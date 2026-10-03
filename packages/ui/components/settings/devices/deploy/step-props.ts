@@ -40,6 +40,8 @@ export interface DeployDeviceCheck {
 
 /** Props of every deploy wizard step (plan §2.5). */
 export interface DeployStepProps {
+	/** Embedded deployment keeps the source route even when its host URL is unchanged. */
+	route?: DeployRoute;
 	scope: DevicesScope;
 	draft: DeployDraft;
 	/** Derived from the draft, per target. */

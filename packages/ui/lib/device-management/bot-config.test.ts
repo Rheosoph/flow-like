@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import {
+	type BotAnswerCase,
+	type BotProvider,
 	DISCORD_INTENTS,
+	botAnswerCase,
 	botHandle,
 	botTokenEventId,
 	botTokenKey,
@@ -11,7 +14,7 @@ import {
 	savedBotToken,
 } from "./bot-config";
 
-/* The bot settings rule of run-more-2-design §1.4; the bots crate's test carries the same cases. */
+/* The bot settings rule of run-more-2-design §1.4 and the message rule a device and the desktop app share; the bots crate's tests carry the same cases. */
 
 const TELEGRAM = {
 	sink_type: "telegram",
@@ -37,6 +40,12 @@ const DISCORD = {
 	command_prefix: "!",
 };
 
+/** What the bot of a config answers in groups; null when a device can't read the config. */
+function answers(type: string, config: unknown): BotAnswerCase | null {
+	const result = deviceBot(type, config);
+	return result?.ok ? botAnswerCase(result.bot) : null;
+}
+
 test("the editor's default settings are read, with their effective values", () => {
 	expect(deviceBot("telegram", TELEGRAM)).toEqual({
 		ok: true,
@@ -48,27 +57,28 @@ test("the editor's default settings are read, with their effective values", () =
 			mentions: true,
 		},
 	});
-	// A Discord bot reads no prefix, like the desktop app's: the saved "!" is not effective.
 	expect(deviceBot("discord", DISCORD)).toEqual({
 		ok: true,
 		bot: {
 			provider: "discord",
 			open: true,
 			savedToken: false,
-			prefix: "",
+			prefix: "!",
 			mentions: true,
 		},
 	});
+	expect(answers("telegram", TELEGRAM)).toBe("prefix_and_mentions");
+	expect(answers("discord", DISCORD)).toBe("prefix_and_mentions");
 });
 
-test("absent settings take their defaults; an allow list closes the bot", () => {
+test("absent settings take their defaults, and there is no default prefix; an allow list closes the bot", () => {
 	expect(deviceBot("telegram", {})).toEqual({
 		ok: true,
 		bot: {
 			provider: "telegram",
 			open: true,
 			savedToken: false,
-			prefix: "/",
+			prefix: "",
 			mentions: true,
 		},
 	});
@@ -97,7 +107,9 @@ test("absent settings take their defaults; an allow list closes the bot", () => 
 		}),
 	).toMatchObject({ ok: true });
 	expect(DISCORD_INTENTS).toHaveLength(19);
-	// A key that is `null` takes its default, as on a device.
+});
+
+test("a key that is null takes its default, as on a device", () => {
 	expect(
 		deviceBot("discord", {
 			channel_whitelist: null,
@@ -139,12 +151,12 @@ test("a setting of the wrong JSON type, over its bound or unknown is refused wit
 		["telegram", { command_prefix: "x".repeat(17) }, "command_prefix"],
 		["discord", { channel_whitelist: {} }, "channel_whitelist"],
 		["discord", { respond_to_dms: 0 }, "respond_to_dms"],
+		["discord", { command_prefix: 1 }, "command_prefix"],
+		["discord", { command_prefix: ["!"] }, "command_prefix"],
+		["discord", { command_prefix: "x".repeat(17) }, "command_prefix"],
 		["discord", { intents: "Guilds" }, "intents"],
 		["discord", { intents: ["Guilds", "Everything"] }, "intents: Everything"],
 		["discord", { intents: [7] }, "intents: 7"],
-		// Of two unreadable settings a device names the same one first.
-		["discord", { respond_to_dms: 1, intents: "Guilds" }, "respond_to_dms"],
-		["telegram", { chat_blacklist: 1, command_prefix: 5 }, "chat_blacklist"],
 	];
 	for (const [type, config, key] of refused)
 		expect([type, config, deviceBot(type, config)]).toEqual([
@@ -156,20 +168,89 @@ test("a setting of the wrong JSON type, over its bound or unknown is refused wit
 	expect(
 		deviceBot("telegram", { chat_whitelist: ["ü".repeat(64)] }),
 	).toMatchObject({ ok: true });
-	expect(
-		deviceBot("telegram", { command_prefix: "🤖".repeat(16) }),
-	).toMatchObject({ ok: true });
+	for (const type of ["telegram", "discord"])
+		expect(deviceBot(type, { command_prefix: "🤖".repeat(16) })).toMatchObject({
+			ok: true,
+			bot: { prefix: "🤖".repeat(16) },
+		});
 });
 
-test("a Discord bot reads no prefix, so none is effective and none is refused", () => {
-	expect(
-		deviceBot("discord", { respond_to_mentions: false, command_prefix: "?" }),
-	).toMatchObject({ ok: true, bot: { prefix: "", mentions: false } });
-	for (const command_prefix of [1, ["!"], "x".repeat(17)])
-		expect(deviceBot("discord", { command_prefix })).toMatchObject({
-			ok: true,
-			bot: { prefix: "" },
+test("of several unreadable settings a device names the same one first", () => {
+	const order: Record<BotProvider, string[]> = {
+		telegram: [
+			"chat_whitelist",
+			"chat_blacklist",
+			"respond_to_mentions",
+			"respond_to_private",
+			"command_prefix",
+		],
+		discord: [
+			"channel_whitelist",
+			"channel_blacklist",
+			"respond_to_mentions",
+			"respond_to_dms",
+			"command_prefix",
+			"intents",
+		],
+	};
+	for (const [type, keys] of Object.entries(order))
+		keys.forEach((key, index) => {
+			// Every setting from this one on is unreadable; the config lists them last to first.
+			const config = Object.fromEntries(
+				keys
+					.slice(index)
+					.reverse()
+					.map((later) => [later, 7]),
+			);
+			expect([type, key, deviceBot(type, config)]).toEqual([
+				type,
+				key,
+				{ ok: false, problem: "bot_invalid", detail: key },
+			]);
 		});
+});
+
+test("what a bot answers in groups follows its prefix and its mention setting", () => {
+	const table: [BotProvider, string, boolean, BotAnswerCase][] = [
+		["telegram", "/", true, "prefix_and_mentions"],
+		["telegram", "/", false, "prefix_only"],
+		["telegram", "", true, "every"],
+		["telegram", "", false, "every"],
+		["discord", "!", true, "prefix_and_mentions"],
+		["discord", "!", false, "prefix_only"],
+		// Only a Discord bot can be limited to mentions and replies.
+		["discord", "", true, "mentions"],
+		["discord", "", false, "every"],
+	];
+	for (const [provider, prefix, mentions, expected] of table)
+		expect([
+			provider,
+			prefix,
+			mentions,
+			botAnswerCase({ provider, prefix, mentions }),
+		]).toEqual([provider, prefix, mentions, expected]);
+});
+
+test("an absent, null or empty prefix is no prefix; a blank is one", () => {
+	for (const none of [{}, { command_prefix: null }, { command_prefix: "" }]) {
+		const quiet = { ...none, respond_to_mentions: false };
+		expect([none, answers("telegram", none)]).toEqual([none, "every"]);
+		expect([none, answers("telegram", quiet)]).toEqual([none, "every"]);
+		expect([none, answers("discord", none)]).toEqual([none, "mentions"]);
+		expect([none, answers("discord", quiet)]).toEqual([none, "every"]);
+	}
+	// No trimming: a device compares the text with the prefix as it is saved.
+	for (const type of ["telegram", "discord"]) {
+		expect(deviceBot(type, { command_prefix: " " })).toMatchObject({
+			ok: true,
+			bot: { prefix: " " },
+		});
+		expect(answers(type, { command_prefix: " " })).toBe("prefix_and_mentions");
+		expect(
+			answers(type, { command_prefix: "?", respond_to_mentions: false }),
+		).toBe("prefix_only");
+	}
+	expect(answers("discord", { command_prefix: 1 })).toBeNull();
 });
 
 test("a bot's id must leave room for its token key; any other type is no bot", () => {

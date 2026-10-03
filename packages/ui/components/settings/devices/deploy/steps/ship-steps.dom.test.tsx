@@ -8,6 +8,7 @@ import type {
 	PlanEntry,
 } from "../../../../../lib/device-management/model/deploy-plan";
 import type { DeployStepId } from "../../../../../lib/device-management/model/types";
+import { withDeviceEventSource } from "../../../../../lib/event-source";
 import {
 	allByRole,
 	byRole,
@@ -1335,6 +1336,37 @@ describe("Review (APP §3.12)", () => {
 		);
 	});
 
+	test("a device-created schedule does not claim the hub stops or resumes it", async () => {
+		const app = {
+			...VISITOR_PLAN_APP,
+			events: VISITOR_PLAN_APP.events.map((event) =>
+				event.id === "evt_visitor_report"
+					? {
+							...event,
+							...withDeviceEventSource({ config: [...(event.config ?? [])] }),
+						}
+					: event,
+			),
+		};
+		await mountStage({
+			app,
+			initial: reportDraft(),
+			start: "review",
+			prepared: await bundleOf(
+				"app_visitor_checkin",
+				"online",
+				VISITOR_CATALOG,
+			),
+		});
+		const before = text(block("dp-conseq"));
+		expect(before).toContain("Daily visitor report runs on studio-mac-mini");
+		expect(before).not.toContain("The hub stops running");
+		expect(before).not.toContain("the hub runs it again");
+		expect(before).toContain(
+			"Remove it from the service to stop this schedule. Its event stays in the app.",
+		);
+	});
+
 	test("a flow version the preparation created is said before anything is uploaded, with what can't be undone", async () => {
 		const bundle = await bundleOf(
 			"app_visitor_checkin",
@@ -1391,6 +1423,37 @@ describe("Review (APP §3.12)", () => {
 					],
 				},
 			);
+
+		test.each(["Private", "Offline"] as const)(
+			"a device-created endpoint does not claim its %s source keeps answering",
+			async (visibility) => {
+				const app = {
+					...SHOP,
+					visibility,
+					events: SHOP.events.map((event) =>
+						event.id === "evt_shop_orders"
+							? {
+									...event,
+									...withDeviceEventSource({
+										config: [...(event.config ?? [])],
+									}),
+								}
+							: event,
+					),
+				};
+				await mountStage({
+					app,
+					initial: shopDraft(["evt_shop_orders"]),
+					start: "review",
+				});
+				const before = text(block("dp-conseq"));
+				expect(before).toContain(
+					"Orders answers GET http://127.0.0.1:8080/orders.",
+				);
+				expect(before).not.toContain("The hub keeps answering");
+				expect(before).not.toContain("This computer keeps answering");
+			},
+		);
 
 		test("an Endpoint, a form and a bot: where it answers, who may call or run it, and how the bot is undone", async () => {
 			await mountStage({

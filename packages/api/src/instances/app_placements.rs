@@ -45,6 +45,8 @@ pub(crate) struct AppDevicePlacements {
     /// (`telegram`, `discord`) run in one place at a time and are listed only while this hub
     /// can record where.
     pub event_types: Vec<String>,
+    /// The hub can save an event for devices without activating its source trigger.
+    pub device_event_creation: bool,
     /// The project's schedules and bots that a device runs, is about to run, or just ran, at
     /// most 512. One the hub has and nobody released is not listed. Missing on a hub that
     /// cannot hand schedules or bots to devices.
@@ -165,6 +167,7 @@ fn listed(
         server_time,
         placements: found.grants.into_iter().filter_map(placement).collect(),
         event_types: event_types(schedule_rows.is_some()),
+        device_event_creation: true,
         schedules: schedule_rows.map(|rows| {
             schedules::listed(rows, |device| visible.contains_key(device), server_time)
         }),
@@ -346,6 +349,7 @@ mod tests {
             .unwrap(),
             serde_json::json!({
                 "server_time": 1_750_000_000,
+                "device_event_creation": true,
                 "event_types": ["http","simple_chat","rest","mcp","daemon","cron","api","quick_action","generic_form","telegram","discord"],
                 "schedules": [],
                 "placements": [{

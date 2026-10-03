@@ -2,13 +2,39 @@
 //! chat lists, private chats and the prefix (rules 3 to 5) by [`crate::config::BotSpec::admits`]
 //! on the facts this module reads from the message.
 
-use teloxide::types::{Document, Message, MessageEntityKind};
+use teloxide::types::{Document, Message, MessageEntityKind, User};
+
+use crate::runner;
 
 /// The bot itself, as `getMe` reported it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Me {
+pub struct Me {
     pub id: u64,
+    /// Without the `@`.
     pub username: String,
+}
+
+impl Me {
+    /// The bot from the user `getMe` answers with.
+    pub fn of(user: &User) -> Self {
+        Self {
+            id: user.id.0,
+            username: user.username.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// What the settings rules 3 to 5 read of a message: its chat, whether that is a private
+/// chat, whether it is addressed to the bot, its text or caption, and whether its leading
+/// command names another bot. The message is not kept, so the desktop app reads its own
+/// messages with it.
+pub fn facts_of(message: &Message, me: &Me) -> runner::Message {
+    let mut facts = runner::Message::new(message.chat.id.0.to_string(), ());
+    facts.private = message.chat.is_private();
+    facts.addressed = addressed(me, message);
+    facts.text = text_of(message).to_string();
+    facts.foreign_command = foreign_command(me, message);
+    facts
 }
 
 /// Rules 1 and 2: a person wrote it, and it has text, a caption or an image.
@@ -29,7 +55,7 @@ pub(crate) fn is_image_document(document: &Document) -> bool {
 }
 
 /// The text the prefix is matched against: the text, or the caption.
-pub(crate) fn text_of(message: &Message) -> &str {
+fn text_of(message: &Message) -> &str {
     message
         .text()
         .or_else(|| message.caption())
@@ -37,7 +63,7 @@ pub(crate) fn text_of(message: &Message) -> &str {
 }
 
 /// The bot is mentioned, or the message replies to one of the bot's messages.
-pub(crate) fn addressed(me: &Me, message: &Message) -> bool {
+fn addressed(me: &Me, message: &Message) -> bool {
     mentions(me, message) || replies_to(me, message)
 }
 
@@ -64,7 +90,7 @@ fn replies_to(me: &Me, message: &Message) -> bool {
 }
 
 /// The leading command names another bot, as `/start@otherbot` does.
-pub(crate) fn foreign_command(me: &Me, message: &Message) -> bool {
+fn foreign_command(me: &Me, message: &Message) -> bool {
     let command = text_of(message)
         .split(char::is_whitespace)
         .next()

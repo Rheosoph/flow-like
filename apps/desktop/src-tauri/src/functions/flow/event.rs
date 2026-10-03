@@ -467,6 +467,11 @@ async fn sync_local_sink(
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     mode: SinkRegistration,
 ) -> anyhow::Result<()> {
+    let mode = if event.is_device_source() {
+        SinkRegistration::Skip
+    } else {
+        mode
+    };
     let manager_state = crate::state::TauriEventSinkManagerState::construct(handler).await?;
     let manager = manager_state.lock().await;
     match mode {
@@ -515,7 +520,11 @@ pub async fn upsert_event(
         }
         let event = app.upsert_event(event, version_type, enforce_id).await?;
 
-        let mode = register_sink.unwrap_or(SinkRegistration::Keep);
+        let mode = if event.is_device_source() {
+            SinkRegistration::Skip
+        } else {
+            register_sink.unwrap_or(SinkRegistration::Keep)
+        };
         if let Err(e) =
             sync_local_sink(&handler, &app_id, &event, offline, pat, oauth_tokens, mode).await
         {
@@ -528,6 +537,11 @@ pub async fn upsert_event(
                 event.id,
                 e
             );
+            if mode == SinkRegistration::Skip {
+                return Err(TauriFunctionError::new(&format!(
+                    "Event was saved, but its trigger on this computer could not be removed: {e}"
+                )));
+            }
             if event.event_type == "geolocation" {
                 return Err(TauriFunctionError::new(&format!(
                     "Location Event was saved, but device monitoring could not be updated: {e}"

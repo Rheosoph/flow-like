@@ -3,7 +3,7 @@
 
 use flow_like_bots::config::DISCORD_INTENTS;
 use flow_like_bots::discord::{
-    ClientEnd, Verdict, answer_text, chat_payload, facts, final_parts, intent, intents,
+    ClientEnd, Verdict, answer_text, chat_payload, facts, facts_of, final_parts, intent, intents,
     progress_text, stage_link, verdict,
 };
 use flow_like_bots::render::utf16_len;
@@ -196,46 +196,72 @@ fn admitted(spec: &BotSpec, extra: Value) -> bool {
     spec.admits(&facts(message(1000, extra), bot()))
 }
 
-#[test]
-fn filter_answers_mentions_and_replies_in_servers_and_reads_no_prefix() {
-    let defaults = spec(json!({}));
-    let mention = json!([bot_user()]);
-    let replied = message_json(990, json!({"author": bot_user(), "content": "an answer"}));
-    let someone = message_json(991, json!({"author": {"id": "502", "username": "bob"}}));
-    let bob = json!([{"id": "502", "username": "bob"}]);
+/// A reply to message 990 of `author`.
+fn reply_to(author: Value) -> Value {
+    let replied = message_json(990, json!({"author": author, "content": "an answer"}));
+    json!({"type": 19, "referenced_message": replied})
+}
 
-    assert!(!admitted(&defaults, json!({})), "not addressed");
-    assert!(admitted(&defaults, json!({"mentions": mention})), "mention");
-    assert!(
-        !admitted(&defaults, json!({"mentions": bob})),
-        "someone else"
-    );
-    assert!(admitted(
-        &defaults,
-        json!({"type": 19, "referenced_message": replied})
-    ));
-    assert!(!admitted(
-        &defaults,
-        json!({"type": 19, "referenced_message": someone})
-    ));
-    assert!(
-        !admitted(&defaults, json!({"content": "!ask now"})),
-        "the editor's default prefix"
-    );
-
-    let prefixed = spec(json!({"command_prefix": "?"}));
-    assert!(!admitted(&prefixed, json!({"content": "?ask now"})));
-    assert!(admitted(&prefixed, json!({"mentions": mention})));
+fn bob() -> Value {
+    json!({"id": "502", "username": "bob"})
 }
 
 #[test]
-fn filter_answers_every_message_in_servers_with_mentions_off() {
+fn filter_answers_mentions_and_replies_in_servers_without_a_prefix() {
+    let defaults = spec(json!({}));
+
+    assert!(!admitted(&defaults, json!({})), "not addressed");
+    assert!(admitted(&defaults, json!({"mentions": [bot_user()]})));
+    assert!(!admitted(&defaults, json!({"mentions": [bob()]})));
+    assert!(admitted(&defaults, reply_to(bot_user())));
+    assert!(!admitted(&defaults, reply_to(bob())));
+    assert!(
+        !admitted(&defaults, json!({"content": "!ask now"})),
+        "the editor's default prefix is not set here"
+    );
+    for none in [json!(null), json!("")] {
+        let unset = spec(json!({ "command_prefix": none }));
+        assert!(!admitted(&unset, json!({"content": "!ask now"})));
+        assert!(admitted(&unset, json!({"mentions": [bot_user()]})));
+    }
+}
+
+#[test]
+fn filter_answers_the_prefix_mentions_and_replies_in_servers() {
+    let prefixed = spec(json!({"command_prefix": "?"}));
+
+    assert!(admitted(&prefixed, json!({"content": "?ask now"})));
+    assert!(!admitted(&prefixed, json!({"content": "ask? now"})));
+    assert!(!admitted(&prefixed, json!({})), "not addressed");
+    assert!(admitted(&prefixed, json!({"mentions": [bot_user()]})));
+    assert!(admitted(&prefixed, reply_to(bot_user())));
+    assert!(!admitted(&prefixed, reply_to(bob())));
+
+    let image = attachment(1, "cat.png", "image/png");
+    let no_text = json!({"content": "", "attachments": [image]});
+    assert!(!admitted(&prefixed, no_text), "an image alone");
+}
+
+#[test]
+fn filter_answers_only_the_prefix_in_servers_with_mentions_off() {
+    let only = spec(json!({"command_prefix": "!", "respond_to_mentions": false}));
+
+    assert!(admitted(&only, json!({"content": "!ask now"})));
+    assert!(!admitted(&only, json!({})), "not addressed");
+    assert!(!admitted(&only, json!({"mentions": [bot_user()]})));
+    assert!(!admitted(&only, reply_to(bot_user())));
+    let both = json!({"content": "!ask <@900>", "mentions": [bot_user()]});
+    assert!(admitted(&only, both));
+}
+
+#[test]
+fn filter_answers_every_message_in_servers_with_mentions_off_and_no_prefix() {
     let every = spec(json!({"respond_to_mentions": false}));
-    let bob = json!([{"id": "502", "username": "bob"}]);
 
     assert!(admitted(&every, json!({})), "not addressed");
-    assert!(admitted(&every, json!({"mentions": bob})), "someone else");
+    assert!(admitted(&every, json!({"mentions": [bob()]})));
     assert!(admitted(&every, json!({"mentions": [bot_user()]})));
+    assert!(admitted(&every, json!({"content": "!ask now"})));
 
     let listed = spec(json!({"respond_to_mentions": false, "channel_whitelist": ["301"]}));
     assert!(!admitted(&listed, json!({})), "another channel");
@@ -282,11 +308,37 @@ fn facts_name_the_channel_and_keep_the_message() {
     assert_eq!(facts.chat, "300");
     assert!(facts.private);
     assert!(!facts.addressed);
-    assert!(facts.text.is_empty(), "no rule reads the text");
+    assert_eq!(facts.text, "hi");
     assert_eq!((facts.update_id, facts.sent_at), (None, None));
     assert!(!facts.foreign_command);
     let native = facts.native::<Message>().map(|native| native.id.get());
     assert_eq!(native, Some(1000));
+}
+
+/// What the desktop app calls: the same facts from a message it keeps.
+#[test]
+fn facts_are_read_by_reference_without_keeping_the_message() {
+    let content = "?ask <@900>";
+    let mention = message(1000, json!({"content": content, "mentions": [bot_user()]}));
+    let read = facts_of(&mention, bot());
+    assert_eq!((read.chat.as_str(), read.text.as_str()), ("300", content));
+    assert!(read.addressed && !read.private && !read.foreign_command);
+    assert!(read.native::<Message>().is_none());
+    assert!(read.native::<()>().is_some());
+    assert!(!facts_of(&mention, None).addressed, "the bot is not known");
+
+    let kept = facts(mention.clone(), bot());
+    assert_eq!(
+        (&kept.chat, kept.private, kept.addressed, &kept.text),
+        (&read.chat, read.private, read.addressed, &read.text)
+    );
+    for config in [json!({}), json!({"command_prefix": "?"})] {
+        let rule = spec(config);
+        assert_eq!(rule.admits(&read), rule.admits(&kept));
+    }
+
+    let direct = message(1001, json!({"guild_id": null, "member": null}));
+    assert!(facts_of(&direct, bot()).private);
 }
 
 fn current() -> Message {

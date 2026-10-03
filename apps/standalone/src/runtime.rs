@@ -1840,8 +1840,27 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn pinned_daemon_remains_running_until_cancelled() {
+        assert_pinned_daemon_runs(false).await;
+    }
+
+    #[tokio::test]
+    async fn device_source_definition_runs_on_its_deployment_destination() {
+        assert_pinned_daemon_runs(true).await;
+    }
+
+    async fn assert_pinned_daemon_runs(device_source: bool) {
         let directory = tempfile::tempdir().unwrap();
-        let (config, state, started, starts) = fixture(directory.path()).await;
+        let (mut config, state, started, starts) = fixture(directory.path()).await;
+        if device_source {
+            let app = App::load(config.project_id.clone(), state.clone())
+                .await
+                .unwrap();
+            let mut event = app.get_event("event", Some((1, 0, 0))).await.unwrap();
+            event.set_device_source().unwrap();
+            event.event_version = (1, 0, 1);
+            event.save(&app, Some((1, 0, 1))).await.unwrap();
+            config.events[0].event_version = [1, 0, 1];
+        }
         let stop = CancellationToken::new();
         let runtime_stop = stop.clone();
         let (ready_sender, ready_receiver) = oneshot::channel();

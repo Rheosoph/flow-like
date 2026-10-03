@@ -33,6 +33,10 @@ import {
 	cancelDeviceCommands,
 	withDeviceCommandBridge,
 } from "@flow-like/flow-like-ui/lib/device-bridge";
+import {
+	isDeviceEventSource,
+	withDeviceEventSource,
+} from "@flow-like/flow-like-ui/lib/event-source";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	recordNativePreamble,
@@ -54,6 +58,7 @@ import type {
 	IEventSinkStatusContext,
 	IEventTimeline,
 	IEventTimelineRun,
+	IEventUpsertOptions,
 	IInboundEmailAddress,
 	IListRegistrationsResponse,
 	IPutRegressionSuiteRequest,
@@ -957,12 +962,16 @@ export class EventState implements IEventState {
 
 	async upsertEvent(
 		appId: string,
-		event: IEvent,
+		inputEvent: IEvent,
 		versionType?: IVersionType,
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
+		options?: IEventUpsertOptions,
 	): Promise<IEvent> {
-		if (event.board_id && event.execution_mode !== "Remote") {
+		const deviceSource =
+			options?.source === "device" || isDeviceEventSource(inputEvent);
+		const event = deviceSource ? withDeviceEventSource(inputEvent) : inputEvent;
+		if (!deviceSource && event.board_id && event.execution_mode !== "Remote") {
 			await this.ensureRpaApprovalForEvent(
 				appId,
 				event,
@@ -971,7 +980,9 @@ export class EventState implements IEventState {
 			);
 		}
 
-		const registerSink = await this.confirmLocalSinkRegistration(appId, event);
+		const registerSink = deviceSource
+			? "skip"
+			: await this.confirmLocalSinkRegistration(appId, event);
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
@@ -996,6 +1007,17 @@ export class EventState implements IEventState {
 				"Profile, auth or query client not set. Cannot upsert event.",
 			);
 		}
+		if (deviceSource) {
+			const capabilities = await fetcher<{ device_event_creation?: boolean }>(
+				this.backend.profile,
+				`apps/${appId}/device-placements`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			if (capabilities?.device_event_creation !== true) {
+				throw new Error("Update the hub to create events directly on devices.");
+			}
+		}
 		const response = await fetcher<IEvent>(
 			this.backend.profile,
 			`apps/${appId}/events/${event.id}`,
@@ -1007,6 +1029,7 @@ export class EventState implements IEventState {
 					profile_id: this.backend.profile.id,
 					pat: personalAccessToken,
 					oauth_tokens: oauthTokens,
+					...(deviceSource ? { register_source: false } : {}),
 				}),
 			},
 			this.backend.auth,
@@ -1800,6 +1823,7 @@ export class EventState implements IEventState {
 		if (!context) return readLocal();
 
 		const { event, appId } = context;
+		if (isDeviceEventSource(event)) return false;
 		if (!event.active) return false;
 		// REST/MCP endpoints use the event's enabled flag and separate setup
 		// registrations. They do not register a local worker sink.

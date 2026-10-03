@@ -23,9 +23,10 @@ use crate::config::{BotSpec, BotToken};
 use crate::limits::ImageBudget;
 use crate::reply::ReplySink;
 use crate::runner::{Connection, End, Intake, LinkState, Message, Refusal};
-use filter::Me;
 use poll::{Failure, Health};
 use sender::{Body, Target};
+
+pub use filter::{Me, facts_of};
 
 /// How long the read position may take to be confirmed at a stop.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(2);
@@ -83,22 +84,14 @@ fn native(message: &Message) -> Option<&TelegramMessage> {
     message.native::<TelegramMessage>()
 }
 
-/// The facts the runner's filter reads, from a message that passed rules 0 to 2.
+/// A message that passed rules 0 to 2 in the runner's terms: its facts, its update and date,
+/// and the message itself for the payload, the reply and notices.
 fn incoming(me: &Me, update_id: i64, observed: bool, message: TelegramMessage) -> Message {
-    let chat = message.chat.id.0.to_string();
-    let private = message.chat.is_private();
-    let sent_at = message.date.timestamp();
-    let addressed = filter::addressed(me, &message);
-    let foreign_command = filter::foreign_command(me, &message);
-    let text = filter::text_of(&message).to_string();
-    let mut incoming = Message::new(chat, message);
+    let mut incoming = facts_of(&message, me);
     incoming.update_id = Some(update_id);
-    incoming.sent_at = Some(sent_at);
-    incoming.private = private;
-    incoming.addressed = addressed;
-    incoming.text = text;
-    incoming.foreign_command = foreign_command;
+    incoming.sent_at = Some(message.date.timestamp());
     incoming.observed = observed;
+    incoming.native = Box::new(message);
     incoming
 }
 
@@ -200,10 +193,7 @@ impl Telegram {
                 bot.get_me().await.map_err(|error| Failure::of(&error))
             })
             .await?;
-        Ok(Me {
-            id: me.user.id.0,
-            username: me.user.username.clone().unwrap_or_default(),
-        })
+        Ok(Me::of(&me))
     }
 
     async fn clear_webhook(
@@ -401,6 +391,20 @@ mod tests {
         json!([{"file_id": "p1", "file_unique_id": "u1", "width": 90, "height": 90, "file_size": 1000}])
     }
 
+    fn reply_to_the_bot() -> Value {
+        json!({"text": "yes", "reply_to_message": {"message_id": 9, "date": 1_789_999_990,
+            "chat": group(), "from": {"id": BOT_ID, "is_bot": true, "first_name": "Helper"}, "text": "Sure?"}})
+    }
+
+    fn slash() -> Value {
+        json!({"command_prefix": "/"})
+    }
+
+    /// Whether a new message with `fields` in the group starts a run of an event with `config`.
+    fn in_group(config: Value, fields: Value) -> bool {
+        starts(config, new_message(group(), fields))
+    }
+
     #[test]
     fn only_new_messages_start_runs() {
         let text = json!({"text": "hello"});
@@ -455,71 +459,58 @@ mod tests {
 
     #[test]
     fn groups_need_a_mention_a_reply_or_the_prefix() {
-        assert!(!starts(
-            json!({}),
-            new_message(group(), json!({"text": "just chatting"}))
-        ));
-        assert!(starts(
-            json!({}),
-            new_message(group(), mention("hey @Helper_Bot look", 4, 11))
-        ));
-        assert!(!starts(
-            json!({}),
-            new_message(group(), mention("hey @helper_bot_fan", 4, 15))
-        ));
+        assert!(!in_group(slash(), json!({"text": "just chatting"})));
+        assert!(in_group(slash(), mention("hey @Helper_Bot look", 4, 11)));
+        assert!(!in_group(slash(), mention("hey @helper_bot_fan", 4, 15)));
         let text_mention = json!({"text": "Helper, look", "entities": [{"type": "text_mention", "offset": 0,
             "length": 6, "user": {"id": BOT_ID, "is_bot": true, "first_name": "Helper"}}]});
-        assert!(starts(json!({}), new_message(group(), text_mention)));
-        let reply = json!({"text": "yes", "reply_to_message": {"message_id": 9, "date": 1_789_999_990,
-            "chat": group(), "from": {"id": BOT_ID, "is_bot": true, "first_name": "Helper"}, "text": "Sure?"}});
-        assert!(starts(json!({}), new_message(group(), reply.clone())));
-        assert!(!starts(
-            json!({"respond_to_mentions": false, "command_prefix": ""}),
-            new_message(group(), reply)
-        ));
-        assert!(starts(
+        assert!(in_group(slash(), text_mention));
+        assert!(in_group(slash(), reply_to_the_bot()));
+        assert!(in_group(slash(), command("/ask what time is it")));
+        assert!(!in_group(json!({"command_prefix": "!"}), command("/ask")));
+    }
+
+    #[test]
+    fn groups_need_the_prefix_with_mentions_off() {
+        let only = || json!({"command_prefix": "/", "respond_to_mentions": false});
+        assert!(in_group(only(), command("/ask")));
+        assert!(!in_group(only(), json!({"text": "just chatting"})));
+        assert!(!in_group(only(), mention("hey @helper_bot look", 4, 11)));
+        assert!(!in_group(only(), reply_to_the_bot()));
+    }
+
+    #[test]
+    fn groups_without_a_prefix_answer_every_message() {
+        let unset = [
             json!({}),
-            new_message(group(), command("/ask what time is it"))
-        ));
-        assert!(!starts(
+            json!({"command_prefix": null}),
             json!({"command_prefix": ""}),
-            new_message(group(), command("/ask"))
-        ));
+            json!({"respond_to_mentions": false}),
+        ];
+        for config in unset {
+            let answers = |fields: Value| in_group(config.clone(), fields);
+            assert!(answers(json!({"text": "just chatting"})), "{config}");
+            assert!(answers(command("/x@otherbot")), "{config}");
+            assert!(answers(reply_to_the_bot()), "{config}");
+            assert!(answers(json!({"photo": photo()})), "{config}");
+            let joined = json!({"new_chat_members": [person()]});
+            assert!(!answers(joined), "{config}: rules 0 to 2 come first");
+        }
     }
 
     #[test]
     fn commands_for_another_bot_are_not_a_prefix_match() {
-        assert!(!starts(
-            json!({}),
-            new_message(group(), command("/x@otherbot"))
-        ));
-        assert!(!starts(
-            json!({}),
-            new_message(group(), command("/x@helper_bot_fan now"))
-        ));
-        assert!(starts(
-            json!({}),
-            new_message(group(), command("/x@helper_bot"))
-        ));
-        assert!(starts(
-            json!({}),
-            new_message(group(), command("/x@HELPER_BOT now"))
-        ));
+        assert!(!in_group(slash(), command("/x@otherbot")));
+        assert!(!in_group(slash(), command("/x@helper_bot_fan now")));
+        assert!(in_group(slash(), command("/x@helper_bot")));
+        assert!(in_group(slash(), command("/x@HELPER_BOT now")));
     }
 
     #[test]
     fn a_caption_counts_like_text() {
-        assert!(starts(
-            json!({}),
-            new_message(
-                group(),
-                json!({"photo": photo(), "caption": "/describe this"})
-            )
-        ));
-        assert!(!starts(
-            json!({}),
-            new_message(group(), json!({"photo": photo(), "caption": "nice"}))
-        ));
+        let captioned = |caption: &str| json!({"photo": photo(), "caption": caption});
+        assert!(in_group(slash(), captioned("/describe this")));
+        assert!(!in_group(slash(), captioned("nice")));
         let pdf = json!({"file_id": "d2", "file_unique_id": "du2", "mime_type": "application/pdf", "file_size": 10});
         assert!(!starts(
             json!({}),
@@ -554,6 +545,7 @@ mod tests {
         assert_eq!(incoming.update_id, Some(41));
         assert_eq!(incoming.sent_at, Some(1_790_000_000));
         assert_eq!(incoming.chat, "4242");
+        assert_eq!(incoming.text, "hi");
         assert!(incoming.private && incoming.observed);
         assert!(incoming.native::<TelegramMessage>().is_some());
     }

@@ -1,6 +1,6 @@
 use flow_like_bots::config::{DEFAULT_DISCORD_INTENTS, DISCORD_INTENTS};
-use flow_like_bots::{BotProblem, BotSpec, BotToken, Message, Provider};
-use serde_json::{Value, json};
+use flow_like_bots::{BotProblem, BotSettings, BotSpec, BotToken, Message, Provider};
+use serde_json::{Map, Value, json};
 
 const TELEGRAM_TOKEN: &str = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
 // Synthetic segments exercise local parsing without resembling an issued token.
@@ -26,7 +26,7 @@ fn defaults_per_provider() {
     assert!(telegram.open);
     assert!(telegram.allow.is_empty() && telegram.deny.is_empty());
     assert!(telegram.respond_to_mentions && telegram.respond_to_private);
-    assert_eq!(telegram.command_prefix, "/");
+    assert_eq!(telegram.command_prefix, "");
     assert!(telegram.intents.is_empty());
 
     let discord = spec("discord", json!({})).unwrap();
@@ -69,7 +69,7 @@ fn saved_editor_config_reads() {
         ]
     );
     assert!(!discord.respond_to_private);
-    assert_eq!(discord.command_prefix, "");
+    assert_eq!(discord.command_prefix, "!");
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn null_is_absent_and_other_providers_keys_are_ignored() {
     )
     .unwrap();
     assert!(telegram.open && telegram.respond_to_mentions);
-    assert_eq!(telegram.command_prefix, "/");
+    assert_eq!(telegram.command_prefix, "");
 
     let discord = spec(
         "discord",
@@ -92,10 +92,38 @@ fn null_is_absent_and_other_providers_keys_are_ignored() {
 }
 
 #[test]
-fn discord_reads_no_prefix() {
-    for prefix in [json!(["!"]), json!(5), json!("x".repeat(17))] {
-        let discord = spec("discord", json!({ "command_prefix": prefix })).unwrap();
-        assert_eq!(discord.command_prefix, "");
+fn absent_null_and_empty_prefixes_are_no_prefix() {
+    for event_type in ["telegram", "discord"] {
+        let absent = spec(event_type, json!({})).unwrap();
+        assert_eq!(absent.command_prefix, "", "{event_type}");
+        for prefix in [Value::Null, json!("")] {
+            let read = spec(event_type, json!({ "command_prefix": prefix })).unwrap();
+            assert_eq!(read, absent, "{event_type}: {prefix}");
+        }
+        let blank = spec(event_type, json!({"command_prefix": " "})).unwrap();
+        assert_eq!(blank.command_prefix, " ", "{event_type}: untrimmed");
+        assert!(blank.admits(&message("-5", false, false, " ask")));
+        assert!(!blank.admits(&message("-5", false, false, "ask")));
+    }
+}
+
+#[test]
+fn a_prefix_is_a_text_of_at_most_sixteen_characters_for_both_providers() {
+    for event_type in ["telegram", "discord"] {
+        let longest = "🙂".repeat(16);
+        let read = spec(event_type, json!({ "command_prefix": longest })).unwrap();
+        assert_eq!(read.command_prefix, longest, "{event_type}");
+        let wrong = [
+            json!("x".repeat(17)),
+            json!(5),
+            json!(["!"]),
+            json!(true),
+            json!({"prefix": "!"}),
+        ];
+        for prefix in wrong {
+            let config = json!({ "command_prefix": prefix });
+            refused(event_type, config, "command_prefix");
+        }
     }
 }
 
@@ -120,28 +148,38 @@ fn wrong_types_name_their_key() {
         refused(event_type, json!({ key: "yes" }), key);
         refused(event_type, json!({ key: 1 }), key);
     }
-    refused("telegram", json!({"command_prefix": 5}), "command_prefix");
-    refused(
-        "telegram",
-        json!({"command_prefix": ["/"]}),
-        "command_prefix",
-    );
     refused("discord", json!({"intents": "Guilds"}), "intents");
     refused("discord", json!({"intents": [1]}), "intents");
 }
 
+/// With every key from one on wrong, that one is named: lists, `respond_to_mentions`, the
+/// private flag, the prefix, then the intents of Discord.
 #[test]
 fn the_first_problem_is_the_one_a_client_names() {
-    refused(
-        "discord",
-        json!({"respond_to_dms": 1, "intents": "Guilds"}),
-        "respond_to_dms",
-    );
-    refused(
-        "telegram",
-        json!({"chat_blacklist": 1, "command_prefix": 5}),
+    let telegram = [
+        "chat_whitelist",
         "chat_blacklist",
-    );
+        "respond_to_mentions",
+        "respond_to_private",
+        "command_prefix",
+    ];
+    let discord = [
+        "channel_whitelist",
+        "channel_blacklist",
+        "respond_to_mentions",
+        "respond_to_dms",
+        "command_prefix",
+        "intents",
+    ];
+    for (event_type, order) in [("telegram", &telegram[..]), ("discord", &discord[..])] {
+        for first in 0..order.len() {
+            let wrong: Map<String, Value> = order[first..]
+                .iter()
+                .map(|key| (key.to_string(), json!(7)))
+                .collect();
+            refused(event_type, Value::Object(wrong), order[first]);
+        }
+    }
 }
 
 #[test]
@@ -176,19 +214,6 @@ fn bounds() {
         "discord",
         json!({"channel_whitelist": ["ä".repeat(65)]}),
         "channel_whitelist",
-    );
-    assert_eq!(
-        spec("telegram", json!({"command_prefix": "🙂".repeat(16)}))
-            .unwrap()
-            .command_prefix
-            .chars()
-            .count(),
-        16
-    );
-    refused(
-        "telegram",
-        json!({"command_prefix": "x".repeat(17)}),
-        "command_prefix",
     );
 }
 
@@ -326,15 +351,17 @@ fn message(chat: &str, private: bool, addressed: bool, text: &str) -> Message {
 
 #[test]
 fn filter_rules_three_to_five() {
-    let open = spec("telegram", json!({})).unwrap();
-    assert!(open.admits(&message("1", true, false, "hello")));
-    assert!(open.admits(&message("-5", false, true, "hey bot")));
-    assert!(open.admits(&message("-5", false, false, "/start")));
-    assert!(open.admits(&message("-5", false, false, "/start@thisbot")));
+    let slash = spec("telegram", json!({"command_prefix": "/"})).unwrap();
+    assert!(slash.admits(&message("1", true, false, "hello")));
+    assert!(slash.admits(&message("-5", false, true, "hey bot")));
+    assert!(slash.admits(&message("-5", false, false, "/start")));
+    assert!(slash.admits(&message("-5", false, false, "/start@thisbot")));
     let mut foreign = message("-5", false, false, "/start@otherbot");
     foreign.foreign_command = true;
-    assert!(!open.admits(&foreign));
-    assert!(!open.admits(&message("-5", false, false, "just talking")));
+    assert!(!slash.admits(&foreign));
+    assert!(!slash.admits(&message("-5", false, false, "just talking")));
+    let inside = message("-5", false, false, "see /start");
+    assert!(!slash.admits(&inside), "the prefix leads the text");
 
     let quiet = spec(
         "telegram",
@@ -342,8 +369,9 @@ fn filter_rules_three_to_five() {
     )
     .unwrap();
     assert!(!quiet.admits(&message("1", true, false, "hello")));
-    assert!(!quiet.admits(&message("-5", false, true, "hey bot")));
-    assert!(!quiet.admits(&message("-5", false, false, "/start")));
+    assert!(quiet.admits(&message("-5", false, true, "hey bot")));
+    assert!(quiet.admits(&message("-5", false, false, "just talking")));
+    assert!(quiet.admits(&foreign), "every message, without a prefix");
 
     let listed = spec(
         "telegram",
@@ -358,20 +386,175 @@ fn filter_rules_three_to_five() {
     assert!(denied.admits(&message("4", true, false, "hi")));
 }
 
-#[test]
-fn discord_follows_the_desktop_rule_in_servers() {
-    let mention_only = spec("discord", json!({"command_prefix": "!"})).unwrap();
-    assert!(mention_only.admits(&message("7", false, true, "hey")));
-    assert!(!mention_only.admits(&message("7", false, false, "hey")));
-    assert!(!mention_only.admits(&message("7", false, false, "!ask hey")));
+const GROUP: &str = "-5";
+const DENIED: &str = "-9";
 
-    let every = spec(
-        "discord",
-        json!({"respond_to_mentions": false, "respond_to_dms": false, "channel_blacklist": ["9"]}),
-    )
-    .unwrap();
-    assert!(every.admits(&message("7", false, false, "hey")));
-    assert!(every.admits(&message("7", false, true, "hey")));
-    assert!(!every.admits(&message("9", false, false, "hey")));
-    assert!(!every.admits(&message("7", true, false, "hey")));
+/// A row of rule R's table: the prefix (`None`: the key is absent), "respond to mentions",
+/// and whether a group message starts a run that is plain, starts with the prefix, or is
+/// addressed to the bot (a mention, a reply).
+struct Row {
+    provider: Provider,
+    prefix: Option<&'static str>,
+    mentions: bool,
+    plain: bool,
+    prefixed: bool,
+    addressed: bool,
+}
+
+const fn row(
+    provider: Provider,
+    prefix: Option<&'static str>,
+    mentions: bool,
+    [plain, prefixed, addressed]: [bool; 3],
+) -> Row {
+    Row {
+        provider,
+        prefix,
+        mentions,
+        plain,
+        prefixed,
+        addressed,
+    }
+}
+
+const RULE: [Row; 8] = [
+    row(Provider::Telegram, Some("/"), true, [false, true, true]),
+    row(Provider::Discord, Some("!"), true, [false, true, true]),
+    row(Provider::Telegram, Some("/"), false, [false, true, false]),
+    row(Provider::Discord, Some("!"), false, [false, true, false]),
+    row(Provider::Telegram, None, true, [true, true, true]),
+    row(Provider::Telegram, None, false, [true, true, true]),
+    row(Provider::Discord, None, true, [false, false, true]),
+    row(Provider::Discord, None, false, [true, true, true]),
+];
+
+impl Row {
+    fn name(&self) -> String {
+        let Self {
+            provider,
+            prefix,
+            mentions,
+            ..
+        } = self;
+        format!("{provider:?}, prefix {prefix:?}, mentions {mentions}")
+    }
+
+    /// The row's bot; chat `DENIED` is on its deny list.
+    fn bot(&self, private: bool) -> BotSpec {
+        let (deny, private_key) = match self.provider {
+            Provider::Telegram => ("chat_blacklist", "respond_to_private"),
+            Provider::Discord => ("channel_blacklist", "respond_to_dms"),
+        };
+        let mut config =
+            json!({ deny: [DENIED], "respond_to_mentions": self.mentions, private_key: private });
+        if let Some(prefix) = self.prefix {
+            config["command_prefix"] = json!(prefix);
+        }
+        spec(self.provider.as_str(), config).unwrap()
+    }
+
+    /// Plain, starting with the prefix, mentioning the bot and replying to it, with what the
+    /// row says of each. Without a prefix the second starts with the editor's default one.
+    fn group_messages(&self, chat: &str) -> [(&'static str, Message, bool); 4] {
+        let editor = match self.provider {
+            Provider::Telegram => "/",
+            Provider::Discord => "!",
+        };
+        let command = format!("{}ask now", self.prefix.unwrap_or(editor));
+        [
+            ("plain", message(chat, false, false, "hello"), self.plain),
+            (
+                "starts with the prefix",
+                message(chat, false, false, &command),
+                self.prefixed,
+            ),
+            (
+                "mentions the bot",
+                message(chat, false, true, "hey @helper_bot"),
+                self.addressed,
+            ),
+            (
+                "replies to the bot",
+                message(chat, false, true, "yes"),
+                self.addressed,
+            ),
+        ]
+    }
+}
+
+#[test]
+fn rule_truth_table() {
+    for row in &RULE {
+        let (name, bot) = (row.name(), row.bot(true));
+        for (case, message, starts) in row.group_messages(GROUP) {
+            assert_eq!(bot.admits(&message), starts, "{name}: {case}");
+        }
+        for (case, message, _) in row.group_messages(DENIED) {
+            assert!(!bot.admits(&message), "{name}: {case}, in a denied chat");
+        }
+        let private = message("42", true, false, "hello");
+        assert!(bot.admits(&private), "{name}: private");
+        assert!(!row.bot(false).admits(&private), "{name}: private, off");
+        let denied = message(DENIED, true, false, "hello");
+        assert!(!bot.admits(&denied), "{name}: private, denied");
+        if row.provider == Provider::Telegram {
+            let mut foreign = message(GROUP, false, false, "/ask@otherbot now");
+            foreign.foreign_command = true;
+            let starts = row.prefix.is_none();
+            assert_eq!(bot.admits(&foreign), starts, "{name}: a foreign command");
+        }
+    }
+}
+
+#[test]
+fn unbounded_takes_the_desktop_apps_settings_as_they_are() {
+    let prefix = "!".repeat(40);
+    let settings = BotSettings {
+        allow: (0..300).map(|id| id.to_string()).collect(),
+        deny: vec!["299".into(), "x".repeat(65), String::new()],
+        respond_to_mentions: false,
+        respond_to_private: false,
+        command_prefix: prefix.clone(),
+    };
+    let bot = BotSpec::unbounded(&"e".repeat(113), Provider::Discord, settings);
+    assert_eq!(bot.event_id.len(), 113);
+    assert_eq!((bot.allow.len(), bot.deny.len(), bot.open), (300, 3, false));
+    assert_eq!(bot.command_prefix, prefix);
+    assert!(bot.intents.is_empty());
+
+    let command = format!("{prefix}go");
+    assert!(bot.admits(&message("298", false, false, &command)));
+    assert!(!bot.admits(&message("298", false, true, "hey")));
+    assert!(!bot.admits(&message("299", false, false, &command)));
+    assert!(!bot.admits(&message("300", false, false, &command)));
+    assert!(!bot.admits(&message("298", true, false, "hey")));
+}
+
+#[test]
+fn unbounded_and_a_devices_reading_build_the_same_bot() {
+    let telegram = json!({"chat_whitelist": ["1", "2"], "chat_blacklist": ["3"],
+        "respond_to_mentions": false, "respond_to_private": false, "command_prefix": "!ask"});
+    let discord = json!({"channel_whitelist": ["1", "2"], "channel_blacklist": ["3"],
+        "respond_to_mentions": false, "respond_to_dms": false, "command_prefix": "!ask",
+        "intents": []});
+    for (provider, config) in [(Provider::Telegram, telegram), (Provider::Discord, discord)] {
+        let settings = BotSettings {
+            allow: vec!["1".into(), "2".into()],
+            deny: vec!["3".into()],
+            respond_to_mentions: false,
+            respond_to_private: false,
+            command_prefix: "!ask".into(),
+        };
+        let built = BotSpec::unbounded("evt_helper", provider, settings);
+        assert_eq!(built, spec(provider.as_str(), config).unwrap());
+    }
+    let open = BotSettings {
+        allow: Vec::new(),
+        deny: Vec::new(),
+        respond_to_mentions: true,
+        respond_to_private: true,
+        command_prefix: String::new(),
+    };
+    let built = BotSpec::unbounded("evt_helper", Provider::Telegram, open);
+    assert_eq!(built, spec("telegram", json!({})).unwrap());
 }

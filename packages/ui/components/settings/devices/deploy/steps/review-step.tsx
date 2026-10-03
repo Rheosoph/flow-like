@@ -48,6 +48,7 @@ import type {
 } from "../../../../../lib/device-management/model/types";
 import { nextRuns } from "../../../../../lib/device-management/schedule";
 import { formatEuroMicros } from "../../../../../lib/device-resources";
+import { isDeviceEventSource } from "../../../../../lib/event-source";
 import { humanFileSize } from "../../../../../lib/utils";
 import { agentTooOldCopy } from "../../copy/eligibility-copy";
 import { gateCopy } from "../../copy/gate-copy";
@@ -1608,6 +1609,12 @@ function addedSchedules(c: Context, item: ReviewTarget): AppEventInput[] {
 	return (c.plan.app?.events ?? []).filter((event) => added.has(event.id));
 }
 
+function sourceRunsEvent(event: AppEventInput): boolean {
+	return (
+		event.active && !isDeviceEventSource({ config: [...(event.config ?? [])] })
+	);
+}
+
 /**
  * A schedule that moves to a device: when it runs there, that the hub stops
  * running it, and what its cloud access means for its runs.
@@ -1641,18 +1648,25 @@ function scheduleConsequence(
 		),
 	);
 	if (plan.mode !== "online") return;
-	out.what.push(
-		t(
-			"devices:deployShip.conseq.scheduleMoves",
-			"The hub stops running {{event}} when {{device}} starts it.",
-			{ event: event.name, device },
-		),
-	);
+	const sourceActive = sourceRunsEvent(event);
+	if (sourceActive)
+		out.what.push(
+			t(
+				"devices:deployShip.conseq.scheduleMoves",
+				"The hub stops running {{event}} when {{device}} starts it.",
+				{ event: event.name, device },
+			),
+		);
 	out.undo.push(
-		t(
-			"devices:deployShip.conseq.scheduleUndo",
-			"Remove it from the service, or choose Run it on the hub again in Events: the hub runs it again a few minutes later.",
-		),
+		sourceActive
+			? t(
+					"devices:deployShip.conseq.scheduleUndo",
+					"Remove it from the service, or choose Run it on the hub again in Events: the hub runs it again a few minutes later.",
+				)
+			: t(
+					"devices:deployShip.conseq.scheduleUndoDevice",
+					"Remove it from the service to stop this schedule. Its event stays in the app.",
+				),
 	);
 	if (item.service.kind !== "new") return;
 	// A new service gets the access this deploy asks for; an existing one keeps what it has.
@@ -1811,7 +1825,9 @@ function endpointConsequences(
 			},
 		),
 	);
-	const names = c.list(endpoints.map((event) => event.name));
+	const activeSources = endpoints.filter(sourceRunsEvent);
+	if (!activeSources.length) return;
+	const names = c.list(activeSources.map((event) => event.name));
 	out.stays.push(
 		plan.mode === "online"
 			? t(
@@ -2259,10 +2275,10 @@ function useDeploy({ c, props, items, choices }: DeployControl) {
 	const deployRoute: DeployRoute =
 		route.screen === "deploy"
 			? route
-			: {
+			: (props.route ?? {
 					screen: "deploy",
 					deviceIds: plan.targets.map((target) => target.deviceId),
-				};
+				});
 	const announce = useAnnounce(c, deployRoute);
 	const run = useDeployRun(plan, {
 		title: deployRunTitleRef(plan),

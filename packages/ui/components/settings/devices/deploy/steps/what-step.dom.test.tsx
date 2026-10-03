@@ -234,15 +234,6 @@ describe("What · Endpoints, forms, one-time schedules and bots (R2 §6.4)", () 
 		expect(telegram).toContain(
 			"No device runs it. Tick it to keep it connected from the device.",
 		);
-		expect(telegram).toContain(
-			"In groups and servers it answers mentions, replies and every message that starts with /.",
-		);
-		// A Discord bot reads no prefix, like the desktop app's; the saved "!" starts nothing.
-		const discord = rowOf(view.container, DISCORD);
-		expect(discord).toContain(
-			"In groups and servers it answers mentions and replies.",
-		);
-		expect(discord).not.toContain("starts with");
 		const once = rowOf(view.container, ONCE);
 		expect(once).toContain("Runs once on 2026-10-15 at 09:00 (Europe/Berlin)");
 		expect(once).toContain("Runs once · the device starts it");
@@ -258,26 +249,67 @@ describe("What · Endpoints, forms, one-time schedules and bots (R2 §6.4)", () 
 		expect(kit.copyOf(view.container)).not.toMatch(kit.MACHINE_WORDS);
 	});
 
-	test("a Discord bot with mention-only off says it answers every message", async () => {
-		const everyMessage = configBytes({
-			...BOTS.discord,
-			respond_to_mentions: false,
-		});
-		const apps = {
-			...APPS,
-			[SHOP]: {
-				...APPS.app_shop_assistant,
-				events: APPS.app_shop_assistant.events.map((event) =>
-					event.id === DISCORD ? { ...event, config: everyMessage } : event,
-				),
+	/** Shop Assistant with the settings of some of its bots replaced. */
+	const shopWithBots = (bots: Record<string, Record<string, unknown>>) => ({
+		...APPS,
+		[SHOP]: {
+			...APPS.app_shop_assistant,
+			events: APPS.app_shop_assistant.events.map((event) =>
+				Object.hasOwn(bots, event.id)
+					? { ...event, config: configBytes(bots[event.id]) }
+					: event,
+			),
+		},
+	});
+	const { command_prefix: _slash, ...telegramNoPrefix } = BOTS.telegram;
+	const { command_prefix: _bang, ...discordNoPrefix } = BOTS.discord;
+	const EVERY =
+		"In groups and servers it answers every message: no command prefix is set.";
+
+	test("a bot with a prefix and mentions on says it answers mentions, replies and the prefix, on Telegram and on Discord", async () => {
+		const view = await kit.mountApp(mountDevices, SHOP);
+		expect(rowOf(view.container, TELEGRAM)).toContain(
+			"In groups and servers it answers mentions, replies and every message that starts with /.",
+		);
+		expect(rowOf(view.container, DISCORD)).toContain(
+			"In groups and servers it answers mentions, replies and every message that starts with !.",
+		);
+	});
+
+	test("a bot without a prefix says it answers every message: a Telegram bot always, a Discord bot with mentions off", async () => {
+		const apps = shopWithBots({
+			[TELEGRAM]: telegramNoPrefix,
+			[DISCORD]: {
+				...BOTS.discord,
+				command_prefix: "",
+				respond_to_mentions: false,
 			},
-		};
+		});
+		const view = await kit.mountApp(mountDevices, SHOP, {}, { apps });
+		for (const eventId of [TELEGRAM, DISCORD]) {
+			const row = rowOf(view.container, eventId);
+			expect([eventId, row.includes(EVERY)]).toEqual([eventId, true]);
+			expect(row).not.toContain("starts with");
+		}
+		expect(kit.copyOf(view.container)).not.toMatch(kit.MACHINE_WORDS);
+	});
+
+	test("a Discord bot without a prefix keeps to mentions and replies while mentions are on; a prefix without mentions answers only the prefix", async () => {
+		const apps = shopWithBots({
+			[DISCORD]: discordNoPrefix,
+			[TELEGRAM]: { ...BOTS.telegram, respond_to_mentions: false },
+		});
 		const view = await kit.mountApp(mountDevices, SHOP, {}, { apps });
 		const discord = rowOf(view.container, DISCORD);
 		expect(discord).toContain(
-			"In servers it answers every message in its channels, not only mentions and replies.",
+			"In groups and servers it answers mentions and replies.",
 		);
-		expect(discord).not.toContain("starts with");
+		expect(discord).not.toContain("every message");
+		const telegram = rowOf(view.container, TELEGRAM);
+		expect(telegram).toContain(
+			"In groups and servers it answers every message that starts with /.",
+		);
+		expect(telegram).not.toContain("mentions");
 	});
 
 	test("a bot ticked by hand gives its service one instance, with the reason", async () => {

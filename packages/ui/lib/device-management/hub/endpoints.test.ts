@@ -634,6 +634,16 @@ describe("schedules on devices (hub)", () => {
 		expect(malformed.schedules).toEqual(SCHEDULE_LISTING.schedules);
 	});
 
+	test("requires an explicit capability for creating an event without a source trigger", async () => {
+		expect(
+			(await listing({ device_event_creation: true })).device_event_creation,
+		).toBe(true);
+		expect((await listing({})).device_event_creation).toBeUndefined();
+		expect(
+			(await listing({ device_event_creation: "true" })).device_event_creation,
+		).toBeUndefined();
+	});
+
 	test("an entry with a state this client does not know is dropped, not the list", async () => {
 		const [device, , returning] = SCHEDULE_LISTING.schedules;
 		expect(

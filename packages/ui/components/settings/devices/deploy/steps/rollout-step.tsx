@@ -1482,24 +1482,28 @@ function RolloutFoot(props: Readonly<FootProps>) {
 
 /* The step. */
 
-function useNavigation(scope: DevicesScope, plan: DeployPlan): Navigation {
+function useNavigation(
+	scope: DevicesScope,
+	plan: DeployPlan,
+	sourceRoute?: DeployRoute,
+): Navigation {
 	const { route } = useDevicesRoute();
 	const appId = plan.app?.id ?? plan.draft.appId ?? undefined;
 	return useMemo(() => {
 		const deploy: DeployRoute =
 			route.screen === "deploy"
 				? route
-				: {
+				: (sourceRoute ?? {
 						screen: "deploy",
 						deviceIds: plan.targets.map((target) => target.deviceId),
 						...(appId ? { appId } : {}),
-					};
+					});
 		return {
 			scope,
 			route: deploy,
 			appScope: appId ? { kind: "app", appId } : scope,
 		};
-	}, [route, scope, plan.targets, appId]);
+	}, [route, sourceRoute, scope, plan.targets, appId]);
 }
 
 function useFinished(
@@ -1729,7 +1733,7 @@ function useRollout(props: Readonly<DeployStepProps>) {
 	useDeployRunWatch(deploymentId);
 	useHandedBundle(deploymentId, props.prepared);
 	const adopted = useDeployRunAdopted(deploymentId);
-	const navigation = useNavigation(scope, plan);
+	const navigation = useNavigation(scope, plan, props.route);
 	const result = useFinished(run.state, props.onFinished);
 	const bundle = props.prepared ?? deployRunExtras(deploymentId).prepared;
 	const files = bundle?.artifact.descriptor.file_count ?? 0;

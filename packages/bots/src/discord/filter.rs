@@ -68,15 +68,21 @@ pub fn addressed(message: &Message, bot: UserId) -> bool {
             .is_some_and(|replied| replied.author.id == bot)
 }
 
+/// What the settings rules 3 to 5 read of a message: its channel, whether it is a direct
+/// message, whether it is addressed to the bot, and its content. The message is not kept, so
+/// the desktop app reads its own messages with it.
+pub fn facts_of(message: &Message, bot: Option<UserId>) -> runner::Message {
+    let mut facts = runner::Message::new(message.channel_id.to_string(), ());
+    facts.private = private(message);
+    facts.addressed = bot.is_some_and(|bot| addressed(message, bot));
+    facts.text = message.content.clone();
+    facts
+}
+
 /// A candidate in the runner's terms; the message itself travels along for the payload, the
-/// reply and notices. Discord keeps no backlog, so there is no age to check, and no rule reads
-/// the text: a Discord bot has no prefix.
+/// reply and notices. Discord keeps no backlog, so there is no age to check.
 pub fn facts(message: Message, bot: Option<UserId>) -> runner::Message {
-    let chat = message.channel_id.to_string();
-    let private = private(&message);
-    let addressed = bot.is_some_and(|bot| addressed(&message, bot));
-    let mut facts = runner::Message::new(chat, message);
-    facts.private = private;
-    facts.addressed = addressed;
+    let mut facts = facts_of(&message, bot);
+    facts.native = Box::new(message);
     facts
 }

@@ -310,6 +310,8 @@ export interface ResourceSummary {
 /** E20 `GET /apps/{app_id}/device-placements`. */
 export interface AppDevicePlacements {
 	server_time: number;
+	/** The hub can save a device event without activating a source trigger. */
+	device_event_creation?: boolean;
 	placements: {
 		device_id: string;
 		placement_id: string;

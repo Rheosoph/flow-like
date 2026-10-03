@@ -123,8 +123,8 @@ impl BotProblem {
     }
 }
 
-/// The settings of one bot event as a device runs them (§1.4). `Debug` prints no chat or
-/// channel id.
+/// The settings of one bot event (§1.4), read from a device's config or built from what the
+/// desktop app saved. `Debug` prints no chat or channel id.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BotSpec {
     pub event_id: String,
@@ -138,11 +138,21 @@ pub struct BotSpec {
     pub respond_to_mentions: bool,
     /// Private chats (Telegram) or direct messages (Discord).
     pub respond_to_private: bool,
-    /// Telegram only; empty: the prefix starts nothing. A Discord bot reads no prefix, like the
-    /// desktop app's, so it is always empty there.
+    /// Empty: no prefix is set.
     pub command_prefix: String,
     /// Discord gateway intents by name, without duplicates; empty for Telegram.
     pub intents: Vec<String>,
+}
+
+/// The settings of a bot event as the desktop app saved them, for [`BotSpec::unbounded`].
+/// Each field means what it means in [`BotSpec`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct BotSettings {
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub respond_to_mentions: bool,
+    pub respond_to_private: bool,
+    pub command_prefix: String,
 }
 
 impl BotSpec {
@@ -163,35 +173,46 @@ impl BotSpec {
         Self::read(event_id, provider, &object(config)?)
     }
 
-    /// Checks the settings in the order a client names them: lists, flags, then the provider's own.
+    /// The desktop app's settings as they are: no bound of a device is checked, so any list and
+    /// any prefix is taken. `intents` stays empty; the desktop app opens its own connection.
+    pub fn unbounded(event_id: &str, provider: Provider, settings: BotSettings) -> Self {
+        Self {
+            event_id: event_id.to_string(),
+            provider,
+            open: settings.allow.is_empty(),
+            allow: settings.allow,
+            deny: settings.deny,
+            respond_to_mentions: settings.respond_to_mentions,
+            respond_to_private: settings.respond_to_private,
+            command_prefix: settings.command_prefix,
+            intents: Vec::new(),
+        }
+    }
+
+    /// Checks the settings in the order a client names them: lists, flags, the prefix, then
+    /// the provider's own.
     fn read(
         event_id: &str,
         provider: Provider,
         config: &Map<String, Value>,
     ) -> Result<Self, BotProblem> {
         let keys = provider.keys();
-        let allow = list(config, keys.allow)?;
-        let deny = list(config, keys.deny)?;
-        let respond_to_mentions = flag(config, "respond_to_mentions")?;
-        let respond_to_private = flag(config, keys.private)?;
-        let (command_prefix, intents) = match provider {
-            Provider::Telegram => (prefix(config)?, Vec::new()),
-            Provider::Discord => (String::new(), intents(config)?),
+        let settings = BotSettings {
+            allow: list(config, keys.allow)?,
+            deny: list(config, keys.deny)?,
+            respond_to_mentions: flag(config, "respond_to_mentions")?,
+            respond_to_private: flag(config, keys.private)?,
+            command_prefix: prefix(config)?,
         };
-        Ok(Self {
-            event_id: event_id.to_string(),
-            provider,
-            open: allow.is_empty(),
-            allow,
-            deny,
-            respond_to_mentions,
-            respond_to_private,
-            command_prefix,
-            intents,
-        })
+        let mut spec = Self::unbounded(event_id, provider, settings);
+        if provider == Provider::Discord {
+            spec.intents = intents(config)?;
+        }
+        Ok(spec)
     }
 
-    /// Rules 3 to 5 of the filter (§5.5) for a message that passed the provider's own rules 0 to 2.
+    /// Rules 3 to 5 of the filter (§5.5) for a message that passed the provider's own rules 0
+    /// to 2. A device and the desktop app both decide with it.
     pub fn admits(&self, message: &Message) -> bool {
         if !self.listens_to(message) {
             return false;
@@ -199,13 +220,7 @@ impl BotSpec {
         if message.private {
             return self.respond_to_private;
         }
-        match self.provider {
-            Provider::Telegram => {
-                (self.respond_to_mentions && message.addressed) || self.prefixed(message)
-            }
-            // The desktop app's rule: with "respond to mentions" off every message starts a run.
-            Provider::Discord => !self.respond_to_mentions || message.addressed,
-        }
+        self.starts_in_group(message)
     }
 
     /// Rule 3: the allow list is empty or names the chat, and the deny list does not name it.
@@ -214,11 +229,23 @@ impl BotSpec {
             && !self.deny.contains(&message.chat)
     }
 
+    /// Rule 5, a group or a server channel. With a prefix: the text starts with it, or the
+    /// message is addressed to the bot while it responds to mentions. Without one a Telegram
+    /// bot answers every message, commands for other bots included; a Discord bot answers the
+    /// messages addressed to it, and every message once it does not respond to mentions.
+    fn starts_in_group(&self, message: &Message) -> bool {
+        if self.command_prefix.is_empty() {
+            return match self.provider {
+                Provider::Telegram => true,
+                Provider::Discord => !self.respond_to_mentions || message.addressed,
+            };
+        }
+        (self.respond_to_mentions && message.addressed) || self.prefixed(message)
+    }
+
     /// The text starts with the prefix; a command addressed to another bot is no match.
     fn prefixed(&self, message: &Message) -> bool {
-        !self.command_prefix.is_empty()
-            && !message.foreign_command
-            && message.text.starts_with(&self.command_prefix)
+        !message.foreign_command && message.text.starts_with(&self.command_prefix)
     }
 }
 
@@ -300,10 +327,11 @@ fn flag(config: &Map<String, Value>, key: &str) -> Result<bool, BotProblem> {
     }
 }
 
+/// No key and `null` are no prefix, like `""`.
 fn prefix(config: &Map<String, Value>) -> Result<String, BotProblem> {
     const KEY: &str = "command_prefix";
     match present(config, KEY) {
-        None => Ok("/".to_string()),
+        None => Ok(String::new()),
         Some(Value::String(prefix)) => {
             let length = prefix.chars().count();
             if length > MAX_PREFIX_CHARS {

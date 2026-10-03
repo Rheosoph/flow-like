@@ -1,4 +1,5 @@
-import type { IEvent } from "@flow-like/flow-like-ui";
+import { type IEvent, IEventExecutionMode } from "@flow-like/flow-like-ui";
+import { withDeviceEventSource } from "@flow-like/flow-like-ui/lib/event-source";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -21,13 +22,22 @@ import { EventState } from "../../components/tauri-provider/event-state";
 function event(eventType = "cron", target?: string): IEvent {
 	return {
 		id: "event-1",
+		name: "Scheduled report",
+		description: "",
 		active: true,
 		event_type: eventType,
-		execution_mode: "Local",
+		execution_mode: IEventExecutionMode.Local,
+		board_id: "board-1",
+		node_id: "node-1",
 		config: Array.from(
 			new TextEncoder().encode(JSON.stringify({ sink_execution: target })),
 		),
-	} as IEvent;
+		event_version: [0, 0, 0],
+		created_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+		updated_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+		priority: 0,
+		variables: {},
+	};
 }
 
 function backend(localOnly = false) {
@@ -44,6 +54,21 @@ function context(value: IEvent) {
 
 describe("desktop event trigger status", () => {
 	beforeEach(() => vi.resetAllMocks());
+
+	test.each(["rest", "mcp", "cron"])(
+		"reports a deployed %s definition inactive at its source",
+		async (type) => {
+			const state = new EventState(backend() as never);
+			await expect(
+				state.isEventSinkActive(
+					"event-1",
+					context(withDeviceEventSource(event(type))),
+				),
+			).resolves.toBe(false);
+			expect(mocks.invoke).not.toHaveBeenCalled();
+			expect(mocks.fetcher).not.toHaveBeenCalled();
+		},
+	);
 
 	test.each(["cron", "api", "http"])(
 		"reads a remote %s trigger from its hosted sink",
@@ -69,10 +94,10 @@ describe("desktop event trigger status", () => {
 		"reads a %s trigger from the hosted sink when its workflow runs remotely",
 		async (target) => {
 			mocks.fetcher.mockResolvedValue({ active: true });
-			const value = {
+			const value: IEvent = {
 				...event("cron", target),
-				execution_mode: "Remote",
-			} as IEvent;
+				execution_mode: IEventExecutionMode.Remote,
+			};
 			const stateBackend = backend();
 			const state = new EventState(stateBackend as never);
 
@@ -90,7 +115,10 @@ describe("desktop event trigger status", () => {
 	);
 
 	test("reports a remote workflow's trigger inactive in a local-only app", async () => {
-		const value = { ...event("discord"), execution_mode: "Remote" } as IEvent;
+		const value: IEvent = {
+			...event("discord"),
+			execution_mode: IEventExecutionMode.Remote,
+		};
 		const state = new EventState(backend(true) as never);
 
 		await expect(

@@ -3554,6 +3554,7 @@ export class FakeHub {
 		return {
 			server_time: now,
 			placements,
+			device_event_creation: true,
 			...(this.has("schedules")
 				? { schedules: this.schedules.listing(appId) }
 				: {}),

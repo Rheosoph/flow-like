@@ -136,6 +136,7 @@ export type {
 	IEventTimeline,
 	IEventTimelineEntry,
 	IEventTimelineRun,
+	IEventUpsertOptions,
 } from "./backend-state/event-state";
 
 export type {

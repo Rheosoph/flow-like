@@ -33,7 +33,7 @@ use crate::reply::ReplySink;
 use crate::runner::{Connection, End, Intake, LinkState, Message};
 
 pub use connection::{ClientEnd, intent, intents, stage_link};
-pub use filter::{Verdict, addressed, facts, is_image, private, startable, verdict};
+pub use filter::{Verdict, addressed, facts, facts_of, is_image, private, startable, verdict};
 pub use payload::{HISTORY, chat_payload, display_name};
 pub use sender::{DiscordReply, NoReply, answer_text, final_parts, notice, progress_text};
 

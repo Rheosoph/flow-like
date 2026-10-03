@@ -9356,6 +9356,7 @@ dependencies = [
  "dirs-next",
  "enigo",
  "flow-like",
+ "flow-like-bots",
  "flow-like-browser",
  "flow-like-catalog",
  "flow-like-device-protocol",

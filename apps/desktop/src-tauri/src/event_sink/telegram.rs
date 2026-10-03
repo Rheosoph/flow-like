@@ -1,5 +1,7 @@
 use anyhow::Result;
 use flow_like::flow_like_model_provider::response::Response;
+use flow_like_bots::telegram::{Me, facts_of};
+use flow_like_bots::{BotSettings, BotSpec, Provider};
 use flow_like_catalog::events::chat_event::{
     Attachment, ChatResponse, ChatStreamingResponse, Reasoning,
 };
@@ -33,11 +35,12 @@ pub struct TelegramSink {
     pub chat_whitelist: Option<Vec<String>>,
     #[serde(default)]
     pub chat_blacklist: Option<Vec<String>>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_flag")]
     pub respond_to_mentions: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_flag")]
     pub respond_to_private: bool,
-    #[serde(default = "default_command_prefix")]
+    /// Empty: no prefix is set. A config without the key or with `null` has none.
+    #[serde(default, deserialize_with = "deserialize_prefix")]
     pub command_prefix: String,
 }
 
@@ -45,8 +48,37 @@ fn default_true() -> bool {
     true
 }
 
-fn default_command_prefix() -> String {
-    "/".to_string()
+/// A flag that is `null` is on, like one without a key.
+fn deserialize_flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or_else(default_true))
+}
+
+fn deserialize_prefix<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+impl TelegramSink {
+    /// Which messages start the event: the rule a device applies, without a device's bounds
+    /// on the lists and the prefix.
+    fn spec(&self, event_id: &str) -> BotSpec {
+        BotSpec::unbounded(
+            event_id,
+            Provider::Telegram,
+            BotSettings {
+                allow: self.chat_whitelist.clone().unwrap_or_default(),
+                deny: self.chat_blacklist.clone().unwrap_or_default(),
+                respond_to_mentions: self.respond_to_mentions,
+                respond_to_private: self.respond_to_private,
+                command_prefix: self.command_prefix.clone(),
+            },
+        )
+    }
 }
 
 lazy_static::lazy_static! {
@@ -63,13 +95,9 @@ struct BotInstance {
 
 #[derive(Clone)]
 struct EventHandler {
-    event_id: String,
     app_id: String,
-    chat_whitelist: Vec<String>,
-    chat_blacklist: Vec<String>,
-    respond_to_mentions: bool,
-    respond_to_private: bool,
-    command_prefix: String,
+    /// The event's id and its message rule.
+    spec: BotSpec,
 }
 
 struct TelegramClientManager {
@@ -95,13 +123,8 @@ impl TelegramClientManager {
         let token = config.bot_token.clone();
 
         let handler = EventHandler {
-            event_id: registration.event_id.clone(),
             app_id: registration.app_id.clone(),
-            chat_whitelist: config.chat_whitelist.clone().unwrap_or_default(),
-            chat_blacklist: config.chat_blacklist.clone().unwrap_or_default(),
-            respond_to_mentions: config.respond_to_mentions,
-            respond_to_private: config.respond_to_private,
-            command_prefix: config.command_prefix.clone(),
+            spec: config.spec(&registration.event_id),
         };
 
         if let Some(bot_instance) = self.bots.get(&token) {
@@ -179,80 +202,19 @@ impl TelegramClientManager {
     }
 }
 
-fn is_chat_allowed(chat_id: &str, handler: &EventHandler) -> bool {
-    if !handler.chat_whitelist.is_empty() && !handler.chat_whitelist.contains(&chat_id.to_string())
-    {
-        return false;
-    }
-
-    if handler.chat_blacklist.contains(&chat_id.to_string()) {
-        return false;
-    }
-
-    true
-}
-
-fn should_process_message(
-    msg: &Message,
-    handler: &EventHandler,
-    bot_username: Option<&str>,
-) -> bool {
-    let chat_id = msg.chat.id.to_string();
+/// Whether `msg` starts a run of the handler's event: the chat lists, private chats and the
+/// rule for groups are those of a device.
+fn should_process_message(msg: &Message, handler: &EventHandler, me: &Me) -> bool {
+    let facts = facts_of(msg, me);
 
     tracing::debug!(
-        "[TELEGRAM] Checking message in chat {} (private: {})",
-        chat_id,
-        msg.chat.is_private()
+        "[TELEGRAM] Checking message in chat {} (private: {}, addressed: {})",
+        facts.chat,
+        facts.private,
+        facts.addressed
     );
 
-    if !is_chat_allowed(&chat_id, handler) {
-        tracing::debug!(
-            "[TELEGRAM] Chat {} not allowed by whitelist/blacklist",
-            chat_id
-        );
-        return false;
-    }
-
-    let is_private = msg.chat.is_private();
-
-    if is_private {
-        tracing::debug!(
-            "[TELEGRAM] Private chat, respond_to_private: {}",
-            handler.respond_to_private
-        );
-        return handler.respond_to_private;
-    }
-
-    let text = match &msg.kind {
-        MessageKind::Common(common) => match &common.media_kind {
-            MediaKind::Text(MediaText { text, .. }) => text.as_str(),
-            _ => "",
-        },
-        _ => "",
-    };
-
-    tracing::debug!(
-        "[TELEGRAM] Group message text: '{}', prefix: '{}', respond_to_mentions: {}",
-        text,
-        handler.command_prefix,
-        handler.respond_to_mentions
-    );
-
-    if text.starts_with(&handler.command_prefix) {
-        tracing::debug!("[TELEGRAM] Message starts with command prefix, processing");
-        return true;
-    }
-
-    if handler.respond_to_mentions
-        && let Some(username) = bot_username
-        && text.contains(&format!("@{}", username))
-    {
-        tracing::debug!("[TELEGRAM] Message mentions bot @{}, processing", username);
-        return true;
-    }
-
-    tracing::debug!("[TELEGRAM] Message does not match criteria, skipping");
-    false
+    handler.spec.admits(&facts)
 }
 
 async fn prepare_message_payload(
@@ -888,24 +850,23 @@ async fn run_telegram_bot(
     }
 
     let me = bot.get_me().await?;
-    let bot_username = me.username.clone();
     tracing::info!(
         "[TELEGRAM] Bot @{} is connected and listening for messages!",
-        bot_username.as_deref().unwrap_or("unknown")
+        me.username.as_deref().unwrap_or("unknown")
     );
+    let me = Me::of(&me);
 
     // Clone values for the handler
     let app_handle_clone = app_handle.clone();
     let db_clone = db.clone();
     let bot_instance_clone = bot_instance.clone();
-    let bot_username_clone = bot_username.clone();
     let token_for_broadcast = token.clone();
 
     let message_handler = Update::filter_message().endpoint(move |bot: Bot, msg: Message| {
         let app_handle = app_handle_clone.clone();
         let db = db_clone.clone();
         let bot_instance = bot_instance_clone.clone();
-        let bot_username = bot_username_clone.clone();
+        let me = me.clone();
         let broadcast_token = token_for_broadcast.clone();
 
         async move {
@@ -934,28 +895,23 @@ async fn run_telegram_bot(
             tracing::debug!("[TELEGRAM] Found {} registered handlers", handlers.len());
 
             for handler in handlers {
-                tracing::debug!("[TELEGRAM] Checking handler for event {}", handler.event_id);
+                let event_id = &handler.spec.event_id;
+                tracing::debug!("[TELEGRAM] Checking handler for event {}", event_id);
 
-                if !should_process_message(&msg, &handler, bot_username.as_deref()) {
-                    tracing::debug!(
-                        "[TELEGRAM] Message not matched for event {}",
-                        handler.event_id
-                    );
+                if !should_process_message(&msg, &handler, &me) {
+                    tracing::debug!("[TELEGRAM] Message not matched for event {}", event_id);
                     continue;
                 }
 
-                tracing::debug!(
-                    "[TELEGRAM] Message matched! Firing event {}",
-                    handler.event_id
-                );
+                tracing::debug!("[TELEGRAM] Message matched! Firing event {}", event_id);
 
-                let payload = prepare_message_payload(&bot, &msg, bot_username.as_deref()).await;
+                let payload = prepare_message_payload(&bot, &msg, Some(me.username.as_str())).await;
 
                 // Fire the event (parallelism handled by event bus consumer)
                 if let Err(e) = fire_telegram_event(
                     &app_handle,
                     &db,
-                    &handler.event_id,
+                    event_id,
                     &handler.app_id,
                     payload,
                     &bot,
@@ -963,11 +919,7 @@ async fn run_telegram_bot(
                 )
                 .await
                 {
-                    tracing::error!(
-                        "[TELEGRAM] Failed to fire event {}: {}",
-                        handler.event_id,
-                        e
-                    );
+                    tracing::error!("[TELEGRAM] Failed to fire event {}: {}", event_id, e);
                 }
             }
 
@@ -1026,6 +978,7 @@ impl TelegramSink {
             [],
         )?;
 
+        // `add_bot_and_handler` binds every column: the default prefix here is never applied.
         conn.execute(
             "CREATE TABLE IF NOT EXISTS telegram_handlers (
                 event_id TEXT PRIMARY KEY,
@@ -1311,5 +1264,283 @@ impl EventSink for TelegramSink {
         tracing::info!("Unregistered Telegram handler: {}", registration.event_id);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event_sink::EventConfig;
+    use serde_json::{Value, json};
+
+    const BOT_ID: u64 = 7_123_456_789;
+    const EVENT: &str = "evt_tg";
+
+    fn with(mut base: Value, extra: Value) -> Value {
+        for (key, value) in extra.as_object().expect("an object") {
+            base[key] = value.clone();
+        }
+        base
+    }
+
+    /// A sink read from an event's config: a token and `settings`.
+    fn sink(settings: Value) -> TelegramSink {
+        serde_json::from_value(with(json!({"bot_token": "a-token"}), settings))
+            .expect("a Telegram config")
+    }
+
+    fn handler(settings: Value) -> EventHandler {
+        EventHandler {
+            app_id: "app".to_string(),
+            spec: sink(settings).spec(EVENT),
+        }
+    }
+
+    fn group() -> Value {
+        json!({"id": -100_200, "type": "supergroup", "title": "Team"})
+    }
+
+    fn private() -> Value {
+        json!({"id": 4242, "type": "private", "first_name": "Ada"})
+    }
+
+    /// Whether a message of a person in `chat` with `fields` starts a run under `settings`.
+    fn starts(settings: Value, chat: Value, fields: Value) -> bool {
+        let person = json!({"id": 4242, "is_bot": false, "first_name": "Ada"});
+        let message =
+            json!({"message_id": 10, "date": 1_790_000_000, "chat": chat, "from": person});
+        let message: Message =
+            serde_json::from_str(&with(message, fields).to_string()).expect("a message");
+        let me = Me {
+            id: BOT_ID,
+            username: "helper_bot".to_string(),
+        };
+        should_process_message(&message, &handler(settings), &me)
+    }
+
+    fn in_group(settings: Value, fields: Value) -> bool {
+        starts(settings, group(), fields)
+    }
+
+    fn text(text: &str) -> Value {
+        json!({"text": text})
+    }
+
+    /// A text whose first word Telegram marks as a bot command.
+    fn command(text: &str) -> Value {
+        let length = text.split_whitespace().next().unwrap_or_default().len();
+        json!({"text": text, "entities": [{"type": "bot_command", "offset": 0, "length": length}]})
+    }
+
+    fn mention() -> Value {
+        let entity = json!({"type": "mention", "offset": 4, "length": 11});
+        json!({"text": "hey @Helper_Bot look", "entities": [entity]})
+    }
+
+    fn reply_to_the_bot() -> Value {
+        let bot = json!({"id": BOT_ID, "is_bot": true, "first_name": "Helper"});
+        let replied = json!({"message_id": 9, "date": 1_789_999_990, "chat": group(),
+            "from": bot, "text": "Sure?"});
+        json!({"text": "yes", "reply_to_message": replied})
+    }
+
+    fn slash() -> Value {
+        json!({"command_prefix": "/"})
+    }
+
+    #[test]
+    fn a_config_without_a_prefix_has_none() {
+        let unset = [
+            json!({}),
+            json!({"command_prefix": null}),
+            json!({"command_prefix": ""}),
+        ];
+        for settings in unset {
+            assert_eq!(sink(settings.clone()).command_prefix, "", "{settings}");
+        }
+        assert_eq!(sink(slash()).command_prefix, "/");
+        assert_eq!(sink(json!({"command_prefix": " "})).command_prefix, " ");
+    }
+
+    #[test]
+    fn flags_are_on_unless_the_config_turns_them_off() {
+        let nulls = json!({"respond_to_mentions": null, "respond_to_private": null});
+        for settings in [json!({}), nulls] {
+            let read = sink(settings);
+            assert!(read.respond_to_mentions && read.respond_to_private);
+        }
+        let off = sink(json!({"respond_to_mentions": false, "respond_to_private": false}));
+        assert!(!off.respond_to_mentions && !off.respond_to_private);
+    }
+
+    /// A registration is saved as tagged JSON, which serde reads through a buffer.
+    #[test]
+    fn a_saved_registration_reads_like_an_event_config() {
+        let read = |settings: Value| {
+            let tagged = json!({"sink_type": "telegram", "bot_token": "a-token"});
+            let saved = with(tagged, settings).to_string();
+            match serde_json::from_str(&saved).expect("a saved config") {
+                EventConfig::Telegram(sink) => sink,
+                other => panic!("a Telegram config, not {other:?}"),
+            }
+        };
+        let unset = read(json!({"command_prefix": null, "respond_to_mentions": null}));
+        assert_eq!(unset.command_prefix, "");
+        assert!(unset.respond_to_mentions && read(json!({})).respond_to_private);
+
+        let saved = serde_json::to_value(EventConfig::Telegram(sink(json!({})))).expect("JSON");
+        assert_eq!(saved["command_prefix"], "");
+        assert_eq!(read(saved).command_prefix, "");
+        assert_eq!(read(slash()).command_prefix, "/");
+    }
+
+    #[test]
+    fn the_spec_takes_the_settings_without_the_bounds_of_a_device() {
+        let chats: Vec<String> = (1..=300).map(|id| format!("-100{id}")).collect();
+        let prefix = "/".repeat(40);
+        let settings = json!({
+            "chat_whitelist": chats,
+            "chat_blacklist": ["7", "8"],
+            "respond_to_mentions": false,
+            "command_prefix": prefix,
+        });
+        let spec = sink(settings.clone()).spec(EVENT);
+        assert_eq!(spec.event_id, EVENT);
+        assert_eq!(spec.provider, Provider::Telegram);
+        assert_eq!(spec.allow, chats);
+        assert_eq!(spec.deny, ["7", "8"]);
+        assert!(!spec.respond_to_mentions && spec.respond_to_private);
+        assert_eq!(spec.command_prefix, prefix);
+
+        let prefixed = || text(&format!("{prefix} now"));
+        assert!(in_group(settings.clone(), prefixed()));
+        assert!(!starts(settings, private(), prefixed()), "off the list");
+
+        let private_off = sink(json!({"respond_to_private": false})).spec(EVENT);
+        assert!(private_off.respond_to_mentions && !private_off.respond_to_private);
+        assert!(private_off.allow.is_empty() && private_off.deny.is_empty());
+        assert_eq!(private_off.command_prefix, "");
+    }
+
+    /// Rule R in a group: what a plain message, one with the prefix, a mention and a reply to
+    /// the bot do under each pair of settings.
+    #[test]
+    fn groups_follow_the_rule_of_a_device() {
+        let prefix_only = json!({"command_prefix": "/", "respond_to_mentions": false});
+        let mentions_off = json!({"respond_to_mentions": false});
+        let rows = [
+            (slash(), [false, true, true, true]),
+            (prefix_only, [false, true, false, false]),
+            (json!({}), [true, true, true, true]),
+            (mentions_off, [true, true, true, true]),
+        ];
+        for (settings, expected) in rows {
+            let messages = [
+                text("just chatting"),
+                command("/ask now"),
+                mention(),
+                reply_to_the_bot(),
+            ];
+            let started = messages.map(|fields| in_group(settings.clone(), fields));
+            assert_eq!(started, expected, "{settings}");
+        }
+    }
+
+    #[test]
+    fn a_caption_counts_like_text() {
+        let photo = json!([{"file_id": "p1", "file_unique_id": "u1", "width": 90, "height": 90,
+            "file_size": 1000}]);
+        let captioned = |caption: &str| json!({"photo": photo, "caption": caption});
+        assert!(in_group(slash(), captioned("/describe this")));
+        assert!(!in_group(slash(), captioned("nice")));
+    }
+
+    #[test]
+    fn a_command_for_another_bot_is_no_prefix_match() {
+        assert!(!in_group(slash(), command("/ask@otherbot now")));
+        assert!(in_group(slash(), command("/ask@HELPER_BOT now")));
+        assert!(in_group(json!({}), command("/ask@otherbot now")));
+    }
+
+    #[test]
+    fn private_chats_follow_respond_to_private() {
+        assert!(starts(slash(), private(), text("hello")));
+        let groups_only = json!({"respond_to_private": false});
+        assert!(!starts(groups_only, private(), text("hello")));
+    }
+
+    #[test]
+    fn chat_lists_come_before_everything_else() {
+        let ask = || command("/ask");
+        assert!(in_group(json!({"chat_whitelist": ["-100200"]}), ask()));
+        assert!(!in_group(json!({"chat_whitelist": ["4242"]}), ask()));
+        assert!(!in_group(json!({"chat_blacklist": ["-100200"]}), ask()));
+        let deny = json!({"chat_blacklist": ["4242"]});
+        assert!(!starts(deny, private(), text("hello")));
+    }
+
+    /// A device ignores a message without text, caption or image; the desktop app considers
+    /// every one.
+    #[test]
+    fn messages_without_text_are_considered() {
+        let location = || json!({"location": {"latitude": 52.5, "longitude": 13.4}});
+        assert!(in_group(json!({}), location()));
+        assert!(!in_group(slash(), location()));
+    }
+
+    /// Stores the handler of `event_id` as registering the event does, with a bot of its own.
+    fn store(db: &DbConnection, event_id: &str, settings: Value) -> TelegramSink {
+        let token = json!({"bot_token": format!("token-of-{event_id}")});
+        let config = sink(with(settings, token));
+        let registration =
+            TelegramSink::create_event_registration(event_id.to_string(), config.clone());
+        TelegramSink::add_bot_and_handler(db, &registration, &config).expect("a stored handler");
+        config
+    }
+
+    /// What a restart does: `start` builds a handler from every row of the sink's tables.
+    #[tokio::test]
+    async fn a_restart_restores_the_prefix_as_it_was_saved() {
+        let connection = rusqlite::Connection::open_in_memory().expect("a database");
+        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
+        TelegramSink::init_tables(&db).expect("the tables");
+        let none = store(&db, "evt_none", json!({}));
+        let prefix_only = json!({"command_prefix": "/", "respond_to_mentions": false});
+        let slash = store(&db, "evt_slash", prefix_only);
+
+        let stored = TelegramSink::load_handlers_from_db(&db)
+            .await
+            .expect("the stored handlers");
+        let mut restored: Vec<BotSpec> = stored
+            .iter()
+            .map(|(registration, config)| config.spec(&registration.event_id))
+            .collect();
+        restored.sort_by(|a, b| a.event_id.cmp(&b.event_id));
+
+        assert_eq!(restored, [none.spec("evt_none"), slash.spec("evt_slash")]);
+        assert_eq!(restored[0].command_prefix, "");
+    }
+
+    /// TEMPORARY probe, removed before the lane ends: what storing a second event of the same
+    /// bot does to the first event's row.
+    #[tokio::test]
+    async fn probe_two_events_of_one_bot() {
+        let connection = rusqlite::Connection::open_in_memory().expect("a database");
+        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
+        TelegramSink::init_tables(&db).expect("the tables");
+        for event_id in ["evt_one", "evt_two"] {
+            let config = sink(json!({}));
+            let registration =
+                TelegramSink::create_event_registration(event_id.to_string(), config.clone());
+            TelegramSink::add_bot_and_handler(&db, &registration, &config).expect("stored");
+        }
+        let stored = TelegramSink::load_handlers_from_db(&db)
+            .await
+            .expect("the stored handlers");
+        let ids: Vec<&str> = stored
+            .iter()
+            .map(|(registration, _)| registration.event_id.as_str())
+            .collect();
+        eprintln!("PROBE telegram: restored handlers={ids:?}");
     }
 }

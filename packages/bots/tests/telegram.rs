@@ -15,7 +15,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use flow_like_bots::limits::{HourBudget, IMAGE_BYTES, IMAGE_BYTES_PER_HOUR, ImageBudget};
 use flow_like_bots::state::{BotEntry, Status};
-use flow_like_bots::telegram::{Timing, connect_to};
+use flow_like_bots::telegram::{Me, Timing, connect_to, facts_of};
 use flow_like_bots::{
     Bot, BotHost, BotSpec, BotToken, BotsState, Connection, Connector, Gate, Message, Provider,
     Revisions, RunEnd, StreamEvent, run_with,
@@ -488,7 +488,11 @@ fn timing() -> Timing {
 }
 
 fn spec() -> BotSpec {
-    BotSpec::from_config(EVENT, "telegram", b"{}").expect("valid settings")
+    spec_of(json!({}))
+}
+
+fn spec_of(config: Value) -> BotSpec {
+    BotSpec::from_config(EVENT, "telegram", config.to_string().as_bytes()).expect("valid settings")
 }
 
 fn bot_token(token: &str) -> BotToken {
@@ -511,9 +515,13 @@ impl Running {
 }
 
 fn start(api_url: String, token: &str, host: Arc<Host>) -> Running {
+    start_with(spec(), api_url, token, host)
+}
+
+fn start_with(spec: BotSpec, api_url: String, token: &str, host: Arc<Host>) -> Running {
     logs::capture();
     let bot = Bot {
-        spec: spec(),
+        spec,
         token: bot_token(token),
     };
     let connector = Arc::new(FakeTelegram {
@@ -553,6 +561,14 @@ fn text_update(id: i64, chat: i64, text: &str, sent: i64) -> Value {
         "message_id": id + 10, "date": sent,
         "chat": {"id": chat, "type": "private", "first_name": "Ada"},
         "from": {"id": chat, "is_bot": false, "first_name": "Ada"},
+        "text": text}})
+}
+
+fn group_update(id: i64, text: &str) -> Value {
+    json!({"update_id": id, "message": {
+        "message_id": id + 10, "date": now(),
+        "chat": {"id": -100_200, "type": "supergroup", "title": "Team"},
+        "from": {"id": 4242, "is_bot": false, "first_name": "Ada"},
         "text": text}})
 }
 
@@ -918,6 +934,69 @@ async fn waiting_nodes_see_every_update_and_take_replies_in_a_busy_chat() {
     running.stop().await;
     assert_eq!(host.runs(), 1, "a reply a waiting node took started a run");
     assert_eq!(host.entry().expect("a state entry").watermark, Some(702));
+}
+
+#[tokio::test]
+async fn a_group_message_starts_a_run_without_a_prefix_and_needs_it_with_one() {
+    let token = token("group");
+    let api = Api::new(&token);
+    api.push(group_update(900, "just chatting"));
+    let url = serve(api.clone()).await;
+
+    let every = Host::new(None);
+    let running = start(url.clone(), &token, every.clone());
+    until("the plain group message runs", || every.runs() == 1).await;
+    running.stop().await;
+    let session = &every.seen()[0].payload["local_session"];
+    assert_eq!(session["chat_type"], "supergroup");
+    assert_eq!(session["message_id"], "910");
+
+    api.script(|script| script.pending.clear());
+    api.push(group_update(901, "just chatting"));
+    api.push(group_update(902, "/ask now"));
+    let prefixed = Host::new(None);
+    let slash = spec_of(json!({"command_prefix": "/"}));
+    let running = start_with(slash, url, &token, prefixed.clone());
+    until("the message with the prefix runs", || prefixed.runs() == 1).await;
+    running.stop().await;
+    let entry = prefixed.entry().expect("a state entry");
+    assert_eq!((entry.messages, entry.ignored, entry.runs), (2, 1, 1));
+    let session = &prefixed.seen()[0].payload["local_session"];
+    assert_eq!(session["message_id"], "912");
+}
+
+/// What the desktop app calls: the bot of `getMe` and the facts of a message it keeps.
+#[test]
+fn facts_are_read_by_reference_without_keeping_the_message() {
+    let reported: teloxide::types::Me =
+        serde_json::from_str(&me().to_string()).expect("the answer of getMe");
+    let bot = Me::of(&reported);
+    let named = Me {
+        id: BOT_ID,
+        username: "helper_bot".to_string(),
+    };
+    assert_eq!(bot, named);
+
+    let text = "/ask@otherbot hey @Helper_Bot";
+    let entities = json!([{"type": "bot_command", "offset": 0, "length": 13},
+        {"type": "mention", "offset": 18, "length": 11}]);
+    let update = group_update(41, text);
+    let mut message = update["message"].clone();
+    message["entities"] = entities;
+    let message: teloxide::types::Message =
+        serde_json::from_str(&message.to_string()).expect("a group message");
+
+    let facts = facts_of(&message, &bot);
+    assert_eq!(facts.chat, "-100200");
+    assert_eq!(facts.text, text);
+    assert!(facts.addressed && facts.foreign_command && !facts.private);
+    assert_eq!((facts.update_id, facts.sent_at), (None, None));
+    assert!(facts.native::<teloxide::types::Message>().is_none());
+
+    assert!(spec().admits(&facts), "no prefix: every message");
+    assert!(spec_of(json!({"command_prefix": "/"})).admits(&facts));
+    let only = json!({"command_prefix": "/", "respond_to_mentions": false});
+    assert!(!spec_of(only).admits(&facts), "another bot's command");
 }
 
 fn photo(file: &str, size: u64) -> Message {

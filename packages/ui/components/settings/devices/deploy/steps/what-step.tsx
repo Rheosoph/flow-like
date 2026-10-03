@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { useInvoke } from "../../../../../hooks/use-invoke";
-import type { BotFacts } from "../../../../../lib/device-management/bot-config";
 import type { EventEligibility } from "../../../../../lib/device-management/deployment";
 import {
 	type AppEventInput,
@@ -36,6 +35,7 @@ import {
 } from "../../../../../lib/device-management/schedule";
 import { useBackend } from "../../../../../state/backend-state";
 import { appCopy } from "../../copy/app-copy";
+import { BotAnswersLine } from "../../copy/bot-answers-line";
 import {
 	eligibilityCopy,
 	eligibilityFixLabel,
@@ -779,40 +779,6 @@ function botToday(
 			};
 }
 
-/**
- * What a bot answers in groups and servers (§5.5). A Telegram bot: mentions and
- * replies, its prefix, both or nothing. A Discord bot reads no prefix, like the
- * desktop app's: mentions and replies, or every message.
- */
-function botAnswersText(t: DevicesT, bot: BotFacts): string {
-	if (bot.provider === "discord" && !bot.mentions)
-		return t(
-			"deploy.what.botAnswersEvery",
-			"In servers it answers every message in its channels, not only mentions and replies.",
-		);
-	if (bot.mentions)
-		return bot.prefix
-			? t(
-					"deploy.what.botAnswersPrefix",
-					"In groups and servers it answers mentions, replies and every message that starts with {{prefix}}.",
-					{ prefix: bot.prefix },
-				)
-			: t(
-					"deploy.what.botAnswers",
-					"In groups and servers it answers mentions and replies.",
-				);
-	return bot.prefix
-		? t(
-				"deploy.what.botAnswersPrefixOnly",
-				"In groups and servers it answers every message that starts with {{prefix}}.",
-				{ prefix: bot.prefix },
-			)
-		: t(
-				"deploy.what.botAnswersNone",
-				"In groups and servers it answers nothing; only private messages start runs.",
-			);
-}
-
 /** A Telegram or Discord bot: where it runs today, what it answers in groups, and that it stays connected. */
 function BotLines({
 	row,
@@ -829,7 +795,7 @@ function BotLines({
 		<>
 			{sub ? <CellSub>{runs}</CellSub> : runs}
 			{today ? <CellSub data-bot-where={today.at}>{today.text}</CellSub> : null}
-			<CellSub data-bot-answers="">{botAnswersText(t, bot)}</CellSub>
+			<BotAnswersLine as={CellSub} bot={bot} />
 		</>
 	);
 }

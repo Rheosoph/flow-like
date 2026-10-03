@@ -1,4 +1,5 @@
-import type { IEvent } from "@flow-like/flow-like-ui";
+import { type IEvent, IEventExecutionMode } from "@flow-like/flow-like-ui";
+import { withDeviceEventSource } from "@flow-like/flow-like-ui/lib/event-source";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -26,13 +27,20 @@ function event(overrides: Partial<IEvent> = {}): IEvent {
 	return {
 		id: "event-1",
 		name: "Nightly report",
+		description: "",
 		active: true,
 		event_type: "cron",
-		execution_mode: "Local",
+		execution_mode: IEventExecutionMode.Local,
 		board_id: "",
+		node_id: "node-1",
 		config: [],
+		event_version: [0, 0, 0],
+		created_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+		updated_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+		priority: 0,
+		variables: {},
 		...overrides,
-	} as IEvent;
+	};
 }
 
 function offlineBackend() {
@@ -102,6 +110,89 @@ describe("local trigger consent when saving an event", () => {
 		await state.upsertEvent("app-1", event());
 
 		expect(calls("upsert_event")[0]?.registerSink).toBe("skip");
+	});
+
+	test("creates a device event without registering a source trigger or requesting local permissions", async () => {
+		const backend = offlineBackend();
+		const state = new EventState(backend as never);
+		const target = event({ board_id: "board-1" });
+
+		await state.upsertEvent("app-1", target, undefined, undefined, undefined, {
+			source: "device",
+		});
+
+		expect(mocks.consent).not.toHaveBeenCalled();
+		expect(backend.boardState.getBoard).not.toHaveBeenCalled();
+		expect(calls("local_sink_registration_plan")).toHaveLength(0);
+		expect(calls("upsert_event")).toEqual([
+			expect.objectContaining({
+				event: withDeviceEventSource(target),
+				enforceId: true,
+				registerSink: "skip",
+			}),
+		]);
+		expect(target.active).toBe(true);
+	});
+
+	test("disables both hub and local source triggers when creating an online device event", async () => {
+		const state = new EventState(onlineBackend() as never);
+		const target = event();
+		mocks.fetcher
+			.mockResolvedValueOnce({ device_event_creation: true })
+			.mockResolvedValueOnce(withDeviceEventSource(target));
+
+		await state.upsertEvent("app-1", target, undefined, undefined, undefined, {
+			source: "device",
+		});
+
+		const request = mocks.fetcher.mock.calls[1]?.[2] as { body: string };
+		expect(JSON.parse(request.body)).toMatchObject({
+			register_source: false,
+			event: { id: target.id, active: true },
+		});
+		expect(calls("upsert_event")[0]).toMatchObject({
+			event: withDeviceEventSource(target),
+			registerSink: "skip",
+		});
+		expect(mocks.consent).not.toHaveBeenCalled();
+	});
+
+	test("refuses an older hub before writing either source copy", async () => {
+		const state = new EventState(onlineBackend() as never);
+		mocks.fetcher.mockResolvedValue({});
+
+		await expect(
+			state.upsertEvent("app-1", event(), undefined, undefined, undefined, {
+				source: "device",
+			}),
+		).rejects.toThrow("Update the hub");
+
+		expect(mocks.fetcher).toHaveBeenCalledTimes(1);
+		expect(calls("upsert_event")).toHaveLength(0);
+	});
+
+	test("editing a device event keeps source triggers disabled without creation options", async () => {
+		const state = new EventState(offlineBackend() as never);
+		const target = withDeviceEventSource(event({ name: "Updated schedule" }));
+
+		await state.upsertEvent("app-1", target);
+
+		expect(calls("upsert_event")[0]).toMatchObject({
+			event: target,
+			registerSink: "skip",
+		});
+		expect(mocks.consent).not.toHaveBeenCalled();
+	});
+
+	test("reports a failed removal of the source trigger before deployment can start", async () => {
+		const state = new EventState(offlineBackend() as never);
+		mocks.invoke.mockRejectedValue(new Error("Source trigger removal failed"));
+
+		await expect(
+			state.upsertEvent("app-1", event(), undefined, undefined, undefined, {
+				source: "device",
+			}),
+		).rejects.toThrow("Source trigger removal failed");
 	});
 
 	test("abandons the save when the dialog is dismissed", async () => {

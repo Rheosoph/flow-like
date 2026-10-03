@@ -60,13 +60,15 @@ pub struct Message {
     pub private: bool,
     /// The bot is mentioned in it, or it replies to one of the bot's messages.
     pub addressed: bool,
-    /// Telegram: the text, or the caption, which the prefix is matched against. Discord: empty.
+    /// What the prefix is matched against: the text or the caption (Telegram), the content
+    /// (Discord).
     pub text: String,
-    /// Its leading command is addressed to another bot (`/x@otherbot`).
+    /// Telegram: its leading command is addressed to another bot (`/x@otherbot`).
     pub foreign_command: bool,
     /// A waiting flow node took it (`Intake::observed`).
     pub observed: bool,
-    /// The provider's own message, handed back to `payload`, `reply` and `notice`.
+    /// The provider's own message, handed back to `payload`, `reply` and `notice`; `()` when
+    /// only the facts were read (`facts_of`).
     pub native: Box<dyn Any + Send + Sync>,
 }
 

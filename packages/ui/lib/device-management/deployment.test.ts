@@ -1771,6 +1771,30 @@ test("the rule names what a device can't read, and what a runnable event shows",
 		mentions: true,
 	});
 	expect(telegram.readiness).toBe("explicit");
+	// A Discord bot's prefix is read like a Telegram bot's, and refused like it.
+	const discord = eventEligibility(
+		approvedEvent(withConfig("discord", DISCORD_DEFAULT)),
+	);
+	expect(discord.bot).toEqual({
+		provider: "discord",
+		open: true,
+		savedToken: false,
+		prefix: "!",
+		mentions: true,
+	});
+	const longPrefix = eventEligibility(
+		approvedEvent(
+			withConfig("discord", {
+				...DISCORD_DEFAULT,
+				command_prefix: "x".repeat(17),
+			}),
+		),
+	);
+	expect([longPrefix.code, longPrefix.detail, longPrefix.bot]).toEqual([
+		"bot_invalid",
+		"command_prefix",
+		undefined,
+	]);
 	const page = eventEligibility(
 		approvedEvent({
 			...withConfig("api", { path: "/services" }),

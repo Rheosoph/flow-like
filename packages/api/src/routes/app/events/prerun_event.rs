@@ -159,6 +159,7 @@ pub async fn prerun_event(
     let version = query.version.as_ref().and_then(|v| parse_version(v));
 
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
+    super::ensure_source_execution_allowed(&event)?;
     // Prerun discloses the full board/flow definition; hold connected apps to
     // the same surface policy as invoke (only directly-callable events, never
     // the REST/MCP events they must reach through the proxy).
@@ -231,6 +232,7 @@ pub async fn prerun_page_event(
     let permission =
         ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
+    super::ensure_source_execution_allowed(&event)?;
     super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
 
     let requested_version = query

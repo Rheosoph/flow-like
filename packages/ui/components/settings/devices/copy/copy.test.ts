@@ -17,6 +17,7 @@ import {
 	attentionNames,
 	defaultCopyTime,
 } from "./attention-copy";
+import { botAnswersText } from "./bot-copy";
 import {
 	agentTooOldCopy,
 	cantHereCopy,
@@ -330,6 +331,35 @@ describe("eligibility copy", () => {
 				route: { method: "GET", path: "/orders" },
 			}),
 		).toBe("GET /orders · served by the device");
+	});
+});
+
+describe("bot copy", () => {
+	test("what a bot answers in groups and servers has one sentence per case", () => {
+		const says = (
+			provider: "telegram" | "discord",
+			prefix: string,
+			mentions: boolean,
+		) => botAnswersText(t, { provider, prefix, mentions });
+		const every =
+			"In groups and servers it answers every message: no command prefix is set.";
+		for (const provider of ["telegram", "discord"] as const) {
+			expect(says(provider, "!", true)).toBe(
+				"In groups and servers it answers mentions, replies and every message that starts with !.",
+			);
+			expect(says(provider, "!", false)).toBe(
+				"In groups and servers it answers every message that starts with !.",
+			);
+			expect(says(provider, "", false)).toBe(every);
+		}
+		expect(says("telegram", "", true)).toBe(every);
+		expect(says("discord", "", true)).toBe(
+			"In groups and servers it answers mentions and replies.",
+		);
+		// The prefix is shown as saved, never escaped or trimmed.
+		expect(says("telegram", "<&> ", false)).toBe(
+			"In groups and servers it answers every message that starts with <&> .",
+		);
 	});
 });
 

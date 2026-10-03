@@ -24,11 +24,11 @@ Gateway mode is used by the desktop adapter and is also available to the Docker 
 | `token` | Gateway | Discord bot token |
 | `webhook_secret` | Webhook | Discord application public key, despite the legacy field name |
 | `intents` | Gateway | Requested Gateway intents |
-| `channel_whitelist` | Desktop Gateway | Process only listed channel IDs when non-empty |
-| `channel_blacklist` | Desktop Gateway | Ignore listed channel IDs |
-| `respond_to_mentions` | Desktop and device Gateway | In guilds, require a mention or a reply to the bot when enabled; answer every message when disabled |
+| `channel_whitelist` | Desktop and device Gateway | Process only listed channel IDs when non-empty |
+| `channel_blacklist` | Desktop and device Gateway | Ignore listed channel IDs |
+| `respond_to_mentions` | Desktop and device Gateway | In a server channel, start a run for a message that mentions the bot or replies to one of its messages. When disabled, only the prefix counts, or every message when no prefix is set; see [Gateway setup](#gateway-setup) |
 | `respond_to_dms` | Gateway | Accept direct messages |
-| `command_prefix` | Sink-service Gateway | Start a run only for messages that begin with the prefix. The desktop app and devices do not read it |
+| `command_prefix` | Gateway | In a server channel, start a run for a message that begins with the prefix. The Events editor writes `!` for a new event; a config without the key, or with an empty value, has no prefix. The desktop app and a device combine it with `respond_to_mentions`; the Docker Compose sink service uses it on its own. Both are described under [Gateway setup](#gateway-setup) |
 | `bot_name`, `bot_description` | UI metadata | Display information for the event configuration |
 
 The default desktop intents are `Guilds`, `GuildMessages`, and `MessageContent`. `MessageContent`, `GuildMembers`, and `GuildPresences` are privileged intents and must also be enabled in the Discord Developer Portal if selected.
@@ -40,7 +40,22 @@ The default desktop intents are `Guilds`, `GuildMessages`, and `MessageContent`.
 3. Enable only the Gateway intents the event needs.
 4. Add the bot to the relevant server and activate the event.
 
-The adapter ignores messages authored by bots. It then applies direct-message, channel, prefix, and mention rules before dispatching the event.
+The desktop app and a device ignore messages authored by bots. Both then apply the same rules, in this order, before they start a run:
+
+1. The channel must pass the lists: `channel_whitelist` is empty or contains it, and `channel_blacklist` does not contain it. The lists apply to direct messages too.
+2. A direct message starts a run when `respond_to_dms` is enabled. It needs no prefix and no mention.
+3. A message in a server channel starts a run according to `command_prefix` and `respond_to_mentions`:
+
+| `command_prefix` | `respond_to_mentions` | Messages in a server channel that start a run |
+|---|---|---|
+| Set | Enabled | Messages that begin with the prefix, messages that mention the bot, and replies to one of the bot's messages |
+| Set | Disabled | Messages that begin with the prefix |
+| Not set | Enabled | Messages that mention the bot and replies to one of the bot's messages |
+| Not set | Disabled | Every message |
+
+No prefix is set when the key is missing, `null` or empty. A prefix is compared with the beginning of the message exactly as saved: case counts and nothing is trimmed, so a single space is a prefix. A mention counts when it names the bot itself, not `@everyone`, `@here` or a role.
+
+The Docker Compose sink service applies its own rule instead. It ignores messages authored by bots, requires `respond_to_dms` for a direct message, and then starts a run for every message that begins with `command_prefix`, in a server channel and in a direct message alike; without a prefix, every message starts a run. `respond_to_mentions` and the channel lists have no effect there, so a mention does not replace the prefix. `guild_id` and `channel_id`, one numeric ID each, limit an event to one server or one channel.
 
 :::caution
 A Discord bot token is a credential. Rotate it if it appears in source control, logs, screenshots, or copied support material.
@@ -92,13 +107,13 @@ Deploys strip the bot token from the event. The deploy wizard asks for it in its
 A device applies these rules:
 
 - **One place.** For an online app, only someone who can edit the app's events can move a bot to a device; the deploy does it for them. A second device or service is refused. While a device holds the bot, the hub's interactions endpoint answers with a short notice and starts no run. A bot that this computer's desktop app runs has to be stopped there before it can be deployed; the wizard does it in one click. Discord accepts several connections with one token and reports none of them: when the same token also runs elsewhere (on another computer, in another service or in another program), every message is answered twice.
-- **Which messages start a run.** A new message of the kind Default or Reply, so no edit and no system message, from an author that is neither a bot nor a webhook, with text or an image. The allow list (`channel_whitelist`) must be empty or contain the channel, and the deny list (`channel_blacklist`) must not contain it. A direct message needs `respond_to_dms`, and the device adds the `DirectMessages` intent for it. In a server channel the bot follows the desktop app's rule: with `respond_to_mentions` on it answers when it is mentioned or replied to, and with it off it answers every message. `command_prefix` is not read. When two events of a service use the same bot, a message starts one run: of the first event in the service's list whose rules it passes.
+- **Which messages start a run.** A device considers fewer messages than the desktop app: only a new message of the kind Default or Reply, so no edit and no system message, from an author that is neither a bot nor a webhook, with text or an image. Such a message must then pass the same rules as on the desktop, listed under [Gateway setup](#gateway-setup). The allow list (`channel_whitelist`) must be empty or contain the channel, and the deny list (`channel_blacklist`) must not contain it. A direct message needs `respond_to_dms`, and the device adds the `DirectMessages` intent for it. In a server channel the table there applies: with a prefix the bot answers messages that begin with it, and with `respond_to_mentions` on also mentions and replies; with no prefix it answers every message, or only mentions and replies when `respond_to_mentions` is on. When two events of a service use the same bot, a message starts one run: of the first event in the service's list whose rules it passes.
 - **What the flow receives.** The `Chat` payload of the desktop adapter. `local_session` holds the handle, `bot_user_id`, `guild_id`, `channel_id`, `message_id` and `user`. `messages` holds up to 10 earlier messages of the channel, read once per message, and then the message itself, each as `{name}[id: {id}]: {text}` with images as Discord CDN links. `attachments` holds links to the message's other files.
 - **Limits.** One run per channel at a time with four messages waiting, eight runs at once per service, ten runs a minute per channel and sixty per bot. A message over a limit is not answered, and its channel gets one notice a minute. A run is stopped after 30 minutes. A run that asks a question is cancelled, because nobody can answer it there.
 - **Answers.** The answer streams into one reply that is edited as the flow writes, split into messages of at most 2,000 characters. Files of the answer are sent as links. An answer can mention people, but never pings `@everyone`, `@here` or a role.
 - **Restarts and updates.** Discord does not keep messages for a bot that is offline, so messages sent while the service stops, restarts or updates are not answered. A run that a stop cuts off is not started again, and messages still waiting behind it are not answered; their channels get one notice to send the message again.
 - **Connection problems.** A refused token or refused intents leave the service running and stop the bot until the service restarts, and the service's status names the fix. Discord refuses the default intents until **Message Content Intent** is enabled for the bot in the Developer Portal. When the connection ends for another reason, the device starts it again after a pause that grows from 5 seconds to 5 minutes, at most 20 times an hour: Discord allows 1,000 session starts a day per token and resets the token of a bot that uses more.
-- **Settings.** The lists hold at most 256 channel IDs, and `intents` only the known intent names; a deploy refuses anything else. The device runs the event version it was deployed with, so edits in Events take effect with the next update of the service.
+- **Settings.** The lists hold at most 256 channel IDs, the prefix at most 16 characters, and `intents` only the known intent names; a deploy refuses anything else. A missing, `null` or empty `command_prefix` means no prefix. The device runs the event version it was deployed with, so edits in Events take effect with the next update of the service.
 
 Anyone who can message a bot with an empty allow list can start runs. Every run counts towards the service's usage, and hosted models spend from its spending limit. Runs carry no personal access token and no signed-in provider tokens (an online service's runs use its cloud access), so a flow that needs a signed-in provider works on the desktop and fails on a device. The token stays on the device when its cloud access ends: to cut a device off for certain, reset the token in the Developer Portal.
 
@@ -108,7 +123,7 @@ Anyone who can message a bot with an empty allow list can start runs. Every run 
 |---|---|
 | Discord rejects the endpoint URL | Event is active, URL is publicly reachable, public key is correct |
 | Gateway connects but sees no content | `MessageContent` is selected and enabled in the Developer Portal |
-| Guild messages are ignored | Mention, prefix, and channel filters |
+| Guild messages are ignored | The channel lists, then the row of the table under [Gateway setup](#gateway-setup) that matches `command_prefix` and `respond_to_mentions`. A prefix needs the `MessageContent` intent: without it Discord sends no text for messages that do not mention the bot |
 | DMs are ignored | `respond_to_dms` |
 | Webhook returns `401` | Signature headers, request body integrity, and application public key |
 | A device reports that Discord refused the bot's permissions | Enable **Message Content Intent** (and any other privileged intent the event selects) in the Developer Portal, then restart the service |

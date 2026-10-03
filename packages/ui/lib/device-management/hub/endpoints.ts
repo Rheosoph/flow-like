@@ -521,6 +521,7 @@ const appPlacementsSchema: z.ZodType<
 	schedules: scheduleRows.optional(),
 	// Absent on a hub before Endpoints, forms and bots on devices: its presence is that capability.
 	event_types: eventTypes,
+	device_event_creation: z.boolean().optional().catch(undefined),
 	server_time: time,
 	placements: z
 		.array(

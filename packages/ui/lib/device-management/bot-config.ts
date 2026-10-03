@@ -9,17 +9,24 @@ export type BotProvider = "telegram" | "discord";
 
 export const BOT_EVENT_TYPES = ["telegram", "discord"] as const;
 
-/** What the What step says about a bot; `prefix` and `mentions` are the effective values. */
+/** What the What step and the Events editor say about a bot; `prefix` and `mentions` are the effective values. */
 export interface BotFacts {
 	provider: BotProvider;
 	/** No allowed chats or channels: anyone who can message the bot starts runs. */
 	open: boolean;
 	/** The event record carries a token of its own (offered in Settings, never shown). */
 	savedToken: boolean;
-	/** Telegram only: a Discord bot reads no prefix, like the desktop app's, so it is empty there. */
+	/** Empty when no command prefix is set. Never trimmed: a blank is a prefix. */
 	prefix: string;
 	mentions: boolean;
 }
+
+/** Which messages of a group or server channel start a run. */
+export type BotAnswerCase =
+	| "prefix_and_mentions"
+	| "prefix_only"
+	| "mentions"
+	| "every";
 
 export type DeviceBotResult =
 	| { ok: true; bot: BotFacts }
@@ -53,22 +60,19 @@ export const DISCORD_INTENTS = [
 	"AutoModerationExecution",
 ] as const;
 
-/** `prefix` is the default a device reads; null where it reads no prefix at all. */
 const SETTINGS: Record<
 	BotProvider,
-	{ allow: string; deny: string; private: string; prefix: string | null }
+	{ allow: string; deny: string; private: string }
 > = {
 	telegram: {
 		allow: "chat_whitelist",
 		deny: "chat_blacklist",
 		private: "respond_to_private",
-		prefix: "/",
 	},
 	discord: {
 		allow: "channel_whitelist",
 		deny: "channel_blacklist",
 		private: "respond_to_dms",
-		prefix: null,
 	},
 };
 
@@ -111,7 +115,7 @@ function intentProblem(intents: unknown): string | null {
 		: `intents: ${String(unknown).slice(0, 64)}`;
 }
 
-/** The first setting a device can't read; a key that is absent or `null` takes its default. */
+/** The first setting a device can't read, in the order a device checks them; a key that is absent or `null` takes its default. */
 function settingProblem(
 	provider: BotProvider,
 	config: Record<string, unknown>,
@@ -122,8 +126,8 @@ function settingProblem(
 		[keys.deny, readList],
 		["respond_to_mentions", flag],
 		[keys.private, flag],
+		["command_prefix", readPrefix],
 	];
-	if (keys.prefix !== null) rules.push(["command_prefix", readPrefix]);
 	const failed = rules.find(
 		([key, valid]) => config[key] != null && !valid(config[key]),
 	);
@@ -150,24 +154,33 @@ export function deviceBot(
 	const record = config as Record<string, unknown>;
 	const problem = settingProblem(provider, record);
 	if (problem) return { ok: false, problem: "bot_invalid", detail: problem };
-	const keys = SETTINGS[provider];
-	const allow = record[keys.allow];
-	const saved = record.command_prefix;
+	const allow = record[SETTINGS[provider].allow];
+	const prefix = record.command_prefix;
 	return {
 		ok: true,
 		bot: {
 			provider,
 			open: !Array.isArray(allow) || allow.length === 0,
 			savedToken: savedBotToken(eventType, config) !== null,
-			prefix:
-				keys.prefix === null
-					? ""
-					: typeof saved === "string"
-						? saved
-						: keys.prefix,
+			prefix: typeof prefix === "string" ? prefix : "",
 			mentions: record.respond_to_mentions !== false,
 		},
 	};
+}
+
+/**
+ * What a bot answers in a group or server channel its lists allow: the client's
+ * copy of the rule a device and the desktop app decide by (`BotSpec::admits`).
+ * With a prefix it answers messages that start with it, plus mentions and
+ * replies while `mentions` is on. Without one it answers every message, except
+ * a Discord bot with `mentions` on, which answers mentions and replies only.
+ */
+export function botAnswerCase(
+	bot: Pick<BotFacts, "provider" | "prefix" | "mentions">,
+): BotAnswerCase {
+	if (bot.prefix !== "")
+		return bot.mentions ? "prefix_and_mentions" : "prefix_only";
+	return bot.provider === "discord" && bot.mentions ? "mentions" : "every";
 }
 
 const TOKEN_KEY = /^event\.([A-Za-z0-9_.-]{1,112})\.bot_token$/;

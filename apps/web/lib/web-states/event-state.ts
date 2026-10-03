@@ -32,6 +32,10 @@ import {
 	withDeviceCommandBridge,
 } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
+	isDeviceEventSource,
+	withDeviceEventSource,
+} from "@flow-like/flow-like-ui/lib/event-source";
+import {
 	requestTimeoutMs,
 	withRequestDeadline,
 } from "@flow-like/flow-like-ui/lib/request-deadline";
@@ -46,7 +50,10 @@ import type {
 	TeamsBotPackage,
 	TeamsBotSetup,
 } from "@flow-like/flow-like-ui/lib/teams-bot";
-import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
+import type {
+	IEventUpsertOptions,
+	IOAuthCheckResult,
+} from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type {
 	ICanaryExplainResult,
 	ICanaryPromoteResult,
@@ -272,11 +279,24 @@ export class WebEventState implements IEventState {
 
 	async upsertEvent(
 		appId: string,
-		event: IEvent,
+		inputEvent: IEvent,
 		versionType?: IVersionType,
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
+		options?: IEventUpsertOptions,
 	): Promise<IEvent> {
+		const deviceSource =
+			options?.source === "device" || isDeviceEventSource(inputEvent);
+		const event = deviceSource ? withDeviceEventSource(inputEvent) : inputEvent;
+		if (deviceSource) {
+			const capabilities = await apiGet<{ device_event_creation?: boolean }>(
+				`apps/${appId}/device-placements`,
+				this.backend.auth,
+			);
+			if (capabilities?.device_event_creation !== true) {
+				throw new Error("Update the hub to create events directly on devices.");
+			}
+		}
 		return apiPut<IEvent>(
 			`apps/${appId}/events/${event.id}`,
 			{
@@ -285,6 +305,7 @@ export class WebEventState implements IEventState {
 				pat: personalAccessToken,
 				oauth_tokens: oauthTokens,
 				profile_id: this.backend.profile?.id,
+				...(deviceSource ? { register_source: false } : {}),
 			},
 			this.backend.auth,
 		);
@@ -803,6 +824,7 @@ export class WebEventState implements IEventState {
 		context?: IEventSinkStatusContext,
 	): Promise<boolean> {
 		if (context) {
+			if (isDeviceEventSource(context.event)) return false;
 			if (!context.event.active) return false;
 			// Hosted endpoints use the event's enabled flag. Their setup
 			// registrations are separate from worker sink registrations.

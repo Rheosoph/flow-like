@@ -705,7 +705,7 @@ async fn the_first_event_whose_filter_passes_takes_the_message() {
     let mut running = Running::start(
         vec![
             bot("evt_admins", json!({"chat_whitelist": ["1"]}), TOKEN),
-            bot("evt_everyone", json!({"respond_to_private": true}), TOKEN),
+            bot("evt_everyone", json!({"command_prefix": "/"}), TOKEN),
         ],
         host.clone(),
         fake.clone(),
