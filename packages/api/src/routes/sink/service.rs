@@ -68,6 +68,9 @@ pub struct SinkConfig {
     pub profile_json: Option<serde_json::Value>,
     /// Whether the sink should be active (synced from event.active)
     pub active: Option<bool>,
+    /// Drops the stored path and method so the row no longer holds the unique
+    /// (app, path, method) slot; set for events that never serve on the hub.
+    pub release_route: bool,
 }
 
 /// Sync a sink to the database and external schedulers
@@ -106,6 +109,11 @@ pub async fn sync_sink(
         let new_active = config.active.unwrap_or(old_active);
         if new_active != old_active {
             active_model.active = Set(new_active);
+        }
+
+        if config.release_route {
+            active_model.path = Set(None);
+            active_model.method = Set(None);
         }
 
         // Only update optional fields if provided

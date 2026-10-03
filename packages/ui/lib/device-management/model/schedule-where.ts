@@ -107,7 +107,9 @@ export type ScheduleWhere =
 			serviceId?: string;
 	  }
 	/** Handed back; the hub runs it again at `hubResumesAt`. */
-	| { fact: "returning"; hubResumesAt: number };
+	| { fact: "returning"; hubResumesAt: number }
+	/** A device-only event no service holds: the hub never runs it, so only a deploy puts it anywhere. */
+	| { fact: "device_only" };
 
 export interface ScheduleWhereDevice {
 	id: string;
@@ -502,13 +504,29 @@ export function scheduleWheres(
 	);
 }
 
-/** Where a claimed event of an online app runs once the hub's list is known: the hub when it is not listed. */
+const HUB_FACTS = new Set<ScheduleWhere["fact"]>([
+	"hub",
+	"released",
+	"returning",
+]);
+
+/**
+ * Where a claimed event of an online app runs once the hub's list is known:
+ * the hub when it is not listed. A device-only event has no hub to fall back
+ * to, so the facts that say the hub runs it (or will) read `device_only`.
+ */
 export function whereOf(
 	wheres: Readonly<Record<string, ScheduleWhere>> | null | undefined,
 	eventId: string,
+	deviceOnly = false,
 ): ScheduleWhere | undefined {
 	if (!wheres) return undefined;
-	return Object.hasOwn(wheres, eventId) ? wheres[eventId] : { fact: "hub" };
+	const where: ScheduleWhere = Object.hasOwn(wheres, eventId)
+		? wheres[eventId]
+		: { fact: "hub" };
+	return deviceOnly && HUB_FACTS.has(where.fact)
+		? { fact: "device_only" }
+		: where;
 }
 
 /**

@@ -146,6 +146,9 @@ interface StageProps {
 	platform?: "desktop" | "web";
 	/** The frame's sentence for the plan's first problem. */
 	blockingText?: string;
+	footerContainer?: HTMLElement | null;
+	embedded?: boolean;
+	deployMore?(): void;
 }
 
 const STEPS: Partial<
@@ -193,6 +196,9 @@ function Stage(stage: StageProps) {
 				onFinished={(result) => sink.results.push(result)}
 				prepared={prepared}
 				blockingText={stage.blockingText}
+				footerContainer={stage.footerContainer}
+				embedded={stage.embedded}
+				deployMore={stage.deployMore}
 				reportDeviceCheck={(deviceId, value) => {
 					sink.checks[deviceId] = value;
 				}}
@@ -1106,6 +1112,76 @@ describe("Review (APP §3.12)", () => {
 		expect(sink.steps).toEqual(["access_cost"]);
 	});
 
+	test("inside a dialog the blocked primary moves to the host footer as a disabled button with the reason and the way to the setting", async () => {
+		const footer = document.createElement("footer");
+		document.body.append(footer);
+		try {
+			const { fake, sink, container } = await mountStage({
+				app: VISITOR_PLAN_APP,
+				initial: visitorDraft([EDGE], {
+					approval: {
+						files: "read_only",
+						ownerConsent: false,
+						models: [],
+						maxInstances: 1,
+						expiresAt: NOW0 + 30 * 86_400,
+					},
+				}),
+				start: "review",
+				prepared: await bundleOf(
+					"app_visitor_checkin",
+					"online",
+					VISITOR_CATALOG,
+				),
+				footerContainer: footer,
+			});
+			const label = "Deploy Check-in page to edge-berlin-01";
+			expect(container.querySelector("[data-deploy-action]")).toBeNull();
+			const deploy = byRole("button", label, footer) as HTMLButtonElement;
+			expect(deploy.disabled).toBe(true);
+			expect(deploy.className).toContain("h-11");
+			expect(text(footer)).toContain(
+				"Access & cost needs your attention first.",
+			);
+			await click(byRole("button", "Open required settings", footer));
+			expect(sink.steps).toEqual(["access_cost"]);
+			await click(deploy);
+			expect(fake.workspace.activity.runs()).toEqual([]);
+		} finally {
+			footer.remove();
+		}
+	});
+
+	test("inside a dialog the unblocked primary starts the run from the footer", async () => {
+		const footer = document.createElement("footer");
+		document.body.append(footer);
+		try {
+			const { fake, sink } = await mountStage({
+				app: VISITOR_PLAN_APP,
+				initial: visitorDraft([EDGE]),
+				start: "review",
+				prepared: await bundleOf(
+					"app_visitor_checkin",
+					"online",
+					VISITOR_CATALOG,
+				),
+				footerContainer: footer,
+			});
+			serveArtifacts(fake.agent(EDGE));
+			const deploy = byRole(
+				"button",
+				"Deploy Check-in page to edge-berlin-01",
+				footer,
+			) as HTMLButtonElement;
+			expect(deploy.disabled).toBe(false);
+			await click(deploy);
+			expect(sink.steps).toEqual(["rollout"]);
+			expect(footer.querySelector("[data-deploy-action]")).toBeNull();
+		} finally {
+			footer.remove();
+		}
+	});
+
 	test("the frame's sentence for the first problem is the reason next to the blocked primary", async () => {
 		const reason =
 			"Confirm that you own Visitor Check-in and allow these services to read its files.";
@@ -1521,6 +1597,7 @@ describe("Review (APP §3.12)", () => {
 async function deployStage(
 	deviceIds: string[],
 	prepare?: (fake: FakeWorkspace) => void,
+	extra: Partial<StageProps> = {},
 ) {
 	const bundle = await bundleOf(
 		"app_visitor_checkin",
@@ -1532,6 +1609,7 @@ async function deployStage(
 		initial: visitorDraft(deviceIds),
 		start: "review",
 		prepared: bundle,
+		...extra,
 	});
 	for (const deviceId of deviceIds) serveArtifacts(stage.fake.agent(deviceId));
 	prepare?.(stage.fake);
@@ -1628,6 +1706,24 @@ describe("Rollout (APP §3.13, §7.8)", () => {
 		expect(fake.workspace.activity.runs()).toHaveLength(1);
 		expect(prose(container)).not.toMatch(MACHINE_WORDS);
 		expect(sink.results).toHaveLength(1);
+	});
+
+	test("embedded in a dialog the result has no Exit deploy, and Deploy to more devices asks the frame instead of the route", async () => {
+		let more = 0;
+		const { navigations, sink } = await deployStage([EDGE, STUDIO], undefined, {
+			embedded: true,
+			deployMore: () => {
+				more += 1;
+			},
+		});
+		await until(() => sink.results.length === 1, "the run to finish");
+		expect(queryByRole("link", "Exit deploy")).toBeNull();
+		await clickByText("Deploy to more devices…");
+		await clickByText("Deploy to more devices…");
+		expect(more).toBe(2);
+		expect(navigations.some((entry) => entry.href.includes("step=where"))).toBe(
+			false,
+		);
 	});
 
 	test("shown once: an access token leaves this window with the result that showed it", async () => {

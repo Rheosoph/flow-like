@@ -7,6 +7,7 @@ import {
 	getEventSections,
 	isTriggerSection,
 } from "../../../lib/event-sections";
+import { isDeviceEventSource } from "../../../lib/event-source";
 import {
 	type HostingBlocker,
 	getHostedFrontendKind,
@@ -252,7 +253,7 @@ export function computeEventIssues({
 		}
 	}
 
-	if (requiresSink && !event.active) {
+	if (requiresSink && !event.active && !isDeviceEventSource(event)) {
 		issues.push({
 			id: "sink-inactive",
 			severity: "check",

@@ -232,6 +232,16 @@ pub async fn list_app_sinks(
     Ok(Json(sink_responses_with_events(&state.db, sinks).await))
 }
 
+async fn ensure_event_may_use_hub_trigger(
+    state: &AppState,
+    sink: &event_sink::Model,
+) -> Result<(), ApiError> {
+    match get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await? {
+        Some(event) => crate::routes::app::events::ensure_hub_trigger_allowed(&event),
+        None => Ok(()),
+    }
+}
+
 /// GET /sink/{event_id}
 /// Get a specific sink by event ID
 #[utoipa::path(
@@ -290,6 +300,7 @@ pub async fn get_sink(
     request_body = UpdateSinkRequest,
     responses(
         (status = 200, description = "Updated sink", body = SinkResponse),
+        (status = 400, description = "The event runs on its deployed devices only"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Sink not found")
@@ -314,6 +325,7 @@ pub async fn update_sink(
 
     let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
     let sink_app_id = sink.app_id.clone();
+    ensure_event_may_use_hub_trigger(&state, &sink).await?;
 
     let mut active_model: event_sink::ActiveModel = sink.into();
 
@@ -359,6 +371,7 @@ pub async fn update_sink(
     ),
     responses(
         (status = 200, description = "Toggled sink", body = SinkResponse),
+        (status = 400, description = "The event runs on its deployed devices only, so its hub trigger cannot be turned on"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Sink not found")
@@ -383,6 +396,9 @@ pub async fn toggle_sink(
 
     let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
     let sink_app_id = sink.app_id.clone();
+    if !sink.active {
+        ensure_event_may_use_hub_trigger(&state, &sink).await?;
+    }
 
     // Use service module to toggle (handles external scheduler sync)
     let updated = super::service::toggle_sink_active(&state.db, &state, &event_id)

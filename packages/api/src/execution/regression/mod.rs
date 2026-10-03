@@ -410,6 +410,14 @@ pub async fn spawn_suite_run(
         )));
     }
 
+    if let Some(event_id) = suite.event_id.as_deref()
+        && let Some(event) =
+            crate::routes::app::events::db::get_event_from_db_opt(&state.db, event_id, &app_id)
+                .await?
+    {
+        crate::routes::app::events::ensure_source_execution_allowed(&event)?;
+    }
+
     let (dispatch_version, version_label) =
         resolve_candidate(&state, &app_id, &suite.board_id, candidate).await?;
 

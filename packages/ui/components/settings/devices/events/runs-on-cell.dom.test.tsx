@@ -579,6 +579,68 @@ describe("A schedule on the Events list: when it runs and where", () => {
 		expect(queryByRole("button", "Run it on the hub again", dialog)).toBeNull();
 	});
 
+	test("a device-only schedule nobody holds: the popover says devices only, never the hub, and has no way back to it", async () => {
+		const deviceOnly = withEvent("app_invoice_ai", RECONCILE, {
+			deviceOnly: true,
+		});
+		const sentence =
+			"Runs only on the devices you deploy it to. Not deployed yet.";
+		const { cell, dialog, where } = await openSchedule({ app: deviceOnly });
+		expect(where()?.getAttribute("data-schedule-where")).toBe("device_only");
+		expect(where()?.textContent).toBe(`Where it runs${sentence}`);
+		expect(
+			cell.querySelector("[data-runs-on-where='device_only']")?.textContent,
+		).toBe(sentence);
+		expect(dialog.textContent).not.toContain("The hub runs");
+		expect(queryByRole("button", "Run it on the hub again", dialog)).toBeNull();
+		expect(byRole("link", "Run on a device…", dialog)).toBeTruthy();
+	});
+
+	test("a device-only schedule whose service stopped still reads devices only: no give-back that promises the hub", async () => {
+		const deviceOnly = withEvent("app_invoice_ai", RECONCILE, {
+			deviceOnly: true,
+		});
+		const stopped = await openSchedule({
+			app: deviceOnly,
+			schedules: [onEdge("device")],
+		});
+		expect(stopped.where()?.getAttribute("data-schedule-where")).toBe(
+			"device_idle",
+		);
+		expect(
+			queryByRole("button", "Run it on the hub again", stopped.dialog),
+		).toBeNull();
+		await stopped.unmount();
+		const returning = await openSchedule({
+			app: deviceOnly,
+			schedules: [
+				{ event_id: RECONCILE, state: "returning", hub_resumes_at: NOW0 + 300 },
+			],
+		});
+		expect(returning.where()?.textContent).toContain(
+			"Runs only on the devices you deploy it to.",
+		);
+		expect(returning.dialog.textContent).not.toContain("Returns to the hub");
+	});
+
+	test("a device-only schedule of a local-only app drops the desktop-app line", async () => {
+		const { cell } = await renderCells("app_crm_sync", {
+			now: NOW0,
+			app: withEvent("app_crm_sync", "evt_crm_hourly", { deviceOnly: true }),
+		});
+		await click(
+			byRole("button", "Where Hourly sync runs", cell("evt_crm_hourly")),
+		);
+		const dialog = byRole("dialog", "Where Hourly sync runs");
+		expect(dialog.querySelector("[data-schedule-where='local']")).toBeNull();
+		expect(dialog.textContent).not.toContain(
+			"Runs in the desktop app while it is open",
+		);
+		expect(
+			dialog.querySelector("[data-schedule-where='device_only']")?.textContent,
+		).toBe("Runs only on the devices you deploy it to. Not deployed yet.");
+	});
+
 	test("released to a service that has not started it: the hub still runs it", async () => {
 		const givenBack: string[] = [];
 		const { cell, dialog, where } = await openSchedule({

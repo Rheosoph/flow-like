@@ -121,8 +121,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	eventTriggerConfig,
+	isDeviceEventSource,
 	mergeEventTriggerConfig,
 } from "../../../lib/event-source";
+import { cn } from "../../../lib/utils";
+import { saveCreatedEventRoute } from "./create-event-route";
 import { EventAttentionStrip } from "./event-attention-strip";
 import { EventCanary } from "./event-canary";
 import { EventEditorHeader } from "./event-editor-header";
@@ -130,7 +133,9 @@ import { EventHistory } from "./event-history";
 import { EventHosting } from "./event-hosting";
 import { EventQuality } from "./event-quality";
 import { EventSectionRail } from "./event-section-rail";
+import { EventWhereRuns } from "./event-where-runs";
 import { EventsOverview } from "./events-overview";
+import { NewEventDialog } from "./new-event-dialog";
 import { SectionGuidance } from "./section-guidance";
 import { SetupChecklist } from "./setup-checklist";
 import { isHeadlessEventType, useEventIssues } from "./use-event-issues";
@@ -265,7 +270,6 @@ export default function EventsPage({
 		setIsCreateDialogOpen(true);
 	}, [newEventTemplate, newEventTemplateKey]);
 	const [isCreating, setIsCreating] = useState(false);
-	const [creationBusy, setCreationBusy] = useState(false);
 	const [deviceEventId, setDeviceEventId] = useState(createId);
 	useEffect(() => {
 		if (!isCreateDialogOpen) setDeviceEventId(createId());
@@ -405,20 +409,16 @@ export default function EventsPage({
 					oauthTokens,
 				);
 
-				// If this is a UI event (including page-target events), create a path-based route pointing to it.
-				// Use savedEvent.id since the backend may generate a new ID for new events
 				if (
-					uiEventTypeSet.has(savedEvent.event_type) ||
-					!!savedEvent.default_page_id
-				) {
-					try {
-						const path = normalizeRoutePath(newEvent.path);
-						await backend.routeState.setRoute(id, path, savedEvent.id);
-						await invalidate(backend.routeState.getRoutes, [id]);
-					} catch (error) {
-						console.error("Failed to create route for UI event:", error);
-					}
-				}
+					await saveCreatedEventRoute(
+						backend.routeState,
+						id,
+						savedEvent,
+						newEvent.path,
+						uiEventTypeSet,
+					)
+				)
+					await invalidate(backend.routeState.getRoutes, [id]);
 
 				await invalidate(backend.eventState.getEvents, [id]);
 				await events.refetch();
@@ -428,7 +428,6 @@ export default function EventsPage({
 				toast.error(`Failed to create event: ${errorMessage(error)}`);
 			} finally {
 				if (savedEvent) {
-					setCreationBusy(false);
 					setIsCreateDialogOpen(false);
 					setShowCreatePatDialog(false);
 					setPendingEvent(null);
@@ -459,7 +458,7 @@ export default function EventsPage({
 		async (draft: Partial<IEvent>) => {
 			if (!id) throw new Error("App ID is required to create an event");
 			if (!canWriteEvents) throw new Error(writeDeniedMessage);
-			return backend.eventState.upsertEvent(
+			const savedEvent = await backend.eventState.upsertEvent(
 				id,
 				newEventDefinition(draft, eventList.length, deviceEventId),
 				undefined,
@@ -467,14 +466,28 @@ export default function EventsPage({
 				undefined,
 				{ source: "device" },
 			);
+			if (
+				await saveCreatedEventRoute(
+					backend.routeState,
+					id,
+					savedEvent,
+					draft.path,
+					uiEventTypeSet,
+				)
+			)
+				await invalidate(backend.routeState.getRoutes, [id]);
+			return savedEvent;
 		},
 		[
 			id,
 			canWriteEvents,
 			writeDeniedMessage,
 			backend.eventState,
+			backend.routeState,
 			eventList.length,
 			deviceEventId,
+			uiEventTypeSet,
+			invalidate,
 		],
 	);
 
@@ -538,6 +551,17 @@ export default function EventsPage({
 		[id, router, basePath, embedded, onEventIdChange],
 	);
 
+	const handleOpenRunsOn = useCallback(
+		(runsOnEventId: string) => {
+			if (embedded) {
+				onEventIdChange?.(null);
+				return;
+			}
+			router.push(`${basePath}?id=${id}&event=${runsOnEventId}`);
+		},
+		[id, router, basePath, embedded, onEventIdChange],
+	);
+
 	const handleNavigateToNode = useCallback(
 		(event: IEvent, nodeId: string) => {
 			if (embedded && id && event.board_id) {
@@ -577,19 +601,16 @@ export default function EventsPage({
 						pendingCreateOAuthTokens,
 					);
 
-					// Create route for UI events - use savedEvent.id since backend may generate new ID
 					if (
-						uiEventTypeSet.has(savedEvent.event_type) ||
-						!!savedEvent.default_page_id
-					) {
-						try {
-							const path = normalizeRoutePath(pendingRoutePath);
-							await backend.routeState.setRoute(id, path, savedEvent.id);
-							await invalidate(backend.routeState.getRoutes, [id]);
-						} catch (error) {
-							console.error("Failed to create route for UI event:", error);
-						}
-					}
+						await saveCreatedEventRoute(
+							backend.routeState,
+							id,
+							savedEvent,
+							pendingRoutePath,
+							uiEventTypeSet,
+						)
+					)
+						await invalidate(backend.routeState.getRoutes, [id]);
 
 					await invalidate(backend.eventState.getEvents, [id]);
 					await events.refetch();
@@ -598,7 +619,6 @@ export default function EventsPage({
 					toast.error(`Failed to create event: ${errorMessage(error)}`);
 				} finally {
 					if (savedEvent) {
-						setCreationBusy(false);
 						setIsCreateDialogOpen(false);
 						setShowCreatePatDialog(false);
 						setPendingEvent(null);
@@ -636,6 +656,7 @@ export default function EventsPage({
 				onReload={async () => {
 					await events.refetch();
 				}}
+				onOpenRunsOn={handleOpenRunsOn}
 				tokenStore={tokenStore}
 				consentStore={consentStore}
 				hub={hub}
@@ -730,26 +751,13 @@ export default function EventsPage({
 				</div>
 			</div>
 
-			<Dialog
+			<NewEventDialog
 				open={isCreateDialogOpen}
-				onOpenChange={(open) => {
-					if (!creationBusy) setIsCreateDialogOpen(open);
-				}}
+				onOpenChange={setIsCreateDialogOpen}
+				onDeployed={() => void events.refetch()}
 			>
-				<DialogContent
-					className="w-[calc(100vw-2rem)] max-w-[1100px] gap-0 overflow-hidden p-0 sm:max-w-[1100px]"
-					showCloseButton={!creationBusy}
-				>
-					<DialogHeader className="border-b px-5 py-5 pr-12 sm:px-7">
-						<DialogTitle>{t("newEvent", "New event")}</DialogTitle>
-						<DialogDescription>
-							{t(
-								"chooseEventStartAndDestination",
-								"Choose what starts your flow and where it runs.",
-							)}
-						</DialogDescription>
-					</DialogHeader>
-					{id && (
+				{(shell) =>
+					id && (
 						<EventForm
 							eventConfig={eventMapping}
 							uiEventTypes={uiEventTypes}
@@ -759,13 +767,10 @@ export default function EventsPage({
 							onSubmit={handleCreateEvent}
 							onCreateDevice={handleCreateDeviceEvent}
 							onNavigateDeployment={(href) => router.push(href)}
-							onDeploymentComplete={() => {
-								setCreationBusy(false);
-								setIsCreateDialogOpen(false);
-								void events.refetch();
-							}}
-							onBusyChange={setCreationBusy}
-							onCancel={() => setIsCreateDialogOpen(false)}
+							onDeploymentComplete={shell.onDeploymentComplete}
+							onBusyChange={shell.onBusyChange}
+							onSavedChange={shell.onSavedChange}
+							onCancel={shell.onCancel}
 							isSubmitting={isCreating}
 							tokenStore={tokenStore}
 							consentStore={consentStore}
@@ -773,9 +778,9 @@ export default function EventsPage({
 							onStartOAuth={onStartOAuth}
 							onRefreshToken={onRefreshToken}
 						/>
-					)}
-				</DialogContent>
-			</Dialog>
+					)
+				}
+			</NewEventDialog>
 
 			{/* PAT Selector Dialog for Event Creation */}
 			<PatSelectorDialog
@@ -799,6 +804,7 @@ function EventConfiguration({
 	appId,
 	onDone,
 	onReload,
+	onOpenRunsOn,
 	tokenStore,
 	consentStore,
 	hub,
@@ -813,6 +819,8 @@ function EventConfiguration({
 	appId: string;
 	onDone?: () => void;
 	onReload?: () => void;
+	/** Leaves the editor for the list with this event's Runs on cell open. */
+	onOpenRunsOn?: (eventId: string) => void;
 	/** Token store for OAuth checks. If not provided, OAuth checks are skipped. */
 	tokenStore?: IOAuthTokenStoreWithPending;
 	/** Consent store for OAuth consent tracking. */
@@ -845,6 +853,7 @@ function EventConfiguration({
 		"Your role cannot create, change or delete this project's events.",
 	);
 	const [formData, setFormData] = useState<IEvent>(event);
+	const deviceOnly = isDeviceEventSource(formData);
 	const [confirmLeave, setConfirmLeave] = useState(false);
 	const [showPatDialog, setShowPatDialog] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
@@ -1074,10 +1083,17 @@ function EventConfiguration({
 			return;
 		}
 
-		const requiresSink = checkRequiresSink();
+		// A device-only event registers nothing here, so there is nothing to authorize.
+		const requiresSink = checkRequiresSink() && !deviceOnly;
 
 		// Check OAuth requirements first if we have the stores
-		if (tokenStore && consentStore && onStartOAuth && !oauthTokens) {
+		if (
+			tokenStore &&
+			consentStore &&
+			onStartOAuth &&
+			!oauthTokens &&
+			!deviceOnly
+		) {
 			let oauthResult: Awaited<ReturnType<typeof checkOAuthTokens>> | undefined;
 
 			// Try board first, fallback to prerun for execute-only permissions
@@ -1661,13 +1677,29 @@ function EventConfiguration({
 				<div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-lg border bg-card/80 px-3 py-3 sm:px-4">
 					<div className="flex shrink-0 items-center gap-2.5">
 						<div
-							className={`w-2.5 h-2.5 rounded-full ${formData.active ? "bg-green-500" : "bg-orange-500"}`}
+							className={cn(
+								"w-2.5 h-2.5 rounded-full",
+								deviceOnly
+									? formData.active
+										? "bg-info-solid"
+										: "bg-muted-foreground/50"
+									: formData.active
+										? "bg-green-500"
+										: "bg-orange-500",
+							)}
 						/>
 						<span className="text-sm font-medium">
-							{formData.active ? "Active" : "Inactive"}
+							{deviceOnly
+								? formData.active
+									? t("devicesOnly", "Devices only")
+									: t("devicesOnlyPaused", "Devices only, paused")
+								: formData.active
+									? "Active"
+									: "Inactive"}
 						</span>
 					</div>
 					{(() => {
+						if (deviceOnly) return null;
 						if (isServerOnlyEventType(formData.event_type)) {
 							return (
 								<Badge variant="secondary" className="gap-1.5">
@@ -1799,7 +1831,16 @@ function EventConfiguration({
 							size="sm"
 							disabled={!canWriteEvents}
 							title={canWriteEvents ? undefined : writeDeniedMessage}
-							onClick={() => handleInputChange("active", !formData.active)}
+							onClick={() => {
+								if (deviceOnly && formData.active)
+									toast.info(
+										t(
+											"devicePauseKeepsRunning",
+											"Devices that already run it keep running until you update or stop their service.",
+										),
+									);
+								handleInputChange("active", !formData.active);
+							}}
 							className="shrink-0 gap-2"
 						>
 							{formData.active ? (
@@ -1828,6 +1869,30 @@ function EventConfiguration({
 										"Public — reachable on its public endpoint with the configured auth.",
 									)}
 						</p>
+					)}
+					{deviceOnly && (
+						<EventWhereRuns
+							appId={appId}
+							event={formData}
+							mapping={
+								eventMapping[board.data?.nodes?.[formData.node_id]?.name ?? ""]
+							}
+							boardExecutionMode={board.data?.execution_mode}
+							isOffline={isOffline}
+							hub={hub}
+							canWrite={canWriteEvents}
+							writeDeniedMessage={writeDeniedMessage}
+							dirty={isDirty}
+							tokenStore={tokenStore}
+							consentStore={consentStore}
+							onStartOAuth={onStartOAuth}
+							onRefreshToken={onRefreshToken}
+							onOpenRunsOn={() => onOpenRunsOn?.(event.id)}
+							onTakenBack={(saved) => {
+								setFormData(saved);
+								onReload?.();
+							}}
+						/>
 					)}
 				</div>
 

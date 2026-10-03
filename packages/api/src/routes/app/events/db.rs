@@ -309,6 +309,19 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
     })
 }
 
+/// The app that owns the event row with this id, whichever app that is.
+pub async fn event_row_app_id<C>(db: &C, event_id: &str) -> flow_like_types::Result<Option<String>>
+where
+    C: ConnectionTrait,
+{
+    Ok(event::Entity::find_by_id(event_id)
+        .select_only()
+        .column(event::Column::AppId)
+        .into_tuple::<String>()
+        .one(db)
+        .await?)
+}
+
 /// Sync an event to the database (upsert)
 pub async fn sync_event_to_db<C>(
     db: &C,
@@ -320,12 +333,7 @@ where
 {
     let model = event_to_db_model(app_id, event);
 
-    let existing_app_id = event::Entity::find_by_id(&event.id)
-        .select_only()
-        .column(event::Column::AppId)
-        .into_tuple::<String>()
-        .one(db)
-        .await?;
+    let existing_app_id = event_row_app_id(db, &event.id).await?;
 
     if let Some(existing_app_id) = existing_app_id {
         if existing_app_id != app_id {
@@ -383,6 +391,22 @@ pub async fn validate_event_schedule(
     scheduler.validate_schedule(&cron_expression, &config).await
 }
 
+/// The (path, method) the sink row is keyed on. A device-only event holds no unique
+/// (app, path, method) slot, so it can neither collide with nor block a hub event.
+/// - HTTP/API events take the path from their config (default method POST)
+/// - other events use the UI route
+fn sink_route(event: &CoreEvent) -> (Option<String>, Option<String>) {
+    if event.is_device_source() {
+        return (None, None);
+    }
+    if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
+        let path = extract_http_path(&event.config).or_else(|| event.route.clone());
+        let method = extract_http_method(&event.config).unwrap_or_else(|| "POST".to_string());
+        return (path, Some(method));
+    }
+    (event.route.clone(), None)
+}
+
 /// Sync an event and its sink to the database, with optional PAT and OAuth tokens
 ///
 /// This is the main entry point for event creation/updates when tokens are provided.
@@ -434,26 +458,12 @@ pub async fn sync_event_with_sink_tokens(
         None
     };
 
-    // Determine the sink path:
-    // - For HTTP/API events, extract from event config (path field)
-    // - For other events, use the UI route
-    let sink_path = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
-        extract_http_path(&event.config).or_else(|| event.route.clone())
-    } else {
-        event.route.clone()
-    };
+    let device_only = event.is_device_source();
+    let (sink_path, sink_method) = sink_route(event);
 
     // Extract auth token from HTTP event config
     let config_auth_token = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
         extract_http_auth_token(&event.config)
-    } else {
-        None
-    };
-
-    // Extract HTTP method from event config (default to POST — the most
-    // common trigger method — if the event config doesn't specify one).
-    let sink_method = if matches!(event.event_type.as_str(), "api" | "http" | "webhook") {
-        Some(extract_http_method(&event.config).unwrap_or_else(|| "POST".to_string()))
     } else {
         None
     };
@@ -486,7 +496,8 @@ pub async fn sync_event_with_sink_tokens(
             pat_encrypted,
             oauth_tokens_encrypted,
             profile_json,
-            active: Some(event.active && !event.is_device_source()),
+            active: Some(event.active && !device_only),
+            release_route: device_only,
         },
     )
     .await?;
@@ -1167,6 +1178,46 @@ mod tests {
         assert!(restored.active);
         assert!(restored.is_device_source());
         assert!(super::super::ensure_source_execution_allowed(&restored).is_err());
+    }
+
+    #[test]
+    fn device_only_http_event_holds_no_unique_sink_route() {
+        let mut event = event_with(HashMap::new());
+        event.event_type = "http".into();
+        event.config = br#"{"path":"/hook","method":"put"}"#.to_vec();
+        assert_eq!(
+            sink_route(&event),
+            (Some("/hook".to_string()), Some("PUT".to_string()))
+        );
+
+        event.set_device_source().unwrap();
+        assert_eq!(sink_route(&event), (None, None));
+    }
+
+    #[test]
+    fn clearing_the_device_marker_restores_the_sink_route() {
+        let mut event = event_with(HashMap::new());
+        event.event_type = "api".into();
+        event.config = br#"{"path":"/hook"}"#.to_vec();
+        event.set_device_source().unwrap();
+        assert_eq!(sink_route(&event), (None, None));
+
+        event.config = br#"{"path":"/hook"}"#.to_vec();
+        assert_eq!(
+            sink_route(&event),
+            (Some("/hook".to_string()), Some("POST".to_string()))
+        );
+    }
+
+    #[test]
+    fn device_only_event_with_a_ui_route_keeps_no_sink_route() {
+        let mut event = event_with(HashMap::new());
+        event.event_type = "cron".into();
+        event.route = Some("/daily".into());
+        assert_eq!(sink_route(&event), (Some("/daily".to_string()), None));
+
+        event.set_device_source().unwrap();
+        assert_eq!(sink_route(&event), (None, None));
     }
 
     /// The round trip that used to erase secrets: read blanks the value, so the

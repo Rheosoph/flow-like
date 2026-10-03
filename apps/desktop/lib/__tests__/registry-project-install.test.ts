@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({
 	fetcher: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
 	invoke: mocks.invoke,
 }));
 
@@ -139,6 +140,30 @@ const descriptor = {
 };
 const notInstalled = {
 	error: `Widget bundle ${HASH} of package '${PACKAGE}' is not installed`,
+};
+const bundleUnavailable = {
+	code: "widget_bundle_unavailable",
+	message: notInstalled.error,
+};
+const installUnavailable = (detail: string) => ({
+	code: "widget_bundle_unavailable",
+	message: `Could not install ${PACKAGE}@${PINNED}: ${detail}`,
+});
+
+async function bootstrappingBackend(localOnly = false) {
+	const { TauriBackend } = await import("../../components/tauri-provider");
+	const host = new TauriBackend(() => undefined);
+	vi.spyOn(host, "isLocalOnly").mockResolvedValue(localOnly);
+	vi.spyOn(host.appState, "listPackages").mockResolvedValue({
+		[PACKAGE]: PINNED,
+	});
+	return host;
+}
+
+const initializedAuth = {
+	...SIGNED_IN,
+	isLoading: false,
+	user: { ...SIGNED_IN.user, profile: { sub: "test-user" } },
 };
 
 /** The bundle is missing until a native install brought it. */
@@ -687,7 +712,7 @@ describe("desktop project pin of a member who cannot list the pins", () => {
 		const state = new RegistryState(backend({ pins: {} }) as never);
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId: nextProject() }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(bundleUnavailable);
 		expect(installs()).toEqual([]);
 		expect(describes()).toHaveLength(1);
 	});
@@ -708,7 +733,7 @@ describe("desktop project pin of a member who cannot list the pins", () => {
 		);
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(bundleUnavailable);
 		expect(installs()).toEqual([]);
 	});
 
@@ -862,7 +887,7 @@ describe("desktop project installs and the session", () => {
 			await expect(state.getPackage(PACKAGE, appId)).resolves.toBeNull();
 			await expect(
 				state.describeWidgetPolicy({ ...request, appId }),
-			).rejects.toBe(notInstalled);
+			).rejects.toMatchObject(bundleUnavailable);
 			expect(installs()).toEqual([]);
 			expect(mocks.fetcher).not.toHaveBeenCalled();
 			expect(host.appState.listPackages).not.toHaveBeenCalled();
@@ -918,7 +943,7 @@ describe("desktop project installs and the session", () => {
 		const appId = nextProject();
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(installUnavailable("401 Unauthorized"));
 
 		nativeCommands(bundleFollowsInstalls());
 		host.auth = { isAuthenticated: true, user: { access_token: "renewed" } };
@@ -975,6 +1000,127 @@ describe("desktop project installs and the session", () => {
 });
 
 describe("desktop widget describe for a missing bundle", () => {
+	test("an app whose visibility is not cached can install its pinned widget", async () => {
+		const host = {
+			...backend({ offline: true }),
+			isLocalOnly: vi.fn().mockResolvedValue(false),
+		};
+		nativeCommands(bundleFollowsInstalls());
+		const state = new RegistryState(host as never);
+		const appId = nextProject();
+		await expect(
+			state.describeWidgetPolicy({ ...request, appId }),
+		).resolves.toMatchObject({ policyDigest: DIGEST, status: "ok" });
+		expect(installs()).toEqual([installArgs(appId)]);
+	});
+
+	test.each(["profile first", "auth first"])(
+		"a mounted package widget waits for desktop bootstrap (%s)",
+		async (order) => {
+			const { MicroWidgetGrantController } = await vi.importActual<
+				typeof import(
+					"@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant",
+				)
+			>("@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant");
+			nativeCommands(bundleFollowsInstalls());
+			const host = await bootstrappingBackend();
+			const controller = new MicroWidgetGrantController();
+			const inputs = {
+				registry: host.registryState,
+				active: true,
+				...request,
+				appId: nextProject(),
+				legacyAllowed: true,
+				legacyPolicy: {},
+				props: {},
+				propsKey: "{}",
+			};
+			const flush = async () => {
+				for (let round = 0; round < 60; round++) await Promise.resolve();
+			};
+			try {
+				controller.setInputs(inputs);
+				controller.activate();
+				await flush();
+				expect(describes()).toHaveLength(1);
+				expect(installs()).toEqual([]);
+				expect(controller.getSnapshot().state.status).toBe("describing");
+
+				const pushProfile = () =>
+					host.pushProfile({ hub: "hub.example" } as never);
+				const pushAuth = () => host.pushAuthContext(initializedAuth as never);
+				(order === "profile first" ? pushProfile : pushAuth)();
+				await flush();
+				expect(installs()).toEqual([]);
+				expect(controller.getSnapshot().state.status).toBe("describing");
+				(order === "profile first" ? pushAuth : pushProfile)();
+				await flush();
+
+				expect(installs()).toEqual([installArgs(inputs.appId)]);
+				expect(controller.getSnapshot().state).toMatchObject({
+					status: "ready",
+					frame: { kind: "grant" },
+				});
+			} finally {
+				controller.deactivate();
+			}
+		},
+		60_000,
+	);
+
+	test("installed widget bundles load before auth and profile bootstrap", async () => {
+		nativeCommands({ registry_describe_widget_policy: () => descriptor });
+		const host = await bootstrappingBackend();
+		await expect(
+			host.registryState.describeWidgetPolicy?.({
+				...request,
+				appId: nextProject(),
+			}),
+		).resolves.toMatchObject({ status: "ok" });
+		expect(installs()).toEqual([]);
+	});
+
+	test("missing offline widget bundles do not wait for session bootstrap", async () => {
+		nativeCommands(bundleFollowsInstalls());
+		const host = await bootstrappingBackend(true);
+		await expect(
+			host.registryState.describeWidgetPolicy?.({
+				...request,
+				appId: nextProject(),
+			}),
+		).rejects.toMatchObject(bundleUnavailable);
+		expect(installs()).toEqual([]);
+	});
+
+	test("signed-out bootstrap ends the missing bundle wait without a profile", async () => {
+		nativeCommands(bundleFollowsInstalls());
+		const host = await bootstrappingBackend();
+		const pending = host.registryState.describeWidgetPolicy?.({
+			...request,
+			appId: nextProject(),
+		});
+		const rejected = expect(pending).rejects.toMatchObject(bundleUnavailable);
+		host.pushAuthContext({ ...SIGNED_OUT, isLoading: false } as never);
+		await rejected;
+		expect(installs()).toEqual([]);
+	});
+
+	test("profile bootstrap failure ends the missing bundle wait with its cause", async () => {
+		nativeCommands(bundleFollowsInstalls());
+		const host = await bootstrappingBackend();
+		const pending = host.registryState.describeWidgetPolicy?.({
+			...request,
+			appId: nextProject(),
+		});
+		const rejected = expect(pending).rejects.toMatchObject({
+			code: "widget_bundle_unavailable",
+			message: `Could not load the profile for widget package ${PACKAGE}: Profile could not be read`,
+		});
+		host.pushProfileError(new Error("Profile could not be read"));
+		await rejected;
+		expect(installs()).toEqual([]);
+	});
+
 	test("installs the pinned version through the project and describes once more", async () => {
 		nativeCommands(bundleFollowsInstalls());
 		const state = new RegistryState(backend() as never);
@@ -999,7 +1145,7 @@ describe("desktop widget describe for a missing bundle", () => {
 		);
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId: nextProject() }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(bundleUnavailable);
 		expect(installs()).toEqual([]);
 		expect(describes()).toHaveLength(1);
 		expect(mocks.fetcher).toHaveBeenCalledTimes(1);
@@ -1039,7 +1185,7 @@ describe("desktop widget describe for a missing bundle", () => {
 					packageVersion: packageVersion as string,
 					appId: nextProject(),
 				}),
-			).rejects.toBe(notInstalled);
+			).rejects.toMatchObject(bundleUnavailable);
 			expect(installs()).toEqual([]);
 			expect(describes()).toHaveLength(1);
 			expect(mocks.fetcher).not.toHaveBeenCalled();
@@ -1053,8 +1199,8 @@ describe("desktop widget describe for a missing bundle", () => {
 			},
 		});
 		const state = new RegistryState(backend() as never);
-		await expect(state.describeWidgetPolicy(request)).rejects.toBe(
-			notInstalled,
+		await expect(state.describeWidgetPolicy(request)).rejects.toMatchObject(
+			bundleUnavailable,
 		);
 
 		const other = { error: 'Invalid widget id "x"' };
@@ -1069,7 +1215,7 @@ describe("desktop widget describe for a missing bundle", () => {
 		expect(installs()).toEqual([]);
 	});
 
-	test("a refused install keeps the original error", async () => {
+	test("a refused install reports the installation failure", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		nativeCommands({
 			registry_describe_widget_policy: () => {
@@ -1082,9 +1228,48 @@ describe("desktop widget describe for a missing bundle", () => {
 		const state = new RegistryState(backend() as never);
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId: nextProject() }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(installUnavailable("403 Forbidden"));
 		expect(warn).toHaveBeenCalled();
 		expect(describes()).toHaveLength(1);
+	});
+
+	test("a refused package install gives the mounted widget its error without a fallback frame", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const { MicroWidgetGrantController } = await vi.importActual<
+			typeof import(
+				"@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant",
+			)
+		>("@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant");
+		nativeCommands({
+			registry_describe_widget_policy: () => {
+				throw notInstalled;
+			},
+			registry_install_package: () => {
+				throw { error: "403 Forbidden" };
+			},
+		});
+		const controller = new MicroWidgetGrantController();
+		try {
+			controller.setInputs({
+				registry: new RegistryState(backend() as never),
+				active: true,
+				...request,
+				appId: nextProject(),
+				legacyAllowed: true,
+				legacyPolicy: {},
+				props: {},
+				propsKey: "{}",
+			});
+			controller.activate();
+			for (let round = 0; round < 60; round++) await Promise.resolve();
+			expect(controller.getSnapshot().state).toEqual({
+				status: "error",
+				reason: "bundle_unavailable",
+				detail: installUnavailable("403 Forbidden").message,
+			});
+		} finally {
+			controller.deactivate();
+		}
 	});
 
 	test("a describe whose install failed in transit installs again five seconds later", async () => {
@@ -1103,11 +1288,15 @@ describe("desktop widget describe for a missing bundle", () => {
 
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(installUnavailable("error sending request"));
 		now.mockReturnValue(1_000_000 + 5_000 - 1);
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(
+			installUnavailable(
+				`Installing ${PACKAGE}@${PINNED} through project ${appId} failed less than 5 seconds ago`,
+			),
+		);
 		expect(installs()).toHaveLength(1);
 
 		now.mockReturnValue(1_000_000 + 5_000);
@@ -1126,7 +1315,7 @@ describe("desktop widget describe for a missing bundle", () => {
 		const state = new RegistryState(backend() as never);
 		await expect(
 			state.describeWidgetPolicy({ ...request, appId: nextProject() }),
-		).rejects.toBe(notInstalled);
+		).rejects.toMatchObject(bundleUnavailable);
 		expect(installs()).toHaveLength(1);
 		expect(describes()).toHaveLength(2);
 	});

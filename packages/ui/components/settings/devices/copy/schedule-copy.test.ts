@@ -16,6 +16,7 @@ import type { DevicesT } from "../primitives/area-context";
 import {
 	type WhereNames,
 	canRunOnHubAgain,
+	deviceOnlyText,
 	scheduleHead,
 	scheduleHoldText,
 	scheduleNameList,
@@ -124,6 +125,15 @@ describe("one-time schedules and bots, as one sentence", () => {
 		expect(scheduleWhereText(t, ended, NAMES)).toContain(
 			"the hub takes it back at its next scheduled time",
 		);
+	});
+
+	test("a device-only event reads the same for a schedule, a one-time schedule and a bot, and never mentions the hub running it", () => {
+		const deviceOnly: ScheduleWhere = { fact: "device_only" };
+		const sentence =
+			"Runs only on the devices you deploy it to. Not deployed yet.";
+		for (const kind of ["schedule", "once", "bot"] as const)
+			expect(scheduleWhereText(t, deviceOnly, NAMES, kind)).toBe(sentence);
+		expect(deviceOnlyText(t)).toBe(sentence);
 	});
 
 	test("a bot: connected, on its way, or why it isn't connected", () => {
@@ -299,6 +309,7 @@ test("the way back to the hub exists for a release and for every assignment, not
 	const can = (where: ScheduleWhere | undefined) => canRunOnHubAgain(where);
 	expect(can(undefined)).toBe(false);
 	expect(can({ fact: "hub" })).toBe(false);
+	expect(can({ fact: "device_only" })).toBe(false);
 	expect(can({ fact: "returning", hubResumesAt: 9 })).toBe(false);
 	expect(can({ fact: "released", since: 1 })).toBe(true);
 	expect(can({ fact: "device_idle", why: "removed", ...ASSIGNED })).toBe(true);

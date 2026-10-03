@@ -783,29 +783,82 @@ async fn push_target_resolution_issues(
     }
 }
 
+const SOURCE_KEY: &str = "__flow_like_source";
+const DEVICE_SOURCE: &str = "device";
+const DEFAULT_SOURCE: &str = "default";
+
 impl Event {
     /// The definition is kept here for deployment; this source must not start its trigger.
     pub fn is_device_source(&self) -> bool {
         serde_json::from_slice::<serde_json::Value>(&self.config)
             .ok()
-            .and_then(|config| config.get("__flow_like_source").cloned())
-            .is_some_and(|source| source == "device")
+            .and_then(|config| config.get(SOURCE_KEY).cloned())
+            .is_some_and(|source| source == DEVICE_SOURCE)
     }
 
     pub fn set_device_source(&mut self) -> flow_like_types::Result<()> {
-        let mut config = if self.config.is_empty() {
-            serde_json::Map::new()
-        } else {
-            serde_json::from_slice::<serde_json::Value>(&self.config)?
-                .as_object()
-                .cloned()
-                .ok_or_else(|| {
-                    flow_like_types::anyhow!("Device event settings must be a JSON object")
-                })?
-        };
-        config.insert("__flow_like_source".into(), serde_json::json!("device"));
+        self.set_source_value(DEVICE_SOURCE)
+    }
+
+    /// Asks the next `upsert` to move a device-only event back to its normal trigger. The
+    /// value is consumed there and never persisted.
+    pub fn request_default_source(&mut self) -> flow_like_types::Result<()> {
+        self.set_source_value(DEFAULT_SOURCE)
+    }
+
+    /// Fails when the settings cannot carry the source marker.
+    pub fn ensure_source_settings(&self) -> flow_like_types::Result<()> {
+        self.source_settings().map(|_| ())
+    }
+
+    fn source_settings(
+        &self,
+    ) -> flow_like_types::Result<serde_json::Map<String, serde_json::Value>> {
+        if self.config.is_empty() {
+            return Ok(serde_json::Map::new());
+        }
+        serde_json::from_slice::<serde_json::Value>(&self.config)?
+            .as_object()
+            .cloned()
+            .ok_or_else(|| flow_like_types::anyhow!("Device event settings must be a JSON object"))
+    }
+
+    fn set_source_value(&mut self, source: &str) -> flow_like_types::Result<()> {
+        let mut config = self.source_settings()?;
+        config.insert(SOURCE_KEY.into(), serde_json::json!(source));
         self.config = serde_json::to_vec(&config)?;
         Ok(())
+    }
+
+    fn explicit_non_device_source(&self) -> bool {
+        serde_json::from_slice::<serde_json::Value>(&self.config)
+            .ok()
+            .and_then(|config| {
+                config
+                    .get(SOURCE_KEY)
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .is_some_and(|source| source != DEVICE_SOURCE)
+    }
+
+    fn remove_source_marker(&mut self) -> flow_like_types::Result<()> {
+        let mut config = self.source_settings()?;
+        config.remove(SOURCE_KEY);
+        self.config = serde_json::to_vec(&config)?;
+        Ok(())
+    }
+
+    /// An explicit non-device value clears the marker and is never stored; with the key absent
+    /// a device-only stored event keeps its marker.
+    fn reconcile_source_marker(&mut self, stored_is_device: bool) -> flow_like_types::Result<()> {
+        if self.explicit_non_device_source() {
+            self.remove_source_marker()
+        } else if stored_is_device {
+            self.set_device_source()
+        } else {
+            Ok(())
+        }
     }
 
     /// Populate the inputs field from the board's node pins
@@ -1086,9 +1139,7 @@ impl Event {
 
         // Trigger editors may send only their own fields. Keep deployment metadata
         // from the authoritative record so an ordinary edit cannot start its source.
-        if old_event.as_ref().is_some_and(Event::is_device_source) {
-            self.set_device_source()?;
-        }
+        self.reconcile_source_marker(old_event.as_ref().is_some_and(Event::is_device_source))?;
 
         if let Some(mut old_event) = old_event {
             if !old_event.content_equal(self) || version_type.is_some() {
@@ -1904,6 +1955,89 @@ mod tests {
         assert_eq!(retried.event_version, saved.event_version);
         assert_eq!(app.events, vec!["reserved-device-event"]);
         assert!(retried.get_versions(&app).await.unwrap().is_empty());
+    }
+
+    fn stored_source(event: &Event) -> Option<serde_json::Value> {
+        serde_json::from_slice::<serde_json::Value>(&event.config)
+            .unwrap()
+            .get("__flow_like_source")
+            .cloned()
+    }
+
+    async fn saved_device_event(app: &crate::app::App, id: &str) -> Event {
+        let mut event = storage_event(id);
+        event.config = br#"{"expression":"0 9 * * *"}"#.to_vec();
+        event.set_device_source().unwrap();
+        event.upsert(app, None, true).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn explicit_default_source_clears_the_device_marker_without_storing_it() {
+        let app = test_app().await;
+        let mut saved = saved_device_event(&app, "clear-device-source").await;
+        saved.config = br#"{"expression":"0 10 * * *"}"#.to_vec();
+        saved.request_default_source().unwrap();
+
+        let saved = saved.upsert(&app, None, true).await.unwrap();
+        let reloaded = Event::load(&saved.id, &app, None).await.unwrap();
+
+        assert!(!saved.is_device_source());
+        assert!(!reloaded.is_device_source());
+        assert_eq!(stored_source(&reloaded), None);
+        let config: serde_json::Value = serde_json::from_slice(&reloaded.config).unwrap();
+        assert_eq!(config["expression"], "0 10 * * *");
+    }
+
+    #[tokio::test]
+    async fn any_other_explicit_source_value_clears_the_marker() {
+        let app = test_app().await;
+        let mut saved = saved_device_event(&app, "clear-with-hub-value").await;
+        saved.config = br#"{"__flow_like_source":"hub"}"#.to_vec();
+
+        let saved = saved.upsert(&app, None, true).await.unwrap();
+
+        assert!(!saved.is_device_source());
+        assert_eq!(stored_source(&saved), None);
+    }
+
+    #[tokio::test]
+    async fn absent_source_key_keeps_the_stored_device_marker() {
+        let app = test_app().await;
+        let mut saved = saved_device_event(&app, "keep-device-source").await;
+        saved.config = br#"{"expression":"0 10 * * *"}"#.to_vec();
+
+        let saved = saved.upsert(&app, None, true).await.unwrap();
+
+        assert!(saved.is_device_source());
+        assert_eq!(stored_source(&saved), Some(serde_json::json!("device")));
+    }
+
+    #[tokio::test]
+    async fn explicit_default_source_on_an_ordinary_event_is_dropped_not_stored() {
+        let app = test_app().await;
+        let mut event = storage_event("ordinary-event");
+        event.config = br#"{"expression":"0 9 * * *"}"#.to_vec();
+        let mut saved = event.upsert(&app, None, true).await.unwrap();
+        saved.request_default_source().unwrap();
+
+        let saved = saved.upsert(&app, None, true).await.unwrap();
+
+        assert!(!saved.is_device_source());
+        assert_eq!(stored_source(&saved), None);
+        let config: serde_json::Value = serde_json::from_slice(&saved.config).unwrap();
+        assert_eq!(config["expression"], "0 9 * * *");
+    }
+
+    #[tokio::test]
+    async fn non_object_settings_on_a_device_event_fail_the_upsert_cleanly() {
+        let app = test_app().await;
+        let mut saved = saved_device_event(&app, "device-array-config").await;
+        saved.config = br#"[1,2]"#.to_vec();
+
+        let error = saved.upsert(&app, None, true).await.unwrap_err();
+
+        assert!(error.to_string().contains("JSON object"));
+        assert!(saved.ensure_source_settings().is_err());
     }
 
     fn test_variant(name: &str) -> EventVariant {

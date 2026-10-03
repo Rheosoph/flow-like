@@ -60,6 +60,12 @@ export interface DeployStepProps {
 	startOver?(): void;
 	/** Rollout: the frame's "This deploy" bar for narrow containers; the step places it above its foot. */
 	summaryBar?: ReactNode;
+	/** The host dialog's footer: Review portals its Deploy action there instead of rendering it in the page. */
+	footerContainer?: HTMLElement | null;
+	/** The step runs inside another dialog: it neither links away from it nor offers its own exit. */
+	embedded?: boolean;
+	/** Rollout's "Deploy to more devices…" when the frame restarts the flow itself. */
+	deployMore?(): void;
 }
 
 /** Steps 1–5 also read the wizard's draft state and the preparation of step 2. */

@@ -1520,27 +1520,4 @@ mod tests {
         assert_eq!(restored, [none.spec("evt_none"), slash.spec("evt_slash")]);
         assert_eq!(restored[0].command_prefix, "");
     }
-
-    /// TEMPORARY probe, removed before the lane ends: what storing a second event of the same
-    /// bot does to the first event's row.
-    #[tokio::test]
-    async fn probe_two_events_of_one_bot() {
-        let connection = rusqlite::Connection::open_in_memory().expect("a database");
-        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
-        TelegramSink::init_tables(&db).expect("the tables");
-        for event_id in ["evt_one", "evt_two"] {
-            let config = sink(json!({}));
-            let registration =
-                TelegramSink::create_event_registration(event_id.to_string(), config.clone());
-            TelegramSink::add_bot_and_handler(&db, &registration, &config).expect("stored");
-        }
-        let stored = TelegramSink::load_handlers_from_db(&db)
-            .await
-            .expect("the stored handlers");
-        let ids: Vec<&str> = stored
-            .iter()
-            .map(|(registration, _)| registration.event_id.as_str())
-            .collect();
-        eprintln!("PROBE telegram: restored handlers={ids:?}");
-    }
 }

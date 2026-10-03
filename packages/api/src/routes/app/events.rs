@@ -39,6 +39,17 @@ pub(crate) fn ensure_source_execution_allowed(
     Ok(())
 }
 
+pub(crate) fn ensure_hub_trigger_allowed(
+    event: &flow_like::flow::event::Event,
+) -> Result<(), ApiError> {
+    if event.is_device_source() {
+        return Err(ApiError::bad_request(
+            "This event runs on its deployed devices, so its hub trigger cannot be turned on. Change where it runs in the event settings first.",
+        ));
+    }
+    Ok(())
+}
+
 /// Parse a version string in `MAJOR_MINOR_PATCH` (or dotted `MAJOR.MINOR.PATCH`)
 /// form into a numeric tuple. Returns `None` for malformed input (wrong arity or
 /// non-numeric components) so callers can surface a 400 instead of a 500.
@@ -229,9 +240,35 @@ pub fn routes() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::{
-        connected_app_direct_event_allowed, dotted_version_key, generic_event_endpoint_allowed,
-        parse_version_tuple,
+        connected_app_direct_event_allowed, dotted_version_key, ensure_hub_trigger_allowed,
+        ensure_source_execution_allowed, generic_event_endpoint_allowed, parse_version_tuple,
     };
+    use flow_like_types::FromProto;
+
+    fn event() -> flow_like::flow::event::Event {
+        flow_like::flow::event::Event::from_proto(flow_like_types::proto::Event::default())
+    }
+
+    #[test]
+    fn device_only_events_cannot_turn_on_a_hub_trigger_or_run_on_the_hub() {
+        let mut event = event();
+        assert!(ensure_hub_trigger_allowed(&event).is_ok());
+        assert!(ensure_source_execution_allowed(&event).is_ok());
+
+        event.set_device_source().unwrap();
+        let error = ensure_hub_trigger_allowed(&event).unwrap_err();
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(error.to_string().contains("deployed devices"));
+        assert!(ensure_source_execution_allowed(&event).is_err());
+    }
+
+    #[test]
+    fn an_explicit_clear_makes_the_event_eligible_for_hub_triggers_again() {
+        let mut event = event();
+        event.set_device_source().unwrap();
+        event.config = br#"{"__flow_like_source":"default"}"#.to_vec();
+        assert!(ensure_hub_trigger_allowed(&event).is_ok());
+    }
 
     /// `LogMeta.event_version` is dotted while `LogMeta.version` (the board)
     /// is `v{major}-{minor}-{patch}` — this fails if the shared helper ever

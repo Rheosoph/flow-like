@@ -33,8 +33,9 @@ import {
 } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	isDeviceEventSource,
-	withDeviceEventSource,
+	resolveEventSourceIntent,
 } from "@flow-like/flow-like-ui/lib/event-source";
+import { ensureDeviceEventCreation } from "@flow-like/flow-like-ui/lib/event-source-capability";
 import {
 	requestTimeoutMs,
 	withRequestDeadline,
@@ -285,17 +286,19 @@ export class WebEventState implements IEventState {
 		oauthTokens?: Record<string, IOAuthToken>,
 		options?: IEventUpsertOptions,
 	): Promise<IEvent> {
-		const deviceSource =
-			options?.source === "device" || isDeviceEventSource(inputEvent);
-		const event = deviceSource ? withDeviceEventSource(inputEvent) : inputEvent;
-		if (deviceSource) {
-			const capabilities = await apiGet<{ device_event_creation?: boolean }>(
-				`apps/${appId}/device-placements`,
-				this.backend.auth,
+		const { event, intent } = resolveEventSourceIntent(
+			inputEvent,
+			options?.source,
+		);
+		if (options?.source === "device") {
+			await ensureDeviceEventCreation(
+				`${this.backend.profile?.hub ?? ""}|${appId}`,
+				() =>
+					apiGet<{ device_event_creation?: boolean }>(
+						`apps/${appId}/device-placements`,
+						this.backend.auth,
+					),
 			);
-			if (capabilities?.device_event_creation !== true) {
-				throw new Error("Update the hub to create events directly on devices.");
-			}
 		}
 		return apiPut<IEvent>(
 			`apps/${appId}/events/${event.id}`,
@@ -305,7 +308,8 @@ export class WebEventState implements IEventState {
 				pat: personalAccessToken,
 				oauth_tokens: oauthTokens,
 				profile_id: this.backend.profile?.id,
-				...(deviceSource ? { register_source: false } : {}),
+				...(intent === "device" ? { register_source: false } : {}),
+				...(intent === "clear" ? { register_source: true } : {}),
 			},
 			this.backend.auth,
 		);

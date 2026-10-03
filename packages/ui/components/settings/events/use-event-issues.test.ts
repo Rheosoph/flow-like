@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { withDeviceEventSource } from "../../../lib/event-source";
 import type { IVariable } from "../../../lib/schema/flow/board";
 import {
 	type IEvent,
@@ -255,5 +256,23 @@ describe("hosted link reachability", () => {
 			hostingIssue(page({ execution_mode: IEventExecutionMode.Local }), {}),
 		).toBeUndefined();
 		expect(hostingIssue(page(), hosted)).toBeUndefined();
+	});
+});
+
+describe("sink-inactive issue", () => {
+	const paused = event({ active: false });
+	const issueIds = (input: IEvent) =>
+		computeEventIssues({ event: input, config: {}, requiresSink: true }).map(
+			(issue) => issue.id,
+		);
+
+	test("a paused trigger that needs a sink is flagged", () => {
+		expect(issueIds(paused)).toContain("sink-inactive");
+	});
+
+	test("a device-only event registers no sink here, so it is never flagged", () => {
+		expect(issueIds(withDeviceEventSource(paused))).not.toContain(
+			"sink-inactive",
+		);
 	});
 });

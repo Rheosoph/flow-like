@@ -571,6 +571,136 @@ describe("micro widget bundle refresh", () => {
 	});
 });
 
+describe("micro widget SDK handshake", () => {
+	/** Real SDK in its own document; only the wrapper's two postMessage hops are simulated. */
+	async function connectSdk(dropHello = false) {
+		const { mountFlowWidget } = await import(
+			"../../../../widget-sdk/src/mount"
+		);
+		const wrapper = frame()?.contentWindow;
+		if (!wrapper) throw new Error("The widget frame is missing");
+		const events = new window.EventTarget();
+		const widgetDocument =
+			window.document.implementation.createHTMLDocument("Synthetic widget");
+		const outbound: FlwEnvelope[] = [];
+		const parent = {
+			postMessage(envelope: FlwEnvelope) {
+				outbound.push(envelope);
+				if (dropHello && envelope.type === "hello") return;
+				queueMicrotask(() => {
+					window.dispatchEvent(
+						new window.MessageEvent("message", {
+							data: envelope,
+							source: wrapper as never,
+						}),
+					);
+				});
+			},
+		};
+		const widgetWindow = {
+			parent,
+			self: {},
+			top: parent,
+			addEventListener: events.addEventListener.bind(events),
+			removeEventListener: events.removeEventListener.bind(events),
+		};
+		const inWidget = <T,>(run: () => T): T => {
+			const previousWindow = globalThis.window;
+			const previousDocument = globalThis.document;
+			Object.assign(globalThis, {
+				window: widgetWindow,
+				document: widgetDocument,
+			});
+			try {
+				return run();
+			} finally {
+				Object.assign(globalThis, {
+					window: previousWindow,
+					document: previousDocument,
+				});
+			}
+		};
+		const inbound: FlwEnvelope[] = [];
+		const posted = spyOn(wrapper, "postMessage").mockImplementation((data) => {
+			const envelope = data as FlwEnvelope;
+			inbound.push(envelope);
+			queueMicrotask(() =>
+				inWidget(() =>
+					events.dispatchEvent(
+						new window.MessageEvent("message", {
+							data: envelope,
+							source: parent as never,
+						}),
+					),
+				),
+			);
+		});
+		const bridge = inWidget(() =>
+			mountFlowWidget({
+				id: "chart",
+				name: "Synthetic chart",
+				description: "Exercises the widget protocol without loading a package.",
+				sizing: { resizable: false },
+			}),
+		);
+		cleanup.push(() => {
+			inWidget(() => bridge.dispose());
+			posted.mockRestore();
+		});
+		await settle();
+		return { bridge, inbound, outbound };
+	}
+
+	test("SDK hello completes the handshake after the outer load event", async () => {
+		stubRegistry();
+		await renderWidget(component());
+		const sdk = await connectSdk();
+		expect(sdk.bridge.$mode.get()).toBe("hosted");
+		expect(sdk.outbound.map((message) => message.type)).toEqual([
+			"hello",
+			"ready",
+		]);
+		expect(host.querySelector('[data-slot="skeleton"]')).toBeNull();
+		await act(() => readyTimeout?.());
+		expect(bodyText()).not.toContain("did not become ready");
+	});
+
+	test("outer load completes the handshake when the SDK hello was missed", async () => {
+		stubRegistry();
+		await renderWidget(component());
+		const sdk = await connectSdk(true);
+		expect(sdk.bridge.$mode.get()).toBe("connecting");
+		await act(async () =>
+			frame()?.dispatchEvent(new window.Event("load") as never),
+		);
+		await settle();
+		expect(sdk.bridge.$mode.get()).toBe("hosted");
+		expect(host.querySelector('[data-slot="skeleton"]')).toBeNull();
+		await act(() => readyTimeout?.());
+		expect(bodyText()).not.toContain("did not become ready");
+	});
+
+	test("outer load after ready receives a second SDK ready for its repeated init", async () => {
+		stubRegistry();
+		await renderWidget(component());
+		const sdk = await connectSdk();
+		expect(sdk.bridge.$mode.get()).toBe("hosted");
+		await act(async () =>
+			frame()?.dispatchEvent(new window.Event("load") as never),
+		);
+		await settle();
+		expect(
+			sdk.inbound.filter((message) => message.type === "init"),
+		).toHaveLength(2);
+		expect(
+			sdk.outbound.filter((message) => message.type === "ready"),
+		).toHaveLength(2);
+		expect(host.querySelector('[data-slot="skeleton"]')).toBeNull();
+		await act(() => readyTimeout?.());
+		expect(bodyText()).not.toContain("did not become ready");
+	});
+});
+
 describe("micro widget reload in the page builder", () => {
 	const CSP_CONTRACT = {
 		contractVersion: 2,

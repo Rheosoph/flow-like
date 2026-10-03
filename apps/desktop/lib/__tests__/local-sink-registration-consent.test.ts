@@ -1,5 +1,9 @@
 import { type IEvent, IEventExecutionMode } from "@flow-like/flow-like-ui";
-import { withDeviceEventSource } from "@flow-like/flow-like-ui/lib/event-source";
+import {
+	isDeviceEventSource,
+	withDeviceEventSource,
+} from "@flow-like/flow-like-ui/lib/event-source";
+import { resetDeviceEventCreationCache } from "@flow-like/flow-like-ui/lib/event-source-capability";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -60,8 +64,13 @@ function onlineBackend() {
 	};
 }
 
-function backendPlans(plan: "none" | "existing" | "new") {
+function backendPlans(plan: "none" | "existing" | "new", stored?: IEvent) {
 	mocks.invoke.mockImplementation((command: string) => {
+		if (command === "get_event") {
+			return stored
+				? Promise.resolve(stored)
+				: Promise.reject(new Error("Event not found"));
+		}
 		if (command === "local_sink_registration_plan") {
 			return Promise.resolve(plan);
 		}
@@ -82,6 +91,7 @@ function calls(command: string) {
 describe("local trigger consent when saving an event", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
+		resetDeviceEventCreationCache();
 		backendPlans("new");
 	});
 
@@ -182,6 +192,134 @@ describe("local trigger consent when saving an event", () => {
 			registerSink: "skip",
 		});
 		expect(mocks.consent).not.toHaveBeenCalled();
+	});
+
+	test("a marker-stripped save of a stored device event asks for no approval", async () => {
+		const stored = withDeviceEventSource(event({ board_id: "board-1" }));
+		backendPlans("new", stored);
+		const backend = offlineBackend();
+		const state = new EventState(backend as never);
+
+		await state.upsertEvent(
+			"app-1",
+			event({ board_id: "board-1", name: "Renamed" }),
+		);
+
+		expect(mocks.consent).not.toHaveBeenCalled();
+		expect(backend.boardState.getBoard).not.toHaveBeenCalled();
+		expect(calls("local_sink_registration_plan")).toHaveLength(0);
+		const saved = calls("upsert_event")[0];
+		expect(saved?.registerSink).toBe("skip");
+		expect(isDeviceEventSource(saved?.event as IEvent)).toBe(true);
+	});
+
+	test("keeps the hub source disabled when a stripped save of a device event is online", async () => {
+		backendPlans("new", withDeviceEventSource(event()));
+		const state = new EventState(onlineBackend() as never);
+		mocks.fetcher.mockResolvedValueOnce(withDeviceEventSource(event()));
+
+		await state.upsertEvent("app-1", event());
+
+		expect(mocks.fetcher).toHaveBeenCalledTimes(1);
+		const request = mocks.fetcher.mock.calls[0]?.[2] as { body: string };
+		expect(JSON.parse(request.body)).toMatchObject({ register_source: false });
+		expect(mocks.consent).not.toHaveBeenCalled();
+	});
+
+	test("an event unknown locally is saved like an ordinary event", async () => {
+		mocks.consent.mockResolvedValue("allow");
+		const state = new EventState(offlineBackend() as never);
+
+		await state.upsertEvent("app-1", event());
+
+		expect(mocks.consent).toHaveBeenCalledTimes(1);
+		expect(calls("upsert_event")[0]?.registerSink).toBe("register");
+	});
+
+	test("an explicit clear of a device event asks for consent like an ordinary event", async () => {
+		backendPlans("new", withDeviceEventSource(event()));
+		mocks.consent.mockResolvedValue("allow");
+		const state = new EventState(offlineBackend() as never);
+
+		await state.upsertEvent(
+			"app-1",
+			withDeviceEventSource(event()),
+			undefined,
+			undefined,
+			undefined,
+			{ source: "default" },
+		);
+
+		expect(mocks.consent).toHaveBeenCalledTimes(1);
+		const saved = calls("upsert_event")[0];
+		expect(saved?.registerSink).toBe("register");
+		expect(isDeviceEventSource(saved?.event as IEvent)).toBe(false);
+		expect(calls("local_sink_registration_plan")[0]?.event).toMatchObject({
+			id: "event-1",
+		});
+	});
+
+	test("an explicit clear tells the hub to register the source", async () => {
+		backendPlans("existing");
+		const state = new EventState(onlineBackend() as never);
+		mocks.fetcher.mockResolvedValueOnce(event());
+
+		await state.upsertEvent(
+			"app-1",
+			withDeviceEventSource(event()),
+			undefined,
+			undefined,
+			undefined,
+			{ source: "default" },
+		);
+
+		expect(mocks.fetcher).toHaveBeenCalledTimes(1);
+		const request = mocks.fetcher.mock.calls[0]?.[2] as { body: string };
+		expect(JSON.parse(request.body)).toMatchObject({ register_source: true });
+		expect(calls("upsert_event")[0]?.registerSink).toBe("register");
+	});
+
+	test("probes the hub once for consecutive device creations", async () => {
+		const state = new EventState(onlineBackend() as never);
+		mocks.fetcher.mockImplementation((_profile, path: string) =>
+			Promise.resolve(
+				path.endsWith("device-placements")
+					? { device_event_creation: true }
+					: event(),
+			),
+		);
+
+		for (const id of ["event-1", "event-2"]) {
+			await state.upsertEvent(
+				"app-1",
+				event({ id }),
+				undefined,
+				undefined,
+				undefined,
+				{ source: "device" },
+			);
+		}
+
+		const probes = mocks.fetcher.mock.calls.filter(([, path]) =>
+			String(path).endsWith("device-placements"),
+		);
+		expect(probes).toHaveLength(1);
+	});
+
+	test("explains a forbidden capability probe before writing either copy", async () => {
+		const state = new EventState(onlineBackend() as never);
+		mocks.fetcher.mockRejectedValue(
+			Object.assign(new Error("forbidden"), { status: 403 }),
+		);
+
+		await expect(
+			state.upsertEvent("app-1", event(), undefined, undefined, undefined, {
+				source: "device",
+			}),
+		).rejects.toThrow("cannot manage devices");
+
+		expect(mocks.fetcher).toHaveBeenCalledTimes(1);
+		expect(calls("upsert_event")).toHaveLength(0);
 	});
 
 	test("reports a failed removal of the source trigger before deployment can start", async () => {

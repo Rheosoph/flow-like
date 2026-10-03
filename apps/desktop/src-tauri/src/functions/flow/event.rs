@@ -456,6 +456,15 @@ pub enum SinkRegistration {
     Keep,
 }
 
+/// A device-only event never keeps a trigger here, whatever the caller asked.
+pub(crate) fn effective_sink_mode(event: &Event, requested: SinkRegistration) -> SinkRegistration {
+    if event.is_device_source() {
+        SinkRegistration::Skip
+    } else {
+        requested
+    }
+}
+
 /// Applies `mode` for the saved `event`. `pat` and `oauth_tokens` merge into
 /// the registration's stored credentials.
 async fn sync_local_sink(
@@ -467,12 +476,19 @@ async fn sync_local_sink(
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     mode: SinkRegistration,
 ) -> anyhow::Result<()> {
-    let mode = if event.is_device_source() {
-        SinkRegistration::Skip
-    } else {
-        mode
+    let mode = effective_sink_mode(event, mode);
+    let manager_state = match crate::state::TauriEventSinkManagerState::construct(handler).await {
+        Ok(manager_state) => manager_state,
+        Err(err) if event.is_device_source() => {
+            tracing::warn!(
+                event_id = %event.id,
+                error = %err,
+                "Sink manager unavailable, nothing to remove for a device-only event"
+            );
+            return Ok(());
+        }
+        Err(err) => return Err(err),
     };
-    let manager_state = crate::state::TauriEventSinkManagerState::construct(handler).await?;
     let manager = manager_state.lock().await;
     match mode {
         SinkRegistration::Register => {
@@ -520,11 +536,7 @@ pub async fn upsert_event(
         }
         let event = app.upsert_event(event, version_type, enforce_id).await?;
 
-        let mode = if event.is_device_source() {
-            SinkRegistration::Skip
-        } else {
-            register_sink.unwrap_or(SinkRegistration::Keep)
-        };
+        let mode = effective_sink_mode(&event, register_sink.unwrap_or(SinkRegistration::Keep));
         if let Err(e) =
             sync_local_sink(&handler, &app_id, &event, offline, pat, oauth_tokens, mode).await
         {
