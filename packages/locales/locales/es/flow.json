@@ -1,4 +1,11 @@
 {
+	"updateAllWidgets": "",
+	"updateAllWidgetsDescription": "",
+	"widgetProjectAlreadyCurrent": "",
+	"widgetProjectPageChanged": "",
+	"widgetProjectReloadFailed": "",
+	"widgetProjectReloadPartial": "",
+	"widgetProjectReloaded": "",
 	"1Hour": "1 hora",
 	"24HAgo": "Hace 24 h",
 	"24Hours": "24 horas",

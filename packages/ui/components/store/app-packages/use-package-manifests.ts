@@ -32,6 +32,7 @@ export function invalidateAppPackageQueries(
 		["app-catalog-nodes", appId],
 		["getCatalog", appId],
 		["app-package-widgets", appId],
+		["app-package-widget-usage", appId],
 		[APP_PACKAGE_MANIFEST_KEY],
 	];
 	for (const queryKey of queryKeys)
@@ -39,6 +40,7 @@ export function invalidateAppPackageQueries(
 }
 
 export interface PackageManifestView {
+	version?: string;
 	access?: ManifestAccess;
 	widgets: PackageWidgetEntry[];
 	bundleHash?: string;
@@ -85,6 +87,7 @@ export function usePackageManifests(
 				const pkg = await backend.registryState.getPackage(packageId, appId);
 				if (!pkg) return null;
 				return {
+					version: pkg.version,
 					access: readManifestAccess(pkg.manifest),
 					widgets: readManifestWidgets(pkg.manifest),
 					bundleHash: readManifestWidgetBundleHash(pkg.manifest),

@@ -10,7 +10,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { IWidgetRef } from "../../state/backend-state/page-state";
+import type {
+	IWidgetRef,
+	PageContent,
+} from "../../state/backend-state/page-state";
 import type { A2UIComponent, SurfaceComponent } from "../a2ui/types";
 import {
 	type BuilderClipboard,
@@ -82,6 +85,12 @@ export interface ActionContext {
 	eventId?: string;
 	/** Page behavior hooks for preview mode */
 	pageId?: string;
+	pageContent?: PageContent[];
+	/** Save the live page after updating widgets across the project. */
+	saveWidgetUpdates?: (
+		snapshot: BuilderSnapshot,
+		content: PageContent[],
+	) => Promise<void>;
 	onLoadEventId?: string;
 	onUnloadEventId?: string;
 	onIntervalEventId?: string;

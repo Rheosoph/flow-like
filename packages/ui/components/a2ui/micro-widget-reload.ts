@@ -38,6 +38,9 @@ export interface MicroWidgetReloader {
 	/** The installed build when it differs from the placed one. */
 	updateFor(component: PlacedMicroWidget): AppPackageWidget | null;
 	reload(componentId: string): Promise<void>;
+	/** Update outdated package widgets on every draft page in the project. */
+	reloadAll?(): Promise<void>;
+	isReloadingAll?: boolean;
 	/** Re-read the installed builds, e.g. after the placed one failed to load. */
 	refresh(): void;
 }

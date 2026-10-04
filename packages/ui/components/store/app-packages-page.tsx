@@ -57,6 +57,7 @@ import {
 } from "./app-packages/package-nodes-section";
 import { PackageTile } from "./app-packages/package-tile";
 import { PackageUpdatesBanner } from "./app-packages/package-updates-banner";
+import { PackageWidgetUpdates } from "./app-packages/package-widget-updates";
 import { PackageWidgetsSection } from "./app-packages/package-widgets-section";
 import { LICENSE_WARNING_BADGE_CLASS } from "./app-packages/parts";
 import {
@@ -64,6 +65,7 @@ import {
 	invalidateAppPackageQueries,
 	usePackageManifests,
 } from "./app-packages/use-package-manifests";
+import { usePackageWidgetUpdates } from "./app-packages/use-package-widget-updates";
 import { PackageSearchDialog } from "./package-search-dialog";
 import {
 	WidgetPermissionsButton,
@@ -413,6 +415,21 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				),
 			),
 	});
+	const { refetch: refetchUpdates } = updates;
+	const prepareWidgetPackage = useCallback(
+		async (packageId: string, shouldContinue: () => boolean) => {
+			// Local packages use the installed build, including unpublished rebuilds.
+			if (isOffline.data) return undefined;
+			const fresh = await refetchUpdates({ throwOnError: true });
+			const update = asArray(fresh.data).find(
+				(entry) => entry.packageId === packageId,
+			);
+			if (!update || !shouldContinue()) return undefined;
+			await patchPackageVersion(packageId, update.latestVersion);
+			return update.latestVersion;
+		},
+		[isOffline.data, refetchUpdates, patchPackageVersion],
+	);
 
 	const applyAllUpdates = useMutation({
 		mutationFn: async (updatesToApply: PackageUpdate[]) => {
@@ -541,13 +558,36 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				(view.manifest?.widgets ?? []).map((widget) => ({
 					packageId: view.pkg.packageId,
 					packageName: view.name,
-					packageVersion: view.pkg.version,
+					packageVersion: view.manifest?.version || view.pkg.version,
 					bundleHash: view.manifest?.bundleHash,
 					widget,
 				})),
 			),
 		[views],
 	);
+	const latestWidgetVersions = useMemo(
+		() =>
+			new Map(
+				Array.from(updatesByPackage, ([id, update]) => [
+					id,
+					update.latestVersion,
+				]),
+			),
+		[updatesByPackage],
+	);
+	const widgetUpdates = usePackageWidgetUpdates({
+		appId,
+		widgets,
+		latestVersions: latestWidgetVersions,
+		enabled: !packages.isLoading && !manifests.loading && !updates.isFetching,
+		preparePackage: prepareWidgetPackage,
+	});
+	const packageChangePending =
+		addPackage.isPending ||
+		removePackage.isPending ||
+		applyUpdate.isPending ||
+		applyAllUpdates.isPending ||
+		reactivatePackage.isPending;
 
 	const nodeGroups = useMemo(
 		() =>
@@ -638,7 +678,11 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 						count={widgetConsents.length}
 						onClick={openGrants}
 					/>
-					<Button size="sm" onClick={() => setSearchOpen(true)}>
+					<Button
+						size="sm"
+						onClick={() => setSearchOpen(true)}
+						disabled={widgetUpdates.isUpdating}
+					>
 						<Plus className="size-4" />
 						{t("addPackage", "Add Package")}
 					</Button>
@@ -696,7 +740,11 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 							<PackageUpdatesBanner
 								updates={applicableUpdates}
 								packageNames={displayNames}
-								pending={applyUpdate.isPending || applyAllUpdates.isPending}
+								pending={
+									applyUpdate.isPending ||
+									applyAllUpdates.isPending ||
+									widgetUpdates.isUpdating
+								}
 								onApply={(update) =>
 									applyUpdate.mutate({
 										pkgId: update.packageId,
@@ -727,10 +775,52 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 									canReactivate={canReactivate(view.pkg)}
 									pending={{
 										autoUpdate: toggleAutoUpdate.isPending,
-										update: applyUpdate.isPending || applyAllUpdates.isPending,
-										reactivate: reactivatePackage.isPending,
-										remove: removePackage.isPending,
+										update:
+											applyUpdate.isPending ||
+											applyAllUpdates.isPending ||
+											widgetUpdates.isUpdating,
+										reactivate:
+											reactivatePackage.isPending || widgetUpdates.isUpdating,
+										remove: removePackage.isPending || widgetUpdates.isUpdating,
 									}}
+									widgetUpdates={
+										(view.manifest?.widgets.length ?? 0) > 0 ? (
+											<PackageWidgetUpdates
+												packageName={view.name}
+												outdated={
+													widgetUpdates.byPackage
+														? (widgetUpdates.byPackage.get(
+																view.pkg.packageId,
+															) ?? { widgets: 0, pages: 0 })
+														: undefined
+												}
+												isChecking={widgetUpdates.isChecking}
+												checkFailed={
+													widgetUpdates.checkFailed ||
+													(!offline && updates.isError)
+												}
+												isUpdating={
+													widgetUpdates.updatingPackageId === view.pkg.packageId
+												}
+												disabled={
+													view.pkg.stale ||
+													view.license.state !== "active" ||
+													packageChangePending ||
+													widgetUpdates.isUpdating
+												}
+												nextVersion={
+													offline
+														? undefined
+														: updatesByPackage.get(view.pkg.packageId)
+																?.latestVersion
+												}
+												onUpdate={() =>
+													void widgetUpdates.update(view.pkg.packageId)
+												}
+												onCheck={() => void widgetUpdates.check()}
+											/>
+										) : undefined
+									}
 									actions={{
 										onToggleAutoUpdate: (autoUpdate) =>
 											toggleAutoUpdate.mutate({
