@@ -1019,7 +1019,7 @@ describe("desktop widget describe for a missing bundle", () => {
 		async (order) => {
 			const { MicroWidgetGrantController } = await vi.importActual<
 				typeof import(
-					"@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant",
+					"@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant"
 				)
 			>("@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant");
 			nativeCommands(bundleFollowsInstalls());
@@ -1237,7 +1237,7 @@ describe("desktop widget describe for a missing bundle", () => {
 		vi.spyOn(console, "warn").mockImplementation(() => {});
 		const { MicroWidgetGrantController } = await vi.importActual<
 			typeof import(
-				"@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant",
+				"@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant"
 			)
 		>("@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant");
 		nativeCommands({
