@@ -195,7 +195,10 @@ export async function prepareOnlineDependencies(
 			id,
 			split >= 0 ? reference.slice(0, split) : undefined,
 		);
-		check(bit.id === id, "A model identity differs from this project.");
+		check(
+			bit.id === id && (split < 0 || bit.hub === reference.slice(0, split)),
+			"A model identity differs from this project.",
+		);
 		const resolved = bit.dependencies.length
 			? await backend.apiState.get<IBit[] | { bits: IBit[] }>(
 					profile,
@@ -207,25 +210,43 @@ export async function prepareOnlineDependencies(
 			Array.isArray(dependencies) && dependencies.length <= 2048,
 			"Invalid model dependency inventory.",
 		);
-		const selected = new Map(
-			[bit, ...dependencies].map((item) => [item.id, item]),
-		);
+		const selected = new Map<string, IBit>();
+		for (const item of [bit, ...dependencies]) {
+			identifier(item.id);
+			const previous = selected.get(item.id);
+			check(
+				!previous || previous.hub === item.hub,
+				`Model ID "${item.id}" appears on multiple hubs in its resolved inventory.`,
+			);
+			// The dependency endpoint can repeat the root with less metadata.
+			if (!previous) selected.set(item.id, item);
+		}
+		const packaged = [...selected.values()].map((item) => ({
+			...item,
+			// Device packages use plain IDs after each source hub has been verified.
+			dependencies: item.dependencies.map((dependency) => {
+				const split = dependency.lastIndexOf(":");
+				const id = dependency.slice(split + 1);
+				const resolved = selected.get(id);
+				check(
+					resolved &&
+						(split < 0 || resolved.hub === dependency.slice(0, split)),
+					`Model "${item.hub}:${item.id}" is missing dependency "${dependency}" from its resolved inventory.`,
+				);
+				return id;
+			}),
+		}));
 		const artifacts = new Map<
 			string,
 			{ path: string; size: number; sha256: string }
 		>();
-		for (const item of selected.values()) {
-			identifier(item.id);
+		for (const item of packaged) {
 			// Inline identities are derived by the native model implementation.
 			// Reject them before downloading or stripping their source metadata.
 			const parameters = JSON.stringify(item.parameters).toLowerCase();
 			check(
 				!parameters.includes('"projection"') && !parameters.includes('"mlx"'),
 				"This model needs native asset resolution. Prepare its dependencies from the desktop app.",
-			);
-			check(
-				item.dependencies.every((dependency) => selected.has(dependency)),
-				"A model dependency is missing from its resolved inventory.",
 			);
 			if (!item.file_name) continue;
 			identifier(item.hash);
@@ -274,10 +295,8 @@ export async function prepareOnlineDependencies(
 		}
 		const metadata = encoder.encode(
 			JSON.stringify({
-				bit: publicDependencyMetadata(bit),
-				dependencies: [...selected.values()]
-					.filter((item) => item.id !== id)
-					.map(publicDependencyMetadata),
+				bit: publicDependencyMetadata(packaged[0]),
+				dependencies: packaged.slice(1).map(publicDependencyMetadata),
 				artifacts: [...artifacts.values()],
 			}),
 		);

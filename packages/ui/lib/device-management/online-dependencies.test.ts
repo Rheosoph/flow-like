@@ -9,7 +9,7 @@ import {
 } from "./online-dependencies";
 
 const profile = { id: "profile" } as IProfile;
-function fixture() {
+function fixture(wrapDependencies = false) {
 	const app = {
 		id: "project",
 		bits: ["model"],
@@ -17,17 +17,24 @@ function fixture() {
 	} as unknown as IApp;
 	const bit = {
 		id: "model",
+		hub: "models.test",
 		hash: "model",
 		file_name: null,
-		dependencies: [],
+		dependencies: [] as string[],
 		parameters: { model: "hosted" },
 		download_link: "https://cloud.test/model?token=private",
 	};
+	const dependencies: (typeof bit)[] = [];
 	const calls: unknown[] = [];
 	const backend = {
 		bitState: { getBit: async () => bit },
 		apiState: {
-			get: async () => ({ version: 1, project_id: app.id, documents: { app } }),
+			get: async (_: unknown, path: string) =>
+				path === `bit/${bit.id}/dependencies`
+					? wrapDependencies
+						? { bits: dependencies }
+						: dependencies
+					: { version: 1, project_id: app.id, documents: { app } },
 			post: async (_: unknown, path: string, body: unknown) => {
 				calls.push([path, body]);
 				return {
@@ -39,7 +46,7 @@ function fixture() {
 			},
 		},
 	} as unknown as IBackendState;
-	return { app, backend, bit, calls };
+	return { app, backend, bit, dependencies, calls };
 }
 test("online export resolves and pins dependencies without exporting offline data or URLs", async () => {
 	const f = fixture();
@@ -58,6 +65,121 @@ test("online export resolves and pins dependencies without exporting offline dat
 			new TextDecoder().decode(await file.file.arrayBuffer()),
 		).not.toContain("token=private");
 });
+
+for (const wrapDependencies of [false, true]) {
+	test(`online export resolves qualified transitive dependencies from ${wrapDependencies ? "wrapped" : "array"} inventories`, async () => {
+		const f = fixture(wrapDependencies);
+		f.app.bits = ["models.test:model"];
+		f.bit.dependencies = ["models.test:tokenizer"];
+		const tokenizer = {
+			...f.bit,
+			id: "tokenizer",
+			dependencies: ["assets.test:config"],
+		};
+		const config = {
+			...f.bit,
+			id: "config",
+			hub: "assets.test",
+			dependencies: [],
+		};
+		f.dependencies.push(
+			{ ...f.bit, parameters: {} as typeof f.bit.parameters },
+			tokenizer,
+			config,
+		);
+		const exported = await prepareOnlineDependencies(f.app, f.backend, profile);
+		const metadata = exported.artifact.files.find(
+			(file) => file.path === "bits/metadata/model.json",
+		);
+		if (!metadata) throw new Error("Missing packaged model metadata");
+		expect(JSON.parse(await metadata.file.text())).toMatchObject({
+			bit: {
+				id: "model",
+				hub: "models.test",
+				dependencies: ["tokenizer"],
+				parameters: { model: "hosted" },
+			},
+			dependencies: [
+				{ id: "tokenizer", hub: "models.test", dependencies: ["config"] },
+				{ id: "config", hub: "assets.test", dependencies: [] },
+			],
+		});
+		expect(f.bit.dependencies).toEqual(["models.test:tokenizer"]);
+		expect(tokenizer.dependencies).toEqual(["assets.test:config"]);
+	});
+}
+
+test("online export rejects dependencies with the same ID on different hubs", async () => {
+	const f = fixture();
+	f.bit.dependencies = ["assets.test:model", "other.test:model"];
+	f.dependencies.push(
+		f.bit,
+		{ ...f.bit, hub: "assets.test", dependencies: [] },
+		{ ...f.bit, hub: "other.test", dependencies: [] },
+	);
+	await expect(
+		prepareOnlineDependencies(f.app, f.backend, profile),
+	).rejects.toThrow('Model ID "model" appears on multiple hubs');
+	expect(f.calls).toHaveLength(0);
+});
+
+test("online export resolves unqualified dependencies by their unique ID", async () => {
+	const f = fixture();
+	f.bit.dependencies = ["tokenizer"];
+	f.dependencies.push({
+		...f.bit,
+		id: "tokenizer",
+		hub: "assets.test",
+		dependencies: [],
+	});
+	const exported = await prepareOnlineDependencies(f.app, f.backend, profile);
+	expect(exported.assets.bit_pins).toHaveLength(1);
+});
+
+for (const dependency of ["assets.test:missing", "missing"]) {
+	test(`online export identifies a missing dependency ${dependency}`, async () => {
+		const f = fixture();
+		f.bit.dependencies = ["models.test:tokenizer"];
+		f.dependencies.push({
+			...f.bit,
+			id: "tokenizer",
+			dependencies: [dependency],
+		});
+		await expect(
+			prepareOnlineDependencies(f.app, f.backend, profile),
+		).rejects.toThrow(
+			`Model "models.test:tokenizer" is missing dependency "${dependency}" from its resolved inventory.`,
+		);
+		expect(f.calls).toHaveLength(0);
+	});
+}
+
+test("online export rejects a dependency returned from the wrong hub", async () => {
+	const f = fixture();
+	f.bit.dependencies = ["assets.test:tokenizer"];
+	f.dependencies.push({
+		...f.bit,
+		id: "tokenizer",
+		hub: "other.test",
+		dependencies: [],
+	});
+	await expect(
+		prepareOnlineDependencies(f.app, f.backend, profile),
+	).rejects.toThrow(
+		'Model "models.test:model" is missing dependency "assets.test:tokenizer"',
+	);
+	expect(f.calls).toHaveLength(0);
+});
+
+test("online export rejects a root model returned from the wrong hub", async () => {
+	const f = fixture();
+	f.app.bits = ["other.test:model"];
+	await expect(
+		prepareOnlineDependencies(f.app, f.backend, profile),
+	).rejects.toThrow("A model identity differs from this project.");
+	expect(f.calls).toHaveLength(0);
+});
+
 test("online artifacts cannot smuggle project database files and cannot masquerade as offline", async () => {
 	const marker = {
 		path: "apps/project/online-source.json",
@@ -80,7 +202,7 @@ test("online artifacts cannot smuggle project database files and cannot masquera
 		),
 	).rejects.toThrow("cannot contain offline");
 });
-test("unresolved dependency closure and embedded provider credentials fail before upload", async () => {
+test("embedded provider credentials fail before upload", async () => {
 	const f = fixture();
 	f.bit.parameters = {
 		api_key: "private",
