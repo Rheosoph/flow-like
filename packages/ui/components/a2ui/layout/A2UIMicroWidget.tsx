@@ -276,12 +276,16 @@ function MicroWidgetErrorCard({
 	widgetId,
 	message,
 	onReload,
+	onReloadAll,
+	isReloadingAll,
 }: {
 	widgetId: string;
 	message: string;
 	elementRef?: ComponentProps["elementRef"];
 	/** Offered by editors when a different build of the widget is installed. */
 	onReload?: () => void;
+	onReloadAll?: () => void;
+	isReloadingAll?: boolean;
 }) {
 	const { t } = useTranslation("common");
 	return (
@@ -297,7 +301,13 @@ function MicroWidgetErrorCard({
 						)}
 					</p>
 					<p className="text-muted-foreground break-words">{message}</p>
-					{onReload && <MicroWidgetReloadAction onReload={onReload} />}
+					{onReload && (
+						<MicroWidgetReloadAction
+							onReload={onReload}
+							onReloadAll={onReloadAll}
+							isReloadingAll={isReloadingAll}
+						/>
+					)}
 				</div>
 			</CardContent>
 		</Card>
@@ -792,6 +802,8 @@ function MicroWidgetFrame({
 					"The widget bundle hash is missing, so the local bundle cannot be resolved.",
 				)}
 				onReload={onReload}
+				onReloadAll={reloader?.reloadAll}
+				isReloadingAll={reloader?.isReloadingAll}
 			/>
 		);
 	}
@@ -803,6 +815,8 @@ function MicroWidgetFrame({
 				widgetId={widgetId}
 				detail={grantState.detail}
 				onReload={onReload}
+				onReloadAll={reloader?.reloadAll}
+				isReloadingAll={reloader?.isReloadingAll}
 			/>
 		);
 	}
@@ -839,6 +853,8 @@ function MicroWidgetFrame({
 				widgetId={widgetId}
 				message={failure}
 				onReload={onReload}
+				onReloadAll={reloader?.reloadAll}
+				isReloadingAll={reloader?.isReloadingAll}
 			/>
 		);
 	}

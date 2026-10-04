@@ -83,6 +83,7 @@ export interface PackageTileProps {
 	canReactivate: boolean;
 	pending: PackageTilePending;
 	actions: PackageTileActions;
+	widgetUpdates?: React.ReactNode;
 }
 
 export function PackageTile({
@@ -100,6 +101,7 @@ export function PackageTile({
 	canReactivate,
 	pending,
 	actions,
+	widgetUpdates,
 }: Readonly<PackageTileProps>) {
 	const { t } = useTranslation("store");
 	const locked = pkg.stale || pinState !== "active";
@@ -203,6 +205,7 @@ export function PackageTile({
 						<TileAccessIcons access={access} />
 					)}
 				</div>
+				{widgetUpdates}
 			</div>
 		</article>
 	);

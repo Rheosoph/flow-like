@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	Loader2Icon,
 	RefreshCwIcon,
 	ServerCrashIcon,
 	ShieldEllipsisIcon,
@@ -143,7 +144,13 @@ export function MicroWidgetQueuedCard({
 /** Editors offer this on a failed widget when a different build of it is installed. */
 export function MicroWidgetReloadAction({
 	onReload,
-}: { onReload: () => void }) {
+	onReloadAll,
+	isReloadingAll,
+}: {
+	onReload: () => void;
+	onReloadAll?: () => void;
+	isReloadingAll?: boolean;
+}) {
 	const { t } = useTranslation("common");
 	return (
 		<div className="mt-1 flex flex-col items-start gap-2">
@@ -153,16 +160,40 @@ export function MicroWidgetReloadAction({
 					"A different build of this widget is installed. Reloading keeps its actions and carries over its settings.",
 				)}
 			</p>
-			<Button
-				type="button"
-				size="sm"
-				variant="outline"
-				data-builder-interactive=""
-				onClick={onReload}
-			>
-				<RefreshCwIcon aria-hidden="true" />
-				{t("reloadWidget", "Reload widget")}
-			</Button>
+			<div className="flex flex-wrap gap-2">
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					data-builder-interactive=""
+					disabled={isReloadingAll}
+					onClick={onReload}
+				>
+					<RefreshCwIcon aria-hidden="true" />
+					{t("reloadWidget", "Reload widget")}
+				</Button>
+				{onReloadAll && (
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						data-builder-interactive=""
+						disabled={isReloadingAll}
+						title={t(
+							"updateAllWidgetsDescription",
+							"Update outdated package widgets on every page in this project.",
+						)}
+						onClick={onReloadAll}
+					>
+						{isReloadingAll ? (
+							<Loader2Icon aria-hidden="true" className="animate-spin" />
+						) : (
+							<RefreshCwIcon aria-hidden="true" />
+						)}
+						{t("updateAllWidgets", "Update all")}
+					</Button>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -173,11 +204,15 @@ export function MicroWidgetUnsupportedCard({
 	widgetId,
 	detail,
 	onReload,
+	onReloadAll,
+	isReloadingAll,
 }: {
 	widgetId: string;
 	detail: string | null;
 	elementRef?: ComponentProps["elementRef"];
 	onReload?: () => void;
+	onReloadAll?: () => void;
+	isReloadingAll?: boolean;
 }) {
 	const { t } = useTranslation("common");
 	return (
@@ -210,7 +245,13 @@ export function MicroWidgetUnsupportedCard({
 							{detail}
 						</p>
 					)}
-					{onReload && <MicroWidgetReloadAction onReload={onReload} />}
+					{onReload && (
+						<MicroWidgetReloadAction
+							onReload={onReload}
+							onReloadAll={onReloadAll}
+							isReloadingAll={isReloadingAll}
+						/>
+					)}
 				</div>
 			</CardContent>
 		</Card>

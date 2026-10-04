@@ -246,4 +246,136 @@ describe("listAppPackageWidgets", () => {
 		);
 		expect(result).toEqual([]);
 	});
+
+	test("returns an empty list when listing packages fails by default", async () => {
+		const result = await listAppPackageWidgets(
+			{
+				listPackages: async () => {
+					throw new Error("Package listing unavailable");
+				},
+				getPackage: async () => installed,
+			},
+			"app-1",
+		);
+		expect(result).toEqual([]);
+	});
+
+	test("propagates package listing failures in strict mode", async () => {
+		const failure = new Error("Package listing unavailable");
+		let packageReads = 0;
+		await expect(
+			listAppPackageWidgets(
+				{
+					listPackages: async () => {
+						throw failure;
+					},
+					getPackage: async () => {
+						packageReads += 1;
+						return installed;
+					},
+				},
+				"app-1",
+				{ strict: true },
+			),
+		).rejects.toBe(failure);
+		expect(packageReads).toBe(0);
+	});
+
+	test("rejects partial package results when a manifest read fails in strict mode", async () => {
+		const failure = new Error("Private package unavailable");
+		await expect(
+			listAppPackageWidgets(
+				{
+					listPackages: async () => ({
+						"com.example.pack": "1.2.3",
+						"com.example.private": "1.0.0",
+					}),
+					getPackage: async (id) => {
+						if (id === "com.example.private") throw failure;
+						return installed;
+					},
+				},
+				"app-1",
+				{ strict: true },
+			),
+		).rejects.toBe(failure);
+	});
+
+	test("identifies a listed package that cannot be loaded in strict mode", async () => {
+		await expect(
+			listAppPackageWidgets(
+				{
+					listPackages: async () => ({
+						"com.example.pack": "1.2.3",
+						"com.example.missing": "1.0.0",
+					}),
+					getPackage: async (id) =>
+						id === "com.example.missing" ? null : installed,
+				},
+				"app-1",
+				{ strict: true },
+			),
+		).rejects.toThrow("Package com.example.missing could not be loaded.");
+	});
+
+	test("allows installed packages without widgets in strict mode", async () => {
+		const result = await listAppPackageWidgets(
+			{
+				listPackages: async () => ({
+					"com.example.pack": "1.2.3",
+					"com.example.nodes": "1.0.0",
+				}),
+				getPackage: async (id) =>
+					id === "com.example.nodes"
+						? { version: "1.0.0", manifest: { nodes: [] } }
+						: installed,
+			},
+			"app-1",
+			{ strict: true },
+		);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			packageId: "com.example.pack",
+			packageVersion: "1.2.3",
+			bundleHash: "deadbeef",
+			widget: { id: WIDGET_ENTRY.id, contract: CONTRACT },
+		});
+	});
+
+	test("resolves only the selected package even if another package is inaccessible", async () => {
+		const reads: string[] = [];
+		const widgets = await listAppPackageWidgets(
+			{
+				listPackages: async () => ({ selected: "1.2.3", unavailable: "1.0.0" }),
+				getPackage: async (id) => {
+					reads.push(id);
+					if (id !== "selected") throw new Error("Package unavailable");
+					return installed;
+				},
+			},
+			"app-1",
+			{ strict: true, packageId: "selected" },
+		);
+		expect(reads).toEqual(["selected"]);
+		expect(widgets).toHaveLength(1);
+		expect(widgets[0].packageId).toBe("selected");
+	});
+
+	test("refuses to update a selected package removed from the app", async () => {
+		let reads = 0;
+		await expect(
+			listAppPackageWidgets(
+				{
+					listPackages: async () => ({ other: "1.0.0" }),
+					getPackage: async () => {
+						reads++;
+						return installed;
+					},
+				},
+				"app-1",
+				{ strict: true, packageId: "removed" },
+			),
+		).rejects.toThrow("no longer added");
+		expect(reads).toBe(0);
+	});
 });

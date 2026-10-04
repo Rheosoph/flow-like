@@ -15,11 +15,13 @@ import { cn } from "../../lib";
 import { isMissingResourceError } from "../../lib/api-error";
 import { addNodeCommand } from "../../lib/command/generic-command";
 import { parseDateValue } from "../../lib/date";
+import { trackPageSave } from "../../lib/pending-page-saves";
 import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type {
 	IPage,
 	IWidgetRef,
+	PageContent,
 	PageLayoutType,
 } from "../../state/backend-state/page-state";
 import type { SurfaceComponent } from "../a2ui/types";
@@ -39,6 +41,7 @@ import { Separator } from "../ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
+import type { BuilderSnapshot } from "./BuilderContext";
 import { WidgetBuilder } from "./WidgetBuilder";
 import { PageNoCacheSetting } from "./page-no-cache-setting";
 import {
@@ -212,50 +215,15 @@ export function PageBuilderSurface({
 	// Track last saved components for diff comparison
 	const lastSavedComponentsRef = useRef<string>("");
 	const lastSavedWidgetRefsRef = useRef<string>("{}");
+	const lastSavedContentRef = useRef<string>("[]");
+	const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+	const pendingSavesRef = useRef(0);
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const autoSaveMetadataTimeoutRef = useRef<ReturnType<
 		typeof setTimeout
 	> | null>(null);
 	// Store page in ref for use in callbacks without causing re-renders
 	const pageRef = useRef<IPage | null>(null);
-
-	// Build action context for the widget builder (pages, workflow events, behavior hooks)
-	const actionContext = useMemo(() => {
-		const pages = asArray(allPages.data).map((pageInfo) => ({
-			id: pageInfo.pageId,
-			name: pageInfo.name || pageInfo.pageId,
-		}));
-
-		const workflowEvents = getPageWorkflowEvents(
-			boardNodes,
-			t("unnamedEvent", "Unnamed Event"),
-		);
-
-		return {
-			appId,
-			boardId: effectiveBoardId,
-			pages,
-			workflowEvents,
-			refreshWorkflowEvents,
-			createWorkflowEvent: hasBoard ? createWorkflowEvent : undefined,
-			// Pass behavior hooks for preview mode
-			pageId: page?.id,
-			onLoadEventId: page?.onLoadEventId,
-			onUnloadEventId: page?.onUnloadEventId,
-			onIntervalEventId: page?.onIntervalEventId,
-			onIntervalSeconds: page?.onIntervalSeconds,
-		};
-	}, [
-		appId,
-		effectiveBoardId,
-		page,
-		allPages.data,
-		boardNodes,
-		refreshWorkflowEvents,
-		createWorkflowEvent,
-		hasBoard,
-		t,
-	]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only names a page that does not exist yet; re-running on a language switch would reload over the working copy.
 	useEffect(() => {
@@ -285,6 +253,7 @@ export function PageBuilderSurface({
 				lastSavedWidgetRefsRef.current = JSON.stringify(
 					loadedPage.widgetRefs ?? {},
 				);
+				lastSavedContentRef.current = JSON.stringify(loadedPage.content ?? []);
 			} catch (error) {
 				// Only a confirmed miss may become a blank page. After any other failure (server
 				// unreachable, payload not on this device) a stand-in would autosave over the
@@ -313,6 +282,7 @@ export function PageBuilderSurface({
 				pageRef.current = newPage;
 				lastSavedComponentsRef.current = "[]";
 				lastSavedWidgetRefsRef.current = "{}";
+				lastSavedContentRef.current = "[]";
 			} finally {
 				setIsLoading(false);
 			}
@@ -323,10 +293,27 @@ export function PageBuilderSurface({
 
 	const savePage = useCallback(
 		async (pageToSave: IPage) => {
-			await backend.pageState.updatePage(appId, pageToSave);
-			const linkedBoardId = pageToSave.boardId || boardId;
-			if (linkedBoardId) {
-				await invalidate(backend.boardState.getBoard, [appId, linkedBoardId]);
+			// Keep an earlier autosave from finishing after a project-wide widget update.
+			pendingSavesRef.current += 1;
+			const save = trackPageSave(
+				backend.pageState,
+				appId,
+				saveQueueRef.current.then(async () => {
+					await backend.pageState.updatePage(appId, pageToSave);
+					const linkedBoardId = pageToSave.boardId || boardId;
+					if (linkedBoardId) {
+						await invalidate(backend.boardState.getBoard, [
+							appId,
+							linkedBoardId,
+						]);
+					}
+				}),
+			);
+			saveQueueRef.current = save.catch(() => {});
+			try {
+				await save;
+			} finally {
+				pendingSavesRef.current -= 1;
 			}
 		},
 		[appId, boardId, backend.pageState, backend.boardState, invalidate],
@@ -335,7 +322,8 @@ export function PageBuilderSurface({
 	// Save pending changes on unmount instead of just cancelling
 	useEffect(() => {
 		return () => {
-			// If there's a pending auto-save, execute it immediately
+			const hasPendingSave =
+				autoSaveTimeoutRef.current || autoSaveMetadataTimeoutRef.current;
 			if (autoSaveTimeoutRef.current) {
 				clearTimeout(autoSaveTimeoutRef.current);
 				autoSaveTimeoutRef.current = null;
@@ -343,7 +331,8 @@ export function PageBuilderSurface({
 			if (autoSaveMetadataTimeoutRef.current) {
 				clearTimeout(autoSaveMetadataTimeoutRef.current);
 				autoSaveMetadataTimeoutRef.current = null;
-				// Save immediately on unmount if we have pending metadata changes
+			}
+			if (hasPendingSave) {
 				const currentPage = pageRef.current;
 				if (currentPage && appId) {
 					const pageToSave = {
@@ -379,6 +368,9 @@ export function PageBuilderSurface({
 		async (
 			components: SurfaceComponent[],
 			widgetRefs?: Record<string, IWidgetRef>,
+			content?: PageContent[],
+			throwOnError = false,
+			force = false,
 		) => {
 			const currentPage = pageRef.current;
 			if (!currentPage || !appId) return;
@@ -386,10 +378,15 @@ export function PageBuilderSurface({
 			const componentsJson = JSON.stringify(components);
 			const nextWidgetRefs = widgetRefs ?? currentPage.widgetRefs ?? {};
 			const widgetRefsJson = JSON.stringify(nextWidgetRefs);
+			const nextContent = content ?? currentPage.content;
+			const contentJson = JSON.stringify(nextContent);
 			// Skip if no changes
 			if (
+				!force &&
+				pendingSavesRef.current === 0 &&
 				componentsJson === lastSavedComponentsRef.current &&
-				widgetRefsJson === lastSavedWidgetRefsRef.current
+				widgetRefsJson === lastSavedWidgetRefsRef.current &&
+				contentJson === lastSavedContentRef.current
 			) {
 				return;
 			}
@@ -400,19 +397,30 @@ export function PageBuilderSurface({
 					...currentPage,
 					components,
 					widgetRefs: nextWidgetRefs,
+					content: nextContent,
 					updatedAt: new Date().toISOString(),
 				};
-				await savePage(updatedPage);
 				pageRef.current = updatedPage;
 				setPage(updatedPage);
+				await savePage(updatedPage);
 				lastSavedComponentsRef.current = componentsJson;
 				lastSavedWidgetRefsRef.current = widgetRefsJson;
-				setHasUnsavedChanges(false);
+				lastSavedContentRef.current = contentJson;
+				const latest = pageRef.current;
+				if (
+					latest &&
+					JSON.stringify(latest.components) === componentsJson &&
+					JSON.stringify(latest.widgetRefs ?? {}) === widgetRefsJson &&
+					JSON.stringify(latest.content) === contentJson
+				)
+					setHasUnsavedChanges(false);
 				setLastSavedAt(new Date());
 			} catch (error) {
 				console.error("Failed to save page:", error);
+				setHasUnsavedChanges(true);
+				if (throwOnError) throw error;
 			} finally {
-				setIsSaving(false);
+				setIsSaving(pendingSavesRef.current > 0);
 			}
 		},
 		[appId, savePage],
@@ -424,25 +432,38 @@ export function PageBuilderSurface({
 			components: SurfaceComponent[],
 			widgetRefs?: Record<string, IWidgetRef>,
 		) => {
+			// Keep the working copy current for metadata saves and project-wide updates.
+			const currentPage = pageRef.current;
+			if (currentPage) {
+				pageRef.current = {
+					...currentPage,
+					components,
+					widgetRefs: widgetRefs ?? currentPage.widgetRefs,
+				};
+			}
 			// Check if there are actual changes using ref (avoid state dependency)
 			const componentsJson = JSON.stringify(components);
 			const widgetRefsJson = JSON.stringify(widgetRefs ?? {});
+			if (autoSaveTimeoutRef.current) {
+				clearTimeout(autoSaveTimeoutRef.current);
+				autoSaveTimeoutRef.current = null;
+			}
 			if (
+				pendingSavesRef.current === 0 &&
 				componentsJson === lastSavedComponentsRef.current &&
-				widgetRefsJson === lastSavedWidgetRefsRef.current
+				widgetRefsJson === lastSavedWidgetRefsRef.current &&
+				JSON.stringify(pageRef.current?.content ?? []) ===
+					lastSavedContentRef.current
 			) {
+				setHasUnsavedChanges(false);
 				return; // No changes, skip
 			}
 
 			setHasUnsavedChanges(true);
 
-			// Clear existing auto-save timeout
-			if (autoSaveTimeoutRef.current) {
-				clearTimeout(autoSaveTimeoutRef.current);
-			}
-
 			// Schedule auto-save with debounce
 			autoSaveTimeoutRef.current = setTimeout(() => {
+				autoSaveTimeoutRef.current = null;
 				performSave(components, widgetRefs);
 			}, AUTO_SAVE_DELAY);
 		},
@@ -467,20 +488,18 @@ export function PageBuilderSurface({
 
 	const updatePageProperty = useCallback(
 		<K extends keyof IPage>(key: K, value: IPage[K]) => {
-			let updatedPage: IPage | null = null;
-
-			setPage((prev) => {
-				if (!prev) return prev;
-				updatedPage = { ...prev, [key]: value };
-				pageRef.current = updatedPage;
-				return updatedPage;
-			});
+			const currentPage = pageRef.current;
+			if (!currentPage) return;
+			const updatedPage = { ...currentPage, [key]: value };
+			pageRef.current = updatedPage;
+			setPage(updatedPage);
 
 			// Schedule auto-save for metadata changes
 			if (autoSaveMetadataTimeoutRef.current) {
 				clearTimeout(autoSaveMetadataTimeoutRef.current);
 			}
 			autoSaveMetadataTimeoutRef.current = setTimeout(async () => {
+				autoSaveMetadataTimeoutRef.current = null;
 				// Read current page from ref at execution time
 				const currentPage = pageRef.current;
 				if (!currentPage || !appId) return;
@@ -492,8 +511,6 @@ export function PageBuilderSurface({
 						updatedAt: new Date().toISOString(),
 					};
 					await savePage(pageToSave);
-					pageRef.current = pageToSave;
-					setPage(pageToSave);
 					setLastSavedAt(new Date());
 				} catch (error) {
 					console.error("Failed to save page metadata:", error);
@@ -523,8 +540,6 @@ export function PageBuilderSurface({
 				updatedAt: new Date().toISOString(),
 			};
 			await savePage(pageToSave);
-			pageRef.current = pageToSave;
-			setPage(pageToSave);
 			setLastSavedAt(new Date());
 		} catch (error) {
 			console.error("Failed to save page metadata:", error);
@@ -532,6 +547,66 @@ export function PageBuilderSurface({
 			setIsSaving(false);
 		}
 	}, [appId, savePage]);
+
+	const saveWidgetUpdates = useCallback(
+		async (snapshot: BuilderSnapshot, content: PageContent[]) => {
+			const hasPendingMetadata = autoSaveMetadataTimeoutRef.current !== null;
+			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+			if (autoSaveMetadataTimeoutRef.current)
+				clearTimeout(autoSaveMetadataTimeoutRef.current);
+			autoSaveTimeoutRef.current = null;
+			autoSaveMetadataTimeoutRef.current = null;
+			await performSave(
+				snapshot.components,
+				snapshot.widgetRefs,
+				content,
+				true,
+				hasPendingMetadata,
+			);
+		},
+		[performSave],
+	);
+
+	// Build action context for the widget builder (pages, workflow events, behavior hooks)
+	const actionContext = useMemo(() => {
+		const pages = asArray(allPages.data).map((pageInfo) => ({
+			id: pageInfo.pageId,
+			name: pageInfo.name || pageInfo.pageId,
+		}));
+
+		const workflowEvents = getPageWorkflowEvents(
+			boardNodes,
+			t("unnamedEvent", "Unnamed Event"),
+		);
+
+		return {
+			appId,
+			boardId: effectiveBoardId,
+			pages,
+			workflowEvents,
+			refreshWorkflowEvents,
+			createWorkflowEvent: hasBoard ? createWorkflowEvent : undefined,
+			// Pass behavior hooks for preview mode
+			pageId: page?.id,
+			pageContent: page?.content,
+			saveWidgetUpdates,
+			onLoadEventId: page?.onLoadEventId,
+			onUnloadEventId: page?.onUnloadEventId,
+			onIntervalEventId: page?.onIntervalEventId,
+			onIntervalSeconds: page?.onIntervalSeconds,
+		};
+	}, [
+		appId,
+		effectiveBoardId,
+		page,
+		allPages.data,
+		boardNodes,
+		refreshWorkflowEvents,
+		createWorkflowEvent,
+		hasBoard,
+		saveWidgetUpdates,
+		t,
+	]);
 
 	if (!pageId) {
 		return (

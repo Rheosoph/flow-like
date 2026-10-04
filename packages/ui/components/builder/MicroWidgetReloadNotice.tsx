@@ -24,7 +24,8 @@ export function MicroWidgetReloadNotice({
 	micro: MicroWidgetInstanceComponent;
 }) {
 	const { t } = useTranslation("flow");
-	const { updateFor, reload } = useMicroWidgetReload();
+	const { updateFor, reload, reloadAll, isReloadingAll } =
+		useMicroWidgetReload();
 	const [reloading, setReloading] = useState(false);
 	const update = updateFor(micro);
 	const changes = useMemo(
@@ -81,21 +82,44 @@ export function MicroWidgetReloadNotice({
 					)}
 				</p>
 			)}
-			<Button
-				type="button"
-				size="sm"
-				variant="outline"
-				className="h-7 w-full text-xs"
-				disabled={reloading}
-				onClick={onReload}
-			>
-				{reloading ? (
-					<Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-				) : (
-					<RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+			<div className="flex flex-wrap gap-2">
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					className="h-7 flex-1 text-xs"
+					disabled={reloading || isReloadingAll}
+					onClick={onReload}
+				>
+					{reloading ? (
+						<Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+					) : (
+						<RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+					)}
+					{t("reloadWidget", "Reload widget")}
+				</Button>
+				{reloadAll && (
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						className="h-7 flex-1 text-xs"
+						disabled={reloading || isReloadingAll}
+						title={t(
+							"updateAllWidgetsDescription",
+							"Update outdated package widgets on every page in this project.",
+						)}
+						onClick={() => void reloadAll()}
+					>
+						{isReloadingAll ? (
+							<Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+						) : (
+							<RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+						)}
+						{t("updateAllWidgets", "Update all")}
+					</Button>
 				)}
-				{t("reloadWidget", "Reload widget")}
-			</Button>
+			</div>
 		</div>
 	);
 }
