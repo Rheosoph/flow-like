@@ -200,22 +200,37 @@ export interface AppPackageWidgetSources {
 export async function listAppPackageWidgets(
 	sources: AppPackageWidgetSources,
 	appId: string,
+	options: { strict?: boolean; packageId?: string } = {},
 ): Promise<AppPackageWidget[]> {
 	if (!sources.listPackages) return [];
 	let pinned: Record<string, string>;
 	try {
 		pinned = await sources.listPackages(appId);
-	} catch {
+	} catch (error) {
+		if (options.strict) throw error;
 		return [];
 	}
-	const packageIds = Object.keys(pinned ?? {});
+	if (options.packageId && !Object.hasOwn(pinned ?? {}, options.packageId)) {
+		if (options.strict)
+			throw new Error(
+				`Package ${options.packageId} is no longer added to this app.`,
+			);
+		return [];
+	}
+	const packageIds = options.packageId
+		? [options.packageId]
+		: Object.keys(pinned ?? {});
 	if (packageIds.length === 0) return [];
 
 	const resolved = await Promise.all(
 		packageIds.map(async (packageId) => {
 			try {
 				const installed = await sources.getPackage(packageId, appId);
-				if (!installed) return [];
+				if (!installed) {
+					if (options.strict)
+						throw new Error(`Package ${packageId} could not be loaded.`);
+					return [];
+				}
 				const widgets = readManifestWidgets(installed.manifest);
 				if (widgets.length === 0) return [];
 				const manifestRecord = isRecord(installed.manifest)
@@ -236,7 +251,8 @@ export async function listAppPackageWidgets(
 						widget,
 					}),
 				);
-			} catch {
+			} catch (error) {
+				if (options.strict) throw error;
 				return [];
 			}
 		}),

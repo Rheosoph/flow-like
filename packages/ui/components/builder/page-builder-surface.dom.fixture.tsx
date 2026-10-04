@@ -8,7 +8,7 @@ import {
 	type IGenericCommand,
 } from "../../lib/schema/flow/board/commands/generic-command";
 import type { INode } from "../../lib/schema/flow/node";
-import type { IPage } from "../../state/backend-state/page-state";
+import type { IPage, PageContent } from "../../state/backend-state/page-state";
 import type { SurfaceComponent } from "../a2ui/types";
 import type { BuilderContextType } from "./BuilderContext";
 import type { WidgetBuilderProps } from "./WidgetBuilder";
@@ -69,6 +69,8 @@ interface Scenario {
 	catalogError?: Error;
 	commandError?: Error;
 	holdCommands: boolean;
+	holdSaves?: boolean;
+	saveError?: Error;
 	boardGate?: Promise<void>;
 }
 
@@ -142,6 +144,7 @@ const savedPages: IPage[] = [];
 const sentCommands: IGenericCommand[] = [];
 const executedCommands: IGenericCommand[] = [];
 const heldCommands: (() => void)[] = [];
+const heldSaves: (() => void)[] = [];
 let scenario: Scenario = { catalog, holdCommands: false };
 let boardReads = 0;
 let catalogReads = 0;
@@ -154,6 +157,10 @@ const backend = {
 		getPage: async () =>
 			structuredClone({ ...page, boardId: scenario.pageBoardId }),
 		updatePage: async (_appId: string, updated: IPage) => {
+			if (scenario.holdSaves) {
+				await new Promise<void>((resolve) => heldSaves.push(resolve));
+			}
+			if (scenario.saveError) throw scenario.saveError;
 			savedPages.push(structuredClone(updated));
 		},
 	},
@@ -249,6 +256,8 @@ mock.module("./WidgetBuilder", () => ({
 		return (
 			<BuilderProvider
 				initialComponents={props.initialComponents}
+				initialWidgetRefs={props.initialWidgetRefs}
+				onChange={props.onChange}
 				actionContext={props.actionContext}
 			>
 				<BuilderReader />
@@ -292,6 +301,7 @@ async function mount(overrides: Partial<Scenario> = {}) {
 	sentCommands.length = 0;
 	executedCommands.length = 0;
 	heldCommands.length = 0;
+	heldSaves.length = 0;
 	builderProps = undefined;
 	builder = undefined;
 	const mountedClient = new QueryClient({
@@ -414,6 +424,9 @@ function releaseHeldCommand() {
 }
 
 afterEach(async () => {
+	scenario.holdSaves = false;
+	scenario.saveError = undefined;
+	for (const release of heldSaves.splice(0)) release();
 	for (const release of heldCommands.splice(0)) release();
 	await act(async () => root?.unmount());
 	root = undefined;
@@ -480,6 +493,101 @@ test("auto-save refreshes board metadata after widget event bindings change", as
 	expect(savedPages[0].components?.[0].component.eventHandlers).toEqual(
 		components[0].component.eventHandlers,
 	);
+});
+
+test("project widget updates persist the live snapshot and inline page content", async () => {
+	await mount();
+	const components = withBinding();
+	const content: PageContent[] = [
+		{ Component: structuredClone(components[0]) },
+	];
+	await act(async () => {
+		await currentBuilder().actionContext?.saveWidgetUpdates?.(
+			{ components, widgetRefs: {} },
+			content,
+		);
+	});
+
+	expect(savedPages).toHaveLength(1);
+	expect(savedPages[0].components).toEqual(components);
+	expect(savedPages[0].content).toEqual(content);
+	expect(savedPages[0].boardId).toBe("saved-board");
+	expect(currentBuilder().actionContext?.pageContent).toEqual(content);
+	expect(boardReads).toBe(2);
+});
+
+test("project widget saves reject when persistence fails", async () => {
+	const failure = new Error("Widget update rejected");
+	await mount({ saveError: failure });
+	await act(async () => {
+		await expect(
+			currentBuilder().actionContext?.saveWidgetUpdates?.(
+				{ components: withBinding(), widgetRefs: {} },
+				[],
+			) ?? Promise.resolve(),
+		).rejects.toBe(failure);
+	});
+
+	expect(savedPages).toHaveLength(0);
+	expect(boardReads).toBe(1);
+});
+
+test("metadata changes and unmount keep component edits waiting for autosave", async () => {
+	await mount();
+	const components = withBinding();
+	await act(async () => {
+		currentBuilder().onChange?.(components, {});
+	});
+	await act(async () => {
+		currentBuilder().onCanvasSettingsChange?.({
+			backgroundColor: "var(--background)",
+			padding: "16px",
+			customCss: ".page { color: red; }",
+		});
+	});
+	await act(async () => {
+		root?.unmount();
+		root = undefined;
+	});
+	await settle(() => savedPages.length > 0);
+
+	expect(savedPages.at(-1)?.components).toEqual(components);
+	expect(savedPages.at(-1)?.canvasSettings?.customCss).toBe(
+		".page { color: red; }",
+	);
+});
+
+test("undo during a pending project save is saved after the updated snapshot", async () => {
+	await mount({ holdSaves: true });
+	const previous = structuredClone(currentBuilder().initialComponents ?? []);
+	const components = withBinding();
+	let save: Promise<void> | undefined;
+	await act(async () => {
+		builder?.replaceComponents(components);
+		save = currentBuilder().actionContext?.saveWidgetUpdates?.(
+			{ components, widgetRefs: {} },
+			[],
+		);
+	});
+	await settle(() => heldSaves.length === 1);
+	await act(async () => builder?.undo());
+	expect(Array.from(builder?.components.values() ?? [])).toEqual(previous);
+	await act(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 2100));
+	});
+	// The undo is queued behind the in-flight update instead of racing it.
+	expect(heldSaves).toHaveLength(1);
+	expect(savedPages).toHaveLength(0);
+	await act(async () => heldSaves.shift()?.());
+	await settle(() => heldSaves.length === 1);
+	expect(savedPages).toHaveLength(1);
+	expect(savedPages[0].components).toEqual(components);
+	await act(async () => {
+		heldSaves.shift()?.();
+		await save;
+	});
+	await settle(() => savedPages.length === 2);
+	expect(savedPages[1].components).toEqual(previous);
 });
 
 test("re-reads the board on demand and creates a named event node from an untouched catalog template", async () => {

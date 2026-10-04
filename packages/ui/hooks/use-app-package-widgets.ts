@@ -9,9 +9,22 @@ function appPackageWidgetsKey(appId: string) {
 	return ["app-package-widgets", appId] as const;
 }
 
-function appPackageWidgetsQuery(backend: IBackendState, appId: string) {
+function appPackageWidgetsQuery(
+	backend: IBackendState,
+	appId: string,
+	options: { strict?: boolean; packageId?: string } = {},
+) {
 	return {
-		queryKey: appPackageWidgetsKey(appId),
+		queryKey: options.packageId
+			? [
+					...appPackageWidgetsKey(appId),
+					"package",
+					options.packageId,
+					Boolean(options.strict),
+				]
+			: options.strict
+				? [...appPackageWidgetsKey(appId), "strict"]
+				: appPackageWidgetsKey(appId),
 		queryFn: () =>
 			listAppPackageWidgets(
 				{
@@ -20,6 +33,7 @@ function appPackageWidgetsQuery(backend: IBackendState, appId: string) {
 						backend.registryState.getPackage(packageId, packageAppId),
 				},
 				appId,
+				options,
 			),
 	};
 }
@@ -43,15 +57,19 @@ export function useAppPackageWidgets(
 }
 
 /** Reads past the cache, e.g. right after a local package rebuild. */
-export function fetchAppPackageWidgets(
+export async function fetchAppPackageWidgets(
 	queryClient: QueryClient,
 	backend: IBackendState,
 	appId: string,
+	options: { strict?: boolean; packageId?: string } = {},
 ): Promise<AppPackageWidget[]> {
-	return queryClient.fetchQuery({
-		...appPackageWidgetsQuery(backend, appId),
+	const widgets = await queryClient.fetchQuery({
+		...appPackageWidgetsQuery(backend, appId, options),
 		staleTime: 0,
 	});
+	if (options.strict && !options.packageId)
+		queryClient.setQueryData(appPackageWidgetsKey(appId), widgets);
+	return widgets;
 }
 
 export function invalidateAppPackageWidgets(

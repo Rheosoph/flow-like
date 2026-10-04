@@ -154,9 +154,9 @@ async function bootstrappingBackend(localOnly = false) {
 	const { TauriBackend } = await import("../../components/tauri-provider");
 	const host = new TauriBackend(() => undefined);
 	vi.spyOn(host, "isLocalOnly").mockResolvedValue(localOnly);
-	vi.spyOn(host.appState, "listPackages").mockResolvedValue({
-		[PACKAGE]: PINNED,
-	});
+	host.appState.listPackages = vi
+		.fn<NonNullable<typeof host.appState.listPackages>>()
+		.mockResolvedValue({ [PACKAGE]: PINNED });
 	return host;
 }
 

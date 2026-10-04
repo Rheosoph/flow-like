@@ -2845,6 +2845,8 @@
 	"update": "Aktualisieren",
 	"update_availableCurrentversionVersion": "Update verfügbar: {{currentVersion}} → {{version}}",
 	"updateAllLength": "Alle aktualisieren ({{length}})",
+	"updateAllWidgets": "Alle aktualisieren",
+	"updateAllWidgetsDescription": "Veraltete Paket-Widgets auf jeder Seite dieses Projekts aktualisieren.",
 	"updateAnyway": "Trotzdem aktualisieren",
 	"updated": "Aktualisiert",
 	"updateEvent": "Ereignis aktualisieren",

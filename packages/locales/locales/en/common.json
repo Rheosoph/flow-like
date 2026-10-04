@@ -2852,6 +2852,8 @@
 	"update": "Update",
 	"update_availableCurrentversionVersion": "update_available {{currentVersion}} -> {{version}}",
 	"updateAllLength": "Update All ({{length}})",
+	"updateAllWidgets": "Update all",
+	"updateAllWidgetsDescription": "Update outdated package widgets on every page in this project.",
 	"updateAnyway": "Update anyway",
 	"updated": "Updated",
 	"updateEvent": "Update Event",

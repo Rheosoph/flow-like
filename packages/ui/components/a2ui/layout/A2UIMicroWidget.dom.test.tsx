@@ -784,6 +784,57 @@ describe("micro widget reload in the page builder", () => {
 		expect(findButton("Reload widget")).not.toBeNull();
 	});
 
+	test.each(["failed", "unsupported"] as const)(
+		"%s widgets can update the project and disable both actions during the update",
+		async (failure) => {
+			if (failure === "failed") {
+				stubPrunedRegistry();
+			} else {
+				registryState = {
+					describeWidgetPolicy: async () => {
+						throw new Error("404 Not Found");
+					},
+				};
+			}
+			const { reloader, calls } = stubReloader("rebuilt-bundle");
+			let projectUpdates = 0;
+			reloader.reloadAll = async () => {
+				projectUpdates++;
+			};
+			const broken = component({
+				bundleHash: "pruned-bundle",
+				contract: CSP_CONTRACT,
+			});
+			await renderWidget(broken, { router: {} }, reloader);
+			const updateAll = findButton("Update all");
+			expect(updateAll?.hasAttribute("data-builder-interactive")).toBe(true);
+			expect(updateAll?.getAttribute("title")).toBe(
+				"Update outdated package widgets on every page in this project.",
+			);
+			await click("Update all");
+			expect(projectUpdates).toBe(1);
+			expect(calls.reload).toEqual([]);
+
+			await renderWidget(
+				broken,
+				{ router: {} },
+				{
+					...reloader,
+					isReloadingAll: true,
+				},
+			);
+			expect(findButton("Reload widget")?.disabled).toBe(true);
+			expect(findButton("Update all")?.disabled).toBe(true);
+			expect(
+				findButton("Update all")?.querySelector(".animate-spin"),
+			).not.toBeNull();
+			await click("Reload widget");
+			await click("Update all");
+			expect(calls.reload).toEqual([]);
+			expect(projectUpdates).toBe(1);
+		},
+	);
+
 	test("viewers and current builds get no reload control", async () => {
 		stubPrunedRegistry();
 		const broken = component({
@@ -793,6 +844,7 @@ describe("micro widget reload in the page builder", () => {
 		await renderWidget(broken, { router: {} });
 		expect(host.textContent).toContain("is not installed");
 		expect(findButton("Reload widget")).toBeNull();
+		expect(findButton("Update all")).toBeNull();
 
 		await renderWidget(
 			broken,
@@ -801,6 +853,7 @@ describe("micro widget reload in the page builder", () => {
 		);
 		expect(host.textContent).toContain("is not installed");
 		expect(findButton("Reload widget")).toBeNull();
+		expect(findButton("Update all")).toBeNull();
 	});
 });
 
