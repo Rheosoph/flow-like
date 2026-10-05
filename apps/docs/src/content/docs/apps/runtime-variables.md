@@ -13,6 +13,12 @@ The Flow definition keeps the variable's name, type, and settings. Its saved
 runtime value lives in Flow-Like's local application storage instead of being
 synced with the app.
 
+This page describes values configured in the Desktop app and supplied to
+interactive runs. A [standalone device deployment](/devices/) has its own
+service configuration and secrets on the target. Supply those values during
+[deployment](/devices/deployments/); a secret saved on your editing computer
+does not automatically become available to an unattended device service.
+
 ## Configure a value
 
 1. Open a Flow in Studio and open its variables panel.

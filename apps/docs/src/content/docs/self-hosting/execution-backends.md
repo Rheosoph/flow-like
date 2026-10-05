@@ -137,24 +137,27 @@ and downstream callback behavior for the selected mode.
 
 The dispatcher selects the function by name. Lambda's architecture setting and
 the container build determine which CPU runs the workflow. The API's platform
-settings select the matching compiled WASM artifacts:
+settings describe the receiving executor's OS and CPU:
 
-| Architecture | Lambda setting | Docker build platform | WASM platform |
+| Architecture | Lambda setting | Docker build platform | API platform setting |
 | --- | --- | --- | --- |
-| ARM64 | `arm64` | `linux/arm64` | `linux-aarch64-wt48` |
-| x86-64 | `x86_64` | `linux/amd64` | `linux-x86_64-wt48` |
+| ARM64 | `arm64` | `linux/arm64` | `linux-aarch64` |
+| x86-64 | `x86_64` | `linux/amd64` | `linux-x86_64` |
 
 Set `EXECUTOR_PLATFORM` on the API for the live executor and
 `LAMBDA_ASYNC_EXECUTOR_PLATFORM` for the dedicated native background executor.
 These settings describe the receiving executor, regardless of the API host's
-own architecture. `wt48` identifies the compiled artifact's Wasmtime version.
+own architecture. The API adds the exact Wasmtime release and engine configuration
+revision from shared constants in its application build. For example,
+`linux-aarch64` selects `linux-aarch64-wt48.0.3-p1` artifacts in a build with
+artifact version `48.0.3-p1`. The API does not inspect the remote executor's
+runtime. Deploy the API, compiler, and executors from the same application release.
 
 Both AWS Lambda executor Dockerfiles support ARM64 and x86-64. Build each Lambda
-image for one architecture. The SaaS dev Terraform root defaults the live
-executor to `executor_architecture = "arm64"` and derives `EXECUTOR_PLATFORM`
-from the function, keeping the build, Lambda and artifact settings together.
-Changing that variable to `"x86_64"` also rebuilds the matching image. ARM
-compiled WASM artifacts must exist for the app's installed packages.
+image for one architecture. The AWS Terraform modules derive each API platform
+setting from its Lambda CPU, keeping the image build and function architecture
+together. SaaS roots require ARM64 executors. Matching compiled WASM artifacts
+must exist for the app's installed packages.
 
 ### Native background execution
 
@@ -164,10 +167,10 @@ concurrency budget and can use a different CPU architecture from live runs:
 ```bash
 EXECUTION_BACKEND=lambda_stream
 LAMBDA_EXECUTOR_FUNCTION=flow-executor-fn-dev
-EXECUTOR_PLATFORM=linux-aarch64-wt48
+EXECUTOR_PLATFORM=linux-aarch64
 ASYNC_EXECUTION_BACKEND=lambda_invoke
 LAMBDA_ASYNC_EXECUTOR_FUNCTION=flow-executor-async-fn-dev
-LAMBDA_ASYNC_EXECUTOR_PLATFORM=linux-aarch64-wt48
+LAMBDA_ASYNC_EXECUTOR_PLATFORM=linux-aarch64
 LAMBDA_TENANT_ISOLATION=sub
 ```
 

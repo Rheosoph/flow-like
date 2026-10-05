@@ -420,6 +420,24 @@ export const sidebar = [
 				slug: "self-hosting/overview",
 			},
 			{
+				label: "Device Deployment",
+				collapsed: true,
+				items: [
+					{ label: "Overview", slug: "devices" },
+					{ label: "Set Up a Device", slug: "devices/setup" },
+					{ label: "Deploy and Operate", slug: "devices/deployments" },
+					{
+						label: "Service Access & Port Forwarding",
+						slug: "devices/service-access",
+					},
+					{ label: "Security & Networking", slug: "devices/security" },
+					{
+						label: "Company Edge & Home Automation",
+						slug: "devices/use-cases",
+					},
+				],
+			},
+			{
 				label: "Execution Backends",
 				slug: "self-hosting/execution-backends",
 			},

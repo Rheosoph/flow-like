@@ -17,6 +17,11 @@ or an incorrectly exposed deployment safe by themselves.
 
 ## Security boundaries
 
+Standalone devices have a separate management and workload boundary. See
+[Device security and networking](/devices/security/) for outbound remote
+access, authenticated encryption, scoped sharing, local secrets, and the
+limits of device isolation.
+
 | Boundary | Enforced by | Operator or author responsibility |
 | --- | --- | --- |
 | External WASM node | Wasmtime memory isolation, fuel, epoch interruption, resource limits, capability-aware host functions | Review requested permissions and package provenance |
@@ -186,6 +191,24 @@ Authentication identifies the caller; route and app permission checks still
 decide what that caller may do. Treat both values as secrets, use narrow roles,
 and revoke credentials that are no longer needed.
 
+Personal access tokens use three permission levels: Read Only (`1`), Read &
+Write (`2`), and Admin (`4`). Each level is limited by the owner's app and
+account permissions. A token does not grant its owner any new role. Read Only
+tokens cannot trigger workflows or obtain write-capable upload URLs. Read &
+Write tokens can edit and execute ordinary app content; credential and access
+management requires Admin.
+
+Earlier UI labels and backend capability names disagreed. Existing values
+`1`, `2`, and `4` now follow the UI's three levels. Integrations that used `1`
+as unrestricted backend access must replace that token with an appropriately
+scoped token. Other legacy capability combinations are rejected and must be
+replaced. Creating a PAT through another PAT cannot extend its privileges or
+expiry.
+
+The API reads current PAT records and app and registry permissions for each
+request. Revocation therefore applies across replicas, at the cost of more
+database reads and a dependency on database availability.
+
 ### Backend JWTs
 
 API signers use an ES256 P-256 keypair configured through `BACKEND_KEY`,
@@ -197,6 +220,72 @@ realtime collaboration, interaction responders, and app connections.
 Verification checks the ES256 algorithm, issuer, expected audience, and token
 time claims. All horizontally scaled API instances must use the same active
 keypair while tokens signed by it remain valid.
+
+Cached executor identities use the verifier's signed expiry and clock-skew
+allowance; caching cannot extend that accepted lifetime. Remote queue references
+carry a signed URL and payload hash, which workers verify before downloading
+the job. Deploy the API signer before the workers. Workers reject unsigned
+remote references, including jobs queued by older producers.
+
+### Untrusted downloads and uploads
+
+Open Graph previews retain support for public and intranet HTTP/HTTPS URLs,
+environment proxies and up to five redirects. They read at most 512 KiB,
+matching the existing parsing limit without first buffering the entire page.
+OAuth discovery and JWKS fetches retain configured HTTP, private-network and
+proxy endpoints. Malformed bearer tokens are rejected before fetching keys;
+accepted tokens still require signature and claim validation.
+
+Temporary files, registry artifacts, and metadata media
+upload directly to object storage using signed URLs. The API handles signing
+and metadata rather than file bytes. Temporary upload requests accept 100 files
+per batch; clients can send further batches without a daily file-count quota.
+Signed PUT URLs remain reusable until expiry, including for retries. The
+reported temporary size limit is a client hint, not a byte limit
+enforced by those signed PUTs. Object-store policies and deployment quotas
+must govern storage consumption.
+
+Cleanup deletes objects under `tmp/user/` after 32 days and objects
+under `tmp/solution-staging/` after eight days, allowing issued download URLs
+to remain usable for their full seven-day lifetime. This includes older temporary
+objects but excludes app files and submitted solution attachments. Persistent
+API processes run cleanup hourly; serverless deployments use the
+`cache_cleanup` maintenance job. Keep that maintenance schedule enabled.
+
+New 24-hour solution submissions and upload reservations are retired. Their
+endpoints return `410 Gone` without creating storage objects, email or payment
+sessions. Historical records remain available to administrators; tracking
+requires sign-in and the request's tracking token.
+
+Workflow HTTP nodes preserve response bodies, including the final body after
+streaming callbacks. Operators may set positive
+`FLOW_LIKE_HTTP_MAX_RESPONSE_BYTES` and `FLOW_LIKE_HTTP_TIMEOUT_SECONDS` values
+to opt into byte and duration limits. Neither setting imposes a default limit.
+Attachment extraction and DOCX/PPTX processing retain support for large inputs
+and collections. Their buffered outputs and document expansion still require
+suitable execution memory and isolation.
+
+Registry publication stages input in temporary files, hashes it incrementally,
+and uploads extracted widget files individually. Media transformation stages
+input on disk before decoding and retains the image library's existing decoder
+limits. If temporary files are unavailable, both paths fall back to memory.
+Registry publication also retains single-PUT support for stores that cannot
+complete multipart uploads. Large artifacts remain supported, with resource
+use governed by available memory, disk and existing format and compiler limits.
+
+Custom models and attachment downloads retain their existing network behavior,
+including server-local services and proxies. Custom Vertex remains supported
+with its existing credential checks. Identity, model, attachment and Open Graph
+fetches can therefore reach destinations allowed by the deployment network.
+Open Graph destinations come directly from callers; model and attachment URLs
+can also originate from tenant-controlled data. Network isolation remains
+necessary where those callers must not reach server-local services.
+
+Compiler jobs retain their existing size, concurrency and timeout settings.
+A timeout ends the async job but cannot stop native compilation that has already
+started on a blocking thread. Such work can continue consuming resources after
+the request ends. Signed job validation and deployment resource limits remain
+in place; hard cancellation of native work is not implemented.
 
 ## Authorization
 
