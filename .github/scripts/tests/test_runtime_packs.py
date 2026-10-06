@@ -25,7 +25,7 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 WORKFLOW = REPOSITORY / ".github/workflows/standalone-release.yml"
 EPOCH = 1759600000
 BASE = "https://cdn.example/standalone"
-VERSION = "version: 0.4.0-dev (build 10809, commit 5266f24da)\nbuilt with GNU 14.3.0 for Linux aarch64\n"
+VERSION = "version: 0.6.0-dev (build 11429, commit d81235049)\nbuilt with GNU 14.3.0 for Linux aarch64\n"
 
 READELF_DYNAMIC = """
 Dynamic section at offset 0x2d58 contains 30 entries:
@@ -239,7 +239,7 @@ def stage(root, files, executable=None):
     return root
 
 
-def build_pack(folder, files, runtime_kind="llamacpp", build="b10809", target="x86_64-unknown-linux-gnu",
+def build_pack(folder, files, runtime_kind="llamacpp", build="b11429", target="x86_64-unknown-linux-gnu",
                backend="cpu", entrypoint="llama-server", output=None):
     root = stage(Path(folder) / f"stage-{target}-{backend}", files, entrypoint)
     value = runtime.listing(root, runtime_kind, build, target, backend, entrypoint)
@@ -365,7 +365,7 @@ class PackArchiveTests(unittest.TestCase):
         second = build_pack(self.folder.name, files, output=self.root / "two")
         one, two = self.root / "one" / first["pack"], self.root / "two" / second["pack"]
         self.assertEqual(one.read_bytes(), two.read_bytes())
-        self.assertEqual(first["pack"], "llamacpp-b10809-x86_64-unknown-linux-gnu-cpu.tar.gz")
+        self.assertEqual(first["pack"], "llamacpp-b11429-x86_64-unknown-linux-gnu-cpu.tar.gz")
         self.assertEqual(first["sha256"], hashlib.sha256(one.read_bytes()).hexdigest())
         header = one.read_bytes()[:10]
         self.assertEqual((header[3], header[4:8]), (0, b"\0\0\0\0"), "gzip header must carry no name or time")
@@ -383,7 +383,7 @@ class PackArchiveTests(unittest.TestCase):
 
     def test_listing_sorts_paths_as_strings_not_path_parts(self):
         root = stage(self.root / "stage", {"a-b": b"1", "a/b": b"2", "llama-server": b"3"}, "llama-server")
-        value = runtime.listing(root, "llamacpp", "b10809", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
+        value = runtime.listing(root, "llamacpp", "b11429", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
         self.assertEqual([entry["path"] for entry in value["files"]], ["a-b", "a/b", "llama-server"])
 
     def test_listing_refuses_links_empty_files_reserved_or_colliding_names_and_a_missing_entrypoint(self):
@@ -393,22 +393,22 @@ class PackArchiveTests(unittest.TestCase):
         for index, (extra, reason) in enumerate(cases):
             root = stage(self.root / f"stage{index}", {"llama-server": b"server", **extra}, "llama-server")
             with self.assertRaisesRegex(ValueError, reason):
-                runtime.listing(root, "llamacpp", "b10809", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
+                runtime.listing(root, "llamacpp", "b11429", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
         root = stage(self.root / "case", {"Lib.so": b"x", "lib.so": b"x", "llama-server": b"server"}, "llama-server")
         # Case-insensitive file systems cannot hold both names, so the walk is given both.
         with patch.object(runtime, "staged_files", return_value=[root / "Lib.so", root / "lib.so", root / "llama-server"]), \
                 self.assertRaisesRegex(ValueError, "collides"):
-            runtime.listing(root, "llamacpp", "b10809", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
+            runtime.listing(root, "llamacpp", "b11429", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
         root = stage(self.root / "link", {"llama-server": b"server"}, "llama-server")
         (root / "libggml.so").symlink_to("llama-server")
         with self.assertRaisesRegex(ValueError, "packs hold no links"):
-            runtime.listing(root, "llamacpp", "b10809", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
+            runtime.listing(root, "llamacpp", "b11429", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
         root = stage(self.root / "noentry", {"libggml.so": b"x"})
         with self.assertRaisesRegex(ValueError, "entrypoint llama-server is missing"):
-            runtime.listing(root, "llamacpp", "b10809", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
+            runtime.listing(root, "llamacpp", "b11429", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
         root = stage(self.root / "many", {f"lib{index:02}.so": b"x" for index in range(runtime.MAX_PACK_FILES)} | {"llama-server": b"s"})
         with self.assertRaisesRegex(ValueError, "the limits are 64"):
-            runtime.listing(root, "llamacpp", "b10809", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
+            runtime.listing(root, "llamacpp", "b11429", "x86_64-unknown-linux-gnu", "cpu", "llama-server")
 
     def test_describe_pack_rereads_every_member_against_the_listing(self):
         built = build_pack(self.folder.name, {"llama-server": b"server", "libggml.so.0": b"ggml"})
@@ -430,9 +430,9 @@ class PackArchiveTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, reason):
                 runtime.describe_pack(path)
         rewrite(path, [("pack.json", listing, 0o644), ("libggml.so.0", b"ggml", 0o644), ("llama-server", b"server", 0o755)])
-        renamed = path.with_name("llamacpp-b10809-x86_64-unknown-linux-gnu-vulkan.tar.gz")
+        renamed = path.with_name("llamacpp-b11429-x86_64-unknown-linux-gnu-vulkan.tar.gz")
         path.rename(renamed)
-        with self.assertRaisesRegex(ValueError, "must be named llamacpp-b10809-x86_64-unknown-linux-gnu-cpu.tar.gz"):
+        with self.assertRaisesRegex(ValueError, "must be named llamacpp-b11429-x86_64-unknown-linux-gnu-cpu.tar.gz"):
             runtime.describe_pack(renamed)
 
 
@@ -451,8 +451,8 @@ class UpstreamTests(unittest.TestCase):
                          ["llamacpp-linux-arm64-cpu"])
         self.assertEqual([name for name, spec in runtime.LLAMACPP_PACKS.items() if spec.get("toolchain")],
                          ["llamacpp-linux-arm64-cpu"], "a pack compiled on the runner names its compiler packages")
-        self.assertEqual(runtime.pin().splitlines(), ["build=b10809", "number=10809",
-                                                      "commit=5266f24da75dc449bd56cbed7addb9c8e4a6a73e"])
+        self.assertEqual(runtime.pin().splitlines(), ["build=b11429", "number=11429",
+                                                      "commit=d81235049384534c167caea52b85a694f6103d14"])
         script = (REPOSITORY / "apps/desktop/scripts/update-llama-server.ts").read_text()
         self.assertIn(f'const PINNED_TAG = "{runtime.LLAMACPP_BUILD}"', script, "packs and the desktop pin one build")
 
@@ -475,15 +475,15 @@ class UpstreamTests(unittest.TestCase):
     def fake_archive(self, files, links):
         path = self.root / "upstream.tar.gz"
         with tarfile.open(path, "w:gz") as archive:
-            directory = tarfile.TarInfo("llama-b10809")
+            directory = tarfile.TarInfo("llama-b11429")
             directory.type = tarfile.DIRTYPE
             archive.addfile(directory)
             for name, data in files.items():
-                info = tarfile.TarInfo(f"llama-b10809/{name}")
+                info = tarfile.TarInfo(f"llama-b11429/{name}")
                 info.size = len(data)
                 archive.addfile(info, io.BytesIO(data))
             for name, target in links.items():
-                info = tarfile.TarInfo(f"llama-b10809/{name}")
+                info = tarfile.TarInfo(f"llama-b11429/{name}")
                 info.type, info.linkname = tarfile.SYMTYPE, target
                 archive.addfile(info)
         return path
@@ -505,7 +505,7 @@ class UpstreamTests(unittest.TestCase):
             opener = Opener(data)
             path = Path(runtime.fetch("llamacpp-linux-x64-cpu", self.root / "out", opener))
             self.assertEqual(path.read_bytes(), data)
-            self.assertEqual(opener.requests, ["https://github.com/ggml-org/llama.cpp/releases/download/b10809/llama-b10809-bin-ubuntu-x64.tar.gz"])
+            self.assertEqual(opener.requests, ["https://github.com/ggml-org/llama.cpp/releases/download/b11429/llama-b11429-bin-ubuntu-x64.tar.gz"])
             for body, reason in [(data + b"!", "larger than its pinned"), (b"X" * len(data), "is not the pinned")]:
                 with self.assertRaisesRegex(ValueError, reason):
                     runtime.fetch("llamacpp-linux-x64-cpu", self.root / "bad", Opener(body))
@@ -554,7 +554,7 @@ class UpstreamTests(unittest.TestCase):
                 return done(argv, f"{argv[-1]}:\n" + "".join(f"\t@rpath/{library} (compatibility version 0.0.0, current version 0.0.0)\n"
                                                             for library in names[1:]) + "\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0)\n")
             if argv[0].endswith("llama-server"):
-                return done(argv, "version: 0.4.0-dev (build 10809, commit 5266f24da)\n")
+                return done(argv, "version: 0.6.0-dev (build 11429, commit d81235049)\n")
             return done(argv, f"{argv[-1]}:\n\t@rpath/{name} (compatibility version 0.0.0, current version 0.0.0)\n"
                               "\t/System/Library/Frameworks/Metal.framework/Versions/A/Metal (compatibility version 1.0.0)\n")
         with patch.dict(runtime.UPSTREAM_ARCHIVES, pins), patch.object(runtime, "run", otool):
@@ -562,10 +562,10 @@ class UpstreamTests(unittest.TestCase):
             entries = {entry[0]: entry[7] for entry in members(self.root / "packs" / built["pack"])}
             self.assertEqual(set(entries) - {"pack.json", "THIRD-PARTY-NOTICES.txt"}, set(names), "only the server's files ship")
             self.assertEqual(entries["libggml.0.dylib"], b"\xcf\xfa\xed\xfelibggml.0.dylib")
-            self.assertEqual(entries["THIRD-PARTY-NOTICES.txt"], b"# llama.cpp b10809 (MIT)\n\nMIT License\n")
+            self.assertEqual(entries["THIRD-PARTY-NOTICES.txt"], b"# llama.cpp b11429 (MIT)\n\nMIT License\n")
             with self.assertRaisesRegex(ValueError, "Build the aarch64-apple-darwin pack on a aarch64-apple-darwin runner"):
                 runtime.llamacpp("llamacpp-macos-arm64-metal", archive, EPOCH, self.root / "other", host="x86_64-apple-darwin")
-        with self.assertRaisesRegex(ValueError, "is not the pinned llama.cpp b10809 macos-arm64 archive"):
+        with self.assertRaisesRegex(ValueError, "is not the pinned llama.cpp b11429 macos-arm64 archive"):
             runtime.llamacpp("llamacpp-macos-arm64-metal", archive, EPOCH, self.root / "unpinned", host="aarch64-apple-darwin")
 
     def test_macos_closure_resolves_rpath_against_the_pack_and_rejects_foreign_libraries(self):
@@ -609,7 +609,7 @@ class LinuxPackTests(unittest.TestCase):
         built = self.build()
         entries = members(self.root / "packs" / built["pack"])
         listing = json.loads(entries[0][7])
-        self.assertEqual(built["pack"], "llamacpp-b10809-aarch64-unknown-linux-gnu-cpu.tar.gz")
+        self.assertEqual(built["pack"], "llamacpp-b11429-aarch64-unknown-linux-gnu-cpu.tar.gz")
         self.assertEqual([entry["path"] for entry in listing["files"]], sorted(
             ["THIRD-PARTY-NOTICES.txt", "fallback/libgcc_s.so.1", "fallback/libstdc++.so.6", "libcrypto.so.3",
              "libgomp.so.1", "libssl.so.3", "llama-server", *runtime.LINUX_LIBRARIES, *runtime.ARM64_CPU_BACKENDS]))
@@ -618,7 +618,7 @@ class LinuxPackTests(unittest.TestCase):
         self.assertEqual(contents["fallback/libstdc++.so.6"], b"\x7fELF host libstdc++.so.6")
         notices = contents["THIRD-PARTY-NOTICES.txt"].decode()
         self.assertTrue(notices.startswith(
-            f"# llama.cpp b10809 (MIT), compiled from {runtime.LLAMACPP_COMMIT} with GCC 14.3.0\n\nMIT License\n"))
+            f"# llama.cpp b11429 (MIT), compiled from {runtime.LLAMACPP_COMMIT} with GCC 14.3.0\n\nMIT License\n"))
         self.assertIn("# libssl3 3.0.2-0ubuntu1.20 (Ubuntu package copyright; bundled as libcrypto.so.3, libssl.so.3)\n\n"
                       "Copyright notice of libssl3\n", notices)
         self.assertEqual(sorted(re.findall(r"^# (\S+) (\S+) \(Ubuntu", notices, re.MULTILINE)),
@@ -670,8 +670,8 @@ class LinuxPackTests(unittest.TestCase):
             self.build("unowned")
 
     def test_linux_pack_must_report_the_pinned_build_on_its_own_platform(self):
-        self.host.version = "version: 0.4.0 (build 1, commit 5266f24da)"
-        with self.assertRaisesRegex(ValueError, "not build 10809"):
+        self.host.version = "version: 0.4.0 (build 1, commit d81235049)"
+        with self.assertRaisesRegex(ValueError, "not build 11429"):
             self.build()
         with self.assertRaisesRegex(ValueError, "on a aarch64-unknown-linux-gnu runner"):
             self.build("elsewhere", host="x86_64-unknown-linux-gnu")
@@ -767,8 +767,8 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual([pack["backend"] for pack in value["packs"]], ["cpu", "vulkan"])
         self.assertEqual(list(value["packs"][0]), ["runtime", "build", "target", "backend", "url", "size", "sha256", "entrypoint", "files"])
         self.assertEqual(list(value["packs"][0]["files"][0]), ["path", "size", "sha256", "executable"])
-        self.assertEqual(value["packs"][1]["url"], f"{BASE}/releases/9/runtimes/llamacpp-b10809-x86_64-unknown-linux-gnu-vulkan.tar.gz")
-        archive = self.packs / "llamacpp-b10809-x86_64-unknown-linux-gnu-vulkan.tar.gz"
+        self.assertEqual(value["packs"][1]["url"], f"{BASE}/releases/9/runtimes/llamacpp-b11429-x86_64-unknown-linux-gnu-vulkan.tar.gz")
+        archive = self.packs / "llamacpp-b11429-x86_64-unknown-linux-gnu-vulkan.tar.gz"
         self.assertEqual((value["packs"][1]["size"], value["packs"][1]["sha256"]), (archive.stat().st_size, runtime.sha256_file(archive)))
         self.assertEqual(body, json.dumps(value, separators=(",", ":")))
         signed = Signer(self.root).sign(body)
@@ -787,7 +787,7 @@ class ManifestTests(unittest.TestCase):
             runtime.manifest(self.packs, f"{BASE}/runtimes", 9, self.root, validity_days=1826)
         with self.assertRaisesRegex(ValueError, "holds no runtime packs"):
             runtime.manifest(self.root / "empty", f"{BASE}/runtimes", 9, self.root)
-        archive = self.packs / "llamacpp-b10809-aarch64-apple-darwin-metal.tar.gz"
+        archive = self.packs / "llamacpp-b11429-aarch64-apple-darwin-metal.tar.gz"
         rewrite(archive, [("pack.json", members(archive)[0][7], 0o644), ("libggml.0.dylib", b"G", 0o644), ("llama-server", b"mac", 0o755)])
         with self.assertRaisesRegex(ValueError, "differs from its pack.json entry"):
             runtime.manifest(self.packs, f"{BASE}/runtimes", 9, self.root)
@@ -831,9 +831,9 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(result, {"sequence": 9, "manifests": {target: f"{BASE}/runtimes/{target}.jws" for target in signed}})
         self.assertEqual(sorted(key for key, immutable in store.writes if immutable), [
             "standalone/releases/9/runtimes/aarch64-apple-darwin.jws",
-            "standalone/releases/9/runtimes/llamacpp-b10809-aarch64-apple-darwin-metal.tar.gz",
-            "standalone/releases/9/runtimes/llamacpp-b10809-x86_64-unknown-linux-gnu-cpu.tar.gz",
-            "standalone/releases/9/runtimes/llamacpp-b10809-x86_64-unknown-linux-gnu-vulkan.tar.gz",
+            "standalone/releases/9/runtimes/llamacpp-b11429-aarch64-apple-darwin-metal.tar.gz",
+            "standalone/releases/9/runtimes/llamacpp-b11429-x86_64-unknown-linux-gnu-cpu.tar.gz",
+            "standalone/releases/9/runtimes/llamacpp-b11429-x86_64-unknown-linux-gnu-vulkan.tar.gz",
             "standalone/releases/9/runtimes/x86_64-unknown-linux-gnu.jws"])
         self.assertEqual(sorted(store.writes[-2:]), sorted((f"standalone/runtimes/{target}.jws", False) for target in signed))
         for target, compact in signed.items():
@@ -882,7 +882,7 @@ class PublishTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lists packs of another target"):
             self.publish(MemoryStore())
         self.signed(9)
-        (self.bundle / "llamacpp-b10809-x86_64-unknown-linux-gnu-cpu.tar.gz").write_bytes(b"changed")
+        (self.bundle / "llamacpp-b11429-x86_64-unknown-linux-gnu-cpu.tar.gz").write_bytes(b"changed")
         store = MemoryStore()
         with self.assertRaisesRegex(ValueError, "differs from its signed size, digest or immutable URL"):
             self.publish(store)
@@ -908,7 +908,7 @@ class PublishTests(unittest.TestCase):
         self.signed(9, issued_at=None)
         text = runtime.summary(self.bundle, json.dumps(self.keys))
         self.assertIn("### Runtime packs 9 published", text)
-        self.assertRegex(text, r"\| x86_64-unknown-linux-gnu \| llamacpp b10809 \| vulkan \| 0\.0 MiB \| 2 \| \d{4}-\d{2}-\d{2} \|")
+        self.assertRegex(text, r"\| x86_64-unknown-linux-gnu \| llamacpp b11429 \| vulkan \| 0\.0 MiB \| 2 \| \d{4}-\d{2}-\d{2} \|")
 
 
 def job_body(name):

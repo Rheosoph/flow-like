@@ -27,15 +27,15 @@ _spec = importlib.util.spec_from_file_location("runtime_toolchain", Path(__file_
 toolchain = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(toolchain)
 
-LLAMACPP_BUILD, LLAMACPP_BUILD_NUMBER = "b10809", 10809
-LLAMACPP_COMMIT = "5266f24da75dc449bd56cbed7addb9c8e4a6a73e"
+LLAMACPP_BUILD, LLAMACPP_BUILD_NUMBER = "b11429", 11429
+LLAMACPP_COMMIT = "d81235049384534c167caea52b85a694f6103d14"
 LLAMACPP_DOWNLOADS = "https://github.com/ggml-org/llama.cpp/releases/download"
-# GitHub's asset digests for b10809, re-hashed after download on 2026-10-05.
+# Official v0.6.0 selects b11429. GitHub's asset digests were checked on 2026-10-06.
 UPSTREAM_ARCHIVES = {
-    "macos-arm64": (11123196, "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2"),
-    "macos-x64": (11175330, "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6"),
-    "ubuntu-x64": (16734586, "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941"),
-    "ubuntu-vulkan-x64": (33799345, "07f029cef440c82c3cff5310641eb6347e5cbcd865a5d88990215058aa049e93"),
+    "macos-arm64": (11971406, "740288ec6887be94280a5dfa25b5e23a78285cab104519e6c7e218904ee82459"),
+    "macos-x64": (11487431, "29ac3ea02be6bd143e824973f2cc5fa74bc4094393a9eaab0ff6814f19dd8522"),
+    "ubuntu-x64": (17693462, "f6d25dde8f51133143d1453da4fd5f73b145127177612a283bf7995957af3392"),
+    "ubuntu-vulkan-x64": (31636673, "632c4e98feba2b94407a2130e3133e0c3aefb0ea1ab41337e926d8bfafdd0b74"),
 }
 JWS_TYPE = release.RUNTIME_MANIFEST_JWS_TYPE
 LISTING, FALLBACK, NOTICES = "pack.json", "fallback", "THIRD-PARTY-NOTICES.txt"
