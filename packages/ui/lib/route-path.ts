@@ -1,3 +1,10 @@
+/** Remove trailing path separators in linear time, including on malformed input. */
+export function trimTrailingSlashes(value: string): string {
+	let end = value.length;
+	while (end > 0 && value[end - 1] === "/") end--;
+	return value.slice(0, end);
+}
+
 /**
  * Canonical form of an app route path.
  *
@@ -20,7 +27,7 @@ export function normalizeRoutePath(path: unknown): string {
 	const withLeadingSlash = withoutQuery.startsWith("/")
 		? withoutQuery
 		: `/${withoutQuery}`;
-	const withoutTrailingSlash = withLeadingSlash.replace(/\/+$/, "");
+	const withoutTrailingSlash = trimTrailingSlashes(withLeadingSlash);
 
 	return withoutTrailingSlash === "" ? "/" : withoutTrailingSlash;
 }

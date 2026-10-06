@@ -277,7 +277,8 @@ async function compareKey(
 const percent = (value: number) =>
 	value === 0 ? "0" : value < 0.001 ? "<0.001" : value.toFixed(3);
 
-const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\n/g, " ");
+const cell = (text: string) =>
+	text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
 function markdownReport(
 	baseline: Run,

@@ -124,7 +124,7 @@
 		"dexie": "^4.0.11",
 		"dexie-react-hooks": "^1.1.7",
 		"diff": "8.0.3",
-		"dompurify": "3.4.15",
+		"dompurify": "3.4.16",
 		"dropdown-menu": "^0.1.1",
 		"embla-carousel-react": "^8.5.2",
 		"eventsource-client": "^1.1.4",
