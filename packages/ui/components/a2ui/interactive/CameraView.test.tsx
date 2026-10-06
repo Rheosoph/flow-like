@@ -337,6 +337,36 @@ test("rendering and the editing canvas never acquire a camera", async () => {
 	expect(getMedia).not.toHaveBeenCalled();
 });
 
+test.each([
+	{ maxWidth: undefined, deviceId: undefined, expectedWidth: 1280 },
+	{ maxWidth: 1920, deviceId: undefined, expectedWidth: 1920 },
+	{ maxWidth: 2560, deviceId: "rear-camera", expectedWidth: 2560 },
+	{ maxWidth: 8192, deviceId: undefined, expectedWidth: 4096 },
+	{ maxWidth: 0, deviceId: undefined, expectedWidth: 160 },
+	{ maxWidth: Number.NaN, deviceId: undefined, expectedWidth: 1280 },
+])(
+	"Start requests a supported camera width for maxWidth $maxWidth and device $deviceId",
+	async ({ maxWidth, deviceId, expectedWidth }) => {
+		await render({
+			...defaults,
+			intervalMs: { literalNumber: 0 },
+			maxWidth:
+				maxWidth === undefined ? undefined : { literalNumber: maxWidth },
+			deviceId: deviceId ? { literalString: deviceId } : undefined,
+		});
+		await start();
+		expect(getMedia).toHaveBeenCalledWith({
+			video: {
+				...(deviceId
+					? { deviceId: { exact: deviceId } }
+					: { facingMode: { ideal: "environment" } }),
+				width: { ideal: expectedWidth },
+			},
+			audio: false,
+		});
+	},
+);
+
 test("interval capture waits for the preceding Event and never queues ticks", async () => {
 	let finish!: () => void;
 	const pending = new Promise<void>((resolve) => {
