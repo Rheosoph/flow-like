@@ -127,13 +127,15 @@ Index and query with the same embedding model and configuration. Changing the mo
 
 ## Decision models
 
-Choose a **SystemOne** Bit from the catalog's **Decisions** category, then use a node under **AI / Decisions**. Each node accepts a model from your profile, text or structured state, and instructions:
+Add a **SystemOne** Bit from the catalog's **Decisions** category to your profile, then connect **Find Decision Model** to the **Model** input of a node under **AI / Decisions**. It selects an available decision model from the active profile at execution time. To use a specific model, connect **Load Bit** instead. The three decision nodes accept text in **State** and a question in **Instructions**:
 
 - **SystemOne Noul** returns a yes/no probability and branches through **True** when it meets the threshold, or **False** otherwise. The threshold defaults to `0.5`.
 - **SystemOne Choice** accepts a map of option names to descriptions. It returns the selected name, probabilities, and confidence.
 - **SystemOne Score** accepts two to ten level descriptions in order. It returns a weighted level index, probabilities, confidence, and a legend of level descriptions.
 
-Use **Invoke SystemOne** to ask several named questions together or supply structured criteria. Its request contains `state` and `questions`:
+The optional **Images** input accepts an array of image objects from image nodes, such as **Read Image**. The node converts them to image data URLs before sending the request.
+
+Use **Invoke SystemOne** to ask several named questions together or supply structured state or criteria. Its request contains `state` and `questions`:
 
 ```json
 {
@@ -154,7 +156,7 @@ Use **Invoke SystemOne** to ask several named questions together or supply struc
 
 `choice` returns the selected option and each option's probability. `score` uses an ordered array of two to ten level descriptions and returns a weighted level index. `noul` returns the probability that a yes/no answer is true. Results arrive together without streaming. Assess these probabilities against examples from your own workflow before choosing an automatic-action threshold.
 
-Local Bits require a native decision-model GGUF supported by the bundled llama.cpp release. Flow-Like starts its server and uses `/v1/systemone`. An ordinary chat GGUF cannot serve this endpoint. Image input requires a supported decision model, its projector, and image data URLs.
+Local Bits require a native decision-model GGUF supported by the bundled llama.cpp release. Flow-Like starts its server and uses `/v1/systemone`. An ordinary chat GGUF cannot serve this endpoint. Image input requires a supported decision model and its projector. When using **Invoke SystemOne**, supply images as data URLs in the request's `images` array.
 
 Hosted Bits support OpenRouter, Cloudflare Workers AI, TypeSafe, and operator-configured SystemOne services through the Flow-Like API. Hosted calls use the same account authorization, usage tracking, and billing controls as hosted chat. Administrators configure service credentials on the server; Bits identify the provider and model. For an independently managed endpoint, a custom SystemOne Bit uses its own endpoint and credential.
 

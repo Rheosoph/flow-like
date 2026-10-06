@@ -439,6 +439,56 @@ impl Profile {
             .await
     }
 
+    /// Select the first available SystemOne Bit in this profile's activated model order.
+    pub async fn find_decision_model(
+        &self,
+        capabilities: CompletionModelCapabilities,
+        devices: Option<&DeviceModelProbe>,
+        http_client: Arc<HTTPClient>,
+    ) -> Result<Bit> {
+        let selection = ModelSelection {
+            only_hosted: false,
+            capabilities: Some(capabilities),
+            devices: devices.map(DeviceModelProbe::for_selection),
+            unavailable_model: None,
+        };
+        let mut seen = HashSet::new();
+        for bit_ref in &self.bits {
+            let bit = match self.get_profile_bit(bit_ref, http_client.clone()).await {
+                Ok(bit) => bit,
+                Err(error) => {
+                    tracing::warn!(bit = %bit_ref, %error, "Skipping unresolved profile bit");
+                    continue;
+                }
+            };
+            let Some(parameters) = bit.try_to_systemone() else {
+                continue;
+            };
+            if !seen.insert(bit.id.clone())
+                || parameters.context_length == 0
+                || !selection.admits(&bit)
+            {
+                continue;
+            }
+            let available = if crate::models::systemone::supports_provider(
+                &parameters.provider.provider_name,
+            ) {
+                selection.is_available(&bit).await
+            } else if let Some(devices) = &selection.devices {
+                // Device endpoints are resolved before the factory's native provider dispatch.
+                devices.availability(&bit).await == Some(true)
+            } else {
+                false
+            };
+            if available {
+                return Ok(bit);
+            }
+        }
+        Err(anyhow!(
+            "No available SystemOne decision model found in this profile"
+        ))
+    }
+
     /// Create a copy of this profile with only hosted models (filters out local models)
     /// This is useful for cloud deployments where local models cannot be hosted
     pub fn filter_hosted_only(&self) -> Self {
@@ -812,6 +862,111 @@ mod tests {
             custom_bits: models.into_iter().map(ProfileCustomBit).collect(),
             ..Profile::default()
         }
+    }
+
+    fn decision_bit(id: &str, provider_name: &str) -> Bit {
+        let mut bit = completion_bit(id, provider_name);
+        bit.bit_type = BitTypes::SystemOne;
+        bit
+    }
+
+    #[tokio::test]
+    async fn decision_model_selection_uses_active_profile_order_and_valid_decision_bits() {
+        let mut malformed = decision_bit("malformed", "hosted:systemone_compatible");
+        malformed.parameters["context_length"] = flow_like_types::json::json!(0);
+        let mut profile = profile_with_models(vec![
+            decision_bit("inactive", "hosted:systemone_compatible"),
+            decision_bit("second", "hosted:systemone_compatible"),
+            decision_bit("first", "hosted:systemone_compatible"),
+            completion_bit("chat", "hosted:openai"),
+            malformed,
+        ]);
+        profile.bits = vec![
+            "".into(),
+            "chat".into(),
+            "malformed".into(),
+            "first".into(),
+            "second".into(),
+        ];
+
+        let selected = profile
+            .find_decision_model(
+                CompletionModelCapabilities::default(),
+                None,
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "first");
+    }
+
+    #[tokio::test]
+    async fn decision_model_selection_respects_local_runtime_capabilities() {
+        let profile = profile_with_models(vec![
+            decision_bit("local", "Local"),
+            decision_bit("hosted", "hosted:systemone_compatible"),
+        ]);
+        for (local_server, expected) in [(false, "hosted"), (true, "local")] {
+            let selected = profile
+                .find_decision_model(
+                    CompletionModelCapabilities {
+                        local_server,
+                        ..CompletionModelCapabilities::default()
+                    },
+                    None,
+                    Arc::new(HTTPClient::new_without_refetch()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(selected.id, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn decision_model_selection_skips_unsupported_systemone_providers() {
+        let profile = profile_with_models(vec![
+            decision_bit("unsupported-hosted", "hosted:openai"),
+            decision_bit("unsupported-custom", "custom:ollama"),
+            decision_bit("unsupported-local", "MLX"),
+            decision_bit("supported", "hosted:systemone_compatible"),
+        ]);
+        let selected = profile
+            .find_decision_model(
+                CompletionModelCapabilities {
+                    mlx: true,
+                    ..CompletionModelCapabilities::default()
+                },
+                None,
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "supported");
+    }
+
+    #[tokio::test]
+    async fn decision_model_selection_does_not_fall_back_to_chat_or_inactive_models() {
+        let mut profile = profile_with_models(vec![
+            completion_bit("chat", "hosted:openai"),
+            decision_bit("inactive", "hosted:systemone_compatible"),
+        ]);
+        profile.bits = vec!["chat".into()];
+
+        let error = profile
+            .find_decision_model(
+                CompletionModelCapabilities::default(),
+                None,
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "No available SystemOne decision model found in this profile"
+        );
     }
 
     #[tokio::test]
@@ -1231,6 +1386,38 @@ mod tests {
             CompletionModelCapabilities {
                 device_models: true,
                 ..CompletionModelCapabilities::default()
+            }
+        }
+
+        #[tokio::test]
+        async fn decision_model_selection_probes_devices_and_falls_back_when_unavailable() {
+            let mut device = device_llm_bit("device-decision", "dev-1");
+            device.bit_type = BitTypes::SystemOne;
+            let profile = profile_with_models(vec![
+                device,
+                decision_bit("hosted", "hosted:systemone_compatible"),
+            ]);
+            for (connector, expected) in [
+                (
+                    FakeConnector::serving(endpoint("http://127.0.0.1:9/v1")),
+                    "device-decision",
+                ),
+                (
+                    FakeConnector::failing(ModelUnavailableReason::DeviceLockedDeclined),
+                    "hosted",
+                ),
+            ] {
+                let probe = DeviceModelProbe::new(connector.clone(), Interaction::Forbidden);
+                let selected = profile
+                    .find_decision_model(
+                        with_device_models(),
+                        Some(&probe),
+                        Arc::new(HTTPClient::new_without_refetch()),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(selected.id, expected);
+                assert_eq!(connector.calls(), 1);
             }
         }
 
