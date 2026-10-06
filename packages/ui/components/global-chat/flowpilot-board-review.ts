@@ -3,6 +3,7 @@ import type {
 	BoardEditJobResolution,
 } from "../../lib/schema/copilot";
 import type { IBoardState } from "../../state/backend-state/board-state";
+import type { FlowPilotBoardRunActivity } from "./flowpilot-board-activity";
 
 type ReviewBackend = Pick<
 	IBoardState,
@@ -39,6 +40,10 @@ export async function executeFlowPilotBoardReview(options: {
 	action: string;
 	getVisibleAppIds: () => Promise<Set<string>>;
 	assertActive: () => void;
+	getActiveRun?: (
+		appId: string,
+		boardId: string,
+	) => FlowPilotBoardRunActivity | undefined;
 	approve: (
 		job: BoardEditJob,
 		action: "apply" | "dismiss",
@@ -103,11 +108,19 @@ export async function executeFlowPilotBoardReview(options: {
 			.filter(matchesTarget)
 			.sort((a, b) => b.createdAtMs - a.createdAtMs);
 		options.assertActive();
+		const activeRun = options.getActiveRun?.(appId, boardId);
 		return {
 			status: "ok",
 			app_id: appId,
 			board_id: boardId,
 			reviews: jobs.map(boardReviewSummary),
+			...(activeRun
+				? {
+						active_run: activeRun,
+						message:
+							"A board operation is still running. This list covers retained native reviews; generation may still be preparing a review. Use flowpilot_board mode=inspect to check its progress; wait for its result before retrying an edit.",
+					}
+				: {}),
 		};
 	}
 	if (!boardState.getBoardEditJob) {

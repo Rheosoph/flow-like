@@ -1,6 +1,13 @@
 import { sha256 } from "@noble/hashes/sha2";
+import type { ModelAssetDescriptor } from "./models";
 import { type DeviceAccountScope, accountStorageKey } from "./storage";
+import {
+	type ManagementFailureDiagnostic,
+	managementFailureDiagnostic,
+} from "./transport";
+import type { TunnelArtifactUpload } from "./tunnel";
 import { type ManagementRejection, managementRejection } from "./types";
+import { LiveCallError } from "./workspace/errors";
 
 export const ARTIFACT_CHUNK_BYTES = 8192;
 const ARTIFACT_TRANSFER_TTL_SECONDS = 86_400;
@@ -11,6 +18,21 @@ const MAX_MANIFEST_BYTES = 2 * 1024 ** 2;
 // Placement configurations accept at most these pins; larger selections could never deploy.
 const MAX_BIT_PINS = 256;
 const MAX_PACKAGE_PINS = 64;
+const MAX_PACKAGED_DEPENDENCIES = 2048;
+/** Artifact files and model-store assets of one packaged Bit together. */
+const MAX_PACKAGED_FILES = 2048;
+const MAX_MODEL_ASSET_BYTES = 64 * 1024 ** 3;
+const MAX_MODEL_ASSET_SOURCES = 8;
+const MAX_MODEL_ASSET_SOURCE_LENGTH = 2048;
+const METADATA_V1_FIELDS = ["bit", "dependencies", "artifacts"];
+const METADATA_V2_FIELDS = [
+	"version",
+	"bit",
+	"dependencies",
+	"assets",
+	"artifacts",
+];
+const DESCRIPTOR_FIELDS = ["digest", "size", "file_name", "sources"];
 const encoder = new TextEncoder();
 export type ProjectArtifactFile = {
 	path: string;
@@ -50,10 +72,47 @@ export interface ArtifactBlob {
 	slice(start?: number, end?: number): ArtifactBlob;
 }
 export type ArtifactInput = { path: string; file: ArtifactBlob };
+/** One model-store file of a packaged Bit; a Bit with several lists its parts in load order. */
+export type PackagedBitAsset = {
+	bit_id: string;
+	descriptor: ModelAssetDescriptor;
+};
+/**
+ * `bits/metadata/<bit_id>.json` (`PackagedBitMetadata` in
+ * packages/device-protocol/src/artifact.rs). v1 has no `version` and carries
+ * every Bit file as an artifact. v2 names model-store `assets` the device
+ * acquires itself; small files may still travel as `artifacts`. Every Bit
+ * file is listed exactly once.
+ */
+export type PackagedBitMetadata =
+	| {
+			bit: Record<string, unknown>;
+			dependencies: Record<string, unknown>[];
+			artifacts: ProjectArtifactFile[];
+	  }
+	| {
+			version: 2;
+			bit: Record<string, unknown>;
+			dependencies?: Record<string, unknown>[];
+			assets: PackagedBitAsset[];
+			artifacts?: ProjectArtifactFile[];
+	  };
+/** A model asset the artifact names but does not carry: the device fetches it, or this computer sends it. */
+export type PreparedModelAsset = {
+	/** The pinned Bit whose metadata names it, and that Bit's hub. */
+	pin: string;
+	pinHub?: string;
+	bitId: string;
+	/** The owning Bit's file lives at `<bitHash>/<file_name>` in a Bit store. */
+	bitHash: string;
+	descriptor: ModelAssetDescriptor;
+};
 export type PreparedProjectArtifact = {
 	descriptor: ProjectArtifactDescriptor;
 	manifest: Uint8Array<ArrayBuffer>;
 	files: readonly ArtifactInput[];
+	/** Model-store assets of v2 Bit metadata, one per digest, and the pins that name them; absent for v1. */
+	models?: { pins: ProjectBitPin[]; assets: PreparedModelAsset[] };
 };
 export type ArtifactTransferStatus = {
 	transfer_id: string;
@@ -106,6 +165,7 @@ export class ArtifactUploadError extends Error {
 	constructor(
 		readonly transferId: string | undefined,
 		readonly rejection?: ManagementRejection,
+		readonly diagnostic?: ManagementFailureDiagnostic,
 	) {
 		super(uploadErrorMessage(transferId, rejection));
 		this.name = "ArtifactUploadError";
@@ -199,14 +259,6 @@ function hex(value: Uint8Array): string {
 	return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(
 		"",
 	);
-}
-function base64(bytes: Uint8Array): string {
-	let value = "";
-	for (const byte of bytes) value += String.fromCharCode(byte);
-	return btoa(value)
-		.replaceAll("+", "-")
-		.replaceAll("/", "_")
-		.replace(/=+$/, "");
 }
 export function validateProjectArtifactPath(
 	project: string,
@@ -400,12 +452,227 @@ export function parseProjectArtifactAssets(
 	};
 }
 type SelectedAsset = { size: number | null; sha256: string };
+/** Both versions of packaged Bit metadata, as one list of files and one of assets. */
+type PackagedFiles = {
+	bit: Record<string, unknown>;
+	dependencies: unknown[];
+	artifacts: ProjectArtifactFile[];
+	assets: unknown[];
+};
+/** The one file location a Bit names, `bits/<hash>/<file_name>`. */
+type BitFile = {
+	id?: string;
+	hash: string;
+	path: string;
+	fileName: string;
+	size: number | null;
+};
+type StoredBit = { file: BitFile; parts: ModelAssetDescriptor[] };
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function packagedFiles(value: unknown, bitId: string): PackagedFiles {
+	const wrapper = isRecord(value) ? value : {};
+	const v2 = Object.hasOwn(wrapper, "version");
+	const fields = v2 ? METADATA_V2_FIELDS : METADATA_V1_FIELDS;
+	const dependencies = wrapper.dependencies ?? (v2 ? [] : undefined);
+	const artifacts = wrapper.artifacts ?? (v2 ? [] : undefined);
+	const assets = v2 ? wrapper.assets : [];
+	check(
+		Object.keys(wrapper).every((key) => fields.includes(key)) &&
+			(!v2 || wrapper.version === 2) &&
+			isRecord(wrapper.bit) &&
+			wrapper.bit.id === bitId &&
+			Array.isArray(dependencies) &&
+			dependencies.length <= MAX_PACKAGED_DEPENDENCIES &&
+			Array.isArray(artifacts) &&
+			Array.isArray(assets) &&
+			artifacts.length + assets.length <= MAX_PACKAGED_FILES,
+		"Selected Bit metadata shape differs.",
+	);
+	return {
+		bit: wrapper.bit as Record<string, unknown>,
+		dependencies: dependencies as unknown[],
+		artifacts: artifacts as ProjectArtifactFile[],
+		assets: assets as unknown[],
+	};
+}
+function bitFile(bit: unknown): BitFile | undefined {
+	if (!isRecord(bit) || bit.file_name === null || bit.file_name === undefined)
+		return undefined;
+	const { hash, file_name: fileName } = bit;
+	check(
+		typeof fileName === "string" &&
+			typeof hash === "string" &&
+			!hash.includes("/") &&
+			hash !== "metadata" &&
+			hash !== "deps-cache",
+		"Invalid selected Bit asset path.",
+	);
+	const path = `bits/${hash}/${fileName}`;
+	validateRelativePath(path);
+	const size = bit.size ?? null;
+	check(
+		size === null ||
+			(typeof size === "number" && Number.isSafeInteger(size) && size >= 0),
+		"Invalid selected Bit asset size.",
+	);
+	return {
+		...(typeof bit.id === "string" ? { id: bit.id } : {}),
+		hash,
+		path,
+		fileName,
+		size: size as number | null,
+	};
+}
+function modelAssetSource(source: unknown): boolean {
+	if (
+		typeof source !== "string" ||
+		source.length > MAX_MODEL_ASSET_SOURCE_LENGTH ||
+		source.includes("#")
+	)
+		return false;
+	try {
+		const url = new URL(source);
+		return (
+			url.protocol === "https:" &&
+			url.hostname !== "" &&
+			!url.username &&
+			!url.password
+		);
+	} catch {
+		return false;
+	}
+}
+/** `ModelAssetDescriptor::validate`: a pinned digest, a bounded size, a safe file name, public HTTPS sources. */
+function modelAssetDescriptor(value: unknown): ModelAssetDescriptor {
+	const descriptor = isRecord(value) ? value : {};
+	const digest = isRecord(descriptor.digest) ? descriptor.digest : {};
+	const { size, file_name: fileName } = descriptor;
+	const sources = descriptor.sources ?? [];
+	check(
+		Object.keys(descriptor).every((key) => DESCRIPTOR_FIELDS.includes(key)) &&
+			Object.keys(digest).length === 2 &&
+			(digest.algorithm === "sha256" || digest.algorithm === "blake3") &&
+			typeof digest.hex === "string" &&
+			/^[a-f0-9]{64}$/.test(digest.hex) &&
+			typeof size === "number" &&
+			Number.isSafeInteger(size) &&
+			size > 0 &&
+			size <= MAX_MODEL_ASSET_BYTES &&
+			typeof fileName === "string" &&
+			Array.isArray(sources) &&
+			sources.length <= MAX_MODEL_ASSET_SOURCES &&
+			sources.every(modelAssetSource),
+		"Invalid selected model asset.",
+	);
+	validateRelativePath(fileName as string);
+	return {
+		digest: {
+			algorithm: digest.algorithm as "sha256" | "blake3",
+			hex: digest.hex as string,
+		},
+		size: size as number,
+		file_name: fileName as string,
+		...(sources.length ? { sources: sources as string[] } : {}),
+	};
+}
+/** The Bit each id names; an id two file-backed Bits share names none. */
+function assetOwners(files: readonly BitFile[]): Map<string, BitFile | null> {
+	const owners = new Map<string, BitFile | null>();
+	for (const file of files)
+		if (file.id !== undefined)
+			owners.set(file.id, owners.has(file.id) ? null : file);
+	return owners;
+}
+/** Parts in load order: the first carries the Bit's file name, no two share a name or digest. */
+function checkParts(file: BitFile, parts: readonly ModelAssetDescriptor[]) {
+	check(
+		parts[0]?.file_name === file.fileName,
+		"The first model asset of a selected Bit has another file name.",
+	);
+	parts.forEach((part, index) =>
+		check(
+			parts
+				.slice(0, index)
+				.every(
+					(earlier) =>
+						earlier.file_name !== part.file_name &&
+						(earlier.digest.algorithm !== part.digest.algorithm ||
+							earlier.digest.hex !== part.digest.hex),
+				),
+			"A selected Bit lists a model asset twice.",
+		),
+	);
+	check(
+		parts.length !== 1 || file.size === null || file.size === parts[0]?.size,
+		"A model asset's size differs from its selected Bit.",
+	);
+}
+/** The Bits whose bytes are model-store assets, with their parts. */
+function storedBits(
+	assets: readonly unknown[],
+	files: readonly BitFile[],
+): Map<string, StoredBit> {
+	const owners = assetOwners(files);
+	const stored = new Map<string, StoredBit>();
+	for (const asset of assets) {
+		check(
+			isRecord(asset) &&
+				Object.keys(asset).length === 2 &&
+				typeof asset.bit_id === "string",
+			"Invalid selected model asset.",
+		);
+		const descriptor = modelAssetDescriptor(asset.descriptor);
+		const owner = owners.get(asset.bit_id as string);
+		check(owner, "A model asset belongs to an unknown or ambiguous Bit.");
+		const entry = stored.get(asset.bit_id as string) ?? {
+			file: owner,
+			parts: [],
+		};
+		entry.parts.push(descriptor);
+		stored.set(asset.bit_id as string, entry);
+	}
+	for (const { file, parts } of stored.values()) checkParts(file, parts);
+	return stored;
+}
+/** Locations whose bytes travel in the artifact, with the size their Bits declare. */
+function artifactLocations(
+	files: readonly BitFile[],
+	stored: ReadonlyMap<string, StoredBit>,
+): Map<string, number | null> {
+	const expected = new Map<string, number | null>();
+	const storePaths = new Set<string>();
+	for (const file of files) {
+		if (file.id !== undefined && stored.has(file.id)) {
+			storePaths.add(file.path);
+			continue;
+		}
+		check(
+			!expected.has(file.path) || expected.get(file.path) === file.size,
+			"Selected Bit assets disagree on size.",
+		);
+		expected.set(file.path, file.size);
+	}
+	check(
+		[...expected.keys()].every((path) => !storePaths.has(path)),
+		"A selected Bit file is listed as an artifact and as model assets.",
+	);
+	return expected;
+}
+type SelectedFiles = {
+	selected: Map<string, SelectedAsset>;
+	models: PreparedModelAsset[];
+	modelPins: ProjectBitPin[];
+};
 async function selectedAssets(
 	files: readonly ArtifactInput[],
 	assets: ProjectArtifactAssets,
 	signal?: AbortSignal,
-): Promise<Map<string, SelectedAsset>> {
+): Promise<SelectedFiles> {
 	const selected = new Map<string, SelectedAsset>();
+	const models: PreparedModelAsset[] = [];
+	const modelPins: ProjectBitPin[] = [];
 	for (const pin of assets.bit_pins) {
 		cancelled(signal);
 		const path = `bits/metadata/${pin.bit_id}.json`;
@@ -419,48 +686,26 @@ async function selectedAssets(
 			hex(sha256(bytes)) === pin.metadata_sha256,
 			"Selected Bit metadata digest differs.",
 		);
-		const wrapper = parseAssetJson(
-			new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-		) as {
-			bit: Record<string, unknown>;
-			dependencies: Record<string, unknown>[];
-			artifacts: ProjectArtifactFile[];
-		};
-		check(
-			wrapper &&
-				Object.keys(wrapper).length === 3 &&
-				wrapper.bit?.id === pin.bit_id &&
-				Array.isArray(wrapper.dependencies) &&
-				wrapper.dependencies.length <= 2048 &&
-				Array.isArray(wrapper.artifacts) &&
-				wrapper.artifacts.length <= 2048,
-			"Selected Bit metadata shape differs.",
+		const wrapper = packagedFiles(
+			parseAssetJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+			pin.bit_id,
 		);
-		const expected = new Map<string, number | null>();
-		for (const bit of [wrapper.bit, ...wrapper.dependencies]) {
-			if (bit.file_name === null || bit.file_name === undefined) continue;
-			check(
-				typeof bit.file_name === "string" &&
-					typeof bit.hash === "string" &&
-					!bit.hash.includes("/") &&
-					bit.hash !== "metadata" &&
-					bit.hash !== "deps-cache",
-				"Invalid selected Bit asset path.",
-			);
-			const asset = `bits/${bit.hash}/${bit.file_name}`;
-			validateRelativePath(asset);
-			const size = bit.size ?? null;
-			check(
-				size === null ||
-					(typeof size === "number" && Number.isSafeInteger(size) && size >= 0),
-				"Invalid selected Bit asset size.",
-			);
-			check(
-				!expected.has(asset) || expected.get(asset) === size,
-				"Selected Bit assets disagree on size.",
-			);
-			expected.set(asset, size as number | null);
-		}
+		const bitFiles = [wrapper.bit, ...wrapper.dependencies].flatMap(
+			(bit) => bitFile(bit) ?? [],
+		);
+		const stored = storedBits(wrapper.assets, bitFiles);
+		const { hub } = wrapper.bit;
+		for (const [bitId, { file, parts }] of stored)
+			for (const descriptor of parts)
+				models.push({
+					pin: pin.bit_id,
+					...(typeof hub === "string" && hub ? { pinHub: hub } : {}),
+					bitId,
+					bitHash: file.hash,
+					descriptor,
+				});
+		if (stored.size) modelPins.push(pin);
+		const expected = artifactLocations(bitFiles, stored);
 		check(
 			expected.size === wrapper.artifacts.length,
 			"Selected Bit assets must cover exact metadata paths.",
@@ -509,7 +754,17 @@ async function selectedAssets(
 			selected.set(path, { size: null, sha256: digest });
 		}
 	}
-	return selected;
+	return { selected, models: uniqueAssets(models), modelPins };
+}
+/** One entry per digest: Bits that share a file share its download. */
+function uniqueAssets(models: readonly PreparedModelAsset[]) {
+	const seen = new Set<string>();
+	return models.filter(({ descriptor: { digest } }) => {
+		const key = `${digest.algorithm}/${digest.hex}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
 }
 /** Select only pinned assets from an object-store folder containing bits/ and packages/. */
 export async function selectedProjectAssetFiles(
@@ -529,7 +784,7 @@ export async function selectedProjectAssetFiles(
 		);
 		return { path: parts.slice(1).join("/").normalize("NFC"), file };
 	});
-	const selected = await selectedAssets(inputs, selection, signal);
+	const { selected } = await selectedAssets(inputs, selection, signal);
 	const result = inputs.filter((file) => selected.has(file.path));
 	check(
 		result.length === selected.size,
@@ -546,7 +801,11 @@ export async function prepareProjectArtifact(
 ): Promise<PreparedProjectArtifact> {
 	projectId(project);
 	const selection = parseProjectArtifactAssets(JSON.stringify(assets));
-	const selected = await selectedAssets(inputs, selection, signal);
+	const { selected, models, modelPins } = await selectedAssets(
+		inputs,
+		selection,
+		signal,
+	);
 	check(
 		inputs.length > 0 && inputs.length <= MAX_FILES,
 		"Project file count exceeds its limit.",
@@ -677,6 +936,7 @@ export async function prepareProjectArtifact(
 		},
 		manifest: bytes,
 		files,
+		...(models.length ? { models: { pins: modelPins, assets: models } } : {}),
 	};
 }
 function sameDescriptor(
@@ -730,6 +990,7 @@ function transferStatus(
 export async function uploadProjectArtifact(options: {
 	prepared: PreparedProjectArtifact;
 	request: ArtifactManagementCall;
+	upload: (input: TunnelArtifactUpload) => Promise<ArtifactTransferStatus>;
 	transferId?: string;
 	/** False when the device never acknowledged `transferId`; a refused status then begins it under that id. */
 	confirmed?: boolean;
@@ -834,42 +1095,36 @@ export async function uploadProjectArtifact(options: {
 			file: ArtifactBlob,
 			status: ArtifactTransferStatus,
 		) => {
-			let value = status;
-			while (!value.complete) {
-				cancelled(signal);
-				const offset =
-					value.offset === file.size
-						? Math.max(0, file.size - ARTIFACT_CHUNK_BYTES)
-						: value.offset;
-				const bytes = new Uint8Array(
-					await file
-						.slice(offset, Math.min(file.size, offset + ARTIFACT_CHUNK_BYTES))
-						.arrayBuffer(),
-				);
-				const next = await call(
-					{
-						kind: "chunk",
-						project_id: descriptor.project_id,
-						transfer_id: transferId,
-						file_index: index,
-						offset,
-						data: base64(bytes),
-					},
-					index,
-					file.size,
-				);
-				bytes.fill(0);
-				check(
-					next.offset > value.offset || next.complete,
-					"Device did not advance the artifact upload.",
-				);
-				if (index !== null) {
-					uploaded += next.offset - value.offset;
-					progress("files");
-				}
-				value = next;
+			if (status.complete) return status;
+			cancelled(signal);
+			// A full file without a verified hash needs its final bytes checked again.
+			const offset =
+				status.offset === file.size
+					? Math.max(0, file.size - ARTIFACT_CHUNK_BYTES)
+					: status.offset;
+			const next = transferStatus(
+				await options.upload({
+					projectId: descriptor.project_id,
+					transferId,
+					fileIndex: index,
+					offset,
+					file,
+					signal,
+				}),
+				descriptor,
+				transferId,
+				index,
+				file.size,
+			);
+			check(
+				next.state === "receiving" && next.complete,
+				"Device did not verify the streamed artifact file.",
+			);
+			if (index !== null) {
+				uploaded += next.offset - status.offset;
+				progress("files");
 			}
-			return value;
+			return next;
 		};
 		progress("manifest");
 		current = await send(null, new Blob([prepared.manifest]), current);
@@ -912,7 +1167,13 @@ export async function uploadProjectArtifact(options: {
 		return result;
 	} catch (error) {
 		if (error instanceof ArtifactUploadError) throw error;
-		throw new ArtifactUploadError(transferId);
+		throw new ArtifactUploadError(
+			transferId,
+			undefined,
+			error instanceof LiveCallError
+				? error.diagnostic
+				: managementFailureDiagnostic(error),
+		);
 	}
 }
 export async function abortProjectArtifact(

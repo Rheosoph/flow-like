@@ -547,6 +547,8 @@ export interface IEventState {
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
 		beforeDispatch?: () => void,
+		/** The same dispatch's prerun response; the backend validates scope and freshness. */
+		preparedPrerun?: IPrerunEventResponse,
 	): Promise<ILogMetadata | undefined>;
 
 	/** Execute an event remotely via the server-side SSE invoke endpoint */

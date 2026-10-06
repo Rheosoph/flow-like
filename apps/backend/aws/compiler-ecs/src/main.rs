@@ -1,10 +1,10 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use flow_like_compiler::{process_job, CompilationJob, CompilerConfig};
+use flow_like_compiler::{CompilationJob, CompilerConfig, process_job};
 use flow_like_types_contracts::dispatch::CompilationJobRef;
 use std::time::Duration;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer as _};
+use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
 const DEFAULT_TASK_TIMEOUT_SECS: u64 = 3600; // 1 hour
 
@@ -137,21 +137,10 @@ async fn resolve_compilation_jobs(json: &str) -> Result<Vec<CompilationJob>, Str
     // Try as a remote reference first (compact `{ "remote_url": "..." }`)
     if let Ok(job_ref) = serde_json::from_str::<CompilationJobRef>(json) {
         match job_ref {
-            CompilationJobRef::Remote { remote_url } => {
-                tracing::info!("Fetching remote compilation job");
-                let response =
-                    tokio::time::timeout(Duration::from_secs(30), reqwest::get(&remote_url))
-                        .await
-                        .map_err(|_| "Remote job fetch timed out".to_string())?
-                        .map_err(|e| format!("Failed to fetch remote job: {}", e.without_url()))?;
-                if !response.status().is_success() {
-                    return Err(format!("HTTP {} from job URL", response.status()));
-                }
-                let body = response
-                    .text()
+            remote @ CompilationJobRef::Remote { .. } => {
+                return flow_like_compiler::resolve::resolve_jobs(remote)
                     .await
-                    .map_err(|e| format!("Failed to read response: {}", e.without_url()))?;
-                return parse_inline_jobs(&body);
+                    .map_err(|error| error.to_string());
             }
             CompilationJobRef::Inline(job) => return Ok(vec![job]),
         }

@@ -151,12 +151,20 @@ pub fn preserve_for_revision(old: &PlacementConfig, next: &PlacementConfig) -> R
     let names: std::collections::BTreeSet<_> = next
         .secret_overrides
         .values()
-        .chain(next.hosting.iter().map(|hosting| &hosting.auth_secret))
+        .chain(
+            next.hosting
+                .iter()
+                .filter_map(|hosting| hosting.auth_secret.as_ref()),
+        )
         .collect();
     let retained: std::collections::BTreeSet<_> = old
         .secret_overrides
         .values()
-        .chain(old.hosting.iter().map(|hosting| &hosting.auth_secret))
+        .chain(
+            old.hosting
+                .iter()
+                .filter_map(|hosting| hosting.auth_secret.as_ref()),
+        )
         .collect();
     ensure!(
         names.len() <= 1025,

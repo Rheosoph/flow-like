@@ -99,6 +99,8 @@ import {
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
 
+const PAGE_TRIGGER_PRERUN_REUSE_MS = 15_000;
+
 function missingOAuthError(
 	reason: string,
 	missingProviders: IOAuthProvider[],
@@ -218,8 +220,51 @@ function reportPageContractRejection(
 export class WebEventState implements IEventState {
 	readonly alwaysRemote = true;
 	private readonly runStreams = new Map<string, AbortController>();
+	// Response identity keeps simultaneous dispatches from consuming each other's prerun.
+	private readonly pagePreruns = new WeakMap<
+		IPrerunEventResponse,
+		{ scope: string; started: number }
+	>();
 
 	constructor(private readonly backend: WebBackendRef) {}
+
+	private pagePrerunScope(
+		appId: string,
+		eventId: string,
+		version: [number, number, number] | undefined,
+		trigger: PageTrigger,
+	): string {
+		return JSON.stringify([
+			getApiBaseUrl(),
+			this.backend.profile?.hub ?? null,
+			this.backend.profile?.id ?? null,
+			this.backend.auth?.user?.profile?.sub ?? null,
+			this.backend.auth?.user?.access_token ?? null,
+			appId,
+			eventId,
+			version ?? null,
+			serializePageTrigger(trigger),
+		]);
+	}
+
+	private takePagePrerun(
+		response: IPrerunEventResponse | undefined,
+		appId: string,
+		eventId: string,
+		trigger: PageTrigger,
+	): IPrerunEventResponse | undefined {
+		if (!response) return undefined;
+		const entry = this.pagePreruns.get(response);
+		this.pagePreruns.delete(response);
+		if (
+			entry?.scope ===
+				this.pagePrerunScope(appId, eventId, undefined, trigger) &&
+			runTimingNow() - entry.started <= PAGE_TRIGGER_PRERUN_REUSE_MS
+		) {
+			return response;
+		}
+		return undefined;
+	}
 
 	async getEvent(
 		appId: string,
@@ -480,6 +525,7 @@ export class WebEventState implements IEventState {
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
 		beforeDispatch?: () => void,
+		preparedPrerun?: IPrerunEventResponse,
 	): Promise<ILogMetadata | undefined> {
 		beforeDispatch?.();
 		return withDeviceCommandBridge(
@@ -496,6 +542,7 @@ export class WebEventState implements IEventState {
 					skipConsentCheck,
 					pageTrigger,
 					beforeDispatch,
+					preparedPrerun,
 				),
 		);
 	}
@@ -510,6 +557,7 @@ export class WebEventState implements IEventState {
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
 		beforeDispatch?: () => void,
+		preparedPrerun?: IPrerunEventResponse,
 	): Promise<ILogMetadata | undefined> {
 		const hub = await timeRunStep("hub_config", () =>
 			getHubConfig(this.backend.profile),
@@ -529,9 +577,21 @@ export class WebEventState implements IEventState {
 		let pagePrerun: IPrerunEventResponse | undefined;
 		if (pageTrigger) {
 			try {
-				pagePrerun = await timeRunStep("prerun", () =>
-					this.prerunEvent(appId, eventId, undefined, pageTrigger),
+				pagePrerun = this.takePagePrerun(
+					preparedPrerun,
+					appId,
+					eventId,
+					pageTrigger,
 				);
+				if (pagePrerun) {
+					const reusedAt = runTimingNow();
+					recordRunStep("prerun.reused", reusedAt, reusedAt);
+				} else {
+					pagePrerun = await timeRunStep("prerun", () =>
+						this.prerunEvent(appId, eventId, undefined, pageTrigger),
+					);
+					this.pagePreruns.delete(pagePrerun);
+				}
 			} catch (error) {
 				reportPageContractRejection(appId, eventId, pageTrigger, error);
 				throw error;
@@ -1279,11 +1339,16 @@ export class WebEventState implements IEventState {
 	): Promise<IPrerunEventResponse> {
 		const params = version ? `?version=${version.join("_")}` : "";
 		if (pageTrigger) {
-			return apiPost<IPrerunEventResponse>(
+			// Capture identity before the request; an account switch cannot reassign its result.
+			const scope = this.pagePrerunScope(appId, eventId, version, pageTrigger);
+			const started = runTimingNow();
+			const result = await apiPost<IPrerunEventResponse>(
 				`apps/${appId}/events/${eventId}/prerun${params}`,
 				{ page_trigger: serializePageTrigger(pageTrigger) },
 				this.backend.auth,
 			);
+			this.pagePreruns.set(result, { scope, started });
+			return result;
 		}
 		return apiGet<IPrerunEventResponse>(
 			`apps/${appId}/events/${eventId}/prerun${params}`,

@@ -2,8 +2,16 @@ pub mod local;
 pub mod mlx;
 pub mod mlx_pack;
 
-use super::media::{MediaReader, RemoteMediaModel};
-use crate::{bit::Bit, state::FlowLikeState};
+use super::{
+    device::{self, ModelEndpoint},
+    factory_cache::{FactoryCache, MODEL_IDLE_TTL},
+    media::{MediaReader, RemoteMediaModel},
+};
+use crate::{
+    bit::Bit,
+    state::{CompletionModelCapabilities, FlowLikeState},
+    utils::execute::RuntimeLocator,
+};
 use flow_like_model_provider::llm::{
     ModelLogic, anthropic::AnthropicModel, bedrock::BedrockModel, cohere::CohereModel,
     deepseek::DeepseekModel, galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel,
@@ -13,16 +21,24 @@ use flow_like_model_provider::llm::{
     perplexity::PerplexityModel, together::TogetherModel, vertex::VertexModel,
     voyageai::VoyageAIModel, xai::XAIModel,
 };
-use flow_like_model_provider::provider::{ModelApiSurface, is_hosted_provider_name};
-use flow_like_types::{Result, json, sync::Mutex, tokio::time::interval};
+use flow_like_model_provider::provider::{ModelApiSurface, ModelProvider, is_hosted_provider_name};
+use flow_like_types::{
+    Result, json,
+    tokio::{sync::Mutex as AsyncMutex, time::interval},
+};
 use local::LocalModel;
 use mlx::MlxModel;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::Arc,
-    time::{Duration, SystemTime},
+    sync::{Arc, LazyLock},
+    time::{Duration, Instant},
 };
+
+/// Local engines load one at a time, so each llama-server's `--fit on` sizes its GPU offload
+/// against the memory the engines loaded before it hold.
+pub(crate) static LOCAL_ENGINE_LOADS: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default);
 
 #[derive(Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ExecutionSettings {
@@ -47,11 +63,11 @@ impl ExecutionSettings {
     }
 }
 
-// TODO: implement DashMap
+/// Shared by every run without an outer lock: builds of one cache key coalesce, builds of other
+/// keys proceed in parallel, so a cold start or an unlock prompt never stalls unrelated models.
 pub struct ModelFactory {
-    pub cached_models: HashMap<String, Arc<dyn ModelLogic>>,
-    pub ttl_list: HashMap<String, SystemTime>,
-    pub execution_settings: ExecutionSettings,
+    models: FactoryCache<dyn ModelLogic>,
+    execution_settings: RwLock<ExecutionSettings>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -178,6 +194,46 @@ fn ensure_hosted_proxy_endpoint(
     );
 }
 
+/// Why this host cannot run a Local or MLX Bit. When the runtime's executable is all the host
+/// lacks, the refusal names that runtime and where the host looks for it.
+async fn local_runtime_refusal(
+    bit: &Bit,
+    app_state: &Arc<FlowLikeState>,
+) -> flow_like_types::Error {
+    let installable = FlowLikeState::installable_completion_runtimes(app_state).await;
+    runtime_refusal(bit, installable, &app_state.runtime_locator)
+}
+
+fn runtime_refusal(
+    bit: &Bit,
+    installable: CompletionModelCapabilities,
+    locator: &RuntimeLocator,
+) -> flow_like_types::Error {
+    if bit.is_mlx_model() {
+        if installable.mlx
+            && let Err(missing) = locator.installed_mlx_service()
+        {
+            return flow_like_types::anyhow!(
+                "MLX model {} cannot execute on this host: {missing}",
+                bit.id
+            );
+        }
+        return flow_like_types::anyhow!(
+            "MLX model {} cannot execute on this host; it requires local ML, a local Bit store, and supported Apple-silicon hardware",
+            bit.id
+        );
+    }
+    if installable.local_server
+        && let Err(missing) = locator.installed_llama_server()
+    {
+        return flow_like_types::anyhow!("Model {} cannot execute on this host: {missing}", bit.id);
+    }
+    flow_like_types::anyhow!(
+        "Model {} cannot execute on this host; local llama-server models require local ML, a local Bit store, and a non-mobile target",
+        bit.id
+    )
+}
+
 impl Default for ModelFactory {
     fn default() -> Self {
         Self::new()
@@ -187,29 +243,35 @@ impl Default for ModelFactory {
 impl ModelFactory {
     pub fn new() -> Self {
         Self {
-            cached_models: HashMap::new(),
-            ttl_list: HashMap::new(),
-            execution_settings: ExecutionSettings::new(),
+            models: FactoryCache::default(),
+            execution_settings: RwLock::new(ExecutionSettings::new()),
         }
     }
 
-    pub fn set_execution_settings(&mut self, settings: ExecutionSettings) {
-        self.execution_settings = settings;
+    pub fn set_execution_settings(&self, settings: ExecutionSettings) {
+        *self.execution_settings.write() = settings;
+    }
+
+    async fn build_standard_model(
+        &self,
+        bit: &Bit,
+        provider: &str,
+        model_provider: &ModelProvider,
+        provider_config: &flow_like_model_provider::provider::ModelProviderConfiguration,
+    ) -> Result<Arc<dyn ModelLogic>> {
+        self.models
+            .get_or_build(&bit.id, || {
+                Self::standard_model(provider, model_provider, provider_config)
+            })
+            .await
     }
 
     #[allow(clippy::cognitive_complexity)]
-    async fn build_standard_model(
-        &mut self,
-        bit: &Bit,
+    async fn standard_model(
         provider: &str,
-        model_provider: &flow_like_model_provider::provider::ModelProvider,
+        model_provider: &ModelProvider,
         provider_config: &flow_like_model_provider::provider::ModelProviderConfiguration,
     ) -> Result<Arc<dyn ModelLogic>> {
-        if let Some(model) = self.cached_models.get(&bit.id) {
-            self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-            return Ok(model.clone());
-        }
-
         let model: Arc<dyn ModelLogic> = match provider {
             "azure" | "openai" => Arc::new(
                 OpenAIModel::new(model_provider, provider_config)
@@ -247,24 +309,25 @@ impl ModelFactory {
                 ));
             }
         };
-
-        self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-        self.cached_models.insert(bit.id.clone(), model.clone());
         Ok(model)
     }
 
-    #[allow(clippy::cognitive_complexity)]
     async fn build_custom_model(
-        &mut self,
+        &self,
         bit: &Bit,
         provider: &str,
-        model_provider: &flow_like_model_provider::provider::ModelProvider,
+        model_provider: &ModelProvider,
     ) -> Result<Arc<dyn ModelLogic>> {
-        if let Some(model) = self.cached_models.get(&bit.id) {
-            self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-            return Ok(model.clone());
-        }
+        self.models
+            .get_or_build(&bit.id, || Self::custom_model(provider, model_provider))
+            .await
+    }
 
+    #[allow(clippy::cognitive_complexity)]
+    async fn custom_model(
+        provider: &str,
+        model_provider: &ModelProvider,
+    ) -> Result<Arc<dyn ModelLogic>> {
         let model: Arc<dyn ModelLogic> = match provider {
             "custom:openai" => Arc::new(
                 OpenAIModel::from_provider_with_surface(
@@ -303,17 +366,85 @@ impl ModelFactory {
                 ));
             }
         };
-
-        self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-        self.cached_models.insert(bit.id.clone(), model.clone());
         Ok(model)
+    }
+
+    /// MLX and Local GGUF Bits run in a runtime this host starts: the MLX bridge or a
+    /// llama-server sidecar.
+    async fn build_local_runtime_model(
+        &self,
+        bit: &Bit,
+        app_state: Arc<FlowLikeState>,
+    ) -> Result<Arc<dyn ModelLogic>> {
+        let capabilities = FlowLikeState::completion_model_capabilities(&app_state).await;
+        let settings = self.execution_settings.read().clone();
+        if bit.is_mlx_model() {
+            if !capabilities.mlx {
+                return Err(local_runtime_refusal(bit, &app_state).await);
+            }
+            return self
+                .models
+                .get_or_build(&bit.mlx_runtime_model_cache_key()?, || async {
+                    MlxModel::new(bit, app_state.clone(), &settings)
+                        .await
+                        .map(|model| model as Arc<dyn ModelLogic>)
+                })
+                .await;
+        }
+
+        if !capabilities.local_server {
+            return Err(local_runtime_refusal(bit, &app_state).await);
+        }
+        self.models
+            .get_or_build(&bit.runtime_model_cache_key(), || async {
+                LocalModel::new(bit, app_state.clone(), &settings)
+                    .await
+                    .map(|model| model as Arc<dyn ModelLogic>)
+            })
+            .await
+    }
+
+    /// An OpenAI chat-completions client for a model served elsewhere, cached per endpoint.
+    async fn build_endpoint_model(&self, endpoint: ModelEndpoint) -> Result<Arc<dyn ModelLogic>> {
+        self.models
+            .get_or_build(&endpoint.cache_key(), || async {
+                let provider = ModelProvider {
+                    provider_name: "openai".to_string(),
+                    model_id: Some(endpoint.model.clone()),
+                    version: None,
+                    api_surface: Some(ModelApiSurface::ChatCompletions),
+                    params: Some(HashMap::from([
+                        (
+                            "api_key".to_string(),
+                            flow_like_types::Value::String(endpoint.bearer.clone()),
+                        ),
+                        (
+                            "endpoint".to_string(),
+                            flow_like_types::Value::String(
+                                endpoint.base_url.trim_end_matches('/').to_string(),
+                            ),
+                        ),
+                        (
+                            "model_id".to_string(),
+                            flow_like_types::Value::String(endpoint.model.clone()),
+                        ),
+                    ])),
+                };
+                let model = OpenAIModel::from_provider_with_surface(
+                    &provider,
+                    ModelApiSurface::ChatCompletions,
+                )
+                .await?;
+                Ok(Arc::new(model) as Arc<dyn ModelLogic>)
+            })
+            .await
     }
 
     /// Wraps every model except MLX in [`RemoteMediaModel`], outside the cache, so fetches use
     /// the caller's execution environment and inline only media the provider's client reads.
     /// MLX hands out its cached runtime itself, whose identity `mlx_e2e` asserts.
     pub async fn build(
-        &mut self,
+        &self,
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
         access_token: Option<String>,
@@ -337,66 +468,27 @@ impl ModelFactory {
     #[allow(clippy::cognitive_complexity)]
     #[allow(clippy::too_many_lines)]
     async fn build_inner(
-        &mut self,
+        &self,
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
         access_token: Option<String>,
         usage_context: Option<ModelUsageContext>,
     ) -> Result<Arc<dyn ModelLogic>> {
         let provider_config = app_state.model_provider_config.clone();
-        let settings = self.execution_settings.clone();
-        let provider = bit.try_to_provider();
-        if provider.is_none() {
-            return Err(flow_like_types::anyhow!("Model type not supported"));
-        }
-
-        let mut model_provider =
-            provider.ok_or(flow_like_types::anyhow!("Model type not supported"))?;
+        let mut model_provider = bit
+            .try_to_provider()
+            .ok_or_else(|| flow_like_types::anyhow!("Model type not supported"))?;
         let provider = model_provider.provider_name.trim().to_ascii_lowercase();
         model_provider.provider_name = provider.clone();
 
+        if let Some(endpoint) =
+            device::resolve_endpoint(bit, &app_state, usage_context.as_ref()).await?
+        {
+            return self.build_endpoint_model(endpoint).await;
+        }
+
         if bit.is_mlx_model() || provider.eq_ignore_ascii_case("local") {
-            let capabilities = FlowLikeState::completion_model_capabilities(&app_state).await;
-            if bit.is_mlx_model() && !capabilities.mlx {
-                return Err(flow_like_types::anyhow!(
-                    "MLX model {} cannot execute on this host; it requires local ML, a local Bit store, and supported Apple-silicon hardware",
-                    bit.id
-                ));
-            }
-            if provider.eq_ignore_ascii_case("local") && !capabilities.local_server {
-                return Err(flow_like_types::anyhow!(
-                    "Model {} cannot execute on this host; local llama-server models require local ML, a local Bit store, and a non-mobile target",
-                    bit.id
-                ));
-            }
-        }
-
-        if bit.is_mlx_model() {
-            let cache_key = bit.mlx_runtime_model_cache_key()?;
-            if let Some(model) = self.cached_models.get(&cache_key) {
-                self.ttl_list.insert(cache_key.clone(), SystemTime::now());
-                return Ok(model.clone());
-            }
-
-            let mlx_model: Arc<MlxModel> =
-                Arc::new(MlxModel::new(bit, app_state.clone(), &settings).await?);
-            self.ttl_list.insert(cache_key.clone(), SystemTime::now());
-            self.cached_models.insert(cache_key, mlx_model.clone());
-            return Ok(mlx_model);
-        }
-
-        if provider.eq_ignore_ascii_case("local") {
-            let cache_key = bit.runtime_model_cache_key();
-            if let Some(model) = self.cached_models.get(&cache_key) {
-                self.ttl_list.insert(cache_key.clone(), SystemTime::now());
-                return Ok(model.clone());
-            }
-
-            let local_model = LocalModel::new(bit, app_state, &settings).await?;
-            let local_model: Arc<LocalModel> = Arc::new(local_model);
-            self.ttl_list.insert(cache_key.clone(), SystemTime::now());
-            self.cached_models.insert(cache_key, local_model.clone());
-            return Ok(local_model);
+            return self.build_local_runtime_model(bit, app_state).await;
         }
 
         if provider.starts_with("custom:") {
@@ -421,8 +513,7 @@ impl ModelFactory {
         if is_hosted_provider_name(&provider) {
             // Legacy callers still supply a token snapshot. Live-authorized
             // clients resolve their lease at dispatch, including retained agents.
-            self.cached_models.remove(&bit.id);
-            self.ttl_list.remove(&bit.id);
+            self.models.remove(&bit.id);
 
             let authorizer = app_state.request_authorizer.clone();
             let access_token = app_state
@@ -600,35 +691,19 @@ impl ModelFactory {
             .await
     }
 
-    pub fn gc(&mut self) {
-        let mut to_remove = Vec::new();
-        for id in self.cached_models.keys() {
-            // check if the model was not used for 5 minutes
-            let ttl = self.ttl_list.get(id).unwrap();
-            if ttl.elapsed().unwrap().as_secs() > 300 {
-                to_remove.push(id.clone());
-            }
-        }
-
-        for id in to_remove {
-            self.cached_models.remove(&id);
-            self.ttl_list.remove(&id);
-        }
+    /// Evicts models unused for five minutes. A model someone still holds is in use, so a long
+    /// turn never loses its server; its idle time starts when the last holder lets go.
+    pub fn gc(&self) {
+        self.models.gc(Instant::now(), MODEL_IDLE_TTL);
     }
 }
 
-pub async fn start_gc(state: Arc<Mutex<ModelFactory>>) {
+pub async fn start_gc(state: Arc<ModelFactory>) {
     let mut interval = interval(Duration::from_secs(1));
 
     loop {
         interval.tick().await;
-
-        {
-            let state = state.try_lock();
-            if let Ok(mut state) = state {
-                state.gc();
-            }
-        }
+        state.gc();
     }
 }
 
@@ -647,6 +722,7 @@ mod tests {
         ModelProvider, ModelProviderConfiguration, OllamaConfig,
     };
     use flow_like_storage::files::store::FlowLikeStore;
+    use std::time::SystemTime;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -832,7 +908,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         for (id, provider) in [
             ("local-model", "Local"),
@@ -858,6 +934,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_host_that_lacks_only_the_runtime_names_it() {
+        let locator = RuntimeLocator::bundled_in(std::path::Path::new("/missing/flow-like"));
+        let entrypoint = |runtime: Option<std::path::PathBuf>| {
+            runtime.expect("a runtime path").display().to_string()
+        };
+        let installable = CompletionModelCapabilities {
+            local_server: true,
+            mlx: true,
+            ..CompletionModelCapabilities::default()
+        };
+
+        let local = runtime_refusal(
+            &completion_bit("local-model", "Local"),
+            installable,
+            &locator,
+        )
+        .to_string();
+        let llama_server = entrypoint(locator.llama_server.clone().map(|r| r.entrypoint));
+        assert!(local.starts_with("Model local-model cannot execute on this host"));
+        assert!(local.contains("llama-server is not installed"), "{local}");
+        assert!(local.contains(&llama_server), "{local}");
+
+        let mlx =
+            runtime_refusal(&completion_bit("mlx-model", "MLX"), installable, &locator).to_string();
+        let helper = entrypoint(locator.mlx_service.clone().map(|r| r.entrypoint));
+        assert!(mlx.contains("The MLX service is not installed"), "{mlx}");
+        assert!(mlx.contains(&helper), "{mlx}");
+
+        let unsupported = runtime_refusal(
+            &completion_bit("local-model", "Local"),
+            CompletionModelCapabilities::default(),
+            &locator,
+        )
+        .to_string();
+        assert!(unsupported.contains("non-mobile target"), "{unsupported}");
+        assert!(!unsupported.contains("not installed"), "{unsupported}");
+    }
+
     #[tokio::test]
     async fn factory_accepts_endpoint_backed_legacy_local_providers() {
         let store = FlowLikeStore::Memory(Arc::new(
@@ -872,7 +987,7 @@ mod tests {
             crate::utils::http::HTTPClient::new_without_refetch(),
             model_provider_config,
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         for provider in [
             "Ollama",
@@ -903,7 +1018,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         for provider in ["Premium", "Internal", "Hosted", "hosted:openrouter"] {
             let model = factory
@@ -921,7 +1036,7 @@ mod tests {
                 "{provider} should use the Rig OpenRouter client"
             );
             assert_eq!(model.default_model().await.as_deref(), Some(provider));
-            assert!(!factory.cached_models.contains_key(provider));
+            assert!(!factory.models.contains(provider));
         }
     }
 
@@ -951,7 +1066,7 @@ mod tests {
         );
         state.hosted_model_token = model_token.map(ToOwned::to_owned);
         let state = Arc::new(state.for_execution_run());
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
         let model = factory
             .build(
                 &completion_bit("bit_opaque_123", "hosted:openrouter"),
@@ -1055,7 +1170,7 @@ mod tests {
             crate::utils::http::HTTPClient::new_without_refetch(),
         );
         state.request_authorizer = Some(Arc::new(ScopedAuthorizer { base, instance }));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
         let model = factory
             .build(
                 &completion_bit("offline-bit", "hosted:openrouter"),
@@ -1110,7 +1225,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         let model = factory
             .build(
@@ -1127,7 +1242,7 @@ mod tests {
             UsageReportingMode::OpenAIStreamOptions
         );
         assert_eq!(model.default_model().await.as_deref(), Some("openai-bit"));
-        assert!(!factory.cached_models.contains_key("openai-bit"));
+        assert!(!factory.models.contains("openai-bit"));
     }
 
     #[tokio::test]
@@ -1145,7 +1260,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
         let model = factory
             .build(
                 &completion_bit_with_surface(
@@ -1195,7 +1310,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         for provider in ["hosted:openrouter", "hosted:bedrock"] {
             let Err(error) = factory
@@ -1229,7 +1344,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         let model = factory
             .build(
@@ -1246,7 +1361,7 @@ mod tests {
             UsageReportingMode::OpenAIStreamOptions
         );
         assert_eq!(model.default_model().await.as_deref(), Some("bedrock-bit"));
-        assert!(!factory.cached_models.contains_key("bedrock-bit"));
+        assert!(!factory.models.contains("bedrock-bit"));
     }
 
     #[tokio::test]
@@ -1258,7 +1373,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         for provider in ["hosted:anthropic", "hosted:azure", "hosted:vertex"] {
             let error = match factory
@@ -1290,7 +1405,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
-        let mut factory = ModelFactory::new();
+        let factory = ModelFactory::new();
 
         let error = match factory
             .build(&completion_bit("hosted-model", "Hosted"), state, None, None)
@@ -1301,5 +1416,255 @@ mod tests {
         };
 
         assert!(error.to_string().contains("requires an access token"));
+    }
+
+    mod device_models {
+        use super::*;
+        use crate::models::device::{
+            DeviceModelConnector, DeviceModelTarget, Interaction, ModelUnavailable,
+            ModelUnavailableReason, model_unavailable,
+            testing::{FakeConnector, FakeRouter, device_llm_bit, endpoint},
+        };
+        use flow_like_types::async_trait;
+        use tokio::sync::Barrier;
+
+        fn memory_state() -> FlowLikeState {
+            let store = FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ));
+            FlowLikeState::new(
+                FlowLikeConfig::with_default_store(store),
+                crate::utils::http::HTTPClient::new_without_refetch(),
+            )
+        }
+
+        fn run_context(run_id: &str) -> Option<ModelUsageContext> {
+            Some(ModelUsageContext {
+                run_id: Some(run_id.to_string()),
+                ..ModelUsageContext::default()
+            })
+        }
+
+        async fn build_error(
+            factory: &ModelFactory,
+            bit: &Bit,
+            state: FlowLikeState,
+        ) -> flow_like_types::Error {
+            match factory
+                .build(bit, Arc::new(state), None, run_context("run-7"))
+                .await
+            {
+                Ok(_) => panic!("{} must not build", bit.id),
+                Err(error) => error,
+            }
+        }
+
+        #[tokio::test]
+        async fn a_declined_hard_coded_device_bit_fails_with_a_typed_sentence() {
+            let connector = FakeConnector::failing(ModelUnavailableReason::DeviceLockedDeclined);
+            let mut state = memory_state();
+            state.device_model_connector = Some(connector.clone());
+
+            let error = build_error(
+                &ModelFactory::new(),
+                &device_llm_bit("device-bit", "dev-1"),
+                state,
+            )
+            .await;
+
+            assert_eq!(
+                model_unavailable(&error).map(|unavailable| unavailable.reason),
+                Some(ModelUnavailableReason::DeviceLockedDeclined)
+            );
+            assert_eq!(
+                error.to_string(),
+                "Model 'Qwen3 8B' runs on device 'GPU box', which stayed locked."
+            );
+            assert_eq!(
+                *connector.interactions.lock(),
+                vec![Interaction::Allowed {
+                    run_label: Some("run-7".to_string())
+                }]
+            );
+        }
+
+        #[tokio::test]
+        async fn without_a_connector_a_device_bit_is_a_server_execution_error() {
+            let error = build_error(
+                &ModelFactory::new(),
+                &device_llm_bit("device-bit", "dev-1"),
+                memory_state(),
+            )
+            .await;
+
+            assert_eq!(
+                model_unavailable(&error).map(|unavailable| unavailable.reason),
+                Some(ModelUnavailableReason::ServerExecution)
+            );
+            let message = error.to_string();
+            assert!(message.contains("'Qwen3 8B'") && message.contains("'dev-1'"));
+        }
+
+        #[tokio::test]
+        async fn device_bits_stream_chat_completions_through_the_connector_endpoint() {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let base = format!("http://{}/v1", listener.local_addr().unwrap());
+            let capture = tokio::spawn(capture_one_http_request(listener));
+            let mut state = memory_state();
+            state.device_model_connector = Some(FakeConnector::serving(endpoint(&base)));
+
+            let model = ModelFactory::new()
+                .build(
+                    &device_llm_bit("device-bit", "dev-1"),
+                    Arc::new(state),
+                    None,
+                    None,
+                )
+                .await
+                .expect("device model through the connector");
+            let mut history = History::new(
+                "ignored".to_string(),
+                vec![HistoryMessage::from_string(Role::User, "hello")],
+            );
+            history.set_stream(true);
+            let callback: LLMCallback = Arc::new(|_| Box::pin(async { Ok(()) }));
+            assert!(model.invoke(&history, Some(callback)).await.is_err());
+
+            let request = tokio::time::timeout(Duration::from_secs(10), capture)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(request.request_line, "POST /v1/chat/completions HTTP/1.1");
+            assert!(
+                request
+                    .headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer loopback-token\r\n")
+            );
+            assert_eq!(request.body["model"], "qwen3-8b");
+        }
+
+        #[tokio::test]
+        async fn device_models_are_cached_per_endpoint_not_per_bit() {
+            let served = endpoint("http://127.0.0.1:9/v1");
+            let mut state = memory_state();
+            state.device_model_connector = Some(FakeConnector::serving(served.clone()));
+            let state = Arc::new(state);
+            let factory = ModelFactory::new();
+
+            let first = factory
+                .build_inner(&device_llm_bit("bit-a", "dev-1"), state.clone(), None, None)
+                .await
+                .unwrap();
+            let second = factory
+                .build_inner(&device_llm_bit("bit-b", "dev-1"), state, None, None)
+                .await
+                .unwrap();
+
+            assert!(Arc::ptr_eq(&first, &second));
+            assert!(factory.models.contains(&served.cache_key()));
+            assert!(!factory.models.contains("bit-a"));
+        }
+
+        #[tokio::test]
+        async fn the_router_serves_local_and_own_device_bits_without_a_sidecar() {
+            let served = endpoint("http://127.0.0.1:9/v1");
+            let mut state = memory_state();
+            state.local_model_router = Some(Arc::new(FakeRouter(served.clone())));
+            let state = Arc::new(state);
+            let factory = ModelFactory::new();
+
+            let model = factory
+                .build(
+                    &completion_bit("local-model", "Local"),
+                    state.clone(),
+                    None,
+                    None,
+                )
+                .await
+                .expect("a routed Local Bit needs no local runtime");
+            assert_eq!(model.default_model().await.as_deref(), Some("qwen3-8b"));
+            assert!(factory.models.contains(&served.cache_key()));
+            assert!(!factory.models.contains("local-model"));
+
+            factory
+                .build(&device_llm_bit("own-bit", "this-device"), state, None, None)
+                .await
+                .expect("the router answers before any connector is needed");
+        }
+
+        #[tokio::test]
+        async fn gc_keeps_a_held_model_and_evicts_it_a_ttl_after_release() {
+            let served = endpoint("http://127.0.0.1:9/v1");
+            let mut state = memory_state();
+            state.local_model_router = Some(Arc::new(FakeRouter(served.clone())));
+            let factory = ModelFactory::new();
+            let held = factory
+                .build(
+                    &completion_bit("local-model", "Local"),
+                    Arc::new(state),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let key = served.cache_key();
+            let start = Instant::now();
+
+            factory
+                .models
+                .gc(start + MODEL_IDLE_TTL * 2, MODEL_IDLE_TTL);
+            assert!(factory.models.contains(&key), "a held model survives GC");
+
+            drop(held);
+            let released = start + MODEL_IDLE_TTL * 2 + Duration::from_secs(1);
+            factory.models.gc(released, MODEL_IDLE_TTL);
+            assert!(factory.models.contains(&key));
+
+            factory.models.gc(
+                released + MODEL_IDLE_TTL + Duration::from_secs(1),
+                MODEL_IDLE_TTL,
+            );
+            assert!(!factory.models.contains(&key));
+        }
+
+        /// Answers only once both builds are connecting at the same time.
+        struct RendezvousConnector(Barrier);
+
+        #[async_trait]
+        impl DeviceModelConnector for RendezvousConnector {
+            async fn connect(
+                &self,
+                target: &DeviceModelTarget,
+                _interaction: Interaction,
+            ) -> std::result::Result<ModelEndpoint, ModelUnavailable> {
+                self.0.wait().await;
+                Ok(ModelEndpoint {
+                    model: target.model.clone(),
+                    ..endpoint(&format!("http://127.0.0.1:9/{}", target.device_id))
+                })
+            }
+        }
+
+        #[tokio::test]
+        async fn builds_of_different_bits_run_in_parallel() {
+            let mut state = memory_state();
+            state.device_model_connector = Some(Arc::new(RendezvousConnector(Barrier::new(2))));
+            let state = Arc::new(state);
+            let factory = ModelFactory::new();
+            let first_bit = device_llm_bit("bit-a", "dev-a");
+            let second_bit = device_llm_bit("bit-b", "dev-b");
+
+            let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(
+                    factory.build(&first_bit, state.clone(), None, None),
+                    factory.build(&second_bit, state.clone(), None, None),
+                )
+            })
+            .await
+            .expect("one build waiting on its device must not block another");
+
+            assert!(first.is_ok() && second.is_ok());
+        }
     }
 }

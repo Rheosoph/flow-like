@@ -21,6 +21,8 @@ export interface IUseInterfaceProps {
 	config?: Partial<IEventPayload>;
 	toolbarRef?: RefObject<IToolBarActions | null>;
 	sidebarRef?: RefObject<ISidebarActions | null>;
+	/** A Home or lesson tile never takes the cursor on open; only the form workbench reads it. */
+	presentation?: "page" | "tile";
 	/** A standalone host resolves app routes to its own published URLs. */
 	onNavigate?: (
 		route: string,

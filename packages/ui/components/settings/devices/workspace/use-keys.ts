@@ -38,6 +38,7 @@ export function useKeySession(deviceId: string): KeySessionSnapshot {
 }
 
 export interface KeyChip {
+	/** Unlocked here, or held by the desktop app for model access. */
 	unlockedCount: number;
 	/** Every device with keys on this computer, plus open sessions. */
 	sessions: KeySessionSnapshot[];
@@ -54,7 +55,9 @@ export function useKeyChip(): KeyChip {
 	const sessions = useManagerValue(subscribe, read);
 	return useMemo(
 		() => ({
-			unlockedCount: sessions.filter((row) => row.state === "unlocked").length,
+			unlockedCount: sessions.filter(
+				(row) => row.state === "unlocked" || row.heldForModels,
+			).length,
 			sessions,
 			lock: (deviceId) => keys.lock(deviceId),
 			lockAll: () => keys.lockAll(),

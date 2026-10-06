@@ -82,6 +82,12 @@ const ROWS: Row[] = [
 		route: { screen: "device", deviceId: DEVICE, tab: "metrics" },
 	},
 	{
+		name: "N2 Models tab",
+		href: `/settings/devices?device=${DEVICE}&tab=models`,
+		scope: ACCOUNT,
+		route: { screen: "device", deviceId: DEVICE, tab: "models" },
+	},
+	{
 		name: "N2 certificate focus (E12 reminder link)",
 		href: `/settings/devices?device=${DEVICE}&tab=certificates&certificate=cert_01`,
 		scope: ACCOUNT,
@@ -211,6 +217,12 @@ const ROWS: Row[] = [
 		href: `/library/config/devices?id=app_invoice&device=${DEVICE}&tab=services`,
 		scope: APP,
 		route: { screen: "device", deviceId: DEVICE, tab: "services" },
+	},
+	{
+		name: "N2 Models tab in app context",
+		href: `/library/config/devices?id=app_invoice&device=${DEVICE}&tab=models`,
+		scope: APP,
+		route: { screen: "device", deviceId: DEVICE, tab: "models" },
 	},
 	{
 		name: "N3 in app context",

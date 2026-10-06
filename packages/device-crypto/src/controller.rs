@@ -365,6 +365,26 @@ impl UnlockedController {
         expected_device: [u8; 32],
         now: i64,
     ) -> Result<CertifiedHandshake> {
+        self.begin_certified_noise(grant_id, expected_device, now, false)
+    }
+
+    /// Each tunnel key epoch uses a fresh key and the same short authorization lifetime.
+    pub fn begin_tunnel_noise(
+        &self,
+        grant_id: &str,
+        expected_device: [u8; 32],
+        now: i64,
+    ) -> Result<CertifiedHandshake> {
+        self.begin_certified_noise(grant_id, expected_device, now, true)
+    }
+
+    fn begin_certified_noise(
+        &self,
+        grant_id: &str,
+        expected_device: [u8; 32],
+        now: i64,
+        tunnel: bool,
+    ) -> Result<CertifiedHandshake> {
         validate_management_id(grant_id)?;
         let secret = Zeroizing::new(random_key());
         let certificate = ControllerCertificate {
@@ -375,14 +395,19 @@ impl UnlockedController {
             management_key: x25519_dalek::x25519(*secret, x25519_dalek::X25519_BASEPOINT_BYTES),
             issued_at: now,
             expires_at: now
-                .checked_add(300)
+                .checked_add(flow_like_device_protocol::MANAGEMENT_SESSION_SECONDS)
                 .ok_or_else(|| anyhow::anyhow!("Invalid session time"))?,
         };
         let certificate_jws = sign_controller_certificate(
             &certificate,
             &SigningKey::from_bytes(&self.secrets.controller_seed),
         )?;
-        let handshake = noise::Handshake::initiator(
+        let initialize = if tunnel {
+            noise::Handshake::tunnel_initiator
+        } else {
+            noise::Handshake::initiator
+        };
+        let handshake = initialize(
             &secret,
             expected_device,
             &certificate.device_id,
@@ -1205,6 +1230,63 @@ mod tests {
                 .decrypt(&reader.encrypt(b"inspect").unwrap())
                 .unwrap(),
             b"inspect"
+        );
+    }
+
+    #[test]
+    fn tunnel_renewal_creates_fresh_keys_without_extending_certificate_lifetime() {
+        let password = b"a memorable local password";
+        let sealed = create_controller_vault("device", password).unwrap();
+        let controller = unlock_controller_vault("device", password, &sealed.vault).unwrap();
+        let device_secret = random_key();
+        let device_public =
+            x25519_dalek::x25519(device_secret, x25519_dalek::X25519_BASEPOINT_BYTES);
+        let old = controller
+            .begin_tunnel_noise("owner", device_public, 100)
+            .unwrap();
+        let renewed = controller
+            .begin_tunnel_noise("owner", device_public, 340)
+            .unwrap();
+        assert_ne!(old.certificate.session_id, renewed.certificate.session_id);
+        assert_ne!(
+            old.certificate.management_key,
+            renewed.certificate.management_key
+        );
+        assert_eq!(old.certificate.expires_at, 400);
+        assert_eq!(renewed.certificate.expires_at, 640);
+        let certificate = verify_controller_certificate(
+            &renewed.certificate_jws,
+            &sealed.public_bundle.controller_key,
+            340,
+        )
+        .unwrap();
+        assert!(
+            verify_controller_certificate(
+                &old.certificate_jws,
+                &sealed.public_bundle.controller_key,
+                400
+            )
+            .is_err()
+        );
+        let mut controller = renewed.handshake;
+        let mut device = noise::Handshake::tunnel_responder(
+            &device_secret,
+            certificate.management_key,
+            "device",
+            &certificate.session_id,
+        )
+        .unwrap();
+        device.read(&controller.write().unwrap()).unwrap();
+        controller.read(&device.write().unwrap()).unwrap();
+        device.read(&controller.write().unwrap()).unwrap();
+        let mut controller = controller.finish().unwrap();
+        let mut device = device.finish().unwrap();
+        let payload = vec![42; flow_like_device_protocol::TUNNEL_MAX_FRAME];
+        assert_eq!(
+            device
+                .decrypt(&controller.encrypt(&payload).unwrap())
+                .unwrap(),
+            payload
         );
     }
 

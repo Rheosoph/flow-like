@@ -43,7 +43,9 @@ pub use reconcile::{
     reconcile_text_with_catalog_scoped, reconcile_with_catalog, reconcile_with_catalog_mode,
     reconcile_with_catalog_scoped,
 };
-pub(crate) use reconcile::{catalog_names, parse_pin_occurrence_ref, pin_occurrence_ref};
+pub(crate) use reconcile::{
+    catalog_names, flowscript_analysis_ast, parse_pin_occurrence_ref, pin_occurrence_ref,
+};
 pub(crate) use reconcile::{
     dynamic_placeholder_config_pin, synthesize_dynamic_input_pin_from_template,
 };

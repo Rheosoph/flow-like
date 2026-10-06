@@ -9,9 +9,9 @@ import type { IGenericCommand } from "../schema/flow/board/commands/generic-comm
 import type { INode, IPin } from "../schema/flow/node";
 import type { ILayer } from "../schema/flow/run";
 import type { AutoRerouteChain } from "./normalize-reroutes";
-import type { DataRoute } from "./route";
+import type { WireRoute } from "./route";
 interface RerouteCommandInput {
-	routes: readonly DataRoute[];
+	routes: readonly WireRoute[];
 	chains: readonly AutoRerouteChain[];
 	reroute: INode;
 	currentLayer: string | undefined;
@@ -48,7 +48,6 @@ export function buildAutoRerouteCommands({
 		const [fromPin, fromNode] = pinCache.get(route.fromPin) ?? [];
 		const [toPin, toNode] = pinCache.get(route.toPin) ?? [];
 		if (!fromPin || !fromNode || !toPin || !toNode) continue;
-		if (fromPin.data_type === "Execution") continue;
 		const previous = oldChains.get(key(route))?.nodes ?? [];
 		if (!route.waypoints.length && !previous.length) continue;
 		const sameTopology = previous.length === route.waypoints.length;

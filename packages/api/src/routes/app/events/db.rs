@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::db::{
     DEFAULT_WRITE_CHUNK, DbDialect, RetryPolicy, delete_in_batches, retry_transaction,
 };
-use crate::entity::{event, event_remote_auth, event_remote_registration};
+use crate::entity::{event, event_remote_auth, event_remote_registration, event_sink};
 use flow_like::app::App;
 use flow_like::flow::event::{
     CanaryEvent, Event as CoreEvent, EventExecutionMode, EventExposure, EventInput, EventVariant,
@@ -405,6 +405,30 @@ fn sink_route(event: &CoreEvent) -> (Option<String>, Option<String>) {
         return (path, Some(method));
     }
     (event.route.clone(), None)
+}
+
+/// The event whose sink already holds the `(app, path, method)` slot that `event` would claim on
+/// the hub. Device-only events hold no slot, so two of them may share a route; moving one back to
+/// the hub claims it, and that conflict is reported before anything is written.
+pub async fn hub_route_holder<C>(
+    db: &C,
+    app_id: &str,
+    event: &CoreEvent,
+) -> flow_like_types::Result<Option<String>>
+where
+    C: ConnectionTrait,
+{
+    let (Some(path), Some(method)) = sink_route(event) else {
+        return Ok(None);
+    };
+    Ok(event_sink::Entity::find()
+        .filter(event_sink::Column::AppId.eq(app_id))
+        .filter(event_sink::Column::Path.eq(path))
+        .filter(event_sink::Column::Method.eq(method))
+        .filter(event_sink::Column::EventId.ne(event.id.as_str()))
+        .one(db)
+        .await?
+        .map(|sink| sink.event_id))
 }
 
 /// Sync an event and its sink to the database, with optional PAT and OAuth tokens

@@ -1,18 +1,23 @@
 "use client";
 
 import {
+	useCallback,
 	useEffect,
 	useMemo,
 	useRef,
 	useState,
 	useSyncExternalStore,
 } from "react";
-import { readArtifactUsage } from "../../../../lib/device-management/agent-reads";
+import {
+	agentSupports,
+	readArtifactUsage,
+} from "../../../../lib/device-management/agent-reads";
 import {
 	type ArtifactProgress,
 	type ArtifactTransferStatus,
 	ArtifactUploadError,
 	type PendingArtifactTransfer,
+	type PreparedModelAsset,
 	type PreparedProjectArtifact,
 	forgetArtifactTransfer,
 	pendingArtifactTransfers,
@@ -58,6 +63,14 @@ import {
 	latestPinsOnline,
 	publishLatestFlows,
 } from "../../../../lib/device-management/latest-flows";
+import {
+	type PushableAsset,
+	desktopPushEnvironment,
+	modelPushOf,
+	pushFile,
+	pushModelAsset,
+	rememberPushableAssets,
+} from "../../../../lib/device-management/model-push";
 import type { AppEventInput } from "../../../../lib/device-management/model/app-plan";
 import {
 	type DeployFailure,
@@ -89,12 +102,10 @@ import type {
 	CopyRef,
 	DeployRoute,
 } from "../../../../lib/device-management/model/types";
+import { desktopArtifactUpload } from "../../../../lib/device-management/native-client";
 import { prepareOnlineDependencies } from "../../../../lib/device-management/online-dependencies";
 import { prepareOnlineMetadata } from "../../../../lib/device-management/online-metadata";
-import {
-	desktopExportCommands,
-	prepareDesktopProject,
-} from "../../../../lib/device-management/project-export";
+import { prepareDesktopProject } from "../../../../lib/device-management/project-export";
 import type { ManagementCall } from "../../../../lib/device-management/telemetry";
 import type {
 	ActivityItem,
@@ -125,6 +136,12 @@ import {
 	useDeviceWorkspace,
 } from "../workspace";
 import { latestFlowsOf } from "../workspace/use-latest-flows";
+import { desktopExport, targetsHaveModelStore } from "./desktop-export";
+import {
+	type ModelAssetSender,
+	type ModelFileRow,
+	ensureModels,
+} from "./ensure-models";
 import type { DeployPrepared } from "./step-props";
 import {
 	type CopyEventCheck,
@@ -210,6 +227,8 @@ export interface DeployTargetDetail {
 	rolloutId?: string;
 	transferId?: string;
 	rollout?: DeploymentRolloutStatus;
+	/** The version's model files the device fetches itself, or this computer sends. */
+	models?: readonly ModelFileRow[];
 }
 
 export type DeployRunDetails = Readonly<Record<string, DeployTargetDetail>>;
@@ -366,7 +385,22 @@ const CLASSIFIERS: ((error: unknown) => Classified | undefined)[] = [
 		error instanceof ArtifactUploadError
 			? {
 					code: error.rejection?.code ?? "upload_unconfirmed",
-					detail: error.rejection?.error ?? error.message,
+					detail: [
+						error.rejection?.error ?? error.message,
+						...(error.diagnostic
+							? [
+									"Client transport diagnostics:",
+									...(error.diagnostic.transport
+										? [`Transport: ${error.diagnostic.transport}`]
+										: []),
+									`Transport phase: ${error.diagnostic.phase}`,
+									`Transport cause: ${error.diagnostic.cause}`,
+									...(error.diagnostic.fallbackReason
+										? [`Relay fallback: ${error.diagnostic.fallbackReason}`]
+										: []),
+								]
+							: []),
+					].join("\n"),
 				}
 			: undefined,
 	// The hub answered and said no (not allowed, a conflict, bad input): that is a refusal, not a lost answer.
@@ -417,6 +451,11 @@ interface TargetMemo {
 	grant?: ResourceGrant;
 	billing?: BillingGrant;
 	installed?: InstalledProject;
+	/** The model files of the committed version (Bit metadata v2). */
+	models?: PreparedProjectArtifact["models"];
+	modelsReady?: boolean;
+	modelsKey?: string;
+	modelsAt?: number;
 	catalog?: DeploymentCatalog;
 	deployment?: DeploymentPlan;
 	applied?: boolean;
@@ -584,6 +623,7 @@ async function prepareOnline(
 	const native =
 		deps.platform === "desktop" &&
 		(app.bits.length > 0 || Object.keys(app.packages ?? {}).length > 0);
+	const modelStore = run.modelStore(plan);
 	if (!native) {
 		const exported = await prepareOnlineDependencies(
 			app,
@@ -591,12 +631,13 @@ async function prepareOnline(
 			deps.profile,
 			signal,
 			approved,
+			modelStore,
 		);
 		return { bundle: bundleOf(exported.artifact, facts, approved) };
 	}
 	const exported = await prepareDesktopProject(
 		appId,
-		await desktopExportCommands(app),
+		await desktopExport(app, undefined, modelStore),
 		signal,
 		approved,
 	);
@@ -617,7 +658,7 @@ async function prepareOffline(
 	const { latest, published } = await publishFlows(run, plan, appId, signal);
 	const exported = await prepareDesktopProject(
 		appId,
-		await desktopExportCommands(undefined, deps.scope.account),
+		await desktopExport(undefined, deps.scope.account, run.modelStore(plan)),
 		signal,
 	);
 	try {
@@ -693,6 +734,9 @@ export async function uploadPreparedCopy(
 		const status = await uploadProjectArtifact({
 			prepared: bundle.artifact,
 			request: input.call,
+			upload: desktopArtifactUpload(deviceId, (file) =>
+				input.workspace.live.uploadArtifact(deviceId, file),
+			),
 			transferId: pending?.transfer_id,
 			confirmed: pending ? pending.confirmed === true : undefined,
 			signal: input.signal,
@@ -1072,11 +1116,57 @@ async function shipVersion(job: Job) {
 	const { status } = shipped;
 	if (!status.project_path) throw new DeployRunFailure("upload_unconfirmed");
 	memo.installed = installedProject(shipped.bundle, status.project_path);
+	memo.models = shipped.bundle.artifact.models;
+	if (memo.models) rememberPushableAssets(memo.models.assets);
 }
 
-function uploadBundle(job: Job, bundle: DeployPrepared) {
+/**
+ * Bit metadata v2 goes only to an agent that acquires model files itself;
+ * asked again because the bundle may be older than what the agent says now.
+ */
+async function requireModelStore(job: Job, bundle: DeployPrepared) {
+	if (!bundle.artifact.models) return;
+	const { live } = job.run.workspace;
+	const { deviceId } = job.device;
+	const features = () => live.inspection(deviceId)?.value.features;
+	if (agentSupports(features(), "model_store")) return;
+	await live.refreshInspection(deviceId);
+	job.run.alive();
+	if (!agentSupports(features(), "model_store"))
+		throw new DeployRunFailure("agent_feature", "model_store");
+}
+
+const pushableOf = (asset: PreparedModelAsset): PushableAsset => ({
+	descriptor: asset.descriptor,
+	bitHash: asset.bitHash,
+	pin: { id: asset.pin, ...(asset.pinHub ? { hub: asset.pinHub } : {}) },
+});
+
+/** After the commit: the device gets every model file of the version before it is applied. */
+async function ensureProjectModels(job: Job) {
+	const { memo } = job;
+	const models = memo.models;
+	if (!models || memo.modelsReady) return;
+	guard(job);
+	const { live } = job.run.workspace;
+	const send = job.run.modelSender(job);
+	await ensureModels({
+		call: job.call,
+		features: () => live.inspection(job.device.deviceId)?.value.features,
+		projectId: appIdOf(job.plan),
+		models,
+		...(send ? { send } : {}),
+		signal: job.signal,
+		guard: () => guard(job),
+		report: (rows) => job.run.modelProgress(job, rows),
+	});
+	memo.modelsReady = true;
+}
+
+async function uploadBundle(job: Job, bundle: DeployPrepared) {
 	guard(job);
 	job.run.phase(job.target, "upload");
+	await requireModelStore(job, bundle);
 	return uploadPreparedCopy({
 		workspace: job.run.workspace,
 		deviceId: job.device.deviceId,
@@ -1142,7 +1232,7 @@ function previousVariables(
 
 function tokenFor(job: Job): string {
 	const { endpoint } = job.plan.draft;
-	if (!hostedService(job)) return "";
+	if (!hostedService(job) || endpoint.token === "none") return "";
 	if (endpoint.token === "keep")
 		return job.memo.existing?.config.hosting ? "" : newToken();
 	const own = draftTargetOf(job)?.over.token;
@@ -1424,6 +1514,7 @@ async function runChain(job: Job) {
 		await loadExisting(job);
 		await approveAccess(job);
 		await shipVersion(job);
+		await ensureProjectModels(job);
 		const deployment = await wireDeployment(job);
 		await execute(job, deployment);
 	}
@@ -1707,6 +1798,8 @@ class DeployRun {
 	private readonly inFlight = new Set<string>();
 	private readonly items = new Map<string, string>();
 	private readonly handles = new Map<string, ResumeHandle>();
+	/** Model files this computer is sending, by target. */
+	private readonly pushes = new Map<string, AbortController>();
 	private abort = new AbortController();
 	private bundlePromise: Promise<DeployPrepared> | null = null;
 	/** The copy this run prepared itself. */
@@ -1854,6 +1947,84 @@ class DeployRun {
 			done: progress.completedFiles,
 			total: progress.totalFiles,
 		});
+	}
+
+	/** Whether a bundle this run prepares itself may name model-store assets (Bit metadata v2). */
+	modelStore(plan: DeployPlan): boolean {
+		const { live } = this.workspace;
+		return targetsHaveModelStore(
+			plan.targets,
+			(deviceId) => live.inspection(deviceId)?.value.features,
+		);
+	}
+
+	/** The rows of a target's model files; the tray counts the files present. */
+	modelProgress(job: Job, rows: readonly ModelFileRow[]) {
+		const key = rows.map((row) => `${row.state}:${row.reason ?? ""}`).join();
+		const now = Date.now();
+		if (
+			job.memo.modelsKey === key &&
+			now - (job.memo.modelsAt ?? 0) < PROGRESS_EVERY_MS
+		)
+			return;
+		const changed = job.memo.modelsKey !== key;
+		job.memo.modelsKey = key;
+		job.memo.modelsAt = now;
+		this.note(job.target, { models: rows });
+		if (changed)
+			this.phase(job.target, "install", {
+				done: rows.filter((row) => row.state === "present").length,
+				total: rows.length,
+			});
+	}
+
+	/** Sends one model file from this computer; undefined while the live session offers no push. */
+	modelSender(job: Job): ModelAssetSender | undefined {
+		const push = modelPushOf(this.workspace.live, job.device.deviceId);
+		if (!push) return undefined;
+		const environment =
+			this.workspace.deps.platform === "desktop" && this.backend
+				? desktopPushEnvironment(this.backend.bitState)
+				: {};
+		return async (asset, jobId, progress, signal) => {
+			const cancel = new AbortController();
+			const stop = () => cancel.abort(signal.reason);
+			signal.addEventListener("abort", stop, { once: true });
+			this.pushes.set(job.target, cancel);
+			try {
+				const file = await pushFile(pushableOf(asset), {
+					...environment,
+					signal: cancel.signal,
+					onLocalDownload: (bytes) => progress(bytes, "local_download"),
+				});
+				try {
+					await pushModelAsset({
+						jobId,
+						file,
+						push,
+						signal: cancel.signal,
+						onProgress: ({ bytes }) => progress(bytes, file.from),
+					});
+				} finally {
+					file.close();
+				}
+			} catch (error) {
+				if (cancel.signal.aborted && !signal.aborted)
+					throw new DeployRunFailure(
+						"model_push_cancelled",
+						asset.descriptor.file_name,
+					);
+				throw error;
+			} finally {
+				signal.removeEventListener("abort", stop);
+				this.pushes.delete(job.target);
+			}
+		};
+	}
+
+	/** Stops sending a target's model file; the target then fails and can be retried. */
+	cancelModelPush(target: string) {
+		this.pushes.get(target)?.abort(new Error("Sending was stopped."));
 	}
 
 	/** Strategy, phases and identifiers are final once the commands exist. */
@@ -2465,6 +2636,17 @@ export function useShownTokens(
 			});
 		};
 	}, [workspace, deploymentId, key]);
+}
+
+/** Stops sending a target's model file from this computer. */
+export function useCancelModelPush(deploymentId: string | undefined) {
+	const workspace = useDeviceWorkspace();
+	return useCallback(
+		(target: string) => {
+			if (deploymentId) runFor(workspace, deploymentId).cancelModelPush(target);
+		},
+		[workspace, deploymentId],
+	);
 }
 
 /** Marks the run as shown on this page, so its end isn't announced with a toast. */

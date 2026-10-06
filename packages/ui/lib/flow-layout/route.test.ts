@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { computeFlowLayout, computeFlowLayoutDetailed } from "./index";
 import { measureNodeBox, pinOffsetY } from "./measure";
-import { type DataRoute, planDataRoutes, sampleDataRoute } from "./route";
+import { type WireRoute, planWireRoutes, sampleWireRoute } from "./route";
 import { GraphBuilder, allScenarios } from "./test-fixtures";
 import type { AutoLayoutInput, LayoutBox } from "./types";
 type Point = {
@@ -20,7 +20,7 @@ function inside(point: Point, box: LayoutBox): boolean {
 function expectClear(
 	input: AutoLayoutInput,
 	positions: Positions,
-	route: DataRoute,
+	route: WireRoute,
 ): void {
 	const boxes = input.layerNodes
 		.map((node) => {
@@ -32,7 +32,7 @@ function expectClear(
 			return { x, y, ...size };
 		})
 		.concat(input.obstacles ?? []);
-	for (const [a, b] of sampleDataRoute(input, positions, route)) {
+	for (const [a, b] of sampleWireRoute(input, positions, route)) {
 		for (let i = 0; i <= 12; i++) {
 			const point = {
 				x: a.x + ((b.x - a.x) * i) / 12,
@@ -105,14 +105,18 @@ function distinctIntersections(
 	}
 	return count;
 }
-function skipEdge(pathType: AutoLayoutInput["edgePathType"] = "default") {
+function skipEdge(
+	pathType: AutoLayoutInput["edgePathType"] = "default",
+	kind: "data" | "exec" = "data",
+) {
 	const graph = new GraphBuilder();
-	graph.exec("source", { dataOuts: 1 });
+	graph.exec("source", { execOuts: kind === "exec" ? 2 : 1, dataOuts: 1 });
 	graph.exec("middle", { dataIns: 2 });
 	graph.exec("target", { dataIns: 1 });
 	graph.execLink("source", "middle");
 	graph.execLink("middle", "target");
-	graph.dataLink("source", "target");
+	if (kind === "exec") graph.execLink("source", "target", "exec-out-1");
+	else graph.dataLink("source", "target");
 	const positions: Positions = new Map([
 		["source", [0, 0]],
 		["middle", [230, 0]],
@@ -120,6 +124,11 @@ function skipEdge(pathType: AutoLayoutInput["edgePathType"] = "default") {
 	]);
 	return { input: graph.build({ edgePathType: pathType }), positions };
 }
+
+const skipRoute = (routes: WireRoute[]) =>
+	required(
+		routes.find((route) => route.from === "source" && route.to === "target"),
+	);
 
 function parallelBranches(
 	edgePathType: AutoLayoutInput["edgePathType"] = "default",
@@ -170,23 +179,29 @@ function parallelBranches(
 function expectBranchLocality(
 	input: AutoLayoutInput,
 	positions: Positions,
-	routes: DataRoute[],
+	routes: WireRoute[],
 ) {
+	const pins = new Map(
+		input.layerNodes.flatMap((node) =>
+			Object.values(node.pins).map((pin) => [pin.id, pin] as const),
+		),
+	);
 	const upper: number[] = [];
 	const lower: number[] = [];
 	for (const route of routes) {
 		expect(route.unresolved).toBeUndefined();
-		expect(route.waypoints.length).toBeGreaterThan(0);
 		expectClear(input, positions, route);
-		if (route.from.startsWith("upper"))
+		if (pins.get(route.fromPin)?.data_type === "Execution") continue;
+		expect(route.waypoints.length).toBeGreaterThan(0);
+		if (route.from.startsWith("upper") && route.to.startsWith("upper"))
 			upper.push(...route.waypoints.map((point) => point.y + 12));
-		if (route.from.startsWith("lower"))
+		if (route.from.startsWith("lower") && route.to.startsWith("lower"))
 			lower.push(...route.waypoints.map((point) => point.y));
 	}
 	// Each branch has a clear corridor. Its reroutes must not cross the other branch's band.
 	expect(Math.max(...upper)).toBeLessThan(Math.min(...lower));
 }
-describe("data route planning", () => {
+describe("wire route planning", () => {
 	for (const pathType of [
 		"default",
 		"straight",
@@ -196,9 +211,9 @@ describe("data route planning", () => {
 		test(`keeps parallel execution branches in their own routing corridors (${pathType})`, () => {
 			const { input, positions } = parallelBranches(pathType);
 			const before = structuredClone(input);
-			const routes = planDataRoutes(input, positions);
+			const routes = planWireRoutes(input, positions);
 			expectBranchLocality(input, positions, routes);
-			expect(planDataRoutes(input, positions)).toEqual(routes);
+			expect(planWireRoutes(input, positions)).toEqual(routes);
 			expect(input).toEqual(before);
 			const placed = computeFlowLayoutDetailed(input, "routed");
 			expectBranchLocality(
@@ -206,15 +221,17 @@ describe("data route planning", () => {
 				placed.positions,
 				required(placed.routing).routes,
 			);
-			const placedRoutes = required(placed.routing).routes;
+			const placedRoutes = required(placed.routing).routes.filter((route) =>
+				route.fromPin.includes(":out-"),
+			);
 			const beforeCrossings = distinctIntersections(
 				placedRoutes.map((route) =>
-					sampleDataRoute(input, placed.positions, { ...route, waypoints: [] }),
+					sampleWireRoute(input, placed.positions, { ...route, waypoints: [] }),
 				),
 			);
 			const afterCrossings = distinctIntersections(
 				placedRoutes.map((route) =>
-					sampleDataRoute(input, placed.positions, route),
+					sampleWireRoute(input, placed.positions, route),
 				),
 			);
 			expect(afterCrossings).toBeLessThanOrEqual(beforeCrossings);
@@ -222,7 +239,7 @@ describe("data route planning", () => {
 	}
 	test("keeps independent execution chains in separate routing bands", () => {
 		const { input, positions } = parallelBranches("default", true);
-		expectBranchLocality(input, positions, planDataRoutes(input, positions));
+		expectBranchLocality(input, positions, planWireRoutes(input, positions));
 	});
 	test("ignores a tall branch tail beyond the connection's horizontal span", () => {
 		const { graph, positions } = parallelBranches();
@@ -235,17 +252,25 @@ describe("data route planning", () => {
 		}
 		graph.dataLink("upper-0", "upper-2", 2, 4);
 		const input = graph.build();
-		const expected = planDataRoutes(input, positions);
+		const expected = required(
+			planWireRoutes(input, positions).find(
+				(route) => route.fromPin === "upper-0:out-2",
+			),
+		);
 		const tall = {
 			...input,
 			nodeSizes: new Map<string, readonly [number, number]>([
 				["upper-3", [150, 2000]],
 			]),
 		};
-		const actual = planDataRoutes(tall, positions);
+		const actual = required(
+			planWireRoutes(tall, positions).find(
+				(route) => route.fromPin === "upper-0:out-2",
+			),
+		);
 		expect(actual).toEqual(expected);
-		expect(actual[0].unresolved).toBeUndefined();
-		expectClear(tall, positions, actual[0]);
+		expect(actual.unresolved).toBeUndefined();
+		expectClear(tall, positions, actual);
 	});
 	test("pure inputs below the execution spines do not reverse branch order", () => {
 		const { graph } = parallelBranches();
@@ -279,9 +304,11 @@ describe("data route planning", () => {
 			["lower-a", [0, 200]],
 			["lower-b", [460, 200]],
 		]);
-		const routes = planDataRoutes(input, positions);
-		expect(routes).toHaveLength(2);
-		const transfer = required(routes.find((route) => route.from === "upper-a"));
+		const routes = planWireRoutes(input, positions);
+		expect(routes).toHaveLength(4);
+		const transfer = required(
+			routes.find((route) => route.fromPin === "upper-a:out-0"),
+		);
 		expect(transfer.to).toBe("lower-b");
 		expect(transfer.unresolved).toBeUndefined();
 		expectClear(input, positions, transfer);
@@ -346,7 +373,7 @@ describe("data route planning", () => {
 				const actual = computeFlowLayoutDetailed(noisyInput, "routed");
 				expect(actual.positions).toEqual(expected.positions);
 				expect(actual.routing).toEqual(expected.routing);
-				expect(planDataRoutes(noisyInput, expected.positions)).toEqual(
+				expect(planWireRoutes(noisyInput, expected.positions)).toEqual(
 					required(expected.routing).routes,
 				);
 			}
@@ -364,12 +391,12 @@ describe("data route planning", () => {
 			["c", [230, -28]],
 			["d", [460, 122]],
 		]);
-		const routes = planDataRoutes(input, positions);
+		const routes = planWireRoutes(input, positions);
 		const direct = routes.map((route) =>
-			sampleDataRoute(input, positions, { ...route, waypoints: [] }),
+			sampleWireRoute(input, positions, { ...route, waypoints: [] }),
 		);
 		const routed = routes.map((route) =>
-			sampleDataRoute(input, positions, route),
+			sampleWireRoute(input, positions, route),
 		);
 		expect(crossingCount(direct[0], direct[1])).toBeGreaterThan(0);
 		expect(crossingCount(routed[0], routed[1])).toBe(0);
@@ -381,21 +408,27 @@ describe("data route planning", () => {
 		"step",
 		"smoothstep",
 	] as const) {
-		test(`routes a screenshot-style skip edge around the intervening node (${pathType})`, () => {
-			const { input, positions } = skipEdge(pathType);
-			const routes = planDataRoutes(input, positions);
-			expect(routes).toHaveLength(1);
-			expect(routes[0].waypoints).toHaveLength(2);
-			expect(routes[0].unresolved).toBeUndefined();
-			expectClear(input, positions, routes[0]);
-		});
+		for (const kind of ["data", "exec"] as const) {
+			test(`routes ${kind} skip edges around the intervening node (${pathType})`, () => {
+				const { input, positions } = skipEdge(pathType, kind);
+				const routes = planWireRoutes(input, positions);
+				expect(routes).toHaveLength(3);
+				const skip = skipRoute(routes);
+				expect(skip.waypoints).toHaveLength(2);
+				expect(skip.unresolved).toBeUndefined();
+				for (const route of routes) {
+					expectClear(input, positions, route);
+					if (route !== skip) expect(route.waypoints).toEqual([]);
+				}
+			});
+		}
 	}
 	test("leaves a clear connection without reroutes", () => {
 		const graph = new GraphBuilder();
 		graph.pure("a");
 		graph.pure("b");
 		graph.dataLink("a", "b");
-		const routes = planDataRoutes(
+		const routes = planWireRoutes(
 			graph.build(),
 			new Map([
 				["a", [0, 0]],
@@ -427,25 +460,26 @@ describe("data route planning", () => {
 			["e", [230, -28]],
 			["f", [460, 122]],
 		]);
-		const routes = planDataRoutes(input, positions);
-		const execRoute: DataRoute = {
-			from: "e",
-			to: "f",
-			fromPin: "e:exec-out-0",
-			toPin: "f:exec-in",
+		const routes = planWireRoutes(input, positions);
+		expect(routes).toHaveLength(2);
+		const execRoute = required(routes.find((route) => route.from === "e"));
+		const execution = sampleWireRoute(input, positions, {
+			...execRoute,
 			waypoints: [],
-		};
-		const execution = sampleDataRoute(input, positions, execRoute);
-		const baseline = sampleDataRoute(input, positions, {
+		});
+		const baseline = sampleWireRoute(input, positions, {
 			...routes[0],
 			waypoints: [],
 		});
 		expect(crossingCount(baseline, execution)).toBeGreaterThan(0);
 		expect(routes[0].waypoints.length).toBeGreaterThan(0);
 		expect(
-			crossingCount(sampleDataRoute(input, positions, routes[0]), execution),
+			crossingCount(
+				sampleWireRoute(input, positions, routes[0]),
+				sampleWireRoute(input, positions, execRoute),
+			),
 		).toBe(0);
-		expectClear(input, positions, routes[0]);
+		for (const route of routes) expectClear(input, positions, route);
 	});
 	test("handles measured node sizes and measured pin centres", () => {
 		const { input, positions } = skipEdge();
@@ -454,42 +488,44 @@ describe("data route planning", () => {
 			["source:out-0", { x: 150, y: 70 }],
 			["target:in-0", { x: 0, y: 90 }],
 		]);
-		const route = planDataRoutes(input, positions)[0];
-		const samples = sampleDataRoute(input, positions, route);
+		const route = skipRoute(planWireRoutes(input, positions));
+		const samples = sampleWireRoute(input, positions, route);
 		expect(samples[0][0]).toEqual({ x: 150, y: 70 });
 		expect(samples[samples.length - 1][1]).toEqual({ x: 460, y: 90 });
 		expect(route.waypoints.length).toBeGreaterThan(0);
 		expectClear(input, positions, route);
 	});
-	test("keeps scoped routes off unselected nodes and does not route boundary-crossing connections", () => {
-		const { input, positions } = skipEdge();
-		input.only = new Set(["source", "target"]);
-		required(
-			input.layerNodes.find((node) => node.id === "middle"),
-		).coordinates = [230, 0, 0];
-		positions.delete("middle");
-		const routes = planDataRoutes(input, positions);
-		expect(routes).toHaveLength(1);
-		expect(routes[0].waypoints.length).toBeGreaterThan(0);
-		expectClear(input, positions, routes[0]);
-		input.only = new Set(["source"]);
-		expect(planDataRoutes(input, positions)).toEqual([]);
-	});
-	test("respects obstacles outside the logical graph", () => {
-		const { input, positions } = skipEdge();
-		input.obstacles = [{ x: 205, y: 90, width: 200, height: 200 }];
-		const route = planDataRoutes(input, positions)[0];
-		expect(route.unresolved).toBeUndefined();
-		expect(route.waypoints.length).toBeGreaterThan(0);
-		expectClear(input, positions, route);
-	});
-	test("preserves connections when no bounded route clears the obstacles", () => {
-		const { input, positions } = skipEdge();
-		input.obstacles = [{ x: 155, y: -5000, width: 65, height: 10000 }];
-		const route = planDataRoutes(input, positions)[0];
-		expect(route.waypoints).toEqual([]);
-		expect(route.unresolved).toBe(true);
-	});
+	for (const kind of ["data", "exec"] as const) {
+		test(`keeps scoped ${kind} routes off unselected nodes and does not route boundary-crossing connections`, () => {
+			const { input, positions } = skipEdge("default", kind);
+			input.only = new Set(["source", "target"]);
+			required(
+				input.layerNodes.find((node) => node.id === "middle"),
+			).coordinates = [230, 0, 0];
+			positions.delete("middle");
+			const routes = planWireRoutes(input, positions);
+			expect(routes).toHaveLength(1);
+			expect(routes[0].waypoints.length).toBeGreaterThan(0);
+			expectClear(input, positions, routes[0]);
+			input.only = new Set(["source"]);
+			expect(planWireRoutes(input, positions)).toEqual([]);
+		});
+		test(`keeps ${kind} routes off obstacles outside the logical graph`, () => {
+			const { input, positions } = skipEdge("default", kind);
+			input.obstacles = [{ x: 205, y: 90, width: 200, height: 200 }];
+			const route = skipRoute(planWireRoutes(input, positions));
+			expect(route.unresolved).toBeUndefined();
+			expect(route.waypoints.length).toBeGreaterThan(0);
+			expectClear(input, positions, route);
+		});
+		test(`preserves ${kind} connections when no bounded route clears the obstacles`, () => {
+			const { input, positions } = skipEdge("default", kind);
+			input.obstacles = [{ x: 155, y: -5000, width: 65, height: 10000 }];
+			const route = skipRoute(planWireRoutes(input, positions));
+			expect(route.waypoints).toEqual([]);
+			expect(route.unresolved).toBe(true);
+		});
+	}
 	test("preserves manual reroutes and their real pin positions", () => {
 		const graph = new GraphBuilder();
 		const manual = graph.pure("manual");
@@ -501,10 +537,10 @@ describe("data route planning", () => {
 			["manual", [0, 22]],
 			["b", [230, 0]],
 		]);
-		const route = planDataRoutes(input, positions)[0];
+		const route = planWireRoutes(input, positions)[0];
 		expect(route.from).toBe("manual");
 		expect(route.fromPin).toBe("manual:out-0");
-		expect(sampleDataRoute(input, positions, route)[0][0]).toEqual({
+		expect(sampleWireRoute(input, positions, route)[0][0]).toEqual({
 			x: 16,
 			y: 28,
 		});
@@ -524,9 +560,9 @@ describe("data route planning", () => {
 			positions.set(`target-${i}`, [500, i * 80]);
 		}
 		const input = graph.build();
-		const routes = planDataRoutes(input, positions);
+		const routes = planWireRoutes(input, positions);
 		expect(
-			planDataRoutes(
+			planWireRoutes(
 				{ ...input, layerNodes: [...input.layerNodes].reverse() },
 				positions,
 			),
@@ -546,23 +582,31 @@ describe("data route planning", () => {
 			}
 		}
 	});
-	test("backward connections are bounded and any chosen route clears its own endpoint boxes", () => {
-		const graph = new GraphBuilder();
-		graph.pure("a");
-		graph.exec("middle", { dataIns: 4 });
-		graph.pure("b");
-		graph.dataLink("a", "b");
-		const input = graph.build();
-		const positions: Positions = new Map([
-			["a", [460, 0]],
-			["middle", [230, 0]],
-			["b", [0, 0]],
-		]);
-		const route = planDataRoutes(input, positions)[0];
-		expect(route.waypoints.length).toBeLessThanOrEqual(4);
-		if (route.waypoints.length) expectClear(input, positions, route);
-		else expect(route.unresolved).toBe(true);
-	});
+	for (const kind of ["data", "exec"] as const) {
+		test(`backward ${kind} connections are bounded and any chosen route clears its own endpoint boxes`, () => {
+			const graph = new GraphBuilder();
+			if (kind === "exec") graph.exec("a");
+			else graph.pure("a");
+			graph.exec("middle", { dataIns: 4 });
+			if (kind === "exec") {
+				graph.exec("b");
+				graph.execLink("a", "b");
+			} else {
+				graph.pure("b");
+				graph.dataLink("a", "b");
+			}
+			const input = graph.build();
+			const positions: Positions = new Map([
+				["a", [460, 0]],
+				["middle", [230, 0]],
+				["b", [0, 0]],
+			]);
+			const route = planWireRoutes(input, positions)[0];
+			expect(route.waypoints.length).toBeLessThanOrEqual(4);
+			if (route.waypoints.length) expectClear(input, positions, route);
+			else expect(route.unresolved).toBe(true);
+		});
+	}
 	for (const pathType of [
 		"default",
 		"straight",
@@ -592,32 +636,29 @@ describe("data route planning", () => {
 				graph.dataLink(`step-${from}`, `step-${to}`, output, input);
 			const input = graph.build({ edgePathType: pathType });
 			const positions = computeFlowLayout(input);
-			const routes = planDataRoutes(input, positions);
-			expect(routes).toHaveLength(7);
+			const routes = planWireRoutes(input, positions);
+			expect(routes).toHaveLength(13);
+			const dataRoutes = routes.filter((route) =>
+				route.fromPin.includes(":out-"),
+			);
+			expect(dataRoutes).toHaveLength(7);
 			expect(
-				routes.every(
+				dataRoutes.every(
 					(route) => !route.unresolved && route.waypoints.length > 0,
 				),
 			).toBe(true);
 			expect(
-				planDataRoutes(
+				planWireRoutes(
 					{ ...input, layerNodes: [...input.layerNodes].reverse() },
 					positions,
 				),
 			).toEqual(routes);
 			for (const route of routes) expectClear(input, positions, route);
-			const execRoutes: DataRoute[] = Array.from({ length: 6 }, (_, index) => ({
-				from: `step-${index}`,
-				to: `step-${index + 1}`,
-				fromPin: `step-${index}:exec-out-0`,
-				toPin: `step-${index + 1}:exec-in`,
-				waypoints: [],
-			}));
 			const dots = routes.flatMap((route) =>
 				route.waypoints.map((point) => ({ ...point, width: 16, height: 12 })),
 			);
-			for (const route of [...routes, ...execRoutes]) {
-				for (const [a, b] of sampleDataRoute(input, positions, route)) {
+			for (const route of routes) {
+				for (const [a, b] of sampleWireRoute(input, positions, route)) {
 					for (let index = 0; index <= 12; index++) {
 						const point = {
 							x: a.x + ((b.x - a.x) * index) / 12,
@@ -635,7 +676,7 @@ describe("data route planning", () => {
 		);
 		const positions = computeFlowLayout(scenario.input);
 		const started = performance.now();
-		const routes = planDataRoutes(scenario.input, positions);
+		const routes = planWireRoutes(scenario.input, positions);
 		expect(performance.now() - started).toBeLessThan(1000);
 		expect(routes.length).toBeGreaterThan(100);
 		expect(routes.every((route) => route.waypoints.length <= 4)).toBe(true);
@@ -653,7 +694,7 @@ describe("data route planning", () => {
 			positions.set(`b-${i}`, [460, i * 180]);
 		}
 		const started = performance.now();
-		const routes = planDataRoutes(graph.build(), positions);
+		const routes = planWireRoutes(graph.build(), positions);
 		expect(performance.now() - started).toBeLessThan(1500);
 		expect(routes.filter((route) => route.waypoints.length > 0)).toHaveLength(
 			100,

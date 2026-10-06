@@ -17,16 +17,16 @@ use crate::{
 };
 use flow_like_storage::Path;
 
-fn node(id: &str, reroute: bool, layer: Option<&str>) -> Node {
+fn node(id: &str, reroute: bool, layer: Option<&str>, data_type: VariableType) -> Node {
     let mut node = Node::new(if reroute { "reroute" } else { id }, id, "", "Test");
     node.id = id.to_string();
     node.coordinates = Some((0.0, 0.0, 0.0));
     node.layer = layer.map(str::to_string);
     if id != "source" {
-        node.add_input_pin("route_in", "In", "", VariableType::String);
+        node.add_input_pin("route_in", "In", "", data_type.clone());
     }
     if id == "source" || reroute {
-        node.add_output_pin("route_out", "Out", "", VariableType::String);
+        node.add_output_pin("route_out", "Out", "", data_type);
     }
     node.auto_reroute = reroute.then_some(true);
     node
@@ -93,7 +93,7 @@ fn through_wire(commands: Vec<GenericCommand>) -> Vec<GenericCommand> {
     flow_like_types::json::from_slice(&flow_like_types::json::to_vec(&commands).unwrap()).unwrap()
 }
 
-async fn insert_and_remove_chain(layer_id: Option<&str>) {
+async fn insert_and_remove_chain(layer_id: Option<&str>, data_type: VariableType) {
     let state = Arc::new(FlowLikeState::new(
         FlowLikeConfig::new(),
         HTTPClient::new_without_refetch(),
@@ -105,25 +105,37 @@ async fn insert_and_remove_chain(layer_id: Option<&str>) {
             Layer::new(id.into(), "Group".into(), LayerType::Collapsed),
         );
     }
-    let source = node("source", false, layer_id);
-    let mut target = node("target", false, layer_id);
+    let source = node("source", false, layer_id, data_type.clone());
+    let mut target = node("target", false, layer_id, data_type.clone());
     target.coordinates = Some((400.0, 0.0, 0.0));
-    let fanout = node("fanout", false, layer_id);
-    for node in [&source, &target, &fanout] {
+    let execution = data_type == VariableType::Execution;
+    let mut sibling = node(
+        if execution { "source" } else { "fanout" },
+        false,
+        layer_id,
+        data_type.clone(),
+    );
+    sibling.id = "sibling".into();
+    let sibling_wire = if execution {
+        connect(&sibling, &target)
+    } else {
+        connect(&source, &sibling)
+    };
+    for node in [&source, &target, &sibling] {
         board.nodes.insert(node.id.clone(), node.clone());
     }
     board
         .execute_commands(
-            through_wire(vec![connect(&source, &target), connect(&source, &fanout)]),
+            through_wire(vec![connect(&source, &target), sibling_wire]),
             state.clone(),
         )
         .await
-        .expect("initial fanout");
+        .expect("initial sibling connection");
     let direct = topology(&board);
 
-    let mut first = node("first", true, layer_id);
+    let mut first = node("first", true, layer_id, data_type.clone());
     first.coordinates = Some((100.0, 60.0, 0.0));
-    let mut second = node("second", true, layer_id);
+    let mut second = node("second", true, layer_id, data_type);
     second.coordinates = Some((300.0, 60.0, 0.0));
     let inserted = board
         .execute_commands(
@@ -152,15 +164,25 @@ async fn insert_and_remove_chain(layer_id: Option<&str>) {
         .expect("route through two nodes");
     let routed = topology(&board);
     assert_eq!(board.nodes.len(), 5);
-    let output = board.nodes[&source.id]
-        .get_pin_by_name("route_out")
-        .unwrap();
-    assert_eq!(output.connected_to.len(), 2);
-    assert!(
-        output
-            .connected_to
-            .contains(&fanout.get_pin_by_name("route_in").unwrap().id)
-    );
+    if execution {
+        let input = board.nodes[&target.id].get_pin_by_name("route_in").unwrap();
+        assert_eq!(input.depends_on.len(), 2);
+        assert!(
+            input
+                .depends_on
+                .contains(&sibling.get_pin_by_name("route_out").unwrap().id)
+        );
+    } else {
+        let output = board.nodes[&source.id]
+            .get_pin_by_name("route_out")
+            .unwrap();
+        assert_eq!(output.connected_to.len(), 2);
+        assert!(
+            output
+                .connected_to
+                .contains(&sibling.get_pin_by_name("route_in").unwrap().id)
+        );
+    }
     for id in [&first.id, &second.id] {
         assert_eq!(board.nodes[id].layer.as_deref(), layer_id);
         assert_eq!(board.nodes[id].auto_reroute, Some(true));
@@ -211,10 +233,16 @@ async fn insert_and_remove_chain(layer_id: Option<&str>) {
 
 #[flow_like_types::tokio::test]
 async fn auto_reroute_batch_preserves_fanout_and_undo_redo() {
-    insert_and_remove_chain(None).await;
+    insert_and_remove_chain(None, VariableType::String).await;
 }
 
 #[flow_like_types::tokio::test]
 async fn auto_reroute_batch_preserves_layer_and_undo_redo() {
-    insert_and_remove_chain(Some("group")).await;
+    insert_and_remove_chain(Some("group"), VariableType::String).await;
+}
+
+#[flow_like_types::tokio::test]
+async fn auto_reroute_batch_preserves_execution_fanin_and_undo_redo() {
+    insert_and_remove_chain(None, VariableType::Execution).await;
+    insert_and_remove_chain(Some("group"), VariableType::Execution).await;
 }

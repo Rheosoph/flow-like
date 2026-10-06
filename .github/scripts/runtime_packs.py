@@ -73,10 +73,11 @@ LLAMACPP_PACKS = {
                                   "archive": "ubuntu-vulkan-x64",
                                   "files": LINUX_LIBRARIES + X64_CPU_BACKENDS + ("libggml-vulkan.so",),
                                   "bundled": BUNDLED, "fallback": FALLBACK_LIBRARIES + ("libvulkan.so.1",)},
-    # Upstream's arm64 build needs GLIBC_2.38, so CI compiles the pinned commit on ubuntu-22.04-arm.
+    # Upstream's arm64 build needs GLIBC_2.38, so CI compiles the pinned commit on ubuntu-22.04-arm
+    # with these compiler packages; the pack's notices record their exact versions.
     "llamacpp-linux-arm64-cpu": {"target": "aarch64-unknown-linux-gnu", "backend": "cpu", "archive": None,
                                  "files": LINUX_LIBRARIES + ARM64_CPU_BACKENDS, "bundled": BUNDLED,
-                                 "fallback": FALLBACK_LIBRARIES},
+                                 "fallback": FALLBACK_LIBRARIES, "toolchain": ("gcc-14", "g++-14")},
 }
 # The helper finds SwiftPM bundles beside itself and Swift back-deployment libraries in ../lib.
 MLX_ENTRYPOINT = "bin/flow-like-mlx-service"
@@ -261,9 +262,43 @@ def ldd_paths(text):
     return {match.group(1): match.group(2) for match in re.finditer(r"^\s*(\S+) => (/\S+)", text, re.MULTILINE)}
 
 
+def merged_usr_alias(path):
+    """The file's other name on a merged-/usr system, where /lib, /bin and /sbin link into /usr."""
+    text = path.as_posix()
+    return Path(text[len("/usr"):] if text.startswith("/usr/") else f"/usr{text}")
+
+
 def debian_package(path):
-    """The installed Debian package that owns a library file, as `dpkg-query -S` names it."""
-    return tool("dpkg-query", "-S", str(path)).split(":", 1)[0].strip()
+    """The installed package that owns a library file, as `dpkg-query -S` names it (`libgcc-s1:amd64`).
+
+    dpkg finds a file only under the path its package registered, and a merged-/usr runner reaches
+    it under both: libgcc-s1 registers /lib/<triplet>/libgcc_s.so.1, libstdc++6 /usr/lib/<triplet>."""
+    alias = merged_usr_alias(path)
+    for candidate in (path, alias):
+        result = run("dpkg-query", "-S", str(candidate))
+        if not result.returncode:
+            return result.stdout.split(": ", 1)[0].strip()
+    raise ValueError(f"No installed Debian package owns {path} or {alias}: {result.stdout.strip()[-400:]}")
+
+
+def debian_version(package):
+    return tool("dpkg-query", "--show", "--showformat=${Version}", package).strip()
+
+
+def debian_notice(package, names):
+    """A bundled package's copyright notice, titled with the exact version the pack carries."""
+    name = package.split(":", 1)[0]
+    return (f"{name} {debian_version(package)} (Ubuntu package copyright; bundled as {', '.join(names)})",
+            (DEBIAN_DOCS / name / "copyright").read_text())
+
+
+def llamacpp_title(spec):
+    """The llama.cpp notice's title; a pack compiled on the runner also names the compiler packages."""
+    title = f"llama.cpp {LLAMACPP_BUILD} (MIT)"
+    if spec["archive"] is not None:
+        return title
+    compilers = ", ".join(f"{package} {debian_version(package)}" for package in spec["toolchain"])
+    return f"{title}, compiled from {LLAMACPP_COMMIT} with {compilers}"
 
 
 def bundle_host_libraries(stage, spec):
@@ -283,9 +318,7 @@ def bundle_host_libraries(stage, spec):
     for path in staged_files(stage):
         if elf(path) and dynamic_section(tool("readelf", "-d", "--wide", str(path)))[1] != "$ORIGIN":
             tool("patchelf", "--set-rpath", "$ORIGIN", str(path))
-    return [(f"{package} (Ubuntu package copyright; bundled as {', '.join(names)})",
-             (DEBIAN_DOCS / package / "copyright").read_text())
-            for package, names in sorted(packages.items())]
+    return [debian_notice(package, names) for package, names in sorted(packages.items())]
 
 
 def write_notices(stage, notices):
@@ -445,7 +478,7 @@ def llamacpp(pack, source, epoch, output, host=None):
             write(stage / "llama-server", read("llama-server"), 0o755)
             for name in spec["files"]:
                 write(stage / name, read(name))
-            notices = [(f"llama.cpp {LLAMACPP_BUILD} (MIT)", read("LICENSE").decode())]
+            notices = [(llamacpp_title(spec), read("LICENSE").decode())]
         if spec["target"].endswith("-linux-gnu"):
             notices += bundle_host_libraries(stage, spec)
             write_notices(stage, notices)

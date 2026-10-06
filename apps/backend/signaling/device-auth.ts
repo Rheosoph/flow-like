@@ -86,6 +86,25 @@ function rejectAmbiguousJson(segment: string): void {
 
 export type DeviceTransportAdmission = DeviceAdmission & { tokenId: string };
 
+/** Renew a socket's lease without changing its routing or account budget. */
+export function validateDeviceRenewal(
+	previous: DeviceTransportAdmission,
+	next: DeviceTransportAdmission,
+	now = Date.now(),
+): void {
+	if (
+		previous.expiresAtMs <= now ||
+		next.expiresAtMs <= previous.expiresAtMs ||
+		next.tokenId === previous.tokenId ||
+		next.deviceId !== previous.deviceId ||
+		next.deviceAuthEpoch !== previous.deviceAuthEpoch ||
+		next.participantId !== previous.participantId ||
+		next.role !== previous.role ||
+		next.subject !== previous.subject
+	)
+		throw new RealtimeAuthError();
+}
+
 /** Transport admission conveys no authority to decrypt or execute management requests. */
 export async function createDeviceAuthenticator(config: RealtimeAuthConfig) {
 	const verificationKey = config.insecureLocalDev

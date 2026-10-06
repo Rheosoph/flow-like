@@ -29,7 +29,7 @@ const MAX_BODY_SIZE: usize = 512 * 1024; // 512 KB
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn parse_og_tags(html: &str) -> OgMetadata {
-    let html_lower = html.to_lowercase();
+    let html_lower = html.to_ascii_lowercase();
 
     // Collect all <meta ...> tags as (lowercase_tag, original_tag) pairs
     let meta_tags: Vec<(&str, &str)> = {
@@ -212,8 +212,8 @@ pub async fn fetch_og_metadata(
     }
 
     let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(REQUEST_TIMEOUT)
         .user_agent("Mozilla/5.0 (compatible; FlowLikeBot/1.0)")
         .build()
         .map_err(|e| ApiError::internal(format!("HTTP client error: {e}")))?;
@@ -248,19 +248,11 @@ pub async fn fetch_og_metadata(
         }));
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| ApiError::bad_gateway(format!("Failed to read body: {}", e.without_url())))?;
-
-    let body = if bytes.len() > MAX_BODY_SIZE {
-        String::from_utf8_lossy(&bytes[..MAX_BODY_SIZE]).into_owned()
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
-    };
+    let bytes = crate::http_bounds::read_prefix(response, MAX_BODY_SIZE).await?;
+    let body = String::from_utf8_lossy(&bytes);
 
     // Stop at </head> to avoid parsing the full body
-    let head_section = if let Some(pos) = body.to_lowercase().find("</head") {
+    let head_section = if let Some(pos) = body.to_ascii_lowercase().find("</head") {
         &body[..pos]
     } else {
         &body
@@ -272,6 +264,52 @@ pub async fn fetch_og_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn intranet_previews_keep_working_without_reading_the_full_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+                .await.unwrap();
+            let mut prefix = b"<head><title>Internal dashboard</title></head>".to_vec();
+            prefix.resize(MAX_BODY_SIZE, b' ');
+            socket
+                .write_all(format!("{:x}\r\n", prefix.len()).as_bytes())
+                .await
+                .unwrap();
+            socket.write_all(&prefix).await.unwrap();
+            socket.write_all(b"\r\n").await.unwrap();
+            // The response never finishes. Preview parsing must stop at its existing prefix limit.
+            std::future::pending::<()>().await;
+        });
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            fetch_og_metadata(Query(OgQuery {
+                url: format!("http://{address}/dashboard"),
+            })),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.title.as_deref(), Some("Internal dashboard"));
+        server.abort();
+    }
+
+    #[test]
+    fn unicode_content_preserves_html_byte_offsets() {
+        let metadata = parse_og_tags(
+            "<title>İstanbul</title><meta property=\"og:description\" content=\"İ\">",
+        );
+        assert_eq!(metadata.title.as_deref(), Some("İstanbul"));
+        assert_eq!(metadata.description.as_deref(), Some("İ"));
+    }
 
     #[test]
     fn parses_standard_og_tags() {
@@ -351,21 +389,23 @@ mod tests {
 
     #[tokio::test]
     async fn extracts_og_from_flow_like_com() {
+        let parsed = reqwest::Url::parse("https://flow-like.com").expect("public URL");
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(5))
             .timeout(std::time::Duration::from_secs(10))
             .user_agent("Mozilla/5.0 (compatible; FlowLikeBot/1.0)")
             .build()
             .expect("client");
 
         let resp = client
-            .get("https://flow-like.com")
+            .get(parsed)
             .header("Accept", "text/html")
             .send()
             .await
             .expect("request failed");
 
         let body = resp.text().await.expect("body");
-        let head = if let Some(pos) = body.to_lowercase().find("</head") {
+        let head = if let Some(pos) = body.to_ascii_lowercase().find("</head") {
             &body[..pos]
         } else {
             &body

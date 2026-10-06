@@ -776,8 +776,8 @@ export function TelegramConfig({
 								)}
 								<p className="text-xs text-muted-foreground">
 									{t(
-										"prefixForBotCommandsDefault",
-										"Prefix for bot commands (default: /)",
+										"prefixForBotCommandsEgStart",
+										"Prefix for bot commands (e.g., /start)",
 									)}
 								</p>
 								<BotAnswersLine

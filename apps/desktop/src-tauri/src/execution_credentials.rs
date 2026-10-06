@@ -325,6 +325,14 @@ pub(crate) fn session_binding(hub: &str, subject: &str) -> Option<(String, Strin
     })
 }
 
+/// The (hub, subject) the webview's session is signed in as, unless it was revoked.
+pub(crate) fn webview_account(webview: &str) -> Option<(String, String)> {
+    let sessions = SESSIONS.lock().ok()?;
+    let session = sessions.bridges.get(webview)?.authority.as_ref()?;
+    (!session.revoked.load(Ordering::Acquire))
+        .then(|| (session.hub.clone(), session.subject.clone()))
+}
+
 pub(crate) fn open_session(window: &str, webview: &str) -> Result<String, String> {
     SESSIONS
         .lock()
@@ -471,6 +479,7 @@ impl DesktopAuthorizer {
                 ) && (path == format!("/apps/{}", self.project)
                     || path.starts_with(&format!("/apps/{}/", self.project)))
             }
+            ResourceAudience::DeviceModels => false,
         };
         if !allowed {
             return Err(AuthorizationError::InvalidRequest);
@@ -485,10 +494,15 @@ impl RequestAuthorizer for DesktopAuthorizer {
     }
 
     fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
-        (!self.hub.is_empty()).then(|| match audience {
-            ResourceAudience::HostedModels => self.api_base(),
-            ResourceAudience::ProjectApi => format!("{}/apps/{}", self.api_base(), self.project),
-        })
+        (!self.hub.is_empty())
+            .then(|| match audience {
+                ResourceAudience::HostedModels => Some(self.api_base()),
+                ResourceAudience::ProjectApi => {
+                    Some(format!("{}/apps/{}", self.api_base(), self.project))
+                }
+                ResourceAudience::DeviceModels => None,
+            })
+            .flatten()
     }
 
     fn authorize<'a>(&'a self, request: AuthorizationRequest<'a>) -> AuthorizationFuture<'a> {

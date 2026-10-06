@@ -810,7 +810,7 @@ describe("Access › Add people", () => {
 		await click(byRole("button", "Device admin", sheet));
 		expect(
 			inPortal("dialog").querySelector("[data-summary]")?.textContent,
-		).toBe("Device admin · 12 permissions");
+		).toBe("Device admin · 13 permissions");
 		await click(byRole("button", "App", inPortal("dialog")));
 		sheet = inPortal("dialog");
 		for (const capability of [
@@ -834,7 +834,7 @@ describe("Access › Add people", () => {
 			byRole("button", "Device admin", sheet).hasAttribute("disabled"),
 		).toBe(true);
 		expect(sheet.querySelector("[data-summary]")?.textContent).toBe(
-			"Deployer · 9 permissions",
+			"Custom · 10 permissions",
 		);
 		// An app has to be chosen before the step can be left.
 		expect(next(sheet).getAttribute("aria-disabled")).toBe("true");

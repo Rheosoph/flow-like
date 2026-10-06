@@ -11,6 +11,7 @@ mod proof;
 mod recovery;
 mod release;
 mod storage;
+mod tunnel;
 mod wire;
 mod workload;
 
@@ -24,6 +25,7 @@ pub use proof::*;
 pub use recovery::*;
 pub use release::*;
 pub use storage::*;
+pub use tunnel::*;
 pub use wire::*;
 pub use workload::*;
 
@@ -48,3 +50,9 @@ pub type Result<T> = std::result::Result<T, ProtocolError>;
 
 mod artifact;
 pub use artifact::*;
+
+mod models;
+pub use models::*;
+
+mod runtime_pack;
+pub use runtime_pack::*;

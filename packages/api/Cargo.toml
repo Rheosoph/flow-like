@@ -67,6 +67,8 @@ fs4 = "0.8"
 
 # ---- AWS dependencies ----
 aws-config = {workspace = true, optional=true}
+aws-credential-types = { version = "1", optional = true }
+aws-sigv4 = { version = "1", optional = true }
 aws-sdk-sts = {workspace = true, optional=true}
 aws-sdk-cloudwatch = {workspace = true, optional=true}
 aws-sdk-sesv2 = {workspace = true, optional=true}
@@ -127,7 +129,7 @@ default = ["aws", "cognito", "ses", "smtp", "sendgrid"]
 secrets-aws = ["flow-like-secrets/aws"]
 secrets-gcp = ["flow-like-secrets/gcp"]
 secrets-azure = ["flow-like-secrets/azure"]
-aws = ["aws-config", "aws-sdk-sts", "aws-sdk-sns", "aws-sdk-cloudwatch", "flow-like-sinks/aws"]
+aws = ["aws-config", "aws-credential-types", "aws-sigv4", "aws-sdk-sts", "aws-sdk-sns", "aws-sdk-cloudwatch", "flow-like-sinks/aws"]
 azure = [
     "urlencoding",
     "dep:azure_core",
@@ -200,6 +202,7 @@ urlencoding = []
 db-chaos = []
 
 [dev-dependencies]
+sea-orm = { workspace = true, features = ["sqlx-sqlite"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util", "net", "io-util"] }
 dotenv = { workspace = true }
 flow-like-wasm.workspace = true

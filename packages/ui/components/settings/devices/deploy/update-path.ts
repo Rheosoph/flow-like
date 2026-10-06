@@ -335,7 +335,8 @@ export function secretCount(
 	const hosted = plan.services.find(
 		(value) => value.key === service.key,
 	)?.hosted;
-	const token = hosted && draft.endpoint.token !== "keep" ? 1 : 0;
+	const token =
+		hosted && !["keep", "none"].includes(draft.endpoint.token) ? 1 : 0;
 	return typed + botTokensToSave(plan, target.deviceId, service) + token;
 }
 
@@ -635,7 +636,7 @@ function projectedInstalled(
 
 function reviewToken(plan: DeployPlan, item: ReviewTarget): string {
 	const { endpoint } = plan.draft;
-	if (!item.hosted) return "";
+	if (!item.hosted || endpoint.token === "none") return "";
 	if (endpoint.token === "keep")
 		return item.existing?.config.hosting ? "" : PLACEHOLDER_TOKEN;
 	const own = draftTarget(plan, item.target.deviceId)?.over.token;

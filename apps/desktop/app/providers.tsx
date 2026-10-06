@@ -28,6 +28,7 @@ import { Suspense, useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { DesktopAuthProvider } from "../components/auth-provider";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
+import { DeviceModelUnlockProvider } from "../components/device-model-unlock-provider";
 import DownloadNotificationProvider from "../components/download-notification-provider";
 import GlobalAnchorHandler from "../components/global-anchor-component";
 import { IdbMigrationGate } from "../components/idb-migration-gate";
@@ -171,6 +172,7 @@ export function Providers({
 														<DesktopAuthProvider>
 															<Toaster />
 															<PendingInviteRedeemer />
+															<DeviceModelUnlockProvider />
 															<NotificationProvider />
 															<RuntimeVariablesProviderComponent>
 																<ExecutionServiceProvider>

@@ -1563,6 +1563,7 @@ export function UsePageContent({
 							config={parseUint8ArrayToJson(effectiveRouteEvent.config) ?? {}}
 							toolbarRef={headerRef}
 							sidebarRef={sidebarRef}
+							presentation={embedded ? "tile" : "page"}
 						/>
 					</div>
 				);
@@ -1612,6 +1613,7 @@ export function UsePageContent({
 							config={config}
 							toolbarRef={headerRef}
 							sidebarRef={sidebarRef}
+							presentation={embedded ? "tile" : "page"}
 						/>
 					</div>
 				);

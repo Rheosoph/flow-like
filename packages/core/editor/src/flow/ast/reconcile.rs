@@ -311,6 +311,178 @@ impl FlatDocument {
     }
 }
 
+/// Produce a source-only analysis view using the compiler's module and call resolution.
+/// Helpers keep their qualified identity after hoisting, so evidence and repair scoring cannot
+/// confuse same-named functions in different modules. This view is never rendered or applied.
+pub(crate) fn flowscript_analysis_ast(ast: &BoardAst, catalog: &[NodeMetadata]) -> BoardAst {
+    let board = Board::new_detached(None, Default::default());
+    let mut source = ast.clone();
+    normalize_unavailable_anchors(&board, &mut source);
+    let doc = FlatDocument::new(&source, None);
+    let modules = resolve_modules(&board, &doc, None);
+    let mut resolver = StructuralPlanner::new(&board, catalog, None);
+    resolver.interface_schemas = interface_schema_map(&doc.ast);
+    resolver.interfaces = doc.ast.interfaces.clone();
+    resolver.prepare_modules(&modules);
+    resolver.prepare_uses(&doc.ast);
+    resolver.prepare_function_sigs(&doc);
+    resolver.index_qualified_functions();
+
+    let mut result = doc.ast.clone();
+    for (index, function) in result.functions.iter_mut().enumerate() {
+        let key = resolver.declared_function_key(&doc, index);
+        resolver.current_module = key.module.clone();
+        function.name = analysis_function_name(&resolver, &key);
+        analysis_block_calls(&resolver, &mut function.body);
+    }
+    for (index, event) in result.events.iter_mut().enumerate() {
+        resolver.current_module = resolver.declared_event_module(&doc, index);
+        if let Some(path) = resolver
+            .current_module
+            .as_ref()
+            .and_then(|id| resolver.module_name_paths.get(id))
+        {
+            event.event_name = Some(format!(
+                "{}::{}",
+                path.join("::"),
+                event.event_name.as_deref().unwrap_or(&event.name)
+            ));
+        }
+        analysis_block_calls(&resolver, &mut event.body);
+    }
+    for (index, block) in result.detached.iter_mut().enumerate() {
+        resolver.current_module = resolver.scope_module(&doc.detached_scopes[index]);
+        analysis_block_calls(&resolver, block);
+    }
+    result
+}
+
+fn analysis_function_name(resolver: &StructuralPlanner<'_>, key: &FnKey) -> String {
+    match key
+        .module
+        .as_ref()
+        .and_then(|id| resolver.module_name_paths.get(id))
+    {
+        Some(path) => format!("{}::{}", path.join("::"), key.name),
+        None => key.name.clone(),
+    }
+}
+
+fn analysis_call(resolver: &StructuralPlanner<'_>, call: &mut Call) {
+    // Resolve before rewriting nested operands: the compiler may inspect their original names
+    // when selecting an overload. Fold positional arguments into their declared pins as well.
+    if let Ok(resolved) = resolver.resolve_call_target(call) {
+        *call = resolved.call;
+        match resolved.target {
+            CallTarget::Function(key) => {
+                call.display = analysis_function_name(resolver, &key);
+                call.path.clear();
+                call.node_type.clear();
+            }
+            CallTarget::Catalog(metadata) => call.node_type = metadata.name,
+        }
+    }
+    if let Some(receiver) = &mut call.receiver {
+        analysis_expr_calls(resolver, receiver);
+    }
+    for value in &mut call.positional {
+        analysis_expr_calls(resolver, value);
+    }
+    for argument in &mut call.args {
+        analysis_expr_calls(resolver, &mut argument.value);
+    }
+}
+
+fn analysis_expr_calls(resolver: &StructuralPlanner<'_>, expression: &mut Expr) {
+    match expression {
+        Expr::Call(call) => analysis_call(resolver, call),
+        Expr::Field { base, .. } | Expr::Member { base, .. } => analysis_expr_calls(resolver, base),
+        Expr::Object(fields) => {
+            for field in fields {
+                analysis_expr_calls(resolver, &mut field.value);
+            }
+        }
+        Expr::Array(items) => {
+            for item in items {
+                analysis_expr_calls(resolver, item);
+            }
+        }
+        Expr::Index { base, index } => {
+            analysis_expr_calls(resolver, base);
+            analysis_expr_calls(resolver, index);
+        }
+        Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            analysis_expr_calls(resolver, cond);
+            analysis_expr_calls(resolver, then);
+            analysis_expr_calls(resolver, otherwise);
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            analysis_expr_calls(resolver, lhs);
+            analysis_expr_calls(resolver, rhs);
+        }
+        Expr::Template { parts } => {
+            for part in parts {
+                if let TemplatePart::Expr(expression) = part {
+                    analysis_expr_calls(resolver, expression);
+                }
+            }
+        }
+        Expr::Ref(_) | Expr::Literal(_) => {}
+    }
+}
+
+fn analysis_block_calls(resolver: &StructuralPlanner<'_>, block: &mut Block) {
+    for statement in &mut block.stmts {
+        match statement {
+            Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
+                analysis_call(resolver, call);
+            }
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                ..
+            } => {
+                analysis_call(resolver, call);
+                if let Some(condition) = condition {
+                    analysis_expr_calls(resolver, condition);
+                }
+                for arm in arms {
+                    analysis_block_calls(resolver, &mut arm.body);
+                }
+            }
+            Stmt::Loop {
+                call,
+                iterable,
+                body,
+                ..
+            } => {
+                analysis_call(resolver, call);
+                if let Some(iterable) = iterable {
+                    analysis_expr_calls(resolver, iterable);
+                }
+                analysis_block_calls(resolver, body);
+            }
+            Stmt::Assign { value, .. }
+            | Stmt::FieldAssign { value, .. }
+            | Stmt::LocalAlias { value, .. } => {
+                analysis_expr_calls(resolver, value);
+            }
+            Stmt::Return { values, .. } => {
+                for value in values {
+                    analysis_expr_calls(resolver, value);
+                }
+            }
+            Stmt::Handler(event) => analysis_block_calls(resolver, &mut event.body),
+            Stmt::Local(_) | Stmt::Comment(_) => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AuthoredNodeScope {
     Existing(Option<String>),

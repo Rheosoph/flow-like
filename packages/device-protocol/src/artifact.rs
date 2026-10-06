@@ -1,7 +1,8 @@
-use crate::{ProtocolError, Result};
-use serde::{Deserialize, Serialize};
+use crate::{ModelAssetDescriptor, ProtocolError, Result};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
 
 pub const PROJECT_ARTIFACT_CHUNK_BYTES: usize = 8192;
@@ -629,5 +630,535 @@ impl ProjectPackagePin {
         validate_artifact_digest(&self.wasm_sha256)?;
         validate_artifact_digest(&self.manifest_sha256)?;
         Ok(())
+    }
+}
+
+pub const PACKAGED_BIT_METADATA_MAX_BYTES: u64 = 16 * 1024 * 1024;
+pub const PACKAGED_BIT_MAX_DEPENDENCIES: usize = 2048;
+/// Artifact files and model-store assets of one packaged Bit together.
+pub const PACKAGED_BIT_MAX_FILES: usize = 2048;
+
+/// One model-store file of a packaged Bit. A Bit with several entries lists its parts in load
+/// order, and the first carries the Bit's own `file_name`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackagedBitAsset {
+    pub bit_id: String,
+    pub descriptor: ModelAssetDescriptor,
+}
+
+/// The `"version": 2` of Bit metadata v2.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u32", into = "u32")]
+pub struct PackagedBitMetadataVersion2;
+
+impl TryFrom<u32> for PackagedBitMetadataVersion2 {
+    type Error = ProtocolError;
+
+    fn try_from(version: u32) -> Result<Self> {
+        if version != 2 {
+            return Err(ProtocolError::Invalid("packaged Bit metadata version"));
+        }
+        Ok(Self)
+    }
+}
+
+impl From<PackagedBitMetadataVersion2> for u32 {
+    fn from(_: PackagedBitMetadataVersion2) -> Self {
+        2
+    }
+}
+
+/// Every Bit file travels in the artifact.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackagedBitMetadataV1 {
+    pub bit: Value,
+    pub dependencies: Vec<Value>,
+    pub artifacts: Vec<ProjectArtifactFile>,
+}
+
+/// The device acquires `assets` into its model store itself; small files may still travel in
+/// the artifact as `artifacts`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackagedBitMetadataV2 {
+    pub version: PackagedBitMetadataVersion2,
+    pub bit: Value,
+    #[serde(default)]
+    pub dependencies: Vec<Value>,
+    pub assets: Vec<PackagedBitAsset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ProjectArtifactFile>,
+}
+
+/// `bits/metadata/<bit_id>.json` of a project artifact, pinned by
+/// `ProjectBitPin.metadata_sha256`. v1 has no `version` field. Bits stay JSON here, and every
+/// Bit with a `file_name` has one file location, `bits/<hash>/<file_name>`, whose bytes are an
+/// artifact file or, in v2, model-store assets.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "Map<String, Value>")]
+pub enum PackagedBitMetadata {
+    V1(PackagedBitMetadataV1),
+    V2(PackagedBitMetadataV2),
+}
+
+impl TryFrom<Map<String, Value>> for PackagedBitMetadata {
+    type Error = serde_json::Error;
+
+    fn try_from(fields: Map<String, Value>) -> std::result::Result<Self, Self::Error> {
+        if fields.contains_key("version") {
+            serde_json::from_value(Value::Object(fields)).map(Self::V2)
+        } else {
+            serde_json::from_value(Value::Object(fields)).map(Self::V1)
+        }
+    }
+}
+
+impl Serialize for PackagedBitMetadata {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::V1(metadata) => metadata.serialize(serializer),
+            Self::V2(metadata) => metadata.serialize(serializer),
+        }
+    }
+}
+
+/// The file location a packaged Bit names.
+struct BitFile {
+    id: Option<String>,
+    path: String,
+    file_name: String,
+    size: Option<u64>,
+}
+
+fn bit_file(bit: &Value) -> Result<Option<BitFile>> {
+    let Some(name) = bit.get("file_name").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let file_name = name
+        .as_str()
+        .ok_or(ProtocolError::Invalid("packaged Bit file name"))?;
+    let path = format!("bits/{}/{file_name}", bit_hash(bit)?);
+    validate_artifact_relative_path(&path)?;
+    Ok(Some(BitFile {
+        id: bit.get("id").and_then(Value::as_str).map(str::to_owned),
+        path,
+        file_name: file_name.to_owned(),
+        size: bit_size(bit)?,
+    }))
+}
+
+/// The directory of a Bit's file; `metadata` and `deps-cache` belong to the Bit store.
+fn bit_hash(bit: &Value) -> Result<&str> {
+    let hash = bit
+        .get("hash")
+        .and_then(Value::as_str)
+        .ok_or(ProtocolError::Invalid("packaged Bit file hash"))?;
+    if hash.contains('/') || hash == "metadata" || hash == "deps-cache" {
+        return Err(ProtocolError::Invalid("packaged Bit file path"));
+    }
+    Ok(hash)
+}
+
+fn bit_size(bit: &Value) -> Result<Option<u64>> {
+    bit.get("size")
+        .filter(|value| !value.is_null())
+        .map(|size| {
+            size.as_u64()
+                .ok_or(ProtocolError::Invalid("packaged Bit file size"))
+        })
+        .transpose()
+}
+
+/// The Bit each asset belongs to, by id; an id that two file-backed Bits share owns nothing.
+fn asset_owners(files: &[BitFile]) -> HashMap<&str, Option<&BitFile>> {
+    let mut owners = HashMap::new();
+    for file in files {
+        if let Some(id) = &file.id {
+            owners
+                .entry(id.as_str())
+                .and_modify(|owner| *owner = None)
+                .or_insert(Some(file));
+        }
+    }
+    owners
+}
+
+fn validate_parts(file: &BitFile, parts: &[&ModelAssetDescriptor]) -> Result<()> {
+    if parts
+        .first()
+        .is_some_and(|first| first.file_name != file.file_name)
+    {
+        return Err(ProtocolError::Invalid(
+            "first model asset of a packaged Bit has another file name",
+        ));
+    }
+    for (index, part) in parts.iter().enumerate() {
+        if parts[..index]
+            .iter()
+            .any(|earlier| earlier.file_name == part.file_name || earlier.digest == part.digest)
+        {
+            return Err(ProtocolError::Invalid(
+                "duplicate model asset of a packaged Bit",
+            ));
+        }
+    }
+    if let [single] = parts
+        && file.size.is_some_and(|size| size != single.size)
+    {
+        return Err(ProtocolError::Invalid(
+            "model asset size differs from its packaged Bit",
+        ));
+    }
+    Ok(())
+}
+
+/// The ids of the Bits whose bytes are model-store assets.
+fn asset_backed(assets: &[PackagedBitAsset], files: &[BitFile]) -> Result<HashSet<String>> {
+    let owners = asset_owners(files);
+    let mut parts: HashMap<&str, Vec<&ModelAssetDescriptor>> = HashMap::new();
+    for asset in assets {
+        asset.descriptor.validate()?;
+        if !matches!(owners.get(asset.bit_id.as_str()), Some(Some(_))) {
+            return Err(ProtocolError::Invalid(
+                "model asset of an unknown or ambiguous packaged Bit",
+            ));
+        }
+        parts
+            .entry(asset.bit_id.as_str())
+            .or_default()
+            .push(&asset.descriptor);
+    }
+    for (id, descriptors) in &parts {
+        if let Some(Some(file)) = owners.get(id) {
+            validate_parts(file, descriptors)?;
+        }
+    }
+    Ok(parts.into_keys().map(str::to_owned).collect())
+}
+
+/// Locations whose bytes travel as artifact files, with the size their Bits declare.
+fn artifact_locations(
+    files: &[BitFile],
+    stored: &HashSet<String>,
+) -> Result<BTreeMap<String, Option<u64>>> {
+    let mut expected = BTreeMap::new();
+    let mut store_paths = HashSet::new();
+    for file in files {
+        if file.id.as_ref().is_some_and(|id| stored.contains(id)) {
+            store_paths.insert(file.path.as_str());
+            continue;
+        }
+        if let Some(previous) = expected.insert(file.path.clone(), file.size)
+            && previous != file.size
+        {
+            return Err(ProtocolError::Invalid(
+                "conflicting packaged Bit file sizes",
+            ));
+        }
+    }
+    if expected
+        .keys()
+        .any(|path| store_paths.contains(path.as_str()))
+    {
+        return Err(ProtocolError::Invalid(
+            "packaged Bit file listed as an artifact and as model assets",
+        ));
+    }
+    Ok(expected)
+}
+
+fn validate_packaged_artifacts(
+    artifacts: &[ProjectArtifactFile],
+    expected: &BTreeMap<String, Option<u64>>,
+) -> Result<()> {
+    if artifacts.len() != expected.len() {
+        return Err(ProtocolError::Invalid(
+            "packaged Bit artifacts differ from its files",
+        ));
+    }
+    let mut seen = HashSet::new();
+    for file in artifacts {
+        let size = expected
+            .get(&file.path)
+            .ok_or(ProtocolError::Invalid("unselected packaged Bit artifact"))?;
+        validate_artifact_digest(&file.sha256)?;
+        if size.is_some_and(|size| size != file.size)
+            || file.size > PROJECT_ARTIFACT_MAX_FILE_BYTES
+            || !seen.insert(file.path.as_str())
+        {
+            return Err(ProtocolError::Invalid(
+                "packaged Bit artifact size or identity",
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl PackagedBitMetadata {
+    pub fn bit(&self) -> &Value {
+        match self {
+            Self::V1(metadata) => &metadata.bit,
+            Self::V2(metadata) => &metadata.bit,
+        }
+    }
+
+    pub fn dependencies(&self) -> &[Value] {
+        match self {
+            Self::V1(metadata) => &metadata.dependencies,
+            Self::V2(metadata) => &metadata.dependencies,
+        }
+    }
+
+    /// Files whose bytes travel in the artifact.
+    pub fn artifacts(&self) -> &[ProjectArtifactFile] {
+        match self {
+            Self::V1(metadata) => &metadata.artifacts,
+            Self::V2(metadata) => &metadata.artifacts,
+        }
+    }
+
+    /// Files the device acquires into its model store; v1 names none.
+    pub fn assets(&self) -> &[PackagedBitAsset] {
+        match self {
+            Self::V1(_) => &[],
+            Self::V2(metadata) => &metadata.assets,
+        }
+    }
+
+    /// The root Bit is `bit_id`, and every Bit file is listed exactly once: as one artifact
+    /// file, or as one or more model-store assets.
+    pub fn validate(&self, bit_id: &str) -> Result<()> {
+        if self.bit().get("id").and_then(Value::as_str) != Some(bit_id) {
+            return Err(ProtocolError::Invalid("packaged Bit identity"));
+        }
+        if self.dependencies().len() > PACKAGED_BIT_MAX_DEPENDENCIES {
+            return Err(ProtocolError::Invalid("packaged Bit dependency count"));
+        }
+        if self.artifacts().len() + self.assets().len() > PACKAGED_BIT_MAX_FILES {
+            return Err(ProtocolError::Invalid("packaged Bit file count"));
+        }
+        let mut files = Vec::new();
+        for bit in std::iter::once(self.bit()).chain(self.dependencies()) {
+            files.extend(bit_file(bit)?);
+        }
+        let stored = asset_backed(self.assets(), &files)?;
+        validate_packaged_artifacts(self.artifacts(), &artifact_locations(&files, &stored)?)
+    }
+}
+
+#[cfg(test)]
+mod packaged_bit_tests {
+    use super::*;
+    use crate::{DigestAlgorithm, ModelAssetDigest};
+    use serde_json::json;
+
+    fn descriptor(fill: char, file_name: &str, size: u64) -> ModelAssetDescriptor {
+        ModelAssetDescriptor {
+            digest: ModelAssetDigest {
+                algorithm: DigestAlgorithm::Blake3,
+                hex: fill.to_string().repeat(64),
+            },
+            size,
+            file_name: file_name.into(),
+            sources: vec!["https://cdn.flow-like.com/bits/model".into()],
+        }
+    }
+
+    fn asset(bit_id: &str, fill: char, file_name: &str, size: u64) -> PackagedBitAsset {
+        PackagedBitAsset {
+            bit_id: bit_id.into(),
+            descriptor: descriptor(fill, file_name, size),
+        }
+    }
+
+    fn artifact(path: &str, size: u64) -> ProjectArtifactFile {
+        ProjectArtifactFile {
+            path: path.into(),
+            size,
+            sha256: artifact_sha256(path.as_bytes()),
+        }
+    }
+
+    /// A model whose weights are a model-store asset and whose tokenizer is an artifact file.
+    fn v2() -> PackagedBitMetadataV2 {
+        PackagedBitMetadataV2 {
+            version: PackagedBitMetadataVersion2,
+            bit: json!({"id": "model", "hash": "weights-hash", "file_name": "model.gguf",
+                        "size": 4096, "dependencies": ["tokenizer"]}),
+            dependencies: vec![json!({"id": "tokenizer", "hash": "tokenizer-hash",
+                                      "file_name": "tokenizer.json", "size": 12})],
+            assets: vec![asset("model", 'a', "model.gguf", 4096)],
+            artifacts: vec![artifact("bits/tokenizer-hash/tokenizer.json", 12)],
+        }
+    }
+
+    fn checked(metadata: PackagedBitMetadataV2) -> Result<()> {
+        PackagedBitMetadata::V2(metadata).validate("model")
+    }
+
+    #[test]
+    fn versions_are_told_apart_by_the_version_field_and_round_trip() {
+        let v1 = json!({"bit": {"id": "model", "hash": "h", "file_name": "model.bin", "size": 7},
+                        "dependencies": [],
+                        "artifacts": [{"path": "bits/h/model.bin", "size": 7,
+                                       "sha256": artifact_sha256(b"weights")}]});
+        let parsed: PackagedBitMetadata = serde_json::from_value(v1.clone()).unwrap();
+        assert!(matches!(parsed, PackagedBitMetadata::V1(_)));
+        assert!(parsed.assets().is_empty());
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), v1);
+        parsed.validate("model").unwrap();
+
+        let wire = serde_json::to_value(PackagedBitMetadata::V2(v2())).unwrap();
+        assert_eq!(wire["version"], 2);
+        let parsed: PackagedBitMetadata = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(parsed, PackagedBitMetadata::V2(v2()));
+        assert_eq!(parsed.assets().len(), 1);
+        parsed.validate("model").unwrap();
+
+        let mut only_assets = v2();
+        only_assets.artifacts.clear();
+        only_assets.dependencies.clear();
+        let mut wire = serde_json::to_value(PackagedBitMetadata::V2(only_assets)).unwrap();
+        assert!(wire.get("artifacts").is_none());
+        assert!(serde_json::from_value::<PackagedBitMetadata>(wire.clone()).is_ok());
+        wire.as_object_mut().unwrap().remove("dependencies");
+        let without_dependencies: PackagedBitMetadata = serde_json::from_value(wire).unwrap();
+        without_dependencies.validate("model").unwrap();
+
+        for refused in [
+            json!({"version": 1, "bit": {}, "dependencies": [], "assets": []}),
+            json!({"version": 3, "bit": {}, "dependencies": [], "assets": []}),
+            json!({"version": "2", "bit": {}, "dependencies": [], "assets": []}),
+            json!({"version": 2, "bit": {}, "dependencies": []}),
+            json!({"version": 2, "bit": {}, "dependencies": [], "assets": [], "extra": 1}),
+            json!({"bit": {}, "dependencies": [], "artifacts": [], "assets": []}),
+            json!({"bit": {}, "dependencies": []}),
+            json!({"dependencies": [], "artifacts": []}),
+        ] {
+            assert!(
+                serde_json::from_value::<PackagedBitMetadata>(refused.clone()).is_err(),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_lists_every_file_as_an_artifact_exactly_once() {
+        let metadata = |artifacts: Value| {
+            serde_json::from_value::<PackagedBitMetadata>(json!({
+                "bit": {"id": "model", "hash": "h", "file_name": "model.bin", "size": 7},
+                "dependencies": [{"id": "projector", "hash": "p", "file_name": "mmproj.gguf"}],
+                "artifacts": artifacts,
+            }))
+            .unwrap()
+        };
+        let weights =
+            json!({"path": "bits/h/model.bin", "size": 7, "sha256": artifact_sha256(b"w")});
+        let projector =
+            json!({"path": "bits/p/mmproj.gguf", "size": 3, "sha256": artifact_sha256(b"p")});
+        metadata(json!([weights, projector]))
+            .validate("model")
+            .unwrap();
+        assert!(
+            metadata(json!([weights, projector]))
+                .validate("other")
+                .is_err()
+        );
+        assert!(metadata(json!([weights])).validate("model").is_err());
+        assert!(
+            metadata(json!([weights, weights]))
+                .validate("model")
+                .is_err()
+        );
+        let mut resized = weights.clone();
+        resized["size"] = json!(8);
+        assert!(
+            metadata(json!([resized, projector]))
+                .validate("model")
+                .is_err()
+        );
+        let mut elsewhere = projector.clone();
+        elsewhere["path"] = json!("bits/other/mmproj.gguf");
+        assert!(
+            metadata(json!([weights, elsewhere]))
+                .validate("model")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v2_names_store_assets_and_small_artifacts_for_every_bit_file() {
+        checked(v2()).unwrap();
+
+        let mut stored_tokenizer = v2();
+        stored_tokenizer.artifacts.clear();
+        stored_tokenizer
+            .assets
+            .push(asset("tokenizer", 'c', "tokenizer.json", 12));
+        checked(stored_tokenizer).unwrap();
+
+        let mut split = v2();
+        split.bit["file_name"] = json!("qwen-00001-of-00002.gguf");
+        split.bit["size"] = Value::Null;
+        split.assets = vec![
+            asset("model", 'a', "qwen-00001-of-00002.gguf", 4096),
+            asset("model", 'b', "qwen-00002-of-00002.gguf", 2048),
+        ];
+        checked(split.clone()).unwrap();
+        split.assets.swap(0, 1);
+        assert!(checked(split.clone()).is_err(), "first part names the Bit");
+        split.assets.swap(0, 1);
+        split.assets[1].descriptor.digest = split.assets[0].descriptor.digest.clone();
+        assert!(checked(split).is_err(), "parts are distinct");
+    }
+
+    #[test]
+    fn v2_refuses_files_listed_twice_nowhere_or_unsafely() {
+        let mut resized = v2();
+        resized.assets[0].descriptor.size = 4097;
+        assert!(checked(resized).is_err());
+
+        let mut unknown = v2();
+        unknown
+            .assets
+            .push(asset("missing", 'd', "model.gguf", 4096));
+        assert!(checked(unknown).is_err());
+
+        let mut unlisted = v2();
+        unlisted.artifacts.clear();
+        assert!(
+            checked(unlisted).is_err(),
+            "the tokenizer is listed nowhere"
+        );
+
+        let mut twice = v2();
+        twice
+            .artifacts
+            .push(artifact("bits/weights-hash/model.gguf", 4096));
+        assert!(
+            checked(twice).is_err(),
+            "weights are an asset and an artifact"
+        );
+
+        let mut ambiguous = v2();
+        ambiguous
+            .dependencies
+            .push(json!({"id": "model", "hash": "x", "file_name": "model.gguf"}));
+        assert!(checked(ambiguous).is_err());
+
+        let mut insecure = v2();
+        insecure.assets[0].descriptor.sources = vec!["http://cdn.flow-like.com/model".into()];
+        assert!(checked(insecure).is_err());
+
+        let mut traversal = v2();
+        traversal.bit["file_name"] = json!("../model.gguf");
+        traversal.assets[0].descriptor.file_name = "../model.gguf".into();
+        assert!(checked(traversal).is_err());
+
+        let mut renamed = v2();
+        renamed.bit["id"] = json!("other");
+        assert!(checked(renamed).is_err());
     }
 }

@@ -40,7 +40,108 @@ use std::sync::Arc;
 use std::time::Duration;
 use utoipa::ToSchema;
 
-use flow_like_wasm_schema::runtime::WASMTIME_MAJOR_VERSION;
+use flow_like_wasm_schema::runtime::{
+    WASMTIME_MAJOR_VERSION, artifact_platform_key, current_artifact_platform, portable_target,
+};
+
+struct StagedArtifact {
+    file: flow_like_storage::files::bounded::StagedObject,
+    size: u64,
+    prefix: [u8; 4],
+    blake3: String,
+    sha256: String,
+}
+
+async fn stage_artifact(
+    data: flow_like_storage::object_store::GetResult,
+) -> flow_like_types::Result<StagedArtifact> {
+    let mut file = flow_like_storage::files::bounded::spool_object(data).await?;
+    flow_like_types::tokio::task::spawn_blocking(move || {
+        use sha2::Digest;
+        use std::io::{Read, Seek};
+
+        let mut blake3 = blake3::Hasher::new();
+        let mut sha256 = sha2::Sha256::new();
+        let mut prefix = [0; 4];
+        let mut size = 0_u64;
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            if size < 4 {
+                let start = size as usize;
+                let length = count.min(4 - start);
+                prefix[start..start + length].copy_from_slice(&buffer[..length]);
+            }
+            blake3.update(&buffer[..count]);
+            sha256.update(&buffer[..count]);
+            size += count as u64;
+        }
+        file.rewind()?;
+        Ok(StagedArtifact {
+            file,
+            size,
+            prefix,
+            blake3: blake3.finalize().to_hex().to_string(),
+            sha256: hex::encode(sha256.finalize()),
+        })
+    })
+    .await?
+}
+
+async fn upload_artifact_file(
+    store: &FlowLikeStore,
+    path: &Path,
+    file: flow_like_storage::files::bounded::StagedObject,
+) -> flow_like_types::Result<()> {
+    use flow_like_storage::files::bounded::StagedObject;
+    use flow_like_types::tokio::io::AsyncWriteExt;
+    use std::io::{Read, Seek};
+
+    let mut file = match file {
+        StagedObject::Memory(bytes) => {
+            // Memory fallback already owns the whole body. Preserve that allocation
+            // through single PUT, including when bundle readers share its bytes.
+            store
+                .as_generic()
+                .put(path, PutPayload::from(bytes.into_inner()))
+                .await?;
+            return Ok(());
+        }
+        StagedObject::File(file) => file,
+    };
+    file.rewind()?;
+    let mut input = flow_like_types::tokio::fs::File::from_std(file.try_clone()?);
+    let mut writer =
+        flow_like_storage::object_store::buffered::BufWriter::new(store.as_generic(), path.clone())
+            .with_max_concurrency(2);
+    let result = async {
+        flow_like_types::tokio::io::copy(&mut input, &mut writer).await?;
+        writer.shutdown().await
+    }
+    .await;
+    if result.is_ok() {
+        return Ok(());
+    }
+    let _ = writer.abort().await;
+    drop(input);
+    // Some custom stores and existing IAM policies only support single PUT.
+    // Replay the staged source without downloading it again.
+    let bytes = flow_like_types::tokio::task::spawn_blocking(move || -> std::io::Result<_> {
+        file.rewind()?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+    .await??;
+    store
+        .as_generic()
+        .put(path, PutPayload::from(bytes))
+        .await?;
+    Ok(())
+}
 
 /// CDN path prefix for WASM packages
 const WASM_PACKAGES_PATH: &str = "wasm";
@@ -212,6 +313,20 @@ pub fn validate_manifest_widget_bundle(
     manifest: &PackageManifest,
     bundle_bytes: &[u8],
 ) -> flow_like_types::Result<(String, i64)> {
+    validate_manifest_widget_reader(
+        manifest,
+        WidgetBundleReader::new(std::io::Cursor::new(bundle_bytes))?,
+        sha256_hex(bundle_bytes),
+        bundle_bytes.len() as i64,
+    )
+}
+
+fn validate_manifest_widget_reader<R: std::io::Read + std::io::Seek>(
+    manifest: &PackageManifest,
+    mut reader: WidgetBundleReader<R>,
+    actual_hash: String,
+    bundle_size: i64,
+) -> flow_like_types::Result<(String, i64)> {
     if manifest.widgets.is_empty() {
         return Err(flow_like_types::anyhow!(
             "Manifest for '{}' declares no widgets but a widget bundle was provided",
@@ -219,7 +334,6 @@ pub fn validate_manifest_widget_bundle(
         ));
     }
 
-    let actual_hash = sha256_hex(bundle_bytes);
     let declared_hash = manifest
         .widget_bundle_hash
         .as_deref()
@@ -238,7 +352,6 @@ pub fn validate_manifest_widget_bundle(
         ));
     }
 
-    let mut reader = WidgetBundleReader::from_bytes(bundle_bytes.to_vec())?;
     reader.validate().map_err(|errors| {
         flow_like_types::anyhow!("Invalid widget bundle: {}", errors.join("; "))
     })?;
@@ -298,7 +411,7 @@ pub fn validate_manifest_widget_bundle(
         ));
     }
 
-    Ok((actual_hash, bundle_bytes.len() as i64))
+    Ok((actual_hash, bundle_size))
 }
 
 /// Stored widget rows with the declared-only `network` block recomputed, so the
@@ -364,10 +477,25 @@ pub async fn unpack_widget_bundle_to_assets(
     version: &str,
     bundle_bytes: Vec<u8>,
 ) -> flow_like_types::Result<usize> {
+    unpack_widget_bundle_reader(
+        store,
+        package_id,
+        version,
+        WidgetBundleReader::from_bytes(bundle_bytes)?,
+    )
+    .await
+}
+
+async fn unpack_widget_bundle_reader<R: std::io::Read + std::io::Seek + Send + 'static>(
+    store: &FlowLikeStore,
+    package_id: &str,
+    version: &str,
+    mut reader: WidgetBundleReader<R>,
+) -> flow_like_types::Result<usize> {
     fn collect_files(
         root: &std::path::Path,
         dir: &std::path::Path,
-        out: &mut Vec<(String, Vec<u8>)>,
+        out: &mut Vec<(String, std::path::PathBuf)>,
     ) -> flow_like_types::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
@@ -382,38 +510,34 @@ pub async fn unpack_widget_bundle_to_assets(
                     .map(|c| c.as_os_str().to_string_lossy().into_owned())
                     .collect::<Vec<_>>()
                     .join("/");
-                out.push((rel, std::fs::read(&path)?));
+                out.push((rel, path));
             }
         }
         Ok(())
     }
 
-    let entries = flow_like_types::tokio::task::spawn_blocking(
-        move || -> flow_like_types::Result<Vec<(String, Vec<u8>)>> {
+    let (_staging, entries) =
+        flow_like_types::tokio::task::spawn_blocking(move || -> flow_like_types::Result<_> {
             let staging = tempfile::tempdir()?;
             let dest = staging.path().join("bundle");
-            let mut reader = WidgetBundleReader::from_bytes(bundle_bytes)?;
             reader.unpack(&dest)?;
             let mut out = Vec::new();
             collect_files(&dest, &dest, &mut out)?;
-            Ok(out)
-        },
-    )
-    .await??;
+            Ok((staging, out))
+        })
+        .await??;
 
     let base = Path::from(WIDGET_ASSETS_PATH)
         .join(package_id)
         .join(version);
     let mut uploaded = 0usize;
-    for (rel, data) in entries {
+    for (rel, file_path) in entries {
         let mut object_path = base.clone();
         for segment in rel.split('/') {
             object_path = object_path.join(segment);
         }
-        store
-            .as_generic()
-            .put(&object_path, PutPayload::from(data))
-            .await?;
+        let file = std::fs::File::open(file_path)?;
+        upload_artifact_file(store, &object_path, file.into()).await?;
         uploaded += 1;
     }
     Ok(uploaded)
@@ -430,12 +554,7 @@ pub fn with_current_wasmtime_version(existing: Option<Vec<String>>) -> Vec<Strin
 
 /// Build a platform key from OS and architecture strings.
 fn platform_key_for(os: &str, arch: &str) -> String {
-    let arch = if os == "ios" && arch == "aarch64" {
-        "pulley64"
-    } else {
-        arch
-    };
-    format!("{}-{}-wt{}", os, arch, WASMTIME_MAJOR_VERSION)
+    artifact_platform_key(os, arch)
 }
 
 /// Normalize legacy client platform keys to the executable platform we can
@@ -453,36 +572,9 @@ pub fn host_platform_key() -> String {
     platform_key_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
-/// Map `(os, arch)` to a wasmtime target triple for cross-compilation.
-/// Returns `None` when the requested platform matches the current host
-/// (no cross-compilation needed).
+/// Select a portable baseline even when the API and compiler share a host architecture.
 fn target_triple_for(os: &str, arch: &str) -> Option<&'static str> {
-    if os == "ios" {
-        // iOS AOT artifacts must be Pulley bytecode. Native arm64 `.cwasm`
-        // artifacts still contain executable machine code that iOS can reject
-        // at runtime because it is not part of the app's signed code pages.
-        return match arch {
-            "aarch64" | "pulley64" => Some("pulley64"),
-            _ => None,
-        };
-    }
-
-    let host_os = std::env::consts::OS;
-    let host_arch = std::env::consts::ARCH;
-    if os == host_os && arch == host_arch {
-        return None; // host – no cross-compilation required
-    }
-    match (os, arch) {
-        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
-        ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
-        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
-        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
-        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
-        ("windows", "aarch64") => Some("aarch64-pc-windows-msvc"),
-        ("android", "aarch64") => Some("aarch64-linux-android"),
-        ("android", "x86_64") => Some("x86_64-linux-android"),
-        _ => None,
-    }
+    portable_target(os, arch)
 }
 
 /// Lightweight target specification used by the API to enumerate compilation
@@ -494,12 +586,15 @@ pub struct TargetSpec {
     pub cross_triple: Option<String>,
 }
 
-/// The platform key the executor expects.
+/// The artifact platform key the executor expects.
 ///
-/// Read from `EXECUTOR_PLATFORM` (e.g. `linux-x86_64-wt43`).
-/// Falls back to the host platform key when unset.
+/// Read the OS/architecture from `EXECUTOR_PLATFORM` (e.g. `linux-aarch64`)
+/// and derive the artifact version from this API build. Explicit artifact keys
+/// remain supported. Falls back to the host platform key when unset.
 pub fn executor_target_platform() -> String {
-    std::env::var("EXECUTOR_PLATFORM").unwrap_or_else(|_| host_platform_key())
+    current_artifact_platform(
+        &std::env::var("EXECUTOR_PLATFORM").unwrap_or_else(|_| host_platform_key()),
+    )
 }
 
 /// Every platform the system knows how to compile for.
@@ -743,6 +838,12 @@ impl ServerRegistry {
         self
     }
 
+    pub fn compilation_backend(&self) -> Option<&crate::compilation::CompilationBackend> {
+        self.compilation_dispatcher
+            .as_ref()
+            .and_then(|dispatcher| dispatcher.backend())
+    }
+
     /// Get storage path for a WASM package version
     fn wasm_path(package_id: &str, version: &str) -> Path {
         Path::from(WASM_PACKAGES_PATH)
@@ -816,7 +917,6 @@ impl ServerRegistry {
             }))
     }
 
-    /// Get a presigned PUT URL for uploading a WASM binary to temporary storage
     pub async fn get_upload_url(&self, tmp_path: &str) -> flow_like_types::Result<String> {
         let path = Path::from(tmp_path);
         let url = self
@@ -2085,13 +2185,8 @@ impl ServerRegistry {
             submitter_id, manifest.id, manifest.version
         );
         let tmp_object_path = Path::from(tmp_path.as_str());
-        let wasm_data: Option<Vec<u8>> = match self
-            .content_bucket
-            .as_generic()
-            .get(&tmp_object_path)
-            .await
-        {
-            Ok(data) => Some(data.bytes().await?.to_vec()),
+        let wasm_data = match self.content_bucket.as_generic().get(&tmp_object_path).await {
+            Ok(data) => Some(stage_artifact(data).await?),
             Err(_) if !manifest.widgets.is_empty() => None,
             Err(_) => {
                 return Err(flow_like_types::anyhow!(
@@ -2102,19 +2197,16 @@ impl ServerRegistry {
         let has_wasm = wasm_data.is_some();
 
         if let Some(wasm) = &wasm_data
-            && (wasm.len() < 8 || &wasm[0..4] != b"\0asm")
+            && (wasm.size < 8 || &wasm.prefix != b"\0asm")
         {
             return Err(flow_like_types::anyhow!("Invalid WASM binary"));
         }
 
         let hash = wasm_data
             .as_ref()
-            .map(|wasm| blake3::hash(wasm).to_hex().to_string())
+            .map(|wasm| wasm.blake3.clone())
             .unwrap_or_default();
-        let size = wasm_data
-            .as_ref()
-            .map(|wasm| wasm.len() as i64)
-            .unwrap_or(0);
+        let size = wasm_data.as_ref().map(|wasm| wasm.size as i64).unwrap_or(0);
 
         // Check for hash duplicates (non-blocking flag)
         let duplicate_info = if has_wasm {
@@ -2155,32 +2247,39 @@ impl ServerRegistry {
                         "Widget bundle not found at tmp path — upload may have failed. Packages declaring widgets must upload a widget bundle."
                     )
                 })?;
-            let bundle_bytes = bundle_data.bytes().await?.to_vec();
-
-            let (bundle_hash, bundle_size) = {
-                let manifest_for_validation = manifest.clone();
-                let bytes = bundle_bytes.clone();
+            let bundle = stage_artifact(bundle_data).await?;
+            let validation_file = bundle.file.try_clone()?;
+            let manifest_for_validation = manifest.clone();
+            let actual_hash = bundle.sha256;
+            let size = bundle.size as i64;
+            let (bundle_hash, bundle_size) =
                 flow_like_types::tokio::task::spawn_blocking(move || {
-                    validate_manifest_widget_bundle(&manifest_for_validation, &bytes)
+                    validate_manifest_widget_reader(
+                        &manifest_for_validation,
+                        WidgetBundleReader::new(validation_file)?,
+                        actual_hash,
+                        size,
+                    )
                 })
-                .await??
-            };
+                .await??;
 
             let final_bundle_path = Self::widget_bundle_path(&manifest.id, &manifest.version);
-            self.content_bucket
-                .as_generic()
-                .put(&final_bundle_path, PutPayload::from(bundle_bytes.clone()))
-                .await?;
+            upload_artifact_file(
+                &self.content_bucket,
+                &final_bundle_path,
+                bundle.file.try_clone()?,
+            )
+            .await?;
 
             // Unpack into widget-assets/ so the web app can load entries from
             // the CDN. The widget-asset fallback route serves entries straight
             // from the stored bundle, so a failure here degrades performance,
             // not correctness.
-            if let Err(e) = unpack_widget_bundle_to_assets(
+            if let Err(e) = unpack_widget_bundle_reader(
                 &self.content_bucket,
                 &manifest.id,
                 &manifest.version,
-                bundle_bytes,
+                WidgetBundleReader::new(bundle.file)?,
             )
             .await
             {
@@ -2199,10 +2298,7 @@ impl ServerRegistry {
         // Move WASM from tmp to final path
         let final_wasm_path = Self::wasm_path(&manifest.id, &manifest.version);
         if let Some(wasm) = wasm_data {
-            self.content_bucket
-                .as_generic()
-                .put(&final_wasm_path, PutPayload::from(wasm))
-                .await?;
+            upload_artifact_file(&self.content_bucket, &final_wasm_path, wasm.file).await?;
         }
         let stored_wasm_path = if has_wasm {
             final_wasm_path.to_string()
@@ -3166,6 +3262,7 @@ impl PackageWidgetSource for ServerRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like_storage::object_store::ObjectStore;
     use flow_like_wasm_schema::widget::{ContractInput, ContractInputType, WidgetContract};
     use flow_like_wasm_schema::widget_bundle::{BuilderWidget, WidgetBundleBuilder};
     use flow_like_wasm_schema::widget_policy::{
@@ -3755,6 +3852,194 @@ INSERT INTO "AppPackage" (id,"appId","packageId",version,stale,"staleSince") VAL
         );
 
         assert!(validate_manifest_widget_bundle(&manifest, &bytes).is_err());
+    }
+
+    #[derive(Debug, Default)]
+    struct SinglePutStore {
+        inner: flow_like_storage::object_store::memory::InMemory,
+        multipart_attempts: std::sync::atomic::AtomicUsize,
+        put_payload_address: std::sync::atomic::AtomicUsize,
+    }
+
+    impl std::fmt::Display for SinglePutStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("single-put-only")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl flow_like_storage::object_store::ObjectStore for SinglePutStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            options: flow_like_storage::object_store::PutOptions,
+        ) -> flow_like_storage::object_store::Result<flow_like_storage::object_store::PutResult>
+        {
+            self.put_payload_address.store(
+                payload
+                    .iter()
+                    .next()
+                    .map_or(0, |bytes| bytes.as_ptr() as usize),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            self.inner.put_opts(location, payload, options).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            _: &Path,
+            _: flow_like_storage::object_store::PutMultipartOptions,
+        ) -> flow_like_storage::object_store::Result<
+            Box<dyn flow_like_storage::object_store::MultipartUpload>,
+        > {
+            self.multipart_attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(flow_like_storage::object_store::Error::NotSupported {
+                source: Box::new(std::io::Error::from(std::io::ErrorKind::Unsupported)),
+            })
+        }
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: flow_like_storage::object_store::GetOptions,
+        ) -> flow_like_storage::object_store::Result<flow_like_storage::object_store::GetResult>
+        {
+            self.inner.get_opts(location, options).await
+        }
+        fn delete_stream(
+            &self,
+            locations: futures::stream::BoxStream<
+                'static,
+                flow_like_storage::object_store::Result<Path>,
+            >,
+        ) -> futures::stream::BoxStream<'static, flow_like_storage::object_store::Result<Path>>
+        {
+            self.inner.delete_stream(locations)
+        }
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> futures::stream::BoxStream<
+            'static,
+            flow_like_storage::object_store::Result<flow_like_storage::object_store::ObjectMeta>,
+        > {
+            self.inner.list(prefix)
+        }
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> flow_like_storage::object_store::Result<flow_like_storage::object_store::ListResult>
+        {
+            self.inner.list_with_delimiter(prefix).await
+        }
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: flow_like_storage::object_store::CopyOptions,
+        ) -> flow_like_storage::object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_artifacts_publish_the_shared_input_allocation_without_multipart() {
+        use flow_like_storage::files::bounded::StagedObject;
+        use std::io::Read;
+        use std::sync::atomic::Ordering;
+
+        let custom = Arc::new(SinglePutStore::default());
+        let store = FlowLikeStore::Other(custom.clone());
+        let bytes = vec![42; 11 * 1024 * 1024];
+        let original_address = bytes.as_ptr() as usize;
+        let expected_hash = blake3::hash(&bytes);
+        let staged = StagedObject::from(bytes);
+        let mut bundle_reader = staged.try_clone().unwrap();
+        let destination = Path::from("wasm/memory.wasm");
+        upload_artifact_file(&store, &destination, staged)
+            .await
+            .unwrap();
+        assert_eq!(
+            custom.put_payload_address.load(Ordering::SeqCst),
+            original_address
+        );
+        assert_eq!(custom.multipart_attempts.load(Ordering::SeqCst), 0);
+        let mut prefix = [0; 4];
+        bundle_reader.read_exact(&mut prefix).unwrap();
+        assert_eq!(prefix, [42; 4]);
+        let published = store
+            .as_generic()
+            .get(&destination)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(blake3::hash(&published), expected_hash);
+    }
+
+    #[tokio::test]
+    async fn stores_without_multipart_keep_supporting_large_artifacts() {
+        use std::io::{Seek, Write};
+        let custom = Arc::new(SinglePutStore::default());
+        let store = FlowLikeStore::Other(custom.clone());
+        let bytes = vec![42; 11 * 1024 * 1024];
+        let mut staged = flow_like_storage::files::bounded::StagedObject::new();
+        staged.write_all(&bytes).unwrap();
+        staged.rewind().unwrap();
+        let destination = Path::from("wasm/single-put.wasm");
+        upload_artifact_file(&store, &destination, staged)
+            .await
+            .unwrap();
+        assert_eq!(
+            custom
+                .multipart_attempts
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            store
+                .as_generic()
+                .get(&destination)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn large_artifact_staging_preserves_bytes_through_multipart_upload() {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let source = Path::from("tmp/large.wasm");
+        let destination = Path::from("wasm/large.wasm");
+        let mut bytes = vec![7; 65 * 1024 * 1024];
+        bytes[..4].copy_from_slice(b"\0asm");
+        let expected_hash = blake3::hash(&bytes).to_hex().to_string();
+        store.as_generic().put(&source, bytes.into()).await.unwrap();
+        let staged = stage_artifact(store.as_generic().get(&source).await.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(staged.size, 65 * 1024 * 1024);
+        assert_eq!(staged.prefix, *b"\0asm");
+        assert_eq!(staged.blake3, expected_hash);
+        upload_artifact_file(&store, &destination, staged.file)
+            .await
+            .unwrap();
+        let published = store
+            .as_generic()
+            .get(&destination)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(blake3::hash(&published).to_hex().to_string(), expected_hash);
     }
 
     #[tokio::test]

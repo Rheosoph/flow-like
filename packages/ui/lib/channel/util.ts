@@ -50,9 +50,23 @@ export function timeoutSignal(
 }
 
 export async function readBodyExcerpt(response: Response): Promise<string> {
+	const reader = response.body?.getReader();
+	if (!reader) return "";
 	try {
-		return bodyExcerpt(await response.text());
+		const decoder = new TextDecoder();
+		let text = "";
+		while (text.length < MAX_ERROR_BODY_CHARS) {
+			const next = await reader.read();
+			if (next.done) break;
+			text += decoder.decode(next.value.subarray(0, 4 * MAX_ERROR_BODY_CHARS), {
+				stream: true,
+			});
+		}
+		return bodyExcerpt(text);
 	} catch {
 		return "";
+	} finally {
+		await reader.cancel().catch(() => {});
+		reader.releaseLock();
 	}
 }

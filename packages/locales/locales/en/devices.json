@@ -78,6 +78,7 @@
 			"signingFailed": "The change couldn't be signed with the owner key of {{device}}. Lock and unlock the device, then try again.",
 			"tooMany": "{{device}} would have more than {{max, number}} people. Remove access you no longer need first.",
 			"unknown": "The hub didn't answer in time. The change may or may not be saved; check the access rules of {{device}} before trying again.",
+			"unknownPermissions": "Someone's access on {{device}} holds a permission a newer version of Flow-Like gave, which this version doesn't know. Update Flow-Like to change these access rules: saving them here would take that permission away. Nothing was saved.",
 			"unverified": "The hub returned access rules for {{device}} that don't check out with your owner key, so nothing was signed. Try again; if it stays, don't change access from this hub.",
 			"wrongPassword": "That password didn't open the owner key of {{device}}. Nothing was saved."
 		},
@@ -3490,6 +3491,8 @@
 			"liveRelayed": "Live · relayed",
 			"liveRelayedTitle": "Relayed through the hub. Both connection kinds are end-to-end encrypted. The connection renews itself every 5 minutes while the keys stay unlocked.",
 			"lockedTitle": "Keys for this device are on this computer but closed. Unlock with the device password.",
+			"models": "Unlocked for models",
+			"modelsTitle": "The desktop app holds this device's keys for your flows' model calls; this window holds none of them. Lock closes them in the app too.",
 			"noneTitle": "This computer has no keys for this device.",
 			"reconnecting": "Reconnecting… keys still unlocked",
 			"stale": "Unusable keys here",
@@ -4813,6 +4816,34 @@
 		"mode": {
 			"offline": "offline copy",
 			"online": "runs online"
+		},
+		"models": {
+			"bytes": "{{done}} of {{total}}",
+			"fail": {
+				"agent": "the device's agent is too old to fetch model files itself",
+				"disk": "the device's model disk has no room for {{file}}",
+				"push": "sending {{file}} from this computer failed",
+				"reply": "the device's answer about its model files was invalid",
+				"stopped": "you stopped sending {{file}}",
+				"unreachable": "the device couldn't download {{file}}, and this version of the app can't send it from here"
+			},
+			"from": "from {{host}}",
+			"left": "{{eta}} left",
+			"progress": "Transfer of {{file}}",
+			"sendFailed": "Sending it from this computer failed: {{error}}",
+			"state": {
+				"checking": "Checking",
+				"downloading": "Device is downloading",
+				"downloadingHere": "Downloading to this computer",
+				"failed": "Failed",
+				"present": "On the device",
+				"relaying": "Downloading through this computer",
+				"sending": "Sending from this computer",
+				"verifying": "Verifying",
+				"waiting": "Waiting"
+			},
+			"stop": "Stop sending",
+			"title": "Model files"
 		},
 		"order": {
 			"allLower": "all at once",
@@ -9209,6 +9240,7 @@
 		"unlockSeveral": "Unlock several…"
 	},
 	"models": {
+		"lockAll": "Lock all devices",
 		"actions": {
 			"add": "Add model…",
 			"cancelJob": {
@@ -9222,9 +9254,14 @@
 				"label": "Change the settings of {{model}}",
 				"undo": "Change the settings back.",
 				"what": "{{model}} uses the new settings the next time it loads.",
-				"whatLoaded": "{{model}} restarts with the new settings.",
+				"whatLoaded": "{{model}} lets the requests in flight finish, then restarts with the new settings.",
+				"whatOff": "{{model}} keeps the new settings and stays off until you change this in its settings.",
+				"whatOnDemand": "{{model}} lets the requests in flight finish, then stops. Its next request loads it with the new settings.",
+				"whatSame": "Nothing restarts: {{model}} keeps its settings.",
+				"whatStops": "{{model}} lets the requests in flight finish, then stops and stays off until you change this in its settings.",
 				"who": "Nobody notices until it loads.",
-				"whoLoaded": "Requests in flight are cut off while it restarts."
+				"whoLoaded": "New requests wait until it has restarted.",
+				"whoSame": "Nobody notices."
 			},
 			"ensure": {
 				"label": "Prepare the app's models",
@@ -9256,13 +9293,14 @@
 				"who": "Apps and people that use it get answers without waiting for it to start."
 			},
 			"loadButton": "Load…",
+			"onDemandButton": "Load on demand…",
 			"remove": {
-				"check": "Delete its files from {{device}}",
+				"check": "Let {{device}} delete its files",
 				"label": "Remove {{model}}",
 				"stays": "Other models, runtimes and the usage statistics stay.",
-				"undo": "Add it again: its files download again.",
-				"what": "{{model}} is removed from {{device}}. Its files are deleted unless another model uses them.",
-				"who": "Apps and people that use it get an error from now on."
+				"undo": "Add it again: files deleted by then download again.",
+				"what": "{{model}} is removed from {{device}} once the requests in flight have finished. Files no other model uses are deleted after a day, or sooner when the disk runs short.",
+				"who": "After that, apps and people that use it get an error."
 			},
 			"removeButton": "Remove…",
 			"removeRuntime": {
@@ -9273,6 +9311,24 @@
 				"who": "Models on this engine fall back to another installed runtime, or can't load until one is installed."
 			},
 			"removeRuntimeButton": "Remove…",
+			"residency": {
+				"alwaysOn": {
+					"label": "Keep {{model}} loaded",
+					"what": "{{model}} loads within seconds if it isn't loaded and stays loaded, even without requests.",
+					"who": "Apps and people that use it get answers without waiting for it to start."
+				},
+				"onDemand": {
+					"label": "Load {{model}} on demand",
+					"what": "{{model}} unloads after {{minutes, number}} min without requests and frees its memory. Nothing restarts now.",
+					"who": "The next request after that loads it again and waits until it has started."
+				},
+				"pinnedOff": {
+					"label": "Keep {{model}} off",
+					"what": "{{model}} stops, frees its memory and stays off until you change this in its settings.",
+					"who": "Apps and people that use it get an error until then."
+				},
+				"undo": "Change it back in its settings."
+			},
 			"settingsButton": "Settings…",
 			"sub": "on {{device}}",
 			"tray": {
@@ -9290,11 +9346,16 @@
 			"unload": {
 				"label": "Unload {{model}}",
 				"undo": "Load it again.",
-				"what": "{{model}} stops and frees its memory. Requests in flight are cut off.",
+				"what": "{{model}} lets the requests in flight finish, then stops and frees its memory.",
 				"who": "Apps and people that use it get an error until it is loaded again.",
 				"whoOnDemand": "The next request loads it again and waits until it has started."
 			},
 			"unloadButton": "Unload…",
+			"updateRuntime": {
+				"label": "Update {{runtime}}",
+				"undo": "The build it replaces is deleted.",
+				"what": "{{device}} downloads the newest signed {{runtime}} runtime and checks its signature before it replaces the installed build."
+			},
 			"when": {
 				"background": "Starts now and downloads in the background. Progress shows under Downloads.",
 				"now": "Immediately."
@@ -9314,7 +9375,8 @@
 				"httpStatusCode": "The download source answered with error {{status}}.",
 				"io": "The device couldn't write the file to its disk.",
 				"noSources": "No download source is known for this file.",
-				"sizeMismatch": "The file had another size than expected, so the device discarded it."
+				"sizeMismatch": "The file had another size than expected, so the device discarded it.",
+				"unknown": "The download failed for a reason this version of Flow-Like doesn't know yet."
 			},
 			"finished_one": "{{count, number}} download finished.",
 			"finished_other": "{{count, number}} downloads finished.",
@@ -9331,6 +9393,50 @@
 				"verifying": "Verifying"
 			},
 			"title": "Downloads"
+		},
+		"fit": {
+			"block": {
+				"disk": "It needs {{needed}} on the model disk, which has {{available}} left.",
+				"engineUnavailable": "{{device}} can't run {{engine}} models.",
+				"fileTooLarge": "One of its files is larger than a device stores (64 GiB).",
+				"noFingerprint": "Its files carry no fingerprint the device could check them against. Add it from Hugging Face, where every large file has one.",
+				"projectorMissing": "A vision model needs a projector file, and this source has none. Add it as a chat model instead.",
+				"splitIncomplete": "Parts of it are missing from the repository.",
+				"tooManyFiles": "It has more files than a device takes for one model (32)."
+			},
+			"detail": {
+				"cpu": "It runs on the processor: this device has no GPU it can use.",
+				"cpuNoRoom": "{{gpu}} has no room for it, so it runs on the processor.",
+				"gpu": "Every layer fits on {{gpu}}.",
+				"gpuPinned": "{{percent, number}} % of its layers run on {{gpu}}, as set; the rest run on the processor, which is much slower.",
+				"partial": "{{percent, number}} % of it fits on {{gpu}}; the rest runs on the processor, which is much slower.",
+				"tooLarge": "It doesn't fit in the memory free on this device, even with the leanest settings."
+			},
+			"estimated": "The context size is estimated from the model's size: its config.json couldn't be read.",
+			"gpuNoRuntime": "llama.cpp on this device has no runtime for {{gpu}}, so its models run on the processor.",
+			"gpuNotSeen": "The llama.cpp runtime on this device doesn't see {{gpu}}, so its models run on the processor.",
+			"gpuUnknown": "The GPU's memory is read once a runtime for it is installed. Until then the check counts the processor only.",
+			"memory": {
+				"gpu": "About {{size}} of GPU memory · {{free}} free",
+				"partial": "About {{gpu}} on the GPU and {{ram}} in RAM",
+				"parts": "Weights {{weights}} · context {{context}} · runtime {{runtime}}",
+				"ram": "About {{size}} of RAM · {{free}} free",
+				"tooLarge": "Needs about {{size}}, more than the device has free",
+				"unified": "About {{size}} of unified memory · {{free}} free"
+			},
+			"speed": {
+				"crawl": "Very slow",
+				"fast": "Fast",
+				"good": "Good speed",
+				"rate": "{{speed}} · about {{rate, number}} tokens/s",
+				"slow": "Slow"
+			},
+			"verdict": {
+				"cpu": "Processor only",
+				"gpu": "Fits on the GPU",
+				"partial": "Partly on the GPU",
+				"tooLarge": "Too large"
+			}
 		},
 		"hardware": {
 			"available": "Available · {{size}}",
@@ -9357,6 +9463,79 @@
 			"title": "Hardware and runtimes",
 			"unified": "memory shared with the processor"
 		},
+		"install": {
+			"add": "Add {{model}}",
+			"back": "Back",
+			"cancel": "Cancel",
+			"close": "Close",
+			"continue": "Continue",
+			"done": {
+				"downloading_one": "The device downloads {{count, number}} file and checks it. Progress shows under Downloads on the Models tab.",
+				"downloading_other": "The device downloads {{count, number}} files and checks each one. Progress shows under Downloads on the Models tab.",
+				"present": "The device has every file already. It loads when you load it or on its first request.",
+				"title": "{{model}} is on {{device}}"
+			},
+			"reason": {
+				"blocked": "This version can't be added to the device.",
+				"pick": "Choose a model first.",
+				"reference": "Enter a Hugging Face repository first."
+			},
+			"review": {
+				"diskMemory": "Takes {{disk}} of the model disk, which has {{left}} left. Files another model already uses aren't downloaded again. Once loaded: {{memory}} ({{verdict}}).",
+				"diskMemoryLabel": "Disk and memory",
+				"files": "Files",
+				"filesValue_one": "{{count, number}} file · {{size}}",
+				"filesValue_other": "{{count, number}} files · {{size}}",
+				"fingerprintFailed": "Nothing was sent: {{reason}}",
+				"fingerprinting_one": "Fingerprinting {{done, number}} of {{count, number}} small file on this computer…",
+				"fingerprinting_other": "Fingerprinting {{done, number}} of {{count, number}} small files on this computer…",
+				"kind": "Used for",
+				"model": "Model",
+				"runs": "When it runs",
+				"sending": "Sending it to the device…",
+				"sources": "Sources: {{hosts}}.",
+				"twin": "{{device}} already hosts these files as {{model}}. Adding them again creates a second model with its own settings; the files aren't downloaded twice.",
+				"whatPresent": "{{device}} has every file of it already, so nothing is downloaded."
+			},
+			"source": {
+				"bits": "My Bits",
+				"bitsEmpty": "None of your Bits is a model a device can host: a GGUF or MLX model from Hugging Face.",
+				"bitsLegend": "Your models",
+				"bitsNoMatch": "None of your models matches.",
+				"bitsSearchLabel": "Search your models",
+				"hub": "Flow-Like hub",
+				"hubEmpty": "No hub model a device can host matches.",
+				"hubLegend": "Models on the hub",
+				"huggingFace": "Hugging Face",
+				"label": "Where the model comes from",
+				"listFailed": "The list couldn't be loaded: {{reason}}",
+				"loading": "Loading models…",
+				"lookupFailed": "The model couldn't be read: {{reason}}",
+				"reference": "Repository",
+				"referenceHint": "Like Qwen/Qwen3-8B-GGUF, or its huggingface.co address. GGUF and MLX repositories work; the device downloads the files itself.",
+				"searchLabel": "Search the hub",
+				"searchPlaceholder": "Qwen, Gemma, embeddings…",
+				"shown": "{{shown, number}} of {{total, number}} shown. Search to find the others."
+			},
+			"step": {
+				"review": "Review",
+				"settings": "Settings",
+				"source": "Model",
+				"version": "Version"
+			},
+			"stepNote": "Step {{n, number}} of {{total, number}} · {{step}}",
+			"title": "Add a model to {{device}}",
+			"version": {
+				"download": "{{size}} download",
+				"kind": "Use it for",
+				"legend": "Version, and how it fits on {{device}}",
+				"license": "License: {{license}}",
+				"present": "Already on the device",
+				"projector": "Projector",
+				"projectorHint": "The file that lets the model see images. The first one is recommended.",
+				"recommended": "Recommended"
+			}
+		},
 		"overview": {
 			"headline": {
 				"downloading_one": "{{count, number}} model downloading",
@@ -9381,6 +9560,57 @@
 			"recommendations": "Recommendations",
 			"seconds": "{{value, number}} s"
 		},
+		"playground": {
+			"brokeOff": "The answer from {{device}} broke off before the model finished. Try again.",
+			"chat": {
+				"clear": "Clear",
+				"empty": "Send a message to see how fast {{model}} answers.",
+				"loading": "Waiting for {{device}} to load {{model}}. The first answer can take a few minutes.",
+				"message": "Message",
+				"placeholder": "Ask {{model}} something",
+				"send": "Send",
+				"stop": "Stop",
+				"stopped": "Stopped.",
+				"thinking": "Thinking",
+				"waiting": "Waiting for the first token…",
+				"you": "You"
+			},
+			"embed": {
+				"placeholder": "Text to turn into a vector",
+				"preview": "[{{values}}, …]",
+				"run": "Embed",
+				"text": "Text"
+			},
+			"intro": "Requests travel to the device through the encrypted tunnel and count as yours in its statistics.",
+			"measure": {
+				"dimensions_one": "{{count, number}} dimension",
+				"dimensions_other": "{{count, number}} dimensions",
+				"inOut_one": "{{count, number}} token in, {{out}} out",
+				"inOut_other": "{{count, number}} tokens in, {{out}} out",
+				"out_one": "{{count, number}} token out",
+				"out_other": "{{count, number}} tokens out",
+				"speed": "{{value}} tok/s",
+				"tokens_one": "{{count, number}} token",
+				"tokens_other": "{{count, number}} tokens",
+				"total": "{{value}} in all",
+				"ttft": "First token {{value}}"
+			},
+			"model": "Model",
+			"modelOption": "{{model}} · {{state}}",
+			"noModels": "No model on {{device}} can answer yet. Wait until its files are downloaded.",
+			"open": "Try a model…",
+			"refused": {
+				"busy": "Too many requests are waiting for {{device}}. Try again in a moment.",
+				"noHost": "{{device}} isn't running its model host right now.",
+				"notAllowed": "Your access to {{device}} doesn't include using its models.",
+				"notFound": "{{device}} doesn't host this model anymore.",
+				"other": "The model gateway on {{device}} answered with error {{status}}.",
+				"unavailable": "The model can't answer right now."
+			},
+			"stalled": "{{device}} didn't start answering. It may still be loading the model; try again in a few minutes.",
+			"title": "Try a model on {{device}}",
+			"unsupported": "This version of Flow-Like can't send requests to models on devices yet."
+		},
 		"recommendations": {
 			"anyModel": "a model",
 			"containerGpuHidden": "{{device}} runs in a container that can't see the host's GPU. Start the container with GPU access to use it.",
@@ -9390,6 +9620,30 @@
 			"ctxTruncationPlain": "Prompts to {{model}} come close to its context limit. A longer context per slot needs more memory.",
 			"diskLow": "The model disk has {{free}} left. Remove models you don't use or give it more room.",
 			"diskLowPlain": "The model disk is almost full. Remove models you don't use or give it more room.",
+			"fix": {
+				"alwaysOn": "Keep {{model}} loaded…",
+				"cacheF16": "Use a 16-bit cache…",
+				"cacheQ4": "Use a 4-bit cache…",
+				"cacheQ8": "Use an 8-bit cache…",
+				"context": "Use {{tokens, number}} tokens per slot…",
+				"cpuOnly": "Run on the processor only…",
+				"flashOff": "Turn off flash attention…",
+				"flashOn": "Turn on flash attention…",
+				"gpuAuto": "Fit the layers to the GPU…",
+				"gpuLayers_one": "Put {{count, number}} layer on the GPU…",
+				"gpuLayers_other": "Put {{count, number}} layers on the GPU…",
+				"install": "Install {{runtime}}…",
+				"onDemand": "Load {{model}} on demand…",
+				"pinnedOff": "Keep {{model}} off…",
+				"settings": "Apply the recommended settings…",
+				"settingsFor": "Apply the recommended settings to {{model}}…",
+				"slots_one": "Use {{count, number}} slot…",
+				"slots_other": "Use {{count, number}} slots…",
+				"threads_one": "Use {{count, number}} thread…",
+				"threads_other": "Use {{count, number}} threads…",
+				"unload": "Unload {{model}}…",
+				"update": "Update {{runtime}}…"
+			},
 			"gpuUnused": "{{gpu}} isn't used: {{model}} runs on the CPU. A GPU runtime runs it faster.",
 			"gpuUnusedAll": "{{gpu}} isn't used: models run on the CPU. A GPU runtime runs them faster.",
 			"idleResident": "Nothing used {{model}} for {{hours, number}} hours, but it stays loaded. Loading it on demand frees its memory.",
@@ -9405,10 +9659,120 @@
 			"requestsQueuedPlain": "Requests wait for {{model}}. More parallel slots help.",
 			"requestsQueuedWait": "Requests wait for {{model}}: the slowest wait {{wait}}. More parallel slots help.",
 			"runtimeOutdated": "A newer model runtime, {{latest}}, is available for {{device}}.",
+			"runtimeOutdatedPack": "A newer build of {{pack}}, {{latest}}, is available for {{device}}.",
+			"runtimeOutdatedPackPlain": "A newer build of {{pack}} is available for {{device}}.",
 			"runtimeOutdatedPlain": "A newer model runtime is available for {{device}}.",
 			"slowTtft": "Answers from {{model}} take up to {{ttft}} to start because its prompt cache misses. Reusing the cache or a fixed system prompt helps.",
 			"slowTtftPlain": "Answers from {{model}} are slow to start because its prompt cache misses. Reusing the cache or a fixed system prompt helps.",
 			"theGpu": "The GPU"
+		},
+		"send": {
+			"button": "Send from this computer ({{size}})",
+			"bytes": "{{done}} of {{total}}",
+			"downloadingHere": "Downloading to this computer first",
+			"failed": "Sending failed: {{error}}",
+			"left": "{{eta}} left",
+			"progress": "Sending {{file}}",
+			"retry": "Send again",
+			"sending": "Sending from this computer",
+			"sent": "Sent. The device checks the file before it uses it.",
+			"stop": "Stop sending",
+			"stopped": "Stopped. The device keeps what it received; sending again continues from there.",
+			"tray": "Send a model file",
+			"unknownDesktop": "The device lists no download address for this file, and this computer has no copy of it.",
+			"unknownWeb": "The device lists no download address for this file. The desktop app can send it from its own copy of the model.",
+			"unsupported": "This version of the app can't send model files to devices yet.",
+			"verifying": "All of it is sent. The device is checking the file."
+		},
+		"settings": {
+			"apply": "Apply",
+			"back": "Back",
+			"changes": "Changes",
+			"close": "Close",
+			"field": {
+				"ctx": "Context per slot",
+				"flashAttn": "Flash attention",
+				"gpuLayers": "Layers on the GPU",
+				"kvCache": "Context cache precision",
+				"parallel": "Parallel requests",
+				"threads": "Processor threads"
+			},
+			"flashNeeded": "An 8-bit or 4-bit context cache needs flash attention, so it can't be off.",
+			"gone": "This model is no longer on {{device}}.",
+			"gpuLayers": {
+				"all": "All layers",
+				"auto": "As many as fit",
+				"count_one": "{{count, number}} layer",
+				"count_other": "{{count, number}} layers",
+				"none": "None: processor only"
+			},
+			"hint": {
+				"ctx": "How many tokens one request may hold: prompt, history and answer.",
+				"flashAttn": "A faster way to read long prompts that also takes less memory.",
+				"gpuLayers": "Layers on the GPU answer much faster than layers on the processor.",
+				"kvCache": "Lower precision halves the memory the context takes, at a small cost in quality.",
+				"parallel": "Requests the model answers at the same time. Each one keeps its own context.",
+				"threads": "Processor threads for the parts that run on the processor."
+			},
+			"kv": {
+				"f16": "Full precision",
+				"q4": "4-bit",
+				"q8": "8-bit"
+			},
+			"memoryNow": "{{kind}} · uses {{gpu}} of GPU memory and {{ram}} of RAM now",
+			"memoryNowRam": "{{kind}} · uses {{ram}} of RAM now",
+			"noChanges": "Nothing changed yet.",
+			"reason": {
+				"allLayers": "Every layer fits on the GPU.",
+				"cores_one": "One per processor core: this device has {{count, number}}.",
+				"cores_other": "One per processor core: this device has {{count, number}}.",
+				"cpuSlots": "On the processor, few requests at a time answer fastest.",
+				"flash": "Faster on long prompts and lighter on memory.",
+				"gpuSlots": "A GPU answers four requests at once at nearly the speed of one.",
+				"idleUnload": "Frees the memory when nobody uses it; the next request loads it again.",
+				"memory": "Lower, so the model fits where it runs fastest on this device.",
+				"modelLimit_one": "The model handles at most {{count, number}} token.",
+				"modelLimit_other": "The model handles at most {{count, number}} tokens.",
+				"noGpu": "There is no GPU with room for it, so it runs on the processor.",
+				"someLayers": "The GPU takes as many layers as fit; the rest run on the processor.",
+				"standard": "The engine's best-practice default."
+			},
+			"recommended": "Recommended.",
+			"recommendedValue": "Recommended: {{value}}.",
+			"residency": {
+				"alwaysOn": "Always loaded",
+				"alwaysOnHint": "Answers without a start-up wait and keeps its memory all the time.",
+				"idle": "Unload after",
+				"label": "When it runs",
+				"onDemand": "Loads on demand",
+				"onDemandHint": "The first request loads it; it unloads after a while without requests.",
+				"pinnedOff": "Kept off",
+				"pinnedOffHint": "Never loads, not even for a request, until you change this."
+			},
+			"review": "Review changes",
+			"reviewTitle": "Review changes to {{model}}",
+			"stale": {
+				"reload": "Load the new settings",
+				"text": "Someone changed them after you opened this sheet. Load them, then apply your change again; what you changed here stays.",
+				"title": "These settings changed on the device"
+			},
+			"stepApply": "Step 2 of 2 · Apply",
+			"stepChange": "Step 1 of 2 · Change",
+			"sub": "on {{device}}",
+			"title": "Settings of {{model}}",
+			"titleUnknown": "Model settings",
+			"useRecommended": "Use recommended",
+			"value": {
+				"deviceDefault": "Device default",
+				"off": "Off",
+				"on": "On",
+				"slots_one": "{{count, number}} at a time",
+				"slots_other": "{{count, number}} at a time",
+				"threads_one": "{{count, number}} thread",
+				"threads_other": "{{count, number}} threads",
+				"tokens_one": "{{count, number}} token",
+				"tokens_other": "{{count, number}} tokens"
+			}
 		},
 		"states": {
 			"checking": "Checking what {{device}} supports…",
@@ -9425,7 +9789,68 @@
 			"olderAgentText": "Update the device agent to serve models from it. Its services keep running as they are.",
 			"reading": "Reading models from {{device}}…",
 			"retry": "Try again",
+			"snapshotTitle": "Last reported",
 			"unlock": "Unlock…"
+		},
+		"stats": {
+			"allModels": "All models",
+			"consumers": {
+				"caller": "Caller",
+				"label": "Requests by caller",
+				"owner": "The owner",
+				"person": "One person",
+				"title": "Who called",
+				"tokens": "Tokens",
+				"you": "You"
+			},
+			"empty": {
+				"day": "No model answered a request in the last 24 hours.",
+				"dayModel": "No requests to {{model}} in the last 24 hours.",
+				"quarter": "No model answered a request in the last 90 days.",
+				"quarterModel": "No requests to {{model}} in the last 90 days.",
+				"week": "No model answered a request in the last 7 days.",
+				"weekModel": "No requests to {{model}} in the last 7 days."
+			},
+			"failedTitle": "{{device}} didn't return its usage statistics",
+			"inAll": "{{total}} in all",
+			"median": "Median",
+			"modelLabel": "Model",
+			"noData": "Nothing reported in this range.",
+			"notLoaded": "Connect live to read the usage statistics of {{device}}.",
+			"p95": "95th percentile",
+			"queue": {
+				"title": "Queue wait"
+			},
+			"range": {
+				"day": "24 h",
+				"quarter": "90 d",
+				"week": "7 d"
+			},
+			"rangeLabel": "Time range",
+			"reading": "Reading usage statistics from {{device}}…",
+			"requests": {
+				"answered": "Answered",
+				"failed": "Failed",
+				"title": "Requests"
+			},
+			"retry": "Try again",
+			"speed": {
+				"series": "Generated",
+				"summary": "{{value}} on average",
+				"title": "Generation speed"
+			},
+			"speedValue": "{{value}} tok/s",
+			"title": "Usage and performance",
+			"tokens": {
+				"in": "In",
+				"out": "Out",
+				"title": "Tokens"
+			},
+			"tooLarge": "They are larger than {{device}} can send over this connection. Pick a shorter range or a single model.",
+			"ttft": {
+				"title": "Time to first token"
+			},
+			"upTo": "up to {{value}}"
 		},
 		"table": {
 			"actions": "Actions",
@@ -9440,7 +9865,8 @@
 				"engineExited": "The engine stopped unexpectedly.",
 				"healthTimeout": "The engine didn't become ready in time.",
 				"insufficientMemory": "Not enough memory, even after idle models were unloaded.",
-				"runtimeMissing": "No runtime for its engine is installed."
+				"runtimeMissing": "No runtime for its engine is installed.",
+				"unknown": "For a reason this version of Flow-Like doesn't know yet."
 			},
 			"foot": "Requests, speed and who used a model cover the last 24 hours. Memory and busy slots are what the device reports now.",
 			"kind": {
@@ -9470,6 +9896,7 @@
 				"loaded": "Loaded",
 				"loading": "Loading",
 				"stopped": "Not loaded",
+				"unknown": "State not known",
 				"unloading": "Unloading"
 			},
 			"title": "Models",
@@ -9481,6 +9908,91 @@
 				"person": "One person",
 				"you": "You"
 			}
+		},
+		"unlockPrompt": {
+			"askRun": "“{{run}}” wants to use {{model}}, which runs on {{device}}.",
+			"askUnnamed": "A run wants to use {{model}}, which runs on {{device}}.",
+			"block": {
+				"freshEndpoint": "The keys for {{device}} were restored from a backup. Unlock it once in Devices; after that runs can ask here.",
+				"noVault": "This computer holds no keys for {{device}}. Add it in Devices first; until then runs go on without it.",
+				"signedOut": "Sign in to unlock {{device}}."
+			},
+			"decline": "Not now",
+			"failure": {
+				"authorityMismatch": "The signed identity of {{device}} doesn't match the keys on this computer. Check it in Devices.",
+				"deviceUnavailable": "{{device}} was removed or is no longer shared with you.",
+				"failed": "Unlocking failed. Try again.",
+				"hubUnreachable": "The hub couldn't be reached to check {{device}}. Check your connection and try again.",
+				"signedOut": "Sign in again, then unlock.",
+				"wrongPassword": "That password didn't open the keys. Try again."
+			},
+			"keep": "Keep unlocked until I quit",
+			"keepHint": "Runs reach it without asking until you quit Flow-Like. Off: it locks again after 30 min unused.",
+			"password": "Device password",
+			"passwordHint": "The keys open in this app only and never leave this computer.",
+			"timeout": "No answer within 2 minutes counts as Not now: the run goes on without this device.",
+			"title": "Unlock {{device}}?",
+			"unlock": "Unlock"
+		},
+		"use": {
+			"access": {
+				"blockHubUnsupported": "This hub cannot save model permissions yet. Update the hub first.",
+				"blockUnknown": "{{device}} hasn't been read live, so whether its agent hosts models is unknown. Connect to it once.",
+				"blockUnsupported": "{{device}}'s agent doesn't host models. Update the agent first.",
+				"presetsNeedDevice": "Device admin and Model user need whole-device access.",
+				"hubUnsupported": "This hub cannot save model permissions yet. Update the hub, or remove Use models and Manage models. Nothing was saved.",
+				"saveUnsupported": "{{device}}'s agent doesn't host models, so it would refuse these access rules. Update the agent and connect once, or remove Use models and Manage models."
+			},
+			"badge": "Device",
+			"badgeLocked": "Device · locked",
+			"badgeLockedTitle": "Runs on one of your devices, which is locked in this app: a desktop run asks for its password first. Cloud runs skip it.",
+			"badgeTitle": "Runs on one of your devices. Desktop runs reach it through an encrypted tunnel; cloud runs skip it.",
+			"badgeUnlocked": "Device · unlocked",
+			"badgeUnlockedTitle": "Runs on one of your devices, which is unlocked in this app: desktop runs call it without asking for its password. Cloud runs skip it.",
+			"button": "Use from my apps…",
+			"cancel": "Cancel",
+			"conseq": {
+				"undo": "Remove it from your models any time; the model stays on {{device}}.",
+				"undoWeb": "Remove it from your models in the Flow-Like desktop app any time; the model stays on {{device}}.",
+				"what": "Adds “{{name}}” to your models, served by {{model}} on {{device}}. It holds no secret and copies no weights.",
+				"when": "Now. Runs in the desktop app reach the device through an encrypted tunnel. Cloud runs skip it: Find Model takes the next model, and a flow that names it fails there.",
+				"who": "You. Whoever runs it needs Use models on {{device}} and unlocks the device on their computer."
+			},
+			"context": "Context length",
+			"contextFixed": "From the model's settings on the device.",
+			"contextOpen": "The device picks it; enter what the model was loaded with.",
+			"defaultName": "{{model}} on {{device}}",
+			"description": "{{kind}} model hosted on {{device}}.",
+			"done": "Done",
+			"inputLength": "Input length",
+			"locked": "{{device}} is locked. Unlock it to add its model.",
+			"name": "Name in your models",
+			"problem": {
+				"context": "Enter the tokens per request as a whole number.",
+				"name": "Give it a name of up to {{max, number}} characters.",
+				"vector": "Enter how many numbers the model returns per text, e.g. 768."
+			},
+			"result": {
+				"failed": "The model wasn't added to your models. Try again.",
+				"hubRefused": "This hub doesn't take models from devices yet, so nothing was added. Add it from the Flow-Like desktop app, or once the hub is updated.",
+				"notAllowed": "The hub says your account can't use the models of {{device}}. Ask its owner for Use models.",
+				"saved": "“{{name}}” is in your models. Pick it in any model picker.",
+				"savedNotActive": "“{{name}}” is in your models, but not on in the profile you use. Turn it on in Settings › Models.",
+				"savedNotActiveWeb": "“{{name}}” is in your models, but not on in the profile you use. Turn it on in Settings › Models in the Flow-Like desktop app.",
+				"savedWeb": "“{{name}}” is in your models. Pick it in the Flow-Like desktop app: only its runs reach your devices, so this browser's model pickers leave it out."
+			},
+			"submit": "Add to my models",
+			"subtitle": "Your flows and chats pick it like any other model, and its calls go to {{device}}.",
+			"subtitleWeb": "Your flows and chats in the Flow-Like desktop app pick it like any other model, and its calls go to {{device}}.",
+			"title": "Use {{model}} from your apps",
+			"tokens": "tokens",
+			"unlock": {
+				"keep": "Keep unlocked for model access",
+				"keepHintDesktop": "Your flows on this computer can call its models until you lock it or quit Flow-Like. It won't lock after 30 min unused.",
+				"keepHintWeb": "Its models stay reachable from this window until you lock it or close the window. It won't lock after 30 min unused."
+			},
+			"vector": "Vector length",
+			"vectorHint": "The model card says it, e.g. 768 for nomic-embed-text."
 		}
 	},
 	"newEvent": {
@@ -12652,6 +13164,15 @@
 			"stateSr": " ({{state}})",
 			"unknown": "Unknown",
 			"warning": "Needs attention"
+		},
+		"chart": {
+			"readout": "{{span}}: {{values}}",
+			"showChart": "Show chart",
+			"showTable": "Show table",
+			"soFar": "{{span}} (so far)",
+			"span": "{{from}} – {{to}}",
+			"spanSameDay": "{{from}}–{{to}}",
+			"time": "Time"
 		},
 		"check": {
 			"active": "Checking",

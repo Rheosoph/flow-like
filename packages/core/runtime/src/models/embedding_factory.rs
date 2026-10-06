@@ -1,14 +1,20 @@
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{sync::Arc, time::Instant};
 
 use flow_like_model_provider::{
-    embedding::{EmbeddingModelLogic, openai::OpenAIEmbeddingModel},
+    embedding::{
+        EmbeddingModelLogic, endpoint::EndpointEmbeddingModel, openai::OpenAIEmbeddingModel,
+    },
     image_embedding::ImageEmbeddingModelLogic,
     provider::is_hosted_provider_name,
 };
 
 use crate::{bit::Bit, state::FlowLikeState};
 
-use super::llm::ModelUsageContext;
+use super::{
+    device::{self, ModelEndpoint},
+    factory_cache::{FactoryCache, MODEL_IDLE_TTL},
+    llm::ModelUsageContext,
+};
 #[cfg(feature = "local-ml")]
 use super::{
     embedding::local::LocalEmbeddingModel, image_embedding::local::LocalImageEmbeddingModel,
@@ -17,10 +23,10 @@ use super::{
 #[cfg(feature = "remote-ml")]
 use flow_like_model_provider::embedding::proxy::ProxyEmbeddingModel;
 
+/// Shared by every run without an outer lock, like [`super::llm::ModelFactory`].
 pub struct EmbeddingFactory {
-    pub cached_text_models: HashMap<String, Arc<dyn EmbeddingModelLogic>>,
-    pub cached_image_models: HashMap<String, Arc<dyn ImageEmbeddingModelLogic>>,
-    pub ttl_list: HashMap<String, SystemTime>,
+    text_models: FactoryCache<dyn EmbeddingModelLogic>,
+    image_models: FactoryCache<dyn ImageEmbeddingModelLogic>,
 }
 
 pub fn is_local_provider(provider_name: &str) -> bool {
@@ -94,14 +100,13 @@ impl Default for EmbeddingFactory {
 impl EmbeddingFactory {
     pub fn new() -> Self {
         Self {
-            cached_text_models: HashMap::new(),
-            cached_image_models: HashMap::new(),
-            ttl_list: HashMap::new(),
+            text_models: FactoryCache::default(),
+            image_models: FactoryCache::default(),
         }
     }
 
     pub async fn build_text(
-        &mut self,
+        &self,
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
@@ -118,17 +123,13 @@ impl EmbeddingFactory {
         if is_local_provider(&provider_name) {
             #[cfg(feature = "local-ml")]
             {
-                if let Some(model) = self.cached_text_models.get(&bit.id) {
-                    // update last used time
-                    self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-                    return Ok(model.clone());
-                }
-
-                let local_model = LocalEmbeddingModel::new(bit, app_state).await?;
-                self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-                self.cached_text_models
-                    .insert(bit.id.clone(), local_model.clone());
-                return Ok(local_model);
+                return self
+                    .text_models
+                    .get_or_build(&bit.id, || async move {
+                        let model = LocalEmbeddingModel::new(bit, app_state).await?;
+                        Ok(model as Arc<dyn EmbeddingModelLogic>)
+                    })
+                    .await;
             }
 
             #[cfg(not(feature = "local-ml"))]
@@ -150,12 +151,30 @@ impl EmbeddingFactory {
 
     /// Build a text embedding model using the capabilities of the current host.
     ///
+    /// Device Bits, and Local Bits a device's model host serves, use that
+    /// endpoint. Every other Bit runs locally or through the API proxy.
+    pub async fn build_text_routed(
+        &self,
+        bit: &Bit,
+        app_state: Arc<FlowLikeState>,
+        access_token: Option<String>,
+        usage_context: Option<ModelUsageContext>,
+    ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
+        if let Some(endpoint) =
+            device::resolve_endpoint(bit, &app_state, usage_context.as_ref()).await?
+        {
+            return self.build_endpoint_text(bit, endpoint).await;
+        }
+        self.build_text_local_or_proxy(bit, app_state, access_token, usage_context)
+            .await
+    }
+
     /// A filesystem-backed host with local ML support keeps locally runnable
     /// Bits local. Other hosts proxy remote-capable Bits when an access token is
     /// available. A remote-capable Local Bit fails with a routing error when the
     /// proxy is unavailable; standard providers use their normal factory path.
-    pub async fn build_text_routed(
-        &mut self,
+    async fn build_text_local_or_proxy(
+        &self,
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
         access_token: Option<String>,
@@ -227,32 +246,50 @@ impl EmbeddingFactory {
         self.build_text(bit, app_state).await
     }
 
+    /// An embedding client for a model served elsewhere, cached per endpoint and Bit because the
+    /// Bit sets prefixes and chunk sizes.
+    async fn build_endpoint_text(
+        &self,
+        bit: &Bit,
+        endpoint: ModelEndpoint,
+    ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
+        let provider = bit.try_to_embedding().ok_or_else(|| {
+            flow_like_types::anyhow!("Bit {} is not a text embedding model", bit.id)
+        })?;
+        let key = format!("{}#{}", endpoint.cache_key(), bit.id);
+        self.text_models
+            .get_or_build(&key, || async move {
+                let model = EndpointEmbeddingModel::new(
+                    &endpoint.base_url,
+                    endpoint.bearer,
+                    endpoint.model,
+                    provider,
+                )?;
+                Ok(Arc::new(model) as Arc<dyn EmbeddingModelLogic>)
+            })
+            .await
+    }
+
     pub async fn build_image(
-        &mut self,
+        &self,
         bit: &Bit,
         _app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Arc<dyn ImageEmbeddingModelLogic>> {
-        let provider = bit.try_to_image_embedding();
-        if provider.is_none() {
-            return Err(flow_like_types::anyhow!("Model type not supported"));
-        }
-
-        let provider = provider.ok_or(flow_like_types::anyhow!("Model type not supported"))?;
+        let provider = bit
+            .try_to_image_embedding()
+            .ok_or(flow_like_types::anyhow!("Model type not supported"))?;
         let provider = provider.provider.provider_name;
 
         if is_local_provider(&provider) {
             #[cfg(feature = "local-ml")]
             {
-                if let Some(model) = self.cached_image_models.get(&bit.id) {
-                    self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-                    return Ok(model.clone());
-                }
-
-                let local_model = LocalImageEmbeddingModel::new(bit, _app_state, self).await?;
-                self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-                self.cached_image_models
-                    .insert(bit.id.clone(), local_model.clone());
-                return Ok(local_model);
+                return self
+                    .image_models
+                    .get_or_build(&bit.id, || async move {
+                        let model = LocalImageEmbeddingModel::new(bit, _app_state, self).await?;
+                        Ok(model as Arc<dyn ImageEmbeddingModelLogic>)
+                    })
+                    .await;
             }
             #[cfg(not(feature = "local-ml"))]
             {
@@ -269,7 +306,7 @@ impl EmbeddingFactory {
     /// Used in executors (AWS Lambda, Kubernetes) where secrets are not available
     #[cfg(feature = "remote-ml")]
     pub async fn build_text_proxy(
-        &mut self,
+        &self,
         bit: &Bit,
         access_token: String,
         usage_context: Option<ModelUsageContext>,
@@ -280,7 +317,7 @@ impl EmbeddingFactory {
 
     #[cfg(feature = "remote-ml")]
     async fn build_text_proxy_authorized(
-        &mut self,
+        &self,
         bit: &Bit,
         access_token: String,
         usage_context: Option<ModelUsageContext>,
@@ -322,29 +359,11 @@ impl EmbeddingFactory {
         Ok(model)
     }
 
-    pub fn gc(&mut self) {
-        let mut to_remove = Vec::new();
-        for id in self.cached_image_models.keys() {
-            // check if the model was not used for 5 minutes
-            let ttl = self.ttl_list.get(id).unwrap();
-            if ttl.elapsed().unwrap().as_secs() > 300 {
-                to_remove.push(id.clone());
-            }
-        }
-
-        for id in self.cached_text_models.keys() {
-            // check if the model was not used for 5 minutes
-            let ttl = self.ttl_list.get(id).unwrap();
-            if ttl.elapsed().unwrap().as_secs() > 300 {
-                to_remove.push(id.clone());
-            }
-        }
-
-        for id in to_remove {
-            self.cached_text_models.remove(&id);
-            self.cached_image_models.remove(&id);
-            self.ttl_list.remove(&id);
-        }
+    /// Evicts models unused for five minutes; a model someone still holds is in use.
+    pub fn gc(&self) {
+        let now = Instant::now();
+        self.image_models.gc(now, MODEL_IDLE_TTL);
+        self.text_models.gc(now, MODEL_IDLE_TTL);
     }
 }
 
@@ -358,6 +377,7 @@ mod tests {
     };
     use flow_like_storage::files::store::FlowLikeStore;
     use flow_like_types::{json, tokio};
+    use std::collections::HashMap;
 
     fn embedding_bit(provider_name: &str) -> Bit {
         let parameters = EmbeddingModelProvider {
@@ -604,5 +624,91 @@ mod tests {
                 .to_string()
                 .contains("requires the 'remote-ml' feature")
         );
+    }
+
+    mod endpoints {
+        use super::*;
+        use crate::models::device::{
+            Interaction, ModelUnavailableReason, model_unavailable,
+            testing::{FakeConnector, FakeRouter, device_embedding_bit, endpoint},
+        };
+
+        fn memory_state() -> FlowLikeState {
+            let store = FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ));
+            FlowLikeState::new(
+                crate::state::FlowLikeConfig::with_default_store(store),
+                crate::utils::http::HTTPClient::new_without_refetch(),
+            )
+        }
+
+        fn is_endpoint_model(model: &Arc<dyn EmbeddingModelLogic>) -> bool {
+            model.as_cacheable().as_any().is::<EndpointEmbeddingModel>()
+        }
+
+        #[tokio::test]
+        async fn device_embeddings_use_the_connector_endpoint() {
+            let connector = FakeConnector::serving(endpoint("http://127.0.0.1:9/v1"));
+            let mut state = memory_state();
+            state.device_model_connector = Some(connector.clone());
+            let usage_context = ModelUsageContext {
+                run_id: Some("run-3".to_string()),
+                ..ModelUsageContext::default()
+            };
+
+            let model = EmbeddingFactory::new()
+                .build_text_routed(
+                    &device_embedding_bit("device-embedding", "dev-1"),
+                    Arc::new(state),
+                    None,
+                    Some(usage_context),
+                )
+                .await
+                .expect("device embedding through the connector");
+
+            assert!(is_endpoint_model(&model));
+            assert_eq!(
+                *connector.interactions.lock(),
+                vec![Interaction::Allowed {
+                    run_label: Some("run-3".to_string())
+                }]
+            );
+        }
+
+        #[tokio::test]
+        async fn device_embeddings_without_a_connector_are_server_execution_errors() {
+            let error = match EmbeddingFactory::new()
+                .build_text_routed(
+                    &device_embedding_bit("device-embedding", "dev-1"),
+                    Arc::new(memory_state()),
+                    Some("user-token".to_string()),
+                    None,
+                )
+                .await
+            {
+                Ok(_) => panic!("a server cannot reach device embeddings"),
+                Err(error) => error,
+            };
+
+            assert_eq!(
+                model_unavailable(&error).map(|unavailable| unavailable.reason),
+                Some(ModelUnavailableReason::ServerExecution)
+            );
+        }
+
+        #[tokio::test]
+        async fn the_router_serves_local_embeddings_from_the_model_host() {
+            let mut state = memory_state();
+            state.local_model_router =
+                Some(Arc::new(FakeRouter(endpoint("http://127.0.0.1:9/v1"))));
+
+            let model = EmbeddingFactory::new()
+                .build_text_routed(&embedding_bit("Local"), Arc::new(state), None, None)
+                .await
+                .expect("a routed Local embedding needs no local runtime");
+
+            assert!(is_endpoint_model(&model));
+        }
     }
 }

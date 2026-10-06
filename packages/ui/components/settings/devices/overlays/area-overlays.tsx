@@ -5,6 +5,8 @@ import type {
 	DevicesRoute,
 	DevicesScope,
 } from "../../../../lib/device-management/model/types";
+import { AddModelSheet } from "../models/add-model/add-model-sheet";
+import { ModelSettingsSheet } from "../models/settings/model-settings-sheet";
 import { devicesHref } from "../routing/devices-href";
 import { ACCOUNT_SCOPE } from "../routing/devices-route";
 import { useDevicesRoute } from "../routing/use-devices-route";
@@ -84,8 +86,37 @@ function OverlayHost({ scopeKey, scope, onNavigate }: Readonly<HostProps>) {
 	return sheetFor(overlay, { scope, onNavigate, onClose });
 }
 
+type ModelOverlay = Extract<
+	OverlayState,
+	{ kind: "model_add" | "model_settings" }
+>;
+
+const isModelOverlay = (overlay: OverlayState): overlay is ModelOverlay =>
+	overlay.kind === "model_add" || overlay.kind === "model_settings";
+
+/** Models tab › Add model and a model's settings. */
+function modelSheetFor(overlay: ModelOverlay, sheet: OverlaySheetProps) {
+	if (overlay.kind === "model_add")
+		return (
+			<AddModelSheet
+				key={overlay.deviceId}
+				deviceId={overlay.deviceId}
+				{...sheet}
+			/>
+		);
+	return (
+		<ModelSettingsSheet
+			key={`${overlay.deviceId}/${overlay.modelId}`}
+			deviceId={overlay.deviceId}
+			modelId={overlay.modelId}
+			{...sheet}
+		/>
+	);
+}
+
 /** The sheet the store asks for, keyed so another request starts it fresh. */
 function sheetFor(overlay: OverlayState, sheet: OverlaySheetProps) {
+	if (isModelOverlay(overlay)) return modelSheetFor(overlay, sheet);
 	switch (overlay.kind) {
 		case "unlock":
 			return (
@@ -94,6 +125,7 @@ function sheetFor(overlay: OverlayState, sheet: OverlaySheetProps) {
 					deviceId={overlay.deviceId}
 					connectLive={overlay.connectLive}
 					returnTo={overlay.returnTo}
+					forModels={overlay.forModels}
 					{...sheet}
 				/>
 			);

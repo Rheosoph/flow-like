@@ -19,12 +19,13 @@ deployed service still runs on the device.
 | --- | --- | --- |
 | Live device management | Status, logs, deployment operations, and supported on-demand actions | Account access, unlocked controller key, and permission for each operation |
 | Direct service address | The device's hosted interface or API | A network route to the listener and a service access token if required |
-| Encrypted service tunnel | A configured, running service listener on the device | A valid controller session, Connect to services permission in scope, and a service access token if required |
+| Encrypted service tunnel | The service's hosted listener and the additional loopback listeners configured for it | A valid controller session, Connect to services permission in scope, and a service access token if required |
+| Model gateway | The models the device hosts | A valid controller session and Use models permission for the whole device |
 
-The tunnel transport supports private service connections. Studio's local
-port-forwarding controls and the web app's tunneled service viewer are being
-integrated. The **Endpoint → Open** procedure below describes direct access;
-it requires network reachability and does not itself create a tunnel.
+The **Endpoint → Open** procedure below describes direct access. It requires
+network reachability and does not create a tunnel. To use a service through
+the encrypted tunnel instead, use **Connect through Studio** on the same tab;
+see [Connect through the encrypted tunnel](#connect-through-the-encrypted-tunnel).
 
 ## Open a service on the device or private network
 
@@ -114,17 +115,29 @@ input types. Forms that require file input direct you to the service page.
 Run history and the service's actual result are the evidence that an action
 completed; an accepted request alone is insufficient.
 
-## How on-demand service forwarding works
+A service that consists only of forms and quick actions has no hosted
+interface by default. In the deployment wizard's **Endpoint & limits** step,
+**Open these forms and quick actions as a deployed app** creates a listener
+for it with that step's access settings. Studio then opens the service
+through the encrypted tunnel as described below. **Run now…** works with or
+without that listener.
+
+## Connect through the encrypted tunnel
 
 A tunnel joins an authorized controller to the device's service transport.
 The device opens the destination connection using its own deployed
-configuration. The client identifies a service deployment; it does not supply
-an arbitrary host and port to dial.
+configuration. The client names a service and one of its listeners; it does
+not supply an arbitrary host and port to dial.
 
-The current service target is the placement's built-in `hosting` listener.
-That covers the listener serving the deployed web interface and hosted APIs.
-It does not provide general forwarding to SSH, a database, another LAN host,
-or a listener opened independently by a REST/MCP server Flow.
+A service offers these tunnel targets:
+
+- its hosted listener, `hosting`, which serves the deployed web interface and
+  hosted APIs;
+- up to 16 additional listeners named in the service's settings. Each is a
+  TCP, HTTP, or HTTPS listener on the device's loopback interface, such as a
+  database or a REST or MCP server that a Flow opens itself.
+
+The tunnel does not reach other hosts on the device's network.
 
 **Connect to services** (`service_connect`) must be granted for the device,
 project, or placement involved. Status access alone does not permit a service
@@ -132,18 +145,66 @@ connection. The placement must be running its current configuration. If the
 service requires a token, it still checks that token through the tunnel. The
 tunnel does not inject a token or change the service's access settings.
 
-### Studio and browser connections
+The models a device hosts are a separate tunnel target that needs **Use
+models** for the whole device. Connect to services does not include model
+access, and Use models does not include service connections. See
+[Host models on a device](/devices/models/).
 
-A desktop forward needs a local listening port that connects a local program
-to the remote service stream. Bind such a forward to loopback when it is
-intended only for programs on your computer. The local port is distinct from
-the device's service port and from a router's port-forwarding rule.
+### Use a service from Studio
 
-A browser consumes the stream through a web client integration. It cannot
-create a general operating-system TCP listener for other programs. A WebRTC
-data channel also does not turn a private device address into an ordinary
-public URL. Browser service access needs the client to handle requests through
-the tunnel explicitly.
+Unlock the device, connect live, select the service, and open **Endpoint**.
+**Connect through Studio** lists the service's listeners under **Service
+listener**:
+
+- **Open deployed app** opens the hosted interface's Pages, chat, forms, and
+  quick actions inside Studio, through the tunnel. Enter the service access
+  token there if the service requires one; it stays in that session. Closing
+  the app clears the session's conversations and Page data.
+- **Send request** sends one HTTP request to an HTTP or HTTPS listener, with
+  a method, path, headers, and body. Include the service's access token as a
+  header if the service requires one. The response streams in; Studio shows
+  its most recent 1,048,576 characters.
+- **Open local port**, in the desktop app only, opens a port on this
+  computer's loopback address that leads to the listener. Enter `0` for any
+  free port, then copy the address. Programs on this computer, such as a
+  browser or a database client, can connect to it while the service page stays
+  open. **Close local port** ends it. Before opening the port, Studio checks
+  that you may connect and that the listener answers.
+
+A TCP listener has no request form. Connect a program to it through a local
+port from the desktop app.
+
+Locking the device, leaving the service page, or losing the connection ends
+open requests and local ports. Headers and tokens entered on the page are
+kept only until then.
+
+### Add service listeners
+
+Under **Additional service listeners**, select **Add listener**, then enter a
+**Service ID**, the **Protocol**, the **Device loopback address**, and the
+**Device port**. For HTTPS, also enter the **TLS server name** and the server
+certificate's **Certificate SHA-256 fingerprint**. Saving changes the
+service's configuration; a running service applies it with health checks or
+restarts, as you choose. Changing listeners needs Deploy & configure
+permission for the service. Saving does not start the program behind a
+listener. That program must already listen on the address.
+
+Everyone with Connect to services in the service's scope can reach these
+listeners. Require authentication in each program behind them.
+
+For a request to an HTTPS listener, or to a hosted listener with a
+certificate, the device opens the TLS connection itself. It checks the
+certificate's SHA-256 fingerprint and server name before any request passes.
+Update the fingerprint when that certificate changes. A local port passes
+bytes through unchanged, so a program connecting to an HTTPS listener this
+way speaks TLS with the listener itself.
+
+### Browser connections
+
+A browser cannot create a general operating-system TCP listener for other
+programs. A WebRTC data channel also does not turn a private device address
+into an ordinary public URL. The web app therefore offers the deployed app
+and single requests through the tunnel; local ports need the desktop app.
 
 Direct requests from an unrelated website face the service's browser-origin
 restrictions. The hosted HTTP endpoints do not provide a general CORS policy
@@ -177,12 +238,15 @@ For capacity limits and relay configuration, see
 | Observation | Check |
 | --- | --- |
 | Live management works, but a direct service link fails | The listener, host firewall, private-network route, and Docker port mapping. Management connectivity does not establish direct reachability. |
-| A loopback link opens the wrong machine | Open it on the device itself or use an access path that creates a local forward on the client. |
+| A loopback link opens the wrong machine | Open it on the device itself, or open a local port from the desktop app and use that address. |
 | The service returns `401` | Check whether the running service requires a token and supply its current token, even when using an encrypted connection. |
 | The browser rejects HTTPS | Check the certificate hostname, trust chain, and expiry. A management connection does not make the service's certificate trusted. |
 | A tunnel is refused despite visible status | Check Connect to services permission, its scope and expiry, agent compatibility, and the running service configuration. |
 | Requests fail after an update | Verify readiness and the current listener, reconnect, and check for a changed token or route. |
 | A web app cannot call the direct endpoint | Check browser origin restrictions and whether the client uses the supported service-access path. |
+| Requests to an HTTPS listener fail after its certificate was renewed | Update its **Certificate SHA-256 fingerprint** under **Additional service listeners**. |
+| A listener shows no request form | It is a TCP listener. Open a local port from the desktop app. |
+| Model requests are refused although service connections work | The model gateway needs Use models permission for the whole device and an agent that hosts models. |
 
 Read [Device security and networking](/devices/security/) before widening a
 listener's exposure to resolve a connectivity problem.

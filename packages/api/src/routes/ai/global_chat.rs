@@ -1043,6 +1043,7 @@ pub(crate) async fn run_global_chat(
             },
             false,
             flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await,
+            None,
             flow_like_state.http_client.clone(),
         )
         .await?;

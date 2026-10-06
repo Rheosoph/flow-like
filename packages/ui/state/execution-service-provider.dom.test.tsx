@@ -5,6 +5,7 @@ import type { RuntimeVariablesPromptProps } from "../components/flow/runtime-var
 import type { WasmSandboxWarningDialogProps } from "../components/flow/wasm-sandbox-warning-dialog";
 import type { ILogMetadata, IRunPayload } from "../lib";
 import type { PageTrigger } from "../lib/schema/flow/page-trigger";
+import type { IEventState } from "./backend-state/event-state";
 import type { IPrerunEventResponse } from "./backend-state/types";
 import type { ExecutionServiceContextValue } from "./execution-service-context-value";
 import type {
@@ -94,8 +95,12 @@ const backend = {
 	boardState: {},
 	eventState: {
 		alwaysRemote: true,
-		executeEvent: mock(async () => undefined),
-		executeEventRemote,
+		executeEvent: mock(
+			async (..._args: Parameters<IEventState["executeEvent"]>) => undefined,
+		),
+		executeEventRemote: executeEventRemote as
+			| typeof executeEventRemote
+			| undefined,
 		prerunEvent: mock(
 			async (_appId: string, eventId: string): Promise<IPrerunEventResponse> =>
 				({
@@ -225,6 +230,9 @@ beforeEach(async () => {
 	runtimePrompt = undefined;
 	wasmPrompt = undefined;
 	executeEventRemote.mockClear();
+	backend.eventState.executeEventRemote = executeEventRemote;
+	backend.eventState.executeEvent.mockClear();
+	backend.eventState.prerunEvent.mockClear();
 	saveValues.mockClear();
 	const container = browser.document.createElement("div");
 	browser.document.body.append(container);
@@ -239,6 +247,33 @@ beforeEach(async () => {
 		),
 	);
 	mounted = true;
+});
+
+test("a web dispatch receives exactly its own Page prerun response", async () => {
+	backend.eventState.executeEventRemote = undefined;
+	await start("app-a", "event-a");
+	await start("app-b", "event-b");
+	const calls = backend.eventState.executeEvent.mock.calls;
+	expect(calls).toHaveLength(2);
+	for (const [index, call] of calls.entries()) {
+		const prepared = (await backend.eventState.prerunEvent.mock.results[index]
+			?.value) as IPrerunEventResponse | undefined;
+		expect(call[9]).toBe(prepared);
+		expect(call[7]).toBe(LOAD);
+	}
+});
+
+test("Page prerun handoff also works without a runtime variables provider", async () => {
+	backend.eventState.executeEventRemote = undefined;
+	await act(async () =>
+		root.render(
+			createElement(ExecutionServiceProvider, null, createElement(Probe)),
+		),
+	);
+	await start("app-a", "event-a");
+	const prepared = (await backend.eventState.prerunEvent.mock.results[0]
+		?.value) as IPrerunEventResponse | undefined;
+	expect(backend.eventState.executeEvent.mock.calls[0]?.[9]).toBe(prepared);
 });
 
 afterEach(async () => {

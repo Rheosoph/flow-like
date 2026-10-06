@@ -1,4 +1,4 @@
-use flow_like_wasm::aot_cache::{host_platform_key, WASMTIME_MAJOR_VERSION};
+use flow_like_wasm::aot_cache::{host_platform_key, portable_target, WASMTIME_MAJOR_VERSION};
 use flow_like_wasm::{WasmConfig, WasmEngine};
 use tempfile::TempDir;
 use wasmtime::{Config, Engine, ModuleVersionStrategy};
@@ -12,6 +12,42 @@ fn incompatible_engine() -> Engine {
         .module_version(ModuleVersionStrategy::Custom(previous_version.to_string()))
         .unwrap();
     Engine::new(&config).unwrap()
+}
+
+fn portable_compiler_and_runtime() -> (WasmEngine, WasmEngine) {
+    let target = portable_target(std::env::consts::OS, std::env::consts::ARCH).unwrap();
+    let compiler =
+        WasmEngine::new(WasmConfig::default().without_cache().with_target(target)).unwrap();
+    let runtime = WasmEngine::new(WasmConfig::lambda().without_cache()).unwrap();
+    (compiler, runtime)
+}
+
+#[test]
+fn portable_module_deserializes_in_the_executor_configuration() {
+    let (compiler, runtime) = portable_compiler_and_runtime();
+    let wasm =
+        wat::parse_str("(module (func (export \"answer\") (result i32) i32.const 42))").unwrap();
+    let artifact = compiler.precompile(&wasm).unwrap();
+    // The bytes were produced above by our trusted compiler configuration.
+    let module = unsafe { wasmtime::Module::deserialize(runtime.engine(), artifact) }.unwrap();
+    let mut store = wasmtime::Store::new(runtime.engine(), ());
+    store.set_fuel(1000).unwrap();
+    store.set_epoch_deadline(100);
+    let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+    let answer = instance
+        .get_typed_func::<(), i32>(&mut store, "answer")
+        .unwrap();
+    assert_eq!(answer.call(&mut store, ()).unwrap(), 42);
+}
+
+#[cfg(feature = "component-model")]
+#[test]
+fn portable_component_deserializes_in_the_executor_configuration() {
+    let (compiler, runtime) = portable_compiler_and_runtime();
+    let wasm = wat::parse_str("(component)").unwrap();
+    let artifact = compiler.precompile(&wasm).unwrap();
+    // The bytes were produced above by our trusted compiler configuration.
+    unsafe { wasmtime::component::Component::deserialize(runtime.engine(), artifact) }.unwrap();
 }
 
 #[tokio::test]

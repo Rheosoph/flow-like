@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
+import { installRuntimeHistoryGuard } from "../lib/service-runtime/history-guard";
 
 /**
  * Dexie-based UI State Database
@@ -35,6 +36,7 @@ const uiStateDb = new Dexie("UI-State-DB") as Dexie & {
 	pageState: EntityTable<IUIPageState, "id">;
 	globalState: EntityTable<IUIGlobalState, "id">;
 };
+installRuntimeHistoryGuard(uiStateDb);
 
 uiStateDb.version(1).stores({
 	elementValues: "&id, appId, elementId, updatedAt",

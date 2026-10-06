@@ -1,4 +1,8 @@
-import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
+import {
+	PHASE_DEVELOPMENT_SERVER,
+	PHASE_PRODUCTION_BUILD,
+} from "next/constants.js";
+import { prepareMonacoAssets } from "./scripts/prepare-monaco.mjs";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -29,6 +33,9 @@ const nextConfig = {
 };
 
 export default (phase) => {
+	if (phase === PHASE_DEVELOPMENT_SERVER || phase === PHASE_PRODUCTION_BUILD) {
+		prepareMonacoAssets();
+	}
 	if (phase !== PHASE_DEVELOPMENT_SERVER) return nextConfig;
 	return {
 		...nextConfig,

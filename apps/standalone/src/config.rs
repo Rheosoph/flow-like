@@ -29,6 +29,8 @@ pub struct PlacementConfig {
     pub bit_pins: Vec<flow_like_device_protocol::ProjectBitPin>,
     #[serde(default)]
     pub hosting: Option<HostingConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tunnel_services: Vec<TunnelServiceConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_certificate_id: Option<String>,
     #[serde(default = "default_max_replicas")]
@@ -123,13 +125,92 @@ pub struct HostingConfig {
     pub port: u16,
     pub max_in_flight: u16,
     pub request_timeout_secs: u32,
-    pub auth_secret: String,
+    #[serde(default, skip_serializing_if = "ServiceAuthentication::is_token")]
+    pub authentication: ServiceAuthentication,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_secret: Option<String>,
     /// Remote `https://` sources the service UI may load images, media, frames and fetches from,
     /// such as the CDN serving a Page's pictures or 3D models. The UI stays same-origin otherwise,
     /// so streamed workflow output cannot make the browser send conversation data elsewhere.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ui_origins: Vec<String>,
 }
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelServiceProtocol {
+    Tcp,
+    Http,
+    Https,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelServiceConfig {
+    pub id: String,
+    pub host: std::net::IpAddr,
+    pub port: u16,
+    pub protocol: TunnelServiceProtocol,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_server_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_sha256_fingerprint: Option<String>,
+}
+
+impl TunnelServiceConfig {
+    pub fn validate(&self) -> Result<()> {
+        validate_id("tunnel service", &self.id)?;
+        ensure!(self.id != "hosting", "The hosting service name is reserved");
+        ensure!(
+            self.host.is_loopback() && self.port > 0,
+            "Tunnel services require a loopback listener and nonzero port"
+        );
+        if self.protocol == TunnelServiceProtocol::Https {
+            let name = self
+                .tls_server_name
+                .as_deref()
+                .context("HTTPS tunnel services require a TLS server name")?;
+            ensure!(
+                !name.is_empty() && name.len() <= 253,
+                "Invalid tunnel TLS server name"
+            );
+            rustls::pki_types::ServerName::try_from(name.to_owned())
+                .context("Invalid tunnel TLS server name")?;
+            let pin = self
+                .tls_sha256_fingerprint
+                .as_deref()
+                .context("HTTPS tunnel services require a certificate fingerprint")?;
+            ensure!(
+                pin.len() == 64
+                    && pin
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "Invalid tunnel certificate fingerprint"
+            );
+        } else {
+            ensure!(
+                self.tls_server_name.is_none() && self.tls_sha256_fingerprint.is_none(),
+                "Only HTTPS tunnel services accept TLS settings"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceAuthentication {
+    #[default]
+    Token,
+    None,
+}
+
+impl ServiceAuthentication {
+    fn is_token(&self) -> bool {
+        *self == Self::Token
+    }
+}
+
 impl HostingConfig {
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -138,7 +219,18 @@ impl HostingConfig {
                 && (1..=3600).contains(&self.request_timeout_secs),
             "Invalid service listener limits"
         );
-        validate_id("service authentication secret", &self.auth_secret)?;
+        match self.authentication {
+            ServiceAuthentication::Token => validate_id(
+                "service authentication secret",
+                self.auth_secret
+                    .as_deref()
+                    .context("Token authentication requires a service authentication secret")?,
+            )?,
+            ServiceAuthentication::None => ensure!(
+                self.auth_secret.is_none(),
+                "A service without token authentication cannot name an authentication secret"
+            ),
+        }
         ensure!(
             self.ui_origins.len() <= MAX_UI_ORIGINS,
             "The service UI allows at most {MAX_UI_ORIGINS} remote origins, got {}",
@@ -242,6 +334,18 @@ impl PlacementConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.tunnel_services.len() <= 16,
+            "At most 16 tunnel services can be configured"
+        );
+        let mut tunnel_ids = std::collections::HashSet::new();
+        for service in &self.tunnel_services {
+            service.validate()?;
+            ensure!(
+                tunnel_ids.insert(&service.id),
+                "Duplicate tunnel service name"
+            );
+        }
         if let Some(id) = &self.tls_certificate_id {
             flow_like_device_protocol::validate_certificate_id(id)?;
         }
@@ -456,6 +560,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn named_tunnel_services_require_loopback_and_explicit_https_identity() -> Result<()> {
+        let base =
+            serde_json::json!({"id":"database","host":"127.0.0.1","port":5432,"protocol":"tcp"});
+        let parse = |value: Value| -> Result<()> {
+            serde_json::from_value::<TunnelServiceConfig>(value)?.validate()
+        };
+        parse(base.clone())?;
+        for (key, value) in [
+            ("id", serde_json::json!("hosting")),
+            ("host", serde_json::json!("0.0.0.0")),
+            ("host", serde_json::json!("192.168.1.1")),
+            ("port", serde_json::json!(0)),
+        ] {
+            let mut invalid = base.clone();
+            invalid[key] = value;
+            assert!(parse(invalid).is_err());
+        }
+        let mut https = base.clone();
+        https["protocol"] = "https".into();
+        assert!(parse(https.clone()).is_err());
+        https["tls_server_name"] = "api.localhost".into();
+        https["tls_sha256_fingerprint"] = "a".repeat(64).into();
+        parse(https.clone())?;
+        https["protocol"] = "http".into();
+        assert!(parse(https).is_err());
+        let root = tempfile::tempdir()?;
+        let mut config: PlacementConfig = serde_json::from_value(
+            serde_json::json!({"id":"placement","project_id":"project","deployment_id":"deployment","revision":"v1","source":"offline","project_path":root.path(),"events":[{"event_id":"rest","event_version":[1,0,0],"board_version":[1,0,0]}],"tunnel_services":[base]}),
+        )?;
+        config.validate()?;
+        config
+            .tunnel_services
+            .push(config.tunnel_services[0].clone());
+        assert!(config.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn resolves_relative_project_and_requires_online_authorization() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = dir.path().join("placement.json");
@@ -474,6 +616,30 @@ mod tests {
         config.source = ProjectSource::Offline;
         config.events.push(config.events[0].clone());
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn service_authentication_requires_an_explicit_opt_out() {
+        let mut value = serde_json::json!({
+            "host":"127.0.0.1","port":8080,"max_in_flight":4,"request_timeout_secs":30
+        });
+        let parse = |value: &Value| serde_json::from_value::<HostingConfig>(value.clone()).unwrap();
+        assert!(parse(&value).validate().is_err());
+        value["auth_secret"] = "service".into();
+        let legacy = parse(&value);
+        assert_eq!(legacy.authentication, ServiceAuthentication::Token);
+        legacy.validate().unwrap();
+        value["authentication"] = "none".into();
+        assert!(parse(&value).validate().is_err());
+        value.as_object_mut().unwrap().remove("auth_secret");
+        let public = parse(&value);
+        public.validate().unwrap();
+        assert_eq!(public.authentication, ServiceAuthentication::None);
+        assert_eq!(serde_json::to_value(public).unwrap(), value);
+        value["authentication"] = "token".into();
+        assert!(parse(&value).validate().is_err());
+        value["authentication"] = "unknown".into();
+        assert!(serde_json::from_value::<HostingConfig>(value).is_err());
     }
 
     #[test]

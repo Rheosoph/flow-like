@@ -30,7 +30,7 @@ use super::tool_spec::{
 use super::types::{BoardCommand, RunContext, TemplateInfo};
 use crate::flow::ast::{
     ReconcileResult, RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
-    destructive_flowscript_command_summaries,
+    destructive_flowscript_command_summaries, flowscript_analysis_ast,
 };
 use crate::flow::board::Board;
 use crate::state::FlowLikeState;
@@ -2746,6 +2746,7 @@ impl FlowScriptRepairTracker {
 pub fn profile_flowscript_candidate(source: &str) -> FlowScriptCandidateProfile {
     match flow_like_ast::parse(source) {
         Ok(ast) => {
+            let ast = flowscript_analysis_ast(&ast, &[]);
             let mut profile = FlowScriptCandidateProfile::default();
             profile.interfaces.extend(
                 ast.interfaces
@@ -2787,7 +2788,7 @@ pub fn profile_flowscript_candidate(source: &str) -> FlowScriptCandidateProfile 
                 profile.event_entries = profile.event_entries.saturating_add(1);
                 profile.event_names.insert(format!(
                     "{}:{}",
-                    normalize_candidate_symbol(&event.name),
+                    normalize_candidate_symbol(event.event_name.as_deref().unwrap_or(&event.name)),
                     normalize_candidate_symbol(&event.node_type)
                 ));
                 if flowscript_block_calls_any(&event.body, &profile.helper_functions) {
@@ -4728,6 +4729,60 @@ eventsGeneric(payload: Struct) {
         assert_eq!(profile.event_entries, 2);
         assert_eq!(profile.top_level_variables.len(), 2);
         assert_eq!(profile.events_calling_helpers, 2);
+    }
+
+    #[test]
+    fn repair_profile_counts_nested_modules_and_resolves_local_helpers() {
+        let source = r#"use active::nested as selected
+module active {
+    module nested {
+        function send(message: string) { slackSend({ message: message }) }
+        function run() { send("hello") }
+        eventsSimple notify() { run() }
+        detached { logInfo({ message: "retained scope" }) }
+    }
+}
+module inactive {
+    function send() { emailSend({ message: "not called" }) }
+    function run() { send() }
+}
+eventsSimple start() { selected::run() }
+"#;
+        let profile = profile_flowscript_candidate(source);
+        assert_eq!(
+            profile.helper_functions,
+            HashSet::from([
+                "active::nested::send".to_string(),
+                "active::nested::run".to_string(),
+                "inactive::send".to_string(),
+                "inactive::run".to_string(),
+            ])
+        );
+        assert_eq!(profile.non_empty_helper_functions, profile.helper_functions);
+        assert_eq!(profile.helper_non_helper_call_sites, 2);
+        assert_eq!(profile.helper_domain_call_sites, 2);
+        assert_eq!(profile.call_sites, 7);
+        assert_eq!(profile.meaningful_statements, 7);
+        assert_eq!(profile.event_entries, 2);
+        assert_eq!(profile.events_calling_helpers, 2);
+        assert!(profile.event_names.contains("active::nested::notify:"));
+    }
+
+    #[test]
+    fn repair_profile_does_not_drop_scope_when_helpers_move_into_modules() {
+        let original = r#"function send() { slackSend({ message: "hello" }) }
+eventsSimple() { send() }
+"#;
+        let modular = r#"module delivery {
+    function send() { slackSend({ message: "hello" }) }
+}
+eventsSimple() { delivery::send() }
+"#;
+        let before = profile_flowscript_candidate(original);
+        let after = profile_flowscript_candidate(modular);
+        assert_eq!(before.completeness_score(), after.completeness_score());
+        assert_eq!(after.events_calling_helpers, 1);
+        assert_eq!(after.helper_domain_call_sites, 1);
     }
 
     #[test]

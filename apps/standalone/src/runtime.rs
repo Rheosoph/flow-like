@@ -406,9 +406,8 @@ fn placement_local_config(placement: &PlacementConfig, data_root: &Path) -> Resu
     if !placement.bit_pins.is_empty() {
         // Changed model metadata gets a distinct local path. An old replica
         // can retain its open model while the next revision materializes.
-        let digest =
-            flow_like_device_protocol::artifact_sha256(&serde_json::to_vec(&placement.bit_pins)?);
-        config.register_bits_store(local_store(&data_root.join("bits").join(digest))?);
+        let bits = crate::dependencies::placement_bit_store(placement, data_root)?;
+        config.register_bits_store(local_store(&bits)?);
     }
     Ok(config)
 }
@@ -453,6 +452,7 @@ async fn initialize_state(
     // arbitrary filesystem paths remain unavailable to deployed workflows.
     state.execution_environment = ExecutionEnvironment::Server;
     state.request_authorizer = authorizer;
+    state.local_model_router = crate::models::router::placement_router();
     state.service_tls_provider = service_tls;
     if let Some(registry) = registry {
         state.set_lance_store_registry(registry);
@@ -746,9 +746,10 @@ async fn run_with_state_listener<F: Future<Output = Result<()>>>(
             continue;
         }
 
-        // A person starts it; nothing listens for it and it reports no readiness of its own.
+        // A person starts it. An optional configured listener also exposes its streamed run route.
         #[cfg(feature = "on-demand")]
         if kind == EventKind::OnDemand {
+            native_host_required |= config.hosting.is_some();
             let event = crate::on_demand::prepare(crate::hosting::PreparedInvocation {
                 event,
                 template,
@@ -851,7 +852,7 @@ async fn run_with_state_listener<F: Future<Output = Result<()>>>(
     }
     ensure!(
         native_host_required || config.hosting.is_none(),
-        "Hosting configuration requires an HTTP, chat, or Page event"
+        "Hosting configuration requires an HTTP, chat, Page, quick action, or form event"
     );
     if stop.is_cancelled() {
         return Ok(());
@@ -896,7 +897,7 @@ async fn run_with_state_listener<F: Future<Output = Result<()>>>(
     if let Some(context) = &on_demand_context {
         crate::on_demand::prepare_state(&on_demand, context)?;
     }
-    let hosting = if !hosted.is_empty() {
+    let hosting = if native_host_required {
         Some(
             crate::hosting::PreparedHost::bind_with_listener(
                 config,
@@ -923,7 +924,7 @@ async fn run_with_state_listener<F: Future<Output = Result<()>>>(
         if let Some(sub) = delegating_user_id.clone() {
             hosting.set_execution_sub(sub)?;
         }
-        // A service with a web endpoint anyway also offers its forms on its service page.
+        // An explicitly configured listener offers its forms on the service page.
         #[cfg(feature = "on-demand")]
         if let Some(context) = &on_demand_context {
             hosting.with_on_demand(&on_demand, context.counters())?;
@@ -1608,6 +1609,7 @@ pub(crate) mod tests {
             package_pins: Vec::new(),
             bit_pins: Vec::new(),
             max_replicas: 1,
+            tunnel_services: vec![],
             tls_certificate_id: None,
             hosting: None,
             variables: Default::default(),
@@ -1646,6 +1648,70 @@ pub(crate) mod tests {
         assert!(private_runtime_directory(&link).is_err());
         assert_eq!(std::fs::metadata(revision.path())?.mode() & 0o777, 0o555);
         std::fs::set_permissions(revision.path(), std::fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filesystem_embeddings_prefer_local_even_with_cloud_authorization() -> Result<()> {
+        use flow_like_runtime::{
+            bit::{Bit, BitTypes},
+            flow_like_model_provider::provider::{
+                EmbeddingModelProvider, ModelProvider, Pooling, Prefix, RemoteEmbeddingProvider,
+                RemoteExecutionConfig,
+            },
+            models::embedding_factory::{EmbeddingFactory, prefers_local_execution},
+        };
+        use flow_like_types::authorization::{AuthorizationFuture, AuthorizationRequest};
+
+        struct CloudAuthorizer;
+        impl RequestAuthorizer for CloudAuthorizer {
+            fn authorize<'a>(&'a self, _: AuthorizationRequest<'a>) -> AuthorizationFuture<'a> {
+                panic!("Choosing local embeddings must not request cloud authorization");
+            }
+        }
+
+        let bit = Bit {
+            bit_type: BitTypes::Embedding,
+            parameters: serde_json::to_value(EmbeddingModelProvider {
+                languages: vec!["en".into()],
+                vector_length: 384,
+                input_length: 512,
+                prefix: Prefix {
+                    query: String::new(),
+                    paragraph: String::new(),
+                },
+                pooling: Pooling::Mean,
+                provider: ModelProvider {
+                    provider_name: "Local".into(),
+                    model_id: Some("embedding-model".into()),
+                    api_surface: None,
+                    version: None,
+                    params: None,
+                },
+                remote: Some(RemoteExecutionConfig {
+                    implementation: Some(RemoteEmbeddingProvider::Internal),
+                    model_id: Some("embedding-model".into()),
+                    ..Default::default()
+                }),
+            })?,
+            ..Bit::default()
+        };
+        assert!(bit.try_to_embedding().unwrap().supports_remote());
+        let root = tempfile::tempdir()?;
+        let state = offline_state(root.path(), Some(Arc::new(CloudAuthorizer))).await?;
+        assert!(state.request_authorizer.is_some());
+        assert!(FlowLikeState::can_execute_local_bit_models(&state).await);
+        assert!(prefers_local_execution(&bit, &state).await);
+        // No file or download URL: the local loader stops before inference. A
+        // remote route would instead construct a proxy despite the missing file.
+        let error = match EmbeddingFactory::new()
+            .build_text_routed(&bit, state, None, None)
+            .await
+        {
+            Ok(_) => panic!("The filesystem host must load this embedding locally"),
+            Err(error) => error,
+        };
+        assert_eq!(error.to_string(), "No model path");
         Ok(())
     }
 
@@ -1756,7 +1822,8 @@ pub(crate) mod tests {
             port: address.port(),
             max_in_flight: 1,
             request_timeout_secs: 5,
-            auth_secret: "listener".into(),
+            authentication: Default::default(),
+            auth_secret: Some("listener".into()),
             ui_origins: Vec::new(),
         });
         let token = "t".repeat(32);
@@ -3056,7 +3123,8 @@ pub(crate) mod tests {
             port: 1,
             max_in_flight: 1,
             request_timeout_secs: 5,
-            auth_secret: "listener".into(),
+            authentication: Default::default(),
+            auth_secret: Some("listener".into()),
             ui_origins: Vec::new(),
         });
         crate::secrets::install(&config, "listener", "t".repeat(32).as_bytes()).unwrap();
@@ -3149,7 +3217,8 @@ pub(crate) mod tests {
             port,
             max_in_flight: 2,
             request_timeout_secs: 5,
-            auth_secret: "listener".into(),
+            authentication: Default::default(),
+            auth_secret: Some("listener".into()),
             ui_origins: Vec::new(),
         });
         crate::secrets::install(&config, "listener", "t".repeat(32).as_bytes()).unwrap();
@@ -3259,6 +3328,23 @@ pub(crate) mod tests {
         let endpoint = json!({"path": "/run/form", "method": "GET"});
         add_event(&mut free, &state, "endpoint-get", "http", &endpoint).await;
         run_with_state(&free, state, staged).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "on-demand")]
+    #[tokio::test]
+    async fn an_on_demand_only_service_can_explicitly_configure_hosting() -> Result<()> {
+        for kind in ["quick_action", "generic_form"] {
+            let directory = tempfile::tempdir()?;
+            let (config, state) =
+                service_of(directory.path(), kind, &[("run", serde_json::json!({}))]).await;
+            let staged = CancellationToken::new();
+            staged.cancel();
+            run_with_state(&config, state.clone(), staged).await?;
+            validate_rollout_with_state(&config, state.clone()).await?;
+            std::fs::remove_file(crate::config::private_secret_path(&config, "listener")?)?;
+            assert!(validate_rollout_with_state(&config, state).await.is_err());
+        }
         Ok(())
     }
 

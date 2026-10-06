@@ -6,6 +6,11 @@ import type { Surface } from "../../a2ui/types";
 import type { IChatWidget, IMessage } from "./chat-db";
 
 const rendered: Surface[] = [];
+const contexts: Array<{
+	appId?: string;
+	boardId?: string;
+	eventId?: string;
+}> = [];
 const scheduled: string[] = [];
 // bun keeps a module mock for every later file in the process, so both are put back in afterAll.
 const actualRenderer = { ...(await import("../../a2ui/A2UIRenderer")) };
@@ -14,8 +19,17 @@ const actualWidgetSnapshot = {
 };
 mock.module("../../a2ui/A2UIRenderer", () => ({
 	...actualRenderer,
-	A2UIRenderer: ({ surface }: { surface: Surface }) => {
+	A2UIRenderer: ({
+		surface,
+		...context
+	}: {
+		surface: Surface;
+		appId?: string;
+		boardId?: string;
+		eventId?: string;
+	}) => {
 		rendered.push(surface);
+		contexts.push(context);
 		return <div data-probe={surface.id} />;
 	},
 }));
@@ -26,7 +40,6 @@ mock.module("../../../lib/widget-snapshot", () => ({
 		scheduled.push(`${instanceId}@${signature}`);
 	},
 	unregisterWidgetSnapshotSource: () => {},
-	widgetSnapshotAttribute: () => ({}),
 }));
 afterAll(() => {
 	mock.restore();
@@ -111,10 +124,50 @@ async function setup() {
 
 beforeEach(() => {
 	rendered.length = 0;
+	contexts.length = 0;
 	scheduled.length = 0;
 });
 
 describe("embedded widgets during streaming", () => {
+	test("deployed widget origins cannot select another application's state or execution context", async () => {
+		const { MessageWidgets } = await import("./message-widgets");
+		const { root } = await setup();
+		const appId = `device-runtime:${crypto.randomUUID()}`;
+		const origin = {
+			appId: "studio-project",
+			boardId: "studio-board",
+			eventId: "studio-event",
+		};
+		const widgets = [{ ...widget(), origin }];
+		await act(async () => {
+			root.render(
+				<MessageWidgets
+					widgets={widgets}
+					appId={appId}
+					boardId="deployed-board"
+					eventId="deployed-event"
+					snapshots={false}
+				/>,
+			);
+		});
+		expect(contexts.at(-1)).toMatchObject({
+			appId,
+			boardId: "deployed-board",
+			eventId: "deployed-event",
+		});
+		await act(async () => {
+			root.render(
+				<MessageWidgets
+					widgets={widgets}
+					appId="ordinary-chat"
+					snapshots={false}
+				/>,
+			);
+		});
+		expect(contexts.at(-1)).toMatchObject(origin);
+		await act(async () => root.unmount());
+	});
+
 	test("streamed text chunks do not re-render an unchanged widget", async () => {
 		const { MessageComponent } = await import("./message");
 		const { root } = await setup();
@@ -210,7 +263,7 @@ describe("widget snapshot pre-capture", () => {
 
 	test("never runs when the chat does not attach snapshots", async () => {
 		const { MessageComponent } = await import("./message");
-		const { root } = await setup();
+		const { container, root } = await setup();
 		const widgets = [widget()];
 
 		await act(async () => {
@@ -232,6 +285,7 @@ describe("widget snapshot pre-capture", () => {
 			);
 		});
 		expect(scheduled).toHaveLength(0);
+		expect(container.querySelector("[data-chat-widget-instance]")).toBeNull();
 		await act(async () => root.unmount());
 	});
 });

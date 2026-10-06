@@ -29,9 +29,10 @@ import {
 	prepareOnlineMetadata,
 } from "../../../../lib/device-management/online-metadata";
 import {
-	desktopExportCommands,
+	type ExportCommands,
 	prepareDesktopProject,
 } from "../../../../lib/device-management/project-export";
+import type { IApp } from "../../../../lib/schema/app/app";
 import {
 	type IBackendState,
 	useBackend,
@@ -42,6 +43,7 @@ import {
 	useDeviceWorkspace,
 } from "../workspace/device-workspace-provider";
 import { useLatestFlows } from "../workspace/use-latest-flows";
+import { desktopExport } from "./desktop-export";
 import type { DeployPrepared } from "./step-props";
 import { planExportTypes } from "./update-path";
 
@@ -111,12 +113,20 @@ export interface DeployPrepareState {
 	importCopy(copy: ImportedCopy | null): void;
 }
 
-/** Test seams: the native export is only reachable inside the desktop app, and a busy flow is retried after a pause. */
+/**
+ * Test seams: the native export is only reachable inside the desktop app, and
+ * a busy flow is retried after a pause. `modelStore` asks the export for Bit
+ * metadata v2.
+ */
 export const deployPrepareSeams: {
-	exportCommands: typeof desktopExportCommands;
+	exportCommands: (
+		onlineApp?: IApp,
+		userSub?: string,
+		modelStore?: boolean,
+	) => Promise<ExportCommands>;
 	publish: PublishFlowOptions;
 } = {
-	exportCommands: desktopExportCommands,
+	exportCommands: desktopExport,
 	publish: {},
 };
 
@@ -133,6 +143,8 @@ interface PrepareContext {
 	profile: IProfile;
 	desktop: boolean;
 	account: string;
+	/** Every target acquires model files itself: Bit metadata goes v2. */
+	modelStore: boolean;
 	signal: AbortSignal;
 	/** Called as each check starts. */
 	enter(check: PrepareCheckId): void;
@@ -269,6 +281,7 @@ async function prepareOnline(context: PrepareContext): Promise<PrepareResult> {
 			profile,
 			signal,
 			approved,
+			context.modelStore,
 		);
 		context.enter("approved");
 		return {
@@ -277,7 +290,11 @@ async function prepareOnline(context: PrepareContext): Promise<PrepareResult> {
 	}
 	const exported = await prepareDesktopProject(
 		appId,
-		await deployPrepareSeams.exportCommands(approved.app),
+		await deployPrepareSeams.exportCommands(
+			approved.app,
+			undefined,
+			context.modelStore,
+		),
 		signal,
 		approved,
 	);
@@ -298,7 +315,11 @@ async function prepareOffline(context: PrepareContext): Promise<PrepareResult> {
 	context.enter("read_app");
 	const exported = await prepareDesktopProject(
 		context.appId,
-		await deployPrepareSeams.exportCommands(undefined, context.account),
+		await deployPrepareSeams.exportCommands(
+			undefined,
+			context.account,
+			context.modelStore,
+		),
 		context.signal,
 	);
 	try {
@@ -454,6 +475,7 @@ interface PrepareJob {
 	backend: IBackendState;
 	profile: IProfile;
 	account: string;
+	modelStore: boolean;
 	imported: ImportedCopy | null;
 }
 
@@ -514,10 +536,15 @@ function startPrepare(
  * (step 2 or later), again whenever that choice changes or `again()` is
  * called. Skipped for `version: "keep"` and for a local-only app on web.
  * `hubTypes` (the hub's `event_types`) decides which types the export names.
+ * `modelStore`: every target acquires model files itself (Bit metadata v2).
  */
 export function useDeployPrepare(
 	plan: DeployPlan | null,
-	options: { enabled?: boolean; hubTypes?: readonly string[] } = {},
+	options: {
+		enabled?: boolean;
+		hubTypes?: readonly string[];
+		modelStore?: boolean;
+	} = {},
 ): DeployPrepareState {
 	const backend = useBackend();
 	const workspace = useDeviceWorkspace();
@@ -535,13 +562,14 @@ export function useDeployPrepare(
 		options.hubTypes,
 	);
 	const { appId, offline, eventKey, typeKey } = target;
+	const modelStore = options.modelStore === true;
 	const flows = useLatestFlows(plan?.app ? (plan.mode ?? null) : null);
 	// The names of the Latest events and the exported types are part of the choice: another set is another bundle.
 	const latestKey = target.latest
 		.map((row) => `${row.eventId}@${row.boardId}`)
 		.join(",");
 	const key = target.wanted
-		? `${appId}|${offline ? "offline" : "online"}|${eventKey}|${latestKey}|${typeKey}|${attempt}|${imported ? "import" : "app"}`
+		? `${appId}|${offline ? "offline" : "online"}|${eventKey}|${latestKey}|${typeKey}|${attempt}|${imported ? "import" : "app"}|${modelStore ? "v2" : "v1"}`
 		: "";
 	const newest = useRef({
 		backend,
@@ -569,11 +597,12 @@ export function useDeployPrepare(
 				types: typeKey ? typeKey.split(",") : [],
 				offline,
 				desktop,
+				modelStore,
 				...newest.current,
 			},
 			(next) => setRun({ key, ...next }),
 		);
-	}, [key, appId, eventKey, typeKey, offline, desktop]);
+	}, [key, appId, eventKey, typeKey, offline, desktop, modelStore]);
 
 	const current = run.key === key && key ? run : { key, ...IDLE };
 	const again = useCallback(() => setAttempt((value) => value + 1), []);

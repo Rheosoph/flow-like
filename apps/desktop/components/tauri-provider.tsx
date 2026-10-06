@@ -182,6 +182,7 @@ export class TauriBackend implements IBackendState {
 		public auth?: AuthContextProps,
 		public profile?: IProfile,
 		private readonly canHostMLX = false,
+		private readonly deviceModels = false,
 	) {
 		this._apiState = new TauriApiState();
 		this.apiState = this._apiState;
@@ -221,6 +222,7 @@ export class TauriBackend implements IBackendState {
 			canHostEmbeddings: true,
 			canExecuteLocally: true,
 			canUseNativeAgentProviders: !isMobileDevice(),
+			deviceModels: this.deviceModels,
 		};
 	}
 
@@ -1000,6 +1002,12 @@ export function TauriProvider({
 			} catch (error) {
 				console.warn("Failed to detect MLX support:", error);
 			}
+			let deviceModels = false;
+			try {
+				deviceModels = await invoke<boolean>("device_models_available");
+			} catch (error) {
+				console.warn("Failed to detect device model support:", error);
+			}
 
 			// Publish the backend only after capability detection. Consumers never
 			// observe a stale backend object whose synchronous capabilities changed
@@ -1021,6 +1029,7 @@ export function TauriProvider({
 				undefined,
 				undefined,
 				canHostMLX,
+				deviceModels,
 			);
 			console.timeEnd("TauriProvider Initialization");
 

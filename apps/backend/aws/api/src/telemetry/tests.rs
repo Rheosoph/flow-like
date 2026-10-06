@@ -150,6 +150,87 @@ fn service(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pooled_http_connections_do_not_hold_request_spans_past_response_eof() {
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+
+    let exports = Exports::default();
+    let (telemetry, queue, _provider, dispatch) = harness(recorder(&exports), 1.0);
+    let _subscriber = tracing::dispatcher::set_default(&dispatch);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        hyper::server::conn::http1::Builder::new()
+            .serve_connection(
+                TokioIo::new(socket),
+                hyper::service::service_fn(|_| async {
+                    Ok::<_, Infallible>(Response::new(Body::from("upstream")))
+                }),
+            )
+            .await
+            .unwrap();
+    });
+    let client = Client::builder(TokioExecutor::new()).build_http::<Body>();
+    let uri: hyper::Uri = format!("http://{address}/").parse().unwrap();
+    let upstream = client.clone();
+    let route_service = tower::service_fn(move |_request: Request| {
+        let client = upstream.clone();
+        let uri = uri.clone();
+        async move {
+            let route = tracing::info_span!(
+                target: "flow_like::observability", "http.request",
+                http.route = "/items/{id}"
+            );
+            async {
+                let call = tracing::info_span!(
+                    target: "flow_like::observability", "upstream.request",
+                    rpc.service = "test"
+                );
+                async {
+                    let response = client.get(uri).await.unwrap();
+                    axum::body::to_bytes(Body::new(response.into_body()), 64)
+                        .await
+                        .unwrap();
+                }
+                .instrument(call)
+                .await;
+            }
+            .instrument(route.clone())
+            .await;
+            Ok::<_, Infallible>(Response::new(Body::new(RouteBody {
+                body: Body::from("ok"),
+                span: Some(route),
+            })))
+        }
+    });
+
+    assert_eq!(
+        complete(&telemetry, route_service, request(true)).await,
+        "ok"
+    );
+    let batch = exports
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .expect("completed requests must export before pooled connections close");
+    for name in ["lambda.invocation", "http.request", "upstream.request"] {
+        assert!(
+            batch.iter().any(|span| span.name == name),
+            "{name} must close and export while the upstream connection remains pooled"
+        );
+    }
+    assert!(queue.queue.lock().unwrap().is_empty());
+    assert!(
+        !server.is_finished(),
+        "the keep-alive connection is still open"
+    );
+    drop(client);
+    server.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn streaming_flush_waits_for_eof_and_exports_the_complete_parent_chain() {
     let exports = Exports::default();
     let (telemetry, queue, _provider, dispatch) = harness(recorder(&exports), 0.0);

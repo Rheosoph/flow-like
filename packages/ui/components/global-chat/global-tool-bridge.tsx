@@ -192,7 +192,11 @@ import {
 	verifyAtomicBoardDeliveryReadback,
 	verifyAtomicBoardReadback,
 } from "./flowpilot-atomic-readback";
-import { inspectFlowPilotBoard } from "./flowpilot-board-inspection";
+import { flowPilotBoardActivity } from "./flowpilot-board-activity";
+import {
+	inspectFlowPilotBoard,
+	inspectFlowPilotBoardWhenIdle,
+} from "./flowpilot-board-inspection";
 import { executeFlowPilotBoardReview } from "./flowpilot-board-review";
 import { inspectFlowPilotWidgetPage } from "./flowpilot-widget-inspection";
 import {
@@ -4604,6 +4608,8 @@ export function GlobalToolBridge() {
 						getVisibleAppIds: getProfileAppIds,
 						assertActive: () =>
 							assertRequestActive(request, "native review resolution"),
+						getActiveRun: (appId, boardId) =>
+							flowPilotBoardActivity.snapshot(appId, boardId),
 						approve: async (job, action) => {
 							const answer = await approveBoardEditJob(job, action);
 							return answer && "approved" in answer ? answer.approved : null;
@@ -4671,27 +4677,21 @@ export function GlobalToolBridge() {
 								message:
 									"The requested app is not visible in the current profile.",
 							};
-						const release = await boardEditCoordinator.acquire(
-							boardEditLockKey(appId, boardId),
+						return inspectFlowPilotBoardWhenIdle(
+							backend.boardState,
+							{ appId, boardId },
 							{
-								deadlineAtMs: requestDeadline(request),
-								signal:
-									requestExecutionLeasesRef.current.get(request)?.controller
-										.signal,
-								onInvalidated: () => markRequestExpired(request.requestId),
+								assertActive: () =>
+									assertRequestActive(request, "board inspection"),
+								acquireOptions: {
+									deadlineAtMs: requestDeadline(request),
+									signal:
+										requestExecutionLeasesRef.current.get(request)?.controller
+											.signal,
+									onInvalidated: () => markRequestExpired(request.requestId),
+								},
 							},
 						);
-						try {
-							assertRequestActive(request, "board inspection");
-							const result = await inspectFlowPilotBoard(backend.boardState, {
-								appId,
-								boardId,
-							});
-							assertRequestActive(request, "board inspection readback");
-							return result;
-						} finally {
-							release();
-						}
 					}
 					const instruction = argString(args, "instruction");
 					if (!instruction)
@@ -4756,8 +4756,8 @@ export function GlobalToolBridge() {
 							repairScope,
 						});
 					}
-					// Explain/readback waits too, otherwise it can observe the pre-commit board while
-					// a mutation run for the same board still owns the authoritative snapshot.
+					// Explanations wait for the authoritative snapshot. Status inspections above
+					// report the current owner immediately when this lock is held.
 					const boardEditAcquireOptions = () => ({
 						deadlineAtMs: requestDeadline(request),
 						signal:
@@ -4785,6 +4785,9 @@ export function GlobalToolBridge() {
 					let generationFinalWorkspaceStatus: string | undefined;
 					let generationAppliedCommands: number | undefined;
 					let generationPersistedReadbackVerified: boolean | undefined;
+					let boardActivity:
+						| ReturnType<typeof flowPilotBoardActivity.begin>
+						| undefined;
 					try {
 						assertRequestActive(request, "serialized board snapshot");
 						let createdBoard = false;
@@ -4874,6 +4877,15 @@ export function GlobalToolBridge() {
 							assertRequestActive(request, "board-scoped serialization");
 						}
 						const boardRecoveryKey = boardEditRecoveryKey(appId, boardId);
+						boardActivity = flowPilotBoardActivity.begin(
+							appId,
+							boardId,
+							request.requestId,
+							{
+								mode: readOnly ? "explain" : "edit",
+								signal: requestSignal,
+							},
+						);
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardRecoveryKey,
 							repairScope,
@@ -5149,11 +5161,37 @@ export function GlobalToolBridge() {
 						) => {
 							let stepsChanged = false;
 							for (const event of events) {
+								if (
+									event.type === "tool_start" ||
+									event.type === "tool_progress" ||
+									event.type === "tool_end"
+								) {
+									const data = event.data as
+										| Record<string, unknown>
+										| undefined;
+									const toolName = String(
+										data?.tool_name ??
+											data?.toolName ??
+											data?.tool ??
+											data?.name ??
+											"",
+									);
+									boardActivity?.tool(
+										toolName,
+										event.type === "tool_end" ? "returned" : "running",
+									);
+								}
 								if (event.type === "flowscript_workspace") {
 									const candidate = parseFlowScriptWorkspaceCandidate(
 										event.raw,
 									);
 									if (candidate) {
+										boardActivity?.update({
+											workspace_status: candidate.status,
+											...(candidate.status === "queued"
+												? { commit_state: "queued" }
+												: {}),
+										});
 										generationTrace?.recordCandidate(candidate);
 										if (candidate.status === "drafting") {
 											// Incomplete source is useful to watch, but it is not a repair
@@ -5199,7 +5237,18 @@ export function GlobalToolBridge() {
 									const evidence = extractNestedFlowScriptValidationEvidence(
 										event.data,
 									);
-									if (evidence) lastFlowScriptValidation = evidence;
+									if (evidence) {
+										lastFlowScriptValidation = evidence;
+										boardActivity?.update({
+											...(evidence.draftId !== undefined
+												? { draft_id: evidence.draftId }
+												: {}),
+											...(evidence.revision !== undefined
+												? { revision: evidence.revision }
+												: {}),
+											diagnostic_count: evidence.diagnostics.length,
+										});
+									}
 									// The accepted plan arrives early and the run summary carries the
 									// final applied/remaining counts, so later frames refine the same
 									// plan rather than replacing it with a less complete one.
@@ -5228,8 +5277,10 @@ export function GlobalToolBridge() {
 							}
 							if (stepsChanged) publishSubSteps();
 						};
-						const onToken = (chunk: string) =>
+						const onToken = (chunk: string) => {
+							boardActivity?.update();
 							consumeSubRunEvents(pushSubRunChunk(chunk));
+						};
 						let subRunFlushed = false;
 						const flushSubRun = () => {
 							if (subRunFlushed) return;
@@ -5325,6 +5376,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 						);
 						let nestedRunSettled = false;
 						try {
+							boardActivity?.update({
+								stage: readOnly ? "explaining" : "generating",
+							});
 							response = await backend.boardState.copilot_chat(
 								"Board",
 								board,
@@ -5366,6 +5420,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 							);
 							const returnedCommands = response.commands ?? [];
 							flowIrCommit = response.flow_ir_commit;
+							boardActivity?.update({
+								stage: "settling",
+								...(flowIrCommit
+									? {
+											commit_state: "queued",
+											draft_id: flowIrCommit.draft_id,
+											revision: flowIrCommit.revision,
+										}
+									: {}),
+							});
 							const hadRetainedCompiledBatch = Boolean(flowIrCommit);
 							hadReturnedCommands = returnedCommands.length > 0;
 							returnedCommandCount = returnedCommands.length;
@@ -5489,6 +5553,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 									job.review.replacementMode ||
 									job.review.destructiveEffects.length > 0;
 								if (useGlobalChatStore.getState().autoMode) {
+									boardActivity?.update({
+										stage: "applying",
+										commit_state: "applying",
+									});
 									// Auto mode authorizes every board mutation, deletions included.
 									// Settle the durable job before replying so the parent agent
 									// receives the applied board's Event ids and can finish app-level
@@ -5508,6 +5576,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 										appliedCommands =
 											resolvedResult?.commands.length ??
 											job.review.commandCount;
+										boardActivity?.update({
+											stage: "verifying",
+											commit_state: "applied",
+										});
 										const delivery = await deliverNativeBoardEditJob(
 											resolvedJob,
 											boardEditJobResolutionHistoryMode(resolved),
@@ -5600,6 +5672,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 							if (flowIrCommit) {
 								assertRequestActive(request, "atomic compiled workflow apply");
+								boardActivity?.update({
+									stage: "applying",
+									commit_state: "applying",
+								});
 								const token = flowIrCommit;
 								const surfaceNow = useAssistantSurface.getState().boardSurface;
 								const applyLive =
@@ -5652,6 +5728,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 									...compiledResult.diagnostics,
 								];
 								if (compiledResult.status === "applied") {
+									boardActivity?.update({
+										stage: "verifying",
+										commit_state: "applied",
+									});
 									appliedCommands = compiledResult.commands.length;
 									appliedViaLive = applyLive !== null;
 									flowIrCommit = undefined;
@@ -5685,6 +5765,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 								const flowscript = source;
 								const applyOnce = async (allowDeletions: boolean) => {
 									assertRequestActive(request, "FlowScript apply");
+									boardActivity?.update({
+										stage: "applying",
+										commit_state: "applying",
+									});
 									if (backend.boardState.createBoardEditJob) {
 										appliedCommands = 0;
 										diagnostics = [
@@ -6360,6 +6444,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						draftingWorkspaceTimer = undefined;
 						pendingDraftingWorkspace = undefined;
 						boardRecoveryScopeByRequestRef.current.delete(request.requestId);
+						boardActivity?.finish();
 						releaseBoardScopedEdit?.();
 						releaseBoardEdit?.();
 					}

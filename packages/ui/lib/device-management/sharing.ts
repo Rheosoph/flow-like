@@ -3,13 +3,24 @@ import { z } from "zod";
 import { base64url } from "./crypto";
 import { MAX_GRANTS } from "./model/gates";
 import {
+	KNOWN_CAPABILITIES,
+	PERMISSION_PRESETS,
 	type PermissionPreset,
+	agentAccepts,
+	capabilitiesAllowedFor,
+	hubAccepts,
 	isDeviceOnly,
 	orderCapabilities,
 	presetOf,
+	presetsFor,
 	runsCode,
+	unknownCapabilities,
 } from "./model/permissions";
-import type { HostIsolationMode } from "./model/types";
+import {
+	AGENT_FEATURES,
+	type AgentFeatures,
+	type HostIsolationMode,
+} from "./model/types";
 import type {
 	Capability,
 	DeviceReceipt,
@@ -91,7 +102,11 @@ export type AccessRulesErrorCode =
 	| "duplicate_grant"
 	| "too_many"
 	| "no_permissions"
-	| "certificates_unsupported";
+	| "certificates_unsupported"
+	| "models_unsupported"
+	| "hub_models_unsupported"
+	/** A grant holds a permission a newer client gave; re-signing here would take it away. */
+	| "unknown_permissions";
 
 export class AccessRulesError extends Error {
 	constructor(
@@ -383,33 +398,117 @@ export function capabilityDiff(
 
 /* Which permissions can be chosen. */
 
+/** What every agent a grant goes to accepts; a part is `undefined` while one of them was not read live. */
+export interface AgentSupport {
+	/** Manage certificates can be shared. */
+	certificates: boolean | undefined;
+	/** The flags all of them advertise. */
+	features: AgentFeatures | undefined;
+	/** Permissions every target hub verifies. Missing signals keep baseline permissions. */
+	supportedCapabilities?: readonly string[];
+}
+
+/** One agent as its last live read describes it; both are `undefined` until then. */
+export interface AgentFacts {
+	certificateSupport?: boolean;
+	features?: AgentFeatures;
+	supportedCapabilities?: readonly string[];
+}
+
+function certificatesOf(agents: readonly AgentFacts[]): boolean | undefined {
+	if (agents.some((agent) => agent.certificateSupport === false)) return false;
+	return agents.every((agent) => agent.certificateSupport === true)
+		? true
+		: undefined;
+}
+
+function sharedFeatures(
+	agents: readonly AgentFacts[],
+): AgentFeatures | undefined {
+	const known = agents.map((agent) => agent.features);
+	if (!known.length || known.includes(undefined)) return undefined;
+	const shared: AgentFeatures = {};
+	for (const flag of AGENT_FEATURES)
+		if (known.every((features) => features?.[flag] === 1)) shared[flag] = 1;
+	return shared;
+}
+
+/** Permissions accepted by every target agent and its hub. */
+export function agentSupportOf(agents: readonly AgentFacts[]): AgentSupport {
+	return {
+		certificates: certificatesOf(agents),
+		features: sharedFeatures(agents),
+		supportedCapabilities: KNOWN_CAPABILITIES.filter(
+			(capability) =>
+				agents.length > 0 &&
+				agents.every((agent) =>
+					hubAccepts(capability, agent.supportedCapabilities),
+				),
+		),
+	};
+}
+
 export type PermissionBlock =
 	| "device_only"
 	| "certificates_unsupported"
-	| "certificates_unknown";
+	| "certificates_unknown"
+	| "models_unsupported"
+	| "models_unknown"
+	| "hub_models_unsupported";
+
+function agentBlock(capability: Capability, support: AgentSupport) {
+	if (capability === "manage_certificates" && support.certificates !== true)
+		return support.certificates === false
+			? "certificates_unsupported"
+			: "certificates_unknown";
+	if (agentAccepts(capability, support.features))
+		return hubAccepts(capability, support.supportedCapabilities)
+			? null
+			: "hub_models_unsupported";
+	return support.features ? "models_unsupported" : "models_unknown";
+}
 
 /**
  * Why a permission cannot be given: device-wide permissions need whole-device
- * access, and Manage certificates needs an agent that supports sharing it
- * (`undefined` = the device was not read live yet). A permission the person
- * already holds is never blocked by agent support.
+ * access, Manage certificates needs an agent that supports sharing it, and
+ * model permissions need a supporting hub and agents that host models. A
+ * permission the person already holds stays available when support is unknown.
  */
 export function permissionBlock(
 	capability: Capability,
 	scopeKind: InventoryScope["kind"],
-	certificateSupport: boolean | undefined,
+	support: AgentSupport,
 	alreadyHeld = false,
 ): PermissionBlock | null {
 	if (scopeKind !== "device" && isDeviceOnly(capability)) return "device_only";
-	if (
-		capability === "manage_certificates" &&
-		!alreadyHeld &&
-		certificateSupport !== true
-	)
-		return certificateSupport === false
-			? "certificates_unsupported"
-			: "certificates_unknown";
-	return null;
+	return alreadyHeld ? null : agentBlock(capability, support);
+}
+
+/** A preset's permissions on agents with `features`: Device admin is every permission they accept. */
+export function presetCapabilities(
+	preset: PermissionPreset,
+	features: AgentFeatures | undefined,
+	supportedCapabilities?: readonly string[],
+): readonly Capability[] {
+	return preset === "device_admin"
+		? capabilitiesAllowedFor("device", features, supportedCapabilities)
+		: PERMISSION_PRESETS[preset];
+}
+
+/** The preset the picker offers for exactly these permissions, else "custom". */
+export function offeredPreset(
+	capabilities: readonly Capability[],
+	features: AgentFeatures | undefined,
+	supportedCapabilities?: readonly string[],
+): PermissionPreset | "custom" {
+	return (
+		presetsFor("device", features, supportedCapabilities).find((preset) =>
+			sameCapabilities(
+				presetCapabilities(preset, features, supportedCapabilities),
+				capabilities,
+			),
+		) ?? "custom"
+	);
 }
 
 /** The chosen permissions a scope can hold, in display order. */
@@ -682,6 +781,26 @@ function currentGrants(draft: AccessRulesDraft): ManagementGrant[] {
 }
 
 /**
+ * Every grant the next rules keep or change, including the version an upsert
+ * replaces, may hold only permissions this client knows: the ones it doesn't
+ * would be dropped from the signed rules, revoking them unseen.
+ */
+function checkKnownPermissions(
+	grants: readonly ManagementGrant[],
+	deviceId: string,
+) {
+	for (const grant of grants) {
+		const unknown = unknownCapabilities(grant.capabilities);
+		if (unknown.length)
+			throw new AccessRulesError(
+				"unknown_permissions",
+				`Grant ${grant.grant_id} on ${deviceId} holds permissions this client doesn't know (${unknown.join(", ")}); signing the rules here would drop them.`,
+				{ grantId: grant.grant_id },
+			);
+	}
+}
+
+/**
  * The next version of a device's rules: grants that ran out are dropped,
  * `upserts` replace their own grant or are added, `removeIds` are taken out,
  * and the rules are signed for another 31 days.
@@ -706,6 +825,17 @@ export function nextAccessRules(draft: AccessRulesDraft): ManagementPolicy {
 				{ grantId: grant.grant_id },
 			);
 	const replaced = checkRecipientIds(current, upserts);
+	checkKnownPermissions(
+		[
+			...current.filter(
+				(grant) =>
+					!removeIds.includes(grant.grant_id) &&
+					(grant.expires_at > now || replaced.has(grant.grant_id)),
+			),
+			...upserts,
+		],
+		deviceId,
+	);
 	const cap = rulesExpiryAfterSave(now);
 	const grants = [
 		...current.filter(

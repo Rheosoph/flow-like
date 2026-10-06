@@ -1184,17 +1184,17 @@ approval dialog with a "don't ask again this session" option before it runs."#,
         },
         PlatformToolSpec {
             name: "flowpilot_board",
-            description: r#"The only tool allowed to explain or change FlowScript, nodes, connections, layers and Event entries. UI belongs to `flowpilot_widget`; app data belongs to `data_studio_agent`.
+            description: r#"The only tool allowed to explain or change FlowScript, nodes, connections, layers and Event entries. UI belongs to `flowpilot_widget`; data to `data_studio_agent`.
 
-`inspect` requires exact app_id/board_id: canonical source/entry IDs without a model or writes. Check coverage; anchors identify nodes; expressions may share nodes. Avoid style-only repairs. No compile/run. `explain` delegates; its prose is not authoritative source.
+`inspect` requires exact app_id/board_id. It returns `in_progress` and run/draft status during edits, otherwise canonical source/entry IDs, without a model or writes. No compile/run. Check coverage; expressions may share nodes. `explain` delegates; its prose is not authoritative source.
 
-`edit` takes one complete acceptance contract; can create the first board. Parallelize independent boards; never overlap edits. Results: persisted `event_nodes`, draft diagnostics and `segments_remaining`/`manual_steps`. A timeout is an unknown outcome. Resume the retained draft on the same conversation/request and revision; preserve full scope. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft. Report partial/manual work. Use `flowpilot_board_review` to inspect, apply, or dismiss an existing native review without generating another edit."#,
+`edit` takes one complete acceptance contract. Parallelize independent boards; never overlap edits. Await `in_progress` work; do not retry or finish while pending. Results: persisted `event_nodes`, draft diagnostics and `segments_remaining`/`manual_steps`. A timeout has unknown outcome. Resume the retained draft on the same conversation/request and revision; preserve full scope. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft. Report partial/manual work. Resolve existing reviews with `flowpilot_board_review`."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "instruction": { "type": "string", "description": "Complete natural-language instruction or question for the board copilot. For mode=edit: preserve the original full acceptance contract across retries; when a prior result retained a draft, include the original user request text verbatim, name the retained draft_id + expected_revision, and request repair of that same retained production candidate with its diagnostics — never a minimal replacement or a new draft id. For a single retry after zero progress, materially change strategy by requiring a scope plan that splits the build into smaller segments so the first source write lands quickly, after one bounded declaration batch and no more than six ancillary pre-draft inspections; rewording alone is not a retry strategy. For mode=explain: the user's question. Optional and unused for inspect." },
-                        "mode": { "type": "string", "enum": ["edit", "explain", "inspect"], "description": "inspect reads authoritative source/facts directly; explain delegates a read-only question; edit builds or modifies (default)." },
+                        "mode": { "type": "string", "enum": ["edit", "explain", "inspect"], "description": "inspect returns active-run status or authoritative source/facts; explain delegates a read-only question; edit builds or modifies (default)." },
                         "app_id": { "type": "string", "description": "App id (from list_apps, create_app, or the CURRENTLY OPEN BOARD context)." },
                         "board_id": { "type": "string", "description": "Exact target required for inspect. For edit/explain, optional; defaults to the app's first board (or the open board), creating one if none exists. With create_new_board=true you may choose a new id here so flowpilot_board and flowpilot_widget can share the exact board contract." },
                         "board_name": { "type": "string", "description": "Name for the board if one has to be created. Optional." },
@@ -1219,7 +1219,7 @@ approval dialog with a "don't ask again this session" option before it runs."#,
         },
         PlatformToolSpec {
             name: "flowpilot_board_review",
-            description: r#"Recover a retained native board review without another specialist run. Use exact app_id/board_id. `list` reads retained jobs; `status` reads one job. `apply` applies or retries that exact compiled batch; `dismiss` releases its pending review. All except list require a returned job_id. For "apply it" or a pending-review blocker, list first, match the requested review, then resolve that job. Do not regenerate the workflow. Apply/dismiss use the host's review approval. Report the returned phase; applied work still needs separate runtime verification."#,
+            description: r#"Recover a retained native board review without regenerating. Use exact app_id/board_id. `list` reads jobs and active generation; empty reviews do not mean generation stopped. `status` reads one job. `apply` applies or retries its compiled batch; `dismiss` releases its review. All except list require a returned job_id. For "apply it" or a pending-review blocker, list first and resolve the matching job. Apply/dismiss use the host's review approval. Report the returned phase; applied work still needs runtime verification."#,
             schema: || {
                 json!({
                     "type": "object",

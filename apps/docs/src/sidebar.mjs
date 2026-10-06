@@ -426,6 +426,7 @@ export const sidebar = [
 					{ label: "Overview", slug: "devices" },
 					{ label: "Set Up a Device", slug: "devices/setup" },
 					{ label: "Deploy and Operate", slug: "devices/deployments" },
+					{ label: "Host Models", slug: "devices/models" },
 					{
 						label: "Service Access & Port Forwarding",
 						slug: "devices/service-access",

@@ -70,6 +70,22 @@ export interface IEventInput {
 	default_value?: number[] | null;
 	index: number;
 	optional?: boolean;
+	/** The pin is marked sensitive: its default is never copied here. */
+	sensitive?: boolean;
+	valid_values?: string[] | null;
+	/** `[min, max]`. */
+	range?: [number, number] | null;
+	step?: number | null;
+	/**
+	 * A sensitive pin's default exists but is withheld; an optional input left
+	 * out still runs with it.
+	 */
+	default_omitted?: boolean;
+	/**
+	 * Version of the rule that built this input; 0 or absent for inputs stored
+	 * before it, whose description and schema may still be board ref keys.
+	 */
+	inputs_format?: number;
 }
 
 export interface ICanaryEvent {

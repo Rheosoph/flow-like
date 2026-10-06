@@ -92,8 +92,9 @@ import {
 	TabsTrigger,
 	Textarea,
 } from "../ui";
+import { PinOptionsDialog } from "./pin-options-dialog";
+import { hasActivePinOptions, hasPinOptionSections } from "./pin-options-model";
 import { typeToColor } from "./utils";
-import { GeometrySubtypeSelect } from "./variables/geometry-variable";
 import { ValueTypeIcon } from "./variables/variables-menu";
 import { VariablesMenuEdit } from "./variables/variables-menu-edit";
 
@@ -115,7 +116,7 @@ function selectPreviewElement(type: IVariableType) {
 	return (
 		<div className="flex items-center gap-2">
 			<div
-				className={`size-2 rounded-full`}
+				className="size-2 rounded-full"
 				style={{ backgroundColor: typeToColor(type) }}
 			/>
 			<span>{type}</span>
@@ -123,7 +124,7 @@ function selectPreviewElement(type: IVariableType) {
 	);
 }
 
-const normalizeValueType = (vt: any): IValueType => {
+const normalizeValueType = (vt: unknown): IValueType => {
 	const s = String(vt ?? "").toLowerCase();
 	if (s === "array") return IValueType.Array;
 	if (s === "hashmap" || s === "map") return IValueType.HashMap;
@@ -212,10 +213,10 @@ const buildInitialEdits = (
 		isNodeMode && (entity as INode).name === "events_generic";
 
 	for (const pin of Object.values(entity.pins)) {
-		const p: any = pin;
-		const friendly = p?.friendly_name ?? p?.name ?? pin.id;
-		let description = p?.description ?? "";
-		let schema = p?.schema ?? null;
+		const p: typeof pin & { valueType?: unknown } = pin;
+		const friendly = p.friendly_name ?? p.name ?? pin.id;
+		let description = p.description ?? "";
+		let schema = p.schema ?? null;
 
 		// Resolve description ref if it's a hash
 		const descRef = boardRef?.current?.refs?.[description];
@@ -237,7 +238,7 @@ const buildInitialEdits = (
 		}
 
 		// Override description for payload pin on generic_event nodes
-		if (isGenericEvent && p?.name === "payload") {
+		if (isGenericEvent && p.name === "payload") {
 			description = i18next.t(
 				"catchAllForAdditionalMetadata",
 				"(Catch all for additional metadata)",
@@ -249,13 +250,13 @@ const buildInitialEdits = (
 			name: toMachineName(friendly),
 			friendly_name: friendly,
 			description: description,
-			data_type: p?.data_type ?? IVariableType.Generic,
-			options: p?.options ?? null,
+			data_type: p.data_type ?? IVariableType.Generic,
+			options: p.options ?? null,
 			schema: schema,
 			pin_type: pin.pin_type,
 			index: pin.index ?? 1,
-			value_type: normalizeValueType(p?.value_type ?? p?.valueType),
-			default_value: p?.default_value ?? null,
+			value_type: normalizeValueType(p.value_type ?? p.valueType),
+			default_value: p.default_value ?? null,
 		};
 	}
 	return out;
@@ -614,7 +615,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				</DialogHeader>
 				<Tabs
 					value={tab}
-					onValueChange={(v) => setTab(v as any)}
+					onValueChange={(v) => setTab(v as typeof tab)}
 					className="mt-2"
 				>
 					<TabsList
@@ -639,20 +640,22 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 					{isGenericEvent && (
 						<TabsContent value="metadata" className="mt-3 space-y-4">
 							<div className="space-y-2">
-								<label className="text-sm font-medium">
+								<Label htmlFor="generic-event-node-name">
 									{t("nodeName", "Node Name")}
-								</label>
+								</Label>
 								<Input
+									id="generic-event-node-name"
 									value={nodeName}
 									onChange={(e) => setNodeName(e.target.value)}
 									placeholder={t("enterNodeName", "Enter node name")}
 								/>
 							</div>
 							<div className="space-y-2">
-								<label className="text-sm font-medium">
+								<Label htmlFor="generic-event-node-description">
 									{t("nodeDescription", "Node Description")}
-								</label>
+								</Label>
 								<Textarea
+									id="generic-event-node-description"
 									value={nodeDescription}
 									onChange={(e) => setNodeDescription(e.target.value)}
 									placeholder={t(
@@ -854,15 +857,6 @@ export const CacheSettings: React.FC<{
 		</div>
 	);
 };
-
-// Helpers
-const toCSV = (arr?: string[] | null) =>
-	arr && arr.length > 0 ? arr.join(", ") : "";
-const fromCSVStrings = (s: string): string[] =>
-	s
-		.split(",")
-		.map((x) => x.trim())
-		.filter((x) => x.length > 0);
 
 interface PinListProps {
 	geometryEnabled?: boolean;
@@ -1094,6 +1088,7 @@ const SortablePinRow: React.FC<{
 	};
 
 	const [expanded, setExpanded] = useState(false);
+	const [optionsOpen, setOptionsOpen] = useState(false);
 	const [editingName, setEditingName] = useState(false);
 	const [nameDraft, setNameDraft] = useState(pin.friendly_name);
 	const optionalCapable = canBeOptional(pin, isGenericEvent);
@@ -1248,18 +1243,20 @@ const SortablePinRow: React.FC<{
 				>
 					<Trash2Icon className="h-4 w-4 text-destructive-foreground" />
 				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					onClick={() =>
-						(
-							document.getElementById(`opts-${pin.id}`) as HTMLButtonElement
-						)?.click()
-					}
-					title="Options"
-				>
-					<SlidersHorizontalIcon className="h-4 w-4" />
-				</Button>
+				{hasPinOptionSections(pin) && (
+					<Button
+						variant="ghost"
+						size="icon"
+						className="relative"
+						onClick={() => setOptionsOpen(true)}
+						title={t("editPinOptions", "Edit pin options")}
+					>
+						<SlidersHorizontalIcon className="h-4 w-4" />
+						{hasActivePinOptions(pin) && (
+							<span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary" />
+						)}
+					</Button>
+				)}
 			</div>
 			{expanded && (
 				<div className="p-2 space-y-3">
@@ -1285,22 +1282,26 @@ const SortablePinRow: React.FC<{
 						<PinOptionalSection pin={pin} onEdit={onEdit} refs={refs} />
 					)}
 				</div>
-			)}{" "}
-			<div className="sr-only">
-				<PinOptionsButton
-					pin={pin}
-					onApply={(opts) => onEdit(pin.id, { options: opts })}
-					onSchemaChange={(schema) =>
-						onEdit(pin.id, {
-							schema,
-							...(pin.data_type === IVariableType.Geometry &&
-							(schema ?? null) !== (pin.schema ?? null)
-								? { default_value: convertJsonToUint8Array(null) }
-								: {}),
-						})
-					}
-				/>
-			</div>
+			)}
+			<PinOptionsDialog
+				pin={pin}
+				refs={refs}
+				open={optionsOpen}
+				onOpenChange={setOptionsOpen}
+				onSave={({ options, schema }) =>
+					onEdit(pin.id, {
+						options,
+						...(schema === undefined
+							? {}
+							: {
+									schema,
+									...(pin.data_type === IVariableType.Geometry
+										? { default_value: convertJsonToUint8Array(null) }
+										: {}),
+								}),
+					})
+				}
+			/>
 		</div>
 	);
 };
@@ -1428,253 +1429,5 @@ const PinOptionalSection: React.FC<{
 				</div>
 			)}
 		</div>
-	);
-};
-
-interface PinOptionsButtonProps {
-	pin: PinEdit;
-	onApply: (opts: IPinOptions | null) => void;
-	onSchemaChange: (schema: string | null) => void;
-}
-
-const PinOptionsButton: React.FC<PinOptionsButtonProps> = ({
-	pin,
-	onApply,
-	onSchemaChange,
-}) => {
-	const { t } = useTranslation("flow");
-	const [open, setOpen] = useState(false);
-	const [local, setLocal] = useState<IPinOptions | null>(pin.options ?? null);
-	const [localSchema, setLocalSchema] = useState<string>(pin.schema ?? "");
-
-	useEffect(() => {
-		if (open) {
-			setLocal(pin.options ?? null);
-			setLocalSchema(pin.schema ?? "");
-		}
-	}, [open, pin.options, pin.schema]);
-
-	return (
-		<>
-			<Button
-				id={`opts-${pin.id}`}
-				variant="outline"
-				size="sm"
-				className="h-7 px-2"
-				onClick={() => setOpen(true)}
-				title={t("editPinOptions", "Edit pin options")}
-			>
-				{t("options", "Options…")}
-			</Button>
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent
-					className="sm:max-w-lg"
-					onDoubleClick={(e) => e.stopPropagation()}
-				>
-					<DialogHeader>
-						<DialogTitle>
-							{t("pinOptionsFriendly_name", "Pin Options — {{friendly_name}}", {
-								friendly_name: pin.friendly_name,
-							})}
-						</DialogTitle>
-						<DialogDescription>
-							{t("advancedOptionalSettings", "Advanced, optional settings.")}
-						</DialogDescription>
-					</DialogHeader>
-
-					<div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-						<div className="space-y-1.5 md:col-span-6">
-							<Label className="text-xs">{t("schema", "Schema")}</Label>
-							{pin.data_type === IVariableType.Geometry ? (
-								<GeometrySubtypeSelect
-									schema={localSchema || null}
-									onChange={(schema) => setLocalSchema(schema ?? "")}
-								/>
-							) : (
-								<Input
-									className="h-8"
-									value={localSchema}
-									onChange={(e) => setLocalSchema(e.target.value)}
-									placeholder={t(
-										"egMyschemaidentifier",
-										"e.g. my.schema.Identifier",
-									)}
-								/>
-							)}
-						</div>
-
-						<div className="flex items-center gap-2 md:col-span-3">
-							<input
-								id={`opt-egvt-${pin.id}`}
-								type="checkbox"
-								className="h-4 w-4"
-								checked={Boolean(local?.enforce_generic_value_type)}
-								onChange={(e) =>
-									setLocal({
-										...(local ?? {}),
-										enforce_generic_value_type: e.target.checked,
-									} as IPinOptions)
-								}
-							/>
-							<Label htmlFor={`opt-egvt-${pin.id}`} className="text-xs">
-								{t("enforceGenericVt", "Enforce Generic VT")}
-							</Label>
-						</div>
-
-						<div className="flex items-center gap-2 md:col-span-3">
-							<input
-								id={`opt-es-${pin.id}`}
-								type="checkbox"
-								className="h-4 w-4"
-								checked={Boolean(local?.enforce_schema)}
-								onChange={(e) =>
-									setLocal({
-										...(local ?? {}),
-										enforce_schema: e.target.checked,
-									} as IPinOptions)
-								}
-							/>
-							<Label htmlFor={`opt-es-${pin.id}`} className="text-xs">
-								{t("enforceSchema", "Enforce Schema")}
-							</Label>
-						</div>
-
-						<div className="flex items-center gap-2 md:col-span-3">
-							<input
-								id={`opt-sens-${pin.id}`}
-								type="checkbox"
-								className="h-4 w-4"
-								checked={Boolean(local?.sensitive)}
-								onChange={(e) =>
-									setLocal({
-										...(local ?? {}),
-										sensitive: e.target.checked,
-									} as IPinOptions)
-								}
-							/>
-							<Label htmlFor={`opt-sens-${pin.id}`} className="text-xs">
-								{t("sensitive", "Sensitive")}
-							</Label>
-						</div>
-
-						<div className="space-y-1.5 md:col-span-3">
-							<Label className="text-xs">{t("step", "Step")}</Label>
-							<Input
-								className="h-8"
-								type="number"
-								value={local?.step ?? ""}
-								onChange={(e) =>
-									setLocal({
-										...(local ?? {}),
-										step: e.target.value === "" ? null : Number(e.target.value),
-									} as IPinOptions)
-								}
-							/>
-						</div>
-
-						<div className="space-y-1.5 md:col-span-3">
-							<Label className="text-xs">{t("rangeMin", "Range Min")}</Label>
-							<Input
-								className="h-8"
-								type="number"
-								value={local?.range?.[0] ?? ""}
-								onChange={(e) => {
-									const min =
-										e.target.value === "" ? undefined : Number(e.target.value);
-									const max = local?.range?.[1];
-									const nextRange = [
-										Number.isFinite(min as number)
-											? (min as number)
-											: undefined,
-										Number.isFinite(max as number)
-											? (max as number)
-											: undefined,
-									].filter((x) => typeof x === "number") as number[];
-									setLocal({
-										...(local ?? {}),
-										range:
-											nextRange.length === 2
-												? nextRange
-												: nextRange.length === 1
-													? [nextRange[0]]
-													: null,
-									} as IPinOptions);
-								}}
-							/>
-						</div>
-
-						<div className="space-y-1.5 md:col-span-3">
-							<Label className="text-xs">{t("rangeMax", "Range Max")}</Label>
-							<Input
-								className="h-8"
-								type="number"
-								value={local?.range?.[1] ?? ""}
-								onChange={(e) => {
-									const min = local?.range?.[0];
-									const max =
-										e.target.value === "" ? undefined : Number(e.target.value);
-									const nextRange = [
-										Number.isFinite(min as number)
-											? (min as number)
-											: undefined,
-										Number.isFinite(max as number)
-											? (max as number)
-											: undefined,
-									].filter((x) => typeof x === "number") as number[];
-									setLocal({
-										...(local ?? {}),
-										range:
-											nextRange.length === 2
-												? nextRange
-												: nextRange.length === 1
-													? [nextRange[0]]
-													: null,
-									} as IPinOptions);
-								}}
-							/>
-						</div>
-
-						<div className="space-y-1.5 md:col-span-6">
-							<Label className="text-xs">
-								{t(
-									"validValuesCommaseparated",
-									"Valid Values (comma-separated)",
-								)}
-							</Label>
-							<Input
-								className="h-8"
-								value={toCSV(local?.valid_values ?? null)}
-								onChange={(e) =>
-									setLocal({
-										...(local ?? {}),
-										valid_values:
-											e.target.value.trim() === ""
-												? null
-												: fromCSVStrings(e.target.value),
-									} as IPinOptions)
-								}
-							/>
-						</div>
-					</div>
-
-					<DialogFooter className="gap-2">
-						<Button variant="secondary" onClick={() => setOpen(false)}>
-							{t("close", "Close")}
-						</Button>
-						<Button
-							onClick={() => {
-								onApply(local ?? null);
-								onSchemaChange(
-									localSchema.trim() === "" ? null : localSchema.trim(),
-								);
-								setOpen(false);
-							}}
-						>
-							{t("save", "Save")}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-		</>
 	);
 };

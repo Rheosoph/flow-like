@@ -46,10 +46,7 @@ pub struct EnsureWasmArtifactsFailure {
 }
 
 fn current_linux_x86_64_platform() -> String {
-    format!(
-        "{}-{}-wt{}",
-        LINUX_X86_64_OS, LINUX_X86_64_ARCH, WASMTIME_MAJOR_VERSION
-    )
+    flow_like_wasm_schema::runtime::artifact_platform_key(LINUX_X86_64_OS, LINUX_X86_64_ARCH)
 }
 
 async fn object_exists(state: &AppState, path: &Path) -> Result<bool, ApiError> {

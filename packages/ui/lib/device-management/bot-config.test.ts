@@ -9,6 +9,7 @@ import {
 	botTokenKey,
 	botTokenProblem,
 	botTokenVariable,
+	desktopBot,
 	deviceBot,
 	isBotTokenKey,
 	savedBotToken,
@@ -263,8 +264,92 @@ test("a bot's id must leave room for its token key; any other type is no bot", (
 		detail: "id",
 	});
 	expect(botTokenKey("e".repeat(112))).toHaveLength(128);
+	// As on a device: the id comes first, counted in characters.
+	expect(deviceBot("telegram", [], "e".repeat(113))).toMatchObject({
+		detail: "id",
+	});
+	expect(deviceBot("telegram", {}, "🙂".repeat(112))).toMatchObject({
+		ok: true,
+	});
+	expect(deviceBot("telegram", {}, "🙂".repeat(113))).toMatchObject({
+		detail: "id",
+	});
 	for (const type of ["teams", "simple_chat", "cron"])
 		expect(deviceBot(type, TELEGRAM)).toBeNull();
+});
+
+test("a lone surrogate anywhere in the config leaves nothing to read, as serde_json refuses the text", () => {
+	const unreadable: [string, string][] = [
+		["telegram", '{"command_prefix":"\\ud800"}'],
+		["discord", '{"command_prefix":"!\\udc00"}'],
+		["telegram", '{"chat_whitelist":["-100","\\udfff"]}'],
+		["discord", '{"bot_name":"Bot \\ud83d"}'],
+		["telegram", '{"\\ud800":true}'],
+		["discord", '{"extra":{"nested":["\\ud800"]}}'],
+	];
+	for (const [type, text] of unreadable) {
+		const config = JSON.parse(text);
+		expect([text, deviceBot(type, config)]).toEqual([
+			text,
+			{ ok: false, problem: "bot_invalid", detail: "config" },
+		]);
+		expect([text, desktopBot(type, config)]).toEqual([text, null]);
+	}
+	expect(
+		deviceBot("telegram", JSON.parse('{"command_prefix":"\\ud83e\\udd16"}')),
+	).toMatchObject({ ok: true, bot: { prefix: "🤖" } });
+});
+
+test("the desktop app reads the same settings without a device's bounds", () => {
+	const unbounded = {
+		chat_whitelist: Array.from({ length: 300 }, (_, i) => `${i}`),
+		chat_blacklist: ["", "x".repeat(65)],
+		respond_to_mentions: false,
+		command_prefix: "x".repeat(40),
+	};
+	expect(deviceBot("telegram", unbounded)).toMatchObject({
+		ok: false,
+		detail: "chat_whitelist",
+	});
+	expect(desktopBot("telegram", unbounded)).toEqual({
+		provider: "telegram",
+		open: false,
+		savedToken: false,
+		prefix: "x".repeat(40),
+		mentions: false,
+	});
+	expect(desktopBot("discord", DISCORD)).toEqual({
+		provider: "discord",
+		open: true,
+		savedToken: false,
+		prefix: "!",
+		mentions: true,
+	});
+	expect(
+		desktopBot("discord", { intents: ["Guilds", "Everything"] }),
+	).toMatchObject({ prefix: "", mentions: true });
+	expect(
+		desktopBot("discord", { command_prefix: null, respond_to_dms: null }),
+	).toMatchObject({ prefix: "", mentions: true });
+	// A JSON type the desktop app can't take: it registers no bot.
+	const refused: [string, unknown][] = [
+		["telegram", null],
+		["telegram", []],
+		["telegram", { chat_whitelist: "-100" }],
+		["telegram", { chat_blacklist: [7] }],
+		["telegram", { respond_to_mentions: "yes" }],
+		["telegram", { command_prefix: 1 }],
+		["discord", { respond_to_dms: 0 }],
+		["discord", { intents: "Guilds" }],
+		["discord", { intents: [7] }],
+	];
+	for (const [type, config] of refused)
+		expect([type, config, desktopBot(type, config)]).toEqual([
+			type,
+			config,
+			null,
+		]);
+	expect(desktopBot("teams", {})).toBeNull();
 });
 
 test("the token key and the handle are the reserved spellings", () => {

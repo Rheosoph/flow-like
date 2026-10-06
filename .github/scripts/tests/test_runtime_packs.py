@@ -110,6 +110,20 @@ def readelf_versions(name, info):
 
 PACKAGES = {"libstdc++.so.6": "libstdc++6", "libgcc_s.so.1": "libgcc-s1", "libgomp.so.1": "libgomp1",
             "libssl.so.3": "libssl3", "libcrypto.so.3": "libssl3"}
+PPA_GCC = "16-20260315-1ubuntu1~22~ppa1"
+PACKAGE_VERSIONS = {"libstdc++6:arm64": PPA_GCC, "libgcc-s1:arm64": PPA_GCC, "libgomp1:arm64": PPA_GCC,
+                    "libssl3:arm64": "3.0.2-0ubuntu1.20", "gcc-14": "14.3.0-12ubuntu1~22~ppa2",
+                    "g++-14": "14.3.0-12ubuntu1~22~ppa2"}
+
+
+def fake_dpkg(argv, owners, versions):
+    """`dpkg-query -S` finds only a registered path, as dpkg does; `--show` prints an installed version."""
+    if argv[1] == "-S":
+        owner = owners.get(argv[-1])
+        return done(argv, f"{owner}: {argv[-1]}\n") if owner else \
+            done(argv, f"dpkg-query: no path found matching pattern {argv[-1]}\n", 1)
+    version = versions.get(argv[-1])
+    return done(argv, version) if version else done(argv, f"dpkg-query: no packages found matching {argv[-1]}\n", 1)
 
 
 class FakeLinuxHost:
@@ -122,12 +136,20 @@ class FakeLinuxHost:
         for package in set(PACKAGES.values()):
             stage(self.docs, {f"{package}/copyright": f"Copyright notice of {package}\n".encode()})
         self.info, self.calls = {}, []
+        self.owners, self.versions = {}, dict(PACKAGE_VERSIONS)
         self.version = VERSION
 
     def library(self, name, needed=(), runpath="$ORIGIN", needs=None, defines=(), host=False):
         self.info[name] = {"needed": list(needed), "runpath": runpath, "needs": needs or {}, "defines": set(defines)}
         if host:
-            (self.host / name).write_bytes(b"\x7fELF host " + name.encode())
+            path = self.host / name
+            path.write_bytes(b"\x7fELF host " + name.encode())
+            self.owners[str(path.resolve())] = f"{PACKAGES[name]}:arm64"
+
+    def registered_under_alias(self, name):
+        """dpkg knows the file only by its other merged-/usr name, as libgcc-s1 registers /lib/<triplet>."""
+        path = str((self.host / name).resolve())
+        self.owners[f"/usr{path}"] = self.owners.pop(path)
 
     def ldd(self, path):
         seen, pending, lines = set(), list(self.info[path.name]["needed"]), ["\tlinux-vdso.so.1 (0x1)"]
@@ -151,7 +173,7 @@ class FakeLinuxHost:
         if command == "llama-server":
             return done(argv, self.version)
         if command == "dpkg-query":
-            return done(argv, f"{PACKAGES[path.name]}:arm64: {path}\n")
+            return fake_dpkg(argv, self.owners, self.versions)
         info = self.info[path.name]
         if command == "ldd":
             return done(argv, self.ldd(path))
@@ -197,6 +219,7 @@ def arm64_build_outputs(root, host):
                  defines={"GLIBCXX_3.4", "GLIBCXX_3.4.30", "CXXABI_1.3", "CXXABI_1.3.13"})
     host.library("libgcc_s.so.1", ["libc.so.6"], runpath=None, host=True, needs={"libc.so.6": {"GLIBC_2.17"}},
                  defines={"GCC_3.0"})
+    host.registered_under_alias("libgcc_s.so.1")
     host.library("libgomp.so.1", ["libc.so.6"], runpath=None, host=True, needs={"libc.so.6": {"GLIBC_2.34"}},
                  defines={"GOMP_4.0", "OMP_1.0"})
     host.library("libssl.so.3", ["libcrypto.so.3", "libc.so.6"], runpath=None, host=True,
@@ -308,6 +331,24 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(runtime.ldd_paths(LDD), {"libllama-server-impl.so": "/tmp/stage/libllama-server-impl.so",
                                                   "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6"})
 
+    def test_dpkg_finds_the_owner_under_the_merged_usr_name_its_package_registered(self):
+        # Jammy: ldd's /lib/x86_64-linux-gnu/libgcc_s.so.1 resolves through the /lib link into /usr/lib.
+        owners = {"/lib/x86_64-linux-gnu/libgcc_s.so.1": "libgcc-s1:amd64",
+                  "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30": "libstdc++6:amd64"}
+        queries = []
+
+        def dpkg(*argv, env=None):
+            queries.append(argv[-1])
+            return fake_dpkg(argv, owners, {})
+        with patch.object(runtime, "run", dpkg):
+            self.assertEqual(runtime.debian_package(Path("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")), "libgcc-s1:amd64")
+            self.assertEqual(queries, ["/usr/lib/x86_64-linux-gnu/libgcc_s.so.1", "/lib/x86_64-linux-gnu/libgcc_s.so.1"])
+            self.assertEqual(runtime.debian_package(Path("/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30")), "libstdc++6:amd64")
+            self.assertEqual(runtime.debian_package(Path("/lib/x86_64-linux-gnu/libstdc++.so.6.0.30")), "libstdc++6:amd64")
+            with self.assertRaisesRegex(ValueError, "No installed Debian package owns /usr/lib/x86_64-linux-gnu/libfoo.so.1 "
+                                                    "or /lib/x86_64-linux-gnu/libfoo.so.1: dpkg-query: no path found"):
+                runtime.debian_package(Path("/usr/lib/x86_64-linux-gnu/libfoo.so.1"))
+
     def test_otool_dependencies_and_run_paths(self):
         self.assertEqual(runtime.macho_dependencies(OTOOL_L),
                          ["@rpath/libllama-server-impl.dylib", "/usr/lib/libc++.1.dylib", "/usr/lib/librdma.dylib"])
@@ -410,6 +451,8 @@ class UpstreamTests(unittest.TestCase):
             self.assertTrue(0 < size < 64 * 1024**2 and re.fullmatch(r"[0-9a-f]{64}", digest))
         self.assertEqual([name for name, spec in runtime.LLAMACPP_PACKS.items() if not spec["archive"]],
                          ["llamacpp-linux-arm64-cpu"])
+        self.assertEqual([name for name, spec in runtime.LLAMACPP_PACKS.items() if spec.get("toolchain")],
+                         ["llamacpp-linux-arm64-cpu"], "a pack compiled on the runner names its compiler packages")
         self.assertEqual(runtime.pin().splitlines(), ["build=b10809", "number=10809",
                                                       "commit=5266f24da75dc449bd56cbed7addb9c8e4a6a73e"])
         script = (REPOSITORY / "apps/desktop/scripts/update-llama-server.ts").read_text()
@@ -569,11 +612,14 @@ class LinuxPackTests(unittest.TestCase):
         self.assertEqual(contents["libllama.so.0"], b"\x7fELF libllama.so.0.4.0")
         self.assertEqual(contents["fallback/libstdc++.so.6"], b"\x7fELF host libstdc++.so.6")
         notices = contents["THIRD-PARTY-NOTICES.txt"].decode()
-        self.assertTrue(notices.startswith("# llama.cpp b10809 (MIT)\n\nMIT License\n"))
-        self.assertIn("# libssl3 (Ubuntu package copyright; bundled as libcrypto.so.3, libssl.so.3)\n\n"
+        self.assertTrue(notices.startswith(
+            f"# llama.cpp b10809 (MIT), compiled from {runtime.LLAMACPP_COMMIT} with gcc-14 14.3.0-12ubuntu1~22~ppa2, "
+            "g++-14 14.3.0-12ubuntu1~22~ppa2\n\nMIT License\n"))
+        self.assertIn("# libssl3 3.0.2-0ubuntu1.20 (Ubuntu package copyright; bundled as libcrypto.so.3, libssl.so.3)\n\n"
                       "Copyright notice of libssl3\n", notices)
-        self.assertEqual(sorted(re.findall(r"^# (\S+) \(Ubuntu", notices, re.MULTILINE)),
-                         ["libgcc-s1", "libgomp1", "libssl3", "libstdc++6"])
+        self.assertEqual(sorted(re.findall(r"^# (\S+) (\S+) \(Ubuntu", notices, re.MULTILINE)),
+                         [("libgcc-s1", PPA_GCC), ("libgomp1", PPA_GCC), ("libssl3", "3.0.2-0ubuntu1.20"),
+                          ("libstdc++6", PPA_GCC)])
         patched = sorted(Path(argv[-1]).name for command, argv, _ in self.host.calls if command == "patchelf")
         self.assertEqual(patched, ["libcrypto.so.3", "libgcc_s.so.1", "libgomp.so.1", "libssl.so.3", "libstdc++.so.6"])
         starts = [env for command, _, env in self.host.calls if command == "llama-server"]
@@ -607,6 +653,15 @@ class LinuxPackTests(unittest.TestCase):
         (self.host.host / "libgomp.so.1").unlink()
         with self.assertRaisesRegex(ValueError, "Install libgomp.so.1 on the build runner"):
             self.build("missing")
+
+    def test_linux_pack_refuses_a_compiler_or_library_whose_package_it_cannot_name(self):
+        del self.host.versions["g++-14"]
+        with self.assertRaisesRegex(ValueError, r"dpkg-query --show --showformat=\$\{Version\} failed for g\+\+-14"):
+            self.build()
+        self.host.versions["g++-14"] = PACKAGE_VERSIONS["g++-14"]
+        self.host.owners.pop(str((self.host.host / "libgomp.so.1").resolve()))
+        with self.assertRaisesRegex(ValueError, "No installed Debian package owns .*libgomp.so.1 or /usr/.*libgomp.so.1"):
+            self.build("unowned")
 
     def test_linux_pack_must_report_the_pinned_build_on_its_own_platform(self):
         self.host.version = "version: 0.4.0 (build 1, commit 5266f24da)"
@@ -886,6 +941,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotRegex(build, r"\b[0-9a-f]{40}\b")
         self.assertIn('test "$(git -C "$RUNNER_TEMP/llama.cpp" rev-parse HEAD)" = "$LLAMACPP_COMMIT"', build)
         self.assertIn("-DCMAKE_INSTALL_RPATH='$ORIGIN'", build)
+
+    def test_arm64_source_build_compiles_with_the_toolchain_its_notices_record(self):
+        build = step("runtime-packs", "name: Compile the pinned llama.cpp commit for Linux arm64 under the glibc 2.35 floor")
+        c, cxx = runtime.LLAMACPP_PACKS["llamacpp-linux-arm64-cpu"]["toolchain"]
+        self.assertIn(f"sudo apt-get install -y {c} {cxx} ", build)
+        self.assertIn(f"-DCMAKE_C_COMPILER={c} -DCMAKE_CXX_COMPILER={cxx}", build)
 
     def run_fetch(self, outcome):
         with tempfile.TemporaryDirectory() as folder:

@@ -16,6 +16,8 @@ aws-config.workspace = true
 aws-sdk-s3.workspace = true
 
 lambda_runtime.workspace = true
-tokio = { workspace = true, features = ["macros"] }
+tokio = { workspace = true, features = ["macros", "fs", "io-util"] }
 urlencoding.workspace = true
 webp.workspace = true
+
+tempfile = "3"

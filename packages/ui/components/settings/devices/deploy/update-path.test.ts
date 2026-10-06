@@ -361,6 +361,14 @@ describe("update helpers", () => {
 			},
 		};
 		expect(secretCount(kept, first, hostedService)).toBe(0);
+		const withoutToken = {
+			...plan,
+			draft: {
+				...plan.draft,
+				endpoint: { ...plan.draft.endpoint, token: "none" as const },
+			},
+		};
+		expect(secretCount(withoutToken, first, hostedService)).toBe(1);
 	});
 
 	test("a staged or running update blocks a new one; drift is per service", () => {

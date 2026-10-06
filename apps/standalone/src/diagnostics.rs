@@ -33,6 +33,16 @@ pub const FEATURES: &[&str] = &[
     "archive_status",
     "artifact_capacity",
     "scheduled_events",
+    #[cfg(feature = "runtime")]
+    "model_store",
+    #[cfg(feature = "runtime")]
+    "model_host",
+    #[cfg(feature = "runtime")]
+    "model_runtime_llamacpp",
+    #[cfg(feature = "runtime")]
+    "model_runtime_onnx",
+    #[cfg(all(feature = "runtime", target_os = "macos", target_arch = "aarch64"))]
+    "model_runtime_mlx",
 ];
 
 pub const DEVICE_PRESENCE: &str = "device_presence";
@@ -47,6 +57,7 @@ pub const TELEMETRY_SAMPLER: &str = "telemetry_sampler";
 pub const LIVE_TELEMETRY_PUBLISHER: &str = "live_telemetry_publisher";
 pub const CERTIFICATE_INVENTORY_PUBLISHER: &str = "certificate_inventory_publisher";
 pub const CERTIFICATE_RENEWAL: &str = "certificate_renewal";
+pub const MODEL_HOST: &str = "model_host";
 
 const MAX_ERROR_TEXT: usize = 1024;
 const MAX_EVENTS: usize = 64;
@@ -2667,13 +2678,21 @@ mod tests {
             API_EVENTS, DISCORD_BOTS, ON_DEMAND_EVENTS, SCHEDULED_ONCE, TELEGRAM_BOTS,
         };
         let mut expected = json!({"placement_diagnostics":1,"task_health":1,"placement_events":1,"offline_summary":1,"host_operation":1,"network_interfaces":1,"rollout_history":1,"operations":1,"metrics_history":1,"offline_lookup":1,"reader_bindings":1,"acme_failure_detail":1,"archive_status":1,"artifact_capacity":1,"scheduled_events":1});
+        let hosts_models = cfg!(feature = "runtime");
         // A flag of an event part follows the build: it is there exactly when the part is.
+        // The model host is built with the runtime; MLX runs on Apple-silicon Macs only.
+        let serves_mlx = hosts_models && cfg!(all(target_os = "macos", target_arch = "aarch64"));
         for (flag, built) in [
             ("api_events", API_EVENTS),
             ("scheduled_once", SCHEDULED_ONCE),
             ("on_demand_events", ON_DEMAND_EVENTS),
             ("telegram_bots", TELEGRAM_BOTS),
             ("discord_bots", DISCORD_BOTS),
+            ("model_store", hosts_models),
+            ("model_host", hosts_models),
+            ("model_runtime_llamacpp", hosts_models),
+            ("model_runtime_onnx", hosts_models),
+            ("model_runtime_mlx", serves_mlx),
         ] {
             if built {
                 expected[flag] = json!(1);

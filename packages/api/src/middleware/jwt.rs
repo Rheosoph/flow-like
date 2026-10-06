@@ -111,18 +111,9 @@ fn pat_id_from_token(pat_str: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("Invalid PAT format"))
 }
 
-fn pat_lookup_parts(pat_str: &str) -> Option<(&str, String)> {
-    let mut parts = pat_str.strip_prefix("pat_")?.split('.');
-    let id = parts.next()?.trim();
-    let secret = parts.next()?;
-    if id.is_empty() || secret.is_empty() || parts.next().is_some() {
-        return None;
-    }
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(secret.as_bytes());
-    Some((id, hasher.finalize().to_hex().to_string().to_lowercase()))
-}
+#[path = "pat_validation.rs"]
+mod pat_validation;
+use pat_validation::lookup_parts as pat_lookup_parts;
 
 fn api_key_lookup_parts(api_key: &str) -> Option<(&str, &str, String)> {
     let mut parts = api_key.strip_prefix("flk_")?.split('.');
@@ -621,6 +612,8 @@ impl AppUser {
         }
     }
 
+    /// Read current app authority from the database so role changes apply on
+    /// every replica, including routes that can issue another credential.
     pub async fn app_permission(
         &self,
         app_id: &str,
@@ -636,24 +629,6 @@ impl AppUser {
 
         let sub = self.sub();
         if let Ok(sub) = sub {
-            let cached_permission = state.check_permission(&sub, app_id);
-
-            if let Some(role_model) = cached_permission {
-                let permissions = RolePermissions::from_bits(role_model.permissions)
-                    .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
-                return Ok(AppPermissionResponse {
-                    state: state.clone(),
-                    permissions,
-                    role: role_model.clone(),
-                    sub: Some(sub.clone()),
-                    effective_user_id: Some(sub.clone()),
-                    technical_user_id: None,
-                    identifier: sub,
-                    principal: ExecutionPrincipal::User,
-                    origin_app_id: None,
-                });
-            }
-
             let role_model = role::Entity::find()
                 .join(JoinType::InnerJoin, role::Relation::Membership.def())
                 .filter(
@@ -670,8 +645,6 @@ impl AppUser {
 
             let permissions = RolePermissions::from_bits(role_model.permissions)
                 .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
-
-            state.put_permission(&sub, app_id, Arc::new(role_model.clone()));
 
             return Ok(AppPermissionResponse {
                 state: state.clone(),
@@ -732,10 +705,8 @@ impl AppUser {
         Err(self.app_permission_denial())
     }
 
-    /// Resolve app permissions from the canonical database for
-    /// security-sensitive runtime entry points. PAT and API-key credentials are
-    /// revalidated, API-key permissions are read from the current technical-user
-    /// role, and user or app-connection roles bypass the process-local cache.
+    /// Revalidate the credential as well as the current app role for runtime
+    /// entry points that may retain an authenticated principal between requests.
     pub async fn app_permission_fresh(
         &self,
         app_id: &str,
@@ -800,24 +771,6 @@ impl AppUser {
                 return connected_app_permission(&connected, app_id, state).await;
             }
 
-            if let Some(role_model) = state.check_permission(&executor.sub, app_id) {
-                let permissions = RolePermissions::from_bits(role_model.permissions)
-                    .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
-                return Ok(AppPermissionResponse {
-                    state: state.clone(),
-                    permissions,
-                    role: role_model.clone(),
-                    sub: Some(executor.sub.clone()),
-                    effective_user_id: Some(executor.sub.clone()),
-                    technical_user_id: executor.technical_user_id.clone(),
-                    identifier: executor.sub.clone(),
-                    // A run acts as the subject recorded in its executor token;
-                    // any API key behind it stays visible as technical_user_id.
-                    principal: ExecutionPrincipal::User,
-                    origin_app_id: None,
-                });
-            }
-
             let role_model = role::Entity::find()
                 .join(JoinType::InnerJoin, role::Relation::Membership.def())
                 .filter(
@@ -840,8 +793,6 @@ impl AppUser {
             let permissions = RolePermissions::from_bits(role_model.permissions)
                 .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
 
-            state.put_permission(&executor.sub, app_id, Arc::new(role_model.clone()));
-
             return Ok(AppPermissionResponse {
                 state: state.clone(),
                 permissions,
@@ -863,33 +814,28 @@ pub(crate) async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Resu
     fresh_pat_permissions(user, state).await.map(|_| ())
 }
 
-/// Return the current permission mask from the same lookup that checks the
-/// token secret, owner and expiry. Cached authentication cannot widen this mask.
+/// Return the current access level from the same lookup that checks the
+/// token secret, owner and expiry.
 pub(crate) async fn fresh_pat_permissions(
     user: &PATUser,
     state: &AppState,
 ) -> Result<i64, ApiError> {
-    let cache_key = hash_token(&user.pat);
-    let Some((pat_id, secret_hash)) = pat_lookup_parts(&user.pat) else {
-        state.auth_cache.invalidate(&cache_key);
-        return Err(ApiError::unauthorized("PAT is no longer valid"));
-    };
+    Ok(fresh_pat(user, state).await?.permissions)
+}
 
-    let current = Pat::find()
-        .filter(
-            pat::Column::Id
-                .eq(pat_id)
-                .and(pat::Column::Key.eq(secret_hash)),
-        )
-        .one(&state.db)
-        .await?;
+pub(crate) async fn fresh_pat(user: &PATUser, state: &AppState) -> Result<pat::Model, ApiError> {
     let now = chrono::Utc::now().fixed_offset();
+    let current = pat_validation::lookup_current(&state.db, &user.pat, now).await?;
     let Some(current) = current.filter(|pat| pat_is_current(pat, &user.sub, now)) else {
-        state.auth_cache.invalidate(&cache_key);
         return Err(ApiError::unauthorized("PAT is no longer valid"));
     };
+    if crate::permission::pat_permission::PatPermission::from_bits(current.permissions).is_none() {
+        return Err(ApiError::forbidden(
+            crate::permission::pat_permission::LEGACY_PERMISSION_ERROR,
+        ));
+    }
 
-    Ok(current.permissions)
+    Ok(current)
 }
 
 fn pat_is_current(
@@ -1000,13 +946,6 @@ pub fn app_connection_cache_sub(origin_app_id: &str) -> String {
     format!("app-connection::{}", origin_app_id)
 }
 
-fn permission_cache_lookup<T>(
-    allow_cached_value: bool,
-    lookup: impl FnOnce() -> Option<T>,
-) -> Option<T> {
-    allow_cached_value.then(lookup).flatten()
-}
-
 /// Resolve current project authority without constructing a human principal or
 /// consulting the permission cache. Workload grants call this within admission.
 pub(crate) async fn fresh_user_role<C: sea_orm::ConnectionTrait>(
@@ -1045,9 +984,6 @@ async fn user_app_permission_uncached(
         .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
     let role_model = Arc::new(role_model);
 
-    // Fresh callers never read this cache. Publishing the authoritative value
-    // still helps ordinary routes after this request completes.
-    state.put_permission(sub, app_id, role_model.clone());
     Ok(AppPermissionResponse {
         state: state.clone(),
         permissions,
@@ -1066,22 +1002,13 @@ async fn connected_app_permission(
     app_id: &str,
     state: &AppState,
 ) -> Result<AppPermissionResponse, ApiError> {
-    connected_app_permission_inner(connected_app, app_id, state, true).await
+    connected_app_permission_uncached(connected_app, app_id, state).await
 }
 
 async fn connected_app_permission_uncached(
     connected_app: &ConnectedAppUser,
     app_id: &str,
     state: &AppState,
-) -> Result<AppPermissionResponse, ApiError> {
-    connected_app_permission_inner(connected_app, app_id, state, false).await
-}
-
-async fn connected_app_permission_inner(
-    connected_app: &ConnectedAppUser,
-    app_id: &str,
-    state: &AppState,
-    allow_cached_role: bool,
 ) -> Result<AppPermissionResponse, ApiError> {
     if connected_app.target_app_id != app_id {
         tracing::warn!(
@@ -1093,50 +1020,39 @@ async fn connected_app_permission_inner(
         return Err(ApiError::FORBIDDEN);
     }
 
-    let cache_sub = app_connection_cache_sub(&connected_app.origin_app_id);
+    let (connection, role) = app_connection::Entity::find()
+        .filter(
+            app_connection::Column::SourceAppId
+                .eq(&connected_app.origin_app_id)
+                .and(app_connection::Column::TargetAppId.eq(app_id))
+                .and(
+                    app_connection::Column::Status
+                        .eq(sea_orm_active_enums::AppConnectionStatus::Active),
+                ),
+        )
+        .find_also_related(role::Entity)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| {
+            tracing::debug!(
+                origin_app_id = %connected_app.origin_app_id,
+                target_app_id = %app_id,
+                "No active app connection found"
+            );
+            ApiError::FORBIDDEN
+        })?;
 
-    let cached_role = permission_cache_lookup(allow_cached_role, || {
-        state.check_permission(&cache_sub, app_id)
-    });
-    let role_model = if let Some(role_model) = cached_role {
-        role_model
-    } else {
-        let (connection, role) = app_connection::Entity::find()
-            .filter(
-                app_connection::Column::SourceAppId
-                    .eq(&connected_app.origin_app_id)
-                    .and(app_connection::Column::TargetAppId.eq(app_id))
-                    .and(
-                        app_connection::Column::Status
-                            .eq(sea_orm_active_enums::AppConnectionStatus::Active),
-                    ),
-            )
-            .find_also_related(role::Entity)
-            .one(&state.db)
-            .await?
-            .ok_or_else(|| {
-                tracing::debug!(
-                    origin_app_id = %connected_app.origin_app_id,
-                    target_app_id = %app_id,
-                    "No active app connection found"
-                );
-                ApiError::FORBIDDEN
-            })?;
+    let role_model = role
+        .filter(|role| role.app_id.as_deref() == Some(app_id))
+        .ok_or_else(|| {
+            tracing::warn!(
+                connection_id = %connection.id,
+                "App connection is active but has no valid role for this app"
+            );
+            ApiError::FORBIDDEN
+        })?;
 
-        let role_model = role
-            .filter(|role| role.app_id.as_deref() == Some(app_id))
-            .ok_or_else(|| {
-                tracing::warn!(
-                    connection_id = %connection.id,
-                    "App connection is active but has no valid role for this app"
-                );
-                ApiError::FORBIDDEN
-            })?;
-
-        let role_model = Arc::new(role_model);
-        state.put_permission(&cache_sub, app_id, role_model.clone());
-        role_model
-    };
+    let role_model = Arc::new(role_model);
 
     let permissions = RolePermissions::from_bits(role_model.permissions)
         .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
@@ -1290,7 +1206,18 @@ async fn authenticate_request(
                     technical_user_id,
                     app_chain,
                     correlation,
+                    exp,
                 } => {
+                    if !crate::backend_jwt::cached_token_is_current(
+                        exp,
+                        chrono::Utc::now().timestamp(),
+                    ) {
+                        state.auth_cache.invalidate(&cache_key);
+                        request
+                            .extensions_mut()
+                            .insert::<AppUser>(AppUser::Unauthorized);
+                        return Ok(request);
+                    }
                     let user = AppUser::Executor(ExecutorUser {
                         sub,
                         app_id,
@@ -1364,7 +1291,12 @@ async fn authenticate_request(
         }
 
         // OpenID failed — try executor JWT
-        if let Ok(claims) = crate::execution::verify_execution_jwt(token) {
+        if let Ok(claims) = crate::execution::verify_execution_jwt(token)
+            && crate::backend_jwt::cached_token_is_current(
+                claims.exp,
+                chrono::Utc::now().timestamp(),
+            )
+        {
             state.auth_cache.insert(
                 cache_key,
                 CachedAuth::Executor {
@@ -1374,6 +1306,7 @@ async fn authenticate_request(
                     technical_user_id: claims.technical_user_id.clone(),
                     app_chain: claims.app_chain.clone(),
                     correlation: claims.correlation.clone(),
+                    exp: claims.exp,
                 },
             );
             let user = AppUser::Executor(ExecutorUser {
@@ -1425,82 +1358,41 @@ async fn authenticate_request(
 
         if token.starts_with("pat_") {
             let pat_str = token;
-            let cache_key = hash_token(pat_str);
-
-            // Check cache first
-            if let Some(cached) = state.auth_cache.get(&cache_key) {
-                match cached {
-                    CachedAuth::PAT { sub } => {
-                        let pat_user = AppUser::PAT(PATUser {
-                            pat: pat_str.to_string(),
-                            sub,
-                        });
-                        request.extensions_mut().insert::<AppUser>(pat_user);
-                        return Ok(request);
-                    }
-                    CachedAuth::Invalid => {
-                        // Token was previously validated as invalid/expired
-                        request
-                            .extensions_mut()
-                            .insert::<AppUser>(AppUser::Unauthorized);
-                        return Ok(request);
-                    }
-                    _ => {}
-                }
-            }
-
-            // Cache miss - validate PAT. The surrounding branch has already
-            // established the `pat_` prefix.
-            let pat_parts = &pat_str[4..];
-            let parts: Vec<&str> = pat_parts.split('.').collect();
-            if parts.len() != 2 {
-                state.auth_cache.insert(cache_key, CachedAuth::Invalid);
-                request
-                    .extensions_mut()
-                    .insert::<AppUser>(AppUser::Unauthorized);
-                return Ok(request);
-            }
-            let pat_id = parts[0];
-            let pat_secret = parts[1];
-
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(pat_secret.as_bytes());
-            let secret_hash = hasher.finalize().to_hex().to_string().to_lowercase();
-
-            let db_pat = Pat::find()
-                .filter(
-                    pat::Column::Id
-                        .eq(pat_id)
-                        .and(pat::Column::Key.eq(secret_hash)),
-                )
-                .one(&state.db)
-                .instrument(tracing::info_span!(
-                    target: "flow_like::observability",
-                    "db.query",
-                    db.operation = "select",
-                    db.table = "Pat"
-                ))
-                .await?;
+            let db_pat = pat_validation::lookup_current(
+                &state.db,
+                pat_str,
+                chrono::Utc::now().fixed_offset(),
+            )
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "db.query",
+                db.operation = "select",
+                db.table = "Pat"
+            ))
+            .await?;
 
             if let Some(pat) = db_pat {
-                if let Some(valid_until) = pat.valid_until {
-                    let now = chrono::Utc::now().fixed_offset();
-                    if valid_until < now {
-                        state.auth_cache.insert(cache_key, CachedAuth::Invalid);
-                        request
-                            .extensions_mut()
-                            .insert::<AppUser>(AppUser::Unauthorized);
-                        return Ok(request);
-                    }
+                if crate::permission::pat_permission::PatPermission::from_bits(pat.permissions)
+                    .is_none()
+                {
+                    return Err(ApiError::forbidden(
+                        crate::permission::pat_permission::LEGACY_PERMISSION_ERROR,
+                    ));
                 }
-
-                // Cache valid PAT
-                state.auth_cache.insert(
-                    cache_key,
-                    CachedAuth::PAT {
-                        sub: pat.user_id.clone(),
-                    },
-                );
+                let path = request
+                    .extensions()
+                    .get::<axum::extract::OriginalUri>()
+                    .map(|original| original.0.path())
+                    .unwrap_or_else(|| request.uri().path());
+                if !crate::permission::pat_permission::permits_route(
+                    pat.permissions,
+                    request.method().as_str(),
+                    path,
+                ) {
+                    return Err(ApiError::forbidden(
+                        "Personal access token does not permit this operation",
+                    ));
+                }
 
                 let pat_user = AppUser::PAT(PATUser {
                     pat: pat_str.to_string(),
@@ -1844,26 +1736,6 @@ mod tests {
     }
 
     #[test]
-    fn stateless_lambda_fresh_page_permission_bypasses_preseeded_cache() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let reads = AtomicUsize::new(0);
-        let fresh = permission_cache_lookup(false, || {
-            reads.fetch_add(1, Ordering::SeqCst);
-            Some("revoked-role")
-        });
-        assert_eq!(fresh, None);
-        assert_eq!(reads.load(Ordering::SeqCst), 0);
-
-        let ordinary = permission_cache_lookup(true, || {
-            reads.fetch_add(1, Ordering::SeqCst);
-            Some("current-role")
-        });
-        assert_eq!(ordinary, Some("current-role"));
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
     fn stateless_lambda_fresh_page_pat_validation_binds_format_secret_subject_and_expiry() {
         let (id, secret_hash) = pat_lookup_parts("pat_pat-1.secret").unwrap();
         assert_eq!(id, "pat-1");
@@ -1896,6 +1768,8 @@ mod tests {
         assert!(!pat_is_current(&record, "user-2", now));
 
         let mut expired = record;
+        expired.valid_until = Some(now);
+        assert!(pat_is_current(&expired, "user-1", now));
         expired.valid_until = Some(now - chrono::Duration::milliseconds(1));
         assert!(!pat_is_current(&expired, "user-1", now));
     }

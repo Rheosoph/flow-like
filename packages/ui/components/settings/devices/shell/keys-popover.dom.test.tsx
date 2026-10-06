@@ -180,4 +180,40 @@ describe("key session rows", () => {
 		]);
 		expect(rows[0]?.state).toBe("unlocked");
 	});
+
+	test("keys the desktop app holds for models are open and offer Lock", async () => {
+		const rows = keySessionRows(
+			[
+				{ ...snapshot("d1", "locked"), heldForModels: true },
+				{ ...snapshot("d2", "none"), heldForModels: true },
+				snapshot("d3", "locked"),
+			],
+			{
+				devices: [
+					{ device_id: "d1", name: "gpu-box" },
+					{ device_id: "d2", name: "mac-studio" },
+					{ device_id: "d3", name: "nas" },
+				] as never,
+				live: { d1: { state: LIVE } } as never,
+			},
+		);
+		expect(rows.map((row) => [row.name, row.state])).toEqual([
+			["gpu-box", "models"],
+			["mac-studio", "models"],
+			["nas", "locked"],
+		]);
+		const calls: string[] = [];
+		const { container } = await dom.render(
+			<KeysPopoverView
+				sessions={rows}
+				onLock={(id) => calls.push(`lock:${id}`)}
+			/>,
+		);
+		expect(container.textContent).toContain("Unlocked for models");
+		await click(byRole("button", "Lock gpu-box"));
+		expect(calls).toEqual(["lock:d1"]);
+		expect(byRole("button", "Lock all").getAttribute("aria-disabled")).toBe(
+			null,
+		);
+	});
 });

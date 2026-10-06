@@ -803,6 +803,11 @@ fn scope_rules() -> Result<File> {
 }
 
 fn filter_file() -> Result<File> {
+    policy_file(&filter())
+}
+
+/// A sealed memory file with the seccomp program, which bubblewrap reads by descriptor.
+fn policy_file(filters: &[libc::sock_filter]) -> Result<File> {
     let name = CString::new("flow-like-worker-seccomp")?;
     let fd = unsafe {
         libc::syscall(
@@ -813,7 +818,6 @@ fn filter_file() -> Result<File> {
     };
     ensure!(fd >= 0, "Cannot create sandbox seccomp policy");
     let mut file = unsafe { File::from_raw_fd(fd as i32) };
-    let filters = filter();
     let bytes = unsafe {
         std::slice::from_raw_parts(
             filters.as_ptr().cast::<u8>(),
@@ -941,6 +945,7 @@ pub(super) fn command(
         .arg("--bind")
         .arg(data)
         .arg(data)
+        .args(model_asset_mounts(config, data)?)
         .arg("--bind")
         .arg(&scratch)
         .arg("/tmp")
@@ -971,6 +976,33 @@ pub(super) fn command(
         .arg(sandbox.program.as_raw_fd().to_string())
         .args(["--", "/run/flow-like-worker"]);
     Ok((command, sandbox))
+}
+
+/// `--ro-bind <blob> <mount point>` for each model-store file the workload reads directly;
+/// the agent left an empty mount point for each inside the placement data.
+fn model_asset_mounts(
+    config: &crate::config::PlacementConfig,
+    data: &Path,
+) -> Result<Vec<std::ffi::OsString>> {
+    #[cfg(feature = "runtime")]
+    {
+        let binds = crate::dependencies::model_asset_binds(config, data)?;
+        Ok(binds
+            .into_iter()
+            .flat_map(|(blob, mount_point)| {
+                [
+                    "--ro-bind".into(),
+                    blob.into_os_string(),
+                    mount_point.into_os_string(),
+                ]
+            })
+            .collect())
+    }
+    #[cfg(not(feature = "runtime"))]
+    {
+        let _ = (config, data);
+        Ok(Vec::new())
+    }
 }
 
 impl Sandbox {
@@ -1005,6 +1037,219 @@ impl Sandbox {
     }
 }
 
+const LANDLOCK_NET_BIND_TCP: u64 = 1;
+const LANDLOCK_NET_CONNECT_TCP: u64 = 1 << 1;
+const LANDLOCK_RULE_NET_PORT: libc::c_int = 2;
+/// What GPU drivers enumerate devices through.
+const ENGINE_SYSFS: [&str; 5] = [
+    "/sys/dev",
+    "/sys/devices",
+    "/sys/bus/pci",
+    "/sys/class/drm",
+    "/sys/module/nvidia",
+];
+const ENGINE_CONFIG: [&str; 3] = ["/etc/ld.so.cache", "/etc/vulkan", "/etc/OpenCL"];
+
+/// An engine may bind its own loopback port and connect nowhere over TCP.
+fn engine_rules(port: u16) -> Result<File> {
+    #[repr(C)]
+    struct Rules {
+        fs: u64,
+        net: u64,
+        scopes: u64,
+    }
+    #[repr(C)]
+    struct NetPort {
+        allowed_access: u64,
+        port: u64,
+    }
+    let rules = Rules {
+        fs: 0,
+        net: LANDLOCK_NET_BIND_TCP | LANDLOCK_NET_CONNECT_TCP,
+        scopes: 3,
+    };
+    // SAFETY: the kernel reads `size_of::<Rules>()` bytes of the live struct.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            &rules,
+            std::mem::size_of::<Rules>(),
+            0,
+        )
+    };
+    ensure!(fd >= 0, "Cannot create the engine's Landlock network rules");
+    // SAFETY: the syscall returned a new descriptor that nothing else owns.
+    let ruleset = unsafe { File::from_raw_fd(fd as i32) };
+    let bind = NetPort {
+        allowed_access: LANDLOCK_NET_BIND_TCP,
+        port: u64::from(port),
+    };
+    // SAFETY: the kernel reads the live rule for this ruleset descriptor.
+    let added = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_add_rule,
+            ruleset.as_raw_fd(),
+            LANDLOCK_RULE_NET_PORT,
+            &bind,
+            0,
+        )
+    };
+    ensure!(added == 0, "Cannot allow the engine to bind port {port}");
+    Ok(ruleset)
+}
+
+/// The workload policy, and no internet socket but TCP. Landlock limits TCP to binding the
+/// engine's own port; nothing else would stop UDP, raw, SCTP or MPTCP traffic from an engine
+/// that a crafted model took over.
+fn engine_filter() -> Vec<libc::sock_filter> {
+    let statement = |code, k| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let jump = |k, jt, jf| libc::sock_filter {
+        code: 0x15,
+        jt,
+        jf,
+        k,
+    };
+    let mut program = filter();
+    let allow = program.pop();
+    program.extend([
+        jump(libc::SYS_socket as u32, 0, 10),
+        statement(0x20, 16),
+        jump(libc::AF_INET as u32, 1, 0),
+        jump(libc::AF_INET6 as u32, 0, 7),
+        statement(0x20, 24),
+        statement(0x54, 0xf),
+        jump(libc::SOCK_STREAM as u32, 0, 3),
+        statement(0x20, 32),
+        jump(0, 2, 0),
+        jump(libc::IPPROTO_TCP as u32, 1, 0),
+        statement(0x06, 0x0005_0000 | libc::EPERM as u32),
+    ]);
+    program.extend(allow);
+    program
+}
+
+fn gpu_devices() -> Vec<PathBuf> {
+    let mut devices: Vec<PathBuf> = ["/dev/dri", "/dev/kfd"]
+        .iter()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .collect();
+    if let Ok(entries) = std::fs::read_dir("/dev") {
+        let mut nvidia: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("nvidia"))
+            .map(|entry| entry.path())
+            .collect();
+        nvidia.sort();
+        devices.extend(nvidia);
+    }
+    devices
+}
+
+/// The engine profile: the system read-only, the runtime and model files read-only where
+/// they are, GPU device nodes, a private `/tmp`, TCP limited to binding its own loopback
+/// port, and no other internet socket. GGUF parsing is an attack surface, so engines get the
+/// workload class.
+pub(crate) fn engine_command(
+    program: &Path,
+    args: &[std::ffi::OsString],
+    read_only: &[PathBuf],
+    port: u16,
+) -> Result<tokio::process::Command> {
+    landlock_abi()?;
+    let metadata = std::fs::metadata(program)?;
+    ensure!(
+        metadata.is_file() && metadata.mode() & 0o022 == 0,
+        "Engine {} must not be group- or world-writable",
+        program.display()
+    );
+    let seccomp = policy_file(&engine_filter())?;
+    let rules = engine_rules(port)?;
+    let mut command = tokio::process::Command::new(bubblewrap()?);
+    command.args([
+        "--unshare-user",
+        "--unshare-ipc",
+        "--unshare-pid",
+        "--unshare-uts",
+        "--unshare-cgroup",
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--disable-userns",
+    ]);
+    engine_mounts(&mut command, program, read_only)?;
+    command
+        .args(["--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp"])
+        .arg("--seccomp")
+        .arg(seccomp.as_raw_fd().to_string())
+        .arg("--")
+        .arg(program)
+        .args(args);
+    restrict_engine(&mut command, seccomp, rules);
+    Ok(command)
+}
+
+/// The system read-only, the engine's files read-only where they are, GPU devices, and a
+/// private `/tmp`.
+fn engine_mounts(
+    command: &mut tokio::process::Command,
+    program: &Path,
+    read_only: &[PathBuf],
+) -> Result<()> {
+    let system = ["/usr", "/bin", "/lib", "/lib64"]
+        .iter()
+        .chain(ENGINE_CONFIG.iter())
+        .chain(ENGINE_SYSFS.iter())
+        .map(Path::new)
+        .filter(|path| path.exists());
+    for path in system {
+        command.arg("--ro-bind").arg(path).arg(path);
+    }
+    for path in read_only.iter().map(PathBuf::as_path).chain([program]) {
+        ensure!(
+            path.is_absolute(),
+            "Engine path {} must be absolute",
+            path.display()
+        );
+        command.arg("--ro-bind").arg(path).arg(path);
+    }
+    command.args(["--proc", "/proc", "--dev", "/dev"]);
+    for device in gpu_devices() {
+        command.arg("--dev-bind").arg(&device).arg(&device);
+    }
+    command.args(["--tmpfs", "/tmp", "--remount-ro", "/"]);
+    Ok(())
+}
+
+/// Bubblewrap starts without privileges, inside the network rules, and dies with the agent;
+/// it receives the seccomp policy by descriptor.
+fn restrict_engine(command: &mut tokio::process::Command, seccomp: File, rules: File) {
+    let seccomp_fd = seccomp.as_raw_fd();
+    let rules_fd = rules.as_raw_fd();
+    // The closure owns both files, so they stay open until the child has started.
+    let held = (seccomp, rules);
+    // SAFETY: only async-signal-safe calls run between fork and exec.
+    unsafe {
+        command.pre_exec(move || {
+            let _ = &held;
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0
+                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                || libc::syscall(libc::SYS_landlock_restrict_self, rules_fd, 0) != 0
+                || libc::fcntl(seccomp_fd, libc::F_SETFD, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,6 +1264,91 @@ mod tests {
         assert_eq!(cpu("150000 100000").unwrap(), 1500);
         assert!(cpu("max 100000").is_err());
         assert!(cpu("1 0").is_err());
+    }
+
+    /// The call data the kernel hands a seccomp program: number, architecture, arguments.
+    fn call_data(call: libc::c_long, args: [u64; 3]) -> [u8; 64] {
+        #[cfg(target_arch = "x86_64")]
+        let architecture: u32 = 0xc000_003e;
+        #[cfg(target_arch = "aarch64")]
+        let architecture: u32 = 0xc000_00b7;
+        let mut data = [0_u8; 64];
+        data[..4].copy_from_slice(&(call as u32).to_ne_bytes());
+        data[4..8].copy_from_slice(&architecture.to_ne_bytes());
+        for (index, arg) in args.iter().enumerate() {
+            data[16 + index * 8..24 + index * 8].copy_from_slice(&arg.to_ne_bytes());
+        }
+        data
+    }
+
+    /// Runs a seccomp program on one call, for the instructions the policies use: loads of the
+    /// call data, AND, equality and bit tests, and returns.
+    fn verdict(program: &[libc::sock_filter], call: libc::c_long, args: [u64; 3]) -> u32 {
+        let data = call_data(call, args);
+        let (mut next, mut accumulator) = (0, 0_u32);
+        loop {
+            let instruction = program[next];
+            next += 1;
+            let at = instruction.k as usize;
+            let skip = |taken: bool| {
+                usize::from(if taken {
+                    instruction.jt
+                } else {
+                    instruction.jf
+                })
+            };
+            match instruction.code {
+                0x20 => {
+                    accumulator =
+                        u32::from_ne_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
+                }
+                0x54 => accumulator &= instruction.k,
+                0x15 => next += skip(accumulator == instruction.k),
+                0x45 => next += skip(accumulator & instruction.k != 0),
+                0x06 => return instruction.k,
+                code => panic!("unexpected seccomp instruction {code:#x}"),
+            }
+        }
+    }
+
+    #[test]
+    fn engines_open_no_internet_socket_but_tcp() {
+        let (engine, workload) = (engine_filter(), filter());
+        let allowed = 0x7fff_0000;
+        let refused = 0x0005_0000 | libc::EPERM as u32;
+        let socket = |program: &[libc::sock_filter], domain: i32, kind: i32, protocol: i32| {
+            let args = [domain as u64, kind as u64, protocol as u64];
+            verdict(program, libc::SYS_socket, args)
+        };
+        let stream = libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK;
+        let others = [
+            (libc::SOCK_DGRAM, 0),
+            (libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, libc::IPPROTO_ICMP),
+            (libc::SOCK_RAW, libc::IPPROTO_RAW),
+            (libc::SOCK_SEQPACKET, 0),
+            (libc::SOCK_STREAM, libc::IPPROTO_SCTP),
+            (libc::SOCK_STREAM, 262),
+        ];
+        for domain in [libc::AF_INET, libc::AF_INET6] {
+            assert_eq!(socket(&engine[..], domain, stream, 0), allowed);
+            let tcp = socket(&engine[..], domain, libc::SOCK_STREAM, libc::IPPROTO_TCP);
+            assert_eq!(tcp, allowed);
+            for (kind, protocol) in others {
+                let answer = socket(&engine[..], domain, kind, protocol);
+                assert_eq!(answer, refused, "{domain} {kind} {protocol}");
+            }
+            assert_eq!(socket(&workload[..], domain, libc::SOCK_DGRAM, 0), allowed);
+        }
+        assert_eq!(
+            socket(&engine[..], libc::AF_UNIX, libc::SOCK_DGRAM, 0),
+            allowed
+        );
+        assert_eq!(
+            socket(&engine[..], libc::AF_NETLINK, libc::SOCK_RAW, 0),
+            allowed
+        );
+        assert_eq!(verdict(&engine, libc::SYS_ptrace, [0; 3]), refused);
+        assert_eq!(verdict(&engine, libc::SYS_read, [0; 3]), allowed);
     }
 
     #[test]

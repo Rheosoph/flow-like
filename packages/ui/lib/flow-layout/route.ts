@@ -13,7 +13,7 @@ interface Point {
 	y: number;
 }
 
-export interface DataRoute {
+export interface WireRoute {
 	from: string;
 	to: string;
 	fromPin: string;
@@ -753,10 +753,10 @@ function candidates(
 }
 
 /** Samples each rendered segment separately; reroute node interiors are omitted. */
-export function sampleDataRoute(
+export function sampleWireRoute(
 	input: AutoLayoutInput,
 	positions: ReadonlyMap<string, [number, number]>,
-	route: DataRoute,
+	route: WireRoute,
 ): Array<readonly [Point, Point]> {
 	const wire = makeWires(input, positions).wires.find(
 		(candidate) => candidate.key === `${route.fromPin}->${route.toPin}`,
@@ -789,7 +789,6 @@ function routeInOrder(
 	);
 	const eligible = wires.filter(
 		({ edge }) =>
-			edge.kind === "data" &&
 			positions.has(edge.from) &&
 			positions.has(edge.to) &&
 			!retainedReroutes.has(edge.from) &&
@@ -812,7 +811,7 @@ function routeInOrder(
 			a.key.localeCompare(b.key),
 	);
 	if (order === "reverse") eligible.reverse();
-	const results = new Map<string, DataRoute>();
+	const results = new Map<string, WireRoute>();
 	const routeBoxes = new Map<string, Obstacle[]>();
 	// Revisit early choices after all wires have actual routes.
 	for (let pass = 0; pass < 3; pass++) {
@@ -826,7 +825,7 @@ function routeInOrder(
 			const originalHits = collisions(wire, wire.segments, boxIndex);
 			const originalCrossings = crossings(wire, wire.segments, wireIndex);
 			const originalBranchCost = branchCost(wire, wire.segments);
-			const route: DataRoute = results.get(wire.key) ?? {
+			const route: WireRoute = results.get(wire.key) ?? {
 				from: wire.edge.from,
 				to: wire.edge.to,
 				fromPin: wire.edge.fromPin.id,
@@ -986,10 +985,10 @@ function routeInOrder(
 }
 
 /** Keeps node placement fixed and searches bounded, deterministic wire corridors. */
-export function planDataRoutes(
+export function planWireRoutes(
 	input: AutoLayoutInput,
 	positions: ReadonlyMap<string, [number, number]>,
-): DataRoute[] {
+): WireRoute[] {
 	let best = routeInOrder(input, positions, "longest");
 	// Early lane choices constrain later wires. Try other orders on tangled boards.
 	if ((best.crossingCount > 0 || best.locality > 0) && best.routes.length > 1) {

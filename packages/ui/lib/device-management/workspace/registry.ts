@@ -453,7 +453,7 @@ export function createDeviceWorkspace(
 		};
 	}
 
-	function lockedSummary(
+	function lockedServices(
 		deviceId: string,
 	): KeySessionSnapshot["lockedSummary"] {
 		const inspection = late.live.inspection(deviceId);
@@ -470,6 +470,24 @@ export function createDeviceWorkspace(
 				status.observations.flatMap((row) => row.placements),
 			),
 		};
+	}
+
+	/** Counts only, like the service rows: what the Models tab shows while locked (plan §3.6). */
+	function lockedModels(deviceId: string) {
+		const snapshot = late.fleet
+			.get(deviceId)
+			?.metrics?.find((entry) => entry.scope.kind === "device" && entry.models);
+		return snapshot?.models
+			? { readAt: snapshot.observedAt, summary: snapshot.models }
+			: undefined;
+	}
+
+	function lockedSummary(
+		deviceId: string,
+	): KeySessionSnapshot["lockedSummary"] {
+		const summary = lockedServices(deviceId);
+		const models = lockedModels(deviceId);
+		return summary && models ? { ...summary, models } : summary;
 	}
 
 	const local = createLocalInventory(bound, options.local);

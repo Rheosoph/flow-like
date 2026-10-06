@@ -2087,6 +2087,7 @@ async fn get_jwks(jwks_url: &str) -> Result<jsonwebtoken::jwk::JwkSet, ApiError>
         .await
         .map_err(|e| ApiError::internal(format!("jwks parse failed: {e}")))?;
     let mut cache = JWKS_CACHE.lock().await;
+    cache.retain(|_, (at, _)| at.elapsed() < JWKS_TTL);
     cache.insert(
         jwks_url.to_string(),
         (std::time::Instant::now(), jwks.clone()),
@@ -2313,25 +2314,19 @@ async fn verify_oauth_bearer(
     cfg: &Value,
     headers: &HeaderMap,
 ) -> Result<Value, ApiError> {
-    use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
+    use jsonwebtoken::{DecodingKey, Validation, decode};
 
     let token = crate::middleware::jwt::viewer_authorization(headers)
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| ApiError::unauthorized("missing bearer token"))?
         .trim();
-    if token.is_empty() {
-        return Err(ApiError::unauthorized("empty bearer token"));
-    }
-
-    let jwks = oauth_jwks(state, cfg).await?;
-
-    let header = decode_header(token)
-        .map_err(|e| ApiError::unauthorized(format!("invalid jwt header: {e}")))?;
+    let header = parse_oauth_header(token)?;
     let alg = header.alg;
     if !is_asymmetric_jwt_algorithm(alg) {
         return Err(ApiError::unauthorized("unsupported oauth token algorithm"));
     }
 
+    let jwks = oauth_jwks(state, cfg).await?;
     let candidates = candidate_jwks(&jwks, header.kid.as_deref());
     if candidates.is_empty() {
         return Err(ApiError::unauthorized("no matching jwk for token kid"));
@@ -2378,6 +2373,27 @@ async fn verify_oauth_bearer(
     Err(ApiError::unauthorized(last_error.unwrap_or_else(|| {
         "no usable jwk matched token algorithm".to_string()
     })))
+}
+
+fn parse_oauth_header(token: &str) -> Result<jsonwebtoken::Header, ApiError> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let invalid = || ApiError::unauthorized("Malformed OAuth bearer token");
+    let mut parts = token.split('.');
+    let _header = parts.next().ok_or_else(invalid)?;
+    let payload = parts.next().ok_or_else(invalid)?;
+    let signature = parts.next().ok_or_else(invalid)?;
+    if parts.next().is_some() || signature.is_empty() {
+        return Err(invalid());
+    }
+    URL_SAFE_NO_PAD.decode(signature).map_err(|_| invalid())?;
+    let payload = URL_SAFE_NO_PAD.decode(payload).map_err(|_| invalid())?;
+    if !serde_json::from_slice::<Value>(&payload)
+        .map_err(|_| invalid())?
+        .is_object()
+    {
+        return Err(invalid());
+    }
+    jsonwebtoken::decode_header(token).map_err(|_| invalid())
 }
 
 fn verify_oauth_scopes(cfg: &Value, claims: &Value) -> Result<(), ApiError> {
@@ -4531,6 +4547,56 @@ mod tests {
         mcp_resource_url, parse_query_single, registration_auth_headers,
         rest_args_from_body_and_query, with_inbound_openapi_server,
     };
+
+    #[tokio::test]
+    async fn identity_discovery_preserves_private_http_and_large_documents() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected = format!("http://{address}/keys");
+        let body =
+            json!({"jwks_uri": expected, "provider_extension": "x".repeat(300 * 1024)}).to_string();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes()).await.unwrap();
+            socket.write_all(body.as_bytes()).await.unwrap();
+        });
+        let result = super::fetch_oidc_discovery(format!("http://{address}/discovery"))
+            .await
+            .unwrap();
+        assert_eq!(result.jwks_uri, expected);
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn malformed_oauth_tokens_fail_before_fetching_keys() {
+        for token in [
+            "",
+            "one-part",
+            "eyJhbGciOiJSUzI1NiJ9.invalid.sig",
+            "eyJhbGciOiJSUzI1NiJ9.e30.",
+            "eyJhbGciOiJSUzI1NiJ9.e30.c2ln.extra",
+        ] {
+            assert!(super::parse_oauth_header(token).is_err(), "{token}");
+        }
+        assert!(super::parse_oauth_header("eyJhbGciOiJSUzI1NiJ9.e30.c2ln").is_ok());
+    }
+
+    #[test]
+    fn oauth_header_parsing_accepts_large_claim_sets() {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let claims =
+            json!({"groups": (0..2_000).map(|n| format!("group-{n}")).collect::<Vec<_>>()});
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+        let token = format!("eyJhbGciOiJSUzI1NiJ9.{payload}.c2ln");
+        assert!(token.len() > 16 * 1024);
+        assert_eq!(
+            super::parse_oauth_header(&token).unwrap().alg,
+            Algorithm::RS256
+        );
+    }
 
     #[test]
     fn oidc_discovery_respects_provider_cache_limits() {

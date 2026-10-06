@@ -92,6 +92,12 @@ export async function desktopExportCommands(
 	};
 }
 
+/** A whole file of a prepared export: the desktop app reads it from its snapshot itself. */
+export interface SnapshotSource {
+	exportId: string;
+	path: string;
+}
+
 class SnapshotBlob implements ArtifactBlob {
 	constructor(
 		readonly size: number,
@@ -100,6 +106,7 @@ class SnapshotBlob implements ArtifactBlob {
 			length: number,
 		) => Promise<ArrayBuffer>,
 		private readonly offset = 0,
+		readonly source?: SnapshotSource,
 	) {}
 	slice(start = 0, end = this.size): ArtifactBlob {
 		const clamp = (value: number) =>
@@ -125,6 +132,9 @@ class SnapshotBlob implements ArtifactBlob {
 		return bytes.buffer;
 	}
 }
+
+export const snapshotSource = (file: unknown): SnapshotSource | undefined =>
+	file instanceof SnapshotBlob ? file.source : undefined;
 
 /** Native owns the private snapshot; the browser only reads bounded chunks. */
 export async function prepareDesktopProject(
@@ -156,14 +166,19 @@ export async function prepareDesktopProject(
 		const inputs: import("./artifacts").ArtifactInput[] = exported.files.map(
 			({ path, size }) => ({
 				path,
-				file: new SnapshotBlob(size, async (offset, length) => {
-					signal?.throwIfAborted();
-					if (released)
-						throw new Error(
-							"The prepared project has been released. Prepare it again.",
-						);
-					return commands.read(exported.export_id, path, offset, length);
-				}),
+				file: new SnapshotBlob(
+					size,
+					async (offset, length) => {
+						signal?.throwIfAborted();
+						if (released)
+							throw new Error(
+								"The prepared project has been released. Prepare it again.",
+							);
+						return commands.read(exported.export_id, path, offset, length);
+					},
+					0,
+					{ exportId: exported.export_id, path },
+				),
 			}),
 		);
 		if (exported.source === "online") {

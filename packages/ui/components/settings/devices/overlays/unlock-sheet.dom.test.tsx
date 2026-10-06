@@ -26,6 +26,8 @@ const { useOverlayStore } = await import("../workspace/overlay-store");
 const { fakeKeys } = await import("../testing/fake-device-api");
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
 const { AreaOverlays } = await import("./area-overlays");
+const { UnlockSheet } = await import("./unlock-sheet");
+const { ACCOUNT_SCOPE } = await import("../routing/devices-route");
 
 const { lab, edge, warehouse, cold, partner, oldKiosk } = SAMPLE_IDS;
 
@@ -614,3 +616,102 @@ describe("unlock sheet", () => {
 function startsWithD9(line: string) {
 	return line.startsWith("D9 ");
 }
+
+const KEEP_BOX = /^Keep unlocked for model access/;
+
+function ignore() {}
+
+/** Open the sheet directly to exercise the model-access keep-unlocked option. */
+function mountForModels(
+	deviceId: string,
+	forModels: boolean,
+	options: MountDevicesOptions = {},
+) {
+	return mountDevices(
+		<UnlockSheet
+			deviceId={deviceId}
+			forModels={forModels}
+			scope={ACCOUNT_SCOPE}
+			onNavigate={ignore}
+			onClose={ignore}
+		/>,
+		options,
+	);
+}
+
+function keepUnlocked(mounted: MountedDevices, deviceId: string) {
+	return mounted.fake.workspace.keys.snapshot(deviceId).keepUnlocked;
+}
+
+describe("unlock for model access", () => {
+	test("offers to keep the device unlocked, on by default, and the result can change it", async () => {
+		const mounted = await mountForModels(lab, true, { platform: "desktop" });
+		await mounted.settle();
+		const keep = byRole("checkbox", KEEP_BOX, sheet());
+		expect(keep.getAttribute("aria-checked")).toBe("true");
+		expect(sheetText()).toContain(
+			"Your flows on this computer can call its models until you lock it or quit Flow-Like. It won't lock after 30 min unused.",
+		);
+		await untilPasswordEnabled(mounted);
+		await submit(mounted, mounted.fake.password);
+		await untilKeyState(mounted, lab, "unlocked");
+		await untilText(
+			mounted,
+			"Unlocked. lab-gpu-02 stays unlocked while this window is open.",
+		);
+		expect(keepUnlocked(mounted, lab)).toBe(true);
+		expect(mounted.fake.workspace.keys.snapshot(lab).idleLocksAt).toBe(
+			undefined,
+		);
+
+		const kept = byRole("checkbox", KEEP_BOX, sheet());
+		expect(kept.getAttribute("aria-checked")).toBe("true");
+		await click(kept);
+		await mounted.settle();
+		expect(keepUnlocked(mounted, lab)).toBe(false);
+		expect(sheetText()).toContain(
+			"Unlocked. lab-gpu-02 locks after 30 min unused.",
+		);
+	});
+
+	test("unticked, the device keeps its idle lock", async () => {
+		const mounted = await mountForModels(lab, true, { platform: "web" });
+		await mounted.settle();
+		expect(sheetText()).toContain(
+			"Its models stay reachable from this window until you lock it or close the window.",
+		);
+		await click(byRole("checkbox", KEEP_BOX, sheet()));
+		await untilPasswordEnabled(mounted);
+		await submit(mounted, mounted.fake.password);
+		await untilKeyState(mounted, lab, "unlocked");
+		await untilText(mounted, "Unlocked. lab-gpu-02 locks after 30 min unused.");
+		expect(keepUnlocked(mounted, lab)).toBe(false);
+	});
+
+	test("a device that is already unlocked gets the choice right away", async () => {
+		const mounted = await mountForModels(edge, true);
+		await mounted.settle();
+		expect(sheetText()).toContain(
+			"edge-berlin-01 is already unlocked. It locks after 30 min unused.",
+		);
+		const keep = byRole("checkbox", KEEP_BOX, sheet());
+		expect(keep.getAttribute("aria-checked")).toBe("false");
+		await click(keep);
+		await mounted.settle();
+		expect(keepUnlocked(mounted, edge)).toBe(true);
+		expect(sheetText()).toContain(
+			"Unlocked. edge-berlin-01 stays unlocked while this window is open.",
+		);
+	});
+
+	test("an unlock for anything else offers nothing about models", async () => {
+		const mounted = await mountForModels(lab, false);
+		await mounted.settle();
+		expect(queryByRole("checkbox", KEEP_BOX, sheet())).toBeNull();
+		await untilPasswordEnabled(mounted);
+		await submit(mounted, mounted.fake.password);
+		await untilKeyState(mounted, lab, "unlocked");
+		expect(keepUnlocked(mounted, lab)).toBe(false);
+		expect(queryByRole("checkbox", KEEP_BOX, sheet())).toBeNull();
+	});
+});

@@ -1616,7 +1616,7 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
 
                     #[cfg(feature = "model")]
                     {
-                        let mut factory = app_state.embedding_factory.lock().await;
+                        let factory = &app_state.embedding_factory;
                         let model_result = factory
                             .build_text_routed(&bit, app_state.clone(), access_token, usage_context)
                             .await;
@@ -2185,7 +2185,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
 
                     // Build model and invoke
                     let model = {
-                        let mut factory = app_state.model_factory.lock().await;
+                        let factory = &app_state.model_factory;
                         match factory
                             .build(
                                 &bit,
@@ -2444,7 +2444,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     }
 
                     let model = {
-                        let mut factory = app_state.model_factory.lock().await;
+                        let factory = &app_state.model_factory;
                         match factory
                             .build(
                                 &bit,

@@ -87,7 +87,6 @@ struct Field {
     sensitive: bool,
     default: Option<Vec<u8>>,
     options: Option<Vec<String>>,
-    index: u16,
 }
 
 impl Field {
@@ -111,7 +110,6 @@ impl Field {
                 .unwrap_or(false),
             default: pin.default_value.clone(),
             options: options.and_then(|options| options.valid_values.clone()),
-            index: pin.index,
         }
     }
 
@@ -169,21 +167,6 @@ impl Field {
             field["default_omitted"] = Value::Bool(true);
         }
         field
-    }
-
-    fn input(&self) -> EventInput {
-        EventInput {
-            id: self.pin_id.clone(),
-            name: self.name.clone(),
-            friendly_name: self.label.clone(),
-            description: self.description.clone(),
-            data_type: self.data_type_word(),
-            value_type: self.value_type_word(),
-            schema: self.schema.clone(),
-            default_value: self.default.clone().filter(|_| !self.sensitive),
-            optional: self.optional,
-            index: self.index,
-        }
     }
 }
 
@@ -334,8 +317,14 @@ fn navigate_to_routes(config: &[u8]) -> Vec<String> {
 }
 
 /// The service page's view of the event, as `GET /services` lists it: the fields derived
-/// here, a config reduced to `navigate_to_routes`, and nothing a person must not see.
+/// here, built as stored events build their inputs, a config reduced to
+/// `navigate_to_routes`, and nothing a person must not see.
 pub(crate) fn inventory_entry(event: &OnDemandEvent) -> Value {
+    let board = &event.invocation.template.board;
+    let pins = board
+        .nodes
+        .get(&event.invocation.event.node_id)
+        .map(|node| &node.pins);
     let mut public = event.invocation.event.clone();
     public.variables.clear();
     public.node_id.clear();
@@ -345,7 +334,12 @@ pub(crate) fn inventory_entry(event: &OnDemandEvent) -> Value {
     public.correlation_mappings = None;
     public.config = serde_json::to_vec(&json!({"navigate_to_routes": event.navigate_to_routes}))
         .unwrap_or_default();
-    public.inputs = event.fields.iter().map(Field::input).collect();
+    public.inputs = event
+        .fields
+        .iter()
+        .filter_map(|field| pins?.get(&field.pin_id))
+        .map(|pin| EventInput::from_pin(pin, &board.refs))
+        .collect();
     serde_json::to_value(public).unwrap_or(Value::Null)
 }
 
@@ -1513,6 +1507,7 @@ mod tests {
         flow::{
             board::Board,
             compiled::TemplateCache,
+            event::EVENT_INPUTS_FORMAT,
             execution::context::ExecutionContext,
             node::{Node, NodeLogic},
             pin::PinOptions,
@@ -1534,7 +1529,6 @@ mod tests {
             sensitive: false,
             default: None,
             options: None,
-            index: 0,
         }
     }
 
@@ -1952,16 +1946,18 @@ mod tests {
         let config = json!({"navigate_to_routes": ["/notes", 7, ""]});
         let (event, stored) =
             prepared(directory.path(), "events_generic", config, note_form).await?;
-        // The stored list keeps a description as the key of the board's text for it.
-        let refs = &event.invocation.template.board.refs;
         let stored: Vec<_> = stored
-            .iter()
+            .into_iter()
             .filter(|input| input.name != PAYLOAD_PIN)
+            .collect();
+        // The stored list carries the board's text for a description, as the fields do.
+        let described: Vec<_> = stored
+            .iter()
             .map(|input| {
                 (
                     input.name.clone(),
                     input.friendly_name.clone(),
-                    resolve_schema(&input.description, refs).unwrap().to_owned(),
+                    input.description.clone(),
                     input.data_type.clone(),
                     input.value_type.clone(),
                     input.optional,
@@ -1983,7 +1979,7 @@ mod tests {
             })
             .collect();
         assert_eq!(derived.len(), 5);
-        assert_eq!(derived, stored);
+        assert_eq!(derived, described);
         assert_eq!((event.kind(), event.file_fields()), (Kind::Form, 1));
 
         let entry = event.contract_entry(MAX_ENTRY_BYTES);
@@ -2027,6 +2023,12 @@ mod tests {
         assert_eq!(listed["inputs"][1]["default_value"], json!(b"3".to_vec()));
         assert_eq!(listed["inputs"][2]["name"], "secret");
         assert_eq!(listed["inputs"][2]["default_value"], Value::Null);
+        assert_eq!(listed["inputs"][2]["sensitive"], true);
+        assert_eq!(listed["inputs"][2]["default_omitted"], true);
+        assert_eq!(listed["inputs"][3]["valid_values"], json!(["red", "green"]));
+        assert_eq!(listed["inputs"][0]["inputs_format"], EVENT_INPUTS_FORMAT);
+        // The service page lists exactly what a stored event carries.
+        assert_eq!(listed["inputs"], serde_json::to_value(&stored)?);
         let config: Value = serde_json::from_slice(&serde_json::from_value::<Vec<u8>>(
             listed["config"].clone(),
         )?)?;

@@ -300,8 +300,10 @@ describe("getSectionGuidance", () => {
 		expect(mistake("telegram")).toContain("command prefix empty");
 		expect(mistake("discord")).toContain("command prefix is empty");
 		expect(mistake("discord")).toContain("Respond to Mentions off");
-		for (const type of ["telegram", "discord"])
+		for (const type of ["telegram", "discord"]) {
+			expect(mistake(type)).toContain("every message");
 			expect(mistake(type)).not.toContain("mention-only");
+		}
 	});
 
 	test("page events get bootstrap-aware canary guidance, other sections shared", () => {

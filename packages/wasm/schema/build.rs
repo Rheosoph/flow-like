@@ -14,8 +14,8 @@ fn find_workspace_manifest(start: &Path) -> PathBuf {
         .expect("failed to find the workspace Cargo.toml")
 }
 
-fn wasmtime_major_version(workspace_toml: &str) -> &str {
-    let version = workspace_toml
+fn wasmtime_version(workspace_toml: &str) -> &str {
+    workspace_toml
         .lines()
         .find_map(|line| {
             let line = line.trim();
@@ -27,9 +27,12 @@ fn wasmtime_major_version(workspace_toml: &str) -> &str {
             let quoted = version.split_once('"')?.1;
             quoted.split_once('"').map(|(version, _)| version)
         })
-        .expect("could not find the workspace wasmtime dependency version");
+        .expect("could not find the workspace wasmtime dependency version")
+        .trim_start_matches('=')
+}
 
-    version
+fn wasmtime_major_version(workspace_toml: &str) -> &str {
+    wasmtime_version(workspace_toml)
         .split('.')
         .next()
         .filter(|major| !major.is_empty())
@@ -44,14 +47,16 @@ fn main() {
     let workspace_toml =
         fs::read_to_string(&workspace_manifest).expect("failed to read workspace Cargo.toml");
     let major = wasmtime_major_version(&workspace_toml);
+    let version = wasmtime_version(&workspace_toml);
 
     println!("cargo:rerun-if-changed={}", workspace_manifest.display());
     println!("cargo:rustc-env=FLOW_LIKE_WASMTIME_MAJOR_VERSION={major}");
+    println!("cargo:rustc-env=FLOW_LIKE_WASMTIME_SERIALIZATION_VERSION={version}");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::wasmtime_major_version;
+    use super::{wasmtime_major_version, wasmtime_version};
 
     #[test]
     fn extracts_only_the_wasmtime_package_version() {
@@ -60,5 +65,12 @@ mod tests {
             wasmtime-wasi = "48.0.1"
         "#;
         assert_eq!(wasmtime_major_version(manifest), "48");
+    }
+
+    #[test]
+    fn exact_dependency_preserves_the_serialization_patch_version() {
+        let manifest = r#"wasmtime = { version = "=48.0.3" }"#;
+        assert_eq!(wasmtime_major_version(manifest), "48");
+        assert_eq!(wasmtime_version(manifest), "48.0.3");
     }
 }

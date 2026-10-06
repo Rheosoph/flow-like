@@ -239,6 +239,8 @@ pub(crate) fn enforce_host_policy(
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::engine_command;
 
 pub struct IsolationLease {
     #[cfg(target_os = "linux")]

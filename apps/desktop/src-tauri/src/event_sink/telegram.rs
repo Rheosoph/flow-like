@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 use teloxide::prelude::*;
 use teloxide::respond;
 use teloxide::types::{
-    CallbackQuery, ChatId, InputFile, MediaKind, MediaText, MessageKind, ParseMode, ReplyParameters,
+    CallbackQuery, ChatId, InputFile, MediaKind, MessageKind, ParseMode, ReplyParameters,
 };
 
 use crate::utils::UiEmitTarget;
@@ -217,6 +217,16 @@ fn should_process_message(msg: &Message, handler: &EventHandler, me: &Me) -> boo
     handler.spec.admits(&facts)
 }
 
+/// What the flow reads of a message: its text, or the caption of a photo or file, which can
+/// start a run like a text does.
+fn text_or_caption(message: &Message) -> String {
+    message
+        .text()
+        .or_else(|| message.caption())
+        .unwrap_or_default()
+        .to_string()
+}
+
 async fn prepare_message_payload(
     bot: &Bot,
     msg: &Message,
@@ -224,13 +234,7 @@ async fn prepare_message_payload(
 ) -> flow_like_types::Value {
     let mut content_parts = Vec::new();
 
-    let text = match &msg.kind {
-        MessageKind::Common(common) => match &common.media_kind {
-            MediaKind::Text(MediaText { text, .. }) => text.clone(),
-            _ => String::new(),
-        },
-        _ => String::new(),
-    };
+    let text = text_or_caption(msg);
 
     let from = msg.from.as_ref();
     let user_name = from.map(|u| u.full_name()).unwrap_or_default();
@@ -294,13 +298,7 @@ async fn prepare_message_payload(
             break;
         }
 
-        let reply_text = match &reply_msg.kind {
-            MessageKind::Common(common) => match &common.media_kind {
-                MediaKind::Text(MediaText { text, .. }) => text.clone(),
-                _ => String::new(),
-            },
-            _ => String::new(),
-        };
+        let reply_text = text_or_caption(&reply_msg);
 
         if !reply_text.is_empty() {
             let reply_from = reply_msg.from.as_ref();
@@ -997,6 +995,26 @@ impl TelegramSink {
         Ok(())
     }
 
+    /// Updates the bot's row in place: replacing it would delete, through `ON DELETE CASCADE`,
+    /// the stored handlers of every other event on the same bot.
+    fn upsert_bot(conn: &rusqlite::Connection, config: &TelegramSink, now: i64) -> Result<()> {
+        conn.execute(
+            "INSERT INTO telegram_bots (token, bot_name, bot_description, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(token) DO UPDATE SET
+                 bot_name = excluded.bot_name,
+                 bot_description = excluded.bot_description",
+            params![
+                config.bot_token,
+                config.bot_name,
+                config.bot_description,
+                now
+            ],
+        )?;
+
+        Ok(())
+    }
+
     fn add_bot_and_handler(
         db: &DbConnection,
         registration: &EventRegistration,
@@ -1020,16 +1038,7 @@ impl TelegramSink {
             .map(serde_json::to_string)
             .transpose()?;
 
-        conn.execute(
-            "INSERT OR REPLACE INTO telegram_bots (token, bot_name, bot_description, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                config.bot_token,
-                config.bot_name,
-                config.bot_description,
-                now
-            ],
-        )?;
+        Self::upsert_bot(&conn, config, now)?;
 
         conn.execute(
             "INSERT OR REPLACE INTO telegram_handlers
@@ -1455,11 +1464,48 @@ mod tests {
         assert!(!in_group(slash(), captioned("nice")));
     }
 
+    /// The text that started a run reaches the flow, also when it is a caption.
+    #[test]
+    fn the_flow_reads_the_text_or_the_caption() {
+        let read = |fields: Value| {
+            let chat = group();
+            let base = json!({"message_id": 10, "date": 1_790_000_000, "chat": chat});
+            let message: Message =
+                serde_json::from_str(&with(base, fields).to_string()).expect("a message");
+            text_or_caption(&message)
+        };
+        let photo = json!([{"file_id": "p1", "file_unique_id": "u1", "width": 90, "height": 90}]);
+        assert_eq!(read(text("/ask now")), "/ask now");
+        assert_eq!(
+            read(json!({"photo": photo, "caption": "/describe this"})),
+            "/describe this"
+        );
+        assert_eq!(read(json!({"photo": photo})), "");
+    }
+
     #[test]
     fn a_command_for_another_bot_is_no_prefix_match() {
         assert!(!in_group(slash(), command("/ask@otherbot now")));
         assert!(in_group(slash(), command("/ask@HELPER_BOT now")));
         assert!(in_group(json!({}), command("/ask@otherbot now")));
+        let bang = json!({"command_prefix": "!"});
+        assert!(in_group(bang.clone(), text("!ask@team now")));
+        assert!(in_group(bang.clone(), command("/ask@helper_bot now")));
+        assert!(!in_group(bang, command("/ask@otherbot now")));
+    }
+
+    /// Telegram names a forum topic's creation as the message every other message in the
+    /// topic replies to.
+    #[test]
+    fn a_topic_the_bot_opened_is_no_reply_to_it() {
+        let bot = json!({"id": BOT_ID, "is_bot": true, "first_name": "Helper"});
+        let opened = json!({"message_id": 4, "date": 1_789_999_980, "chat": group(), "from": bot,
+            "is_topic_message": true, "message_thread_id": 4,
+            "forum_topic_created": {"name": "Support", "icon_color": 7_322_096}});
+        let topic = json!({"is_topic_message": true, "message_thread_id": 4});
+        let thanks = with(text("thanks"), json!({"reply_to_message": opened}));
+        assert!(!in_group(slash(), with(topic.clone(), thanks)));
+        assert!(in_group(slash(), with(topic, reply_to_the_bot())));
     }
 
     #[test]
@@ -1488,10 +1534,22 @@ mod tests {
         assert!(!in_group(slash(), location()));
     }
 
-    /// Stores the handler of `event_id` as registering the event does, with a bot of its own.
+    /// The sink's tables in a database that enforces foreign keys, as the app's does.
+    fn database() -> DbConnection {
+        let connection = rusqlite::Connection::open_in_memory().expect("a database");
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON")
+            .expect("foreign keys");
+        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
+        TelegramSink::init_tables(&db).expect("the tables");
+        db
+    }
+
+    /// Stores the handler of `event_id` as registering the event does, with a bot of its own
+    /// unless `settings` name a token.
     fn store(db: &DbConnection, event_id: &str, settings: Value) -> TelegramSink {
-        let token = json!({"bot_token": format!("token-of-{event_id}")});
-        let config = sink(with(settings, token));
+        let own = json!({"bot_token": format!("token-of-{event_id}")});
+        let config = sink(with(own, settings));
         let registration =
             TelegramSink::create_event_registration(event_id.to_string(), config.clone());
         TelegramSink::add_bot_and_handler(db, &registration, &config).expect("a stored handler");
@@ -1499,16 +1557,8 @@ mod tests {
     }
 
     /// What a restart does: `start` builds a handler from every row of the sink's tables.
-    #[tokio::test]
-    async fn a_restart_restores_the_prefix_as_it_was_saved() {
-        let connection = rusqlite::Connection::open_in_memory().expect("a database");
-        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
-        TelegramSink::init_tables(&db).expect("the tables");
-        let none = store(&db, "evt_none", json!({}));
-        let prefix_only = json!({"command_prefix": "/", "respond_to_mentions": false});
-        let slash = store(&db, "evt_slash", prefix_only);
-
-        let stored = TelegramSink::load_handlers_from_db(&db)
+    async fn restore(db: &DbConnection) -> Vec<BotSpec> {
+        let stored = TelegramSink::load_handlers_from_db(db)
             .await
             .expect("the stored handlers");
         let mut restored: Vec<BotSpec> = stored
@@ -1516,8 +1566,40 @@ mod tests {
             .map(|(registration, config)| config.spec(&registration.event_id))
             .collect();
         restored.sort_by(|a, b| a.event_id.cmp(&b.event_id));
+        restored
+    }
 
+    #[tokio::test]
+    async fn a_restart_restores_the_prefix_as_it_was_saved() {
+        let db = database();
+        let none = store(&db, "evt_none", json!({}));
+        let prefix_only = json!({"command_prefix": "/", "respond_to_mentions": false});
+        let slash = store(&db, "evt_slash", prefix_only);
+
+        let restored = restore(&db).await;
         assert_eq!(restored, [none.spec("evt_none"), slash.spec("evt_slash")]);
         assert_eq!(restored[0].command_prefix, "");
+    }
+
+    /// Events on one bot share its row: storing one updates the row and keeps the stored
+    /// handlers of the others.
+    #[tokio::test]
+    async fn a_restart_restores_every_event_of_a_shared_bot() {
+        let db = database();
+        let shared = |settings: Value| with(json!({"bot_token": "a-shared-token"}), settings);
+        let mentions = store(&db, "evt_mentions", shared(json!({"bot_name": "Old"})));
+        let slash = json!({"command_prefix": "/", "bot_name": "Helper"});
+        let slash = store(&db, "evt_slash", shared(slash));
+        let both = [mentions.spec("evt_mentions"), slash.spec("evt_slash")];
+        assert_eq!(restore(&db).await, both);
+
+        let stored = TelegramSink::load_handlers_from_db(&db)
+            .await
+            .expect("the stored handlers");
+        let names = stored.iter().map(|(_, config)| config.bot_name.as_deref());
+        assert!(names.eq([Some("Helper"); 2]), "an updated bot row");
+
+        TelegramSink::remove_handler(&db, "evt_slash").expect("a removed handler");
+        assert_eq!(restore(&db).await, [mentions.spec("evt_mentions")]);
     }
 }

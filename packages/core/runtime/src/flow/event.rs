@@ -14,11 +14,19 @@ use crate::{
 };
 
 use super::{
-    board::VersionType, compiled::prerun::PrerunPageExecution, pin::PinType, variable::Variable,
+    board::{Board, VersionType},
+    compiled::prerun::PrerunPageExecution,
+    pin::{Pin, PinType, resolve_schema},
+    variable::Variable,
 };
 
+/// Version of [`EventInput::from_pin`]. Inputs built by an older rule still carry ref keys
+/// instead of their description and schema, lack the pin options and may hold a sensitive
+/// default; readers recompute them (see [`Event::inputs_outdated`]).
+pub const EVENT_INPUTS_FORMAT: u32 = 1;
+
 /// Simplified input pin metadata for events (used when board can't be fetched)
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct EventInput {
     pub id: String,
     pub name: String,
@@ -31,6 +39,62 @@ pub struct EventInput {
     #[serde(default)]
     pub optional: bool,
     pub index: u16,
+    /// The pin is marked sensitive: its default is never copied here.
+    #[serde(default)]
+    pub sensitive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_values: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<(f64, f64)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+    /// A sensitive pin's default exists but is withheld; an optional input left out still runs
+    /// with it.
+    #[serde(default)]
+    pub default_omitted: bool,
+    /// The [`EVENT_INPUTS_FORMAT`] this input was built with; 0 for inputs stored before it.
+    #[serde(default)]
+    pub inputs_format: u32,
+}
+
+impl EventInput {
+    /// The one constructor: description and schema resolved through the board's refs (the raw
+    /// text when a ref is cyclic), the pin options copied, and a sensitive default withheld.
+    pub fn from_pin(pin: &Pin, refs: &HashMap<String, String>) -> Self {
+        let resolved = |text: &str| resolve_schema(text, refs).unwrap_or(text).to_owned();
+        let options = pin.options.as_ref();
+        let sensitive = options
+            .and_then(|options| options.sensitive)
+            .unwrap_or(false);
+        Self {
+            id: pin.id.clone(),
+            name: pin.name.clone(),
+            friendly_name: pin.friendly_name.clone(),
+            description: resolved(&pin.description),
+            data_type: format!("{:?}", pin.data_type),
+            value_type: format!("{:?}", pin.value_type),
+            schema: pin.schema.as_deref().map(resolved),
+            default_value: pin.default_value.clone().filter(|_| !sensitive),
+            optional: options
+                .and_then(|options| options.optional)
+                .unwrap_or(false),
+            index: pin.index,
+            sensitive,
+            valid_values: options
+                .and_then(|options| options.valid_values.clone())
+                .filter(|values| !values.is_empty()),
+            // Stored inputs are also JSON, where a non-finite number would turn into null and
+            // fail every later read of the list.
+            range: options
+                .and_then(|options| options.range)
+                .filter(|(min, max)| min.is_finite() && max.is_finite()),
+            step: options
+                .and_then(|options| options.step)
+                .filter(|step| step.is_finite()),
+            default_omitted: sensitive && pin.default_value.is_some(),
+            inputs_format: EVENT_INPUTS_FORMAT,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -867,46 +931,44 @@ impl Event {
             .open_board(self.board_id.clone(), Some(true), self.board_version)
             .await?;
 
-        let board_guard = board.snapshot();
-
-        if let Some(node) = board_guard.nodes.get(&self.node_id) {
-            // For page-target events (A2UI/generic form), we need Input pins (what user provides)
-            // For regular events, we need Output pins (what the event produces)
-            let target_pin_type = if self.default_page_id.is_some() {
-                PinType::Input
-            } else {
-                PinType::Output
-            };
-
-            let mut inputs: Vec<EventInput> = node
-                .pins
-                .values()
-                .filter(|pin| {
-                    pin.pin_type == target_pin_type
-                        && pin.data_type != super::variable::VariableType::Execution
-                })
-                .map(|pin| EventInput {
-                    id: pin.id.clone(),
-                    name: pin.name.clone(),
-                    friendly_name: pin.friendly_name.clone(),
-                    description: pin.description.clone(),
-                    data_type: format!("{:?}", pin.data_type),
-                    value_type: format!("{:?}", pin.value_type),
-                    schema: pin.schema.clone(),
-                    default_value: pin.default_value.clone(),
-                    optional: pin
-                        .options
-                        .as_ref()
-                        .and_then(|o| o.optional)
-                        .unwrap_or(false),
-                    index: pin.index,
-                })
-                .collect();
-            inputs.sort_by_key(|i| i.index);
+        if let Some(inputs) = self.inputs_from_board(&board.snapshot()) {
             self.inputs = inputs;
         }
 
         Ok(())
+    }
+
+    /// The inputs this event's node gives on `board`, in pin order, or `None` when the board
+    /// lacks the node.
+    pub fn inputs_from_board(&self, board: &Board) -> Option<Vec<EventInput>> {
+        let node = board.nodes.get(&self.node_id)?;
+        // For page-target events (A2UI/generic form), we need Input pins (what user provides)
+        // For regular events, we need Output pins (what the event produces)
+        let target_pin_type = if self.default_page_id.is_some() {
+            PinType::Input
+        } else {
+            PinType::Output
+        };
+
+        let mut inputs: Vec<EventInput> = node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == target_pin_type
+                    && pin.data_type != super::variable::VariableType::Execution
+            })
+            .map(|pin| EventInput::from_pin(pin, &board.refs))
+            .collect();
+        inputs.sort_by_key(|input| input.index);
+        Some(inputs)
+    }
+
+    /// Whether any stored input was built by an older [`EventInput::from_pin`]. Recomputing
+    /// such inputs never cuts a version: [`Event::content_equal`] ignores the inputs.
+    pub fn inputs_outdated(&self) -> bool {
+        self.inputs
+            .iter()
+            .any(|input| input.inputs_format < EVENT_INPUTS_FORMAT)
     }
 
     /// The stored variants as written, falling back to a single Live variant
@@ -1849,11 +1911,12 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChatEventParameters, Event, EventPayload, EventVariant, EventVariantMode, RestoreIssueCode,
-        RestoreIssueSeverity, RestoreOptions, load_error_is_not_found,
+        ChatEventParameters, EVENT_INPUTS_FORMAT, Event, EventInput, EventPayload, EventVariant,
+        EventVariantMode, RestoreIssueCode, RestoreIssueSeverity, RestoreOptions,
+        load_error_is_not_found,
     };
     use crate::flow::{
-        pin::ValueType,
+        pin::{Pin, PinOptions, ValueType},
         variable::{Variable, VariableType},
     };
     use crate::state::{FlowLikeConfig, FlowLikeState};
@@ -2564,18 +2627,7 @@ mod tests {
         rerouted.is_default = true;
         assert!(base.content_equal(&rerouted));
         let mut repinned = base.clone();
-        repinned.inputs = vec![super::EventInput {
-            id: "pin".to_string(),
-            name: "renamed_pin".to_string(),
-            friendly_name: "Renamed".to_string(),
-            description: String::new(),
-            data_type: "String".to_string(),
-            value_type: "Normal".to_string(),
-            schema: None,
-            default_value: None,
-            optional: false,
-            index: 0,
-        }];
+        repinned.inputs = vec![stale_input("pin", "renamed_pin", String::new(), None)];
         assert!(base.content_equal(&repinned));
     }
 
@@ -3431,5 +3483,249 @@ mod tests {
             serialized["ai_disclosure"],
             json!("Plot twist: you're chatting with an AI.")
         );
+    }
+
+    fn form_pin(name: &str, data_type: VariableType) -> Pin {
+        crate::flow::node::Node::new("events_generic", "Generic Event", "", "Events")
+            .add_output_pin(name, name, "", data_type)
+            .clone()
+    }
+
+    /// The key board cleanup stores a description or schema under.
+    fn ref_key(text: &str) -> String {
+        crate::utils::hash::hash_string_non_cryptographic(text).to_string()
+    }
+
+    const FLOW_PATH_SCHEMA: &str = r#"{"title":"FlowPath","type":"object","properties":{"path":{"type":"string"},"store_ref":{"type":"string"}},"required":["path","store_ref"]}"#;
+
+    #[test]
+    fn event_input_from_pin_resolves_description_and_schema_keys() {
+        let description = "The scanned invoice";
+        let refs = HashMap::from([
+            (ref_key(description), description.to_string()),
+            (ref_key(FLOW_PATH_SCHEMA), FLOW_PATH_SCHEMA.to_string()),
+        ]);
+        let mut pin = form_pin("invoice", VariableType::Struct);
+        pin.description = ref_key(description);
+        pin.schema = Some(ref_key(FLOW_PATH_SCHEMA));
+
+        let input = EventInput::from_pin(&pin, &refs);
+        assert_eq!(input.description, description);
+        assert_eq!(input.schema.as_deref(), Some(FLOW_PATH_SCHEMA));
+        assert_eq!(
+            (input.data_type.as_str(), input.value_type.as_str()),
+            ("Struct", "Normal")
+        );
+        assert_eq!(input.inputs_format, EVENT_INPUTS_FORMAT);
+    }
+
+    #[test]
+    fn event_input_from_pin_keeps_empty_unknown_and_cyclic_texts() {
+        // The client's EMPTY_STRING_REF: cleanup stores "" like any other text.
+        let empty = ref_key("");
+        assert_eq!(empty, "16248035215404677707");
+        let refs = HashMap::from([
+            (empty.clone(), String::new()),
+            ("cycle-a".to_string(), "cycle-b".to_string()),
+            ("cycle-b".to_string(), "cycle-a".to_string()),
+        ]);
+        let mut pin = form_pin("note", VariableType::String);
+        pin.description = empty;
+        pin.schema = Some("4242".to_string());
+
+        let input = EventInput::from_pin(&pin, &refs);
+        assert_eq!(input.description, "");
+        assert_eq!(input.schema.as_deref(), Some("4242"));
+
+        pin.description = "cycle-a".to_string();
+        assert_eq!(EventInput::from_pin(&pin, &refs).description, "cycle-a");
+    }
+
+    #[test]
+    fn event_input_from_pin_withholds_a_sensitive_default() {
+        let mut secret = form_pin("api_key", VariableType::String);
+        secret.default_value = Some(br#""hush""#.to_vec());
+        secret.options = Some(PinOptions::new().set_sensitive(true).build());
+
+        let input = EventInput::from_pin(&secret, &HashMap::new());
+        assert!(input.sensitive && input.default_omitted);
+        assert_eq!(input.default_value, None);
+        assert!(!serde_json::to_string(&input).unwrap().contains("hush"));
+
+        secret.default_value = None;
+        let input = EventInput::from_pin(&secret, &HashMap::new());
+        assert!(input.sensitive && !input.default_omitted);
+
+        let mut count = form_pin("count", VariableType::Integer);
+        count.default_value = Some(b"3".to_vec());
+        let input = EventInput::from_pin(&count, &HashMap::new());
+        assert!(!input.sensitive && !input.default_omitted);
+        assert_eq!(input.default_value, Some(b"3".to_vec()));
+    }
+
+    #[test]
+    fn event_input_from_pin_copies_the_pin_options() {
+        let mut ratio = form_pin("ratio", VariableType::Float);
+        ratio.options = Some(
+            PinOptions::new()
+                .set_optional(true)
+                .set_valid_values(vec!["0.5".into(), "1.5".into()])
+                .set_range((0.0, 2.0))
+                .set_step(0.5)
+                .build(),
+        );
+        let input = EventInput::from_pin(&ratio, &HashMap::new());
+        assert!(input.optional);
+        assert_eq!(input.valid_values, Some(vec!["0.5".into(), "1.5".into()]));
+        assert_eq!((input.range, input.step), (Some((0.0, 2.0)), Some(0.5)));
+        let wire = serde_json::to_value(&input).unwrap();
+        assert_eq!(wire["range"], json!([0.0, 2.0]));
+        assert_eq!(wire["valid_values"], json!(["0.5", "1.5"]));
+
+        ratio.options = Some(
+            PinOptions::new()
+                .set_valid_values(Vec::new())
+                .set_range((f64::NEG_INFINITY, 1.0))
+                .set_step(f64::NAN)
+                .build(),
+        );
+        let input = EventInput::from_pin(&ratio, &HashMap::new());
+        assert!(!input.optional);
+        assert_eq!(
+            (input.valid_values.clone(), input.range, input.step),
+            (None, None, None)
+        );
+        let wire = serde_json::to_value(&input).unwrap();
+        for absent in ["valid_values", "range", "step"] {
+            assert!(wire.get(absent).is_none(), "{absent} is left out");
+        }
+    }
+
+    #[test]
+    fn event_input_json_without_the_new_fields_reads_as_outdated() {
+        let stored: EventInput = serde_json::from_value(json!({
+            "id": "pin-title",
+            "name": "title",
+            "friendly_name": "Title",
+            "description": "16248035215404677707",
+            "data_type": "String",
+            "value_type": "Normal",
+            "schema": null,
+            "default_value": null,
+            "index": 1
+        }))
+        .unwrap();
+        assert_eq!(stored.inputs_format, 0);
+        assert!(!stored.optional && !stored.sensitive && !stored.default_omitted);
+        assert_eq!(
+            (stored.valid_values.clone(), stored.range, stored.step),
+            (None, None, None)
+        );
+
+        let mut event = storage_event("outdated-inputs");
+        assert!(!event.inputs_outdated(), "no inputs, nothing to rebuild");
+        event.inputs = vec![stored];
+        assert!(event.inputs_outdated());
+        let reread: Event = serde_json::from_value(serde_json::to_value(&event).unwrap()).unwrap();
+        assert!(reread.inputs_outdated());
+        event.inputs[0].inputs_format = EVENT_INPUTS_FORMAT;
+        assert!(!event.inputs_outdated());
+    }
+
+    const NOTE_ABOUT: &str = "What the note is about";
+
+    /// A form node with a described `title` and a sensitive `secret` that has a default, saved
+    /// as cleanup leaves a board: descriptions are keys into its refs.
+    async fn form_board(app: &mut crate::app::App) -> (String, [String; 2]) {
+        let created = app.create_board(None, None).await.unwrap();
+        let board = app
+            .open_board(created.board_id.clone(), Some(false), None)
+            .await
+            .unwrap();
+        let mut board = board.write().await;
+        let mut node =
+            crate::flow::node::Node::new("events_generic", "Generic Event", "", "Events");
+        node.id = "form-node".into();
+        node.add_output_pin("exec_out", "Output", "", VariableType::Execution);
+        let title = node
+            .add_output_pin("title", "Title", &ref_key(NOTE_ABOUT), VariableType::String)
+            .id
+            .clone();
+        let secret = node
+            .add_output_pin("secret", "Secret", &ref_key(""), VariableType::String)
+            .set_default_value(Some(json!("hush")))
+            .set_options(PinOptions::new().set_sensitive(true).build())
+            .id
+            .clone();
+        board.refs.insert(ref_key(NOTE_ABOUT), NOTE_ABOUT.into());
+        board.refs.insert(ref_key(""), String::new());
+        board.nodes.insert(node.id.clone(), node);
+        board.save(None).await.unwrap();
+        (created.board_id, [title, secret])
+    }
+
+    /// An input as populate_inputs stored it before inputs carried a format.
+    fn stale_input(id: &str, name: &str, key: String, default: Option<Vec<u8>>) -> EventInput {
+        EventInput {
+            id: id.into(),
+            name: name.into(),
+            friendly_name: name.into(),
+            description: key,
+            data_type: "String".into(),
+            value_type: "Normal".into(),
+            schema: None,
+            default_value: default,
+            optional: false,
+            index: 0,
+            sensitive: false,
+            valid_values: None,
+            range: None,
+            step: None,
+            default_omitted: false,
+            inputs_format: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn event_inputs_of_a_stale_stored_event_are_rebuilt_from_its_board() {
+        let mut app = test_app().await;
+        let (board_id, [title, secret]) = form_board(&mut app).await;
+        let mut event = storage_event("stale-form");
+        event.event_type = "generic_form".into();
+        event.board_id = board_id.clone();
+        event.node_id = "form-node".into();
+        event.inputs = vec![
+            stale_input(&title, "title", ref_key(NOTE_ABOUT), None),
+            stale_input(&secret, "secret", ref_key(""), Some(br#""hush""#.to_vec())),
+        ];
+        event.save(&app, None).await.unwrap();
+        let stored = Event::load(&event.id, &app, None).await.unwrap();
+        assert!(stored.inputs_outdated());
+
+        let board = app
+            .open_board(board_id, Some(false), None)
+            .await
+            .unwrap()
+            .snapshot();
+        let rebuilt = stored.inputs_from_board(&board).unwrap();
+        let names: Vec<_> = rebuilt.iter().map(|input| input.name.as_str()).collect();
+        assert_eq!(names, ["title", "secret"]);
+        assert_eq!(rebuilt[0].description, NOTE_ABOUT);
+        assert_eq!(rebuilt[1].description, "");
+        assert!(rebuilt[1].sensitive && rebuilt[1].default_omitted);
+        assert_eq!(rebuilt[1].default_value, None);
+
+        let mut populated = stored.clone();
+        populated.populate_inputs(&app).await.unwrap();
+        assert_eq!(populated.inputs, rebuilt);
+        assert!(!populated.inputs_outdated());
+        assert!(
+            stored.content_equal(&populated),
+            "a rebuild never cuts a version"
+        );
+
+        let mut elsewhere = stored.clone();
+        elsewhere.node_id = "missing-node".into();
+        assert_eq!(elsewhere.inputs_from_board(&board), None);
     }
 }

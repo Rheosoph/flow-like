@@ -1366,7 +1366,7 @@ mod runtime {
     impl IntersectionBudget {
         fn reserve(counter: &AtomicUsize, count: usize, limit: usize) -> Result<()> {
             counter
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                     used.checked_add(count).filter(|next| *next <= limit)
                 })
                 .map(|_| ())

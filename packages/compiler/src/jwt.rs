@@ -1,5 +1,5 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -221,7 +221,7 @@ async fn jwks_public_key(expected_kid: &str) -> Result<Arc<Vec<u8>>, CompilerErr
         // so bad tokens cannot drive a fetch storm against the API.
         if let Some(failed_at) = cache.failed_fetches.get(expected_kid) {
             if failed_at.elapsed() < JWKS_FETCH_FAILURE_BACKOFF {
-                return Err(CompilerError::Jwt(
+                return Err(CompilerError::Config(
                     "compiler JWT kid failed a recent JWKS refresh".to_string(),
                 ));
             }
@@ -249,7 +249,7 @@ async fn jwks_public_key(expected_kid: &str) -> Result<Arc<Vec<u8>>, CompilerErr
     }
 }
 
-pub async fn verify_jwt_async(token: &str) -> Result<CompilerClaims, CompilerError> {
+async fn decoding_key_for(token: &str) -> Result<DecodingKey, CompilerError> {
     let header = decode_header(token)
         .map_err(|_| CompilerError::Jwt("invalid compiler JWT header".to_string()))?;
     if header.alg != Algorithm::ES256 {
@@ -276,6 +276,12 @@ pub async fn verify_jwt_async(token: &str) -> Result<CompilerClaims, CompilerErr
     let decoding_key = DecodingKey::from_ec_pem(&key_bytes)
         .map_err(|_| CompilerError::Config("invalid configured compiler public key".to_string()))?;
 
+    Ok(decoding_key)
+}
+
+pub async fn verify_jwt_async(token: &str) -> Result<CompilerClaims, CompilerError> {
+    let decoding_key = decoding_key_for(token).await?;
+
     let mut validation = Validation::new(Algorithm::ES256);
     validation.validate_exp = true;
     validation.validate_nbf = true;
@@ -295,6 +301,27 @@ pub async fn verify_jwt_async(token: &str) -> Result<CompilerClaims, CompilerErr
         ));
     }
     Ok(token_data.claims)
+}
+
+pub(crate) async fn verify_claim_check(
+    token: &str,
+) -> Result<flow_like_types_contracts::dispatch::ClaimCheckClaims, CompilerError> {
+    let key = decoding_key_for(token).await?;
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.validate_nbf = true;
+    validation.leeway = 30;
+    validation.set_required_spec_claims(&["exp", "nbf", "iss", "aud"]);
+    validation.set_audience(&["flow-like-compiler"]);
+    validation.set_issuer(&["flow-like"]);
+    let claims =
+        decode::<flow_like_types_contracts::dispatch::ClaimCheckClaims>(token, &key, &validation)?
+            .claims;
+    if claims.purpose != "claim-check" || claims.token_type != "compiler" {
+        return Err(CompilerError::Jwt(
+            "Invalid claim-check purpose".to_string(),
+        ));
+    }
+    Ok(claims)
 }
 
 fn is_private_api_host(host: &str) -> bool {
@@ -345,7 +372,7 @@ mod tests {
             .insert("test-kid-failed".to_string(), Instant::now());
 
         let error = jwks_public_key("test-kid-failed").await.unwrap_err();
-        assert!(matches!(error, CompilerError::Jwt(_)));
+        assert!(matches!(error, CompilerError::Config(_)));
 
         // An unrelated cached kid stays retrievable.
         cache_key("test-kid-alive", b"pem-alive").await;

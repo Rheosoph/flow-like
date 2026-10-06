@@ -232,16 +232,6 @@ pub async fn list_app_sinks(
     Ok(Json(sink_responses_with_events(&state.db, sinks).await))
 }
 
-async fn ensure_event_may_use_hub_trigger(
-    state: &AppState,
-    sink: &event_sink::Model,
-) -> Result<(), ApiError> {
-    match get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await? {
-        Some(event) => crate::routes::app::events::ensure_hub_trigger_allowed(&event),
-        None => Ok(()),
-    }
-}
-
 /// GET /sink/{event_id}
 /// Get a specific sink by event ID
 #[utoipa::path(
@@ -325,7 +315,7 @@ pub async fn update_sink(
 
     let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
     let sink_app_id = sink.app_id.clone();
-    ensure_event_may_use_hub_trigger(&state, &sink).await?;
+    super::service::ensure_event_may_use_hub_trigger(&state.db, &sink).await?;
 
     let mut active_model: event_sink::ActiveModel = sink.into();
 
@@ -396,14 +386,10 @@ pub async fn toggle_sink(
 
     let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
     let sink_app_id = sink.app_id.clone();
-    if !sink.active {
-        ensure_event_may_use_hub_trigger(&state, &sink).await?;
-    }
 
-    // Use service module to toggle (handles external scheduler sync)
-    let updated = super::service::toggle_sink_active(&state.db, &state, &event_id)
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Failed to toggle sink: {}", e)))?;
+    // Use service module to toggle (handles external scheduler sync and refuses to turn
+    // the hub trigger of a device-only event on)
+    let updated = super::service::toggle_sink_active(&state.db, &state, &event_id).await?;
 
     audit_branch!(
         state,

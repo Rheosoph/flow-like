@@ -1,6 +1,9 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { withDeviceEventSource } from "../../../lib/event-source";
-import type { IEvent } from "../../../lib/schema/flow/event";
+import {
+	type IEvent,
+	IEventExecutionMode,
+} from "../../../lib/schema/flow/event";
 import type { IEventUpsertOptions } from "../../../state/backend-state/event-state";
 import {
 	byRole,
@@ -105,7 +108,10 @@ async function mount(options: Options = {}) {
 }
 
 const button = (name: string) => byRole("button", name) as HTMLButtonElement;
-const toasts = () => toast.getHistory().map((entry) => entry.title);
+const toasts = () =>
+	toast
+		.getHistory()
+		.flatMap((entry) => ("title" in entry ? [entry.title] : []));
 
 describe("a device-only event's way back", () => {
 	test("says where it runs and opens Runs on", async () => {
@@ -123,7 +129,9 @@ describe("a device-only event's way back", () => {
 		await click(button("Run on the hub"));
 		await view.settle();
 		expect(view.upserts).toHaveLength(1);
-		expect(view.upserts[0].event.execution_mode).toBe("Remote");
+		expect(view.upserts[0].event.execution_mode).toBe(
+			IEventExecutionMode.Remote,
+		);
 		expect(view.upserts[0].options).toEqual({ source: "default" });
 		expect(view.taken.map((saved) => saved.id)).toEqual(["evt_nightly"]);
 		expect(toasts().slice(before)).toEqual([
@@ -137,7 +145,9 @@ describe("a device-only event's way back", () => {
 		});
 		await click(button("Run on this computer"));
 		await view.settle();
-		expect(view.upserts[0].event.execution_mode).toBe("Local");
+		expect(view.upserts[0].event.execution_mode).toBe(
+			IEventExecutionMode.Local,
+		);
 		expect(view.upserts[0].options).toEqual({ source: "default" });
 	});
 

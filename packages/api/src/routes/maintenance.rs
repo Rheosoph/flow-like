@@ -105,6 +105,10 @@ async fn run_maintenance_job(
 
             let store = require_cache_store(&state.cache).await?;
 
+            if let Err(error) = crate::upload_lifecycle::cleanup_expired(&state).await {
+                tracing::error!(%error, "Scheduled temporary upload cleanup failed");
+            }
+
             let deleted = sweep_cache_once(store.as_ref()).await.map_err(|error| {
                 tracing::error!(error = %error, "Scheduled cache cleanup failed");
                 ApiError::internal_error(flow_like_types::anyhow!(

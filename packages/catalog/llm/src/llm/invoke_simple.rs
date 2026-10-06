@@ -176,8 +176,6 @@ impl NodeLogic for InvokeLLMSimpleNode {
         let stream = context.evaluate_pin::<bool>("stream").await?;
         let model_factory = context.app_state.model_factory.clone();
         let model = model_factory
-            .lock()
-            .await
             .build(
                 &model,
                 context.app_state.clone(),

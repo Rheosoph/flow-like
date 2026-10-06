@@ -21,6 +21,7 @@ import {
 	relationshipOf,
 } from "../../../../lib/device-management/model/presence";
 import type {
+	AgentFeatures,
 	AttentionInput,
 	DeviceRow,
 	HostIsolationFacts,
@@ -33,8 +34,10 @@ import {
 	type AccessRules,
 	AccessRulesError,
 	type AccessRulesErrorCode,
+	type AgentSupport,
 	type GrantRow,
 	MAX_GRANTS,
+	type PermissionBlock,
 	accessRulesOf,
 	changeEntries,
 	createAccessLocalStore,
@@ -43,6 +46,7 @@ import {
 	permissionBlock,
 } from "../../../../lib/device-management/sharing";
 import type {
+	Capability,
 	ManagementGrant,
 	ManagementPolicy,
 	PolicyView,
@@ -153,6 +157,10 @@ export interface DeviceAccess {
 	isolationFacts?: HostIsolationFacts;
 	/** Whether the agent can share Manage certificates; `undefined` until read live. */
 	certificateSupport?: boolean;
+	/** The agent's flags; `undefined` until read live. */
+	features?: AgentFeatures;
+	/** Permissions this device's hub can verify in saved policies. */
+	supportedCapabilities?: readonly string[];
 	platform?: string;
 }
 
@@ -179,7 +187,9 @@ function deviceAccessOf(
 		keys:
 			input.keys.find((session) => session.deviceId === deviceId) ??
 			workspace.keys.snapshot(deviceId),
-		...(stored ? { view: stored } : {}),
+		...(stored
+			? { view: stored, supportedCapabilities: stored.supported_capabilities }
+			: {}),
 		...(policy ? { policy } : {}),
 		rules,
 		...(policy && stored
@@ -195,7 +205,10 @@ function deviceAccessOf(
 		isolation: inspection?.hostIsolation ?? null,
 		...(inspection?.isolation ? { isolationFacts: inspection.isolation } : {}),
 		...(inspection
-			? { certificateSupport: inspection.certificate_management === 1 }
+			? {
+					certificateSupport: inspection.certificate_management === 1,
+					features: inspection.features,
+				}
 			: {}),
 		...(inspection?.isolation?.platform
 			? { platform: inspection.isolation.platform }
@@ -387,27 +400,66 @@ export type SaveAccessOutcome =
 
 export const accessResultKey = (deviceId: string) => `access:${deviceId}`;
 
-/** Manage certificates can be newly given only while the agent says it supports sharing it; checked right before signing. */
-function checkCertificateSupport(
+/** The agent can't take a newly given permission: the save stops before anything is signed. */
+function agentRefusal(
+	block: PermissionBlock | null,
+	capability: Capability,
+	deviceId: string,
+): AccessRulesError | undefined {
+	if (block === "hub_models_unsupported")
+		return new AccessRulesError(
+			"hub_models_unsupported",
+			`The hub does not support access rules that give ${capability}.`,
+			{ capability },
+		);
+	if (block === "certificates_unsupported" || block === "certificates_unknown")
+		return new AccessRulesError(
+			"certificates_unsupported",
+			`The agent of ${deviceId} does not support sharing certificate management.`,
+		);
+	if (block === "models_unsupported" || block === "models_unknown")
+		return new AccessRulesError(
+			"models_unsupported",
+			`The agent of ${deviceId} does not host models (${block}), so it would reject access rules that give ${capability}.`,
+			{ capability },
+		);
+	return undefined;
+}
+
+/**
+ * Manage certificates and the model permissions can be newly given only while
+ * the agent says it accepts them and the hub can verify them; checked right
+ * before signing against the freshly fetched policy view.
+ */
+function checkAgentSupport(
 	state: AttentionState,
 	deviceId: string,
 	current: readonly ManagementGrant[],
 	upserts: readonly ManagementGrant[],
+	view: PolicyView,
 ) {
 	const inspection = state.input.live[deviceId]?.inspection?.value;
-	const support = inspection
-		? inspection.certificate_management === 1
-		: undefined;
+	const support: AgentSupport = {
+		certificates: inspection
+			? inspection.certificate_management === 1
+			: undefined,
+		features: inspection?.features,
+		supportedCapabilities: view.supported_capabilities,
+	};
 	for (const grant of upserts) {
-		if (!grant.capabilities.includes("manage_certificates")) continue;
-		const held = current
-			.find((existing) => existing.grant_id === grant.grant_id)
-			?.capabilities.includes("manage_certificates");
-		if (permissionBlock("manage_certificates", "device", support, held))
-			throw new AccessRulesError(
-				"certificates_unsupported",
-				"The device's agent does not support sharing certificate management.",
+		const held = current.find(
+			(existing) => existing.grant_id === grant.grant_id,
+		)?.capabilities;
+		for (const capability of grant.capabilities) {
+			const block = permissionBlock(
+				capability,
+				"device",
+				support,
+				held?.includes(capability),
 			);
+			const refusal = agentRefusal(block, capability, deviceId);
+			if (refusal) throw refusal;
+		}
 	}
 }
 
@@ -476,7 +528,7 @@ export function useSaveAccessRules(): (
 						removeIds,
 					});
 					const before = policy?.grants ?? [];
-					checkCertificateSupport(latest.current, deviceId, before, upserts);
+					checkAgentSupport(latest.current, deviceId, before, upserts, view);
 					const typed =
 						typeof request.password === "function"
 							? request.password() || undefined
@@ -631,6 +683,23 @@ const RULES_ERROR_COPY: Record<AccessRulesErrorCode, ErrorCopy> = {
 		t(
 			"devices:access.error.certificatesUnsupported",
 			"{{device}}'s agent can't share Manage certificates. Update the agent and connect once, or remove that permission.",
+			{ device },
+		),
+	models_unsupported: (t, device) =>
+		t(
+			"devices:models.use.access.saveUnsupported",
+			"{{device}}'s agent doesn't host models, so it would refuse these access rules. Update the agent and connect once, or remove Use models and Manage models.",
+			{ device },
+		),
+	hub_models_unsupported: (t) =>
+		t(
+			"devices:models.use.access.hubUnsupported",
+			"This hub cannot save model permissions yet. Update the hub, or remove Use models and Manage models. Nothing was saved.",
+		),
+	unknown_permissions: (t, device) =>
+		t(
+			"devices:access.error.unknownPermissions",
+			"Someone's access on {{device}} holds a permission a newer version of Flow-Like gave, which this version doesn't know. Update Flow-Like to change these access rules: saving them here would take that permission away. Nothing was saved.",
 			{ device },
 		),
 };

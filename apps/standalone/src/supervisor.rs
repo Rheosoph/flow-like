@@ -612,6 +612,8 @@ impl Reconciler<'_> {
             self.reconcile_placement(record).await;
         }
         self.publish_restarts();
+        #[cfg(feature = "runtime")]
+        self.revoke_stopped_model_tokens();
         // Rollout reconciliation takes the write lock; skip it while idle.
         let rollouts = self.store.has_active_rollouts().and_then(|active| {
             if active {
@@ -626,6 +628,17 @@ impl Reconciler<'_> {
             rollouts,
         );
         Ok(())
+    }
+
+    /// A placement's model gateway token ends with its last running replica, and with the
+    /// placement; a replica that starts later gets a new one.
+    #[cfg(feature = "runtime")]
+    fn revoke_stopped_model_tokens(&self) {
+        if let Some(host) = crate::models::host::ModelHost::current() {
+            host.gateway()
+                .tokens()
+                .retain(|placement| self.children.keys().any(|(id, _)| id == placement));
+        }
     }
 
     fn publish_restarts(&self) {
@@ -1359,8 +1372,7 @@ fn spawn_child(
         .map(|listener| crate::ipc::attach_listener(&mut command, listener))
         .transpose()?;
     isolation.attach(&mut command)?;
-    let child = command
-        .spawn()
+    let child = crate::process_spawner::spawn_blocking(command)
         .context("Spawn standalone workload process")?;
     drop(inherited);
     drop(placement_lock);

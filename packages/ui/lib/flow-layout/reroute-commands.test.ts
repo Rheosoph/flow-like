@@ -67,6 +67,26 @@ function fixture(): AutoLayoutInput {
 	}
 	return input;
 }
+function executionFixture(): AutoLayoutInput {
+	const graph = new GraphBuilder();
+	graph.exec("branch", {
+		start: true,
+		execIn: false,
+		execOuts: ["true", "false"],
+	});
+	graph.exec("middle");
+	graph.exec("target", { execOuts: 0 });
+	graph.execLink("branch", "middle", "true");
+	graph.execLink("branch", "target", "false");
+	graph.execLink("middle", "target");
+	const input = graph.build();
+	const pins = cache(input);
+	for (const [pin] of pins.values()) {
+		for (const target of pin.connected_to)
+			pins.get(target)?.[0].depends_on.push(pin.id);
+	}
+	return input;
+}
 // Applies the public command payload to a detached board. Rust batch tests exercise undo.
 function apply(
 	input: AutoLayoutInput,
@@ -97,8 +117,19 @@ function apply(
 				const target = required(nodes.get(required(command.to_node))).pins[
 					required(command.to_pin)
 				];
-				source.connected_to = [...new Set([...source.connected_to, target.id])];
-				target.depends_on = [...new Set([...target.depends_on, source.id])];
+				if (source.data_type === IVariableType.Execution) {
+					source.connected_to = [target.id];
+					for (const node of nodes.values()) {
+						for (const pin of Object.values(node.pins))
+							pin.depends_on = pin.depends_on.filter((id) => id !== source.id);
+					}
+					target.depends_on.push(source.id);
+				} else {
+					source.connected_to = [
+						...new Set([...source.connected_to, target.id]),
+					];
+					target.depends_on = [source.id];
+				}
 				break;
 			}
 			case ICommandType.DisconnectPin: {
@@ -149,6 +180,98 @@ const logicalEdges = (input: AutoLayoutInput) =>
 		)
 		.sort();
 describe("automatic reroute graph edits", () => {
+	test("inserts, reuses, and removes execution chains while preserving other incoming wires", () => {
+		const input = executionFixture();
+		const route = {
+			from: "branch",
+			to: "target",
+			fromPin: "branch:false",
+			toPin: "target:exec-in",
+			waypoints: [
+				{ x: 250, y: 120 },
+				{ x: 550, y: 120 },
+			],
+		};
+		const commands = buildAutoRerouteCommands({
+			routes: [route],
+			chains: [],
+			reroute: template(),
+			currentLayer: undefined,
+			pinCache: cache(input),
+		});
+		const routed = apply(input, commands);
+		const dots = routed.layerNodes.filter((node) => node.auto_reroute);
+		expect(dots).toHaveLength(2);
+		for (const dot of dots) {
+			for (const pin of Object.values(dot.pins)) {
+				expect(pin.data_type).toBe(IVariableType.Execution);
+				expect(pin.default_value).toBeNull();
+			}
+		}
+		expect(cache(routed).get("target:exec-in")?.[0].depends_on).toContain(
+			"middle:exec-out-0",
+		);
+		expect(logicalEdges(routed)).toEqual(logicalEdges(input));
+		const normalized = normalizeAutoReroutes(routed);
+		expect(normalized.chains).toHaveLength(1);
+		expect(normalized.input.layerNodes).toHaveLength(input.layerNodes.length);
+		for (const current of [routed, JSON.parse(JSON.stringify(routed))]) {
+			expect(
+				buildAutoRerouteCommands({
+					routes: [route],
+					chains: normalizeAutoReroutes(current).chains,
+					reroute: template(),
+					currentLayer: undefined,
+					pinCache: cache(current),
+				}),
+			).toEqual([]);
+		}
+		const removed = buildAutoRerouteCommands({
+			routes: [{ ...route, waypoints: [] }],
+			chains: normalized.chains,
+			reroute: template(),
+			currentLayer: undefined,
+			pinCache: cache(routed),
+		});
+		const direct = apply(routed, removed);
+		expect(direct.layerNodes.some((node) => node.auto_reroute)).toBe(false);
+		expect(logicalEdges(direct)).toEqual(logicalEdges(input));
+		expect(cache(direct).get("target:exec-in")?.[0].depends_on.sort()).toEqual([
+			"branch:false",
+			"middle:exec-out-0",
+		]);
+	});
+	test("keeps generated execution reroutes that merge incoming wires", () => {
+		const input = executionFixture();
+		const commands = buildAutoRerouteCommands({
+			routes: [
+				{
+					from: "branch",
+					to: "target",
+					fromPin: "branch:false",
+					toPin: "target:exec-in",
+					waypoints: [{ x: 250, y: 120 }],
+				},
+			],
+			chains: [],
+			reroute: template(),
+			currentLayer: undefined,
+			pinCache: cache(input),
+		});
+		const routed = apply(input, commands);
+		const pins = cache(routed);
+		const dot = required(routed.layerNodes.find((node) => node.auto_reroute));
+		const routeIn = required(
+			Object.values(dot.pins).find((pin) => pin.name === "route_in"),
+		);
+		required(pins.get("middle:exec-out-0"))[0].connected_to = [routeIn.id];
+		required(pins.get("target:exec-in"))[0].depends_on = required(
+			pins.get("target:exec-in"),
+		)[0].depends_on.filter((id) => id !== "middle:exec-out-0");
+		routeIn.depends_on.push("middle:exec-out-0");
+		expect(normalizeAutoReroutes(routed).chains).toEqual([]);
+		expect(normalizeAutoReroutes(routed).input).toBe(routed);
+	});
 	test("keeps chains between the two boundaries of the same open layer", () => {
 		const input = fixture();
 		const routed = apply(input, layoutCommands(input).commands);
@@ -167,32 +290,38 @@ describe("automatic reroute graph edits", () => {
 			),
 		).toBe(true);
 	});
-	test("routes a skip connection, preserves fan-out, and reuses identical nodes on repeat", () => {
-		const input = fixture();
-		const original = structuredClone(input);
-		const first = layoutCommands(input);
-		const routed = apply(input, first.commands);
-		const dots = routed.layerNodes.filter((node) => node.auto_reroute);
-		expect(dots.length).toBeGreaterThanOrEqual(2);
-		expect(logicalEdges(routed)).toEqual(logicalEdges(input));
-		expect(input).toEqual(original);
-		const second = layoutCommands(routed);
-		expect(
-			second.commands.some(
-				(command) => command.command_type === ICommandType.AddNode,
-			),
-		).toBe(false);
-		expect(
-			second.commands.some(
-				(command) => command.command_type === ICommandType.RemoveNode,
-			),
-		).toBe(false);
-		expect(apply(routed, second.commands)).toEqual(routed);
-		const restored = JSON.parse(JSON.stringify(routed)) as AutoLayoutInput;
-		expect(apply(restored, layoutCommands(restored).commands)).toEqual(
-			restored,
-		);
-	});
+	test.each([
+		["data", fixture],
+		["execution", executionFixture],
+	] as const)(
+		"routes %s skips, preserves connections, and reuses identical nodes on repeat",
+		(_, makeFixture) => {
+			const input = makeFixture();
+			const original = structuredClone(input);
+			const first = layoutCommands(input);
+			const routed = apply(input, first.commands);
+			const dots = routed.layerNodes.filter((node) => node.auto_reroute);
+			expect(dots.length).toBeGreaterThanOrEqual(2);
+			expect(logicalEdges(routed)).toEqual(logicalEdges(input));
+			expect(input).toEqual(original);
+			const second = layoutCommands(routed);
+			expect(
+				second.commands.some(
+					(command) => command.command_type === ICommandType.AddNode,
+				),
+			).toBe(false);
+			expect(
+				second.commands.some(
+					(command) => command.command_type === ICommandType.RemoveNode,
+				),
+			).toBe(false);
+			expect(apply(routed, second.commands)).toEqual(routed);
+			const restored = JSON.parse(JSON.stringify(routed)) as AutoLayoutInput;
+			expect(apply(restored, layoutCommands(restored).commands)).toEqual(
+				restored,
+			);
+		},
+	);
 	test("preserves an existing chain when no route could be resolved", () => {
 		const input = fixture();
 		const routed = apply(input, layoutCommands(input).commands);

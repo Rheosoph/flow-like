@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { IHistoryMessage } from "../../../lib";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
+import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
 import { finalizePlanSteps } from "./event-processor";
@@ -360,6 +361,7 @@ const chatDb = new Dexie("Chat-History") as Dexie & {
 	localStage: EntityTable<ILocalChatState, "id">;
 	globalState: EntityTable<IGlobalState, "id">;
 };
+installRuntimeHistoryGuard(chatDb);
 
 // Schema declaration:
 chatDb.version(3).stores({

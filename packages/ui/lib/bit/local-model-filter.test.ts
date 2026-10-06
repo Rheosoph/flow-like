@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { type IBit, IBitTypes } from "../schema";
 import {
+	deviceOfModelBit,
 	filterHostableLlmModels,
 	getLlmModelTier,
+	isDeviceModelBit,
 	isFreeLlmModel,
 	isHostableLlmModel,
 	isHostedLlmModel,
@@ -145,6 +147,64 @@ describe("filterHostableLlmModels", () => {
 				canHostMLX: false,
 			}),
 		).toEqual([bit("Hosted"), bit("llamacpp"), bit("OpenAI")]);
+	});
+});
+
+describe("device models", () => {
+	const device = bit("device");
+
+	test("a device Bit names the device provider, whatever its case", () => {
+		expect(isDeviceModelBit(device)).toBe(true);
+		expect(isDeviceModelBit(bit(" Device "))).toBe(true);
+		expect(isDeviceModelBit(bit("Local"))).toBe(false);
+		expect(isDeviceModelBit(bit(undefined))).toBe(false);
+		expect(isLocalLlmModel(device)).toBe(false);
+	});
+
+	test("a device Bit names the device its model runs on", () => {
+		const on = (providerName: string, params: unknown) =>
+			({
+				...bit(providerName),
+				parameters: { provider: { provider_name: providerName, params } },
+			}) as IBit;
+		expect(deviceOfModelBit(on("device", { device_id: "gpu-box" }))).toBe(
+			"gpu-box",
+		);
+		expect(deviceOfModelBit(on("device", { device_id: "" }))).toBeUndefined();
+		expect(deviceOfModelBit(on("device", {}))).toBeUndefined();
+		expect(deviceOfModelBit(device)).toBeUndefined();
+		expect(
+			deviceOfModelBit(on("custom:openai", { device_id: "gpu-box" })),
+		).toBeUndefined();
+	});
+
+	test("only a host with the device connector keeps them; the web and older hosts skip them", () => {
+		const everything = {
+			canHostLlamaCPP: true,
+			canHostMLX: true,
+			canUseNativeAgentProviders: true,
+		};
+		expect(isHostableLlmModel(device, everything)).toBe(false);
+		expect(
+			isHostableLlmModel(device, { ...everything, deviceModels: false }),
+		).toBe(false);
+		expect(
+			isHostableLlmModel(device, { ...everything, deviceModels: true }),
+		).toBe(true);
+		expect(
+			isHostableLlmModel(device, {
+				canHostLlamaCPP: false,
+				canHostMLX: false,
+				deviceModels: true,
+			}),
+		).toBe(true);
+		expect(
+			filterHostableLlmModels([device, bit("OpenAI")], everything),
+		).toEqual([bit("OpenAI")]);
+		const all = [device, bit("Local"), bit("OpenAI")];
+		expect(
+			filterHostableLlmModels(all, { ...everything, deviceModels: true }),
+		).toEqual(all);
 	});
 });
 

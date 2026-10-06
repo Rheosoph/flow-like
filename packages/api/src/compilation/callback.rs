@@ -115,7 +115,7 @@ pub async fn handle_compilation_callback(
         CompilationStatus::Failed => (
             WasmCompilationStatus::LocalOnly,
             Some(Vec::new()),
-            result.error,
+            Some(result.error.unwrap_or_else(|| "Compilation failed".into())),
         ),
     };
 
@@ -126,7 +126,11 @@ pub async fn handle_compilation_callback(
         id: Set(version_record.id.clone()),
         compilation_status: Set(compilation_status),
         compiled_platforms: Set(platforms.map(Into::into)),
-        compilation_error: Set(error),
+        compilation_error: Set(replacement_error(
+            error,
+            version_record.compilation_error.as_deref(),
+            chrono::Utc::now().timestamp(),
+        )),
         compiled_artifact_generation: Set(if compiled_ok {
             claims.artifact_generation.clone()
         } else {
@@ -150,7 +154,7 @@ pub async fn handle_compilation_callback(
     }
 
     // Auto-approve private packages on successful compilation
-    let auto_approve = compiled_ok
+    let auto_approve = needs_private_approval(compiled_ok, &version_record.status)
         && package
             .as_ref()
             .is_some_and(|p| p.visibility == WasmPackageVisibility::Private);
@@ -293,6 +297,23 @@ fn supported_versions_for_publication(
     with_current_wasmtime_version(if generation.is_some() { None } else { existing })
 }
 
+fn replacement_error(error: Option<String>, previous: Option<&str>, now: i64) -> Option<String> {
+    let marker = crate::execution::wasm_resolve::UPGRADE_MARKER;
+    error.map(|error| {
+        if previous.is_some_and(|previous| previous.starts_with(marker)) {
+            format!("{marker}{now}:{error}")
+        } else {
+            error
+        }
+    })
+}
+
+fn needs_private_approval(compiled_ok: bool, status: &WasmPackageStatus) -> bool {
+    // Rebuilding an approved historical pin must not promote it over the
+    // package's current version. The guarded metadata update handles rebuilds.
+    compiled_ok && *status == WasmPackageStatus::PendingReview
+}
+
 fn publication_update(
     mut update: wasm_package_version::ActiveModel,
     version_id: &str,
@@ -317,12 +338,17 @@ fn publication_update(
         .filter(wasm_package_version::Column::Id.eq(version_id));
     if failed {
         use wasm_package_version::Column;
+        // Legacy publications have no generation id. Their nonempty artifact
+        // list must remain usable if the portable replacement fails too.
+        let has_publication = Condition::any()
+            .add(Column::CompiledArtifactGeneration.is_not_null())
+            .add(Column::CompiledPlatforms.ne(serde_json::json!([])));
         query = query
             .col_expr(
                 Column::CompilationStatus,
                 Column::CompilationStatus.save_as(Expr::expr(
                     Expr::case(
-                        Column::CompiledArtifactGeneration.is_not_null(),
+                        has_publication.clone(),
                         Expr::value(WasmCompilationStatus::Compiled),
                     )
                     .finally(Expr::value(WasmCompilationStatus::LocalOnly)),
@@ -331,11 +357,8 @@ fn publication_update(
             .col_expr(
                 Column::CompiledPlatforms,
                 Column::CompiledPlatforms.save_as(Expr::expr(
-                    Expr::case(
-                        Column::CompiledArtifactGeneration.is_not_null(),
-                        Expr::col(Column::CompiledPlatforms),
-                    )
-                    .finally(Expr::value(serde_json::json!([]))),
+                    Expr::case(has_publication, Expr::col(Column::CompiledPlatforms))
+                        .finally(Expr::value(serde_json::json!([]))),
                 )),
             );
     }
@@ -428,10 +451,126 @@ mod publication_tests {
             .build(DatabaseBackend::Postgres)
             .to_string();
         let (assignments, _) = sql.split_once(" WHERE ").unwrap();
-        assert!(assignments.contains("CASE WHEN (\"WasmPackageVersion\".\"compiledArtifactGeneration\" IS NOT NULL) THEN 'COMPILED' ELSE 'LOCAL_ONLY' END"));
+        assert!(assignments.contains("\"compiledArtifactGeneration\" IS NOT NULL"));
+        assert!(assignments.contains("\"compiledPlatforms\" <> '[]'"));
+        assert!(assignments.contains("THEN 'COMPILED' ELSE 'LOCAL_ONLY' END"));
         assert!(assignments.contains("THEN \"compiledPlatforms\""));
         assert!(!assignments.contains("\"compiledArtifactGeneration\" ="));
         assert!(!assignments.contains("\"nodes\" ="));
         assert!(assignments.contains("replacement failed"));
+    }
+
+    #[test]
+    fn failed_automatic_upgrade_retains_retry_backoff() {
+        let previous = Some("artifact-upgrade:1000:claim");
+        assert_eq!(replacement_error(None, previous, 2000), None);
+        assert_eq!(
+            replacement_error(Some("failed".into()), previous, 2000),
+            Some("artifact-upgrade:2000:failed".into())
+        );
+        assert_eq!(
+            replacement_error(Some("failed".into()), None, 2000),
+            Some("failed".into())
+        );
+    }
+
+    #[test]
+    fn recompiling_an_approved_private_pin_does_not_promote_it_again() {
+        assert!(needs_private_approval(
+            true,
+            &WasmPackageStatus::PendingReview
+        ));
+        for status in [
+            WasmPackageStatus::Active,
+            WasmPackageStatus::Deprecated,
+            WasmPackageStatus::Disabled,
+            WasmPackageStatus::Rejected,
+        ] {
+            assert!(!needs_private_approval(true, &status));
+        }
+        assert!(!needs_private_approval(
+            false,
+            &WasmPackageStatus::PendingReview
+        ));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn failed_upgrade_keeps_legacy_and_generation_publications_executable() {
+        use sea_orm::{ConnectionTrait, Database, QuerySelect};
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        db.execute_unprepared(
+            r#"CREATE TABLE public."WasmPackageVersion" (
+            id TEXT PRIMARY KEY, "compilationStatus" TEXT, "compiledPlatforms" TEXT,
+            "compiledArtifactGeneration" TEXT, "compilationError" TEXT
+        )"#,
+        )
+        .await
+        .unwrap();
+        for (id, generation, platforms, expected) in [
+            (
+                "legacy",
+                None,
+                vec!["linux-x86_64-wt48".to_string()],
+                WasmCompilationStatus::Compiled,
+            ),
+            (
+                "generation",
+                Some("old-job"),
+                vec!["linux-x86_64-wt48".to_string()],
+                WasmCompilationStatus::Compiled,
+            ),
+            (
+                "first-publication",
+                None,
+                Vec::new(),
+                WasmCompilationStatus::LocalOnly,
+            ),
+        ] {
+            wasm_package_version::Entity::insert(wasm_package_version::ActiveModel {
+                id: Set(id.into()),
+                compilation_status: Set(WasmCompilationStatus::Pending),
+                compiled_platforms: Set(Some(platforms.clone().into())),
+                compiled_artifact_generation: Set(generation.map(str::to_owned)),
+                ..Default::default()
+            })
+            .exec(&db)
+            .await
+            .unwrap();
+            publication_update(
+                wasm_package_version::ActiveModel {
+                    compilation_status: Set(WasmCompilationStatus::LocalOnly),
+                    compiled_platforms: Set(Some(Default::default())),
+                    compiled_artifact_generation: Set(None),
+                    compilation_error: Set(Some("replacement failed".into())),
+                    ..Default::default()
+                },
+                id,
+                Some("new-job"),
+            )
+            .exec(&db)
+            .await
+            .unwrap();
+            let (status, published, published_generation) =
+                wasm_package_version::Entity::find_by_id(id)
+                    .select_only()
+                    .column(wasm_package_version::Column::CompilationStatus)
+                    .column(wasm_package_version::Column::CompiledPlatforms)
+                    .column(wasm_package_version::Column::CompiledArtifactGeneration)
+                    .into_tuple::<(
+                        WasmCompilationStatus,
+                        crate::entity::json_types::StringList,
+                        Option<String>,
+                    )>()
+                    .one(&db)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(status, expected);
+            assert_eq!(published, platforms);
+            assert_eq!(published_generation.as_deref(), generation);
+        }
     }
 }

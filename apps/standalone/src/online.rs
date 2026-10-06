@@ -1526,6 +1526,7 @@ mod tests {
             package_pins: Vec::new(),
             bit_pins: Vec::new(),
             max_replicas: 1,
+            tunnel_services: vec![],
             tls_certificate_id: None,
             hosting: None,
             variables: BTreeMap::new(),
@@ -3496,7 +3497,8 @@ mod tests {
             port: 8090,
             max_in_flight: 1,
             request_timeout_secs: 5,
-            auth_secret: "listener".into(),
+            authentication: Default::default(),
+            auth_secret: Some("listener".into()),
             ui_origins: Vec::new(),
         });
         crate::secrets::install(&placement, "listener", b"0123456789abcdef0123456789abcdef")

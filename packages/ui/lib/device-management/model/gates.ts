@@ -1033,6 +1033,21 @@ export const ACTION_GATES: Readonly<Record<ActionId, ActionGate>> = {
 	change_device_password: local({ keys: true, unlocked: "password" }),
 	delete_local_keys: local({ keys: "stored" }),
 	forget_identity: local(),
+	models_view: live([], {
+		capsAny: ["model_use", "model_manage"],
+		deviceScopeOnly: true,
+		locked: "locked_metrics",
+		features: agentFlag("model_host"),
+	}),
+	models_manage: live(["model_manage"], {
+		deviceScopeOnly: true,
+		features: agentFlag("model_host"),
+	}),
+	models_use: live(["model_use"], {
+		deviceScopeOnly: true,
+		features: agentFlag("model_host"),
+	}),
+	models_ensure: live(["deploy"], { features: agentFlag("model_store") }),
 };
 
 function toResult(failure: Failure): GateFailure {

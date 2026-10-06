@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { isRuntimeNamespace } from "../../../lib/service-runtime/session-scope";
 import { cn } from "../../../lib/utils";
 import {
 	registerWidgetSnapshotSource,
@@ -223,7 +224,7 @@ const MessageWidget = memo(function MessageWidget({
 			<div
 				ref={containerRef}
 				className="max-h-120 overflow-auto"
-				{...widgetSnapshotAttribute(widget.instance_id)}
+				{...(snapshots ? widgetSnapshotAttribute(widget.instance_id) : {})}
 			>
 				{/* Only one live renderer at a time: two mounted trees for the same
 				    surface duplicate iframes, charts and map instances. */}
@@ -259,6 +260,7 @@ export const MessageWidgets = memo(function MessageWidgets({
 	snapshots = true,
 }: MessageWidgetsProps) {
 	if (!widgets?.length) return null;
+	const runtime = isRuntimeNamespace(appId);
 
 	return (
 		<div
@@ -268,9 +270,9 @@ export const MessageWidgets = memo(function MessageWidgets({
 				<MessageWidget
 					key={widget.instance_id}
 					widget={widget}
-					appId={widget.origin?.appId ?? appId}
-					boardId={widget.origin?.boardId ?? boardId}
-					eventId={widget.origin?.eventId ?? eventId}
+					appId={runtime ? appId : (widget.origin?.appId ?? appId)}
+					boardId={runtime ? boardId : (widget.origin?.boardId ?? boardId)}
+					eventId={runtime ? eventId : (widget.origin?.eventId ?? eventId)}
 					snapshots={snapshots}
 				/>
 			))}

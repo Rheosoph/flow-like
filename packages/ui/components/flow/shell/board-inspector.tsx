@@ -84,9 +84,9 @@ const PinRow = memo(function PinRow({ pin }: Readonly<{ pin: IPin }>) {
 	const options = pin.options ?? undefined;
 	const traits: string[] = [];
 	if (options?.enforce_generic_value_type)
-		traits.push(t("enforceGenericVT", "Enforce Generic VT"));
+		traits.push(t("pinOptionsLockValueShape", "Lock value shape"));
 	if (options?.enforce_schema)
-		traits.push(t("enforceSchema", "Enforce Schema"));
+		traits.push(t("pinOptionsEnforceSchema", "Enforce schema"));
 	if (options?.valid_values?.length)
 		traits.push(`${options.valid_values.length} ${t("options", "Options…")}`);
 	if (options?.range) traits.push(`${options.range[0]} – ${options.range[1]}`);

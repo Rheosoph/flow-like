@@ -39,6 +39,10 @@ pub(crate) struct HostedAiJob {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum HostedWork {
     Chat {
+        // Old API-key jobs remain readable, but cannot gain IAM access without
+        // a catalog ID that can be authorized again at execution time.
+        #[serde(default)]
+        bit_id: Option<String>,
         body: serde_json::Value,
         responses_api: bool,
         stream: bool,
@@ -509,10 +513,12 @@ pub(crate) async fn work(
             .await?;
     }
     let started = Instant::now();
-    let outcome = execute(&state, &job).await;
+    // Chat preparation can fail while resolving IAM credentials, before any
+    // inference request. Finalize those failures without retaining provider spend.
+    let mut provider_request_started = !matches!(&job.request, HostedWork::Chat { .. });
+    let outcome = execute(&state, &job, &mut provider_request_started).await;
     if let Err(error) = outcome {
-        // A failed worker can have incurred provider spend. Never retry that
-        // provider request or release its retained reservation automatically.
+        // After dispatch, a failed worker may have incurred provider spend.
         if let HostedWork::GlobalAssistant { usage, .. } | HostedWork::Copilot { usage, .. } =
             &job.request
         {
@@ -528,7 +534,11 @@ pub(crate) async fn work(
                 &state,
                 Some(&id),
                 UsageInvocationSettlement {
-                    status: STATUS_UNKNOWN_USAGE,
+                    status: if provider_request_started {
+                        STATUS_UNKNOWN_USAGE
+                    } else {
+                        crate::usage_accounting::STATUS_FAILED
+                    },
                     error: Some(error.to_string()),
                     latency_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
                     ..Default::default()
@@ -539,12 +549,20 @@ pub(crate) async fn work(
         let mut head = read_json::<StreamHead>(&state, &id, "head.json")
             .await?
             .unwrap_or(StreamHead {
-                status: 502,
+                status: if provider_request_started {
+                    502
+                } else {
+                    error.status().as_u16()
+                },
                 content_type: "text/event-stream".into(),
                 ..Default::default()
             });
         head.done = true;
-        head.error = Some("Hosted AI response was interrupted; usage is being reconciled".into());
+        head.error = Some(if provider_request_started {
+            "Hosted AI response was interrupted; usage is being reconciled".into()
+        } else {
+            "Hosted AI request could not be started".into()
+        });
         write_json(&state, &id, "head.json", &head).await?;
         let _ = state
             .meta_bucket
@@ -555,7 +573,11 @@ pub(crate) async fn work(
     Ok(Json(serde_json::json!({"status":"finished"})))
 }
 
-async fn execute(state: &AppState, job: &HostedAiJob) -> Result<(), ApiError> {
+async fn execute(
+    state: &AppState,
+    job: &HostedAiJob,
+    provider_request_started: &mut bool,
+) -> Result<(), ApiError> {
     let remaining = (job.deadline - Utc::now()).num_milliseconds();
     if remaining <= 0 {
         return Err(ApiError::service_unavailable(
@@ -564,6 +586,7 @@ async fn execute(state: &AppState, job: &HostedAiJob) -> Result<(), ApiError> {
     }
     let response = match &job.request {
         HostedWork::Chat {
+            bit_id,
             body,
             responses_api,
             stream,
@@ -576,17 +599,19 @@ async fn execute(state: &AppState, job: &HostedAiJob) -> Result<(), ApiError> {
             } else {
                 ModelApiSurface::ChatCompletions
             };
-            let (url, api_key) = relay::build_provider_url(state, provider, surface).await?;
-            let mut request = flow_like_types::reqwest::Client::new()
-                .post(&url)
-                .bearer_auth(api_key)
-                .json(body)
-                .timeout(Duration::from_millis(remaining as u64));
-            if *provider == HostedProvider::OpenRouter {
-                request = request
-                    .header("HTTP-Referer", "https://flow-like.com")
-                    .header("X-Title", "Flow-Like");
-            }
+            let connection = super::hosted_connection::resolve(state, provider, surface).await?;
+            let request = connection
+                .request(
+                    state,
+                    bit_id.as_deref(),
+                    model_id,
+                    surface,
+                    body,
+                    Duration::from_millis(remaining as u64),
+                )
+                .await?;
+            let url = connection.url;
+            *provider_request_started = true;
             if *stream {
                 relay::handle_streaming(
                     request,
@@ -712,6 +737,29 @@ async fn execute(state: &AppState, job: &HostedAiJob) -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_chat_jobs_do_not_acquire_a_catalog_identity() {
+        let mut value = serde_json::json!({"Chat": {
+            "body": {"model": "upstream-model"},
+            "responses_api": false,
+            "stream": true,
+            "provider": "Bedrock",
+            "model_id": "upstream-model",
+            "context": {"user_id": "user"}
+        }});
+        let legacy: HostedWork = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(legacy, HostedWork::Chat { bit_id: None, .. }));
+
+        value["Chat"]["bit_id"] = serde_json::json!("official-bit");
+        let current: HostedWork = serde_json::from_value(value).unwrap();
+        let restored: HostedWork =
+            serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
+        assert!(
+            matches!(restored, HostedWork::Chat { bit_id: Some(id), .. } if id == "official-bit")
+        );
+    }
+
     #[cfg(feature = "lambda")]
     #[test]
     fn async_worker_event_is_a_valid_authenticated_lambda_http_request() {

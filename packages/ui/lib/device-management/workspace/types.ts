@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { IApiState } from "../../../state/backend-state/api-state";
 import type { IProfile } from "../../../types";
+import type { ArtifactTransferStatus } from "../artifacts";
 import type { FleetMetrics } from "../fleet";
 import type { HubQueryContext } from "../hub/queries";
 import type { RetainedObservation } from "../inventory";
@@ -21,8 +22,14 @@ import type {
 	ServiceView,
 	SourcePlane,
 } from "../model/types";
+import type { ModelAssetStatus, ModelsSummary } from "../models";
 import type { DeviceAccountScope, LocalDeviceVault } from "../storage";
 import type { ManagementCall } from "../telemetry";
+import type { DeviceServiceStream, TunnelServiceOptions } from "../tunnel";
+import type {
+	TunnelArtifactUpload,
+	TunnelModelAssetPush,
+} from "../tunnel-data";
 import type {
 	ArchiveRoster,
 	BrowserController,
@@ -135,8 +142,19 @@ export interface KeySessionSnapshot {
 	idleLocksAt?: number;
 	keepUnlocked: boolean;
 	restoredNeedsFreshEndpoint: boolean;
+	/**
+	 * The desktop app still holds this device's keys for model access (kept,
+	 * unlocked from a run's prompt, or in use by a run) while this window holds
+	 * none; locking the device drops them.
+	 */
+	heldForModels?: boolean;
 	/** Greyed "Locked · last read 12:03"; `readAt` is unix seconds. */
-	lockedSummary?: { readAt: number; services: ServiceSummary[] };
+	lockedSummary?: {
+		readAt: number;
+		services: ServiceSummary[];
+		/** The model host's counters from the last metrics snapshot; `readAt` is when the device reported them. */
+		models?: { readAt: number; summary: ModelsSummary };
+	};
 	lastError?: KeyError | KeyHubError;
 }
 
@@ -369,7 +387,7 @@ export type CallLane = "user" | "operation" | "poll";
 export interface DeviceCallOptions {
 	lane?: CallLane;
 	signal?: AbortSignal;
-	/** Defaults to `READ_COMMANDS.has(command.type)`. Reads may be retried once after `ManagementUnconfirmedError`; writes never are. */
+	/** Defaults to `isReadCommand(command)`. Reads may be retried once after `ManagementUnconfirmedError`; writes never are. */
 	idempotent?: boolean;
 	trackUnconfirmed?: { kind: ActivityKind; target: ActivityTarget };
 }
@@ -382,6 +400,17 @@ export interface LiveInspection {
 }
 
 export interface LiveSessionManager {
+	openService(
+		deviceId: string,
+		placementId: string,
+		serviceId?: string,
+		options?: TunnelServiceOptions,
+	): Promise<DeviceServiceStream>;
+	/** One HTTP stream to the device's model gateway; only for agents with `model_host`. */
+	openModelGateway(
+		deviceId: string,
+		options?: { signal?: AbortSignal },
+	): Promise<DeviceServiceStream>;
 	state(deviceId: string): LiveState;
 	subscribe(listener: () => void): () => void;
 	/** Ref-counted demand: while > 0 and unlocked, keep a session open, renew and reconnect. */
@@ -391,6 +420,15 @@ export interface LiveSessionManager {
 	): () => void;
 	/** Bound to the device, not to a connection; plugs into every DM function unchanged. */
 	call(deviceId: string, options?: DeviceCallOptions): ManagementCall;
+	uploadArtifact(
+		deviceId: string,
+		input: TunnelArtifactUpload,
+	): Promise<ArtifactTransferStatus>;
+	/** One model asset push over the data tunnel, or the probe that opens its push session. */
+	pushModelAsset(
+		deviceId: string,
+		input: TunnelModelAssetPush,
+	): Promise<ModelAssetStatus>;
 	/** Multi-request critical section; polls wait, user calls queue behind it. */
 	exclusive<T>(
 		deviceId: string,

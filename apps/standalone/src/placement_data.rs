@@ -271,7 +271,21 @@ fn copy_tree(
 
 /// The source must be a stopped project or a consistent database snapshot. Copying
 /// files cannot manufacture a transactionally consistent snapshot of a live database.
+/// The model-store assets of its Bits are present and visible in its Bit store afterwards.
 pub(crate) fn prepare_for_launch(
+    root: &Path,
+    config: &PlacementConfig,
+    revision: u64,
+    intent: u64,
+    cancel: &CancellationToken,
+) -> Result<PathBuf> {
+    let data = prepare_data(root, config, revision, intent, cancel)?;
+    #[cfg(feature = "runtime")]
+    crate::dependencies::prepare_model_assets(root, config, &data, cancel)?;
+    Ok(data)
+}
+
+fn prepare_data(
     root: &Path,
     config: &PlacementConfig,
     revision: u64,

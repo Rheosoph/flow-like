@@ -280,6 +280,44 @@ const AGENT_FEATURE_REFUSALS: Partial<
 			"devices:deployShip.fail.agentFeature.discordBots",
 			"the device's agent is too old to run Discord bots",
 		),
+	model_store: (t) =>
+		t(
+			"devices:deployShip.models.fail.agent",
+			"the device's agent is too old to fetch model files itself",
+		),
+};
+
+/** Why the step that gets a version's model files onto the device stopped; `file` names the file. */
+const MODEL_REFUSALS: Record<string, (t: DevicesT, file: string) => string> = {
+	model_disk: (t, file) =>
+		t(
+			"devices:deployShip.models.fail.disk",
+			"the device's model disk has no room for {{file}}",
+			{ file },
+		),
+	model_unreachable: (t, file) =>
+		t(
+			"devices:deployShip.models.fail.unreachable",
+			"the device couldn't download {{file}}, and this version of the app can't send it from here",
+			{ file },
+		),
+	model_push: (t, file) =>
+		t(
+			"devices:deployShip.models.fail.push",
+			"sending {{file}} from this computer failed",
+			{ file },
+		),
+	model_push_cancelled: (t, file) =>
+		t(
+			"devices:deployShip.models.fail.stopped",
+			"you stopped sending {{file}}",
+			{ file },
+		),
+	model_reply: (t) =>
+		t(
+			"devices:deployShip.models.fail.reply",
+			"the device's answer about its model files was invalid",
+		),
 };
 
 function agentFeatureRefusal(t: DevicesT, feature: string): string {
@@ -304,6 +342,7 @@ export const RUN_REFUSALS: Record<
 	string,
 	(t: DevicesT, detail: string) => string
 > = {
+	...MODEL_REFUSALS,
 	agent_feature: agentFeatureRefusal,
 	bot_role: (t, event) =>
 		t(
@@ -584,7 +623,7 @@ const ACKNOWLEDGE_COPY: Record<
 	endpoint_shared_token: (t, device) =>
 		t(
 			"devices:deploy.issue.acknowledge.endpointSharedToken",
-			"Confirm on {{device}} that an Endpoint with its own token shares the service's access token, or deploy it as its own service.",
+			"Confirm on {{device}} that the Endpoint uses the service's access settings. Its token from Events is not used.",
 			{ device },
 		),
 };
@@ -1093,12 +1132,12 @@ const EXCEPTION_COPY = {
 	endpoint_shared_token: ({ t, p, device, event }) => ({
 		differs: t(
 			"devices:deploy.exception.endpointSharedTokenDiffers",
-			"{{event}} · the service's token",
+			"{{event}} · the service's access settings",
 			{ event },
 		),
 		why: t(
 			"devices:deploy.exception.endpointSharedToken",
-			"{{event}} has its own token in Events. On {{device}} everyone with {{service}}'s access token can call it, like every other endpoint, page and chat of {{service}}.",
+			"{{event}} has its own token in Events. On {{device}} it uses {{service}}'s access settings, like every other endpoint, Page and chat of {{service}}. Its token from Events is not used.",
 			{ event, device, service: p.service },
 		),
 	}),

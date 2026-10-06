@@ -221,16 +221,12 @@ async fn mlx_model_answers_end_to_end() {
     );
 
     // 7. Factory cache key must dedupe the runtime.
-    let factory = Arc::new(Mutex::new(ModelFactory::new()));
+    let factory = ModelFactory::new();
     let first = factory
-        .lock()
-        .await
         .build(&bit, state.clone(), None, None)
         .await
         .expect("factory build");
     let second = factory
-        .lock()
-        .await
         .build(&bit, state.clone(), None, None)
         .await
         .expect("factory build 2");

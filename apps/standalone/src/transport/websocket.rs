@@ -1,5 +1,5 @@
 use super::{
-    IO_TIMEOUT, NoiseConnection, SessionRegistry, rtc,
+    IO_TIMEOUT, NoiseConnection, SessionRegistry, rtc, tunnel,
     wire::{self, Channel, NoiseEnvelope, ServerFrame, SignalEnvelope},
 };
 use crate::{
@@ -8,11 +8,11 @@ use crate::{
     management::ManagementService,
 };
 use anyhow::{Context, Result, ensure};
-use flow_like_device_protocol::DeviceSignalingResponse;
+use flow_like_device_protocol::{DeviceSignalingResponse, TunnelEnvelope, TunnelEnvelopeBody};
 use futures_util::{SinkExt, StreamExt};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
-    sync::{mpsc, watch},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
     task::JoinSet,
 };
 use tokio_tungstenite::{
@@ -25,6 +25,54 @@ use tokio_util::sync::CancellationToken;
 
 type NoiseSenders = HashMap<String, (String, mpsc::Sender<NoiseEnvelope>)>;
 
+// Six MiB includes base64/envelope overhead for all sixteen 256 KiB stream windows.
+const TUNNEL_QUEUE_BYTES: usize = 6 * 1024 * 1024;
+const TUNNEL_QUEUE_FRAMES: usize = 512;
+
+struct TunnelInput {
+    bytes: Vec<u8>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for TunnelInput {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+struct TunnelSender {
+    sender: mpsc::Sender<TunnelInput>,
+    budget: Arc<Semaphore>,
+}
+
+impl TunnelSender {
+    fn channel() -> (Self, mpsc::Receiver<TunnelInput>) {
+        let (sender, receiver) = mpsc::channel(TUNNEL_QUEUE_FRAMES);
+        (
+            Self {
+                sender,
+                budget: Arc::new(Semaphore::new(TUNNEL_QUEUE_BYTES)),
+            },
+            receiver,
+        )
+    }
+
+    fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+
+    fn try_send(&self, bytes: Vec<u8>) -> Result<()> {
+        let count = u32::try_from(bytes.len())?;
+        let permit = Arc::clone(&self.budget).try_acquire_many_owned(count)?;
+        self.sender
+            .try_send(TunnelInput {
+                bytes,
+                _permit: permit,
+            })
+            .map_err(|_| anyhow::anyhow!("Tunnel input queue is full or closed"))
+    }
+}
+
 /// Relayed Noise sessions and WebRTC peers outlive any one signaling socket. The relay may
 /// close the shared device socket (renewal, per-socket limits); the next socket carries the
 /// same sessions, and only a lost admission releases them.
@@ -36,11 +84,18 @@ struct Relayed {
     output: mpsc::Receiver<String>,
     sessions_cancel: CancellationToken,
     cancel: CancellationToken,
+    tunnel_inputs: HashMap<String, (String, TunnelSender, CancellationToken)>,
+    tunnel_sessions: JoinSet<()>,
+    tunnel_registry: Arc<SessionRegistry>,
+    tunnel_outbound: mpsc::Sender<String>,
+    tunnel_output: mpsc::Receiver<String>,
+    tunnel_cancel: CancellationToken,
 }
 
 impl Relayed {
     fn new(cancel: CancellationToken) -> Self {
         let (outbound, output) = mpsc::channel(32);
+        let (tunnel_outbound, tunnel_output) = mpsc::channel(32);
         Self {
             inputs: HashMap::new(),
             sessions: JoinSet::new(),
@@ -48,6 +103,12 @@ impl Relayed {
             outbound,
             output,
             sessions_cancel: cancel.child_token(),
+            tunnel_inputs: HashMap::new(),
+            tunnel_sessions: JoinSet::new(),
+            tunnel_registry: Arc::new(SessionRegistry::default()),
+            tunnel_outbound,
+            tunnel_output,
+            tunnel_cancel: cancel.child_token(),
             cancel,
         }
     }
@@ -56,9 +117,13 @@ impl Relayed {
         while self.sessions.try_join_next().is_some() {}
         while self.peers.try_join_next().is_some() {}
         self.inputs.retain(|_, (_, sender)| !sender.is_closed());
+        while self.tunnel_sessions.try_join_next().is_some() {}
+        self.tunnel_inputs
+            .retain(|_, (_, sender, _)| !sender.is_closed());
     }
 
     async fn release_sessions(&mut self) {
+        self.release_tunnels().await;
         self.sessions_cancel.cancel();
         while self.sessions.join_next().await.is_some() {}
         self.inputs.clear();
@@ -66,10 +131,84 @@ impl Relayed {
         self.sessions_cancel = self.cancel.child_token();
     }
 
+    async fn release_tunnels(&mut self) {
+        self.tunnel_cancel.cancel();
+        while self.tunnel_sessions.join_next().await.is_some() {}
+        self.tunnel_inputs.clear();
+        while self.tunnel_output.try_recv().is_ok() {}
+        self.tunnel_cancel = self.cancel.child_token();
+    }
+
     async fn shutdown(mut self) {
         self.cancel.cancel();
         while self.sessions.join_next().await.is_some() {}
         while self.peers.join_next().await.is_some() {}
+        while self.tunnel_sessions.join_next().await.is_some() {}
+    }
+
+    fn route_tunnel(&mut self, bytes: Vec<u8>, from: &str, management: &Arc<ManagementService>) {
+        let Ok(envelope) = TunnelEnvelope::decode(&bytes) else {
+            return;
+        };
+        self.tunnel_inputs
+            .retain(|_, (_, sender, _)| !sender.is_closed());
+        if let Some((owner, sender, cancel)) = self.tunnel_inputs.get(&envelope.session_id) {
+            if owner == from
+                && (matches!(envelope.body, TunnelEnvelopeBody::Close)
+                    || sender.try_send(bytes).is_err())
+            {
+                cancel.cancel();
+                self.tunnel_inputs.remove(&envelope.session_id);
+            }
+            return;
+        }
+        let TunnelEnvelopeBody::Hello(hello) = envelope.body else {
+            return;
+        };
+        let Ok(connection) = tunnel::Connection::new(
+            management,
+            &envelope.session_id,
+            &hello.grant_id,
+            &hello.certificate_jws,
+        ) else {
+            return;
+        };
+        let Ok(permit) = self.tunnel_registry.reserve(
+            &envelope.session_id,
+            &hello.grant_id,
+            &self.tunnel_cancel,
+        ) else {
+            return;
+        };
+        let (sender, receiver) = TunnelSender::channel();
+        if sender.try_send(bytes).is_err() {
+            return;
+        }
+        let session_id = envelope.session_id.clone();
+        self.tunnel_inputs.insert(
+            envelope.session_id,
+            (from.into(), sender, permit.cancel.clone()),
+        );
+        let (output, mut outgoing) = mpsc::channel::<Vec<u8>>(32);
+        let outbound = self.tunnel_outbound.clone();
+        let from = from.to_owned();
+        self.tunnel_sessions.spawn(async move {
+            let cancel = permit.cancel.clone();
+            let _permit = permit;
+            let forward = async {
+                while let Some(bytes) = outgoing.recv().await {
+                    let frame = wire::outbound(&from, Channel::Tunnel, &bytes)?;
+                    tokio::time::timeout(IO_TIMEOUT, outbound.send(frame)).await??;
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            tokio::select! { _ = cancel.cancelled() => {}, _ = connection.serve(receiver, output, cancel.clone()) => {}, _ = forward => {} }
+            if !cancel.is_cancelled()
+                && let Ok(bytes) = (TunnelEnvelope { session_id, body: TunnelEnvelopeBody::Close }).encode()
+                && let Ok(frame) = wire::outbound(&from, Channel::Tunnel, &bytes) {
+                let _ = outbound.try_send(frame);
+            }
+        });
     }
 
     fn route_noise(
@@ -155,16 +294,30 @@ impl Relayed {
             session_id,
             grant_id,
             certificate_jws,
+            protocol,
             ..
         } = &offer;
-        let noise = match NoiseConnection::new(management, session_id, grant_id, certificate_jws) {
+        let is_tunnel = protocol.as_deref() == Some(wire::TUNNEL_PROTOCOL);
+        let session = if is_tunnel {
+            tunnel::Connection::new(management, session_id, grant_id, certificate_jws)
+                .map(rtc::PeerSession::Tunnel)
+        } else {
+            NoiseConnection::new(management, session_id, grant_id, certificate_jws)
+                .map(rtc::PeerSession::Management)
+        };
+        let session = match session {
             Ok(noise) => noise,
             Err(error) => {
                 tracing::warn!(session_id = %session_id, grant_id = %grant_id, "Management peer was not admitted: {error:#}");
                 return;
             }
         };
-        let permit = match registry.reserve(session_id, grant_id, &self.cancel) {
+        let registry = if is_tunnel {
+            &self.tunnel_registry
+        } else {
+            registry
+        };
+        let permit = match registry.reserve_pending(session_id, grant_id, &self.cancel) {
             Ok(permit) => permit,
             Err(error) => {
                 tracing::warn!(session_id = %session_id, grant_id = %grant_id, "Management peer was refused: {error:#}");
@@ -174,9 +327,9 @@ impl Relayed {
         let output = self.outbound.clone();
         let from = from.to_owned();
         self.peers.spawn(async move {
-            let cancel = permit.cancel.clone();
-            let _permit = permit;
-            let _ = rtc::serve(offer, noise, &from, admission, output, cancel).await;
+            let (cancel, opened) = (permit.cancel.clone(), permit.on_open());
+            let _ = rtc::serve(offer, session, &from, admission, output, cancel, opened).await;
+            drop(permit);
         });
     }
 }
@@ -216,6 +369,8 @@ pub(super) async fn run(
             &cancel,
         )
         .await;
+        // A relay disconnect may lose bytes. Existing TCP streams are never replayed.
+        relayed.release_tunnels().await;
         if cancel.is_cancelled() {
             break;
         }
@@ -279,7 +434,7 @@ fn socket_failure(error: &anyhow::Error) -> TaskFailure {
 async fn connection(
     url: &str,
     device_id: &str,
-    current: Arc<DeviceSignalingResponse>,
+    mut current: Arc<DeviceSignalingResponse>,
     management: &Arc<ManagementService>,
     registry: &Arc<SessionRegistry>,
     admission: &mut watch::Receiver<Option<Arc<DeviceSignalingResponse>>>,
@@ -337,15 +492,27 @@ async fn connection(
     let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_pong = tokio::time::Instant::now();
+    let mut renewal: Option<(Arc<DeviceSignalingResponse>, tokio::time::Instant)> = None;
     let result: Result<()> = async {
         loop {
             tokio::select! {
+                biased;
                 _ = cancel.cancelled() => break,
-                changed = admission.changed() => { changed?; break; }
+                changed = admission.changed() => {
+                    changed?;
+                    let Some(next) = admission.borrow_and_update().clone() else { break; };
+                    if next.device_auth_epoch != current.device_auth_epoch || !next.signaling_urls.iter().any(|candidate| candidate == url)
+                        || next.expires_at <= current.expires_at || renewal.is_some() { break; }
+                    let frame = serde_json::json!({"type":"reauthorize","token":next.token}).to_string();
+                    tokio::time::timeout(IO_TIMEOUT, sender.send(Message::Text(frame.into()))).await??;
+                    renewal = Some((next, tokio::time::Instant::now()));
+                }
                 _ = heartbeat.tick() => {
                     ensure!(unix_time()? < current.expires_at && last_pong.elapsed() < Duration::from_secs(60), heartbeat_expired());
+                    ensure!(renewal.as_ref().is_none_or(|(_, started)| started.elapsed() < Duration::from_secs(30)), "Signaling renewal timed out");
                     tokio::time::timeout(IO_TIMEOUT, sender.send(Message::Text("{\"type\":\"ping\"}".into()))).await??;
                     relayed.inputs.retain(|_, (_, sender)| !sender.is_closed());
+                    relayed.tunnel_inputs.retain(|_, (_, sender, _)| !sender.is_closed());
                 }
                 value = relayed.output.recv() => {
                     let value = value.context("Signaling output closed")?;
@@ -363,6 +530,11 @@ async fn connection(
                     let frame: ServerFrame = serde_json::from_str(&text)?;
                     match frame {
                         ServerFrame::Pong => last_pong = tokio::time::Instant::now(),
+                        ServerFrame::Reauthorized { expires_at } => {
+                            let (next, _) = renewal.take().context("Unexpected signaling renewal acknowledgement")?;
+                            ensure!(expires_at == next.expires_at, "Signaling renewal binding mismatch");
+                            current = next;
+                        },
                         ServerFrame::Ready { .. } => anyhow::bail!("Repeated signaling admission"),
                         ServerFrame::Frame { to, channel, payload, from, from_role } => {
                             ensure!(to == device_id && from_role == "controller", "Signaling route mismatch");
@@ -377,12 +549,18 @@ async fn connection(
                                     let Ok(offer) = SignalEnvelope::parse(&bytes) else { continue; };
                                     relayed.accept_offer(offer, &from, management, registry, current.clone());
                                 }
+                                Channel::Tunnel => relayed.route_tunnel(bytes, &from, management),
                             }
                         }
                     }
                 }
+                value = relayed.tunnel_output.recv() => {
+                    let value = value.context("Tunnel signaling output closed")?;
+                    tokio::time::timeout(IO_TIMEOUT, sender.send(Message::Text(value.into()))).await??;
+                }
                 _ = relayed.sessions.join_next(), if !relayed.sessions.is_empty() => {},
                 _ = relayed.peers.join_next(), if !relayed.peers.is_empty() => {},
+                _ = relayed.tunnel_sessions.join_next(), if !relayed.tunnel_sessions.is_empty() => {},
             }
         }
         Ok(())
@@ -403,6 +581,52 @@ mod tests {
         WebSocketStream, accept_hdr_async,
         tungstenite::handshake::server::{Request, Response},
     };
+    static TRANSPORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn tunnel_queue_accepts_every_stream_window_and_reclaims_consumed_bytes() -> Result<()> {
+        use flow_like_device_protocol::{
+            TUNNEL_HEADER_LEN, TUNNEL_INITIAL_WINDOW, TUNNEL_MAX_DATA, TUNNEL_MAX_STREAMS,
+        };
+        let (sender, mut receiver) = TunnelSender::channel();
+        let mut frames = 0;
+        for _ in 0..TUNNEL_MAX_STREAMS {
+            let mut remaining = TUNNEL_INITIAL_WINDOW as usize;
+            while remaining > 0 {
+                let count = remaining.min(TUNNEL_MAX_DATA);
+                let bytes = TunnelEnvelope {
+                    session_id: "window-burst".into(),
+                    body: TunnelEnvelopeBody::Message(vec![0; count + TUNNEL_HEADER_LEN + 16]),
+                }
+                .encode()?;
+                sender.try_send(bytes)?;
+                remaining -= count;
+                frames += 1;
+            }
+        }
+        assert!(frames > 32, "the old relay queue rejected this legal burst");
+        assert!(sender.budget.available_permits() < TUNNEL_QUEUE_BYTES);
+        for _ in 0..frames {
+            drop(receiver.recv().await.context("a queued stream frame")?);
+        }
+        assert_eq!(sender.budget.available_permits(), TUNNEL_QUEUE_BYTES);
+        Ok(())
+    }
+
+    #[test]
+    fn tunnel_queue_bounds_bytes_even_before_its_frame_limit() -> Result<()> {
+        use flow_like_device_protocol::TUNNEL_MAX_ENVELOPE;
+        let (sender, receiver) = TunnelSender::channel();
+        let frames = TUNNEL_QUEUE_BYTES / TUNNEL_MAX_ENVELOPE;
+        assert!(frames < TUNNEL_QUEUE_FRAMES);
+        for _ in 0..frames {
+            sender.try_send(vec![0; TUNNEL_MAX_ENVELOPE])?;
+        }
+        assert!(sender.try_send(vec![0; 1]).is_err());
+        drop(receiver);
+        assert_eq!(sender.budget.available_permits(), TUNNEL_QUEUE_BYTES);
+        Ok(())
+    }
 
     async fn accept(listener: &TcpListener, expires_at: i64) -> Result<WebSocketStream<TcpStream>> {
         let (stream, _) = timeout(Duration::from_secs(10), listener.accept()).await??;
@@ -420,6 +644,89 @@ mod tests {
         .await?;
         socket.send(Message::Text(serde_json::json!({"type":"ready","participant_id":"device","role":"device","expires_at":expires_at}).to_string().into())).await?;
         Ok(socket)
+    }
+
+    #[tokio::test]
+    async fn admission_renews_in_place_without_dropping_the_device_socket() -> Result<()> {
+        let _health_guard = TRANSPORT_TEST_LOCK.lock().await;
+        let fixture = super::super::tests::fixture()?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("ws://{}", listener.local_addr()?);
+        let now = unix_time()?;
+        let initial = Arc::new(DeviceSignalingResponse {
+            token: "redacted".into(),
+            expires_at: now + 120,
+            device_auth_epoch: 1,
+            signaling_urls: vec![url.clone()],
+            ice_servers: vec![],
+            ice_expires_at: None,
+            policy_version: 0,
+            policy_digest: None,
+        });
+        let mut next = (*initial).clone();
+        next.token = "renewed".into();
+        next.expires_at = now + 300;
+        let (admission, mut receiver) = watch::channel(Some(initial.clone()));
+        let cancel = CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let serving = tokio::spawn(async move {
+            let mut relayed = Relayed::new(task_cancel.clone());
+            connection(
+                &url,
+                "device",
+                initial,
+                &fixture.management,
+                &Arc::new(SessionRegistry::default()),
+                &mut receiver,
+                &mut relayed,
+                &task_cancel,
+            )
+            .await
+        });
+        let mut socket = accept(&listener, now + 120).await?;
+        // Ready must be consumed before the replacement admission is published.
+        loop {
+            let Message::Text(text) = timeout(Duration::from_secs(5), socket.next())
+                .await?
+                .context("No heartbeat")??
+            else {
+                continue;
+            };
+            if serde_json::from_str::<serde_json::Value>(&text)?["type"] == "ping" {
+                break;
+            }
+        }
+        admission.send(Some(Arc::new(next)))?;
+        let Message::Text(text) = timeout(Duration::from_secs(5), socket.next())
+            .await?
+            .context("No renewal")??
+        else {
+            anyhow::bail!("No renewal frame")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text)?;
+        assert_eq!(
+            value,
+            serde_json::json!({"type":"reauthorize","token":"renewed"})
+        );
+        socket
+            .send(Message::Text(
+                serde_json::json!({"type":"reauthorized","expires_at":now + 300})
+                    .to_string()
+                    .into(),
+            ))
+            .await?;
+        socket.send(Message::Ping(vec![1, 2, 3].into())).await?;
+        let Message::Pong(bytes) = timeout(Duration::from_secs(5), socket.next())
+            .await?
+            .context("Socket closed on renewal")??
+        else {
+            anyhow::bail!("No renewal liveness response")
+        };
+        assert_eq!(&bytes[..], &[1, 2, 3]);
+        assert!(!serving.is_finished());
+        cancel.cancel();
+        timeout(Duration::from_secs(5), serving).await???;
+        Ok(())
     }
 
     async fn deliver(
@@ -522,13 +829,17 @@ mod tests {
             watch::channel(None).0,
             cancel.clone(),
         ));
-        assert_eq!(
-            crate::diagnostics::test_support::reported(MANAGEMENT_TRANSPORT).await,
-            (
-                crate::diagnostics::TaskState::Failing,
-                Some(TaskFailure::HubUnreachable)
-            )
-        );
+        timeout(Duration::from_secs(5), async {
+            while crate::diagnostics::test_support::health(MANAGEMENT_TRANSPORT)
+                != Some((
+                    crate::diagnostics::TaskState::Failing,
+                    Some(TaskFailure::HubUnreachable),
+                ))
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
         cancel.cancel();
         Ok(renewal.await?)
     }
@@ -536,11 +847,12 @@ mod tests {
     #[tokio::test]
     async fn relayed_sessions_survive_socket_replacement_and_release_with_their_admission()
     -> Result<()> {
+        let _health_guard = TRANSPORT_TEST_LOCK.lock().await;
         use crate::diagnostics::{TaskState, test_support::health};
         let fixture = super::super::tests::fixture()?;
         let _directory = fixture.directory;
         let mut initiator = fixture.initiator;
-        // No other test drives the transport, so its task health is this test's alone.
+        // Tests that drive this shared health registry hold the transport lock.
         fail_a_renewal(fixture.management.clone()).await?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("ws://{}/ws/devices", listener.local_addr()?);

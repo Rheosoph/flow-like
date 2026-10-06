@@ -12,7 +12,7 @@ import {
 	resetAzureWebPubSubConnections,
 } from "./azure-web-pubsub";
 import { pushFirebaseRtdb, resetFirebaseSessions } from "./gcp-firebase-rtdb";
-import { pushHttp } from "./http";
+import { isScopedHttpChannel, pushHttp } from "./http";
 import { pushInProcess } from "./in-process";
 import { type ChannelPushOptions, errorMessage } from "./util";
 
@@ -57,7 +57,12 @@ export async function pushToChannel(
 	try {
 		await deliver(handle.transport, body, options);
 	} catch (primary) {
-		if (!handle.fallback || options.signal?.aborted) throw primary;
+		if (
+			!handle.fallback ||
+			options.signal?.aborted ||
+			isScopedHttpChannel(handle.transport)
+		)
+			throw primary;
 		console.warn(
 			`[channel] ${handle.transport.type} push for channel '${handle.channel_id}' failed, retrying through ${handle.fallback.type}: ${errorMessage(primary)}`,
 		);

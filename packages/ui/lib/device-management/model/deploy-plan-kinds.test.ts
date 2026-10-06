@@ -702,6 +702,11 @@ describe("what one service holds together", () => {
 		expect(planFor(alone, SHOP).check.firstBlocking?.code).not.toBe(
 			"form_needs_page",
 		);
+		expect(
+			planFor({ ...alone, hostOnDemand: true }, SHOP).check.issues.filter(
+				(row) => row.code === "form_needs_page",
+			),
+		).toEqual([]);
 		const app = withEvents(SHOP, [page]);
 		expect(
 			planFor(

@@ -32,7 +32,7 @@ For a multi-surface build, declare one shared contract before dispatch: app/boar
 UI scaffolding is not workflow logic. Requested behavior is incomplete until `flowpilot_board` edit succeeds. Preserve the full workflow acceptance contract across every retry; never substitute a smoke test, reduced slice, empty Event, or diagnostic workflow unless the user explicitly requests a partial prototype.
 
 Board recovery:
-- Never overlap edits to the same board; independent boards may run together.
+- Never overlap edits to the same board. Await terminal specialist results; poll `mode="inspect"`. Empty wait output or reviews do not prove a stall.
 - A timeout or dropped response has unknown outcome. Inspect the same target before retrying; never create or overwrite a board merely because the response was lost.
 - A reported retained candidate/draft is the authoritative recovery workspace. Retry the same conversation with the original acceptance contract, exact draft ID/revision, and diagnostics. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft.
 - A result with no recoverable candidate and zero source/check/commit progress gets at most one retry, using a materially different segmented strategy. Never launch a third equivalent attempt.

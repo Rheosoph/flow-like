@@ -81,6 +81,8 @@ const draft = (values: Record<string, string>, removed: string[] = []) => ({
 describe("views", () => {
 	test("hosting, exposure and the service page address", () => {
 		const hosting = hostingOf(config());
+		expect(hosting?.authentication).toBe("token");
+		expect(hosting?.authSecret).toBe("service-access");
 		expect(hosting?.exposure).toBe("all");
 		expect(hosting?.origins).toEqual([]);
 		expect(exposureOf("127.0.0.1")).toBe("loopback");
@@ -97,6 +99,16 @@ describe("views", () => {
 			),
 		).toBe("http://[::1]:8080/ui/");
 		expect(hostingOf(config({ hosting: null }))).toBeNull();
+	});
+
+	test("hosting explicitly permits access without a token", () => {
+		const stored = config();
+		if (!stored.hosting) throw new Error("no hosting");
+		stored.hosting.authentication = "none";
+		stored.hosting.auth_secret = undefined;
+		const hosting = hostingOf(stored);
+		expect(hosting?.authentication).toBe("none");
+		expect(hosting?.authSecret).toBeUndefined();
 	});
 
 	test("the restart policy is absent, not zero, when the device sent none", () => {

@@ -7,6 +7,7 @@ use std::{
 use crate::{
     bit::{Bit, BitModelPreference, BitTypes},
     hub::{BitSearchQuery, Hub},
+    models::device::DeviceModelProbe,
     state::CompletionModelCapabilities,
     utils::http::HTTPClient,
 };
@@ -25,6 +26,43 @@ fn split_profile_bit_reference(reference: &str) -> Option<(&str, &str)> {
     }
 
     Some((hub, bit_id))
+}
+
+/// What the host can run while a model is selected, and how candidates are probed.
+struct ModelSelection {
+    only_hosted: bool,
+    capabilities: Option<CompletionModelCapabilities>,
+    devices: Option<DeviceModelProbe>,
+    unavailable_model: Option<String>,
+}
+
+impl ModelSelection {
+    /// `bit` with its preference score when this host can run it.
+    fn candidate(
+        &self,
+        bit: Bit,
+        preference: &BitModelPreference,
+        multimodal: bool,
+    ) -> Option<(f32, Bit)> {
+        if !self.admits(&bit) || (multimodal && !bit.is_multimodal()) {
+            return None;
+        }
+        let score = bit.score(preference).ok()?;
+        Some((score, bit))
+    }
+
+    /// Whether this host can run `bit` in-process or have its model host serve it.
+    fn admits(&self, bit: &Bit) -> bool {
+        let routed = self
+            .devices
+            .as_ref()
+            .is_some_and(|devices| devices.may_route(bit));
+        Profile::model_matches_host_filter(bit, self.only_hosted, self.capabilities, routed)
+    }
+
+    async fn is_available(&self, bit: &Bit) -> bool {
+        Profile::model_available(bit, self.capabilities, self.devices.as_ref()).await
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Hash, PartialEq, Eq)]
@@ -205,6 +243,7 @@ impl Profile {
                 | "lmstudio"
                 | "custom:lmstudio"
                 | "mlx"
+                | crate::models::device::DEVICE_PROVIDER_NAME
         )
     }
 
@@ -250,6 +289,9 @@ impl Profile {
         if bit.is_mlx_model() {
             return capabilities.mlx;
         }
+        if bit.is_device_model() {
+            return capabilities.device_models;
+        }
 
         let requires_local_server = bit
             .try_to_provider()
@@ -257,16 +299,19 @@ impl Profile {
         !requires_local_server || capabilities.local_server
     }
 
+    /// `routed`: the device's model host may serve `bit`, so it needs no runtime in this process.
     fn model_matches_host_filter(
         bit: &Bit,
         only_hosted: bool,
         capabilities: Option<CompletionModelCapabilities>,
+        routed: bool,
     ) -> bool {
         if only_hosted && Self::is_local_model(bit) {
             return false;
         }
-        capabilities
-            .is_none_or(|capabilities| Self::can_execute_completion_model(bit, capabilities))
+        routed
+            || capabilities
+                .is_none_or(|capabilities| Self::can_execute_completion_model(bit, capabilities))
     }
 
     async fn external_model_available(
@@ -295,6 +340,40 @@ impl Profile {
         available.is_ok()
     }
 
+    /// Bits the device's model host serves are available when its router answers them, and device
+    /// models when the probe reaches them, which may prompt the user to unlock the device. Without
+    /// a probe device models are unreachable, and a Bit the router does not serve needs its runtime
+    /// in this process.
+    async fn model_available(
+        bit: &Bit,
+        capabilities: Option<CompletionModelCapabilities>,
+        devices: Option<&DeviceModelProbe>,
+    ) -> bool {
+        if let Some(devices) = devices
+            && let Some(available) = devices.availability(bit).await
+        {
+            return available;
+        }
+        if bit.is_device_model() {
+            return false;
+        }
+        capabilities
+            .is_none_or(|capabilities| Self::can_execute_completion_model(bit, capabilities))
+            && Self::external_model_available(bit, capabilities).await
+    }
+
+    /// Personal providers and device models can be unavailable at run time; a saved preference
+    /// for one falls back instead of failing.
+    fn falls_back_when_unavailable(bit: &Bit) -> bool {
+        bit.is_device_model()
+            || bit.try_to_provider().is_some_and(|provider| {
+                flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
+                    &provider.provider_name,
+                )
+                .is_some()
+            })
+    }
+
     /// Gets the best model based on the preference
     /// `remote = true` skips this profile's own bits entirely and scores the whole
     /// hub catalog instead — recommendation/discovery only. Anything that runs on
@@ -317,34 +396,34 @@ impl Profile {
     ///
     /// `capabilities` applies to both paths. This matters for explicit model
     /// IDs, which otherwise bypass automatic filtering and can reach an
-    /// unsupported local runtime.
+    /// unsupported local runtime. `devices` probes device candidates and, on a
+    /// device, the Bits its model host serves; any unavailable one is skipped
+    /// for the next candidate.
     pub async fn resolve_completion_model(
         &self,
         model_id: Option<&str>,
         preference: &BitModelPreference,
         multimodal: bool,
         capabilities: CompletionModelCapabilities,
+        devices: Option<&DeviceModelProbe>,
         http_client: Arc<HTTPClient>,
     ) -> Result<Bit> {
-        let mut unavailable_model = None;
+        let mut selection = ModelSelection {
+            only_hosted: false,
+            capabilities: Some(capabilities),
+            devices: devices.map(DeviceModelProbe::for_selection),
+            unavailable_model: None,
+        };
         if let Some(model_id) = model_id {
             let bit = self.find_bit(model_id, http_client.clone()).await?;
-            let external = bit.try_to_provider().is_some_and(|provider| {
-                flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
-                    &provider.provider_name,
-                )
-                .is_some()
-            });
-            if external {
-                if Self::can_execute_completion_model(&bit, capabilities)
-                    && Self::external_model_available(&bit, Some(capabilities)).await
-                {
+            if Self::falls_back_when_unavailable(&bit) {
+                if selection.admits(&bit) && selection.is_available(&bit).await {
                     return Ok(bit);
                 }
                 // An unavailable personal provider must not strand a saved use-case preference.
-                tracing::debug!(bit_id = %bit.id, "Falling back from unavailable external model");
-                unavailable_model = Some(bit.id);
-            } else if !Self::can_execute_completion_model(&bit, capabilities) {
+                tracing::debug!(bit_id = %bit.id, "Falling back from unavailable model");
+                selection.unavailable_model = Some(bit.id);
+            } else if !selection.admits(&bit) {
                 return Err(anyhow!(
                     "Model {model_id} requires a local completion runtime that this host cannot execute"
                 ));
@@ -353,16 +432,8 @@ impl Profile {
             }
         }
 
-        self.get_best_model_filtered_inner(
-            preference,
-            multimodal,
-            false,
-            false,
-            Some(capabilities),
-            unavailable_model.as_deref(),
-            http_client,
-        )
-        .await
+        self.get_best_model_filtered_inner(preference, multimodal, false, &selection, http_client)
+            .await
     }
 
     /// Create a copy of this profile with only hosted models (filters out local models)
@@ -388,16 +459,14 @@ impl Profile {
         only_hosted: bool,
         http_client: Arc<HTTPClient>,
     ) -> Result<Bit> {
-        self.get_best_model_filtered_inner(
-            preference,
-            multimodal,
-            remote,
+        let selection = ModelSelection {
             only_hosted,
-            None,
-            None,
-            http_client,
-        )
-        .await
+            capabilities: None,
+            devices: None,
+            unavailable_model: None,
+        };
+        self.get_best_model_filtered_inner(preference, multimodal, remote, &selection, http_client)
+            .await
     }
 
     async fn get_best_model_filtered_inner(
@@ -405,25 +474,15 @@ impl Profile {
         preference: &BitModelPreference,
         multimodal: bool,
         remote: bool,
-        only_hosted: bool,
-        capabilities: Option<CompletionModelCapabilities>,
-        unavailable_model: Option<&str>,
+        selection: &ModelSelection,
         http_client: Arc<HTTPClient>,
     ) -> Result<Bit> {
-        let mut candidates = Vec::new();
         let multimodal = multimodal || preference.multimodal.unwrap_or(false);
-
-        for bit in self.activated_custom_bits() {
-            if !Self::model_matches_host_filter(bit, only_hosted, capabilities) {
-                continue;
-            }
-            if multimodal && !bit.is_multimodal() {
-                continue;
-            }
-            if let Ok(score) = bit.score(preference) {
-                candidates.push((score, bit.clone()));
-            }
-        }
+        let mut candidates: Vec<(f32, Bit)> = self
+            .activated_custom_bits()
+            .into_iter()
+            .filter_map(|bit| selection.candidate(bit.clone(), preference, multimodal))
+            .collect();
 
         if !remote {
             for bit_ref in &self.bits {
@@ -438,69 +497,46 @@ impl Profile {
                         continue;
                     }
                 };
-
-                if !Self::model_matches_host_filter(&bit, only_hosted, capabilities) {
-                    continue;
-                }
-
-                if multimodal && !bit.is_multimodal() {
-                    continue;
-                }
-                if let Ok(score) = bit.score(preference) {
-                    candidates.push((score, bit));
-                }
+                candidates.extend(selection.candidate(bit, preference, multimodal));
             }
 
-            return Self::select_available_model(candidates, capabilities, unavailable_model).await;
+            return Self::select_available_model(candidates, selection).await;
         }
 
         let preference = preference.parse();
-        let available_hubs = self.get_available_hubs(http_client).await?;
-        let mut bits: HashMap<String, Bit> = HashMap::new();
+        let hub_models = self.hub_completion_models(http_client).await?;
+        candidates.extend(
+            hub_models
+                .into_iter()
+                .filter_map(|bit| selection.candidate(bit, &preference, multimodal)),
+        );
+        Self::select_available_model(candidates, selection).await
+    }
+
+    /// Every LLM and VLM the profile's hubs list; a hub that fails to answer is skipped.
+    async fn hub_completion_models(&self, http_client: Arc<HTTPClient>) -> Result<Vec<Bit>> {
         let query = BitSearchQuery::builder()
             .with_bit_types(vec![BitTypes::Vlm, BitTypes::Llm])
             .build();
-        for hub in available_hubs {
-            match hub.search_bit(&query).await {
-                Ok(models) => {
-                    bits.extend(models.into_iter().map(|bit| (bit.id.clone(), bit.clone())));
-                }
-                Err(_) => {
-                    continue;
-                }
-            };
-        }
-
-        for (_, bit) in bits {
-            if !Self::model_matches_host_filter(&bit, only_hosted, capabilities) {
-                continue;
-            }
-
-            if multimodal && !bit.is_multimodal() {
-                continue;
-            }
-
-            if let Ok(score) = bit.score(&preference) {
-                candidates.push((score, bit));
+        let mut bits: HashMap<String, Bit> = HashMap::new();
+        for hub in self.get_available_hubs(http_client).await? {
+            if let Ok(models) = hub.search_bit(&query).await {
+                bits.extend(models.into_iter().map(|bit| (bit.id.clone(), bit)));
             }
         }
-
-        Self::select_available_model(candidates, capabilities, unavailable_model).await
+        Ok(bits.into_values().collect())
     }
 
     async fn select_available_model(
         mut candidates: Vec<(f32, Bit)>,
-        capabilities: Option<CompletionModelCapabilities>,
-        unavailable_model: Option<&str>,
+        selection: &ModelSelection,
     ) -> Result<Bit> {
         // Stable sorting preserves profile order for equal scores. Probe only
         // candidates that can win, and never probe a hydrated Bit twice.
         candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let mut seen: HashSet<String> = unavailable_model.into_iter().map(String::from).collect();
+        let mut seen: HashSet<String> = selection.unavailable_model.iter().cloned().collect();
         for (_, bit) in candidates {
-            if seen.insert(bit.id.clone())
-                && Self::external_model_available(&bit, capabilities).await
-            {
+            if seen.insert(bit.id.clone()) && selection.is_available(&bit).await {
                 return Ok(bit);
             }
         }
@@ -770,6 +806,7 @@ mod tests {
                         &BitModelPreference::default(),
                         false,
                         CompletionModelCapabilities::default(),
+                        None,
                         Arc::new(HTTPClient::new_without_refetch()),
                     )
                     .await
@@ -793,6 +830,7 @@ mod tests {
                     &BitModelPreference::default(),
                     false,
                     CompletionModelCapabilities::default(),
+                    None,
                     Arc::new(HTTPClient::new_without_refetch()),
                 )
                 .await
@@ -888,6 +926,7 @@ mod tests {
                 &BitModelPreference::default(),
                 false,
                 CompletionModelCapabilities::default(),
+                None,
                 Arc::new(HTTPClient::new_without_refetch()),
             )
             .await
@@ -909,7 +948,9 @@ mod tests {
                     local_server: true,
                     mlx: false,
                     local_credentials: false,
+                    device_models: false,
                 },
+                None,
                 Arc::new(HTTPClient::new_without_refetch()),
             )
             .await
@@ -932,6 +973,7 @@ mod tests {
                 &BitModelPreference::default(),
                 false,
                 CompletionModelCapabilities::default(),
+                None,
                 http_client.clone(),
             )
             .await
@@ -948,6 +990,7 @@ mod tests {
                 &BitModelPreference::default(),
                 false,
                 CompletionModelCapabilities::default(),
+                None,
                 http_client,
             )
             .await
@@ -965,6 +1008,7 @@ mod tests {
                 &BitModelPreference::default(),
                 false,
                 CompletionModelCapabilities::default(),
+                None,
                 Arc::new(HTTPClient::new_without_refetch()),
             )
             .await
@@ -988,6 +1032,7 @@ mod tests {
                     &BitModelPreference::default(),
                     false,
                     CompletionModelCapabilities::default(),
+                    None,
                     Arc::new(HTTPClient::new_without_refetch()),
                 )
                 .await
@@ -1014,7 +1059,9 @@ mod tests {
                     local_server: false,
                     mlx: true,
                     local_credentials: false,
+                    device_models: false,
                 },
+                None,
                 Arc::new(HTTPClient::new_without_refetch()),
             )
             .await
@@ -1039,7 +1086,9 @@ mod tests {
                     local_server: true,
                     mlx: false,
                     local_credentials: false,
+                    device_models: false,
                 },
+                None,
                 Arc::new(HTTPClient::new_without_refetch()),
             )
             .await
@@ -1102,6 +1151,207 @@ mod tests {
                 Profile::is_local_model(&bit),
                 "{provider_name} should be treated as local-only"
             );
+        }
+    }
+
+    mod device_models {
+        use super::*;
+        use crate::models::device::{
+            DeviceModelProbe, Interaction, ModelUnavailableReason,
+            testing::{FakeConnector, FakeRouter, device_llm_bit, endpoint},
+        };
+
+        fn profile() -> Profile {
+            profile_with_models(vec![
+                device_llm_bit("device-model", "dev-1"),
+                completion_bit("fallback", "hosted:openai"),
+            ])
+        }
+
+        fn with_device_models() -> CompletionModelCapabilities {
+            CompletionModelCapabilities {
+                device_models: true,
+                ..CompletionModelCapabilities::default()
+            }
+        }
+
+        async fn select(
+            profile: &Profile,
+            model_id: Option<&str>,
+            capabilities: CompletionModelCapabilities,
+            devices: Option<&DeviceModelProbe>,
+        ) -> Bit {
+            profile
+                .resolve_completion_model(
+                    model_id,
+                    &BitModelPreference::default(),
+                    false,
+                    capabilities,
+                    devices,
+                    Arc::new(HTTPClient::new_without_refetch()),
+                )
+                .await
+                .expect("a model is selected")
+        }
+
+        #[tokio::test]
+        async fn find_model_falls_back_when_the_device_stays_locked() {
+            let connector = FakeConnector::failing(ModelUnavailableReason::DeviceLockedDeclined);
+            let run = Interaction::Allowed {
+                run_label: Some("run-1".to_string()),
+            };
+            let probe = DeviceModelProbe::new(connector.clone(), run.clone());
+
+            let selected = select(&profile(), None, with_device_models(), Some(&probe)).await;
+            assert_eq!(selected.id, "fallback");
+            assert_eq!(*connector.interactions.lock(), vec![run]);
+
+            let preferred = select(
+                &profile(),
+                Some("device-model"),
+                with_device_models(),
+                Some(&probe),
+            )
+            .await;
+            assert_eq!(preferred.id, "fallback");
+            assert_eq!(connector.calls(), 2, "one probe per selection");
+        }
+
+        #[tokio::test]
+        async fn find_model_picks_a_reachable_device_model() {
+            let probe = DeviceModelProbe::new(
+                FakeConnector::serving(endpoint("http://127.0.0.1:9/v1")),
+                Interaction::Forbidden,
+            );
+
+            let selected = select(&profile(), None, with_device_models(), Some(&probe)).await;
+            assert_eq!(selected.id, "device-model");
+        }
+
+        #[tokio::test]
+        async fn hosts_without_a_connector_skip_device_models() {
+            for model_id in [None, Some("device-model")] {
+                let selected = select(
+                    &profile(),
+                    model_id,
+                    CompletionModelCapabilities::default(),
+                    None,
+                )
+                .await;
+                assert_eq!(selected.id, "fallback", "{model_id:?}");
+            }
+
+            let unprobed = select(&profile(), None, with_device_models(), None).await;
+            assert_eq!(unprobed.id, "fallback");
+        }
+
+        #[test]
+        fn device_models_are_filtered_from_hosted_only_selection() {
+            assert!(Profile::is_local_model(&device_llm_bit(
+                "device-model",
+                "dev-1"
+            )));
+        }
+
+        /// A placement's probe: the device's model host behind a router, and no connector.
+        fn on_a_device() -> DeviceModelProbe {
+            let router = Arc::new(FakeRouter(endpoint("http://127.0.0.1:9/v1")));
+            DeviceModelProbe::for_host(None, Some(router), Interaction::Forbidden)
+                .expect("a router makes a probe")
+        }
+
+        #[tokio::test]
+        async fn find_model_on_a_device_picks_the_bits_its_model_host_serves() {
+            let probe = on_a_device();
+            for served in [
+                completion_bit("local-model", "Local"),
+                device_llm_bit("own-model", "this-device"),
+            ] {
+                let profile = profile_with_models(vec![
+                    served.clone(),
+                    completion_bit("fallback", "hosted:openai"),
+                ]);
+                let capabilities = CompletionModelCapabilities::default();
+
+                let selected = select(&profile, None, capabilities, Some(&probe)).await;
+                assert_eq!(selected.id, served.id);
+                let preferred = select(
+                    &profile,
+                    Some(served.id.as_str()),
+                    capabilities,
+                    Some(&probe),
+                )
+                .await;
+                assert_eq!(preferred.id, served.id);
+
+                let unrouted = select(&profile, None, capabilities, None).await;
+                assert_eq!(unrouted.id, "fallback");
+            }
+        }
+
+        #[tokio::test]
+        async fn bits_the_model_host_does_not_serve_still_need_their_runtime_here() {
+            let probe = on_a_device();
+            let profile = profile_with_models(vec![
+                completion_bit("mlx-model", "MLX"),
+                completion_bit("fallback", "hosted:openai"),
+            ]);
+
+            let without_mlx = select(
+                &profile,
+                None,
+                CompletionModelCapabilities::default(),
+                Some(&probe),
+            )
+            .await;
+            assert_eq!(without_mlx.id, "fallback");
+
+            let with_mlx = CompletionModelCapabilities {
+                mlx: true,
+                ..CompletionModelCapabilities::default()
+            };
+            let selected = select(&profile, None, with_mlx, Some(&probe)).await;
+            assert_eq!(selected.id, "mlx-model");
+        }
+
+        #[tokio::test]
+        async fn one_selection_asks_a_declined_device_once() {
+            let connector = FakeConnector::failing(ModelUnavailableReason::DeviceLockedDeclined);
+            let probe =
+                DeviceModelProbe::new(connector.clone(), Interaction::Allowed { run_label: None });
+            let profile = profile_with_models(vec![
+                device_llm_bit("first", "dev-1"),
+                device_llm_bit("second", "dev-1"),
+                completion_bit("fallback", "hosted:openai"),
+            ]);
+
+            let selected = select(&profile, None, with_device_models(), Some(&probe)).await;
+            assert_eq!(selected.id, "fallback");
+            assert_eq!(
+                connector.calls(),
+                1,
+                "the second model is on the declined device"
+            );
+
+            let preferred =
+                select(&profile, Some("second"), with_device_models(), Some(&probe)).await;
+            assert_eq!(preferred.id, "fallback");
+            assert_eq!(connector.calls(), 2, "the next selection asks again");
+        }
+
+        #[tokio::test]
+        async fn a_missing_model_does_not_rule_out_its_device() {
+            let connector = FakeConnector::failing(ModelUnavailableReason::ModelMissing);
+            let probe = DeviceModelProbe::new(connector.clone(), Interaction::Forbidden);
+            let profile = profile_with_models(vec![
+                device_llm_bit("first", "dev-1"),
+                device_llm_bit("second", "dev-1"),
+                completion_bit("fallback", "hosted:openai"),
+            ]);
+
+            let selected = select(&profile, None, with_device_models(), Some(&probe)).await;
+            assert_eq!(selected.id, "fallback");
+            assert_eq!(connector.calls(), 2);
         }
     }
 }

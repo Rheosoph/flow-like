@@ -41,6 +41,7 @@ import {
 	deviceSchedule,
 } from "./schedule";
 import type { ManagementCall } from "./telemetry";
+import { tunnelServicesSchema } from "./tunnel-services";
 import {
 	type ManagementRejection,
 	type ManagementResponse,
@@ -196,9 +197,15 @@ const hostingSchema = z
 		port: z.number().int().min(1).max(65535),
 		max_in_flight: z.number().int().min(1).max(1024),
 		request_timeout_secs: z.number().int().min(1).max(3600),
-		auth_secret: identifier,
+		authentication: z.enum(["token", "none"]).optional(),
+		auth_secret: identifier.nullish(),
 	})
-	.passthrough();
+	.passthrough()
+	.refine((hosting) =>
+		hosting.authentication === "none"
+			? hosting.auth_secret == null
+			: hosting.auth_secret != null,
+	);
 const resourceGrantSchema = z
 	.object({
 		grant_id: identifier,
@@ -370,6 +377,7 @@ const placementConfigSchema = z
 			.max(64),
 		hosting: hostingSchema.nullish(),
 		tls_certificate_id: z.string().uuid().nullish(),
+		tunnel_services: tunnelServicesSchema.optional(),
 		max_replicas: z.number().int().min(1).max(32),
 		variables: z.record(identifier, z.unknown()).default({}),
 		secret_overrides: z.record(identifier, identifier).default({}),
@@ -1356,6 +1364,10 @@ type PlanInput = {
 	port: number;
 	replicas: number;
 	serviceToken: string;
+	/** Explicitly expose selected forms and quick actions through the service listener. */
+	hostOnDemand?: boolean;
+	/** Undefined preserves existing authentication and defaults to a token for new services. */
+	serviceAuthentication?: "token" | "none";
 	/** Undefined keeps the selected certificate; null removes the device override. */
 	tlsCertificateId?: string | null;
 	resourceGrant?: Record<string, unknown>;
@@ -1662,7 +1674,12 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		throw new Error(
 			"Prepare and install controller-approved executable metadata before deploying this online project.",
 		);
-	const hosted = events.some((event) => event.hosted);
+	const hosted =
+		events.some((event) => event.hosted) ||
+		Boolean(
+			(input.hostOnDemand === true || existing?.config.hosting) &&
+				events.some((event) => event.kind === "on_demand"),
+		);
 	if (
 		!Number.isInteger(input.replicas) ||
 		input.replicas < 1 ||
@@ -1673,28 +1690,38 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 			"Only HTTP, chat and Page services can use multiple replicas. Schedules, bots, background and own-server events keep a service at one.",
 		);
 	const previousHosting = existing?.config.hosting ?? undefined;
+	const authentication =
+		input.serviceAuthentication ?? previousHosting?.authentication ?? "token";
+	const { auth_secret: _previousAuthSecret, ...hostingSettings } =
+		previousHosting ?? {};
 	const replaceToken =
-		hosted && (!previousHosting || input.serviceToken !== "");
+		hosted &&
+		authentication === "token" &&
+		(!previousHosting?.auth_secret || input.serviceToken !== "");
 	if (
 		hosted &&
 		(!z.string().ip().safeParse(input.host).success ||
 			!Number.isInteger(input.port) ||
 			input.port < 1 ||
-			input.port > 65535 ||
-			(replaceToken && !/^[\x21-\x7e]{32,4096}$/.test(input.serviceToken)))
+			input.port > 65535)
 	)
+		throw new Error("Set a listener IP and a port from 1 to 65535.");
+	if (replaceToken && !/^[\x21-\x7e]{32,4096}$/.test(input.serviceToken))
 		throw new Error(
-			"Set a listener IP, a port from 1 to 65535, and a service token of at least 32 printable characters.",
+			"Set a service token of at least 32 printable characters without whitespace.",
 		);
 	assertOneVersionPerPackage(installed.assets?.package_pins ?? []);
 	const { plain, references, secrets } = placementVariables(input);
 	// A rotated token gets a fresh name so the running revision keeps its current token.
-	const authSecret = !previousHosting
-		? "service-access"
-		: replaceToken
-			? `service-access-${crypto.randomUUID()}`
-			: previousHosting.auth_secret;
-	if (replaceToken)
+	const authSecret =
+		authentication === "none"
+			? undefined
+			: !previousHosting
+				? "service-access"
+				: replaceToken
+					? `service-access-${crypto.randomUUID()}`
+					: previousHosting.auth_secret;
+	if (replaceToken && authSecret)
 		secrets.push({ name: authSecret, value: input.serviceToken });
 	for (const secret of secrets) {
 		const bytes = new TextEncoder().encode(secret.value).length;
@@ -1733,12 +1760,15 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		...(hosted
 			? {
 					hosting: {
-						...previousHosting,
+						...hostingSettings,
 						host: input.host,
 						port: input.port,
 						max_in_flight: previousHosting?.max_in_flight ?? 64,
 						request_timeout_secs: previousHosting?.request_timeout_secs ?? 300,
-						auth_secret: authSecret,
+						...(authentication === "none" || previousHosting?.authentication
+							? { authentication }
+							: {}),
+						...(authSecret ? { auth_secret: authSecret } : {}),
 					},
 				}
 			: {}),

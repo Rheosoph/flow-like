@@ -10,7 +10,7 @@ use flow_like_types::async_trait;
 use flow_like_types::json::json;
 
 #[cfg(feature = "execute")]
-use crate::document::openxml::{read_zip, write_zip};
+use crate::document::openxml::{append_before_closing, read_zip, write_zip};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -190,9 +190,15 @@ impl NodeLogic for PptxMergeNode {
             });
 
             for src_key in &add_slide_keys {
-                base_max_num += 1;
-                rid_counter += 1;
-                sld_id_counter += 1;
+                base_max_num = base_max_num
+                    .checked_add(1)
+                    .ok_or_else(|| flow_like_types::anyhow!("Slide identifier limit exceeded"))?;
+                rid_counter = rid_counter.checked_add(1).ok_or_else(|| {
+                    flow_like_types::anyhow!("Relationship identifier limit exceeded")
+                })?;
+                sld_id_counter = sld_id_counter
+                    .checked_add(1)
+                    .ok_or_else(|| flow_like_types::anyhow!("Slide identifier limit exceeded"))?;
 
                 let new_slide_key = format!("ppt/slides/slide{}.xml", base_max_num);
                 let new_rels_key = format!("ppt/slides/_rels/slide{}.xml.rels", base_max_num);
@@ -227,24 +233,28 @@ impl NodeLogic for PptxMergeNode {
                     r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{}.xml"/>"#,
                     rid_counter, base_max_num
                 );
-                rels_xml = rels_xml.replace(
+                append_before_closing(
+                    &mut rels_xml,
                     "</Relationships>",
-                    &format!("{}\n</Relationships>", new_rel),
-                );
+                    &format!("{}\n", new_rel),
+                )?;
 
                 let new_sld_id = format!(
                     r#"<p:sldId id="{}" r:id="rId{}"/>"#,
                     sld_id_counter, rid_counter
                 );
-                pres_xml =
-                    pres_xml.replace("</p:sldIdLst>", &format!("{}\n</p:sldIdLst>", new_sld_id));
+                append_before_closing(
+                    &mut pres_xml,
+                    "</p:sldIdLst>",
+                    &format!("{}\n", new_sld_id),
+                )?;
 
                 if !ct_xml.contains(&format!("/ppt/slides/slide{}.xml", base_max_num)) {
                     let ct_entry = format!(
                         r#"<Override PartName="/ppt/slides/slide{}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>"#,
                         base_max_num
                     );
-                    ct_xml = ct_xml.replace("</Types>", &format!("{}\n</Types>", ct_entry));
+                    append_before_closing(&mut ct_xml, "</Types>", &format!("{}\n", ct_entry))?;
                 }
             }
 

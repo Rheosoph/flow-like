@@ -23,40 +23,51 @@ function Host({
 }: Readonly<{ log: boolean[]; deployed?: string[] }>) {
 	const [open, setOpen] = useState(true);
 	return (
-		<NewEventDialog
-			open={open}
-			onOpenChange={(next) => {
-				log.push(next);
-				setOpen(next);
-			}}
-			onDeployed={() => deployed?.push("deployed")}
-		>
-			{(shell) => (
-				<div>
-					<button type="button" onClick={() => shell.onSavedChange(saved)}>
-						save
-					</button>
-					<button type="button" onClick={() => shell.onSavedChange(null)}>
-						unmount form
-					</button>
-					<button type="button" onClick={() => shell.onBusyChange(true)}>
-						busy
-					</button>
-					<button type="button" onClick={shell.onDeploymentComplete}>
-						finish
-					</button>
-					<button type="button" onClick={shell.onCancel}>
-						cancel
-					</button>
-				</div>
-			)}
-		</NewEventDialog>
+		<>
+			<button type="button" onClick={() => setOpen(true)}>
+				reopen
+			</button>
+			<NewEventDialog
+				open={open}
+				onOpenChange={(next) => {
+					log.push(next);
+					setOpen(next);
+				}}
+				onDeployed={() => deployed?.push("deployed")}
+			>
+				{(shell) => (
+					<div>
+						<button type="button" onClick={() => shell.onSavedChange(saved)}>
+							save
+						</button>
+						<button type="button" onClick={() => shell.onSavedChange(null)}>
+							unmount form
+						</button>
+						<button type="button" onClick={() => shell.onBusyChange(true)}>
+							busy
+						</button>
+						<button type="button" onClick={() => shell.onDeployedChange(true)}>
+							deployed
+						</button>
+						<button type="button" onClick={shell.onDeploymentComplete}>
+							finish
+						</button>
+						<button type="button" onClick={shell.onCancel}>
+							cancel
+						</button>
+					</div>
+				)}
+			</NewEventDialog>
+		</>
 	);
 }
 
 const closeButtons = () =>
 	document.querySelectorAll("[data-slot='dialog-close']").length;
-const toasts = () => toast.getHistory().map((entry) => entry.title);
+const toasts = () =>
+	toast
+		.getHistory()
+		.flatMap((entry) => ("title" in entry ? [entry.title] : []));
 
 describe("New event dialog shell", () => {
 	test("retitles itself once an event is saved", async () => {
@@ -97,6 +108,31 @@ describe("New event dialog shell", () => {
 		await click(byRole("button", "finish"));
 		expect(deployed).toEqual(["deployed"]);
 		expect(toasts().slice(before)).toEqual([]);
+	});
+
+	test("closing after a deploy succeeded raises no notice, even though Done was not pressed", async () => {
+		const log: boolean[] = [];
+		await dom.render(<Host log={log} />);
+		const before = toasts().length;
+		await click(byRole("button", "save"));
+		await click(byRole("button", "deployed"));
+		await click(byRole("button", "cancel"));
+		expect(log).toEqual([false]);
+		expect(toasts().slice(before)).toEqual([]);
+	});
+
+	test("a deploy reported for one event does not silence the notice for the next", async () => {
+		const before = toasts().length;
+		await dom.render(<Host log={[]} />);
+		await click(byRole("button", "save"));
+		await click(byRole("button", "deployed"));
+		await click(byRole("button", "cancel"));
+		await click(byRole("button", "reopen"));
+		await click(byRole("button", "save"));
+		await click(byRole("button", "cancel"));
+		expect(toasts().slice(before)).toEqual([
+			"Visitor welcome was saved. Deploy it from its Runs on column.",
+		]);
 	});
 
 	test("a busy step blocks dismissal, and the form going away frees the dialog", async () => {

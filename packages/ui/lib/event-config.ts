@@ -13,7 +13,7 @@ import { SimpleChatConfig } from "../components/interfaces/configs/simple_chat";
 import { TeamsConfig } from "../components/interfaces/configs/teams";
 import { TelegramConfig } from "../components/interfaces/configs/telegram";
 import { UserMailConfig } from "../components/interfaces/configs/user_mail";
-import { GenericEventFormInterface } from "../components/interfaces/generic-event-form";
+import { FormWorkbenchInterface } from "../components/interfaces/form-workbench";
 import type { IEventMapping } from "../components/interfaces/interfaces";
 import { EVENT_DEFINITIONS } from "./event-definitions";
 
@@ -63,7 +63,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			deeplink: DeeplinkConfig,
 		},
 		useInterfaces: {
-			generic_form: GenericEventFormInterface,
+			generic_form: FormWorkbenchInterface,
 		},
 	},
 	events_simple: {
@@ -78,7 +78,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			mcp: McpConfig,
 		},
 		useInterfaces: {
-			quick_action: GenericEventFormInterface,
+			quick_action: FormWorkbenchInterface,
 		},
 	},
 };

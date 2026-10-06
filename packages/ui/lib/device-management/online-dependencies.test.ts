@@ -92,7 +92,8 @@ for (const wrapDependencies of [false, true]) {
 			(file) => file.path === "bits/metadata/model.json",
 		);
 		if (!metadata) throw new Error("Missing packaged model metadata");
-		expect(JSON.parse(await metadata.file.text())).toMatchObject({
+		const text = new TextDecoder().decode(await metadata.file.arrayBuffer());
+		expect(JSON.parse(text)).toMatchObject({
 			bit: {
 				id: "model",
 				hub: "models.test",

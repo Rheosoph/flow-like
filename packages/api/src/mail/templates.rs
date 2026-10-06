@@ -1,5 +1,14 @@
 use chrono::Utc;
 
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 fn base_template(content: &str, footer_text: &str) -> String {
     let year = Utc::now().format("%Y");
     format!(
@@ -97,8 +106,8 @@ fn cta_button(text: &str, url: &str) -> String {
                 </td>
             </tr>
         </table>"#,
-        text = text,
-        url = url
+        text = escape_html(text),
+        url = escape_html(url)
     )
 }
 
@@ -253,16 +262,19 @@ pub fn solution_submission_confirmation(
                 </div>
             </td>
         </tr>"##,
-        company_name = company_name,
+        company_name = escape_html(company_name),
         info_card = info_card(
             "Request Details",
             vec![
-                ("Plan", format!("{}{}", tier_display, priority_html)),
+                (
+                    "Plan",
+                    format!("{}{}", escape_html(tier_display), priority_html)
+                ),
                 (
                     "Tracking Token",
                     format!(
                         "<code style=\"background: #1a1a1a; padding: 4px 8px; border-radius: 6px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; color: #3b82f6;\">{}</code>",
-                        tracking_token
+                        escape_html(tracking_token)
                     )
                 ),
             ]
@@ -423,7 +435,7 @@ pub fn solution_status_update(
         </tr>"##,
         emoji = emoji,
         headline = headline,
-        company_name = company_name,
+        company_name = escape_html(company_name),
         old_badge = status_badge(old_status),
         new_badge = status_badge(new_status),
         description = description,
@@ -527,7 +539,7 @@ pub fn solution_log_added(
                 </div>
             </td>
         </tr>"##,
-        company_name = company_name,
+        company_name = escape_html(company_name),
         action = action,
         details_html = details_html,
         status_badge = status_badge(current_status),
@@ -618,7 +630,7 @@ pub fn solution_delivered(
                 </p>
             </td>
         </tr>"##,
-        company_name = company_name,
+        company_name = escape_html(company_name),
         notes_html = notes_html,
         cta_button = cta_button("Access Your Solution →", tracking_url)
     );
@@ -1063,7 +1075,40 @@ fn cta_button_secondary(text: &str, url: &str) -> String {
                 </td>
             </tr>
         </table>"#,
-        text = text,
-        url = url
+        text = escape_html(text),
+        url = escape_html(url)
     )
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    #[test]
+    fn solution_confirmation_escapes_html_but_preserves_plain_text() {
+        let company = "</strong><a href=\"https://evil.example\">Click</a>";
+        let (html, text) = solution_submission_confirmation(
+            company,
+            "https://example.com/track?a=1&b=2",
+            "<token>",
+            "<tier>",
+            false,
+        );
+        assert!(!html.contains(company));
+        assert!(html.contains("&lt;/strong&gt;"));
+        assert!(html.contains("&lt;token&gt;"));
+        assert!(html.contains("&lt;tier&gt;"));
+        assert!(html.contains("https://example.com/track?a=1&amp;b=2"));
+        assert!(text.contains(company));
+        assert!(
+            cta_button("Click", "flow-like://track/request").contains("flow-like://track/request")
+        );
+        assert!(
+            cta_button("Click", "https://user:password@example.com/track")
+                .contains("https://user:password@example.com/track")
+        );
+        assert!(
+            !cta_button("Click", "https://example.com/\" onclick=\"alert(1)")
+                .contains("\" onclick=")
+        );
+    }
 }

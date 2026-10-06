@@ -186,6 +186,7 @@ pub(crate) async fn resolve_sink_pat_user_id(
         .select_only()
         .column(pat::Column::UserId)
         .column(pat::Column::ValidUntil)
+        .column(pat::Column::Permissions)
         .column(membership::Column::Id)
         .join(JoinType::LeftJoin, membership_of_app)
         .filter(
@@ -196,13 +197,14 @@ pub(crate) async fn resolve_sink_pat_user_id(
         .into_tuple::<(
             String,
             Option<sea_orm::prelude::DateTimeWithTimeZone>,
+            i64,
             Option<String>,
         )>()
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to validate sink PAT: {}", e)))?;
 
-    let Some((user_id, valid_until, membership_id)) = db_pat else {
+    let Some((user_id, valid_until, permissions, membership_id)) = db_pat else {
         tracing::warn!(
             sink_id = %sink.id,
             event_id = %sink.event_id,
@@ -225,6 +227,8 @@ pub(crate) async fn resolve_sink_pat_user_id(
         return Err(ApiError::unauthorized("Stored sink PAT is expired"));
     }
 
+    ensure_sink_pat_scope(permissions)?;
+
     if membership_id.is_none() {
         tracing::warn!(
             sink_id = %sink.id,
@@ -239,6 +243,45 @@ pub(crate) async fn resolve_sink_pat_user_id(
     }
 
     Ok(Some(user_id))
+}
+
+fn ensure_sink_pat_scope(bits: i64) -> Result<(), ApiError> {
+    use crate::permission::pat_permission::{
+        LEGACY_PERMISSION_ERROR, PatPermission, has_pat_permission,
+    };
+    let permission = PatPermission::from_bits(bits)
+        .ok_or_else(|| ApiError::forbidden(LEGACY_PERMISSION_ERROR))?;
+    if !has_pat_permission(&permission, PatPermission::ReadWrite) {
+        return Err(ApiError::forbidden(
+            "Stored sink PAT requires Read & Write or Admin access to execute workflows",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pat_scope_tests {
+    use super::ensure_sink_pat_scope;
+    use crate::permission::pat_permission::PatPermission;
+
+    #[test]
+    fn stored_tokens_require_write_access() {
+        for permission in [PatPermission::ReadWrite, PatPermission::Admin] {
+            assert!(ensure_sink_pat_scope(permission.bits()).is_ok());
+        }
+        for bits in [
+            0,
+            -1,
+            PatPermission::ReadOnly.bits(),
+            3,
+            8,
+            16,
+            32,
+            1 | (1 << 62),
+        ] {
+            assert!(ensure_sink_pat_scope(bits).is_err(), "{bits}");
+        }
+    }
 }
 
 fn is_multipart_content_type(content_type: Option<&str>) -> bool {

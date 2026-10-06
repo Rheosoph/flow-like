@@ -36,6 +36,7 @@ export function HeroAgentControls() {
 				isFree: model.isFree,
 				supportedReasoningEfforts: model.supportedReasoningEfforts,
 				defaultReasoningEffort: model.defaultReasoningEffort,
+				deviceId: model.deviceId,
 			}))}
 			selectedModelId={selectedModelId}
 			selectedEffort={reasoningEffort}

@@ -337,7 +337,7 @@ impl WebResearchSession {
 /// counters so concurrent researchers cannot both observe the last slot as free.
 fn reserve_capped_call(counter: &AtomicUsize, limit: usize) -> bool {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
             (calls < limit).then_some(calls + 1)
         })
         .is_ok()

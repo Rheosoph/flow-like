@@ -704,7 +704,7 @@ fn repair_geometry_inner(
     if !matches!(&repaired, Geometry::GeometryCollection(_)) {
         let positions = repaired.coords_count();
         emitted_positions
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current
                     .checked_add(positions)
                     .filter(|total| *total <= MAX_GEOMETRY_POSITIONS)

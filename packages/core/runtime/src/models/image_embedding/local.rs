@@ -38,7 +38,7 @@ impl LocalImageEmbeddingModel {
     pub async fn new(
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
-        factory: &mut EmbeddingFactory,
+        factory: &EmbeddingFactory,
     ) -> flow_like_types::Result<Arc<Self>> {
         let bit = Arc::new(bit.clone());
         let bit_store = FlowLikeState::bit_store(&app_state).await?;

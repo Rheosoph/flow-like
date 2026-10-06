@@ -39,6 +39,17 @@ export function serviceWhyText(
 			"{{event}} is a bot, so this service runs 1 instance. Two instances would answer every message twice.",
 			{ event: eventName(plan, why.eventId) },
 		);
+	if (
+		why.code === "on_demand" &&
+		plan.services.some(
+			(service) => service.hosted && service.events.includes(why.eventId),
+		)
+	)
+		return t(
+			"devices:deploy.services.whyHostedOnDemand",
+			"{{event}} is available through the service page and Studio. This form or quick-action service runs 1 instance.",
+			{ event: eventName(plan, why.eventId) },
+		);
 	if (why.code === "on_demand")
 		return t(
 			"devices:deploy.services.whyOnDemand",

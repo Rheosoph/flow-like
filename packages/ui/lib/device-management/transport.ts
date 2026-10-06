@@ -1,6 +1,17 @@
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
+import type { ArtifactTransferStatus } from "./artifacts";
 import { base64url, unbase64url } from "./crypto";
+import type { ModelAssetStatus } from "./models";
+import type { DeviceServiceStream, TunnelServiceOptions } from "./tunnel";
+import {
+	DeviceTunnelDataClient,
+	type TunnelArtifactUpload,
+	TunnelDataRequestError,
+	type TunnelModelAssetPush,
+	isTunnelReadCommand,
+} from "./tunnel-data";
+import type { TunnelConnectOptions } from "./tunnel-transport";
 import {
 	type BrowserController,
 	type DeviceReceipt,
@@ -20,6 +31,15 @@ const IDENTITY_FAILED = "Encrypted device identity confirmation failed.";
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
+
+class ManagementReadError extends Error {
+	constructor(
+		readonly code: "timeout" | "connection_closed" | "invalid_reply",
+		message: string,
+	) {
+		super(message);
+	}
+}
 type Envelope = {
 	kind: "hello" | "handshake" | "message";
 	session_id: string;
@@ -30,6 +50,12 @@ type Envelope = {
 type Channel = "signal" | "noise";
 
 export class FrameQueue<T> {
+	constructor(
+		private readonly capacity = 32,
+		private readonly byteLimit = Number.POSITIVE_INFINITY,
+		private readonly size: (value: T) => number = () => 0,
+	) {}
+	private bytes = 0;
 	private values: T[] = [];
 	private waiting?: {
 		resolve: (value: T) => void;
@@ -46,16 +72,28 @@ export class FrameQueue<T> {
 			waiter.resolve(value);
 			return;
 		}
-		if (this.values.length >= 32) {
-			this.close(new Error("Management input exceeded its bound."));
+		if (
+			this.values.length >= this.capacity ||
+			this.bytes + this.size(value) > this.byteLimit
+		) {
+			this.close(
+				new ManagementReadError(
+					"invalid_reply",
+					"Management input exceeded its bound.",
+				),
+			);
 			return;
 		}
 		this.values.push(value);
+		this.bytes += this.size(value);
 	}
 	next(timeout = 15_000): Promise<T> {
 		if (this.failure) return Promise.reject(this.failure);
-		if (this.values.length)
-			return Promise.resolve(this.values.splice(0, 1)[0] as T);
+		if (this.values.length) {
+			const value = this.values.splice(0, 1)[0] as T;
+			this.bytes -= this.size(value);
+			return Promise.resolve(value);
+		}
 		if (this.waiting)
 			return Promise.reject(
 				new Error("Management frames require an ordered reader."),
@@ -63,14 +101,20 @@ export class FrameQueue<T> {
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.waiting = undefined;
-				reject(new Error(TIMED_OUT));
+				reject(new ManagementReadError("timeout", TIMED_OUT));
 			}, timeout);
 			this.waiting = { resolve, reject, timer };
 		});
 	}
-	close(error = new Error("Management connection closed.")): void {
+	close(
+		error: Error = new ManagementReadError(
+			"connection_closed",
+			"Management connection closed.",
+		),
+	): void {
 		this.failure = error;
 		this.values = [];
+		this.bytes = 0;
 		if (this.waiting) {
 			clearTimeout(this.waiting.timer);
 			this.waiting.reject(error);
@@ -111,16 +155,45 @@ export type ConnectErrorCode =
 	| "identity_confirmation_failed"
 	| "cancelled";
 
+/** Fixed client facts only; never includes a frame, command, credential or raw error. */
+export interface ManagementFailureDiagnostic {
+	transport?: "webrtc" | "websocket";
+	phase: ConnectStepId | "wait_reply" | "envelope" | "decrypt" | "response";
+	cause:
+		| ConnectErrorCode
+		| "timeout"
+		| "connection_closed"
+		| "invalid_reply"
+		| "decrypt_failed"
+		| "transport_failed";
+	fallbackReason?: RelayFallbackReason;
+}
+
 /** A connect failure tied to its progress step; the message is the transport's original sentence. */
 export class ConnectError extends Error {
 	constructor(
 		readonly step: ConnectStepId,
 		readonly code: ConnectErrorCode,
 		message: string,
-		readonly detail: { status?: number; url?: string } = {},
+		readonly detail: {
+			status?: number;
+			url?: string;
+			transport?: "webrtc" | "websocket";
+			fallbackReason?: RelayFallbackReason;
+		} = {},
 	) {
 		super(message);
 		this.name = "ConnectError";
+	}
+	get diagnostic(): ManagementFailureDiagnostic {
+		return {
+			phase: this.step,
+			cause: this.code,
+			...(this.detail.transport ? { transport: this.detail.transport } : {}),
+			...(this.detail.fallbackReason
+				? { fallbackReason: this.detail.fallbackReason }
+				: {}),
+		};
 	}
 }
 
@@ -210,10 +283,12 @@ function parseEnvelope(text: string): Envelope {
 	return value as unknown as Envelope;
 }
 
-class Relay {
+export class Relay {
 	readonly noise = new FrameQueue<string>();
 	readonly signal = new FrameQueue<string>();
+	readonly tunnel = new FrameQueue<Uint8Array>(512, 4_259_840, (v) => v.length);
 	private readonly ready = new FrameQueue<Record<string, unknown>>();
+	private readonly reauthorized = new FrameQueue<number>();
 	private readonly opened = new FrameQueue<void>();
 	private readonly socket: WebSocket;
 	private heartbeat?: ReturnType<typeof setInterval>;
@@ -223,7 +298,7 @@ class Relay {
 	private readonly closeListeners = new Set<() => void>();
 	constructor(
 		url: string,
-		private readonly admission: SignalingAdmission,
+		private admission: SignalingAdmission,
 		private readonly participant: string,
 		private readonly deviceId: string,
 	) {
@@ -250,6 +325,13 @@ class Relay {
 					this.lastPong = Date.now();
 					return;
 				}
+				if (
+					frame.type === "reauthorized" &&
+					typeof frame.expires_at === "number"
+				) {
+					this.reauthorized.push(frame.expires_at);
+					return;
+				}
 				if (frame.type !== "frame")
 					throw new Error("Unexpected signaling frame.");
 				if (
@@ -260,11 +342,18 @@ class Relay {
 					return;
 				if (typeof frame.payload !== "string")
 					throw new Error("Missing signaling payload.");
-				const payload = decoder.decode(unbase64url(frame.payload));
+				const bytes = unbase64url(frame.payload);
+				if (frame.channel === "tunnel") {
+					this.tunnel.push(bytes);
+					return;
+				}
+				const payload = decoder.decode(bytes);
 				if (frame.channel === "noise") this.noise.push(payload);
 				else if (frame.channel === "signal") this.signal.push(payload);
 			} catch {
-				this.close();
+				this.close(
+					new ManagementReadError("invalid_reply", "Invalid signaling frame."),
+				);
 			}
 		};
 	}
@@ -298,6 +387,12 @@ class Relay {
 	}
 	send(channel: Channel, payload: unknown): void {
 		const bytes = encoder.encode(JSON.stringify(payload));
+		this.sendBytes(channel, bytes);
+	}
+	sendTunnel(bytes: Uint8Array): void {
+		this.sendBytes("tunnel", bytes);
+	}
+	private sendBytes(channel: Channel | "tunnel", bytes: Uint8Array): void {
 		if (
 			bytes.length > 32_768 ||
 			this.closed ||
@@ -314,18 +409,43 @@ class Relay {
 			}),
 		);
 	}
+	async waitWritable(): Promise<void> {
+		const deadline = Date.now() + 15_000;
+		while (this.socket.bufferedAmount > 32_768) {
+			if (this.closed || Date.now() >= deadline)
+				throw new Error("Device tunnel transport stalled.");
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		if (this.closed) throw new Error("Device tunnel transport closed.");
+	}
+	async reauthorize(admission: SignalingAdmission): Promise<void> {
+		if (this.closed || admission.expires_at <= this.admission.expires_at)
+			throw new Error("Device signaling renewal did not extend admission.");
+		await this.waitWritable();
+		this.socket.send(
+			JSON.stringify({ type: "reauthorize", token: admission.token }),
+		);
+		const expiresAt = await this.reauthorized.next();
+		if (expiresAt !== admission.expires_at) {
+			this.close();
+			throw new Error("Device signaling renewal differs.");
+		}
+		this.admission = admission;
+	}
 	onClosed(listener: () => void): void {
 		if (this.closed) queueMicrotask(listener);
 		else this.closeListeners.add(listener);
 	}
-	close(): void {
+	close(error?: Error): void {
 		if (this.closed) return;
 		this.closed = true;
 		clearInterval(this.heartbeat);
-		this.noise.close();
-		this.signal.close();
-		this.ready.close();
-		this.opened.close();
+		this.noise.close(error);
+		this.signal.close(error);
+		this.tunnel.close(error);
+		this.ready.close(error);
+		this.reauthorized.close(error);
+		this.opened.close(error);
 		this.socket.onclose = null;
 		this.socket.onmessage = null;
 		this.socket.onerror = null;
@@ -344,7 +464,7 @@ interface Pipe {
 	kind: "webrtc" | "websocket";
 }
 
-async function eventReady(
+export async function eventReady(
 	target: EventTarget,
 	event: string,
 	ready: () => boolean,
@@ -404,8 +524,8 @@ async function rtcPipe(
 	const input = new FrameQueue<string>();
 	const closeListeners = new Set<() => void>();
 	let ended = false;
-	const end = () => {
-		input.close();
+	const end = (error?: Error) => {
+		input.close(error);
 		if (ended) return;
 		ended = true;
 		for (const listener of closeListeners) listener();
@@ -416,13 +536,15 @@ async function rtcPipe(
 			typeof event.data !== "string" ||
 			encoder.encode(event.data).length > 32_768
 		) {
-			end();
+			end(
+				new ManagementReadError("invalid_reply", "Invalid management frame."),
+			);
 			return;
 		}
 		input.push(event.data);
 	};
-	channel.onclose = end;
-	channel.onerror = end;
+	channel.onclose = () => end();
+	channel.onerror = () => end();
 	try {
 		await peer.setLocalDescription(await peer.createOffer());
 		await eventReady(
@@ -491,7 +613,13 @@ async function authenticate(
 	grantId: string,
 	deviceId: string,
 	consumed: () => void,
-): Promise<{ session: NoiseSession; expiresAt: number; bootId: string }> {
+): Promise<{
+	session: NoiseSession;
+	expiresAt: number;
+	bootId: string;
+	dataTunnel: boolean;
+	serviceTunnel: boolean;
+}> {
 	const sessionId = handshake.sessionId();
 	pipe.send({
 		kind: "hello",
@@ -531,7 +659,13 @@ async function authenticate(
 			typeof ready.boot_id !== "string"
 		)
 			throw new Error(IDENTITY_FAILED);
-		return { session, expiresAt: ready.expires_at, bootId: ready.boot_id };
+		return {
+			session,
+			expiresAt: ready.expires_at,
+			bootId: ready.boot_id,
+			dataTunnel: ready.data_tunnel === 1,
+			serviceTunnel: ready.service_tunnel === 1,
+		};
 	} catch (error) {
 		session.close();
 		session.free();
@@ -563,12 +697,24 @@ export class ManagementRequestNotSentError extends Error {
 
 /** The request left this app but no authenticated reply arrived; its outcome is unknown. */
 export class ManagementUnconfirmedError extends Error {
-	constructor(readonly operationId: string) {
+	constructor(
+		readonly operationId: string,
+		readonly diagnostic?: ManagementFailureDiagnostic,
+	) {
 		super(
 			`Device operation ${operationId} has no confirmed result. Reconnect and inspect its status before retrying.`,
 		);
 		this.name = "ManagementUnconfirmedError";
 	}
+}
+
+export function managementFailureDiagnostic(
+	error: unknown,
+): ManagementFailureDiagnostic | undefined {
+	return error instanceof ConnectError ||
+		error instanceof ManagementUnconfirmedError
+		? error.diagnostic
+		: undefined;
 }
 
 export function matchesOperationResponse(
@@ -584,7 +730,7 @@ export function matchesOperationResponse(
 	return response.operation_id === requestId;
 }
 
-async function requestAdmission(
+export async function requestAdmission(
 	api: IApiState,
 	profile: IProfile,
 	receipt: DeviceReceipt,
@@ -624,7 +770,7 @@ async function requestAdmission(
 	return admission;
 }
 
-async function openRelay(
+export async function openRelay(
 	admission: SignalingAdmission,
 	participant: string,
 	deviceId: string,
@@ -708,6 +854,8 @@ function asConnectError(
 export type ConnectionCloseReason = "local" | "remote";
 
 export class DeviceManagementConnection {
+	private dataOptions?: TunnelConnectOptions;
+	private dataClient?: DeviceTunnelDataClient;
 	private busy = false;
 	private closed = false;
 	private closeReason: ConnectionCloseReason = "local";
@@ -724,6 +872,8 @@ export class DeviceManagementConnection {
 		readonly bootId: string,
 		/** Set when the session runs over the relay because the direct connection failed. */
 		readonly fallbackReason?: RelayFallbackReason,
+		private readonly supportsDataTunnel = false,
+		private readonly supportsServiceTunnel = false,
 	) {
 		pipe.onClose?.(() => this.shutdown("remote"));
 	}
@@ -784,7 +934,7 @@ export class DeviceManagementConnection {
 				signal,
 			);
 			report({ step, state: "done" });
-			return await DeviceManagementConnection.secure({
+			const connection = await DeviceManagementConnection.secure({
 				relay,
 				admission,
 				controller,
@@ -794,6 +944,8 @@ export class DeviceManagementConnection {
 				begin,
 				report,
 			});
+			connection.dataOptions = { api, profile, controller, receipt, grantId };
+			return connection;
 		} catch (error) {
 			report({ step, state: "failed" });
 			throw asConnectError(error, step, signal);
@@ -855,7 +1007,10 @@ export class DeviceManagementConnection {
 					finished = true;
 				},
 			).catch((error: unknown) => {
-				throw securingFailure(error, signal);
+				const failure = securingFailure(error, signal);
+				failure.detail.transport = pipe?.kind;
+				failure.detail.fallbackReason = fallbackReason;
+				throw failure;
 			});
 			if (signal?.aborted) {
 				authenticated.session.close();
@@ -872,6 +1027,8 @@ export class DeviceManagementConnection {
 				authenticated.expiresAt,
 				authenticated.bootId,
 				fallbackReason,
+				authenticated.dataTunnel,
+				authenticated.serviceTunnel,
 			);
 		} catch (error) {
 			cancel();
@@ -888,6 +1045,12 @@ export class DeviceManagementConnection {
 		command: Record<string, unknown>,
 		operationId: string = crypto.randomUUID(),
 	): Promise<ManagementResponse> {
+		if (command.type === "service_listeners" && !this.supportsServiceTunnel)
+			throw new ManagementRequestNotSentError(
+				"Update the device agent to connect to deployed services.",
+			);
+		if (isTunnelReadCommand(command))
+			return this.requestData(command, operationId);
 		if (this.closed || this.expiresAt <= now())
 			throw new Error(
 				"Management session expired. Reconnect before continuing.",
@@ -896,6 +1059,7 @@ export class DeviceManagementConnection {
 			throw new Error("Wait for the current device operation to finish.");
 		this.busy = true;
 		let sent = false;
+		let phase: ManagementFailureDiagnostic["phase"] = "wait_reply";
 		try {
 			const issued = now();
 			const bytes = encoder.encode(
@@ -925,13 +1089,15 @@ export class DeviceManagementConnection {
 				data: base64url(encrypted),
 			});
 			sent = true;
-			const response = parseEnvelope(await this.pipe.next());
+			const reply = await this.pipe.next();
+			phase = "envelope";
+			const response = parseEnvelope(reply);
 			if (response.kind !== "message" || response.session_id !== this.sessionId)
 				throw new Error("Management response does not match this session.");
-			const plaintext = this.session.decrypt(
-				unbase64url(response.data, 16_400),
-				now(),
-			);
+			const ciphertext = unbase64url(response.data, 16_400);
+			phase = "decrypt";
+			const plaintext = this.session.decrypt(ciphertext, now());
+			phase = "response";
 			let value: Record<string, unknown>;
 			try {
 				value = object(JSON.parse(decoder.decode(plaintext)));
@@ -956,10 +1122,108 @@ export class DeviceManagementConnection {
 				throw new ManagementRequestNotSentError(
 					`Device operation ${operationId} was not sent because the management session failed locally. Reconnect and retry.`,
 				);
-			throw new ManagementUnconfirmedError(operationId);
+			throw new ManagementUnconfirmedError(operationId, {
+				transport: this.pipe.kind,
+				phase,
+				cause:
+					error instanceof ManagementReadError
+						? error.code
+						: phase === "decrypt"
+							? "decrypt_failed"
+							: phase === "envelope" || phase === "response"
+								? "invalid_reply"
+								: "transport_failed",
+				...(this.fallbackReason ? { fallbackReason: this.fallbackReason } : {}),
+			});
 		} finally {
 			this.busy = false;
 		}
+	}
+	async requestData(
+		command: Record<string, unknown>,
+		operationId: string = crypto.randomUUID(),
+		signal?: AbortSignal,
+	): Promise<ManagementResponse> {
+		if (!isTunnelReadCommand(command))
+			throw new ManagementRequestNotSentError(
+				"This operation requires the management connection.",
+			);
+		try {
+			return await this.bulk().request(command, operationId, signal);
+		} catch (error) {
+			if (error instanceof TunnelDataRequestError && error.sent)
+				throw new ManagementUnconfirmedError(operationId, {
+					phase: "wait_reply",
+					cause: "transport_failed",
+				});
+			throw new ManagementRequestNotSentError(
+				error instanceof Error
+					? error.message
+					: "The device data request could not be sent.",
+			);
+		}
+	}
+	uploadArtifact(input: TunnelArtifactUpload): Promise<ArtifactTransferStatus> {
+		return this.bulk().uploadArtifact(input);
+	}
+	/** One model asset push over the data tunnel (plan §3.1); the device checks the digest. */
+	pushModelAsset(input: TunnelModelAssetPush): Promise<ModelAssetStatus> {
+		return this.bulk().pushModelAsset(input);
+	}
+	openService(
+		placementId: string,
+		serviceId: string,
+		options?: TunnelServiceOptions,
+	): Promise<DeviceServiceStream> {
+		if (!this.supportsServiceTunnel)
+			throw new Error(
+				"Update the device agent to connect to deployed services.",
+			);
+		return this.bulk().openService(placementId, serviceId, options);
+	}
+	/** Only for agents with `model_host`: an older one closes the whole tunnel on the unknown target. */
+	openModelGateway(
+		options: { signal?: AbortSignal } = {},
+	): Promise<DeviceServiceStream> {
+		if (!this.supportsServiceTunnel)
+			throw new Error(
+				"Update the device agent to send requests to its models.",
+			);
+		return this.bulk().openModelGateway(options);
+	}
+	detachDataTunnel(): DeviceTunnelDataClient | undefined {
+		const client = this.dataClient;
+		this.dataClient = undefined;
+		return client;
+	}
+	adoptDataTunnel(client: DeviceTunnelDataClient): void {
+		if (
+			this.closed ||
+			!this.supportsDataTunnel ||
+			!this.dataOptions ||
+			!client.matches(this.dataOptions)
+		) {
+			client.close();
+			return;
+		}
+		this.dataClient?.close();
+		this.dataClient = client;
+	}
+	private bulk(): DeviceTunnelDataClient {
+		if (!this.supportsDataTunnel)
+			throw new Error(
+				"Update the device agent to use encrypted streaming transfers.",
+			);
+		if (this.closed || this.expiresAt <= now())
+			throw new Error(
+				"Management session expired. Reconnect before continuing.",
+			);
+		if (!this.dataClient) {
+			if (!this.dataOptions)
+				throw new Error("Device data transport is unavailable.");
+			this.dataClient = new DeviceTunnelDataClient(this.dataOptions);
+		}
+		return this.dataClient;
 	}
 	close(): void {
 		this.shutdown("local");
@@ -968,6 +1232,8 @@ export class DeviceManagementConnection {
 		if (this.closed) return;
 		this.closed = true;
 		this.closeReason = reason;
+		this.dataClient?.close();
+		this.dataClient = undefined;
 		this.pipe.close();
 		this.relay.close();
 		this.session.close();

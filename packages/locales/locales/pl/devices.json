@@ -5286,6 +5286,33 @@
 			"offline": "",
 			"online": ""
 		},
+		"models": {
+			"bytes": "",
+			"fail": {
+				"agent": "",
+				"disk": "",
+				"push": "",
+				"reply": "",
+				"stopped": "",
+				"unreachable": ""
+			},
+			"from": "",
+			"left": "",
+			"progress": "",
+			"sendFailed": "",
+			"state": {
+				"checking": "",
+				"downloading": "",
+				"failed": "",
+				"present": "",
+				"relaying": "",
+				"sending": "",
+				"verifying": "",
+				"waiting": ""
+			},
+			"stop": "",
+			"title": ""
+		},
 		"order": {
 			"allLower": "",
 			"firstLower": "",
@@ -6248,6 +6275,8 @@
 			"keys": "",
 			"label": "",
 			"metrics": "",
+			"models": "",
+			"modelsRevoked": "",
 			"overview": "",
 			"revoked": "",
 			"services": "",
@@ -7139,6 +7168,11 @@
 			"manageCertificatesNote": "",
 			"metrics": "",
 			"metricsExplain": "",
+			"modelManage": "",
+			"modelManageExplain": "",
+			"modelManageNote": "",
+			"modelUse": "",
+			"modelUseExplain": "",
 			"noteRunsCode": "",
 			"reboot": "",
 			"rebootExplain": "",
@@ -7438,6 +7472,8 @@
 			"deployerExplain": "",
 			"deviceAdmin": "",
 			"deviceAdminExplain": "",
+			"modelUser": "",
+			"modelUserExplain": "",
 			"operator": "",
 			"operatorExplain": "",
 			"viewer": "",
@@ -10064,6 +10100,765 @@
 		},
 		"title": "",
 		"unlockSeveral": ""
+	},
+	"models": {
+		"actions": {
+			"add": "",
+			"cancelJob": {
+				"label": "",
+				"undo": "",
+				"what": "",
+				"who": ""
+			},
+			"cancelJobButton": "",
+			"configure": {
+				"label": "",
+				"undo": "",
+				"what": "",
+				"whatLoaded": "",
+				"who": "",
+				"whoLoaded": ""
+			},
+			"ensure": {
+				"label": "",
+				"undo": "",
+				"what_one": "",
+				"what_few": "",
+				"what_many": "",
+				"what_other": "",
+				"who": ""
+			},
+			"install": {
+				"label": "",
+				"stays": "",
+				"undo": "",
+				"what_one": "",
+				"what_few": "",
+				"what_many": "",
+				"what_other": "",
+				"who": ""
+			},
+			"installRuntime": {
+				"label": "",
+				"undo": "",
+				"what": "",
+				"who": ""
+			},
+			"installRuntimeButton": "",
+			"load": {
+				"label": "",
+				"undo": "",
+				"what": "",
+				"when": "",
+				"who": ""
+			},
+			"loadButton": "",
+			"remove": {
+				"check": "",
+				"label": "",
+				"stays": "",
+				"undo": "",
+				"what": "",
+				"who": ""
+			},
+			"removeButton": "",
+			"removeRuntime": {
+				"check": "",
+				"label": "",
+				"undo": "",
+				"what": "",
+				"who": ""
+			},
+			"removeRuntimeButton": "",
+			"settingsButton": "",
+			"sub": "",
+			"tray": {
+				"any": "",
+				"cancelJob": "",
+				"configure": "",
+				"ensure": "",
+				"install": "",
+				"installRuntime": "",
+				"load": "",
+				"remove": "",
+				"removeRuntime": "",
+				"unload": ""
+			},
+			"unload": {
+				"label": "",
+				"undo": "",
+				"what": "",
+				"who": "",
+				"whoOnDemand": ""
+			},
+			"unloadButton": "",
+			"when": {
+				"background": "",
+				"now": ""
+			}
+		},
+		"downloads": {
+			"bytes": "",
+			"etaHours": "",
+			"etaMinutes": "",
+			"etaSeconds": "",
+			"failure": {
+				"cancelled": "",
+				"digestMismatch": "",
+				"diskBudget": "",
+				"egressBlocked": "",
+				"httpStatus": "",
+				"httpStatusCode": "",
+				"io": "",
+				"noSources": "",
+				"sizeMismatch": ""
+			},
+			"finished_one": "",
+			"finished_few": "",
+			"finished_many": "",
+			"finished_other": "",
+			"from": "",
+			"left": "",
+			"progress": "",
+			"rate": "",
+			"state": {
+				"awaitingPush": "",
+				"failed": "",
+				"fetching": "",
+				"present": "",
+				"queued": "",
+				"verifying": ""
+			},
+			"title": ""
+		},
+		"fit": {
+			"block": {
+				"disk": "",
+				"engineUnavailable": "",
+				"fileTooLarge": "",
+				"noFingerprint": "",
+				"projectorMissing": "",
+				"splitIncomplete": "",
+				"tooManyFiles": ""
+			},
+			"detail": {
+				"cpu": "",
+				"cpuNoRoom": "",
+				"gpu": "",
+				"gpuPinned": "",
+				"partial": "",
+				"tooLarge": ""
+			},
+			"estimated": "",
+			"gpuNoRuntime": "",
+			"gpuNotSeen": "",
+			"gpuUnknown": "",
+			"memory": {
+				"gpu": "",
+				"partial": "",
+				"parts": "",
+				"ram": "",
+				"tooLarge": "",
+				"unified": ""
+			},
+			"speed": {
+				"crawl": "",
+				"fast": "",
+				"good": "",
+				"rate": "",
+				"slow": ""
+			},
+			"verdict": {
+				"cpu": "",
+				"gpu": "",
+				"partial": "",
+				"tooLarge": ""
+			}
+		},
+		"hardware": {
+			"available": "",
+			"backend": {
+				"cpu": "",
+				"cuda": "",
+				"metal": "",
+				"vulkan": ""
+			},
+			"cpu": "",
+			"cpuCores_one": "",
+			"cpuCores_few": "",
+			"cpuCores_many": "",
+			"cpuCores_other": "",
+			"free": "",
+			"gpuMemoryUnknown": "",
+			"gpus": "",
+			"installed": "",
+			"memory": "",
+			"noGpu": "",
+			"noRuntimes": "",
+			"runtimeName": "",
+			"runtimes": "",
+			"storage": "",
+			"storageUsed": "",
+			"title": "",
+			"unified": ""
+		},
+		"install": {
+			"add": "",
+			"back": "",
+			"cancel": "",
+			"close": "",
+			"continue": "",
+			"done": {
+				"downloading_one": "",
+				"downloading_few": "",
+				"downloading_many": "",
+				"downloading_other": "",
+				"present": "",
+				"title": ""
+			},
+			"reason": {
+				"blocked": "",
+				"pick": "",
+				"reference": ""
+			},
+			"review": {
+				"diskMemory": "",
+				"diskMemoryLabel": "",
+				"files": "",
+				"filesValue_one": "",
+				"filesValue_few": "",
+				"filesValue_many": "",
+				"filesValue_other": "",
+				"fingerprintFailed": "",
+				"fingerprinting_one": "",
+				"fingerprinting_few": "",
+				"fingerprinting_many": "",
+				"fingerprinting_other": "",
+				"kind": "",
+				"model": "",
+				"runs": "",
+				"sending": "",
+				"sources": "",
+				"twin": "",
+				"whatPresent": ""
+			},
+			"source": {
+				"bits": "",
+				"bitsEmpty": "",
+				"bitsLegend": "",
+				"bitsNoMatch": "",
+				"bitsSearchLabel": "",
+				"hub": "",
+				"hubEmpty": "",
+				"hubLegend": "",
+				"huggingFace": "",
+				"label": "",
+				"listFailed": "",
+				"loading": "",
+				"lookupFailed": "",
+				"reference": "",
+				"referenceHint": "",
+				"searchLabel": "",
+				"searchPlaceholder": "",
+				"shown": ""
+			},
+			"step": {
+				"review": "",
+				"settings": "",
+				"source": "",
+				"version": ""
+			},
+			"stepNote": "",
+			"title": "",
+			"version": {
+				"download": "",
+				"kind": "",
+				"legend": "",
+				"license": "",
+				"present": "",
+				"projector": "",
+				"projectorHint": "",
+				"recommended": ""
+			}
+		},
+		"overview": {
+			"headline": {
+				"downloading_one": "",
+				"downloading_few": "",
+				"downloading_many": "",
+				"downloading_other": "",
+				"empty": "",
+				"emptyRest": "",
+				"errors_one": "",
+				"errors_few": "",
+				"errors_many": "",
+				"errors_other": "",
+				"failed_one": "",
+				"failed_few": "",
+				"failed_many": "",
+				"failed_other": "",
+				"gpuMemory": "",
+				"idle_one": "",
+				"idle_few": "",
+				"idle_many": "",
+				"idle_other": "",
+				"noTraffic": "",
+				"serving_one": "",
+				"serving_few": "",
+				"serving_many": "",
+				"serving_other": "",
+				"servingSome": "",
+				"traffic": ""
+			},
+			"milliseconds": "",
+			"noRecommendations": "",
+			"recommendations": "",
+			"seconds": ""
+		},
+		"playground": {
+			"chat": {
+				"clear": "",
+				"empty": "",
+				"message": "",
+				"placeholder": "",
+				"send": "",
+				"stop": "",
+				"stopped": "",
+				"thinking": "",
+				"waiting": "",
+				"you": ""
+			},
+			"embed": {
+				"placeholder": "",
+				"preview": "",
+				"run": "",
+				"text": ""
+			},
+			"intro": "",
+			"measure": {
+				"dimensions_one": "",
+				"dimensions_few": "",
+				"dimensions_many": "",
+				"dimensions_other": "",
+				"inOut_one": "",
+				"inOut_few": "",
+				"inOut_many": "",
+				"inOut_other": "",
+				"out_one": "",
+				"out_few": "",
+				"out_many": "",
+				"out_other": "",
+				"speed": "",
+				"tokens_one": "",
+				"tokens_few": "",
+				"tokens_many": "",
+				"tokens_other": "",
+				"total": "",
+				"ttft": ""
+			},
+			"model": "",
+			"modelOption": "",
+			"noModels": "",
+			"open": "",
+			"refused": {
+				"busy": "",
+				"noHost": "",
+				"notAllowed": "",
+				"notFound": "",
+				"other": "",
+				"unavailable": ""
+			},
+			"title": "",
+			"unsupported": ""
+		},
+		"recommendations": {
+			"anyModel": "",
+			"containerGpuHidden": "",
+			"cpuThreads": "",
+			"cpuThreadsPlain": "",
+			"ctxTruncation": "",
+			"ctxTruncationPlain": "",
+			"diskLow": "",
+			"diskLowPlain": "",
+			"fix": {
+				"alwaysOn": "",
+				"cacheF16": "",
+				"cacheQ4": "",
+				"cacheQ8": "",
+				"context": "",
+				"cpuOnly": "",
+				"flashOff": "",
+				"flashOn": "",
+				"gpuAuto": "",
+				"gpuLayers_one": "",
+				"gpuLayers_few": "",
+				"gpuLayers_many": "",
+				"gpuLayers_other": "",
+				"install": "",
+				"onDemand": "",
+				"pinnedOff": "",
+				"settings": "",
+				"settingsFor": "",
+				"slots_one": "",
+				"slots_few": "",
+				"slots_many": "",
+				"slots_other": "",
+				"threads_one": "",
+				"threads_few": "",
+				"threads_many": "",
+				"threads_other": "",
+				"unload": "",
+				"update": ""
+			},
+			"gpuUnused": "",
+			"gpuUnusedAll": "",
+			"idleResident": "",
+			"idleResidentPlain": "",
+			"kvPressure": "",
+			"kvPressurePlain": "",
+			"memoryPressure": "",
+			"memoryPressurePlain": "",
+			"partialOffload": "",
+			"partialOffloadPlain": "",
+			"requestsQueued_one": "",
+			"requestsQueued_few": "",
+			"requestsQueued_many": "",
+			"requestsQueued_other": "",
+			"requestsQueuedPlain": "",
+			"requestsQueuedWait": "",
+			"runtimeOutdated": "",
+			"runtimeOutdatedPlain": "",
+			"slowTtft": "",
+			"slowTtftPlain": "",
+			"theGpu": ""
+		},
+		"send": {
+			"button": "",
+			"bytes": "",
+			"failed": "",
+			"left": "",
+			"progress": "",
+			"retry": "",
+			"sending": "",
+			"sent": "",
+			"stop": "",
+			"stopped": "",
+			"unknownDesktop": "",
+			"unknownWeb": "",
+			"unsupported": ""
+		},
+		"settings": {
+			"apply": "",
+			"back": "",
+			"changes": "",
+			"close": "",
+			"field": {
+				"ctx": "",
+				"flashAttn": "",
+				"gpuLayers": "",
+				"kvCache": "",
+				"parallel": "",
+				"threads": ""
+			},
+			"flashNeeded": "",
+			"gone": "",
+			"gpuLayers": {
+				"all": "",
+				"auto": "",
+				"count_one": "",
+				"count_few": "",
+				"count_many": "",
+				"count_other": "",
+				"none": ""
+			},
+			"hint": {
+				"ctx": "",
+				"flashAttn": "",
+				"gpuLayers": "",
+				"kvCache": "",
+				"parallel": "",
+				"threads": ""
+			},
+			"kv": {
+				"f16": "",
+				"q4": "",
+				"q8": ""
+			},
+			"memoryNow": "",
+			"memoryNowRam": "",
+			"noChanges": "",
+			"reason": {
+				"allLayers": "",
+				"cores_one": "",
+				"cores_few": "",
+				"cores_many": "",
+				"cores_other": "",
+				"cpuSlots": "",
+				"flash": "",
+				"gpuSlots": "",
+				"idleUnload": "",
+				"memory": "",
+				"modelLimit_one": "",
+				"modelLimit_few": "",
+				"modelLimit_many": "",
+				"modelLimit_other": "",
+				"noGpu": "",
+				"someLayers": "",
+				"standard": ""
+			},
+			"recommended": "",
+			"recommendedValue": "",
+			"residency": {
+				"alwaysOn": "",
+				"alwaysOnHint": "",
+				"idle": "",
+				"label": "",
+				"onDemand": "",
+				"onDemandHint": "",
+				"pinnedOff": "",
+				"pinnedOffHint": ""
+			},
+			"review": "",
+			"reviewTitle": "",
+			"stale": {
+				"reload": "",
+				"text": "",
+				"title": ""
+			},
+			"stepApply": "",
+			"stepChange": "",
+			"sub": "",
+			"title": "",
+			"titleUnknown": "",
+			"useRecommended": "",
+			"value": {
+				"deviceDefault": "",
+				"off": "",
+				"on": "",
+				"slots_one": "",
+				"slots_few": "",
+				"slots_many": "",
+				"slots_other": "",
+				"threads_one": "",
+				"threads_few": "",
+				"threads_many": "",
+				"threads_other": "",
+				"tokens_one": "",
+				"tokens_few": "",
+				"tokens_many": "",
+				"tokens_other": ""
+			}
+		},
+		"states": {
+			"checking": "",
+			"emptyText": "",
+			"emptyTitle": "",
+			"failedTitle": "",
+			"loading": "",
+			"locked": "",
+			"lockedTitle": "",
+			"needsLive": "",
+			"needsLiveTitle": "",
+			"offline": "",
+			"olderAgent": "",
+			"olderAgentText": "",
+			"reading": "",
+			"retry": "",
+			"unlock": ""
+		},
+		"stats": {
+			"allModels": "",
+			"consumers": {
+				"caller": "",
+				"label": "",
+				"owner": "",
+				"person": "",
+				"title": "",
+				"tokens": "",
+				"you": ""
+			},
+			"empty": {
+				"day": "",
+				"dayModel": "",
+				"quarter": "",
+				"quarterModel": "",
+				"week": "",
+				"weekModel": ""
+			},
+			"failedTitle": "",
+			"inAll": "",
+			"median": "",
+			"modelLabel": "",
+			"noData": "",
+			"notLoaded": "",
+			"p95": "",
+			"queue": {
+				"title": ""
+			},
+			"range": {
+				"day": "",
+				"quarter": "",
+				"week": ""
+			},
+			"rangeLabel": "",
+			"reading": "",
+			"requests": {
+				"answered": "",
+				"failed": "",
+				"title": ""
+			},
+			"retry": "",
+			"speed": {
+				"series": "",
+				"summary": "",
+				"title": ""
+			},
+			"speedValue": "",
+			"title": "",
+			"tokens": {
+				"in": "",
+				"out": "",
+				"title": ""
+			},
+			"ttft": {
+				"title": ""
+			},
+			"upTo": ""
+		},
+		"table": {
+			"actions": "",
+			"engine": {
+				"label": "",
+				"llamacpp": "",
+				"mlx": "",
+				"onnx": ""
+			},
+			"failure": {
+				"assetMissing": "",
+				"engineExited": "",
+				"healthTimeout": "",
+				"insufficientMemory": "",
+				"runtimeMissing": ""
+			},
+			"foot": "",
+			"kind": {
+				"chat": "",
+				"embedding": "",
+				"label": "",
+				"vision": ""
+			},
+			"label": "",
+			"memory": "",
+			"memoryGpu": "",
+			"memoryRam": "",
+			"model": "",
+			"requests": "",
+			"residency": {
+				"alwaysOn": "",
+				"onDemand": "",
+				"pinnedOff": ""
+			},
+			"slots": "",
+			"slotsValue": "",
+			"speed": "",
+			"state": {
+				"acquiring": "",
+				"failed": "",
+				"label": "",
+				"loaded": "",
+				"loading": "",
+				"stopped": "",
+				"unloading": ""
+			},
+			"title": "",
+			"usedBy": {
+				"label": "",
+				"more_one": "",
+				"more_few": "",
+				"more_many": "",
+				"more_other": "",
+				"owner": "",
+				"person": "",
+				"you": ""
+			}
+		},
+		"unlockPrompt": {
+			"askRun": "",
+			"askUnnamed": "",
+			"block": {
+				"freshEndpoint": "",
+				"noVault": "",
+				"signedOut": ""
+			},
+			"decline": "",
+			"failure": {
+				"authorityMismatch": "",
+				"deviceUnavailable": "",
+				"failed": "",
+				"hubUnreachable": "",
+				"signedOut": "",
+				"wrongPassword": ""
+			},
+			"keep": "",
+			"keepHint": "",
+			"password": "",
+			"passwordHint": "",
+			"timeout": "",
+			"title": "",
+			"unlock": ""
+		},
+		"use": {
+			"access": {
+				"blockHubUnsupported": "",
+				"blockUnknown": "",
+				"blockUnsupported": "",
+				"presetsNeedDevice": "",
+				"hubUnsupported": "",
+				"saveUnsupported": ""
+			},
+			"badge": "",
+			"badgeTitle": "",
+			"button": "",
+			"cancel": "",
+			"conseq": {
+				"undo": "",
+				"what": "",
+				"when": "",
+				"who": ""
+			},
+			"context": "",
+			"contextFixed": "",
+			"contextOpen": "",
+			"defaultName": "",
+			"description": "",
+			"done": "",
+			"inputLength": "",
+			"locked": "",
+			"name": "",
+			"problem": {
+				"context": "",
+				"name": "",
+				"vector": ""
+			},
+			"result": {
+				"failed": "",
+				"hubRefused": "",
+				"notAllowed": "",
+				"saved": "",
+				"savedNotActive": ""
+			},
+			"submit": "",
+			"subtitle": "",
+			"title": "",
+			"tokens": "",
+			"unlock": {
+				"keep": "",
+				"keepHintDesktop": "",
+				"keepHintWeb": ""
+			},
+			"vector": "",
+			"vectorHint": ""
+		}
 	},
 	"newEvent": {
 		"access": "",
@@ -13376,6 +14171,15 @@
 			"stateSr": "",
 			"unknown": "",
 			"warning": ""
+		},
+		"chart": {
+			"readout": "",
+			"showChart": "",
+			"showTable": "",
+			"soFar": "",
+			"span": "",
+			"spanSameDay": "",
+			"time": ""
 		},
 		"check": {
 			"active": "",

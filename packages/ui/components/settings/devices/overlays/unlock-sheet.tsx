@@ -87,6 +87,8 @@ import {
 
 export interface UnlockSheetProps extends OverlaySheetProps, UnlockRequest {
 	deviceId: string;
+	/** The unlock is for calling the device's models: offers keeping it unlocked (plan §9 Q2). */
+	forModels?: boolean;
 }
 
 /** D1–D7 decide whether the password may be typed (IA §6.4.3); D8 and D9 only warn. */
@@ -571,6 +573,8 @@ interface UnlockRunRequest {
 	password: string;
 	connectLive: boolean;
 	backupToAccount: boolean;
+	/** `undefined` keeps the session's own choice. */
+	keepUnlocked: boolean | undefined;
 	others: readonly LockedDevice[];
 }
 
@@ -626,6 +630,9 @@ function useUnlockRun(options: UnlockRunOptions) {
 			.unlock(deviceId, request.password, {
 				connectLive: request.connectLive,
 				backupToAccount: request.backupToAccount,
+				...(request.keepUnlocked === undefined
+					? {}
+					: { keepUnlocked: request.keepUnlocked }),
 				signal: run.signal,
 				onProgress,
 			})
@@ -731,6 +738,43 @@ interface Option {
 	onChange(checked: boolean): void;
 }
 
+export interface KeepForModelsProps {
+	id: string;
+	option: Option;
+	disabled: boolean;
+}
+
+/** Plan §9 Q2: a device unlocked to call its models may stay unlocked until the window closes. */
+export function KeepForModels({
+	id,
+	option,
+	disabled,
+}: Readonly<KeepForModelsProps>) {
+	const { t } = useTranslation("devices");
+	const { deps } = useDeviceWorkspace();
+	return (
+		<CheckField
+			id={id}
+			checked={option.checked}
+			disabled={disabled}
+			onCheckedChange={option.onChange}
+		>
+			{t("devices:models.use.unlock.keep", "Keep unlocked for model access")}
+			<span className="block text-xs text-muted-foreground">
+				{deps.platform === "desktop"
+					? t(
+							"devices:models.use.unlock.keepHintDesktop",
+							"Your flows on this computer can call its models until you lock it or quit Flow-Like. It won't lock after 30 min unused.",
+						)
+					: t(
+							"devices:models.use.unlock.keepHintWeb",
+							"Its models stay reachable from this window until you lock it or close the window. It won't lock after 30 min unused.",
+						)}
+			</span>
+		</CheckField>
+	);
+}
+
 interface UnlockOptionsProps {
 	formId: string;
 	name: string;
@@ -738,6 +782,8 @@ interface UnlockOptionsProps {
 	/** False when the device is offline: only encrypted snapshots can be read. */
 	online: boolean;
 	live: Option;
+	/** Offered when the unlock is for calling the device's models. */
+	keep: Option | null;
 	/** Offered while the device's account backup is missing, pending or sealed with an older password. */
 	backup: Option | null;
 	/** Offered while other devices with keys here are locked. */
@@ -746,7 +792,7 @@ interface UnlockOptionsProps {
 
 function UnlockOptions(props: Readonly<UnlockOptionsProps>) {
 	const { t } = useTranslation("devices");
-	const { formId, editable, online, live, backup, others } = props;
+	const { formId, editable, online, live, keep, backup, others } = props;
 	return (
 		<>
 			<CheckField
@@ -768,6 +814,13 @@ function UnlockOptions(props: Readonly<UnlockOptionsProps>) {
 					</span>
 				)}
 			</CheckField>
+			{keep ? (
+				<KeepForModels
+					id={`${formId}-keep`}
+					option={keep}
+					disabled={!editable}
+				/>
+			) : null}
 			{backup ? (
 				<CheckField
 					id={`${formId}-backup`}
@@ -1015,13 +1068,14 @@ export function UnlockSheet({
 	deviceId,
 	connectLive,
 	returnTo,
+	forModels = false,
 	onNavigate,
 	onClose,
 }: Readonly<UnlockSheetProps>) {
 	const { t } = useTranslation("devices");
 	const { input } = useAttentionState();
 	const session = useKeySession(deviceId);
-	const { sessions } = useKeyChip();
+	const { sessions, setKeepUnlocked } = useKeyChip();
 	const { preflight, refresh } = usePreflight(deviceId);
 	const live = useLiveSession(deviceId);
 	const attention = useAttention({ deviceId });
@@ -1031,6 +1085,7 @@ export function UnlockSheet({
 	const [alreadyOpen] = useState(() => session.state === "unlocked");
 	const [password, setPassword] = useState("");
 	const [liveChoice, setLiveChoice] = useState<boolean | null>(null);
+	const [keep, setKeep] = useState(true);
 	const [saveBackup, setSaveBackup] = useState(false);
 	const [more, setMore] = useState(false);
 	const [unticked, setUnticked] = useState<Unticked>({});
@@ -1108,6 +1163,7 @@ export function UnlockSheet({
 			password: secret,
 			connectLive: wantLive,
 			backupToAccount: backupOffered && saveBackup,
+			keepUnlocked: forModels ? keep : undefined,
 			others: chosen,
 		});
 	};
@@ -1198,6 +1254,7 @@ export function UnlockSheet({
 						editable={editable}
 						online={online}
 						live={{ checked: wantLive, onChange: setLiveChoice }}
+						keep={forModels ? { checked: keep, onChange: setKeep } : null}
 						backup={
 							backupOffered
 								? { checked: saveBackup, onChange: setSaveBackup }
@@ -1242,6 +1299,16 @@ export function UnlockSheet({
 						wantedLive={run.ranLive}
 						onRetry={() => void live.retry()}
 					/>
+					{forModels ? (
+						<KeepForModels
+							id={`${formId}-keep`}
+							option={{
+								checked: session.keepUnlocked,
+								onChange: (checked) => setKeepUnlocked(deviceId, checked),
+							}}
+							disabled={session.state !== "unlocked"}
+						/>
+					) : null}
 				</div>
 			) : null}
 		</DvSheet>

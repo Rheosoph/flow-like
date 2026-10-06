@@ -1668,8 +1668,6 @@ pub async fn developer_run_node(
             if let Some(settings) = execution_settings.clone() {
                 flow_like_state
                     .model_factory
-                    .lock()
-                    .await
                     .set_execution_settings(settings);
             }
 

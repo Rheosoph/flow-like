@@ -2,7 +2,7 @@
 
 import { ChatInterface } from "@flow-like/flow-like-ui/components/interfaces/chat-default";
 import { ChatFeedbackEnabledContext } from "@flow-like/flow-like-ui/components/interfaces/chat-default/message";
-import { GenericEventFormInterface } from "@flow-like/flow-like-ui/components/interfaces/generic-event-form";
+import { FormWorkbenchInterface } from "@flow-like/flow-like-ui/components/interfaces/form-workbench";
 import { PageInterface } from "@flow-like/flow-like-ui/components/interfaces/page-interface";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
@@ -25,6 +25,7 @@ import {
 	type PageBootstrap,
 	createServiceBackend,
 	isPersonStarted,
+	readServiceInventory,
 } from "./lib/backend";
 import { clearServiceHistory } from "./lib/history";
 import {
@@ -34,12 +35,26 @@ import {
 	resolveServiceNavigation,
 	serviceEventHref,
 } from "./lib/navigation";
-import { type ServiceRequest, createServiceRequest } from "./lib/transport";
+import {
+	type ServiceRequest,
+	ServiceRequestError,
+	createServiceRequest,
+} from "./lib/transport";
 
 interface Session {
 	request: ServiceRequest;
 	inventory: Inventory;
 	controller: AbortController;
+	publicAccess: boolean;
+}
+
+async function openService(
+	token: string | null,
+	controller: AbortController,
+): Promise<Session> {
+	const request = createServiceRequest(token);
+	const inventory = await readServiceInventory(request, controller.signal);
+	return { request, inventory, controller, publicAccess: token === null };
 }
 
 const servesInterface = (event: IEvent) =>
@@ -57,7 +72,36 @@ export default function Service() {
 	const [input, setInput] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [checkingAccess, setCheckingAccess] = useState(true);
+	const [needsToken, setNeedsToken] = useState(false);
+	const [accessCheck, setAccessCheck] = useState(0);
 	const [clearing, setClearing] = useState(false);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Changing accessCheck retries service discovery.
+	useEffect(() => {
+		const controller = new AbortController();
+		setCheckingAccess(true);
+		setError("");
+		openService(null, controller)
+			.then((opened) => {
+				if (!controller.signal.aborted) setSession(opened);
+			})
+			.catch((cause) => {
+				if (controller.signal.aborted) return;
+				if (cause instanceof ServiceRequestError && cause.status === 401) {
+					setNeedsToken(true);
+					return;
+				}
+				setError(
+					cause instanceof Error
+						? cause.message
+						: "The service could not be opened.",
+				);
+			})
+			.finally(() => {
+				if (!controller.signal.aborted) setCheckingAccess(false);
+			});
+		return () => controller.abort();
+	}, [accessCheck]);
 	useEffect(() => () => session?.controller.abort(), [session]);
 	const lock = useCallback(() => {
 		session?.controller.abort();
@@ -80,6 +124,30 @@ export default function Service() {
 				setClearing(false);
 			});
 	}, [clearing]);
+	if (checkingAccess || clearing)
+		return (
+			<main className="grid min-h-dvh place-items-center bg-background p-6 text-foreground">
+				<output>{clearing ? "Clearing history…" : "Opening service…"}</output>
+			</main>
+		);
+	if (!session && !needsToken)
+		return (
+			<main className="grid min-h-dvh place-items-center bg-background p-6 text-foreground">
+				<div className="w-full max-w-sm space-y-5 rounded-xl border bg-card p-7 shadow-sm">
+					<h1 className="text-2xl font-semibold">Service unavailable</h1>
+					<p role="alert" className="text-sm text-destructive">
+						{error}
+					</p>
+					<button
+						type="button"
+						onClick={() => setAccessCheck((attempt) => attempt + 1)}
+						className="w-full rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground"
+					>
+						Retry connection
+					</button>
+				</div>
+			</main>
+		);
 	if (!session)
 		return (
 			<main className="grid min-h-dvh place-items-center bg-background p-6 text-foreground">
@@ -91,17 +159,9 @@ export default function Service() {
 						setError("");
 						const controller = new AbortController();
 						try {
-							const request = createServiceRequest(input);
-							const inventory = (await (
-								await request("/services", { signal: controller.signal })
-							).json()) as Inventory;
-							if (
-								typeof inventory.project_id !== "string" ||
-								!Array.isArray(inventory.events)
-							)
-								throw new Error("The service returned an invalid inventory.");
+							const opened = await openService(input, controller);
 							setInput("");
-							setSession({ request, inventory, controller });
+							setSession(opened);
 						} catch (cause) {
 							controller.abort();
 							setError(
@@ -340,7 +400,7 @@ function SessionView({
 								onClick={lock}
 								className="rounded-md border px-3 py-1.5 text-sm"
 							>
-								Lock
+								{session.publicAccess ? "Clear history" : "Lock"}
 							</button>
 						</header>
 						{error && (
@@ -378,11 +438,12 @@ function SessionView({
 												<p className="p-6">Loading Page…</p>
 											)
 										) : isPersonStarted(event) ? (
-											<GenericEventFormInterface
+											<FormWorkbenchInterface
 												appId={session.inventory.project_id}
 												event={event}
 												config={eventConfig}
 												onNavigate={navigate}
+												host="service"
 											/>
 										) : (
 											<ChatFeedbackEnabledContext.Provider value={false}>

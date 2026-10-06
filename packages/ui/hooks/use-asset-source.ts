@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useState,
+} from "react";
 import {
 	type ResolvedAssetUrl,
 	invalidateAssetUrl,
@@ -15,6 +21,14 @@ import { useBackend, useBackendReady } from "../state/backend-state";
 
 /** Never re-resolve faster than this, whatever the cache reports. */
 const MIN_REFRESH_DELAY_MS = 1000;
+
+export type AssetSourceResolver = (
+	source: string,
+	signal?: AbortSignal,
+) => Promise<string>;
+/** A deployed runtime resolves media through its own device, never the viewer's filesystem. */
+export const AssetSourceResolverContext =
+	createContext<AssetSourceResolver | null>(null);
 
 export interface AssetSourceOptions {
 	/**
@@ -60,15 +74,18 @@ export function useAssetSource(
 	options: AssetSourceOptions = {},
 ): AssetSourceState {
 	const { localFiles = false } = options;
+	const resolver = useContext(AssetSourceResolverContext);
+	const scoped = useScopedAssetSource(resolver, rawSrc);
 	const backend = useBackend();
 	const backendReady = useBackendReady();
 	const storageState = backend.storageState;
 
-	const storagePath = isStorageAssetPath(rawSrc)
-		? normalizeStorageAssetPath(rawSrc)
-		: undefined;
+	const storagePath =
+		!resolver && isStorageAssetPath(rawSrc)
+			? normalizeStorageAssetPath(rawSrc)
+			: undefined;
 	const directSrc =
-		!storagePath && rawSrc && localFiles && isRootedPath(rawSrc)
+		!resolver && !storagePath && rawSrc && localFiles && isRootedPath(rawSrc)
 			? localFileAssetUrl(rawSrc)
 			: storagePath
 				? undefined
@@ -120,6 +137,7 @@ export function useAssetSource(
 		setAttempt((previous) => previous + 1);
 	}, [appId, storagePath]);
 
+	if (resolver) return scoped;
 	if (!storagePath) {
 		return { src: directSrc, isLoading: false, refresh };
 	}
@@ -132,4 +150,40 @@ export function useAssetSource(
 	}
 
 	return { src: entry?.url, isLoading: !entry, refresh };
+}
+
+function useScopedAssetSource(
+	resolver: AssetSourceResolver | null,
+	source?: string,
+): AssetSourceState {
+	const [attempt, setAttempt] = useState(0);
+	const [result, setResult] = useState<{
+		resolver: AssetSourceResolver;
+		source: string;
+		url?: string;
+		attempt: number;
+	}>();
+	useEffect(() => {
+		if (!resolver || !source) return;
+		const controller = new AbortController();
+		void resolver(source, controller.signal).then(
+			(url) => {
+				if (!controller.signal.aborted)
+					setResult({ resolver, source, url, attempt });
+			},
+			() => {
+				if (!controller.signal.aborted)
+					setResult({ resolver, source, attempt });
+			},
+		);
+		return () => controller.abort();
+	}, [resolver, source, attempt]);
+	const refresh = useCallback(() => setAttempt((value) => value + 1), []);
+	const current =
+		result?.resolver === resolver &&
+		result?.source === source &&
+		result?.attempt === attempt
+			? result
+			: undefined;
+	return { src: current?.url, isLoading: !!source && !current, refresh };
 }
