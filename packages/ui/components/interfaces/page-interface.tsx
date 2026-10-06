@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { useAssetSource } from "../../hooks/use-asset-source";
+import { getApiOrigin } from "../../lib/api-url";
 import {
 	appQueryContext,
 	readAppQuery,
@@ -99,6 +100,8 @@ export interface PageInterfaceProps extends IUseInterfaceProps {
 	onNavigationMessage?: A2UINavigationMessageInterceptor;
 	/** False while an embedded runtime keeps this page mounted off screen. */
 	active?: boolean;
+	/** Show cached content while bootstrap validates the page's execution authority. */
+	executionPending?: boolean;
 }
 
 function buildSurfaceFromPage(page: IPage, pageId: string): Surface | null {
@@ -157,6 +160,7 @@ function PageInterfaceInner({
 	queryParams: providedQueryParams,
 	onNavigationMessage,
 	active = true,
+	executionPending = false,
 }: PageInterfaceProps) {
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
@@ -182,7 +186,11 @@ function PageInterfaceInner({
 	const pageElementDemandRef = useRef(pageElementDemand);
 	pageElementDemandRef.current = pageElementDemand;
 	const auth = useAuth();
-	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
+	const currentUserKey = JSON.stringify([
+		getApiOrigin(backend.profile),
+		backend.profile?.id ?? "",
+		auth?.user?.profile?.sub ?? "anonymous",
+	]);
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
@@ -200,6 +208,8 @@ function PageInterfaceInner({
 	const loadRunTraceRef = useRef<IRunTrace | null>(null);
 	const isMountedRef = useRef(false);
 	const isDisposedRef = useRef(false);
+	const executionPendingRef = useRef(executionPending);
+	executionPendingRef.current = executionPending;
 	const markLoadRevealed = useCallback(() => {
 		const trace = loadRunTraceRef.current;
 		if (!trace) return;
@@ -221,8 +231,8 @@ function PageInterfaceInner({
 	const isGovernedPage = Boolean(event.default_page_id);
 	const cacheEnabled = !page.noCache;
 
-	// A cached surface may only be replayed for the same parameters and the same account that
-	// produced it: the onLoad workflow receives both, and its output is built from them.
+	// A cached surface belongs to its backend, profile, account, and parameters: onLoad output
+	// can contain data specific to any of them.
 	const surfaceIdentity = useMemo((): PageSurfaceIdentity | null => {
 		const revision = pageSurfaceRevision(
 			pageRevision ?? page.updatedAt,
@@ -462,7 +472,10 @@ function PageInterfaceInner({
 	);
 
 	const handleA2UIMessage = useCallback(
-		(message: A2UIServerMessage) => dispatchA2UIMessage(message, false),
+		(message: A2UIServerMessage) => {
+			if (executionPendingRef.current) return;
+			dispatchA2UIMessage(message, false);
+		},
 		[dispatchA2UIMessage],
 	);
 
@@ -477,6 +490,7 @@ function PageInterfaceInner({
 			onRunStarted?: (runId: string) => void,
 			isCurrent?: () => boolean,
 		) => {
+			if (executionPending) return false;
 			if (!pageExecutionRevision) {
 				console.warn(
 					`[PageInterface] Missing governed Page context for ${eventName} event`,
@@ -571,6 +585,7 @@ function PageInterfaceInner({
 			frontendStateStore,
 			event.id,
 			pageExecutionRevision,
+			executionPending,
 			pageRoute,
 			backend,
 			executionService,
@@ -583,6 +598,7 @@ function PageInterfaceInner({
 	// Execute onLoad event if configured (from page settings)
 	useEffect(() => {
 		const executeOnLoadEvent = async () => {
+			if (executionPending) return;
 			if (!page.onLoadEventId || !loadEventExecutionKey) {
 				releaseLoadRun("superseded");
 				loadEventExecutedRef.current = null;
@@ -641,6 +657,7 @@ function PageInterfaceInner({
 		executeOnLoadEvent();
 	}, [
 		page,
+		executionPending,
 		loadEventExecutionKey,
 		executePageEvent,
 		releaseLoadRun,
@@ -673,10 +690,11 @@ function PageInterfaceInner({
 	// Updated after commit, so a cleanup still sees the dispatch of the page that is leaving.
 	const dispatchUnloadRef = useRef<(() => void) | null>(null);
 	useEffect(() => {
-		dispatchUnloadRef.current = page.onUnloadEventId
-			? () => void executePageEvent("unload", "onUnload")
-			: null;
-	}, [page.onUnloadEventId, executePageEvent]);
+		dispatchUnloadRef.current =
+			!executionPending && page.onUnloadEventId
+				? () => void executePageEvent("unload", "onUnload")
+				: null;
+	}, [executionPending, page.onUnloadEventId, executePageEvent]);
 	useEffect(() => {
 		const handleBeforeUnload = () => dispatchUnloadRef.current?.();
 		window.addEventListener("beforeunload", handleBeforeUnload);
@@ -706,7 +724,7 @@ function PageInterfaceInner({
 		// An embedded runtime parks its host instead of unmounting, so a page nobody is
 		// looking at is still mounted and would otherwise keep spending a board run every
 		// tick, forever, invisibly.
-		if (!active) return;
+		if (!active || executionPending) return;
 
 		const intervalMs = page.onIntervalSeconds * 1000;
 		const tick = () => {
@@ -735,6 +753,7 @@ function PageInterfaceInner({
 		executePageEvent,
 		persistSurface,
 		active,
+		executionPending,
 	]);
 
 	const activeSurface = staleSurface ?? surface;
@@ -756,7 +775,7 @@ function PageInterfaceInner({
 		runtimeCanvasSettings?.backgroundImage,
 	);
 
-	if (isGovernedPage && !pageExecutionRevision) {
+	if (isGovernedPage && !pageExecutionRevision && !executionPending) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
 				<p>
@@ -776,8 +795,8 @@ function PageInterfaceInner({
 	if (!activeSurface || !activeSurfaceForRenderer) {
 		return (
 			<div className="h-full w-full">
-				<PageLoadStatus loading={isLoadEventRunning} />
-				{isLoadEventRunning ? (
+				<PageLoadStatus loading={executionPending || isLoadEventRunning} />
+				{executionPending || isLoadEventRunning ? (
 					<div aria-busy="true" className="h-full w-full bg-background">
 						<PageLoadIndicator />
 					</div>
@@ -810,7 +829,8 @@ function PageInterfaceInner({
 	// The static layout or the last visit's surface renders at once; the bar stays until the load
 	// run's own output is what the page shows.
 	const isAwaitingLoadOutput =
-		isLoadEventRunning && (!isScreenRevealed || staleSurface !== null);
+		executionPending ||
+		(isLoadEventRunning && (!isScreenRevealed || staleSurface !== null));
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">
@@ -823,9 +843,12 @@ function PageInterfaceInner({
 			<div
 				ref={pageContainerRef}
 				aria-busy={isAwaitingLoadOutput || undefined}
+				inert={executionPending || undefined}
 				data-page-id={pageContainerId}
 				data-flowpilot-page-event-id={event.id}
-				data-flowpilot-page-loading={isLoadEventRunning ? "true" : "false"}
+				data-flowpilot-page-loading={
+					executionPending || isLoadEventRunning ? "true" : "false"
+				}
 				className={cn("min-h-full flex flex-col", backgroundClass)}
 				style={canvasStyle}
 			>
@@ -842,7 +865,7 @@ function PageInterfaceInner({
 						elementDemand={pageElementDemand}
 						onA2UIMessage={handleA2UIMessage}
 						onNavigationMessage={onNavigationMessage}
-						isPreviewMode={true}
+						isPreviewMode={!executionPending}
 						openDialog={openDialog}
 						closeDialog={closeDialog}
 						agentBridge={
@@ -872,6 +895,7 @@ function PageInterfaceInner({
 										}
 										ready={
 											active &&
+											!executionPending &&
 											!auth?.isLoading &&
 											!isLoadEventRunning &&
 											(!page.onLoadEventId ||
@@ -881,15 +905,17 @@ function PageInterfaceInner({
 												))
 										}
 									/>
-									<LivePageAgentBridge
-										appId={appId}
-										pageId={activeSurface.id}
-										eventId={event.id}
-										getSurface={() => surfaceRef.current}
-										getContainer={() => pageContainerRef.current}
-										applyServerMessage={handleA2UIMessage}
-										loading={isLoadEventRunning}
-									/>
+									{!executionPending && (
+										<LivePageAgentBridge
+											appId={appId}
+											pageId={activeSurface.id}
+											eventId={event.id}
+											getSurface={() => surfaceRef.current}
+											getContainer={() => pageContainerRef.current}
+											applyServerMessage={handleA2UIMessage}
+											loading={isLoadEventRunning}
+										/>
+									)}
 								</>
 							) : undefined
 						}

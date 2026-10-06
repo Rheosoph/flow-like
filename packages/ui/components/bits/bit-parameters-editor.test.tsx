@@ -174,3 +174,23 @@ test("admins can add, enter decimal rates, and remove pricing without losing par
 		window.happyDOM.abort();
 	}
 });
+
+test("SystemOne uses native providers and keeps hosted pricing editable", () => {
+	const markup = renderEditor({
+		bitType: IBitTypes.SystemOne,
+		provider: "hosted:openrouter",
+	});
+	expect(markup).toContain("SystemOne decisions");
+	expect(markup).toContain("hosted:typesafe");
+	expect(markup).toContain("hosted:cloudflare");
+	expect(markup).not.toContain("hosted:anthropic");
+	expect(markup).not.toContain("Chat Completions");
+	expect(markup).toContain("Hosted model pricing");
+	const custom = renderEditor({
+		bitType: IBitTypes.SystemOne,
+		provider: "custom:systemone",
+		scope: "custom",
+	});
+	expect(custom).toContain("Endpoint URL");
+	expect(custom).not.toContain("Hosted model pricing");
+});

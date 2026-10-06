@@ -175,15 +175,15 @@ fn embedding_engine(bit: &Bit) -> Option<ModelEngine> {
 }
 
 /// The Bits the device's model host serves when their metadata is v2: Local chat and vision
-/// models, Local GGUF or ONNX embedding models, and MLX chat and vision models on Apple-silicon
-/// Macs.
+/// models, Local GGUF decision models, Local GGUF or ONNX embedding models, and MLX chat and
+/// vision models on Apple-silicon Macs.
 pub fn hosts(bit: &Bit) -> bool {
     if bit.is_mlx_model() {
         return cfg!(all(target_os = "macos", target_arch = "aarch64"));
     }
     is_local(bit)
         && match bit.bit_type {
-            BitTypes::Llm | BitTypes::Vlm => bit.file_name.is_some(),
+            BitTypes::Llm | BitTypes::Vlm | BitTypes::SystemOne => bit.file_name.is_some(),
             BitTypes::Embedding => embedding_engine(bit).is_some(),
             _ => false,
         }
@@ -267,6 +267,23 @@ fn loading(metadata: &BitMetadata) -> Result<Loading> {
         return Ok(mlx_loading(metadata));
     }
     Ok(match bit.bit_type {
+        BitTypes::SystemOne => match bit.projection_bit().or_else(|| {
+            metadata
+                .dependencies
+                .iter()
+                .find(|bit| bit.bit_type == BitTypes::Projection)
+                .cloned()
+        }) {
+            Some(projection) => {
+                let projector = metadata.single_file(&projection, "projector")?;
+                Loading {
+                    projector: Some(projector.0.file_name.clone()),
+                    extra: vec![projector],
+                    ..Loading::llama(ModelKind::SystemOne, None)
+                }
+            }
+            None => Loading::llama(ModelKind::SystemOne, None),
+        },
         BitTypes::Vlm => {
             let projection = bit
                 .projection_bit()
@@ -736,6 +753,37 @@ mod tests {
         assert!(embedding("nomic.Q4_K_M.GGUF"));
         assert!(embedding("model.onnx"));
         assert!(!embedding("model.safetensors"));
+    }
+
+    #[test]
+    fn systemone_uses_a_native_model_kind_and_optional_projector() -> Result<()> {
+        for projection in [
+            json!({}),
+            json!({"projection": {
+                "download_link": "https://cdn.flow-like.com/bits/mmproj",
+                "file_name": "mmproj.gguf", "size": 4
+            }}),
+        ] {
+            let root = bit(
+                "laya",
+                "SystemOne",
+                Some("laya.gguf"),
+                llm("Local", projection),
+            );
+            assert!(hosts(&root));
+            let projector = root.projection_bit();
+            let dependencies: Vec<_> = projector.iter().cloned().collect();
+            let artifacts: Vec<_> = projector.iter().map(artifact).collect();
+            let meta = committed(json!({
+                "version": 2, "bit": root, "dependencies": dependencies,
+                "assets": [{"bit_id": "laya", "descriptor": descriptor('a', "laya.gguf")}],
+                "artifacts": artifacts,
+            }))?;
+            let hosted = hosting(&meta)?.expect("a hosted decision model");
+            assert_eq!(hosted.spec.kind, ModelKind::SystemOne);
+            assert_eq!(hosted.spec.projector.is_some(), projector.is_some());
+        }
+        Ok(())
     }
 
     #[test]

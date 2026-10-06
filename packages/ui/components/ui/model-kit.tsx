@@ -7,6 +7,7 @@ import {
 	Grid2X2Icon,
 	HardDriveIcon,
 	ImageIcon,
+	ListChecksIcon,
 	type LucideIcon,
 	MicIcon,
 	TypeIcon,
@@ -22,7 +23,8 @@ export type Modality =
 	| "audio"
 	| "speech"
 	| "embed"
-	| "video";
+	| "video"
+	| "decision";
 
 interface ModalityInfo {
 	label: string;
@@ -32,6 +34,11 @@ interface ModalityInfo {
 }
 
 export const MODALITY: Record<Modality, ModalityInfo> = {
+	decision: {
+		label: "Decisions",
+		icon: ListChecksIcon,
+		color: "var(--m-embed)",
+	},
 	text: { label: "Text", icon: TypeIcon, color: "var(--m-text)" },
 	image: { label: "Image", icon: ImageIcon, color: "var(--m-image)" },
 	audio: { label: "Audio", icon: MicIcon, color: "var(--m-audio)" },
@@ -48,6 +55,8 @@ export interface ModalityFlowSpec {
 /** What a model takes in and what it produces, derived from its bit type. */
 export function bitModalities(type: IBitTypes): ModalityFlowSpec {
 	switch (type) {
+		case IBitTypes.SystemOne:
+			return { inputs: ["text"], output: "decision" };
 		case IBitTypes.Vlm:
 			return { inputs: ["text", "image"], output: "text" };
 		case IBitTypes.Stt:
@@ -292,6 +301,10 @@ const PROVIDER_NAMES: Record<string, string> = {
 	azure: "Azure OpenAI",
 	bedrock: "Amazon Bedrock",
 	cohere: "Cohere",
+	cloudflare: "Cloudflare Workers AI",
+	typesafe: "TypeSafe",
+	systemone: "SystemOne endpoint",
+	systemone_compatible: "SystemOne endpoint",
 	deepseek: "DeepSeek",
 	galadriel: "Galadriel",
 	gemini: "Google Gemini",

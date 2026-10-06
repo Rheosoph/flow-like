@@ -201,6 +201,10 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
             "/responses",
             post(routes::chat::responses::invoke_responses),
         )
+        .route(
+            "/systemone",
+            post(routes::chat::systemone::invoke_systemone),
+        )
         .nest("/courses", routes::course::routes())
         .nest("/embeddings", routes::embeddings::routes())
         .nest("/ai", routes::ai::routes())

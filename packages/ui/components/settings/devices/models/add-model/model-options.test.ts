@@ -417,3 +417,26 @@ describe("Bits a device can host", () => {
 		expect(isHostableBit(model)).toBe(hostable);
 	});
 });
+
+test("SystemOne hub Bits install as decisions with an optional projector", () => {
+	const root = bit({
+		type: IBitTypes.SystemOne,
+		file_name: "laya.gguf",
+		size: 1000,
+		hash: "a".repeat(64),
+	});
+	const candidate = fromHubPack(root, []);
+	expect(candidate.kinds).toEqual(["systemone"]);
+	const selected = {
+		candidate,
+		option: candidate.options[0]!,
+		kind: "systemone" as const,
+	};
+	expect(modelSpecOf(selected).kind).toBe("systemone");
+	expect(modelSpecOf(selected).projector).toBeUndefined();
+	const withProjector = choice({
+		kind: "systemone",
+		projector: "mmproj-BF16.gguf",
+	});
+	expect(modelSpecOf(withProjector).projector).toBe("mmproj-BF16.gguf");
+});

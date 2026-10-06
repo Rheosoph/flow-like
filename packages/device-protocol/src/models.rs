@@ -175,6 +175,8 @@ pub enum ModelKind {
     Chat,
     Vision,
     Embedding,
+    #[serde(rename = "systemone")]
+    SystemOne,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -371,8 +373,10 @@ impl ModelSpec {
 
     fn validate_projector(&self, names: &HashSet<&str>) -> Result<()> {
         let needed = self.engine == ModelEngine::Llamacpp && self.kind == ModelKind::Vision;
+        let allowed = self.engine == ModelEngine::Llamacpp
+            && matches!(self.kind, ModelKind::Vision | ModelKind::SystemOne);
         match self.projector.as_deref() {
-            Some(name) if !needed || !names.contains(name) => {
+            Some(name) if !allowed || !names.contains(name) => {
                 Err(ProtocolError::Invalid("model projector"))
             }
             None if needed => Err(ProtocolError::Invalid(
@@ -1784,6 +1788,26 @@ mod tests {
         let mut unnamed = spec(ModelKind::Chat, ModelEngine::Llamacpp, &["model.gguf"]);
         unnamed.display_name = " padded".into();
         assert!(install(unnamed).is_err());
+    }
+
+    #[test]
+    fn systemone_is_a_native_llama_kind_with_an_optional_projector() {
+        let mut model = spec(ModelKind::SystemOne, ModelEngine::Llamacpp, &["laya.gguf"]);
+        assert_eq!(serde_json::to_value(model.kind).unwrap(), "systemone");
+        assert!(model.validate().is_ok());
+        model.engine = ModelEngine::Mlx;
+        assert!(model.validate().is_err());
+        model.engine = ModelEngine::Onnx;
+        assert!(model.validate().is_err());
+        let mut vision = spec(
+            ModelKind::SystemOne,
+            ModelEngine::Llamacpp,
+            &["clef.gguf", "mmproj.gguf"],
+        );
+        vision.projector = Some("mmproj.gguf".into());
+        assert!(vision.validate().is_ok());
+        vision.projector = Some("missing.gguf".into());
+        assert!(vision.validate().is_err());
     }
 
     #[test]

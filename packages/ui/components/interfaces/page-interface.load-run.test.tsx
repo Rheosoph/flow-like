@@ -30,6 +30,7 @@ type Run = {
 const runs: Run[] = [];
 const intervals = new Set<() => void>();
 const captureReadiness: boolean[] = [];
+let authenticatedUser: { profile: { sub: string } } | undefined;
 const cancelExecution = mock(async (_runId: string): Promise<void> => {});
 let renderedOnA2UIMessage: ((message: Record<string, unknown>) => void) | null =
 	null;
@@ -37,7 +38,8 @@ const handleElementsRequest = mock(
 	(message: { type?: string }) => message.type === "requestElements",
 );
 const readCachedSurface = mock(
-	async (): Promise<Surface | null> => null as Surface | null,
+	async (_identity: PageSurfaceIdentity | null): Promise<Surface | null> =>
+		null,
 );
 const writeCachedSurface = mock(
 	async (_identity: PageSurfaceIdentity | null, _surface: Surface) => {},
@@ -110,13 +112,14 @@ mock.module("next/navigation", () => ({
 }));
 mock.module("react-oidc-context", () => ({
 	...actual.oidc,
-	useAuth: () => null,
+	useAuth: () => ({ user: authenticatedUser }),
 }));
 mock.module("../../hooks/use-asset-source", () => ({
 	...actual.assetSource,
 	useAssetSource: () => ({ src: undefined }),
 }));
 const backend = {
+	profile: undefined as { id: string; hub: string } | undefined,
 	eventState: {
 		executeEvent: (
 			_appId: string,
@@ -147,14 +150,17 @@ mock.module("../a2ui/A2UIRenderer", () => ({
 		surface,
 		agentBridge,
 		onA2UIMessage,
+		isPreviewMode,
 	}: {
 		surface: Surface;
 		agentBridge: ReactNode;
 		onA2UIMessage: (message: Record<string, unknown>) => void;
+		isPreviewMode: boolean;
 	}) => {
 		renderedOnA2UIMessage = onA2UIMessage;
 		return (
 			<div
+				data-page-actions-enabled={isPreviewMode}
 				data-rendered-components={Object.keys(surface.components)
 					.sort()
 					.join(" ")}
@@ -170,7 +176,7 @@ mock.module("../a2ui/DataContext", () => ({
 }));
 mock.module("../a2ui/LivePageAgentBridge", () => ({
 	...actual.livePageAgentBridge,
-	LivePageAgentBridge: () => null,
+	LivePageAgentBridge: () => <span data-live-page-agent="" />,
 }));
 mock.module("./native-widget-page-capture", () => ({
 	...actual.nativeWidgetPageCapture,
@@ -236,6 +242,8 @@ afterEach(async () => {
 	runs.length = 0;
 	intervals.clear();
 	captureReadiness.length = 0;
+	authenticatedUser = undefined;
+	backend.profile = undefined;
 	renderedOnA2UIMessage = null;
 	cancelExecution.mockReset();
 	cancelExecution.mockImplementation(async () => {});
@@ -312,7 +320,11 @@ async function flushDisposal() {
 	});
 }
 
-async function mount(appId: string, page: IPage, { strict = false } = {}) {
+async function mount(
+	appId: string,
+	page: IPage,
+	{ strict = false, executionPending = false } = {},
+) {
 	const window = new Window({ url: "https://example.test/use" });
 	// Bun does not populate this Happy DOM realm constructor used by selector parsing.
 	Object.assign(window, { SyntaxError });
@@ -347,13 +359,18 @@ async function mount(appId: string, page: IPage, { strict = false } = {}) {
 	host = container as unknown as HTMLElement;
 	root = createRoot(host);
 	const event = { id: "page-event", default_page_id: page.id } as IEvent;
-	const rerender = async (nextPage: IPage) => {
+	const rerender = async (
+		nextPage: IPage,
+		nextExecutionPending = executionPending,
+	) => {
+		executionPending = nextExecutionPending;
 		const element = (
 			<PageInterface
 				appId={appId}
 				event={event}
 				page={nextPage}
 				pageExecutionRevision="execution-v1"
+				executionPending={executionPending}
 				route="/load"
 				queryParams={{}}
 			/>
@@ -442,6 +459,92 @@ async function deliver(run: Run, events: RunEvents) {
 async function finishRun(run: Run) {
 	await act(async () => run.resolve());
 }
+
+describe("page execution waits for bootstrap validation", () => {
+	test("static content is visible without lifecycle runs or actions, then starts onLoad once", async () => {
+		const page = createPage({
+			onUnloadEventId: "unload-node",
+			onIntervalEventId: "interval-node",
+			onIntervalSeconds: 5,
+		});
+		const { rerender } = await mount("pending-static", page, {
+			strict: true,
+			executionPending: true,
+		});
+		const renderer = host?.querySelector("[data-rendered-components]");
+		expect(renderedComponents()).toBe("headline root");
+		expect(skeleton()).toBeNull();
+		expect(loadIndicator()).not.toBeNull();
+		expect(loadStatus()?.textContent).toBe("Loading page data…");
+		expect(busyRegion()?.hasAttribute("inert")).toBe(true);
+		expect(renderer?.getAttribute("data-page-actions-enabled")).toBe("false");
+		expect(host?.querySelector("[data-live-page-agent]")).toBeNull();
+		expect(pageLoadingFlag()).toBe("true");
+		expect(captureReadiness.at(-1)).toBe(false);
+		expect(runs).toHaveLength(0);
+		expect(intervals.size).toBe(0);
+		await act(async () => {
+			renderedOnA2UIMessage?.(freshMessage);
+			window.dispatchEvent(new window.Event("beforeunload"));
+		});
+		expect(renderedComponents()).toBe("headline root");
+		expect(runs).toHaveLength(0);
+
+		await rerender(page, false);
+		expect(host?.querySelector("[data-rendered-components]")).toBe(renderer);
+		expect(renderer?.getAttribute("data-page-actions-enabled")).toBe("true");
+		expect(host?.querySelector("[inert]")).toBeNull();
+		expect(host?.querySelector("[data-live-page-agent]")).not.toBeNull();
+		expect(runs.map((run) => run.payload.id)).toEqual(["page_load"]);
+		expect(intervals.size).toBe(1);
+		await rerender(page);
+		expect(runs).toHaveLength(1);
+		await finishRun(runs[0]);
+		expect(loadIndicator()).toBeNull();
+		expect(captureReadiness.at(-1)).toBe(true);
+	});
+
+	test("the saved surface stays visible when validation releases execution", async () => {
+		readCachedSurface.mockImplementation(async () => cachedSurface());
+		const page = createPage();
+		const { rerender } = await mount("pending-cached", page, {
+			executionPending: true,
+		});
+		expect(renderedComponents()).toBe("cached headline root");
+		expect(runs).toHaveLength(0);
+		expect(loadIndicator()).not.toBeNull();
+		await rerender(page, false);
+		expect(renderedComponents()).toBe("cached headline root");
+		expect(runs).toHaveLength(1);
+		await finishRun(runs[0]);
+	});
+
+	test("replacing an unvalidated page never fires its onUnload", async () => {
+		const { rerender } = await mount(
+			"pending-replaced",
+			createPage({ id: "pending-page", onUnloadEventId: "unload-node" }),
+			{ executionPending: true },
+		);
+		await rerender(createPage({ id: "validated-page" }), false);
+		await flushDisposal();
+		expect(runs).toHaveLength(1);
+		expect(runs[0].payload.payload).toMatchObject({
+			_page_id: "validated-page",
+			_event_type: "onLoad",
+		});
+		await finishRun(runs[0]);
+	});
+
+	test("noCache pages still hide their layout until fresh output", async () => {
+		await mount("pending-no-cache", createPage({ noCache: true }), {
+			executionPending: true,
+		});
+		expect(skeleton()).not.toBeNull();
+		expect(renderedComponents()).toBeNull();
+		expect(readCachedSurface).not.toHaveBeenCalled();
+		expect(runs).toHaveLength(0);
+	});
+});
 
 describe("page onLoad renders the static layout first", () => {
 	test("static components render while onLoad runs, behind an indicator that leaves on the first renderable message", async () => {
@@ -537,6 +640,50 @@ describe("page onLoad renders the static layout first", () => {
 });
 
 describe("page surface cache", () => {
+	test("restoration stays scoped to the backend, profile, and account", async () => {
+		const previousApiUrl = process.env.NEXT_PUBLIC_API_URL;
+		const previousRuntimeConfig =
+			process.env.NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG;
+		Reflect.deleteProperty(process.env, "NEXT_PUBLIC_API_URL");
+		Reflect.deleteProperty(process.env, "NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG");
+		try {
+			const page = createPage();
+			backend.profile = { id: "profile-a", hub: "first.example.test" };
+			authenticatedUser = { profile: { sub: "account-a" } };
+			const { rerender } = await mount("cache-scope", page, {
+				executionPending: true,
+			});
+			backend.profile = { id: "profile-a", hub: "second.example.test" };
+			await rerender(page);
+			backend.profile = { id: "profile-b", hub: "second.example.test" };
+			await rerender(page);
+			authenticatedUser = { profile: { sub: "account-b" } };
+			await rerender(page);
+			expect(
+				readCachedSurface.mock.calls.map(([identity]) =>
+					JSON.parse(identity?.userKey ?? "null"),
+				),
+			).toEqual([
+				["https://first.example.test", "profile-a", "account-a"],
+				["https://second.example.test", "profile-a", "account-a"],
+				["https://second.example.test", "profile-b", "account-a"],
+				["https://second.example.test", "profile-b", "account-b"],
+			]);
+		} finally {
+			if (previousApiUrl === undefined)
+				Reflect.deleteProperty(process.env, "NEXT_PUBLIC_API_URL");
+			else process.env.NEXT_PUBLIC_API_URL = previousApiUrl;
+			if (previousRuntimeConfig === undefined)
+				Reflect.deleteProperty(
+					process.env,
+					"NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG",
+				);
+			else
+				process.env.NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG =
+					previousRuntimeConfig;
+		}
+	});
+
 	test("a default page renders its static layout without waiting for the cache read, then shows the cached surface behind the indicator while the load run rebuilds from the static layout", async () => {
 		const releaseCache = holdCacheRead();
 		await mount("cache-replay", createPage());

@@ -2060,7 +2060,7 @@ impl NodeLogic for BuildRunwayVideoProviderNode {
         );
         node.set_flowscript_name("ai.video.provider", "runway");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(media_scores());
         add_exec_input(&mut node);
 
@@ -2137,7 +2137,7 @@ impl NodeLogic for BuildFalVideoProviderNode {
         );
         node.set_flowscript_name("ai.video.provider", "fal");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(media_scores());
         add_exec_input(&mut node);
 
@@ -2198,7 +2198,7 @@ impl NodeLogic for BuildReplicateVideoProviderNode {
         );
         node.set_flowscript_name("ai.video.provider", "replicate");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(media_scores());
         add_exec_input(&mut node);
 
@@ -2274,7 +2274,7 @@ impl NodeLogic for GenerateVideoNode {
         );
         node.set_flowscript_name("ai.video", "generate");
         node.add_icon("/flow/icons/video.svg");
-        node.set_version(4);
+        node.set_version(5);
         node.set_scores(media_scores());
 
         node.add_input_pin(

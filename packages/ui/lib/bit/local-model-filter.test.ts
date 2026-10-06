@@ -342,3 +342,25 @@ describe("non-generation models on a host without local runtimes", () => {
 		expect(isHostableLlmModel(model(IBitTypes.Vlm, true), browser)).toBe(false);
 	});
 });
+
+test("SystemOne models require the local runtime and stay out of chat selectors", () => {
+	const local = { ...bit("Local"), id: "decision", type: IBitTypes.SystemOne };
+	const hosted = {
+		...bit("hosted:openrouter"),
+		id: "hosted-decision",
+		type: IBitTypes.SystemOne,
+	};
+	const browser = { canHostLlamaCPP: false, canHostMLX: false };
+	const desktop = { canHostLlamaCPP: true, canHostMLX: true };
+	expect(isHostableLlmModel(local, browser)).toBe(false);
+	expect(isHostableLlmModel(local, desktop)).toBe(true);
+	expect(isHostableLlmModel(hosted, browser)).toBe(true);
+	expect(
+		selectProfileLlmModels(
+			[local, hosted],
+			[hosted],
+			["hub:decision", "hub:hosted-decision"],
+			desktop,
+		),
+	).toEqual([]);
+});

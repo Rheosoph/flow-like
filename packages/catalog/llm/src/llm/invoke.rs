@@ -51,7 +51,7 @@ impl NodeLogic for InvokeLLM {
         );
         node.set_flowscript_name("ai", "invoke");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         // Generic model invocation node. The actual provider can be local or cloud,
         // so we assign balanced default scores.

@@ -169,7 +169,8 @@ function ProjectorField(props: Readonly<VersionStepProps>) {
 	const { t } = useTranslation("devices");
 	const { selected } = props;
 	const needed =
-		props.kind === "vision" &&
+		(props.kind === "vision" ||
+			(props.kind === "systemone" && selected.option.projectors.length > 0)) &&
 		selected.option.engine === "llamacpp" &&
 		selected.option.projectors.length > 1;
 	if (!needed) return null;

@@ -37,6 +37,7 @@ impl NodeLogic for RegisterWorkIqToolsNode {
             "Gives the agent the Microsoft Work IQ tools (mail, calendar, files, people, chats, sites and Microsoft 365 Copilot) as the signed-in user. A tenant admin must enable Work IQ; tool calls are billed in Copilot Credits.",
             "AI/Agents/Builder",
         );
+        node.set_version(1);
         node.set_flowscript_name("agent", "registerWorkIqTools");
         node.set_receiver("agent_in");
         node.add_icon("/flow/icons/copilot.svg");

@@ -2,10 +2,8 @@
 
 //! Shared plumbing for the hosted model proxy.
 //!
-//! `/chat/completions` and `/responses` differ only in the request shape they
-//! relay and the upstream path they target. Provider resolution, tier
-//! enforcement, streaming passthrough and usage accounting are identical, and
-//! live here so both routes settle invocations the same way.
+//! Chat, Responses, and System One share catalog authority, tier enforcement,
+//! and usage accounting. Each surface keeps its own request contract and limits.
 
 use crate::entity::llm_usage_tracking;
 use crate::{
@@ -24,7 +22,7 @@ use axum::{
     http::{HeaderMap, HeaderValue},
     response::Response as AxumResponse,
 };
-use flow_like::bit::Bit;
+use flow_like::bit::{Bit, BitTypes};
 use flow_like::flow_like_model_provider::provider::{ModelApiSurface, ModelProvider};
 use flow_like_types::Bytes;
 use flow_like_types::anyhow;
@@ -46,6 +44,9 @@ fn bound_hosted_request(
     rate: &HostedRateSnapshot,
     provider: &HostedProvider,
 ) -> Result<(i64, i64), ApiError> {
+    if surface == ModelApiSurface::SystemOne {
+        return bound_systemone_request(body, rate, provider);
+    }
     if rate.input_micro_usd_per_million_bytes.is_some() {
         return Err(ApiError::internal(
             "Chat models require a token-based provider tariff",
@@ -156,6 +157,90 @@ fn bound_hosted_request(
     ))
 }
 
+fn bit_surface(bit: &Bit, provider: &ModelProvider) -> Result<ModelApiSurface, ApiError> {
+    if bit.bit_type == BitTypes::SystemOne {
+        return Ok(ModelApiSurface::SystemOne);
+    }
+    if provider.api_surface_or_default() == ModelApiSurface::SystemOne {
+        return Err(ApiError::bad_request(
+            "System One requires a SystemOne model Bit",
+        ));
+    }
+    Ok(provider.api_surface_or_default())
+}
+
+pub(super) fn supports_surface(provider: &HostedProvider, surface: ModelApiSurface) -> bool {
+    if surface == ModelApiSurface::SystemOne {
+        matches!(
+            provider,
+            HostedProvider::OpenRouter
+                | HostedProvider::TypeSafe
+                | HostedProvider::SystemOneCompatible
+                | HostedProvider::Cloudflare
+        )
+    } else {
+        !matches!(
+            provider,
+            HostedProvider::TypeSafe
+                | HostedProvider::SystemOneCompatible
+                | HostedProvider::Cloudflare
+        )
+    }
+}
+
+fn bound_systemone_request(
+    body: &JsonValue,
+    rate: &HostedRateSnapshot,
+    provider: &HostedProvider,
+) -> Result<(i64, i64), ApiError> {
+    if !supports_surface(provider, ModelApiSurface::SystemOne) {
+        return Err(ApiError::bad_request(
+            "This hosted provider does not support System One",
+        ));
+    }
+    let request = super::systemone::validate_payload(body)?;
+    if rate.input_micro_usd_per_million_bytes.is_some() || rate.context_tokens <= 0 {
+        return Err(ApiError::bad_request(
+            "System One requires a token tariff and positive context length",
+        ));
+    }
+    // LEV evaluates multi-option choices in both orders. Other families can
+    // evaluate each question separately, so reserve each possible full context.
+    let count = request.questions.len() as i64;
+    let evaluations = request
+        .questions
+        .values()
+        .map(|question| match question {
+            flow_like::flow_like_model_provider::systemone::SystemOneQuestion::Choice {
+                criteria,
+                ..
+            } if criteria.len() > 1 => 2,
+            _ => 1,
+        })
+        .sum();
+    let input = rate.context_tokens.saturating_mul(evaluations);
+    let options: i64 = request
+        .questions
+        .values()
+        .map(|question| match question {
+            flow_like::flow_like_model_provider::systemone::SystemOneQuestion::Choice {
+                criteria,
+                ..
+            } => criteria.len() as i64,
+            _ => 0,
+        })
+        .sum();
+    // A chosen label appears twice, and every choice adds a probability value.
+    let output = (serde_json::to_vec(body)?.len() as i64)
+        .saturating_mul(2)
+        .saturating_add(count.saturating_mul(1024))
+        .saturating_add(options.saturating_mul(32));
+    Ok((
+        input.saturating_add(output),
+        rate.provider_cost(input, output),
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum HostedProvider {
     OpenRouter,
@@ -164,6 +249,9 @@ pub(crate) enum HostedProvider {
     Bedrock,
     Azure,
     Vertex,
+    TypeSafe,
+    SystemOneCompatible,
+    Cloudflare,
 }
 
 impl HostedProvider {
@@ -176,6 +264,9 @@ impl HostedProvider {
             "hosted:bedrock" => Some(Self::Bedrock),
             "hosted:azure" => Some(Self::Azure),
             "hosted:vertex" => Some(Self::Vertex),
+            "hosted:typesafe" => Some(Self::TypeSafe),
+            "hosted:systemone_compatible" => Some(Self::SystemOneCompatible),
+            "hosted:cloudflare" => Some(Self::Cloudflare),
             _ => None,
         }
     }
@@ -188,6 +279,9 @@ impl HostedProvider {
             Self::Bedrock => "HOSTED_BEDROCK_ENDPOINT",
             Self::Azure => "HOSTED_AZURE_ENDPOINT",
             Self::Vertex => "HOSTED_VERTEX_ENDPOINT",
+            Self::TypeSafe => "HOSTED_TYPESAFE_ENDPOINT",
+            Self::SystemOneCompatible => "HOSTED_SYSTEMONE_ENDPOINT",
+            Self::Cloudflare => "HOSTED_CLOUDFLARE_ACCOUNT_ID",
         }
     }
 
@@ -199,6 +293,9 @@ impl HostedProvider {
             Self::Bedrock => "HOSTED_BEDROCK_API_KEY",
             Self::Azure => "HOSTED_AZURE_API_KEY",
             Self::Vertex => "HOSTED_VERTEX_API_KEY",
+            Self::TypeSafe => "HOSTED_TYPESAFE_API_KEY",
+            Self::SystemOneCompatible => "HOSTED_SYSTEMONE_API_KEY",
+            Self::Cloudflare => "HOSTED_CLOUDFLARE_API_TOKEN",
         }
     }
 
@@ -210,6 +307,8 @@ impl HostedProvider {
             Self::Bedrock => None,
             Self::Azure => None,
             Self::Vertex => None,
+            Self::TypeSafe => Some("https://api.typesafe.ai"),
+            Self::SystemOneCompatible | Self::Cloudflare => None,
         }
     }
 
@@ -220,10 +319,14 @@ impl HostedProvider {
     /// deployment whose `HOSTED_*_ENDPOINT` points straight at
     /// `…/v1/chat/completions` working on `/responses` too.
     pub(super) fn endpoint_url(&self, endpoint: &str, surface: ModelApiSurface) -> String {
+        if *self == Self::Cloudflare {
+            return format!("https://api.cloudflare.com/client/v4/accounts/{endpoint}/ai/run");
+        }
         let endpoint = endpoint.trim_end_matches('/');
         let endpoint = endpoint
             .strip_suffix("/chat/completions")
             .or_else(|| endpoint.strip_suffix("/responses"))
+            .or_else(|| endpoint.strip_suffix("/systemone"))
             .unwrap_or(endpoint);
         let path = surface_path(surface);
 
@@ -232,10 +335,17 @@ impl HostedProvider {
         }
 
         match self {
+            Self::Cloudflare => unreachable!("Cloudflare URL was resolved above"),
             Self::Azure if endpoint.ends_with("/openai") => format!("{endpoint}/v1/{path}"),
             Self::Azure => format!("{endpoint}/openai/v1/{path}"),
             Self::Vertex if endpoint.ends_with("/openapi") => format!("{endpoint}/{path}"),
-            Self::OpenRouter | Self::OpenAI | Self::Anthropic | Self::Bedrock | Self::Vertex => {
+            Self::OpenRouter
+            | Self::OpenAI
+            | Self::Anthropic
+            | Self::Bedrock
+            | Self::Vertex
+            | Self::TypeSafe
+            | Self::SystemOneCompatible => {
                 format!("{endpoint}/v1/{path}")
             }
         }
@@ -249,6 +359,9 @@ impl HostedProvider {
             Self::Bedrock => "bedrock",
             Self::Azure => "azure",
             Self::Vertex => "vertex",
+            Self::TypeSafe => "typesafe",
+            Self::SystemOneCompatible => "systemone_compatible",
+            Self::Cloudflare => "cloudflare",
         }
     }
 }
@@ -257,6 +370,7 @@ fn surface_path(surface: ModelApiSurface) -> &'static str {
     match surface {
         ModelApiSurface::ChatCompletions => "chat/completions",
         ModelApiSurface::Responses => "responses",
+        ModelApiSurface::SystemOne => "systemone",
     }
 }
 
@@ -264,6 +378,7 @@ fn surface_route(surface: ModelApiSurface) -> &'static str {
     match surface {
         ModelApiSurface::ChatCompletions => "/chat/completions",
         ModelApiSurface::Responses => "/responses",
+        ModelApiSurface::SystemOne => "/systemone",
     }
 }
 
@@ -405,13 +520,18 @@ fn instance_model_tier(bit: &Bit, request_path: &str) -> Result<String, ApiError
     let expected_surface = match request_path {
         "/instances/chat/completions" => ModelApiSurface::ChatCompletions,
         "/instances/responses" => ModelApiSurface::Responses,
+        "/instances/systemone" => ModelApiSurface::SystemOne,
         _ => return Err(ApiError::forbidden("Unsupported instance model endpoint")),
     };
     let provider = bit
         .try_to_provider()
         .ok_or_else(|| ApiError::forbidden("The approved Bit is no longer a model provider"))?;
     if HostedProvider::from_provider_name(&provider.provider_name).is_none()
-        || provider.api_surface_or_default() != expected_surface
+        || bit_surface(bit, &provider)? != expected_surface
+        || !supports_surface(
+            &HostedProvider::from_provider_name(&provider.provider_name).unwrap(),
+            expected_surface,
+        )
     {
         return Err(ApiError::forbidden(
             "The approved model no longer supports this hosted endpoint",
@@ -904,6 +1024,7 @@ pub(super) async fn handle_non_streaming(
     provider: &str,
     endpoint: &str,
     invocation_id: Option<&str>,
+    systemone_payload: Option<&JsonValue>,
 ) -> Result<AxumResponse, ApiError> {
     let start = std::time::Instant::now();
     let resp = match request_builder.send().await {
@@ -928,11 +1049,54 @@ pub(super) async fn handle_non_streaming(
     };
     let status = resp.status();
     let headers = resp.headers().clone();
-    let body_bytes = resp.bytes().await.map_err(|e| {
-        tracing::error!(error=%e, "Failed to read upstream body");
-        anyhow!("Failed to read upstream body: {e}")
-    })?;
+    let body_result: Result<Bytes, ApiError> = async {
+        if systemone_payload.is_some() {
+            let mut response = resp;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|_| ApiError::internal("Unable to read System One response"))?
+            {
+                if bytes.len().saturating_add(chunk.len()) > 16 * 1024 * 1024 {
+                    return Err(ApiError::internal("System One response exceeds 16 MiB"));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            let bytes = Bytes::from(bytes);
+            if status.is_success() {
+                return super::systemone::normalize_response(
+                    &bytes,
+                    systemone_payload.unwrap(),
+                    provider,
+                );
+            }
+            Ok(bytes)
+        } else {
+            resp.bytes()
+                .await
+                .map_err(|e| ApiError::internal_error(anyhow!("Failed to read upstream body: {e}")))
+        }
+    }
+    .await;
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let body_bytes = match body_result {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = settle_hosted_usage_invocation(
+                state,
+                invocation_id,
+                UsageInvocationSettlement {
+                    status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
+                    error: Some(error.to_string()),
+                    latency_ms: Some(latency_ms),
+                    ..Default::default()
+                },
+            )
+            .await;
+            return Err(error);
+        }
+    };
     if status.is_success() {
         tracing::info!(model = %upstream_model_id, bytes = body_bytes.len(), latency_ms = latency_ms, "LLM invoke success (non-stream)");
         let usage = extract_usage_from_body(&body_bytes);
@@ -1021,8 +1185,7 @@ pub(super) type PrepareUpstreamBody =
 /// Resolve the Bit, authorize the caller, and relay the request upstream.
 ///
 /// `surface` is the route's own surface. A Bit that declares a different one is
-/// rejected rather than translated — the proxy forwards bytes, it does not
-/// convert between the Chat Completions and Responses schemas.
+/// rejected. Each route preserves its own API contract.
 pub(super) async fn relay_request(
     state: AppState,
     user: AppUser,
@@ -1090,13 +1253,19 @@ async fn relay_authorized_request(
         .ok_or_else(|| ApiError::bad_request("Missing 'model' field"))?;
     let (bit, provider, hosted_provider) = fetch_provider(&state, model_field).await?;
 
-    let bit_surface = provider.api_surface_or_default();
+    let bit_surface = bit_surface(&bit, &provider)?;
     if bit_surface != surface {
         return Err(ApiError::bad_request(format!(
             "Model {model_field} speaks the {} API; call {} instead.",
             bit_surface.as_str(),
             surface_route(bit_surface)
         )));
+    }
+
+    if !supports_surface(&hosted_provider, surface) {
+        return Err(ApiError::bad_request(
+            "This hosted provider does not support the requested API",
+        ));
     }
 
     let (usage_context, tracking_id_opt) = match &caller {
@@ -1197,6 +1366,7 @@ async fn relay_authorized_request(
                     bit_id: Some(bit.id.clone()),
                     body: upstream_body,
                     responses_api: surface == ModelApiSurface::Responses,
+                    systemone_api: surface == ModelApiSurface::SystemOne,
                     stream,
                     provider: hosted_provider,
                     model_id: upstream_model_id,
@@ -1241,6 +1411,7 @@ async fn relay_authorized_request(
             &provider_label,
             &url,
             invocation_id.as_deref(),
+            (surface == ModelApiSurface::SystemOne).then_some(&upstream_body),
         )
         .await
     }
@@ -1354,6 +1525,100 @@ mod tests {
             "output_micro_usd_per_million_tokens": 4_000_000,
         })))
         .0
+    }
+
+    #[test]
+    fn systemone_is_intrinsic_and_reserves_each_question_without_chat_parameters() {
+        let mut bit = test_bit(JsonValue::Null);
+        bit.bit_type = BitTypes::SystemOne;
+        bit.parameters["provider"]["params"] = serde_json::json!({"tier":"FREE"});
+        assert_eq!(
+            instance_model_tier(&bit, "/instances/systemone").unwrap(),
+            "FREE"
+        );
+        assert!(instance_model_tier(&bit, "/instances/chat/completions").is_err());
+        bit.parameters["provider"]["provider_name"] = serde_json::json!("hosted:openai");
+        assert!(instance_model_tier(&bit, "/instances/systemone").is_err());
+        let mut body = serde_json::json!({"model":"jev", "state":"message", "questions":{
+            "a":{"type":"noul","instructions":"Urgent?"},
+            "b":{"type":"noul","instructions":"Refund?"}
+        }});
+        let before = body.clone();
+        let rate = test_rate();
+        let (tokens, cost) = bound_hosted_request(
+            &mut body,
+            ModelApiSurface::SystemOne,
+            &rate,
+            &HostedProvider::OpenRouter,
+        )
+        .unwrap();
+        assert_eq!(body, before);
+        assert!(tokens >= rate.context_tokens * 2);
+        assert!(cost > 0);
+        assert!(
+            bound_hosted_request(
+                &mut body,
+                ModelApiSurface::SystemOne,
+                &rate,
+                &HostedProvider::OpenAI
+            )
+            .is_err()
+        );
+        let usage = extract_usage_and_cost_from_json(
+            &serde_json::json!({"usage":{"input_tokens":10,"output_tokens":0,"cost":0.0001}}),
+        )
+        .unwrap();
+        assert_eq!(
+            (usage.in_tok, usage.out_tok, usage.cost_micro),
+            (Some(10), Some(0), Some(100))
+        );
+    }
+
+    #[test]
+    fn systemone_reserves_both_lev_choice_orders() {
+        let body = serde_json::json!({"model":"lev", "state":"message", "questions":{
+            "choice":{"type":"choice","instructions":"Route?","criteria":{"one":null,"two":null}},
+            "single":{"type":"choice","instructions":"Relevant?","criteria":{"one":null}},
+            "noul":{"type":"noul","instructions":"Urgent?"}
+        }});
+        let rate = test_rate();
+        let (tokens, cost) =
+            bound_systemone_request(&body, &rate, &HostedProvider::SystemOneCompatible).unwrap();
+        let input = rate.context_tokens * 4;
+        let output = serde_json::to_vec(&body).unwrap().len() as i64 * 2 + 3 * 1024 + 3 * 32;
+        assert_eq!(tokens, input + output);
+        assert_eq!(cost, rate.provider_cost(input, output));
+    }
+
+    #[test]
+    fn systemone_provider_endpoints_use_native_paths() {
+        for (provider, base, expected) in [
+            (
+                HostedProvider::OpenRouter,
+                "https://openrouter.ai/api/v1/chat/completions",
+                "https://openrouter.ai/api/v1/systemone",
+            ),
+            (
+                HostedProvider::TypeSafe,
+                "https://api.typesafe.ai",
+                "https://api.typesafe.ai/v1/systemone",
+            ),
+            (
+                HostedProvider::SystemOneCompatible,
+                "https://gateway.example/v1/systemone",
+                "https://gateway.example/v1/systemone",
+            ),
+        ] {
+            assert_eq!(
+                provider.endpoint_url(base, ModelApiSurface::SystemOne),
+                expected
+            );
+            assert!(supports_surface(&provider, ModelApiSurface::SystemOne));
+        }
+        assert!(!supports_surface(
+            &HostedProvider::TypeSafe,
+            ModelApiSurface::ChatCompletions
+        ));
     }
 
     #[test]

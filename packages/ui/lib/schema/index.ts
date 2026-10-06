@@ -166,3 +166,15 @@ export * from "./usage";
 export * from "./interaction";
 // Run ⇄ client reply channel wire types
 export * from "./channel";
+
+export type { ISystemOneParameters } from "./bit/bit/systemone-parameters";
+export type {
+	ISystemOneQuestion,
+	ISystemOneNoulCriteria,
+} from "./bit/bit/systemone-question";
+export type { ISystemOneRequest } from "./bit/bit/systemone-request";
+export type {
+	ISystemOneResponse,
+	ISystemOneAnswer,
+	ISystemOneUsage,
+} from "./bit/bit/systemone-response";

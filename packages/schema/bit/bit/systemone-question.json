@@ -1,0 +1,70 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "SystemOneQuestion",
+	"oneOf": [
+		{
+			"type": "object",
+			"properties": {
+				"instructions": true,
+				"criteria": {
+					"type": "object",
+					"additionalProperties": true
+				},
+				"type": {
+					"type": "string",
+					"const": "choice"
+				}
+			},
+			"additionalProperties": false,
+			"required": ["type", "instructions", "criteria"]
+		},
+		{
+			"type": "object",
+			"properties": {
+				"instructions": true,
+				"criteria": {
+					"type": "array",
+					"items": true
+				},
+				"type": {
+					"type": "string",
+					"const": "score"
+				}
+			},
+			"additionalProperties": false,
+			"required": ["type", "instructions", "criteria"]
+		},
+		{
+			"type": "object",
+			"properties": {
+				"instructions": true,
+				"criteria": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/NoulCriteria"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"type": {
+					"type": "string",
+					"const": "noul"
+				}
+			},
+			"additionalProperties": false,
+			"required": ["type", "instructions"]
+		}
+	],
+	"$defs": {
+		"NoulCriteria": {
+			"type": "object",
+			"properties": {
+				"true": true,
+				"false": true
+			},
+			"additionalProperties": false
+		}
+	}
+}

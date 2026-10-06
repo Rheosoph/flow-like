@@ -306,7 +306,7 @@ impl NodeLogic for BuildStableDiffusionVideoProviderNode {
         );
         node.set_flowscript_name("ai.video.provider", "stableDiffusion");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
+        node.set_version(2);
         node.set_scores(option_node_scores());
         add_exec_input(&mut node);
         node.add_input_pin(

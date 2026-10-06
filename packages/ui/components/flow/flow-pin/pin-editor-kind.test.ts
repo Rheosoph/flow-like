@@ -5,7 +5,7 @@ import {
 	IValueType,
 	IVariableType,
 } from "../../../lib/schema/flow/pin";
-import { resolvePinEditorKind } from "./pin-editor-kind";
+import { isSystemOneModelPin, resolvePinEditorKind } from "./pin-editor-kind";
 
 function pin(name: string, overrides: Partial<IPin> = {}): IPin {
 	return {
@@ -77,4 +77,21 @@ describe("resolvePinEditorKind", () => {
 			resolvePinEditorKind(pin("flag", { data_type: IVariableType.Boolean })),
 		).toBe("boolean");
 	});
+});
+
+test.each([
+	"ai_systemone_invoke",
+	"ai_systemone_noul",
+	"ai_systemone_choice",
+	"ai_systemone_score",
+])("%s model references use the SystemOne Bit selector", (nodeName) => {
+	const model = pin("model", { data_type: IVariableType.String });
+	expect(resolvePinEditorKind(model, nodeName)).toBe("bit");
+	expect(isSystemOneModelPin(model, nodeName)).toBe(true);
+	expect(isSystemOneModelPin(pin("instructions"), nodeName)).toBe(false);
+	expect(resolvePinEditorKind(model, "another_node")).toBe("plain");
+	expect(isSystemOneModelPin(model, "another_node")).toBe(false);
+	expect(
+		resolvePinEditorKind({ ...model, depends_on: ["source"] }, nodeName),
+	).toBe("label");
 });

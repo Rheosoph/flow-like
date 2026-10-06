@@ -9,6 +9,7 @@ impl From<BitType> for BitTypes {
         match value {
             BitType::Llm => Self::Llm,
             BitType::Vlm => Self::Vlm,
+            BitType::SystemOne => Self::SystemOne,
             BitType::Tts => Self::Tts,
             BitType::Stt => Self::Stt,
             BitType::Embedding => Self::Embedding,
@@ -38,6 +39,7 @@ impl From<BitTypes> for BitType {
         match value {
             BitTypes::Llm => Self::Llm,
             BitTypes::Vlm => Self::Vlm,
+            BitTypes::SystemOne => Self::SystemOne,
             BitTypes::Tts => Self::Tts,
             BitTypes::Stt => Self::Stt,
             BitTypes::Embedding => Self::Embedding,

@@ -38,7 +38,12 @@ export const MODEL_MAX_RUNTIMES = 8;
 export const MODEL_OVERVIEW_MAX_RECOMMENDATIONS = 3;
 export const MODEL_RECOMMENDATION_MAX_PARAMS = 8;
 
-export const MODEL_KINDS = ["chat", "vision", "embedding"] as const;
+export const MODEL_KINDS = [
+	"chat",
+	"vision",
+	"embedding",
+	"systemone",
+] as const;
 export const MODEL_ENGINES = ["llamacpp", "mlx", "onnx"] as const;
 export const MODEL_RUNTIMES = ["llamacpp", "mlx"] as const;
 export const MODEL_BACKENDS = ["cpu", "vulkan", "metal", "cuda"] as const;

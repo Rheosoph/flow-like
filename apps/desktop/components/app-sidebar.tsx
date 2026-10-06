@@ -444,6 +444,7 @@ function Profiles() {
 						bit_types: [
 							IBitTypes.Llm,
 							IBitTypes.Vlm,
+							IBitTypes.SystemOne,
 							IBitTypes.Tts,
 							IBitTypes.Stt,
 							IBitTypes.Embedding,

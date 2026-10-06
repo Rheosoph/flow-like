@@ -1,7 +1,8 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { MutableRefObject } from "react";
 import type { IBit } from "../../../../lib/schema/bit/bit";
-import type { IPin } from "../../../../lib/schema/flow/pin";
+import { type IPin, IVariableType } from "../../../../lib/schema/flow/pin";
+import { parseUint8ArrayToJson } from "../../../../lib/uint8";
 import {
 	allByRole,
 	byRole,
@@ -59,4 +60,46 @@ describe("bit select", () => {
 		]);
 		expect(document.querySelectorAll("[data-device-model]")).toHaveLength(1);
 	});
+});
+
+test("SystemOne model pins exclude chat Bits", async () => {
+	const decision = {
+		...model("decisions", "Decision model", "Local"),
+		type: "SystemOne",
+		parameters: {
+			provider: {
+				provider_name: "custom:systemone",
+				params: { api_key: "private-key" },
+			},
+		},
+	} as IBit;
+	const bits = [model("chat", "Chat model", "Hosted"), decision];
+	const data = {
+		...createEmptyFlowSelectorData(),
+		bitOptions: bits,
+		bitsByRef: indexBitsByRef(bits),
+		bitsLoaded: true,
+		loadBits: async () => bits,
+	};
+	let selected: unknown;
+	const { container } = await dom.render(
+		<BitVariable
+			pin={{ friendly_name: "Model", data_type: IVariableType.String } as IPin}
+			value={undefined}
+			setValue={(value) => {
+				selected = value;
+			}}
+			selectorDataRef={{ current: data }}
+			bitType="SystemOne"
+		/>,
+	);
+	await click(byRole("combobox", undefined, container));
+	expect(allByRole("option").map((option) => option.textContent)).toEqual([
+		"Decision model",
+	]);
+	await click(byRole("option", "Decision model"));
+	expect(parseUint8ArrayToJson(selected as number[])).toBe("decisions");
+	expect(
+		JSON.stringify(parseUint8ArrayToJson(selected as number[])),
+	).not.toContain("private-key");
 });

@@ -247,7 +247,8 @@ const licenseOf = (license: string | null | undefined) =>
 
 /** The engine that hosts a Bit on a device; undefined when no device engine can. */
 export function engineOfBit(bit: IBit): ModelEngine | undefined {
-	if (isMlxLlmModel(bit)) return "mlx";
+	if (isMlxLlmModel(bit))
+		return bit.type === IBitTypes.SystemOne ? undefined : "mlx";
 	if (!isLlamaCppLlmModel(bit)) return undefined;
 	const file = bit.file_name?.toLowerCase() ?? "";
 	if (bit.type === IBitTypes.Embedding && file.endsWith(".onnx")) return "onnx";
@@ -256,6 +257,7 @@ export function engineOfBit(bit: IBit): ModelEngine | undefined {
 
 const KIND_OF_TYPE: Partial<Record<IBitTypes, ModelKind>> = {
 	[IBitTypes.Llm]: "chat",
+	[IBitTypes.SystemOne]: "systemone",
 	[IBitTypes.Vlm]: "vision",
 	[IBitTypes.Embedding]: "embedding",
 };
@@ -516,7 +518,11 @@ const needsProjector = (choice: ModelChoice) =>
 	choice.kind === "vision" && choice.option.engine === "llamacpp";
 
 function projectorOf(choice: ModelChoice) {
-	if (!needsProjector(choice)) return undefined;
+	if (
+		!needsProjector(choice) &&
+		!(choice.kind === "systemone" && choice.option.engine === "llamacpp")
+	)
+		return undefined;
 	const wanted = choice.projector ?? choice.option.projectors[0]?.file_name;
 	return choice.option.projectors.find((file) => file.file_name === wanted);
 }

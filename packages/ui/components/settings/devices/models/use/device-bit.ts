@@ -31,6 +31,7 @@ export interface DeviceModelParams {
 
 const BIT_TYPE: Record<ModelKind, IBitTypes> = {
 	chat: IBitTypes.Llm,
+	systemone: IBitTypes.SystemOne,
 	vision: IBitTypes.Vlm,
 	embedding: IBitTypes.Embedding,
 };
@@ -38,6 +39,7 @@ const BIT_TYPE: Record<ModelKind, IBitTypes> = {
 /** Used when the hosted model's settings leave the context to the device. */
 const DEFAULT_CONTEXT: Record<ModelKind, number> = {
 	chat: 8192,
+	systemone: 4096,
 	vision: 8192,
 	embedding: 512,
 };
@@ -110,7 +112,7 @@ export function deviceModelParams(
 		device_id: deviceId,
 		model: model.id,
 		kind: model.kind,
-		...(model.kind === "embedding"
+		...(model.kind === "embedding" || model.kind === "systemone"
 			? {}
 			: { api_surface: "chat_completions" as const }),
 	};
@@ -162,6 +164,8 @@ function parameters(input: DeviceBitInput) {
 		version: null,
 		params: deviceModelParams(input.deviceId, input.model),
 	};
+	if (input.model.kind === "systemone")
+		return { context_length: input.contextLength, provider };
 	if (input.model.kind !== "embedding")
 		return {
 			context_length: input.contextLength,

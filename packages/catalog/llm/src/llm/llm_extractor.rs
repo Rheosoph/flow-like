@@ -625,7 +625,7 @@ impl NodeLogic for LLMExtractNode {
         );
         node.set_flowscript_name("ai", "extract");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(5);
+        node.set_version(6);
 
         node.set_scores(
             NodeScores::new()

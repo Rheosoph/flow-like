@@ -1,4 +1,5 @@
 import { externalModelProviders } from "../../lib/bit/external-model-providers";
+import { validateSystemOneParameters } from "../../lib/bit/systemone-model";
 import type { IBit, IMetadata } from "../../lib/schema/bit/bit";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import type { IApiState } from "../../state/backend-state/api-state";
@@ -246,11 +247,18 @@ export function validateBitDraft(
 	if (scope === "custom" && !bit.meta.en?.name.trim())
 		return "Add an English display name before saving.";
 	const params = record(bit.parameters);
+	if (bit.type === IBitTypes.SystemOne) {
+		const error = validateSystemOneParameters(params, scope);
+		if (error) return error;
+	}
 	if (scope === "admin" && bit.type === IBitTypes.Embedding) {
 		const embeddingError = validateHostedEmbeddingParameters(params);
 		if (embeddingError) return embeddingError;
 	}
-	if (scope === "admin" && [IBitTypes.Llm, IBitTypes.Vlm].includes(bit.type)) {
+	if (
+		scope === "admin" &&
+		[IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.SystemOne].includes(bit.type)
+	) {
 		const pricingError = validateBitPricing(params.pricing);
 		if (pricingError) return pricingError;
 	}

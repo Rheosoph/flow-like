@@ -2381,7 +2381,7 @@ impl NodeLogic for GenerateImageNode {
         );
         node.set_flowscript_name("ai.image", "generate");
         node.add_icon("/flow/icons/image.svg");
-        node.set_version(4);
+        node.set_version(5);
         node.set_scores(media_scores());
 
         node.add_input_pin(

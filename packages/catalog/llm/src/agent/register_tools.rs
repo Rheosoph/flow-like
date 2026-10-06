@@ -31,7 +31,7 @@ impl NodeLogic for RegisterFunctionToolsNode {
         );
         node.set_flowscript_name("agent", "registerFunctionTools");
         node.set_receiver("agent_in");
-        node.set_version(2);
+        node.set_version(3);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_can_reference_fns(true);
 

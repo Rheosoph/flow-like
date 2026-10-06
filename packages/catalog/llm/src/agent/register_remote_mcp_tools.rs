@@ -35,7 +35,7 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
         node.set_flowscript_name("agent", "registerRemoteMcpTools");
         node.set_receiver("agent_in");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(2);
+        node.set_version(3);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(5)

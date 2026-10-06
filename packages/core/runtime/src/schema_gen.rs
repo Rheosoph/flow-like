@@ -1,8 +1,8 @@
 use crate::{
     app::{App, AppSearchQuery},
     bit::{
-        Bit, BitModelPreference, BitPack, LLMParameters, SttModelParameters, TtsModelParameters,
-        VLMParameters,
+        Bit, BitModelPreference, BitPack, LLMParameters, SttModelParameters, SystemOneParameters,
+        TtsModelParameters, VLMParameters,
     },
     flow::{
         board::{
@@ -47,6 +47,7 @@ use flow_like_model_provider::{
     provider::{EmbeddingModelProvider, ImageEmbeddingModelProvider},
     response::Response,
     response_chunk::ResponseChunk,
+    systemone::{SystemOneQuestion, SystemOneRequest, SystemOneResponse},
 };
 use flow_like_storage::files::store::StorageItem;
 use flow_like_types::{Result, intercom::InterComEvent, json::to_string_pretty};
@@ -95,6 +96,13 @@ pub fn generate_schema(base_path: PathBuf) -> flow_like_types::Result<()> {
     generate_and_save_schema::<TtsModelParameters>(&base_path, "bit/bit/tts-parameters.json")?;
     generate_and_save_schema::<SttModelParameters>(&base_path, "bit/bit/stt-parameters.json")?;
 
+    generate_and_save_schema::<SystemOneParameters>(
+        &base_path,
+        "bit/bit/systemone-parameters.json",
+    )?;
+    generate_and_save_schema::<SystemOneRequest>(&base_path, "bit/bit/systemone-request.json")?;
+    generate_and_save_schema::<SystemOneQuestion>(&base_path, "bit/bit/systemone-question.json")?;
+    generate_and_save_schema::<SystemOneResponse>(&base_path, "bit/bit/systemone-response.json")?;
     generate_and_save_schema::<Bit>(&base_path, "bit/bit.json")?;
     generate_and_save_schema::<BitModelPreference>(&base_path, "bit/preferences.json")?;
     generate_and_save_schema::<BitPack>(&base_path, "bit/bit-pack.json")?;

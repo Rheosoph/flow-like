@@ -63,7 +63,13 @@ export function AdminBitsPage() {
 					type === "all"
 						? undefined
 						: type === "hosted"
-							? [IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.Tts, IBitTypes.Stt]
+							? [
+									IBitTypes.Llm,
+									IBitTypes.Vlm,
+									IBitTypes.SystemOne,
+									IBitTypes.Tts,
+									IBitTypes.Stt,
+								]
 							: [type],
 				limit,
 				offset: (page - 1) * limit,

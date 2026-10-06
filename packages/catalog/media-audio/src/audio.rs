@@ -2474,7 +2474,7 @@ impl NodeLogic for TextToSpeechNode {
         );
         node.set_flowscript_name("ai.audio", "textToSpeech");
         node.add_icon("/flow/icons/audio.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(media_scores());
 
         node.add_input_pin(
@@ -2612,7 +2612,7 @@ impl NodeLogic for LocalTextToSpeechNode {
         );
         node.set_flowscript_name("ai.audio", "localTextToSpeech");
         node.add_icon("/flow/icons/audio.svg");
-        node.set_version(4);
+        node.set_version(5);
         node.set_scores(media_scores());
         node.set_long_running(true);
 
@@ -2803,7 +2803,7 @@ impl NodeLogic for SpeechToTextNode {
         );
         node.set_flowscript_name("ai.audio", "speechToText");
         node.add_icon("/flow/icons/audio.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(media_scores());
 
         node.add_input_pin(
@@ -2950,7 +2950,7 @@ impl NodeLogic for LocalSpeechToTextNode {
         );
         node.set_flowscript_name("ai.audio", "localSpeechToText");
         node.add_icon("/flow/icons/audio.svg");
-        node.set_version(1);
+        node.set_version(2);
         node.set_scores(media_scores());
         node.set_long_running(true);
 

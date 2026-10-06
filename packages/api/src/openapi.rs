@@ -650,6 +650,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         // Chat routes
         crate::routes::chat::completions::invoke_llm,
         crate::routes::chat::responses::invoke_responses,
+        crate::routes::chat::systemone::invoke_systemone,
         crate::routes::chat::usage::get_llm_usage,
         // Store routes
         crate::routes::store::get_store_db,

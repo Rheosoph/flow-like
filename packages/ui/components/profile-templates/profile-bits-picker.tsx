@@ -35,6 +35,7 @@ const PAGE_SIZE = 24;
 const MODEL_TYPES = [
 	IBitTypes.Llm,
 	IBitTypes.Vlm,
+	IBitTypes.SystemOne,
 	IBitTypes.Embedding,
 	IBitTypes.ImageEmbedding,
 	IBitTypes.Stt,

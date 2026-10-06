@@ -111,7 +111,7 @@ impl NodeLogic for LLMBranchNode {
         );
         node.set_flowscript_name("ai", "branch");
         node.add_icon("/flow/icons/split.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(5)

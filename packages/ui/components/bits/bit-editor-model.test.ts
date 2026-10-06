@@ -470,3 +470,22 @@ describe("hosted embedding validation", () => {
 		).toContain("fixed endpoint");
 	});
 });
+
+test("SystemOne custom editing validates the native provider and separates credentials", () => {
+	const draft = fixture();
+	draft.type = IBitTypes.SystemOne;
+	draft.parameters = {
+		context_length: 512,
+		provider: {
+			provider_name: "custom:systemone",
+			model_id: "decision",
+			params: { endpoint: "https://models.example.test", api_key: "secret" },
+		},
+	};
+	expect(validateBitDraft(draft, "custom")).toBeNull();
+	const split = splitBitSecrets(draft);
+	expect(JSON.stringify(split.bit)).not.toContain("secret");
+	expect(JSON.stringify(split.secrets)).toContain("secret");
+	draft.parameters.provider.provider_name = "custom:openai";
+	expect(validateBitDraft(draft, "custom")).toContain("Chat providers");
+});

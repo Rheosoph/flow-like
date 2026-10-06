@@ -97,7 +97,7 @@ impl NodeLogic for LLMPlanActionsNode {
         );
         node.set_flowscript_name("automation.llm", "planActions");
         node.add_icon("/flow/icons/bot-plan.svg");
-        node.set_version(5);
+        node.set_version(6);
 
         node.set_scores(
             NodeScores::new()

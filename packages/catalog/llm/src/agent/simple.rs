@@ -125,7 +125,7 @@ impl NodeLogic for SimpleAgentNode {
         node.set_flowscript_name("agent", "simple");
         node.add_icon("/flow/icons/for-each.svg");
         node.set_can_reference_fns(true);
-        node.set_version(5);
+        node.set_version(6);
 
         node.set_scores(
             NodeScores::new()

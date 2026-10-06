@@ -103,7 +103,7 @@ impl NodeLogic for LLMExtractWithStructSchemaNode {
         );
         node.set_flowscript_name("ai", "extractWithStructSchema");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()

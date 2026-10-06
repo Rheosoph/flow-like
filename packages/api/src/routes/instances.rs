@@ -47,6 +47,10 @@ pub fn routes() -> Router<AppState> {
             post(crate::routes::chat::responses::invoke_instance_responses),
         )
         .route(
+            "/systemone",
+            post(crate::routes::chat::systemone::invoke_instance_systemone),
+        )
+        .route(
             "/embeddings/embed",
             post(crate::routes::embeddings::embed::embed_instance_text),
         )

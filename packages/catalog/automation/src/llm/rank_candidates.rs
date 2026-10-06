@@ -148,7 +148,7 @@ impl NodeLogic for LLMRankCandidatesNode {
         );
         node.set_flowscript_name("automation.llm", "rankCandidates");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(5);
+        node.set_version(6);
 
         node.set_scores(
             NodeScores::new()

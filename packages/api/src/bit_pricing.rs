@@ -37,7 +37,7 @@ fn read_bit_pricing(bit: &Bit) -> Result<Option<BitPricing>, String> {
 
 pub(crate) fn validate_bit_pricing(bit: &Bit) -> Result<(), ApiError> {
     match bit.bit_type {
-        BitTypes::Llm | BitTypes::Vlm => {
+        BitTypes::Llm | BitTypes::Vlm | BitTypes::SystemOne => {
             read_bit_pricing(bit).map_err(ApiError::bad_request)?;
         }
         BitTypes::Embedding => {

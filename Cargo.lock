@@ -9898,6 +9898,7 @@ dependencies = [
  "flow-like-catalog",
  "flow-like-device-crypto",
  "flow-like-device-protocol",
+ "flow-like-model-protocol",
  "flow-like-offline-writes",
  "flow-like-runtime",
  "flow-like-storage",
