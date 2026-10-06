@@ -11,16 +11,19 @@ use std::sync::Arc;
 
 pub async fn put_http(parsed: Url, store: Arc<dyn ObjectStore>) -> Result<(Path, usize)> {
     let client = reqwest::Client::new();
-    let resp = client.get(parsed.clone()).send().await?;
+    let mut resp = client.get(parsed.clone()).send().await?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(anyhow!("HTTP error {status} for {parsed}"));
+        return Err(anyhow!("Attachment download returned HTTP {status}"));
     }
 
     // Pull headers we may need
     let headers = resp.headers().clone();
-    // Buffer the body (switch to multipart upload if you expect huge files)
-    let body = resp.bytes().await?;
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        body.extend_from_slice(&chunk);
+    }
+    let body = Bytes::from(body);
 
     // Filename candidates (Content-Disposition first — it's explicitly set by the uploader)
     let mut name = filename_from_content_disposition(&headers)
@@ -201,7 +204,7 @@ fn sanitize_for_path(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::filename_from_url_path;
+    use super::*;
     use reqwest::Url;
 
     #[test]
@@ -211,5 +214,61 @@ mod tests {
             filename_from_url_path(&url).as_deref(),
             Some("Übersicht (2)#1.pdf")
         );
+    }
+
+    #[tokio::test]
+    async fn data_urls_preserve_complete_bodies() {
+        let store = Arc::new(object_store::memory::InMemory::new());
+        for url in ["data:,abcdefgh", "data:;base64,YWJjZGVmZ2g="] {
+            let (path, size) = put_data_url(url, store.clone()).await.unwrap();
+            assert_eq!(size, 8);
+            assert_eq!(
+                store.get(&path).await.unwrap().bytes().await.unwrap(),
+                "abcdefgh"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn loopback_http_preserves_complete_bodies_and_rejects_truncated_transfers() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for body in [
+                b"4\r\n1234\r\n4\r\n5678\r\n0\r\n\r\n".as_slice(),
+                b"4\r\n1234\r\n".as_slice(),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await.unwrap();
+                socket.write_all(body).await.unwrap();
+            }
+        });
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let (path, size) = put_http(
+            Url::parse(&format!("{base}/complete.txt")).unwrap(),
+            store.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(size, 8);
+        assert_eq!(
+            store.get(&path).await.unwrap().bytes().await.unwrap(),
+            "12345678"
+        );
+        assert!(
+            put_http(
+                Url::parse(&format!("{base}/partial.txt")).unwrap(),
+                store.clone()
+            )
+            .await
+            .is_err()
+        );
+        assert!(store.head(&Path::from("partial.txt")).await.is_err());
+        server.await.unwrap();
     }
 }

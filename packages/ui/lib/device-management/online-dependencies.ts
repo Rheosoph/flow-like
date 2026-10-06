@@ -2,11 +2,14 @@ import { blake3 } from "@noble/hashes/blake3";
 import { sha256 } from "@noble/hashes/sha2";
 import type { IBackendState } from "../../state/backend-state";
 import type { IProfile } from "../../types";
+import { bitContentDigest, bitSources } from "../bit/bit-sources";
 import type { IApp } from "../schema/app/app";
 import type { IBit } from "../schema/bit/bit";
 import {
 	type ArtifactInput,
+	type PackagedBitAsset,
 	type ProjectArtifactAssets,
+	type ProjectArtifactFile,
 	prepareProjectArtifact,
 } from "./artifacts";
 
@@ -17,6 +20,7 @@ import {
 
 const MAX_FILE = 64 * 1024 * 1024;
 const MAX_TOTAL = 256 * 1024 * 1024;
+const MAX_MODEL_ASSET = 64 * 1024 ** 3;
 function check(value: unknown, message: string): asserts value {
 	if (!value) throw new Error(message);
 }
@@ -151,12 +155,118 @@ async function download(
 	}
 }
 
+const NO_DIGEST =
+	"A model file has no content digest, and this browser fingerprints files of up to 64 MiB only. Deploy it from the desktop app.";
+const TOO_LARGE =
+	"A model asset exceeds the 64 MiB browser export limit. Use the desktop app.";
+
+interface Packaging {
+	files: Map<string, Blob>;
+	add(path: string, bytes: Uint8Array): void;
+	remaining(): number;
+	modelStore: boolean;
+	signal?: AbortSignal;
+}
+
+/**
+ * A Bit file with a digest known up front: the device fetches it from its
+ * sources, no byte is downloaded here. A file of up to 64 MiB without a public
+ * source (a hub that signs its links) travels in the artifact instead.
+ */
+function storedAsset(item: IBit, root: IBit): PackagedBitAsset | undefined {
+	const digest = bitContentDigest(item, root);
+	if (!digest) return undefined;
+	const { size, file_name: fileName } = item;
+	check(
+		typeof size === "number" &&
+			Number.isSafeInteger(size) &&
+			size > 0 &&
+			size <= MAX_MODEL_ASSET,
+		`Model file ${fileName} has no valid size. Refresh the model's metadata and prepare again.`,
+	);
+	const sources = bitSources(item, root);
+	if (!sources.length && size <= MAX_FILE) return undefined;
+	check(
+		sources.length > 0,
+		`Model file ${fileName} has no public download source the device or this browser could use. Deploy it from the desktop app.`,
+	);
+	return {
+		bit_id: item.id,
+		descriptor: { digest, size, file_name: fileName as string, sources },
+	};
+}
+
+/** A Bit file whose bytes travel in the artifact, downloaded once per location. */
+async function artifactOf(
+	item: IBit,
+	packaging: Packaging,
+): Promise<ProjectArtifactFile> {
+	check(
+		Number.isSafeInteger(item.size) &&
+			(item.size ?? 0) > 0 &&
+			(item.size ?? 0) <= MAX_FILE,
+		packaging.modelStore ? NO_DIGEST : TOO_LARGE,
+	);
+	const path = `bits/${item.hash}/${item.file_name}`;
+	if (!packaging.files.has(path)) {
+		check(
+			item.download_link,
+			"A model asset is unavailable for export. Download it in the desktop app first.",
+		);
+		const bytes = await download(
+			item.download_link,
+			Math.min(item.size as number, packaging.remaining()),
+			packaging.signal,
+		);
+		check(
+			bytes.length === item.size,
+			"Model asset size differs from its metadata.",
+		);
+		packaging.add(path, bytes);
+	}
+	const blob = packaging.files.get(path);
+	check(
+		blob && blob.size === item.size,
+		"Models disagree about an asset's size.",
+	);
+	return {
+		path,
+		size: blob.size,
+		sha256: hash(new Uint8Array(await blob.arrayBuffer())),
+	};
+}
+
+/** v1 when every file travels in the artifact, v2 once the device fetches some of them itself. */
+function packagedMetadata(
+	packaged: readonly IBit[],
+	artifacts: ProjectArtifactFile[],
+	stored: PackagedBitAsset[],
+) {
+	const bit = publicDependencyMetadata(packaged[0]);
+	const dependencies = packaged.slice(1).map(publicDependencyMetadata);
+	if (!stored.length) return { bit, dependencies, artifacts };
+	return {
+		version: 2,
+		bit,
+		dependencies,
+		assets: stored,
+		...(artifacts.length ? { artifacts } : {}),
+	};
+}
+
+/**
+ * `modelStore`: every target device acquires model files into its model
+ * store (`model_store`). Files with a digest known up front then become
+ * Bit metadata v2 assets and are not downloaded here; the rest travel in the
+ * artifact as before.
+ */
 export async function prepareOnlineDependencies(
 	requested: IApp,
 	backend: IBackendState,
 	profile: IProfile,
 	signal?: AbortSignal,
 	approved?: ApprovedOnlineMetadata,
+	modelStore = false,
 ) {
 	identifier(requested.id);
 	const metadata =
@@ -179,6 +289,13 @@ export async function prepareOnlineDependencies(
 		);
 		files.set(path, new Blob([new Uint8Array(bytes)]));
 	}
+	const packaging: Packaging = {
+		files,
+		add,
+		remaining: () => MAX_TOTAL - total,
+		modelStore,
+		...(signal ? { signal } : {}),
+	};
 	const encoder = new TextEncoder();
 	add(
 		`apps/${app.id}/online-source.json`,
@@ -236,10 +353,8 @@ export async function prepareOnlineDependencies(
 				return id;
 			}),
 		}));
-		const artifacts = new Map<
-			string,
-			{ path: string; size: number; sha256: string }
-		>();
+		const artifacts = new Map<string, ProjectArtifactFile>();
+		const stored: PackagedBitAsset[] = [];
 		for (const item of packaged) {
 			// Inline identities are derived by the native model implementation.
 			// Reject them before downloading or stripping their source metadata.
@@ -259,46 +374,18 @@ export async function prepareOnlineDependencies(
 						.every((part) => part && part !== "." && part !== ".."),
 				"Invalid model asset path.",
 			);
-			check(
-				Number.isSafeInteger(item.size) &&
-					(item.size ?? 0) > 0 &&
-					(item.size ?? 0) <= MAX_FILE,
-				"A model asset exceeds the 64 MiB browser export limit. Use the desktop app.",
-			);
-			const path = `bits/${item.hash}/${item.file_name}`;
-			if (!files.has(path)) {
-				check(
-					item.download_link,
-					"A model asset is unavailable for export. Download it in the desktop app first.",
-				);
-				const bytes = await download(
-					item.download_link,
-					Math.min(item.size as number, MAX_TOTAL - total),
-					signal,
-				);
-				check(
-					bytes.length === item.size,
-					"Model asset size differs from its metadata.",
-				);
-				add(path, bytes);
+			const asset = modelStore ? storedAsset(item, packaged[0]) : undefined;
+			if (asset) {
+				stored.push(asset);
+				continue;
 			}
-			const blob = files.get(path);
-			check(
-				blob && blob.size === item.size,
-				"Models disagree about an asset's size.",
-			);
-			artifacts.set(path, {
-				path,
-				size: blob.size,
-				sha256: hash(new Uint8Array(await blob.arrayBuffer())),
-			});
+			const artifact = await artifactOf(item, packaging);
+			artifacts.set(artifact.path, artifact);
 		}
 		const metadata = encoder.encode(
-			JSON.stringify({
-				bit: publicDependencyMetadata(packaged[0]),
-				dependencies: packaged.slice(1).map(publicDependencyMetadata),
-				artifacts: [...artifacts.values()],
-			}),
+			JSON.stringify(
+				packagedMetadata(packaged, [...artifacts.values()], stored),
+			),
 		);
 		check(
 			metadata.length <= 16 * 1024 * 1024,

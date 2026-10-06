@@ -88,6 +88,11 @@ enum ChildRequest {
         #[serde(default)]
         closing: bool,
     },
+    /// The model gateway endpoint that serves one of this placement's pinned Bits.
+    #[cfg(feature = "runtime")]
+    HostModel {
+        bit_id: String,
+    },
 }
 
 /// A schedule another running service of the same project already runs.
@@ -127,6 +132,12 @@ enum ParentResponse {
         start: Vec<crate::management::run_queue::StartRun>,
         #[serde(default)]
         cancel: Vec<String>,
+    },
+    #[cfg(feature = "runtime")]
+    ModelEndpoint {
+        base_url: String,
+        bearer: String,
+        model: String,
     },
     Error {
         code: String,
@@ -273,6 +284,10 @@ impl Drop for ParentResponse {
         {
             authorization.zeroize();
             dpop.zeroize();
+        }
+        #[cfg(feature = "runtime")]
+        if let Self::ModelEndpoint { bearer, .. } = self {
+            bearer.zeroize();
         }
     }
 }
@@ -729,6 +744,37 @@ impl ChildBroker {
         );
         Ok(())
     }
+
+    /// The device's model gateway serving one of this placement's pinned Bits, or `None`
+    /// when the model host does not serve that Bit.
+    #[cfg(feature = "runtime")]
+    pub async fn host_model(
+        &self,
+        bit_id: &str,
+    ) -> Result<Option<crate::models::router::PlacementEndpoint>> {
+        let request = ChildRequest::HostModel {
+            bit_id: bit_id.to_owned(),
+        };
+        match &mut self.request(&request).await? {
+            ParentResponse::ModelEndpoint {
+                base_url,
+                bearer,
+                model,
+            } => Ok(Some(crate::models::router::PlacementEndpoint {
+                base_url: std::mem::take(base_url),
+                bearer: Zeroizing::new(std::mem::take(bearer)),
+                model: std::mem::take(model),
+            })),
+            ParentResponse::Error { code } if code == "not_served" => Ok(None),
+            ParentResponse::Error { code } if code == "model_missing" => {
+                Err(crate::models::router::OwnModelMissing.into())
+            }
+            ParentResponse::Error { code } => {
+                anyhow::bail!("The device's model host refused Bit {bit_id}: {code}")
+            }
+            _ => anyhow::bail!("The supervisor answered a model request for Bit {bit_id} oddly"),
+        }
+    }
 }
 
 impl RequestAuthorizer for ChildBroker {
@@ -736,10 +782,13 @@ impl RequestAuthorizer for ChildBroker {
         AuthorizationAttribution::InstanceGrant
     }
 
+    /// Device models are reached through [`ChildBroker::host_model`], which also names the
+    /// gateway, so the device-models audience has no base here.
     fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
-        self.resource_base.as_ref().map(|base| match audience {
-            ResourceAudience::HostedModels => base.clone(),
-            ResourceAudience::ProjectApi => format!("{base}/project"),
+        self.resource_base.as_ref().and_then(|base| match audience {
+            ResourceAudience::HostedModels => Some(base.clone()),
+            ResourceAudience::ProjectApi => Some(format!("{base}/project")),
+            ResourceAudience::DeviceModels => None,
         })
     }
     fn authorize<'a>(&'a self, request: AuthorizationRequest<'a>) -> AuthorizationFuture<'a> {
@@ -757,6 +806,9 @@ impl RequestAuthorizer for ChildBroker {
                         method: request.method.into(),
                         url: request.url.into(),
                     },
+                    ResourceAudience::DeviceModels => {
+                        return Err(AuthorizationError::InvalidRequest);
+                    }
                 })
                 .await
                 .map_err(|_| AuthorizationError::Unavailable)?;
@@ -1168,6 +1220,41 @@ pub(crate) async fn serve_with_drain(
                         }
                     }
                     ChildRequest::Runs { .. } => unavailable(),
+                    #[cfg(feature = "runtime")]
+                    ChildRequest::HostModel { ref bit_id } => {
+                        let device_id = store.device_id().to_owned();
+                        drop(store);
+                        match crate::models::router::host_for_placement(
+                            &bootstrap.config,
+                            &device_id,
+                            bit_id,
+                        )
+                        .await
+                        {
+                            Ok(Some(endpoint)) => ParentResponse::ModelEndpoint {
+                                base_url: endpoint.base_url,
+                                bearer: endpoint.bearer.to_string(),
+                                model: endpoint.model,
+                            },
+                            Ok(None) => ParentResponse::Error {
+                                code: "not_served".into(),
+                            },
+                            Err(error) if error.is::<crate::models::router::OwnModelMissing>() => {
+                                ParentResponse::Error {
+                                    code: "model_missing".into(),
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    placement_id = %bootstrap.config.id,
+                                    "Host model Bit {bit_id}: {error:#}"
+                                );
+                                ParentResponse::Error {
+                                    code: "model_unavailable".into(),
+                                }
+                            }
+                        }
+                    }
                     ChildRequest::Authorize {
                         ref method,
                         ref url,
@@ -1434,7 +1521,8 @@ mod tests {
             port: port.parse()?,
             max_in_flight: 1,
             request_timeout_secs: 5,
-            auth_secret: "test".into(),
+            authentication: Default::default(),
+            auth_secret: Some("test".into()),
             ui_origins: Vec::new(),
         };
         let listener = inherited_listener(&hosting)?;

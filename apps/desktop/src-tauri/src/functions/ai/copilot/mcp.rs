@@ -1,5 +1,6 @@
 //! MCP server dispatch, tool activity, and HTTP bridge lifetime.
 
+use super::delegated_completion::{DelegatedDrainError, DelegatedPhase, is_owned_delegation};
 use super::mcp_progress::{
     FlowPilotMcpTool, McpProgressHeartbeat, McpToolCancellationGuard,
     record_delegated_run_tool_progress,
@@ -26,7 +27,10 @@ use flow_like::flow::copilot::{
 use flow_like_types::tokio_util::sync::CancellationToken;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -52,6 +56,8 @@ struct FlowPilotMcpServer {
     handler_quiescence: Arc<tokio::sync::Notify>,
     workflow_operation_gate: Arc<tokio::sync::Mutex<()>>,
     dispatch_observer: WorkflowToolDispatchObserver,
+    phase_closed: Arc<AtomicBool>,
+    delegated_phase: Option<Arc<DelegatedPhase>>,
 }
 
 impl FlowPilotMcpServer {
@@ -61,6 +67,8 @@ impl FlowPilotMcpServer {
         tool_activity: Arc<StdMutex<McpToolActivityState>>,
         handler_quiescence: Arc<tokio::sync::Notify>,
         workflow_operation_gate: Arc<tokio::sync::Mutex<()>>,
+        phase_closed: Arc<AtomicBool>,
+        delegated_phase: Option<Arc<DelegatedPhase>>,
     ) -> Self {
         let dispatch_observer = WorkflowToolDispatchObserver::new(workflow_state.as_ref(), "mcp");
         Self {
@@ -70,6 +78,8 @@ impl FlowPilotMcpServer {
             handler_quiescence,
             workflow_operation_gate,
             dispatch_observer,
+            phase_closed,
+            delegated_phase,
         }
     }
 
@@ -227,6 +237,12 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
         let args = serde_json::Value::Object(request.arguments.unwrap_or_default());
 
         async move {
+            if self.phase_closed.load(Ordering::Acquire) {
+                return Err(rmcp::ErrorData::invalid_request(
+                    "This provider phase has ended; no new tools may run.",
+                    None,
+                ));
+            }
             self.dispatch_observer
                 .record(&telemetry_tool, "arrival", None, None);
             if let Ok(mut activity) = self.tool_activity.lock() {
@@ -259,7 +275,21 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
             };
             // Register before workflow preflight so a phase boundary cannot observe quiescence in
             // the small window between `edit_in_flight = true` and spawning its blocking handler.
-            let cancellation = context.ct.child_token();
+            // A global specialist belongs to the chat run, including when code mode drops its
+            // HTTP waiter while producing a final answer. Ordinary calls remain request-owned.
+            let mut delegated_call = self
+                .delegated_phase
+                .as_ref()
+                .filter(|_| tool.is_some() && is_owned_delegation(&tool_name, &args))
+                .map(|phase| phase.begin(&tool_name, &args))
+                .transpose()
+                .map_err(|message| rmcp::ErrorData::invalid_request(message, None))?;
+            let delegated_id = delegated_call.as_ref().map(|call| call.id);
+            let delegated_deadline = delegated_call.as_ref().map(|call| call.deadline);
+            let cancellation = delegated_call
+                .as_ref()
+                .map(|call| call.cancellation.clone())
+                .unwrap_or_else(|| context.ct.child_token());
             let handler_cancellation = cancellation.clone();
             let active_handler = register_mcp_active_handler(
                 &self.tool_activity,
@@ -275,7 +305,16 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
                 );
                 rmcp::ErrorData::internal_error(message, None)
             })?;
-            let mut cancellation_guard = McpToolCancellationGuard::new(cancellation.clone());
+            let mut cancellation_guard = delegated_call
+                .is_none()
+                .then(|| McpToolCancellationGuard::new(cancellation.clone()));
+            if self.phase_closed.load(Ordering::Acquire) {
+                cancellation.cancel();
+                return Err(rmcp::ErrorData::invalid_request(
+                    "This provider phase has ended; no new tools may run.",
+                    None,
+                ));
+            }
 
             let mut context_preflight = ExternalContextPreflight::default();
             if let Some(state) = &self.workflow_state {
@@ -343,16 +382,15 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
             let dispatch_observer = self.dispatch_observer.clone();
             flowpilot_debug_trace!(tool = %definition_name, "FlowPilot MCP tool call started");
 
-            // Inherit protocol-level `notifications/cancelled` as well as HTTP future drops. A
-            // child token lets the Drop guard stop only this handler without cancelling sibling
-            // requests that share the rmcp connection context.
+            // Ordinary calls inherit protocol cancellation and HTTP future drops. Delegated
+            // workers keep the root run's token so a lost provider waiter cannot stop them.
             let task_result = tokio::task::spawn_blocking(move || {
                 let _workflow_operation_guard = workflow_operation_guard;
                 let _active_handler = active_handler;
                 let mut result =
                     crate::functions::ai::frontend_tool_bridge::with_frontend_tool_execution_scope(
                         handler_cancellation,
-                        None,
+                        delegated_deadline,
                         || {
                             dispatch_observer.record(&telemetry_tool, "dispatched", None, None);
                             (handler)(&definition_name, &args)
@@ -390,12 +428,23 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
 
                 record_recoverable_platform_mutation(&tool_activity, &recorded_tool_name, &result);
 
+                if let Some(call) = delegated_call.as_mut() {
+                    call.complete(&result);
+                }
+
                 result
             })
             .await;
             // Once the synchronous handler has settled there is no orphan left to cancel. If this
             // request future is dropped while awaiting the JoinHandle, Drop keeps the guard armed.
-            cancellation_guard.disarm();
+            if let Some(guard) = cancellation_guard.as_mut() {
+                guard.disarm();
+            }
+            if let Some(id) = delegated_id
+                && let Some(phase) = self.delegated_phase.as_ref()
+            {
+                phase.delivered(id);
+            }
             let result = match task_result {
                 Ok(result) => result,
                 Err(error) => {
@@ -565,6 +614,8 @@ pub(super) struct FlowPilotMcpBridge {
     pub(super) workflow_state: Option<Arc<StdMutex<WorkflowToolLoopState>>>,
     pub(super) tool_activity: Arc<StdMutex<McpToolActivityState>>,
     pub(super) handler_quiescence: Arc<tokio::sync::Notify>,
+    phase_closed: Arc<AtomicBool>,
+    delegated_phase: Option<Arc<DelegatedPhase>>,
 }
 
 const FLOWPILOT_MCP_SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -587,6 +638,7 @@ impl FlowPilotMcpBridge {
         tools: Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)>,
         workflow_state: Option<Arc<StdMutex<WorkflowToolLoopState>>>,
         tool_activity: Arc<StdMutex<McpToolActivityState>>,
+        delegation_owner: Option<CancellationToken>,
     ) -> Result<Self, String> {
         use rmcp::transport::streamable_http_server::{
             StreamableHttpService, session::local::LocalSessionManager,
@@ -616,6 +668,10 @@ impl FlowPilotMcpBridge {
         let service_handler_quiescence = handler_quiescence.clone();
         let workflow_operation_gate = Arc::new(tokio::sync::Mutex::new(()));
         let service_workflow_operation_gate = workflow_operation_gate.clone();
+        let phase_closed = Arc::new(AtomicBool::new(false));
+        let service_phase_closed = phase_closed.clone();
+        let delegated_phase = delegation_owner.map(DelegatedPhase::new);
+        let service_delegated_phase = delegated_phase.clone();
         let service: StreamableHttpService<FlowPilotMcpServer, LocalSessionManager> =
             StreamableHttpService::new(
                 move || {
@@ -625,6 +681,8 @@ impl FlowPilotMcpBridge {
                         service_tool_activity.clone(),
                         service_handler_quiescence.clone(),
                         service_workflow_operation_gate.clone(),
+                        service_phase_closed.clone(),
+                        service_delegated_phase.clone(),
                     ))
                 },
                 Default::default(),
@@ -651,7 +709,43 @@ impl FlowPilotMcpBridge {
             workflow_state,
             tool_activity,
             handler_quiescence,
+            phase_closed,
+            delegated_phase,
         })
+    }
+
+    pub(super) async fn drain_delegated_tools(
+        &self,
+    ) -> Result<Vec<serde_json::Value>, DelegatedDrainError> {
+        self.phase_closed.store(true, Ordering::Release);
+        match self.delegated_phase.as_ref() {
+            Some(phase) => phase.drain().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(super) async fn finish_provider_phase(
+        self,
+        provider_succeeded: bool,
+    ) -> Result<FlowPilotMcpPhaseOutcome, String> {
+        let delegated_phase = self.delegated_phase.clone();
+        let completions = if provider_succeeded {
+            self.drain_delegated_tools().await
+        } else {
+            Ok(Vec::new())
+        };
+        // Quiesce even when a completion deadline or cancellation failed the drain. A new
+        // provider must never overlap the previous phase's remaining workers.
+        let mut outcome = self.finish_phase().await?;
+        outcome.delegated_results = match completions {
+            Ok(results) => results,
+            Err(DelegatedDrainError::DeadlineExceeded) => delegated_phase
+                .ok_or_else(|| "Missing delegated phase after its deadline".to_string())?
+                .collect_after_deadline()
+                .map_err(|error| error.to_string())?,
+            Err(error) => return Err(error.to_string()),
+        };
+        Ok(outcome)
     }
 
     pub(super) fn cancel_active_handlers(&self) -> Result<(), String> {
@@ -697,6 +791,10 @@ impl FlowPilotMcpBridge {
     /// next repair process is allowed to start. Each provider phase gets a fresh URL, so a late
     /// HTTP request from the old CLI cannot be mistaken for work belonging to the new phase.
     pub(super) async fn finish_phase(mut self) -> Result<FlowPilotMcpPhaseOutcome, String> {
+        self.phase_closed.store(true, Ordering::Release);
+        if let Some(phase) = self.delegated_phase.as_ref() {
+            phase.cancel();
+        }
         self.cancellation_token.cancellation_token.cancel();
         let cancellation_result = self.cancel_active_handlers();
         let quiescence_result = self.wait_for_handler_quiescence().await;
@@ -734,6 +832,7 @@ impl FlowPilotMcpBridge {
         Ok(FlowPilotMcpPhaseOutcome {
             workflow_snapshot,
             last_successful_mutation,
+            delegated_results: Vec::new(),
         })
     }
 }
@@ -741,6 +840,7 @@ impl FlowPilotMcpBridge {
 pub(super) struct FlowPilotMcpPhaseOutcome {
     pub(super) workflow_snapshot: Option<WorkflowToolLoopSnapshot>,
     pub(super) last_successful_mutation: Option<McpToolCompletion>,
+    pub(super) delegated_results: Vec<serde_json::Value>,
 }
 
 impl Drop for FlowPilotMcpBridge {
@@ -748,6 +848,10 @@ impl Drop for FlowPilotMcpBridge {
         // `external_code_agent_chat_internal` can itself be cancelled by Tauri/the caller. Do not
         // leave the session-local listener alive merely because the async shutdown path was skipped.
         self.cancellation_token.cancellation_token.cancel();
+        self.phase_closed.store(true, Ordering::Release);
+        if let Some(phase) = self.delegated_phase.as_ref() {
+            phase.cancel();
+        }
         let _ = self.cancel_active_handlers();
         if let Some(server_task) = self.server_task.take() {
             server_task.abort();
@@ -758,6 +862,394 @@ impl Drop for FlowPilotMcpBridge {
 #[cfg(test)]
 mod tests {
     use super::{FlowPilotMcpServer, HOME_TOOL_MAX_RESULT_SIZE_CHARS, MAX_RESULT_SIZE_META_KEY};
+
+    use super::{FlowPilotMcpBridge, McpToolActivityState};
+    use flow_like_types::tokio_util::sync::CancellationToken;
+    use rmcp::{
+        ServerHandler, ServiceExt,
+        model::{CallToolRequestParams, ClientRequest, Request},
+        service::PeerRequestOptions,
+        transport::StreamableHttpClientTransport,
+    };
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    fn pending_tool_handler() -> (
+        copilot_sdk::ToolHandler,
+        tokio::sync::oneshot::Receiver<CancellationToken>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        let (started, receiver) = tokio::sync::oneshot::channel();
+        let started = Arc::new(Mutex::new(Some(started)));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let handler_release = release.clone();
+        let handler: copilot_sdk::ToolHandler = Arc::new(move |_, _| {
+            let (cancellation, _) =
+                crate::functions::ai::frontend_tool_bridge::current_tool_execution_for_test()
+                    .unwrap();
+            if let Some(started) = started.lock().unwrap().take() {
+                let _ = started.send(cancellation.clone());
+            }
+            let completed = tokio::runtime::Handle::current().block_on(async {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => false,
+                    _ = handler_release.notified() => true,
+                }
+            });
+            copilot_sdk::ToolResultObject::text(if completed {
+                r#"{"status":"applied","board_id":"test-board","command_count":6228}"#
+            } else {
+                r#"{"status":"cancelled"}"#
+            })
+        });
+        (handler, receiver, release)
+    }
+
+    async fn pending_tool_bridge(
+        name: &'static str,
+        owner: CancellationToken,
+    ) -> (
+        FlowPilotMcpBridge,
+        tokio::sync::oneshot::Receiver<CancellationToken>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        let (handler, receiver, release) = pending_tool_handler();
+        let bridge = FlowPilotMcpBridge::start(
+            vec![(copilot_sdk::Tool::new(name), handler)],
+            None,
+            Arc::new(Mutex::new(McpToolActivityState::default())),
+            Some(owner),
+        )
+        .await
+        .unwrap();
+        (bridge, receiver, release)
+    }
+
+    #[tokio::test]
+    async fn dropping_server_request_future_preserves_only_owned_delegations() {
+        struct PeerServer;
+        impl ServerHandler for PeerServer {}
+
+        let (server_transport, client_transport) = tokio::io::duplex(4096);
+        let server_service =
+            tokio::spawn(async { PeerServer.serve(server_transport).await.unwrap() });
+        let client = ().serve(client_transport).await.unwrap();
+        let server_service = server_service.await.unwrap();
+
+        for (name, owned) in [("flowpilot_board", true), ("execute_event", false)] {
+            let (handler, started, release) = pending_tool_handler();
+            let phase = super::DelegatedPhase::new(CancellationToken::new());
+            let activity = Arc::new(Mutex::new(McpToolActivityState::default()));
+            let server = FlowPilotMcpServer::new(
+                Arc::new(std::collections::HashMap::from([(
+                    name.to_owned(),
+                    super::FlowPilotMcpTool {
+                        definition: copilot_sdk::Tool::new(name),
+                        handler,
+                    },
+                )])),
+                None,
+                activity.clone(),
+                Arc::new(tokio::sync::Notify::new()),
+                Arc::new(tokio::sync::Mutex::new(())),
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Some(phase.clone()),
+            );
+            let context = rmcp::service::RequestContext::new(
+                rmcp::model::NumberOrString::Number(1),
+                server_service.peer().clone(),
+            );
+            let request = tokio::spawn(async move {
+                server
+                    .call_tool(CallToolRequestParams::new(name), context)
+                    .await
+            });
+            let cancellation = tokio::time::timeout(Duration::from_secs(3), started)
+                .await
+                .unwrap()
+                .unwrap();
+            request.abort();
+            let _ = request.await;
+            assert_eq!(cancellation.is_cancelled(), !owned);
+            release.notify_one();
+            let results = tokio::time::timeout(Duration::from_secs(3), phase.drain())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(results.len(), usize::from(owned));
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !activity.lock().unwrap().active_handlers.is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        let _ = client.cancel().await;
+        let _ = server_service.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn successful_parent_exit_drains_a_dropped_delegation_and_fences_late_calls() {
+        let (bridge, started, release) =
+            pending_tool_bridge("flowpilot_board", CancellationToken::new()).await;
+        let url = bridge.url.clone();
+        let client = ().serve(StreamableHttpClientTransport::from_uri(url.clone())).await.unwrap();
+        let peer = client.peer().clone();
+        let request = tokio::spawn(async move {
+            peer.call_tool(CallToolRequestParams::new("flowpilot_board"))
+                .await
+        });
+        let child_cancel = tokio::time::timeout(Duration::from_secs(3), started)
+            .await
+            .unwrap()
+            .unwrap();
+        request.abort();
+        let _ = request.await;
+        let _ = client.cancel().await;
+        assert!(
+            !child_cancel.is_cancelled(),
+            "dropping the provider HTTP waiter must not cancel run-owned work"
+        );
+        let finish = tokio::spawn(async move { bridge.finish_provider_phase(true).await });
+        tokio::task::yield_now().await;
+        assert!(
+            !finish.is_finished(),
+            "the root must wait for the specialist before continuing"
+        );
+        let late = ().serve(StreamableHttpClientTransport::from_uri(url)).await.unwrap();
+        assert!(
+            late.call_tool(CallToolRequestParams::new("flowpilot_board"))
+                .await
+                .is_err(),
+            "the old phase must not admit new work while draining"
+        );
+        let _ = late.cancel().await;
+        release.notify_one();
+        let outcome = tokio::time::timeout(Duration::from_secs(10), finish)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let results = outcome.delegated_results;
+        assert_eq!(results[0]["result"]["output"]["command_count"], 6228);
+        let continuation =
+            super::super::delegated_completion::delegated_completion_prompt(&results);
+        assert!(continuation.contains("6228"));
+        assert!(continuation.contains("Do not repeat a completed mutation"));
+    }
+
+    #[tokio::test]
+    async fn provider_failure_cancels_delegation_before_the_next_phase() {
+        let (bridge, started, _release) =
+            pending_tool_bridge("flowpilot_board", CancellationToken::new()).await;
+        let client =
+            ().serve(StreamableHttpClientTransport::from_uri(bridge.url.clone()))
+                .await
+                .unwrap();
+        let peer = client.peer().clone();
+        let request = tokio::spawn(async move {
+            peer.call_tool(CallToolRequestParams::new("flowpilot_board"))
+                .await
+        });
+        let child_cancel = tokio::time::timeout(Duration::from_secs(3), started)
+            .await
+            .unwrap()
+            .unwrap();
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(10), bridge.finish_provider_phase(false))
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(child_cancel.is_cancelled());
+        assert!(outcome.delegated_results.is_empty());
+        request.abort();
+        let _ = request.await;
+        let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn deadline_preserves_queued_review_and_quiesces_pending_sibling() {
+        let (handler, started, _release) = pending_tool_handler();
+        let completed: copilot_sdk::ToolHandler = Arc::new(|_, _| {
+            copilot_sdk::ToolResultObject::text(r#"{"status":"queued","job_id":"retained-review"}"#)
+        });
+        let activity = Arc::new(Mutex::new(McpToolActivityState::default()));
+        let bridge = FlowPilotMcpBridge::start(
+            vec![
+                (copilot_sdk::Tool::new("flowpilot_board"), completed),
+                (copilot_sdk::Tool::new("data_studio_agent"), handler),
+            ],
+            None,
+            activity.clone(),
+            Some(CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+        let client =
+            ().serve(StreamableHttpClientTransport::from_uri(bridge.url.clone()))
+                .await
+                .unwrap();
+        client
+            .call_tool(CallToolRequestParams::new("flowpilot_board"))
+            .await
+            .unwrap();
+        let peer = client.peer().clone();
+        let request = tokio::spawn(async move {
+            peer.call_tool(CallToolRequestParams::new("data_studio_agent"))
+                .await
+        });
+        let cancellation = tokio::time::timeout(Duration::from_secs(3), started)
+            .await
+            .unwrap()
+            .unwrap();
+        bridge
+            .delegated_phase
+            .as_ref()
+            .unwrap()
+            .expire_pending_calls_for_test();
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(10), bridge.finish_provider_phase(true))
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(cancellation.is_cancelled());
+        assert!(activity.lock().unwrap().active_handlers.is_empty());
+        let results = outcome.delegated_results;
+        assert_eq!(results[0]["result"]["output"]["job_id"], "retained-review");
+        assert!(results[0].get("host_interruption").is_none());
+        assert_eq!(results[1]["result"]["output"]["status"], "cancelled");
+        assert_eq!(
+            results[1]["host_interruption"]["own_deadline_expired"],
+            true
+        );
+        assert_eq!(results[2]["status"], "timeout");
+        assert_eq!(results[2]["handlers_quiesced"], true);
+        let prompt = super::super::delegated_completion::delegated_completion_prompt(&results);
+        assert!(prompt.contains("retained-review"));
+        assert!(prompt.contains("timeout"));
+        request.abort();
+        let _ = request.await;
+        let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn user_stop_during_deadline_quiescence_prevents_completion_resume() {
+        let owner = CancellationToken::new();
+        let (handler, started, _release) = pending_tool_handler();
+        let stop_during_cleanup = owner.clone();
+        let handler: copilot_sdk::ToolHandler = Arc::new(move |name, args| {
+            let result = handler(name, args);
+            stop_during_cleanup.cancel();
+            result
+        });
+        let bridge = FlowPilotMcpBridge::start(
+            vec![(copilot_sdk::Tool::new("flowpilot_board"), handler)],
+            None,
+            Arc::new(Mutex::new(McpToolActivityState::default())),
+            Some(owner),
+        )
+        .await
+        .unwrap();
+        let client =
+            ().serve(StreamableHttpClientTransport::from_uri(bridge.url.clone()))
+                .await
+                .unwrap();
+        let peer = client.peer().clone();
+        let request = tokio::spawn(async move {
+            peer.call_tool(CallToolRequestParams::new("flowpilot_board"))
+                .await
+        });
+        let _ = tokio::time::timeout(Duration::from_secs(3), started)
+            .await
+            .unwrap()
+            .unwrap();
+        bridge
+            .delegated_phase
+            .as_ref()
+            .unwrap()
+            .expire_pending_calls_for_test();
+        let error =
+            tokio::time::timeout(Duration::from_secs(10), bridge.finish_provider_phase(true))
+                .await
+                .unwrap()
+                .err()
+                .expect("user cancellation must prevent resume");
+        assert!(error.contains("cancelled"));
+        request.abort();
+        let _ = request.await;
+        let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn explicit_run_cancellation_interrupts_a_successful_parent_drain() {
+        let owner = CancellationToken::new();
+        let (bridge, started, _release) =
+            pending_tool_bridge("data_studio_agent", owner.clone()).await;
+        let client =
+            ().serve(StreamableHttpClientTransport::from_uri(bridge.url.clone()))
+                .await
+                .unwrap();
+        let peer = client.peer().clone();
+        let request = tokio::spawn(async move {
+            peer.call_tool(CallToolRequestParams::new("data_studio_agent"))
+                .await
+        });
+        let child_cancel = tokio::time::timeout(Duration::from_secs(3), started)
+            .await
+            .unwrap()
+            .unwrap();
+        let finish = tokio::spawn(async move { bridge.finish_provider_phase(true).await });
+        tokio::task::yield_now().await;
+        owner.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(10), finish)
+            .await
+            .unwrap()
+            .unwrap()
+            .err()
+            .expect("explicit cancellation must fail the completion check");
+        assert!(error.contains("cancelled"));
+        assert!(child_cancel.is_cancelled());
+        request.abort();
+        let _ = request.await;
+        let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_non_delegated_request_still_cancels_its_handler() {
+        let (bridge, started, _release) =
+            pending_tool_bridge("execute_event", CancellationToken::new()).await;
+        let client =
+            ().serve(StreamableHttpClientTransport::from_uri(bridge.url.clone()))
+                .await
+                .unwrap();
+        let request = client
+            .send_cancellable_request(
+                ClientRequest::CallToolRequest(Request::new(CallToolRequestParams::new(
+                    "execute_event",
+                ))),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .unwrap();
+        let cancellation = tokio::time::timeout(Duration::from_secs(3), started)
+            .await
+            .unwrap()
+            .unwrap();
+        request
+            .cancel(Some("test request cancellation".into()))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), cancellation.cancelled())
+            .await
+            .unwrap();
+        let _ = client.cancel().await;
+        assert!(bridge.drain_delegated_tools().await.unwrap().is_empty());
+        bridge.finish_phase().await.unwrap();
+    }
 
     fn advertised_max_result_size(name: &str) -> Option<u64> {
         let tool = FlowPilotMcpServer::to_mcp_tool(&copilot_sdk::Tool::new(name));

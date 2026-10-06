@@ -6,7 +6,7 @@
 	"scripts": {
 		"build:frontend": "next build frontend --webpack",
 		"dev:frontend": "next dev frontend -p 3004",
-		"test:frontend": "bun test frontend/lib"
+		"test:frontend": "bun test frontend/lib frontend/client.test.tsx"
 	},
 	"dependencies": {
 		"@flow-like/flow-like-ui": "workspace:*",

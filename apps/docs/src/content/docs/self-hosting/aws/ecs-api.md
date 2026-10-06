@@ -93,6 +93,10 @@ execution queues or functions, and the state tables. Add
 task execution role only pulls the image and writes logs. Pin the collector
 image to a version in production.
 
+For [hosted Bedrock models](/self-hosting/aws/operations/#hosted-bedrock-models),
+grant model invocation permissions to the API task role. When no Bedrock API
+key is configured, the API signs requests with that role's temporary credentials.
+
 `dependsOn` makes ECS stop the API before the collector, so the final trace
 export still has somewhere to go.
 

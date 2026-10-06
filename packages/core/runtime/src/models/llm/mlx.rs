@@ -2,8 +2,9 @@
 mod apple {
     use std::{
         convert::Infallible,
+        path::PathBuf,
         sync::{
-            Arc,
+            Arc, Weak,
             atomic::{AtomicU64, Ordering},
         },
         time::{SystemTime, UNIX_EPOCH},
@@ -22,7 +23,10 @@ mod apple {
         },
         routing::{get, post},
     };
-    use flow_like_model_provider::llm::{ModelLogic, mlx::MlxModel as MlxProviderModel};
+    use flow_like_model_provider::{
+        llm::{ModelLogic, mlx::MlxModel as MlxProviderModel},
+        provider::ModelProvider,
+    };
     use flow_like_storage::files::store::FlowLikeStore;
     use flow_like_types::{
         Result, Value, async_trait,
@@ -35,42 +39,45 @@ mod apple {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     use flow_like_types::tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-        process::{Child, ChildStdin},
-        sync::Mutex,
+        process::{Child, ChildStderr, ChildStdin, ChildStdout},
+        sync::{Mutex, watch},
     };
 
     use crate::{
-        bit::{Bit, BitTypes, MLX_PROVIDER_NAME, can_host_mlx},
+        bit::{Bit, MLX_PROVIDER_NAME, can_host_mlx},
         models::{
             ModelMeta,
-            llm::{DEFAULT_MAX_CONTEXT_SIZE, ExecutionSettings},
+            llm::{
+                DEFAULT_MAX_CONTEXT_SIZE, ExecutionSettings, LOCAL_ENGINE_LOADS,
+                mlx_pack::{MaterializedMlxModel, MlxModelKind, materialize_mlx_model},
+            },
             local_utils::ensure_local_weights,
         },
         state::FlowLikeState,
+        utils::execute::RuntimeLocator,
     };
 
-    use crate::models::llm::mlx_pack::materialize_mlx_model;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    use crate::utils::execute::MlxServiceRuntime;
 
     static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
     const MAX_PROXY_BODY_SIZE: usize = 64 * 1024 * 1024;
     #[cfg(target_os = "ios")]
     const IOS_DEFAULT_MAX_KV_SIZE: u32 = 4_096;
 
+    /// The loader family as the MLX bridge names it.
     #[derive(Clone, Copy, Debug, Serialize)]
     #[serde(rename_all = "lowercase")]
-    enum MlxModelKind {
+    enum BridgeKind {
         Llm,
         Vlm,
     }
 
-    impl MlxModelKind {
-        fn from_bit(bit: &Bit) -> Result<Self> {
-            match bit.bit_type {
-                BitTypes::Llm => Ok(Self::Llm),
-                BitTypes::Vlm => Ok(Self::Vlm),
-                _ => Err(flow_like_types::anyhow!(
-                    "MLX provider requires an LLM or VLM bit"
-                )),
+    impl From<MlxModelKind> for BridgeKind {
+        fn from(kind: MlxModelKind) -> Self {
+            match kind {
+                MlxModelKind::Llm => Self::Llm,
+                MlxModelKind::Vlm => Self::Vlm,
             }
         }
     }
@@ -78,9 +85,9 @@ mod apple {
     #[derive(Debug, Serialize)]
     struct MlxBridgeRequest {
         id: String,
-        command: &'static str,
+        command: String,
         model_directory: String,
-        model_kind: MlxModelKind,
+        model_kind: BridgeKind,
         request: Value,
     }
 
@@ -119,6 +126,11 @@ mod apple {
         fn cancel(&self, _request_id: &str) {}
 
         fn unload(&self) {}
+
+        /// Resolves once the runtime serves no more requests; an in-process runtime never ends.
+        async fn exited(&self) {
+            std::future::pending::<()>().await;
+        }
     }
 
     struct MlxRequestGuard {
@@ -147,12 +159,98 @@ mod apple {
         }
     }
 
+    /// What a served model allows every request, whatever the request asks for.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct MlxRequestLimits {
+        /// Tokens the KV cache holds at most; a request may ask for fewer.
+        pub max_kv_size: Option<u32>,
+        /// Bits per KV cache value at most, 4 or 8; a request may ask for fewer.
+        pub kv_bits: Option<u8>,
+        /// Images only as `data:` URLs: the helper reads local files and fetches URLs itself,
+        /// which a model served to other people must not do for them.
+        pub inline_images_only: bool,
+    }
+
+    impl MlxRequestLimits {
+        fn apply(&self, request: &mut Value) {
+            let Some(request) = request.as_object_mut() else {
+                return;
+            };
+            cap(request, "max_kv_size", self.max_kv_size.map(u64::from));
+            cap(request, "kv_bits", self.kv_bits.map(u64::from));
+        }
+
+        /// Whether the request links an image, where only inline images may reach the helper.
+        fn refuses_images_of(&self, request: &Value) -> bool {
+            self.inline_images_only
+                && request
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|message| message.get("content")?.as_array())
+                    .flatten()
+                    .filter_map(|part| part.get("image_url"))
+                    .map(|image| image.get("url").unwrap_or(image))
+                    .any(|url| !url.as_str().is_some_and(|url| url.starts_with("data:")))
+        }
+    }
+
+    /// Keeps a field at most `limit`: a larger, missing or non-numeric value becomes the limit.
+    fn cap(request: &mut json::Map<String, Value>, field: &str, limit: Option<u64>) {
+        let Some(limit) = limit else {
+            return;
+        };
+        let value = request
+            .get(field)
+            .and_then(Value::as_u64)
+            .filter(|value| *value <= limit)
+            .unwrap_or(limit);
+        request.insert(field.to_owned(), json!(value));
+    }
+
+    /// One MLX model and the limits its requests get.
+    #[derive(Clone, Debug)]
+    pub struct MlxServedModel {
+        /// A Hugging Face style MLX directory: `config.json`, tokenizer files and safetensors.
+        pub directory: PathBuf,
+        pub kind: MlxModelKind,
+        pub limits: MlxRequestLimits,
+    }
+
+    struct Served {
+        directory: String,
+        kind: BridgeKind,
+        limits: MlxRequestLimits,
+        transport: Arc<dyn MlxTransport>,
+    }
+
+    impl Served {
+        /// Sends a request within the limits; the guard cancels it unless disarmed.
+        async fn generate(
+            &self,
+            mut request: Value,
+        ) -> Result<(mpsc::UnboundedReceiver<MlxBridgeEvent>, MlxRequestGuard)> {
+            self.limits.apply(&mut request);
+            let id = next_request_id();
+            let receiver = self
+                .transport
+                .generate(MlxBridgeRequest {
+                    id: id.clone(),
+                    command: "generate".to_owned(),
+                    model_directory: self.directory.clone(),
+                    model_kind: self.kind,
+                    request,
+                })
+                .await?;
+            Ok((receiver, MlxRequestGuard::new(id, self.transport.clone())))
+        }
+    }
+
     #[derive(Clone)]
     struct MlxProxyState {
-        bearer_token: String,
-        model_directory: String,
-        model_kind: MlxModelKind,
-        transport: Arc<dyn MlxTransport>,
+        bearer_token: Arc<str>,
+        served: Arc<Served>,
     }
 
     fn next_request_id() -> String {
@@ -171,16 +269,15 @@ mod apple {
             .is_some_and(|value| constant_time_eq(value.as_bytes(), bearer_token.as_bytes()))
     }
 
+    fn error_response(status: StatusCode, message: &str) -> Response {
+        (status, Json(json!({ "error": { "message": message } }))).into_response()
+    }
+
     fn unauthorized_response() -> Response {
-        (
+        error_response(
             StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": {
-                    "message": "Missing or invalid MLX proxy authorization"
-                }
-            })),
+            "Missing or invalid MLX proxy authorization",
         )
-            .into_response()
     }
 
     async fn health(State(state): State<MlxProxyState>, headers: HeaderMap) -> Response {
@@ -212,17 +309,25 @@ mod apple {
         )
     }
 
-    fn completion_as_stream_chunk(completion: &Value) -> Option<Value> {
-        let choice = completion.get("choices")?.as_array()?.first()?;
-        let message = choice.get("message")?;
+    /// A stream chunk that carries the identity of `completion`.
+    fn stream_chunk(completion: &Value, choices: Value, usage: Value) -> Value {
+        json!({
+            "id": completion.get("id").cloned().unwrap_or_else(|| json!(next_request_id())),
+            "object": "chat.completion.chunk",
+            "created": completion.get("created").cloned().unwrap_or_else(|| json!(0)),
+            "model": completion.get("model").cloned().unwrap_or_else(|| json!("mlx")),
+            "choices": choices,
+            "usage": usage
+        })
+    }
+
+    fn message_as_stream_delta(message: &Value) -> Value {
         let mut delta = json::Map::new();
         delta.insert("role".to_string(), json!("assistant"));
-
-        if let Some(content) = message.get("content") {
-            delta.insert("content".to_string(), content.clone());
-        }
-        if let Some(reasoning) = message.get("reasoning_content") {
-            delta.insert("reasoning_content".to_string(), reasoning.clone());
+        for field in ["content", "reasoning_content"] {
+            if let Some(value) = message.get(field) {
+                delta.insert(field.to_string(), value.clone());
+            }
         }
         if let Some(tool_calls) = message.get("tool_calls") {
             delta.insert(
@@ -230,19 +335,19 @@ mod apple {
                 tool_calls_as_stream_delta(tool_calls),
             );
         }
+        Value::Object(delta)
+    }
 
-        Some(json!({
-            "id": completion.get("id").cloned().unwrap_or_else(|| json!(next_request_id())),
-            "object": "chat.completion.chunk",
-            "created": completion.get("created").cloned().unwrap_or_else(|| json!(0)),
-            "model": completion.get("model").cloned().unwrap_or_else(|| json!("mlx")),
-            "choices": [{
-                "index": choice.get("index").cloned().unwrap_or_else(|| json!(0)),
-                "delta": Value::Object(delta),
-                "finish_reason": choice.get("finish_reason").cloned().unwrap_or(Value::Null)
-            }],
-            "usage": completion.get("usage").cloned().unwrap_or(Value::Null)
-        }))
+    fn completion_as_stream_chunk(completion: &Value) -> Option<Value> {
+        let choice = completion.get("choices")?.as_array()?.first()?;
+        let delta = message_as_stream_delta(choice.get("message")?);
+        let choices = json!([{
+            "index": choice.get("index").cloned().unwrap_or_else(|| json!(0)),
+            "delta": delta,
+            "finish_reason": choice.get("finish_reason").cloned().unwrap_or(Value::Null)
+        }]);
+        let usage = completion.get("usage").cloned().unwrap_or(Value::Null);
+        Some(stream_chunk(completion, choices, usage))
     }
 
     fn usage_as_stream_chunk(completion: &Value) -> Option<Value> {
@@ -250,131 +355,71 @@ mod apple {
         if usage.is_null() {
             return None;
         }
-
-        Some(json!({
-            "id": completion.get("id").cloned().unwrap_or_else(|| json!(next_request_id())),
-            "object": "chat.completion.chunk",
-            "created": completion.get("created").cloned().unwrap_or_else(|| json!(0)),
-            "model": completion.get("model").cloned().unwrap_or_else(|| json!("mlx")),
-            "choices": [],
-            "usage": usage
-        }))
+        Some(stream_chunk(completion, json!([]), usage))
     }
 
-    async fn chat_completions(
-        State(state): State<MlxProxyState>,
-        headers: HeaderMap,
-        Json(request): Json<Value>,
+    /// The completion a non-streaming request ends with, or the message of the error that ended it.
+    async fn completion(
+        receiver: &mut mpsc::UnboundedReceiver<MlxBridgeEvent>,
+        cancellation: &mut MlxRequestGuard,
+    ) -> std::result::Result<Value, String> {
+        while let Some(event) = receiver.recv().await {
+            if !event.is_terminal() {
+                continue;
+            }
+            cancellation.disarm();
+            if event.event == "error" {
+                return Err(event
+                    .error
+                    .unwrap_or_else(|| "MLX generation failed".to_string()));
+            }
+            return event
+                .data
+                .ok_or_else(|| "MLX returned an empty completion".to_string());
+        }
+        Err("MLX bridge closed before completing".to_string())
+    }
+
+    fn sse_data(data: impl AsRef<str>) -> std::result::Result<SseEvent, Infallible> {
+        Ok(SseEvent::default().data(data))
+    }
+
+    /// What a completion adds to its stream: all of it when nothing streamed before, else its
+    /// usage.
+    fn closing_chunk(completion: Option<Value>, saw_chunk: bool) -> Option<Value> {
+        let completion = completion?;
+        (!saw_chunk)
+            .then(|| completion_as_stream_chunk(&completion))
+            .flatten()
+            .or_else(|| usage_as_stream_chunk(&completion))
+    }
+
+    /// Server-sent chunks as the bridge emits them; a completion that streamed none arrives as one.
+    fn stream_response(
+        mut receiver: mpsc::UnboundedReceiver<MlxBridgeEvent>,
+        mut cancellation: MlxRequestGuard,
     ) -> Response {
-        if !has_valid_authorization(&headers, &state.bearer_token) {
-            return unauthorized_response();
-        }
-
-        let request_id = next_request_id();
-        let is_streaming = request
-            .get("stream")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let bridge_request = MlxBridgeRequest {
-            id: request_id.clone(),
-            command: "generate",
-            model_directory: state.model_directory.clone(),
-            model_kind: state.model_kind,
-            request,
-        };
-
-        let mut receiver = match state.transport.generate(bridge_request).await {
-            Ok(receiver) => receiver,
-            Err(error) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": { "message": error.to_string() } })),
-                )
-                    .into_response();
-            }
-        };
-        let mut cancellation = MlxRequestGuard::new(request_id.clone(), state.transport.clone());
-
-        if !is_streaming {
-            while let Some(event) = receiver.recv().await {
-                match event.event.as_str() {
-                    "complete" => {
-                        cancellation.disarm();
-                        return match event.data {
-                            Some(data) => Json(data).into_response(),
-                            None => (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({
-                                    "error": {
-                                        "message": "MLX returned an empty completion"
-                                    }
-                                })),
-                            )
-                                .into_response(),
-                        };
-                    }
-                    "error" => {
-                        cancellation.disarm();
-                        return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "error": {
-                                "message": event.error.unwrap_or_else(|| "MLX generation failed".to_string())
-                            }
-                        })),
-                    )
-                        .into_response();
-                    }
-                    _ => {}
-                }
-            }
-
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": { "message": "MLX bridge closed before completing" } })),
-            )
-                .into_response();
-        }
-
         let stream = flow_like_types::async_stream::stream! {
             let mut saw_chunk = false;
             while let Some(event) = receiver.recv().await {
                 match event.event.as_str() {
-                    "chunk" => {
-                        if let Some(data) = event.data {
-                            saw_chunk = true;
-                            yield Ok::<SseEvent, Infallible>(
-                                SseEvent::default().data(data.to_string())
-                            );
-                        }
-                    }
+                    "chunk" => if let Some(data) = event.data {
+                        saw_chunk = true;
+                        yield sse_data(data.to_string());
+                    },
                     "complete" => {
                         cancellation.disarm();
-                        if let Some(data) = event.data {
-                            if !saw_chunk
-                                && let Some(chunk) = completion_as_stream_chunk(&data)
-                            {
-                                yield Ok::<SseEvent, Infallible>(
-                                    SseEvent::default().data(chunk.to_string())
-                                );
-                            } else if let Some(usage) = usage_as_stream_chunk(&data) {
-                                yield Ok::<SseEvent, Infallible>(
-                                    SseEvent::default().data(usage.to_string())
-                                );
-                            }
+                        if let Some(chunk) = closing_chunk(event.data, saw_chunk) {
+                            yield sse_data(chunk.to_string());
                         }
-                        yield Ok::<SseEvent, Infallible>(SseEvent::default().data("[DONE]"));
+                        yield sse_data("[DONE]");
                         break;
                     }
                     "error" => {
                         cancellation.disarm();
                         let error = event.error.unwrap_or_else(|| "MLX generation failed".to_string());
-                        yield Ok::<SseEvent, Infallible>(
-                            SseEvent::default().data(
-                                json!({ "error": { "message": error } }).to_string()
-                            )
-                        );
-                        yield Ok::<SseEvent, Infallible>(SseEvent::default().data("[DONE]"));
+                        yield sse_data(json!({ "error": { "message": error } }).to_string());
+                        yield sse_data("[DONE]");
                         break;
                     }
                     _ => {}
@@ -387,37 +432,132 @@ mod apple {
             .into_response()
     }
 
-    async fn start_proxy(state: MlxProxyState) -> Result<(u16, JoinHandle<()>)> {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let port = listener.local_addr()?.port();
-        let router = Router::new()
+    async fn chat_completions(
+        State(state): State<MlxProxyState>,
+        headers: HeaderMap,
+        Json(request): Json<Value>,
+    ) -> Response {
+        if !has_valid_authorization(&headers, &state.bearer_token) {
+            return unauthorized_response();
+        }
+        if state.served.limits.refuses_images_of(&request) {
+            return error_response(StatusCode::BAD_REQUEST, "Images must be sent as data: URLs");
+        }
+
+        let is_streaming = request
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let (mut receiver, mut cancellation) = match state.served.generate(request).await {
+            Ok(started) => started,
+            Err(error) => {
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string());
+            }
+        };
+        if is_streaming {
+            return stream_response(receiver, cancellation);
+        }
+        match completion(&mut receiver, &mut cancellation).await {
+            Ok(data) => Json(data).into_response(),
+            Err(message) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &message),
+        }
+    }
+
+    fn router(state: MlxProxyState) -> Router {
+        Router::new()
             .route("/health", get(health))
             .route("/v1/chat/completions", post(chat_completions))
             .layer(DefaultBodyLimit::max(MAX_PROXY_BODY_SIZE))
-            .with_state(state);
-        let task = flow_like_types::tokio::spawn(async move {
-            if let Err(error) = axum::serve(listener, router).await {
-                tracing::error!(%error, "MLX compatibility proxy stopped");
-            }
-        });
-        Ok((port, task))
+            .with_state(state)
     }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    type PendingRequests = Arc<StdMutex<HashMap<String, mpsc::UnboundedSender<MlxBridgeEvent>>>>;
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     struct MacMlxTransport {
         child: Mutex<Child>,
         stdin: Arc<Mutex<ChildStdin>>,
-        pending: Arc<StdMutex<HashMap<String, mpsc::UnboundedSender<MlxBridgeEvent>>>>,
+        pending: PendingRequests,
+        exited: watch::Receiver<bool>,
+    }
+
+    /// Hands one event line of the helper to its request; a terminal event ends the request.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    fn deliver(pending: &PendingRequests, line: &str) {
+        let event = match json::from_str::<MlxBridgeEvent>(line) {
+            Ok(event) => event,
+            Err(error) => {
+                tracing::warn!(%error, output = %line, "Ignoring invalid MLX service event");
+                return;
+            }
+        };
+        let sender = {
+            let Ok(mut pending) = pending.lock() else {
+                return;
+            };
+            if event.is_terminal() {
+                pending.remove(&event.id)
+            } else {
+                pending.get(&event.id).cloned()
+            }
+        };
+        if let Some(sender) = sender {
+            let _ = sender.send(event);
+        }
+    }
+
+    /// Routes the events of the helper to their requests. Once it exits, every open request
+    /// fails and `exited` turns true.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    async fn route_events(
+        stdout: ChildStdout,
+        pending: PendingRequests,
+        exited: watch::Sender<bool>,
+    ) {
+        let mut lines = BufReader::new(stdout).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => deliver(&pending, &line),
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::error!(%error, "Failed reading from MLX service");
+                    break;
+                }
+            }
+        }
+        exited.send_replace(true);
+        if let Ok(mut pending) = pending.lock() {
+            for (id, sender) in pending.drain() {
+                let _ = sender.send(MlxBridgeEvent::error(
+                    id,
+                    "MLX service stopped unexpectedly",
+                ));
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    async fn log_diagnostics(stderr: ChildStderr) {
+        let mut lines = BufReader::new(stderr).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => tracing::info!(output = %line, "MLX service"),
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::warn!(%error, "Failed reading MLX service diagnostics");
+                    break;
+                }
+            }
+        }
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     impl MacMlxTransport {
-        async fn new() -> Result<Self> {
-            use std::{path::PathBuf, process::Stdio};
+        async fn new(runtime: &MlxServiceRuntime) -> Result<Self> {
+            use std::process::Stdio;
 
-            let mut command =
-                crate::utils::execute::async_sidecar(&PathBuf::from("flow-like-mlx-service"))
-                    .await?;
+            let mut command = runtime.command();
             command.kill_on_drop(true);
             let mut child = command
                 .stdin(Stdio::piped())
@@ -425,82 +565,34 @@ mod apple {
                 .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|error| {
-                    flow_like_types::anyhow!("Failed to start the MLX service: {error}")
+                    flow_like_types::anyhow!(
+                        "Failed to start the MLX service at {}: {error}",
+                        runtime.entrypoint.display()
+                    )
                 })?;
+            let (Some(stdin), Some(stdout), Some(stderr)) =
+                (child.stdin.take(), child.stdout.take(), child.stderr.take())
+            else {
+                return Err(flow_like_types::anyhow!(
+                    "The pipes of the MLX service at {} are unavailable",
+                    runtime.entrypoint.display()
+                ));
+            };
 
-            let stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| flow_like_types::anyhow!("MLX service stdin is unavailable"))?;
-            let stdout = child
-                .stdout
-                .take()
-                .ok_or_else(|| flow_like_types::anyhow!("MLX service stdout is unavailable"))?;
-            let stderr = child
-                .stderr
-                .take()
-                .ok_or_else(|| flow_like_types::anyhow!("MLX service stderr is unavailable"))?;
-
-            let pending: Arc<StdMutex<HashMap<String, mpsc::UnboundedSender<MlxBridgeEvent>>>> =
-                Arc::new(StdMutex::new(HashMap::new()));
-            let stdout_pending = pending.clone();
-            drop(flow_like_types::tokio::spawn(async move {
-                let mut lines = BufReader::new(stdout).lines();
-                while let Some(line) = lines.next_line().await.transpose() {
-                    let line = match line {
-                        Ok(line) => line,
-                        Err(error) => {
-                            tracing::error!(%error, "Failed reading from MLX service");
-                            break;
-                        }
-                    };
-                    let event = match json::from_str::<MlxBridgeEvent>(&line) {
-                        Ok(event) => event,
-                        Err(error) => {
-                            tracing::warn!(%error, output = %line, "Ignoring invalid MLX service event");
-                            continue;
-                        }
-                    };
-                    let terminal = event.is_terminal();
-                    let sender = stdout_pending
-                        .lock()
-                        .ok()
-                        .and_then(|pending| pending.get(&event.id).cloned());
-                    if let Some(sender) = sender {
-                        let _ = sender.send(event.clone());
-                    }
-                    if terminal && let Ok(mut pending) = stdout_pending.lock() {
-                        pending.remove(&event.id);
-                    }
-                }
-
-                if let Ok(mut pending) = stdout_pending.lock() {
-                    for (id, sender) in pending.drain() {
-                        let _ = sender.send(MlxBridgeEvent::error(
-                            id,
-                            "MLX service stopped unexpectedly",
-                        ));
-                    }
-                }
-            }));
-            drop(flow_like_types::tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                loop {
-                    match lines.next_line().await {
-                        Ok(Some(line)) => tracing::info!(output = %line, "MLX service"),
-                        Ok(None) => break,
-                        Err(error) => {
-                            tracing::warn!(%error, "Failed reading MLX service diagnostics");
-                            break;
-                        }
-                    }
-                }
-            }));
+            let pending = PendingRequests::default();
+            let (exited_sender, exited) = watch::channel(false);
+            drop(flow_like_types::tokio::spawn(route_events(
+                stdout,
+                pending.clone(),
+                exited_sender,
+            )));
+            drop(flow_like_types::tokio::spawn(log_diagnostics(stderr)));
 
             Ok(Self {
                 child: Mutex::new(child),
                 stdin: Arc::new(Mutex::new(stdin)),
                 pending,
+                exited,
             })
         }
     }
@@ -570,6 +662,11 @@ mod apple {
             if let Ok(mut child) = self.child.try_lock() {
                 let _ = child.start_kill();
             }
+        }
+
+        async fn exited(&self) {
+            let mut exited = self.exited.clone();
+            let _ = exited.wait_for(|done| *done).await;
         }
     }
 
@@ -699,11 +796,16 @@ mod apple {
         }
     }
 
-    async fn native_transport(model_directory: &str) -> Result<Arc<dyn MlxTransport>> {
+    async fn native_transport(
+        model_directory: &str,
+        runtimes: &RuntimeLocator,
+    ) -> Result<Arc<dyn MlxTransport>> {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             let _ = model_directory;
-            Ok(Arc::new(MacMlxTransport::new().await?))
+            Ok(Arc::new(
+                MacMlxTransport::new(runtimes.installed_mlx_service()?).await?,
+            ))
         }
         #[cfg(all(
             target_os = "ios",
@@ -711,6 +813,7 @@ mod apple {
             not(any(target_abi = "sim", target_abi = "macabi"))
         ))]
         {
+            let _ = runtimes;
             return Ok(Arc::new(ios::IosMlxTransport::new(model_directory)?));
         }
         #[cfg(not(any(
@@ -722,29 +825,97 @@ mod apple {
             )
         )))]
         {
-            let _ = model_directory;
+            let _ = (model_directory, runtimes);
             Err(flow_like_types::anyhow!(
                 "MLX is only available on Apple-silicon macOS and iOS devices"
             ))
         }
     }
 
-    struct MlxRuntime {
-        server: JoinHandle<()>,
-        transport: Arc<dyn MlxTransport>,
+    /// An MLX model in the MLX runtime: the helper process on macOS, in process on iOS.
+    /// `serve` answers `/health` and `/v1/chat/completions` on a listener, both behind a bearer
+    /// token. Dropping it stops serving and unloads the model.
+    pub struct MlxEndpoint {
+        served: Arc<Served>,
+        server: Option<JoinHandle<()>>,
     }
 
-    impl Drop for MlxRuntime {
+    impl MlxEndpoint {
+        /// Starts the MLX runtime the locator names, for one model; nothing is served yet.
+        pub async fn start(runtimes: &RuntimeLocator, model: MlxServedModel) -> Result<Self> {
+            let transport = native_transport(&model.directory.to_string_lossy(), runtimes).await?;
+            Ok(Self::with_transport(transport, model))
+        }
+
+        fn with_transport(transport: Arc<dyn MlxTransport>, model: MlxServedModel) -> Self {
+            Self {
+                served: Arc::new(Served {
+                    directory: model.directory.to_string_lossy().into_owned(),
+                    kind: model.kind.into(),
+                    limits: model.limits,
+                    transport,
+                }),
+                server: None,
+            }
+        }
+
+        /// Loads the weights by generating one token, so the first request does not wait for them.
+        pub async fn load(&self) -> Result<()> {
+            let warm_up = json!({"messages": [{"role": "user", "content": "Hi"}], "max_tokens": 1});
+            let (mut receiver, mut cancellation) = self.served.generate(warm_up).await?;
+            completion(&mut receiver, &mut cancellation)
+                .await
+                .map(drop)
+                .map_err(|error| {
+                    flow_like_types::anyhow!(
+                        "Load the MLX model in {}: {error}",
+                        self.served.directory
+                    )
+                })
+        }
+
+        /// Serves the model on `listener` behind `bearer_token` and answers the port.
+        pub fn serve(&mut self, listener: TcpListener, bearer_token: &str) -> Result<u16> {
+            if self.server.is_some() {
+                return Err(flow_like_types::anyhow!(
+                    "The MLX model in {} is served already",
+                    self.served.directory
+                ));
+            }
+            let port = listener.local_addr()?.port();
+            let app = router(MlxProxyState {
+                bearer_token: bearer_token.into(),
+                served: self.served.clone(),
+            });
+            self.server = Some(flow_like_types::tokio::spawn(async move {
+                if let Err(error) = axum::serve(listener, app).await {
+                    tracing::error!(%error, "MLX compatibility proxy stopped");
+                }
+            }));
+            Ok(port)
+        }
+
+        /// Resolves once the MLX helper exited; an in-process runtime never does.
+        pub async fn exited(&self) {
+            self.served.transport.exited().await;
+        }
+    }
+
+    impl Drop for MlxEndpoint {
         fn drop(&mut self) {
-            self.server.abort();
-            self.transport.unload();
+            if let Some(server) = self.server.take() {
+                server.abort();
+            }
+            self.served.transport.unload();
         }
     }
 
     pub struct MlxModel {
         bit: Bit,
-        _runtime: Arc<MlxRuntime>,
-        model: Arc<MlxProviderModel>,
+        model: MlxProviderModel,
+        _endpoint: MlxEndpoint,
+        /// Every client holds the model, so the factory sees it in use and keeps its one runtime.
+        this: Weak<MlxModel>,
         pub port: u16,
     }
 
@@ -757,7 +928,10 @@ mod apple {
     #[async_trait]
     impl ModelLogic for MlxModel {
         async fn provider(&self) -> Result<flow_like_model_provider::llm::ModelConstructor> {
-            self.model.provider().await
+            let this = self.this.upgrade().ok_or_else(|| {
+                flow_like_types::anyhow!("The MLX runtime of {} stopped", self.bit.id)
+            })?;
+            Ok(self.model.provider_with_keepalive(this))
         }
 
         async fn default_model(&self) -> Option<String> {
@@ -798,74 +972,97 @@ mod apple {
         }
     }
 
+    /// The provider of an MLX Bit, with a KV cache that fits the execution settings unless the
+    /// Bit sets one.
+    fn served_provider(bit: &Bit, execution_settings: &ExecutionSettings) -> Result<ModelProvider> {
+        let mut provider = bit.try_to_served_provider().ok_or_else(|| {
+            flow_like_types::anyhow!("Failed to read the MLX provider configuration")
+        })?;
+        provider
+            .params
+            .get_or_insert_default()
+            .entry("max_kv_size".to_string())
+            .or_insert_with(|| json!(default_max_kv_size(bit, execution_settings)));
+        Ok(provider)
+    }
+
+    /// The downloaded files of an MLX Bit, laid out as one model directory.
+    async fn materialize(
+        bit: &Bit,
+        app_state: &Arc<FlowLikeState>,
+    ) -> Result<MaterializedMlxModel> {
+        let FlowLikeStore::Local(bit_store) = FlowLikeState::bit_store(app_state).await? else {
+            return Err(flow_like_types::anyhow!("MLX requires a local model store"));
+        };
+        let pack = bit.pack(app_state.clone()).await?;
+        ensure_local_weights(&pack, app_state, bit.id.as_str(), "MLX model").await?;
+        let root = bit.clone();
+        flow_like_types::tokio::task::spawn_blocking(move || {
+            materialize_mlx_model(&root, &pack, &bit_store)
+        })
+        .await
+        .map_err(|error| {
+            flow_like_types::anyhow!("MLX model materialization task failed: {error}")
+        })?
+    }
+
+    fn ensure_servable(bit: &Bit) -> Result<()> {
+        if !bit.is_mlx_model() {
+            return Err(flow_like_types::anyhow!(
+                "Expected an LLM or VLM bit using the {MLX_PROVIDER_NAME} provider"
+            ));
+        }
+        if !can_host_mlx() {
+            return Err(flow_like_types::anyhow!(
+                "MLX can only run on supported Apple-silicon macOS or iOS devices"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Starts the MLX runtime and loads the model while no other local engine loads.
+    async fn loaded_endpoint(
+        runtimes: &RuntimeLocator,
+        model: MlxServedModel,
+    ) -> Result<MlxEndpoint> {
+        let _one_at_a_time = LOCAL_ENGINE_LOADS.lock().await;
+        let endpoint = MlxEndpoint::start(runtimes, model).await?;
+        endpoint.load().await?;
+        Ok(endpoint)
+    }
+
     impl MlxModel {
         pub async fn new(
             bit: &Bit,
             app_state: Arc<FlowLikeState>,
             execution_settings: &ExecutionSettings,
-        ) -> Result<Self> {
-            if !bit.is_mlx_model() {
-                return Err(flow_like_types::anyhow!(
-                    "Expected an LLM or VLM bit using the {MLX_PROVIDER_NAME} provider"
-                ));
-            }
-            if !can_host_mlx() {
-                return Err(flow_like_types::anyhow!(
-                    "MLX can only run on supported Apple-silicon macOS or iOS devices"
-                ));
-            }
-
-            let model_kind = MlxModelKind::from_bit(bit)?;
-            let bit_store = FlowLikeState::bit_store(&app_state).await?;
-            let FlowLikeStore::Local(bit_store) = bit_store else {
-                return Err(flow_like_types::anyhow!("MLX requires a local model store"));
+        ) -> Result<Arc<Self>> {
+            ensure_servable(bit)?;
+            let provider = served_provider(bit, execution_settings)?;
+            let materialized = materialize(bit, &app_state).await?;
+            let model = MlxServedModel {
+                directory: materialized.path,
+                kind: materialized.kind,
+                limits: MlxRequestLimits::default(),
             };
-
-            let pack = bit.pack(app_state.clone()).await?;
-            ensure_local_weights(&pack, &app_state, bit.id.as_str(), "MLX model").await?;
-            let materialization_bit = bit.clone();
-            let materialization_store = bit_store.clone();
-            let materialized = flow_like_types::tokio::task::spawn_blocking(move || {
-                materialize_mlx_model(&materialization_bit, &pack, &materialization_store)
-            })
-            .await
-            .map_err(|error| {
-                flow_like_types::anyhow!("MLX model materialization task failed: {error}")
-            })??;
-            let model_directory = materialized.path.to_string_lossy().into_owned();
-            let transport = native_transport(&model_directory).await?;
+            let mut endpoint = loaded_endpoint(&app_state.runtime_locator, model).await?;
             let bearer_token = flow_like_types::create_id();
-            let proxy_state = MlxProxyState {
-                bearer_token: bearer_token.clone(),
-                model_directory,
-                model_kind,
-                transport: transport.clone(),
-            };
-            let (port, server) = start_proxy(proxy_state).await?;
-            let runtime = Arc::new(MlxRuntime { server, transport });
+            let port = endpoint.serve(TcpListener::bind(("127.0.0.1", 0)).await?, &bearer_token)?;
+            let model = MlxProviderModel::new(&provider, port, &bearer_token).await?;
+            Ok(Self::serving(bit.clone(), model, endpoint, port))
+        }
 
-            let mut provider = bit.try_to_served_provider().ok_or_else(|| {
-                flow_like_types::anyhow!("Failed to read the MLX provider configuration")
-            })?;
-            provider
-                .params
-                .get_or_insert_default()
-                .entry("max_kv_size".to_string())
-                .or_insert_with(|| json!(default_max_kv_size(bit, execution_settings)));
-            let model = Arc::new(
-                MlxProviderModel::new_with_keepalive(
-                    &provider,
-                    port,
-                    &bearer_token,
-                    runtime.clone(),
-                )
-                .await?,
-            );
-
-            Ok(Self {
-                bit: bit.clone(),
-                _runtime: runtime,
+        fn serving(
+            bit: Bit,
+            model: MlxProviderModel,
+            endpoint: MlxEndpoint,
+            port: u16,
+        ) -> Arc<Self> {
+            Arc::new_cyclic(|this| Self {
+                bit,
                 model,
+                _endpoint: endpoint,
+                this: this.clone(),
                 port,
             })
         }
@@ -874,6 +1071,9 @@ mod apple {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::bit::BitTypes;
+        use flow_like_types::reqwest;
+        use std::{sync::Mutex as StdMutex, time::Duration};
 
         #[test]
         fn completion_response_can_be_buffered_into_one_stream_chunk() {
@@ -955,6 +1155,11 @@ mod apple {
                 default_max_kv_size(&bit, &settings),
                 IOS_DEFAULT_MAX_KV_SIZE
             );
+            let provider = served_provider(&bit, &settings).unwrap();
+            assert_eq!(
+                provider.params.unwrap()["max_kv_size"],
+                json!(default_max_kv_size(&bit, &settings))
+            );
         }
 
         #[test]
@@ -976,28 +1181,282 @@ mod apple {
         }
 
         #[test]
-        fn only_llm_and_vlm_bits_have_an_mlx_kind() {
-            let mut bit = Bit {
-                bit_type: BitTypes::Llm,
-                ..Bit::default()
+        fn bridge_requests_name_the_loader_family_in_lowercase() {
+            assert_eq!(json!(BridgeKind::from(MlxModelKind::Llm)), json!("llm"));
+            assert_eq!(json!(BridgeKind::from(MlxModelKind::Vlm)), json!("vlm"));
+        }
+
+        #[test]
+        fn request_limits_cap_the_kv_cache_and_leave_smaller_asks() {
+            let limits = MlxRequestLimits {
+                max_kv_size: Some(4_096),
+                kv_bits: Some(8),
+                inline_images_only: false,
             };
-            assert!(matches!(
-                MlxModelKind::from_bit(&bit),
-                Ok(MlxModelKind::Llm)
-            ));
-            bit.bit_type = BitTypes::Vlm;
-            assert!(matches!(
-                MlxModelKind::from_bit(&bit),
-                Ok(MlxModelKind::Vlm)
-            ));
-            bit.bit_type = BitTypes::Embedding;
-            assert!(MlxModelKind::from_bit(&bit).is_err());
+            let mut unbounded = json!({"messages": [], "max_kv_size": 1_000_000});
+            limits.apply(&mut unbounded);
+            assert_eq!(unbounded["max_kv_size"], 4_096);
+            assert_eq!(unbounded["kv_bits"], 8);
+
+            let mut smaller = json!({"max_kv_size": 512, "kv_bits": 4, "max_kv": "x"});
+            limits.apply(&mut smaller);
+            assert_eq!(smaller["max_kv_size"], 512);
+            assert_eq!(smaller["kv_bits"], 4);
+
+            let mut odd = json!({"max_kv_size": "all"});
+            limits.apply(&mut odd);
+            assert_eq!(odd["max_kv_size"], 4_096);
+
+            let mut untouched = json!({"max_kv_size": 1_000_000});
+            MlxRequestLimits::default().apply(&mut untouched);
+            assert_eq!(untouched, json!({"max_kv_size": 1_000_000}));
+        }
+
+        /// Answers every request with one chunk and a completion, or with an error when the
+        /// prompt asks for one, and records what it was sent.
+        struct FakeTransport {
+            requests: StdMutex<Vec<Value>>,
+            unloaded: StdMutex<bool>,
+            exit: tokio::sync::watch::Sender<bool>,
+        }
+
+        impl FakeTransport {
+            fn new() -> Arc<Self> {
+                Arc::new(Self {
+                    requests: StdMutex::default(),
+                    unloaded: StdMutex::default(),
+                    exit: tokio::sync::watch::Sender::new(false),
+                })
+            }
+
+            fn sent(&self) -> Vec<Value> {
+                self.requests.lock().unwrap().clone()
+            }
+        }
+
+        #[async_trait]
+        impl MlxTransport for FakeTransport {
+            async fn generate(
+                &self,
+                request: MlxBridgeRequest,
+            ) -> Result<mpsc::UnboundedReceiver<MlxBridgeEvent>> {
+                let sent = json::to_value(&request)?;
+                let failing = sent.to_string().contains("fail");
+                self.requests.lock().unwrap().push(sent);
+                let (sender, receiver) = mpsc::unbounded_channel();
+                let event = |name: &str, data: Value| MlxBridgeEvent {
+                    id: request.id.clone(),
+                    event: name.into(),
+                    data: Some(data),
+                    error: None,
+                };
+                if failing {
+                    sender.send(MlxBridgeEvent::error(&request.id, "Unsupported model type"))?;
+                    return Ok(receiver);
+                }
+                let delta = json!({"choices": [{"index": 0, "delta": {"content": "Hi"}}]});
+                sender.send(event("chunk", delta))?;
+                let answer = json!({"id": "c1", "choices": [{"index": 0,
+                    "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}});
+                sender.send(event("complete", answer))?;
+                Ok(receiver)
+            }
+
+            fn unload(&self) {
+                *self.unloaded.lock().unwrap() = true;
+            }
+
+            async fn exited(&self) {
+                let _ = self.exit.subscribe().wait_for(|done| *done).await;
+            }
+        }
+
+        fn served_model(directory: &str, limits: MlxRequestLimits) -> MlxServedModel {
+            MlxServedModel {
+                directory: PathBuf::from(directory),
+                kind: MlxModelKind::Vlm,
+                limits,
+            }
+        }
+
+        const KV_LIMIT: MlxRequestLimits = MlxRequestLimits {
+            max_kv_size: Some(4_096),
+            kv_bits: None,
+            inline_images_only: false,
+        };
+
+        /// An endpoint over `transport` served behind the token `secret`, and its base URL.
+        async fn serving(transport: Arc<FakeTransport>) -> (MlxEndpoint, String) {
+            let model = served_model("/models/qwen-vl", KV_LIMIT);
+            let mut endpoint = MlxEndpoint::with_transport(transport, model);
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = endpoint.serve(listener, "secret").unwrap();
+            (endpoint, format!("http://127.0.0.1:{port}"))
+        }
+
+        #[tokio::test]
+        async fn an_endpoint_loads_its_model_with_one_token_within_its_limits() {
+            let transport = FakeTransport::new();
+            let model = served_model("/models/qwen-vl", KV_LIMIT);
+            let mut endpoint = MlxEndpoint::with_transport(transport.clone(), model);
+            endpoint.load().await.unwrap();
+            let warm_up = &transport.sent()[0];
+            assert_eq!(warm_up["command"], "generate");
+            assert_eq!(warm_up["model_kind"], "vlm");
+            assert_eq!(warm_up["model_directory"], "/models/qwen-vl");
+            assert_eq!(warm_up["request"]["max_tokens"], 1);
+            assert_eq!(warm_up["request"]["max_kv_size"], 4_096);
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            endpoint.serve(listener, "secret").unwrap();
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            assert!(endpoint.serve(listener, "secret").is_err());
+
+            transport.exit.send_replace(true);
+            tokio::time::timeout(Duration::from_secs(5), endpoint.exited())
+                .await
+                .unwrap();
+            drop(endpoint);
+            assert!(*transport.unloaded.lock().unwrap());
+        }
+
+        #[tokio::test]
+        async fn a_served_endpoint_answers_its_token_whole_and_streamed() {
+            let transport = FakeTransport::new();
+            let (_endpoint, base) = serving(transport.clone()).await;
+            let http = reqwest::Client::new();
+            let health = |token: &str| http.get(format!("{base}/health")).bearer_auth(token).send();
+            assert_eq!(health("wrong").await.unwrap().status(), 401);
+            assert_eq!(health("secret").await.unwrap().status(), 200);
+            let chat = |body: Value| {
+                http.post(format!("{base}/v1/chat/completions"))
+                    .bearer_auth("secret")
+                    .json(&body)
+                    .send()
+            };
+
+            let ask = json!({"messages": [{"role": "user", "content": "hi"}],
+                             "max_kv_size": 1_000_000});
+            let answer: Value = chat(ask).await.unwrap().json().await.unwrap();
+            assert_eq!(answer["choices"][0]["message"]["content"], "Hi");
+            assert_eq!(transport.sent()[0]["request"]["max_kv_size"], 4_096);
+
+            let streamed = json!({"messages": [], "stream": true,
+                                  "stream_options": {"include_usage": true}});
+            let text = chat(streamed).await.unwrap().text().await.unwrap();
+            assert!(text.contains("\"content\":\"Hi\""), "{text}");
+            assert!(text.contains("\"total_tokens\":4"), "{text}");
+            assert!(text.contains("[DONE]"), "{text}");
+
+            let failed = chat(json!({"messages": [{"role": "user", "content": "fail"}]}));
+            let failed = failed.await.unwrap();
+            assert_eq!(failed.status(), 500);
+            let failed: Value = failed.json().await.unwrap();
+            assert_eq!(failed["error"]["message"], "Unsupported model type");
+        }
+
+        #[tokio::test]
+        async fn an_endpoint_served_to_other_people_takes_inline_images_only() {
+            let shown = |url: &str| {
+                let content = json!([{"type": "text", "text": "What is this?"},
+                                     {"type": "image_url", "image_url": {"url": url}}]);
+                json!({"messages": [{"role": "user", "content": content}]})
+            };
+            let ask = |base: &str, body: Value| {
+                reqwest::Client::new()
+                    .post(format!("{base}/v1/chat/completions"))
+                    .bearer_auth("secret")
+                    .json(&body)
+                    .send()
+            };
+            let transport = FakeTransport::new();
+            let limits = MlxRequestLimits {
+                inline_images_only: true,
+                ..KV_LIMIT
+            };
+            let mut endpoint = MlxEndpoint::with_transport(
+                transport.clone(),
+                served_model("/models/qwen-vl", limits),
+            );
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let base = format!(
+                "http://127.0.0.1:{}",
+                endpoint.serve(listener, "secret").unwrap()
+            );
+            let linked = [
+                "file:///Users/owner/scan.png",
+                "/Users/owner/scan.png",
+                "https://example.com/cat.png",
+            ];
+            for url in linked {
+                let refused = ask(&base, shown(url)).await.unwrap();
+                assert_eq!(refused.status(), 400, "{url}");
+            }
+            assert!(transport.sent().is_empty());
+            let inline = ask(&base, shown("data:image/png;base64,iVBORw0KGgo="));
+            assert_eq!(inline.await.unwrap().status(), 200);
+            assert_eq!(transport.sent().len(), 1);
+
+            let desktop = FakeTransport::new();
+            let (_endpoint, base) = serving(desktop.clone()).await;
+            let local = ask(&base, shown("/Users/owner/scan.png")).await.unwrap();
+            assert_eq!(local.status(), 200);
+        }
+
+        #[tokio::test]
+        async fn the_factory_keeps_a_model_whose_client_is_still_in_use() {
+            use crate::models::factory_cache::{FactoryCache, MODEL_IDLE_TTL};
+
+            let transport = FakeTransport::new();
+            let (endpoint, _base) = serving(transport.clone()).await;
+            let provider = ModelProvider {
+                api_surface: None,
+                provider_name: MLX_PROVIDER_NAME.to_string(),
+                model_id: Some("qwen-vl".to_string()),
+                version: None,
+                params: None,
+            };
+            let model = MlxProviderModel::new(&provider, 1, "secret").await.unwrap();
+            let cache = FactoryCache::<dyn ModelLogic>::default();
+            let cached = cache
+                .get_or_build("qwen-vl", || async move {
+                    Ok(MlxModel::serving(Bit::default(), model, endpoint, 1)
+                        as Arc<dyn ModelLogic>)
+                })
+                .await
+                .unwrap();
+            let client = cached.provider().await.unwrap().into_client();
+            drop(cached);
+
+            let idle = std::time::Instant::now() + MODEL_IDLE_TTL * 3;
+            cache.gc(idle, MODEL_IDLE_TTL);
+            assert!(cache.contains("qwen-vl"), "a client in use keeps the model");
+            assert!(!*transport.unloaded.lock().unwrap());
+
+            drop(client);
+            cache.gc(
+                idle + MODEL_IDLE_TTL + Duration::from_secs(1),
+                MODEL_IDLE_TTL,
+            );
+            assert!(!cache.contains("qwen-vl"));
+            assert!(*transport.unloaded.lock().unwrap());
+        }
+
+        #[tokio::test]
+        async fn a_model_that_cannot_generate_fails_its_load() {
+            let model = served_model("/models/fail", MlxRequestLimits::default());
+            let endpoint = MlxEndpoint::with_transport(FakeTransport::new(), model);
+            let error = endpoint.load().await.unwrap_err().to_string();
+            assert_eq!(
+                error,
+                "Load the MLX model in /models/fail: Unsupported model type"
+            );
         }
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::MlxModel;
+pub use apple::{MlxEndpoint, MlxModel, MlxRequestLimits, MlxServedModel};
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod unsupported {
@@ -1030,7 +1489,7 @@ mod unsupported {
             _bit: &Bit,
             _app_state: Arc<FlowLikeState>,
             _execution_settings: &ExecutionSettings,
-        ) -> Result<Self> {
+        ) -> Result<Arc<Self>> {
             Err(flow_like_types::anyhow!(
                 "MLX is only available on Apple-silicon macOS and physical iOS devices"
             ))

@@ -18,7 +18,7 @@ export type DeviceAdmission = {
 export type DeviceFrame = {
 	type: "frame";
 	to: string;
-	channel: "signal" | "noise";
+	channel: "signal" | "noise" | "tunnel";
 	payload: string;
 };
 export type RelayedDeviceFrame = DeviceFrame & {
@@ -108,7 +108,7 @@ export function parseDeviceFrame(value: unknown): DeviceFrame {
 		!exactKeys(value, ["type", "to", "channel", "payload"]) ||
 		value.type !== "frame" ||
 		!deviceIdentifier(value.to) ||
-		!["signal", "noise"].includes(String(value.channel)) ||
+		!["signal", "noise", "tunnel"].includes(String(value.channel)) ||
 		!validPayload(value.payload)
 	)
 		throw new Error("Invalid device signaling frame");

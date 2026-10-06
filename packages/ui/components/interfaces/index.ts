@@ -1,6 +1,6 @@
 export * from "./a2ui-interface";
 export * from "./chat-default";
-export * from "./generic-event-form";
+export { FormWorkbenchInterface } from "./form-workbench";
 export * from "./configs/api";
 export * from "./configs/simple_chat";
 export * from "./configs/cron";

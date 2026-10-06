@@ -21,14 +21,22 @@ const ExecutionEngineContext = createContext<ExecutionEngineProvider | null>(
 
 export function ExecutionEngineProviderComponent({
 	children,
-}: { children: React.ReactNode }) {
+	executionScope,
+	showRunningTasks = true,
+}: {
+	children: React.ReactNode;
+	executionScope?: string;
+	showRunningTasks?: boolean;
+}) {
 	const backend = useBackend();
 	const auth = useAuth();
-	const scope = JSON.stringify([
-		getApiOrigin(backend.profile),
-		backend.profile?.id ?? "",
-		(auth.isAuthenticated ? auth.user?.profile.sub : undefined) ?? "local",
-	]);
+	const scope =
+		executionScope ??
+		JSON.stringify([
+			getApiOrigin(backend.profile),
+			backend.profile?.id ?? "",
+			(auth.isAuthenticated ? auth.user?.profile.sub : undefined) ?? "local",
+		]);
 	const executionService = useExecutionServiceOptional();
 	const engineRef = useRef<ExecutionEngineProvider | null>(null);
 
@@ -55,7 +63,7 @@ export function ExecutionEngineProviderComponent({
 				<FrontendAudioLifecycle scope={scope} />
 			</Suspense>
 			{children}
-			<RunningTasksIndicator />
+			{showRunningTasks && <RunningTasksIndicator />}
 		</ExecutionEngineContext.Provider>
 	);
 }

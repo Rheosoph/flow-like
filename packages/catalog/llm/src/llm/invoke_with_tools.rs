@@ -243,8 +243,6 @@ impl NodeLogic for InvokeLLMWithToolsNode {
         let response = {
             let model_factory = context.app_state.model_factory.clone();
             let model = model_factory
-                .lock()
-                .await
                 .build(
                     &model_bit,
                     context.app_state.clone(),

@@ -1,3 +1,7 @@
 "use client";
 
-export { AdminExplorePage as default } from "@flow-like/flow-like-ui/components/pages/admin/explore/admin-explore-page";
+import { AdminExplorePage } from "@flow-like/flow-like-ui/components/pages/admin/explore/admin-explore-page";
+
+export default function Page() {
+	return <AdminExplorePage />;
+}

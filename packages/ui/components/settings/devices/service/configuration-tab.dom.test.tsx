@@ -115,6 +115,19 @@ const clock = (view: View) =>
 	formatTimeOfDay(view.fake.clock.now(), { locale: "en", seconds: true });
 
 describe("summary", () => {
+	test("a service without token authentication reports that no token is required", async () => {
+		const view = await fieldNotes({
+			arrange: (fake) =>
+				patchConfig(fake, STUDIO, "field-notes", (config) => {
+					const hosting = config.hosting as Config;
+					hosting.authentication = "none";
+					hosting.auth_secret = undefined;
+				}),
+		});
+		await ready(view);
+		expect(said(summary(view))).toContain("Access tokenNot required");
+	});
+
 	test("settings read live: events by name, endpoint, write buffering, how it runs and their size", async () => {
 		const view = await fieldNotes();
 		await ready(view);

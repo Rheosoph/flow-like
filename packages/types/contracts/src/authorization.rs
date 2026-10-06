@@ -6,6 +6,8 @@ use std::{fmt, future::Future, pin::Pin, time::SystemTime};
 pub enum ResourceAudience {
     HostedModels,
     ProjectApi,
+    /// The loopback model gateway of the device a placement runs on.
+    DeviceModels,
 }
 
 /// User requests carry the run's usage headers. Instance requests obtain their

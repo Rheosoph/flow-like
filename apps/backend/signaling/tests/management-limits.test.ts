@@ -92,9 +92,9 @@ describe("account-keyed device budgets", () => {
 			"grantee",
 		);
 		const [, second] = managementFrameBudgets(device, "tab-2", "grantee");
-		expect(aggregate[1]).toBe(DEVICE_AGGREGATE_BUDGET);
+		expect(aggregate?.[1]).toBe(DEVICE_AGGREGATE_BUDGET);
 		expect(first).toEqual(second);
-		expect(first[1]).toBe(DEVICE_PARTICIPANT_BUDGET);
+		expect(first?.[1]).toBe(DEVICE_PARTICIPANT_BUDGET);
 		const budgets = new FrameBudgets();
 		for (let i = 0; i < DEVICE_PARTICIPANT_BUDGET.frames; i++)
 			expect(
@@ -115,7 +115,7 @@ describe("account-keyed device budgets", () => {
 	test("a participant whose account this replica cannot see keeps its own slice", () => {
 		const [, remote] = managementFrameBudgets(device, "remote-tab", null);
 		const [, known] = managementFrameBudgets(device, "remote-tab", "grantee");
-		expect(remote[0]).not.toBe(known[0]);
+		expect(remote?.[0]).not.toBe(known?.[0]);
 		expect(
 			managementFrameBudgets(
 				{ ...device, role: "controller", subject: "grantee" },
@@ -216,6 +216,9 @@ describe("management outbox", () => {
 		expect(outbox.pendingBytes).toBe(0);
 		expect(outbox.enqueue(frame("flooding", 150))).toBeTrue();
 		outbox.close();
+		expect(outbox.pendingBytes).toBe(150);
+		for (const resolve of release.splice(0)) resolve();
+		await settle();
 		expect(outbox.pendingBytes).toBe(0);
 		expect(outbox.enqueue(frame("flooding", 1))).toBeFalse();
 	});

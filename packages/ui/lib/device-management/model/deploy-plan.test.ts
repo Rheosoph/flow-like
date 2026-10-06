@@ -120,6 +120,66 @@ function normalised(plan: DeploymentPlan): unknown {
 	);
 }
 
+test("on-demand hosting is opt-in, survives the wire plan, and preserves an existing listener", () => {
+	const app = APPS.app_field_notes;
+	const draft = draftFor(app, ["edge-berlin-01"], {
+		events: ["evt_notes_form"],
+	});
+	expect(planServices(draft, app)[0].hosted).toBe(false);
+	const enabled = { ...draft, hostOnDemand: true };
+	const plan = resolvePlan(enabled, facts(app));
+	expect(plan.services[0]).toMatchObject({ hosted: true, maxInstances: 1 });
+	const wired = wirePlan(
+		plan,
+		{ deviceId: "edge-berlin-01", serviceKey: "main" },
+		{
+			installed: { ...VISITOR_INSTALLED, project_id: app.id },
+			events: [],
+			variables: {},
+			serviceToken: TOKEN,
+			canManageCertificates: true,
+		},
+	);
+	expect(wired.hostOnDemand).toBe(true);
+	expect(draftWithoutSecrets(enabled).hostOnDemand).toBe(true);
+	const updating = {
+		...draft,
+		targets: [
+			{
+				...draft.targets[0],
+				choices: { main: { kind: "update" as const, serviceId: "notes" } },
+			},
+		],
+	};
+	const devices = {
+		...PLAN_DEVICES,
+		"edge-berlin-01": {
+			...PLAN_DEVICES["edge-berlin-01"],
+			services: [
+				{
+					serviceId: "notes",
+					projectId: app.id,
+					events: ["evt_notes_form"],
+					hosted: true,
+				},
+			],
+		},
+	};
+	expect(
+		resolvePlan(updating, facts(app, { devices })).services[0].hosted,
+	).toBe(true);
+	expect(updating.hostOnDemand).toBeUndefined();
+	const versionOnly = { ...draft, entry: "update" as const, keepEvents: true };
+	expect(
+		resolvePlan(versionOnly, facts(app, { devices })).services[0].hosted,
+	).toBe(true);
+	const bot = draftFor(APPS.app_shop_assistant, [], {
+		events: ["evt_shop_telegram"],
+		hostOnDemand: true,
+	});
+	expect(planServices(bot, APPS.app_shop_assistant)[0]?.hosted).toBe(false);
+});
+
 describe("entries (APP §3.1)", () => {
 	test("app-first new deploy ticks every event that can run and fixes the mode", () => {
 		const draft = makePlan(
@@ -1264,6 +1324,53 @@ const NIGHTLY_LEGACY: DeploymentPlanInput = {
 };
 
 describe("wirePlan oracle: one target equals today's createDeploymentPlan", () => {
+	test("a token-free service passes validation and carries its explicit access choice", () => {
+		const draft = draftFor(VISITOR_PLAN_APP, ["studio-mac-mini"], {
+			endpoint: {
+				host: "127.0.0.1",
+				port: 8080,
+				token: "none",
+				tokenValue: "",
+			},
+		});
+		const { plan, check } = planFor(draft, VISITOR_PLAN_APP);
+		expect(check.issues.some((issue) => issue.code === "token_invalid")).toBe(
+			false,
+		);
+		const wired = wirePlan(
+			plan,
+			{ deviceId: "studio-mac-mini", serviceKey: "main" },
+			{
+				installed: VISITOR_INSTALLED,
+				events: VISITOR_CATALOG.events,
+				variables: VISITOR_CATALOG.variables,
+				serviceToken: "",
+				resourceGrant: GRANT,
+				canManageCertificates: true,
+			},
+		);
+		expect(wired.serviceAuthentication).toBe("none");
+		expect(createDeploymentPlan(wired).config.hosting).toMatchObject({
+			authentication: "none",
+		});
+		expect(
+			diffPlacementConfig(
+				{ hosting: { auth_secret: "service-access" } },
+				{ hosting: { authentication: "none" } },
+			),
+		).toEqual(
+			expect.arrayContaining([
+				{
+					field: "authentication",
+					kind: "changed",
+					before: "token",
+					after: "none",
+				},
+				{ field: "token", kind: "removed" },
+			]),
+		);
+	});
+
 	test("a new online service with a secret, an exposed address and a typed token", () => {
 		const draft = draftFor(VISITOR_PLAN_APP, ["studio-mac-mini"], {
 			vars: {

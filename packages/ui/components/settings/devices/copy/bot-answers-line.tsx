@@ -5,22 +5,20 @@ import type { ComponentType, ReactNode } from "react";
 import {
 	type BotFacts,
 	botAnswerCase,
-	deviceBot,
+	desktopBot,
 } from "../../../../lib/device-management/bot-config";
 import { botAnswersText } from "./bot-copy";
 
 /** A bot's facts, or its event's type and config as the Events editor holds them. */
 type BotSource = { bot: BotFacts } | { eventType: string; config: unknown };
 
-function factsOf(source: BotSource): BotFacts | null {
-	if ("bot" in source) return source.bot;
-	const result = deviceBot(source.eventType, source.config);
-	return result?.ok ? result.bot : null;
-}
+const factsOf = (source: BotSource): BotFacts | null =>
+	"bot" in source ? source.bot : desktopBot(source.eventType, source.config);
 
 /**
  * What a bot answers in groups and servers, as one line of its own. Renders
- * nothing for an event that is no bot or whose settings a device can't read.
+ * nothing for an event that is no bot or whose settings the desktop app can't
+ * read; a device's bounds are the deploy wizard's to name.
  */
 export function BotAnswersLine({
 	as,

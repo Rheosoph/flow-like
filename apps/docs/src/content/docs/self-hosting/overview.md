@@ -10,6 +10,13 @@ deployments include object storage and default to a separate gVisor sandbox for
 each workflow execution. Choose the deployment by the infrastructure you can
 operate and the failure recovery you need.
 
+To run selected apps beside local equipment, use [Device deployment](/devices/).
+A device runs the standalone agent and its assigned services, with remote
+management through your hub. It can complement a hosted or self-hosted backend
+at company sites or on a home automation gateway. Follow the device guides for
+[setup](/devices/setup/), [security and networking](/devices/security/), and
+[company edge and home automation examples](/devices/use-cases/).
+
 ![Conceptual overview of one Flow-Like workflow being deployed to a single-server stack, a multi-node cluster, or isolated on-demand executors](../../../assets/SelfHostingOverview.webp)
 
 ## Deployment Options

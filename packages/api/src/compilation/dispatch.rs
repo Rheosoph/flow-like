@@ -450,6 +450,8 @@ impl CompilationDispatcher {
             .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
 
         let staging_path = Path::from(format!("tmp/compilation/{}.json", job.job_id));
+        let claim_check = crate::backend_jwt::ClaimCheckSigner::new(&payload_bytes)
+            .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
         self.content_bucket
             .put(&staging_path, payload_bytes)
             .await
@@ -466,7 +468,9 @@ impl CompilationDispatcher {
             })?;
 
         let reference = CompilationJobRef::Remote {
-            remote_url: presigned_url.to_string(),
+            remote_url: claim_check
+                .sign_url(&presigned_url.to_string())
+                .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?,
         };
         let message_body = serde_json::to_string(&reference)
             .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
@@ -532,6 +536,8 @@ impl CompilationDispatcher {
             WORKLOAD_COMPILATION,
         ) {
             let staging_path = Path::from(format!("tmp/compilation/{}.json", job.job_id));
+            let claim_check = crate::backend_jwt::ClaimCheckSigner::new(&payload_bytes)
+                .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?;
             self.content_bucket
                 .put(&staging_path, payload_bytes)
                 .await
@@ -556,7 +562,9 @@ impl CompilationDispatcher {
                 })?;
 
             let reference = CompilationJobRef::Remote {
-                remote_url: presigned_url.to_string(),
+                remote_url: claim_check
+                    .sign_url(&presigned_url.to_string())
+                    .map_err(|e| CompilationDispatchError::Serialization(e.to_string()))?,
             };
 
             crate::storage_queue::send_json(

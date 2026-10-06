@@ -4,6 +4,8 @@ const PATTERN: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
 const MAX_HANDSHAKE: usize = 128;
 pub const MAX_PLAINTEXT: usize = 16 * 1024;
 const TAG_LEN: usize = 16;
+const CONTROL_PROLOGUE: &[u8] = b"flow-like/standalone/control/v1";
+const TUNNEL_PROLOGUE: &[u8] = b"flow-like/standalone/tunnel/v1";
 
 /// One ordered, reliable transport connection. A reconnect needs a fresh handshake.
 /// Trusted keys must come from verified grants, never from signaling discovery.
@@ -23,7 +25,14 @@ impl Handshake {
         device_id: &str,
         grant_id: &str,
     ) -> Result<Self> {
-        Self::new(private_key, expected_peer, device_id, grant_id, true)
+        Self::new(
+            private_key,
+            expected_peer,
+            device_id,
+            grant_id,
+            true,
+            CONTROL_PROLOGUE,
+        )
     }
 
     pub fn responder(
@@ -32,7 +41,46 @@ impl Handshake {
         device_id: &str,
         grant_id: &str,
     ) -> Result<Self> {
-        Self::new(private_key, expected_peer, device_id, grant_id, false)
+        Self::new(
+            private_key,
+            expected_peer,
+            device_id,
+            grant_id,
+            false,
+            CONTROL_PROLOGUE,
+        )
+    }
+
+    pub fn tunnel_initiator(
+        private_key: &[u8; 32],
+        expected_peer: [u8; 32],
+        device_id: &str,
+        session_id: &str,
+    ) -> Result<Self> {
+        Self::new(
+            private_key,
+            expected_peer,
+            device_id,
+            session_id,
+            true,
+            TUNNEL_PROLOGUE,
+        )
+    }
+
+    pub fn tunnel_responder(
+        private_key: &[u8; 32],
+        expected_peer: [u8; 32],
+        device_id: &str,
+        session_id: &str,
+    ) -> Result<Self> {
+        Self::new(
+            private_key,
+            expected_peer,
+            device_id,
+            session_id,
+            false,
+            TUNNEL_PROLOGUE,
+        )
     }
 
     fn new(
@@ -41,11 +89,12 @@ impl Handshake {
         device_id: &str,
         grant_id: &str,
         initiator: bool,
+        domain: &[u8],
     ) -> Result<Self> {
         if x25519_dalek::x25519([42; 32], expected_peer) == [0; 32] {
             return Err(CryptoError::InvalidInput("low-order Noise peer key"));
         }
-        let mut prologue = b"flow-like/standalone/control/v1".to_vec();
+        let mut prologue = domain.to_vec();
         for field in [device_id, grant_id] {
             if field.is_empty() || field.len() > 256 {
                 return Err(CryptoError::InvalidInput("session scope"));
@@ -259,5 +308,38 @@ mod tests {
         let ciphertext = old_alice.encrypt(b"previous command").unwrap();
         let (_, mut bob) = connect_same_keys();
         assert!(bob.decrypt(&ciphertext).is_err());
+    }
+
+    #[test]
+    fn tunnel_and_management_handshakes_are_separate_domains() {
+        let (alice_secret, alice_public) = keypair();
+        let (bob_secret, bob_public) = keypair();
+        let mut alice =
+            Handshake::tunnel_initiator(&alice_secret, bob_public, "device", "session").unwrap();
+        let mut management =
+            Handshake::responder(&bob_secret, alice_public, "device", "session").unwrap();
+        management.read(&alice.write().unwrap()).unwrap();
+        assert!(alice.read(&management.write().unwrap()).is_err());
+    }
+
+    #[test]
+    fn lost_ciphertext_closes_tunnel_instead_of_replaying_application_data() {
+        let (alice_secret, alice_public) = keypair();
+        let (bob_secret, bob_public) = keypair();
+        let mut alice =
+            Handshake::tunnel_initiator(&alice_secret, bob_public, "device", "session").unwrap();
+        let mut bob =
+            Handshake::tunnel_responder(&bob_secret, alice_public, "device", "session").unwrap();
+        bob.read(&alice.write().unwrap()).unwrap();
+        alice.read(&bob.write().unwrap()).unwrap();
+        bob.read(&alice.write().unwrap()).unwrap();
+        let (mut alice, mut bob) = (alice.finish().unwrap(), bob.finish().unwrap());
+        let _lost = alice.encrypt(b"first write").unwrap();
+        let next = alice.encrypt(b"second write").unwrap();
+        assert!(bob.decrypt(&next).is_err());
+        assert!(matches!(
+            bob.decrypt(&next),
+            Err(CryptoError::SessionUnavailable)
+        ));
     }
 }

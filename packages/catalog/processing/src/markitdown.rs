@@ -738,8 +738,6 @@ impl NodeLogic for ExtractDocumentAiNode {
 
         let model_factory = context.app_state.model_factory.clone();
         let model = model_factory
-            .lock()
-            .await
             .build(
                 &model_bit,
                 context.app_state.clone(),
@@ -1063,8 +1061,6 @@ impl NodeLogic for ExtractDocumentsAiNode {
 
         let model_factory = context.app_state.model_factory.clone();
         let model = model_factory
-            .lock()
-            .await
             .build(
                 &model_bit,
                 context.app_state.clone(),
@@ -1363,8 +1359,6 @@ async fn invoke_model_simple_standalone(
 
     let model_factory = app_state.model_factory.clone();
     let model = model_factory
-        .lock()
-        .await
         .build(
             model_bit,
             app_state.clone(),
@@ -1629,8 +1623,6 @@ impl NodeLogic for SummarizeDocumentNode {
 
         let model_factory = context.app_state.model_factory.clone();
         let model = model_factory
-            .lock()
-            .await
             .build(
                 &model_bit,
                 context.app_state.clone(),

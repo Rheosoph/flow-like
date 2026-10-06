@@ -11,9 +11,9 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use flow_like_compiler::{compiler_router, CompilerState};
+//! use flow_like_compiler::{compiler_router, CompilerConfig, CompilerState};
 //!
-//! let state = CompilerState::from_env();
+//! let state = CompilerState::new(CompilerConfig::from_env());
 //! let app = compiler_router(state);
 //! ```
 
@@ -22,6 +22,7 @@ pub mod config;
 pub mod error;
 pub mod jwt;
 mod metadata;
+pub mod resolve;
 pub mod router;
 
 pub use compile::compile;
@@ -31,4 +32,4 @@ pub use flow_like_types_contracts::dispatch::{
     CompilationJob, CompilationResult, CompilationStatus,
 };
 pub use metadata::extract_nodes;
-pub use router::{compiler_router, process_job, CompilerState};
+pub use router::{CompilerState, compiler_router, process_job};

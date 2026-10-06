@@ -11,6 +11,7 @@ import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
 } from "../../../../lib/uint8";
+import { DeviceBitBadge } from "../../../settings/devices/models/use/device-model-badge";
 import {
 	type FlowSelectorData,
 	type FlowSelectorDataRef,
@@ -93,7 +94,12 @@ export function BitVariable({
 							const bitId = bitRef(bit);
 							return (
 								<SelectItem key={bitId} value={bitId}>
-									{bitDisplayName(bit) ?? bit.id}
+									<span className="flex min-w-0 items-center gap-1.5">
+										<span className="truncate">
+											{bitDisplayName(bit) ?? bit.id}
+										</span>
+										<DeviceBitBadge bit={bit} />
+									</span>
 								</SelectItem>
 							);
 						})}

@@ -5,6 +5,9 @@ use crate::state::AppState;
 mod activity;
 mod history;
 
+#[cfg(test)]
+mod test_db;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/llm", get(history::get_llm_history))

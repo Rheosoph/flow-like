@@ -343,7 +343,7 @@ const EXCEPTION_COPY: Record<
 	endpoint_shared_token: (c, p) =>
 		c.t(
 			"devices:deployShip.exception.endpointSharedToken",
-			"{{event}} answers to {{service}}'s access token, not its own",
+			"{{event}} uses {{service}}'s access settings; its token from Events is not used",
 			{ event: eventNames(c, [String(p.event)]), service: p.service },
 		),
 	schedule_two_devices: (c, p) =>
@@ -410,6 +410,13 @@ function addressOf(item: ReviewTarget): string {
 	return host ? `${host}:${port}` : `${port}`;
 }
 
+function requiresToken(c: Context, item: ReviewTarget): boolean {
+	const mode = c.plan.draft.endpoint.token;
+	return mode === "keep"
+		? item.existing?.config.hosting?.authentication !== "none"
+		: mode !== "none";
+}
+
 function EndpointCell({
 	c,
 	item,
@@ -437,6 +444,11 @@ function EndpointCell({
 					? c.t("devices:deployShip.plan.certificate", "with a certificate")
 					: c.t("devices:deployShip.plan.plain", "unencrypted")}
 			</CellSub>
+			{!requiresToken(c, item) ? (
+				<CellSub>
+					{c.t("devices:deployShip.plan.noToken", "no token required")}
+				</CellSub>
+			) : null}
 		</>
 	);
 }
@@ -697,7 +709,18 @@ const DIFF_FORMAT: Record<DiffField, DiffFormat> = {
 	},
 	token: {
 		label: (c) => c.t("devices:deployShip.diff.token", "Access token"),
-		value: (c) => c.t("devices:deployShip.diff.newToken", "new token"),
+		value: (c, row) =>
+			row.kind === "removed"
+				? c.t("devices:deployShip.diff.currentToken", "current token")
+				: c.t("devices:deployShip.diff.newToken", "new token"),
+	},
+	authentication: {
+		label: (c) =>
+			c.t("devices:deployShip.diff.authentication", "Service access"),
+		value: (c, _row, value) =>
+			value === "none"
+				? c.t("devices:deployShip.diff.noToken", "no token required")
+				: c.t("devices:deployShip.diff.tokenRequired", "token required"),
 	},
 	certificate: {
 		label: (c) => c.t("devices:deployShip.diff.certificate", "Certificate"),
@@ -1407,10 +1430,14 @@ function answersSentence(c: Context, hosted: readonly ReviewTarget[]): string {
 			{ address, devices: c.list(devices) },
 		),
 	);
-	return `${answers.join(" ")} ${c.t(
-		"devices:deployShip.conseq.tokenOnce",
-		"Clients need the access token shown once after deploy.",
-	)}`;
+	if (hosted.some((item) => requiresToken(c, item)))
+		answers.push(
+			c.t(
+				"devices:deployShip.conseq.tokenOnce",
+				"Clients need the access token shown once after deploy.",
+			),
+		);
+	return answers.join(" ");
 }
 
 function newWho(c: Context, news: readonly ReviewTarget[]): string {
@@ -1795,17 +1822,23 @@ function endpointConsequences(
 			);
 	}
 	out.who.push(
-		t(
-			"devices:deployShip.conseq.endpointToken",
-			"Callers need {{service}}'s access token. The token set in Events is not used on a device.",
-			{ service },
-		),
+		requiresToken(c, item)
+			? t(
+					"devices:deployShip.conseq.endpointToken",
+					"Callers need {{service}}'s access token. The token set in Events is not used on a device.",
+					{ service },
+				)
+			: t(
+					"devices:deployShip.conseq.endpointNoToken",
+					"{{service}} does not require a token. The token set in Events is not used on a device.",
+					{ service },
+				),
 	);
 	const served = item.service.events.filter((eventId) => {
 		const event = plan.app?.events.find((row) => row.id === eventId);
 		return event ? eventKind(event) === "served" : false;
 	});
-	if (served.length > 1)
+	if (served.length > 1 && requiresToken(c, item))
 		out.who.push(
 			t(
 				"devices:deployShip.conseq.endpointShared",
@@ -1863,11 +1896,17 @@ function onDemandConsequences(
 		);
 		if (item.hosted)
 			out.who.push(
-				t(
-					"devices:deployShip.conseq.onDemandPage",
-					"Anyone with {{service}}'s access token can also run it from the service page.",
-					{ service },
-				),
+				requiresToken(c, item)
+					? t(
+							"devices:deployShip.conseq.onDemandPage",
+							"Anyone with {{service}}'s access token can also run it from the service page.",
+							{ service },
+						)
+					: t(
+							"devices:deployShip.conseq.onDemandPageNoToken",
+							"Anyone who can reach {{service}} can also run it from the service page without a token.",
+							{ service },
+						),
 			);
 	}
 }
@@ -2010,6 +2049,15 @@ function consequenceRows(
 	updateConsequences(c, updates, out);
 	scheduleConsequences(c, items, out);
 	kindConsequences(c, items, out);
+	for (const item of items)
+		if (item.hosted && !requiresToken(c, item))
+			out.who.push(
+				t(
+					"devices:deployShip.conseq.noToken",
+					"Anyone who can reach {{service}} on {{device}} can use its endpoints, Pages, chats and actions without a token.",
+					{ service: item.service.serviceId, device: item.target.name },
+				),
+			);
 	flowConsequences(c, facts.prepared, facts.flowNames, out);
 	for (const item of items)
 		if (item.target.locked)

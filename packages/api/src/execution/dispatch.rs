@@ -243,7 +243,8 @@ pub struct DispatchConfig {
     /// Dedicated native asynchronous Lambda. When absent, LambdaInvoke keeps
     /// the legacy API Gateway envelope sent to lambda_function_name.
     pub lambda_async_function_name: Option<String>,
-    /// Platform key for the dedicated asynchronous executor's WASM artifacts.
+    /// OS/architecture for the dedicated asynchronous executor (e.g. linux-aarch64).
+    /// The API build supplies the artifact version; explicit artifact keys also work.
     pub lambda_async_platform: Option<String>,
     /// AWS region for Lambda
     pub lambda_region: Option<String>,
@@ -1316,6 +1317,8 @@ impl Dispatcher {
             blake3::hash(run_id.as_bytes()).to_hex(),
             blake3::hash(job_id.as_bytes()).to_hex()
         ));
+        let claim_check = crate::backend_jwt::ClaimCheckSigner::new(&payload)
+            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
         staging
             .put(&path, payload)
             .await
@@ -1329,7 +1332,9 @@ impl Dispatcher {
             .await
             .map_err(|e| DispatchError::Lambda(format!("failed to sign Lambda payload: {e}")))?;
         serde_json::to_vec(&flow_like_types::dispatch::DispatchPayloadRef::Remote {
-            remote_url: remote_url.to_string(),
+            remote_url: claim_check
+                .sign_url(&remote_url.to_string())
+                .map_err(|e| DispatchError::Serialization(e.to_string()))?,
         })
         .map_err(|e| DispatchError::Serialization(e.to_string()))
     }
@@ -1556,6 +1561,8 @@ impl Dispatcher {
             })?;
 
             let staging_path = StorePath::from(format!("tmp/execution/{}.json", job_id));
+            let claim_check = crate::backend_jwt::ClaimCheckSigner::new(&payload_bytes)
+                .map_err(|e| DispatchError::Serialization(e.to_string()))?;
             staging
                 .put(&staging_path, payload_bytes)
                 .await
@@ -1577,7 +1584,9 @@ impl Dispatcher {
                 })?;
 
             let reference = flow_like_types::dispatch::DispatchPayloadRef::Remote {
-                remote_url: presigned_url.to_string(),
+                remote_url: claim_check
+                    .sign_url(&presigned_url.to_string())
+                    .map_err(|e| DispatchError::Serialization(e.to_string()))?,
             };
             crate::storage_queue::send_json(
                 account_name,
@@ -1668,6 +1677,8 @@ impl Dispatcher {
             })?;
 
             let staging_path = StorePath::from(format!("tmp/execution/{}.json", job_id));
+            let claim_check = crate::backend_jwt::ClaimCheckSigner::new(&payload_bytes)
+                .map_err(|e| DispatchError::Serialization(e.to_string()))?;
             staging
                 .put(&staging_path, payload_bytes)
                 .await
@@ -1682,7 +1693,9 @@ impl Dispatcher {
                 .map_err(|e| DispatchError::PubSub(format!("Failed to sign staging URL: {}", e)))?;
 
             let reference = flow_like_types::dispatch::DispatchPayloadRef::Remote {
-                remote_url: presigned_url.to_string(),
+                remote_url: claim_check
+                    .sign_url(&presigned_url.to_string())
+                    .map_err(|e| DispatchError::Serialization(e.to_string()))?,
             };
             pubsub::send_json(
                 project_id,
@@ -1779,6 +1792,8 @@ impl Dispatcher {
             serde_json::to_vec(&body).map_err(|e| DispatchError::Serialization(e.to_string()))?;
 
         let staging_path = StorePath::from(format!("tmp/sqs/{}.json", job_id));
+        let claim_check = crate::backend_jwt::ClaimCheckSigner::new(&payload_bytes)
+            .map_err(|e| DispatchError::Serialization(e.to_string()))?;
         staging
             .put(&staging_path, payload_bytes)
             .await
@@ -1790,7 +1805,9 @@ impl Dispatcher {
             .map_err(|e| DispatchError::Sqs(format!("Failed to sign staging URL: {}", e)))?;
 
         let reference = flow_like_types::dispatch::DispatchPayloadRef::Remote {
-            remote_url: presigned_url.to_string(),
+            remote_url: claim_check
+                .sign_url(&presigned_url.to_string())
+                .map_err(|e| DispatchError::Serialization(e.to_string()))?,
         };
         let message_body = serde_json::to_string(&reference)
             .map_err(|e| DispatchError::Serialization(e.to_string()))?;
@@ -2552,7 +2569,7 @@ pub(crate) mod pubsub {
     /// Body of every message this API publishes to a work topic.
     ///
     /// `payload` is byte-for-byte what the broker body used to be: the untagged
-    /// inline job object or the `{"remote_url": …}` claim-check reference. The
+    /// inline job object or the `{"remote_url": "..."}` claim-check reference. The
     /// shape is identical to the Queue Storage envelope on purpose — one worker
     /// parser serves both clouds.
     #[derive(Serialize)]
@@ -3981,6 +3998,13 @@ mod tests {
         let mut dispatcher = Dispatcher::from_config(DispatchConfig::default());
         dispatcher.staging_bucket = Some(Arc::new(FlowLikeStore::Memory(store.clone())));
         let mut request = dispatch_request(DispatchTrigger::User);
+        crate::backend_jwt::init_for_tests();
+        request.jwt = crate::backend_jwt::sign(&serde_json::json!({
+            "iss": "flow-like", "aud": "flow-like-executor", "typ": "executor",
+            "sub": "user-1", "iat": chrono::Utc::now().timestamp(),
+            "exp": chrono::Utc::now().timestamp() + 3600,
+        }))
+        .unwrap();
         request.payload = Some(serde_json::json!({
             "input": "x".repeat(LAMBDA_ASYNC_INLINE_PAYLOAD_BYTES)
         }));

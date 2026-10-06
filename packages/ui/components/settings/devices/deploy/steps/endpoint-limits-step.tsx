@@ -132,10 +132,16 @@ function useCertificates(
 	);
 }
 
-/** The events of a service that the device's web server serves: Pages, chats and Endpoints. */
+/** Events reached through the service listener, including forms when hosting is enabled. */
 function servedEvents(state: State, events: readonly string[]) {
 	return (state.plan.app?.events ?? []).filter(
-		(event) => events.includes(event.id) && eventKind(event) === "served",
+		(event) =>
+			events.includes(event.id) &&
+			(eventKind(event) === "served" ||
+				(eventKind(event) === "on_demand" &&
+					state.plan.services.some(
+						(service) => service.hosted && service.events.includes(event.id),
+					))),
 	);
 }
 
@@ -161,7 +167,21 @@ const isEndpoint = (event: {
  * calls all of them, so whoever gets it to open a Page can call the Endpoints.
  */
 function sharedTokenServices(state: State) {
+	if (state.draft.endpoint.token === "none") return [];
 	return state.plan.services.flatMap((service) => {
+		if (
+			state.draft.endpoint.token === "keep" &&
+			!state.plan.targets.some((target) =>
+				target.services.some(
+					(row) =>
+						row.key === service.key &&
+						state.configurations[target.deviceId]?.find(
+							(config) => config.placement_id === row.serviceId,
+						)?.config.hosting?.authentication !== "none",
+				),
+			)
+		)
+			return [];
 		const served = servedEvents(state, service.events);
 		const endpoints = served.filter(isEndpoint);
 		return endpoints.length && endpoints.length < served.length
@@ -319,7 +339,7 @@ function BindChoice({ state, update }: Readonly<PlanStepProps>) {
 					</b>{" "}
 					{t(
 						"deploy.endpoint.exposedText",
-						"Anyone who can reach it can call {{events}}. Keep the access token secret and use a certificate.",
+						"Clients can reach {{events}} at this address. Use a certificate to encrypt network traffic.",
 						{ events: hostedNames(state) },
 					)}
 				</Note>
@@ -571,6 +591,10 @@ function TokenField({ state, update }: Readonly<PlanStepProps>) {
 			},
 		});
 	const body: Record<TokenMode, string> = {
+		none: t(
+			"deploy.endpoint.tokenNone",
+			"Anyone who can reach the service can use its endpoints, Pages, chats and actions without a token. The token set in Events is not used on a device.",
+		),
 		per_device: t(
 			"deploy.endpoint.tokenPerDevice",
 			"Generated on this computer for each device; shown once after deploy so you can copy them.",
@@ -585,7 +609,7 @@ function TokenField({ state, update }: Readonly<PlanStepProps>) {
 		),
 		keep: t(
 			"deploy.endpoint.tokenKeep",
-			"Keeps each service's current token. It can't be read back.",
+			"Keeps each service's current access settings, including whether a token is required. Existing tokens can't be read back.",
 		),
 	};
 	return (
@@ -620,6 +644,10 @@ function TokenField({ state, update }: Readonly<PlanStepProps>) {
 					{
 						value: "own",
 						label: t("deploy.endpoint.tokenOptOwn", "Set my own"),
+					},
+					{
+						value: "none",
+						label: t("deploy.endpoint.tokenOptNone", "No token"),
 					},
 					...(draft.entry === "update"
 						? [
@@ -842,6 +870,7 @@ function sharedEndpoint(t: DevicesT, state: State): string {
 	const { draft, plan } = state;
 	const { host, port, token } = draft.endpoint;
 	const tokens: Record<TokenMode, string> = {
+		none: t("devices:deploy.endpoint.sharedNone", "no token required"),
 		per_device: t(
 			"devices:deploy.endpoint.sharedPerDevice",
 			"one token per device",
@@ -856,7 +885,7 @@ function sharedEndpoint(t: DevicesT, state: State): string {
 		),
 		keep: t(
 			"devices:deploy.endpoint.sharedKeep",
-			"each device keeps its token",
+			"each service keeps its access settings",
 		),
 	};
 	const address =
@@ -1602,6 +1631,31 @@ export function EndpointLimitsStep(props: Readonly<PlanStepProps>) {
 	const { state, goTo } = props;
 	const { plan, app } = state;
 	const hosted = plan.services.some((service) => service.hosted);
+	const onDemandHostingChoice = plan.services.some((service) => {
+		const events = (app?.events ?? []).filter((event) =>
+			service.events.includes(event.id),
+		);
+		if (
+			events.some((event) => eventKind(event) === "served") ||
+			!events.some((event) => eventKind(event) === "on_demand")
+		)
+			return false;
+		return (
+			plan.draft.hostOnDemand === true ||
+			!plan.targets.length ||
+			plan.targets.some((target) =>
+				target.services.some(
+					(row) =>
+						row.key === service.key &&
+						row.events.some((id) => events.some((event) => event.id === id)) &&
+						(row.kind === "new" ||
+							!state.configurations[target.deviceId]?.find(
+								(config) => config.placement_id === row.serviceId,
+							)?.config.hosting),
+				),
+			)
+		);
+	});
 	const limits = t(
 		"deploy.endpoint.ledeLimits",
 		"No event you picked is served by the device's web server, so only limits apply.",
@@ -1653,6 +1707,40 @@ export function EndpointLimitsStep(props: Readonly<PlanStepProps>) {
 	return (
 		<div className="@container/endpointstep flex min-w-0 flex-col gap-4">
 			{header}
+			{onDemandHostingChoice ? (
+				<Block
+					title={t(
+						"deploy.endpoint.onDemandTitle",
+						"Forms and quick actions in Studio",
+					)}
+				>
+					<CheckField
+						id="deploy-host-on-demand"
+						checked={plan.draft.hostOnDemand === true}
+						onCheckedChange={(hostOnDemand) =>
+							state.update({
+								hostOnDemand,
+								...(hostOnDemand && plan.draft.endpoint.token === "keep"
+									? {
+											endpoint: { ...plan.draft.endpoint, token: "per_device" },
+										}
+									: {}),
+							})
+						}
+					>
+						{t(
+							"deploy.endpoint.onDemandEnable",
+							"Open these forms and quick actions as a deployed app",
+						)}
+					</CheckField>
+					<p className="text-sm text-muted-foreground">
+						{t(
+							"deploy.endpoint.onDemandHint",
+							"Creates a device listener with the access settings below. Studio connects through the encrypted tunnel. Services without a listener can still use Run now when this is off.",
+						)}
+					</p>
+				</Block>
+			) : null}
 			{hosted ? <EndpointBlock {...props} /> : <NoEndpoint state={state} />}
 			<InstancesBlock {...props} />
 			<PolicyBlock state={state} />

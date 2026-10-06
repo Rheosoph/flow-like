@@ -6,6 +6,9 @@ use super::cli_resolution::{external_agent_cli_resolution_failure, find_cli_reso
 use super::client_pool::{
     acquire_nested_copilot_run_permit, nested_copilot_run_gate, nested_copilot_run_gate_key,
 };
+use super::delegated_completion::{
+    MAX_DELEGATED_COMPLETION_CONTINUATIONS, delegated_completion_prompt,
+};
 use super::external_continuation::{
     build_external_agent_prompt_body, build_external_agent_prompt_with_options,
     build_external_workflow_continuation_prompt, earn_nested_wall_clock_extension,
@@ -221,6 +224,7 @@ pub(super) async fn external_code_agent_chat_internal(
     let mut final_workflow_snapshot = None;
     let mut last_successful_mutation = None;
     let mut continuation = 0u8;
+    let mut delegated_continuations = 0usize;
     let mut phases_run = 0u32;
     let mut zero_activity_restarts = 0u8;
     let mut previous_exhausted_budget: Option<String> = None;
@@ -277,6 +281,7 @@ pub(super) async fn external_code_agent_chat_internal(
             tools.clone(),
             workflow_state.clone(),
             tool_activity.clone(),
+            global_agent.then(|| run_cancellation.clone()),
         )
         .await
         {
@@ -499,16 +504,80 @@ pub(super) async fn external_code_agent_chat_internal(
             );
         }
 
-        let phase_outcome = match mcp_bridge.finish_phase().await {
+        // A provider can finish its text while code-mode calls are still pending. Drain only
+        // run-owned specialists on a successful exit. Failure and explicit cancellation retain
+        // the existing cancel-and-quiesce path; the old provider cannot admit new calls here.
+        let collect_delegated_results = global_agent
+            && external_agent_run_failure(&run_result).is_none()
+            && !run_cancellation.is_cancelled();
+        let phase_outcome = match mcp_bridge
+            .finish_provider_phase(collect_delegated_results)
+            .await
+        {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
         };
+        let delegated_results = phase_outcome.delegated_results;
         final_workflow_snapshot = phase_outcome.workflow_snapshot;
         last_successful_mutation = phase_outcome.last_successful_mutation;
         let queued = final_workflow_snapshot
             .as_ref()
             .is_some_and(|state| state.queued);
         let run_failure = external_agent_run_failure(&run_result).map(str::to_string);
+        if !delegated_results.is_empty() && !run_cancellation.is_cancelled() {
+            let completion = delegated_completion_prompt(&delegated_results);
+            if delegated_continuations >= MAX_DELEGATED_COMPLETION_CONTINUATIONS {
+                break Err(format!(
+                    "The orchestrator reached the delegated completion continuation limit. All owned calls have settled, but the final completion check remains incomplete. {completion}"
+                ));
+            }
+            delegated_continuations += 1;
+            let mut completion_request =
+                format!("Original user request:\n{raw_user_prompt}\n\n{completion}");
+            if let Some(run_id) = request_id.as_deref() {
+                let steering = drain_global_chat_steering(run_id).await;
+                if !steering.is_empty() {
+                    completion_request.push_str(&format!(
+                        "\n\nThe user sent this while the delegated work completed:\n{}",
+                        steering.join("\n")
+                    ));
+                }
+            }
+            prompt = match (
+                claude_role_appendix.as_deref(),
+                resume_session_id.as_deref(),
+            ) {
+                (_, Some(session)) => {
+                    next_phase_resume = Some(session.to_string());
+                    completion_request
+                }
+                (Some(_), None) => {
+                    build_external_agent_prompt_body(&surface.system_content, &completion_request)
+                }
+                (None, None) => build_external_agent_prompt_with_options(
+                    &surface.system_content,
+                    &completion_request,
+                    scope,
+                    workflow_edit_request,
+                    global_agent,
+                    prompt_profile,
+                    prompt_mode,
+                ),
+            };
+            tracing::info!(
+                completion_records = delegated_results.len(),
+                continuation = delegated_continuations,
+                request_id = request_id.as_deref().unwrap_or("unscoped"),
+                "Continuing FlowPilot orchestrator with settled delegated results"
+            );
+            send_external_progress_event(
+                &channel,
+                EXTERNAL_AGENT_TOOL_CALL_ID,
+                "Checking the orchestrator's completion against the delegated tools' confirmed results.",
+                parent_request_id.as_deref(),
+            );
+            continue;
+        }
         // A phase that managed to queue its batch before the deadline still returns normally; an
         // externally cancelled run keeps its own terminal reporting.
         if nested_wall_clock_exhausted(

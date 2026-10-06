@@ -1,7 +1,6 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useSearchParams } from "next/navigation";
 import {
 	useCallback,
 	useEffect,
@@ -33,6 +32,7 @@ import {
 } from "../../lib/run-timing";
 import { resolveEventBoardVersion } from "../../lib/schema/flow/board-version";
 import type { PageSpecialEvent } from "../../lib/schema/flow/page-trigger";
+import { useClientSearchParams } from "../../lib/set-query-params";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
@@ -163,7 +163,7 @@ function PageInterfaceInner({
 	const executionService = useExecutionServiceOptional();
 	const frontendStateStore = getFrontendStateStore(appId);
 	const router = useClientRouter();
-	const hostSearch = useSearchParams().toString();
+	const hostSearch = useClientSearchParams().toString();
 	const runtimeQueryContext = useMemo(() => {
 		if (providedQueryParams)
 			return { _query_params: { ...providedQueryParams } };

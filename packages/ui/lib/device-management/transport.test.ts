@@ -2,14 +2,20 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 import { base64url, unbase64url } from "./crypto";
+import type { ModelAssetStatus } from "./models";
 import {
 	ConnectError,
 	type ConnectProgress,
 	DeviceManagementConnection,
 } from "./transport";
+import {
+	DeviceTunnelDataClient,
+	type TunnelModelAssetPush,
+} from "./tunnel-data";
 import type {
 	BrowserController,
 	DeviceReceipt,
+	ManagementResponse,
 	SignalingAdmission,
 } from "./types";
 
@@ -20,6 +26,8 @@ const encoder = new TextEncoder();
 const nowS = () => Math.floor(Date.now() / 1000);
 
 type DeviceScript = {
+	/** Reply to the controller's direct connection offer. */
+	offer?: (sessionId: string) => Record<string, unknown>;
 	/** Reply to the controller's hello; defaults to a matching handshake envelope. */
 	hello?: (sessionId: string) => Record<string, unknown>;
 	ready?: () => Record<string, unknown>;
@@ -29,6 +37,7 @@ type DeviceScript = {
 
 let script: DeviceScript = {};
 let sockets: FakeSocket[] = [];
+let commands: string[] = [];
 
 class FakeSocket {
 	static OPEN = 1;
@@ -64,13 +73,13 @@ class FakeSocket {
 	deliver(frame: Record<string, unknown>) {
 		queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(frame) }));
 	}
-	fromDevice(payload: Record<string, unknown>) {
+	fromDevice(payload: Record<string, unknown>, channel = "noise") {
 		this.deliver({
 			type: "frame",
 			to: participants.at(-1),
 			from: DEVICE,
 			from_role: "device",
-			channel: "noise",
+			channel,
 			payload: base64url(encoder.encode(JSON.stringify(payload))),
 		});
 	}
@@ -78,6 +87,8 @@ class FakeSocket {
 		const frame = JSON.parse(text);
 		if (frame.type !== "frame") return;
 		const envelope = JSON.parse(decoder.decode(unbase64url(frame.payload)));
+		if (envelope.kind === "offer" && script.offer)
+			this.fromDevice(script.offer(envelope.session_id), "signal");
 		if (envelope.kind === "hello")
 			this.fromDevice(
 				script.hello?.(envelope.session_id) ?? {
@@ -103,6 +114,23 @@ class FakeSocket {
 					),
 				),
 			});
+		if (envelope.kind === "message") {
+			const request = JSON.parse(decoder.decode(unbase64url(envelope.data)));
+			commands.push(request.command.type);
+			this.fromDevice({
+				kind: "message",
+				session_id: envelope.session_id,
+				data: base64url(
+					encoder.encode(
+						JSON.stringify({
+							operation_id: request.operation_id,
+							state: "completed",
+							result: { ok: true },
+						}),
+					),
+				),
+			});
+		}
 	}
 	close() {
 		this.readyState = 3;
@@ -187,6 +215,7 @@ let saved: { WebSocket: unknown; RTCPeerConnection: unknown };
 beforeEach(() => {
 	script = {};
 	sockets = [];
+	commands = [];
 	participants = [];
 	saved = {
 		WebSocket: globals.WebSocket,
@@ -201,6 +230,172 @@ afterEach(() => {
 });
 
 describe("connect progress and fallback", () => {
+	test("refuses service discovery and forwarding before sending to agents without service support", async () => {
+		for (const feature of [undefined, 2, "1"]) {
+			script.ready = () => ({
+				ready: true,
+				device_id: DEVICE,
+				expires_at: nowS() + 300,
+				boot_id: "boot-1",
+				data_tunnel: 1,
+				service_tunnel: feature,
+			});
+			const { result } = await connect();
+			const connection = result as DeviceManagementConnection;
+			const socketCount = sockets.length;
+			await expect(
+				connection.request({ type: "service_listeners", placement_id: "api" }),
+			).rejects.toThrow("Update the device agent");
+			expect(() => connection.openService("api", "hosting")).toThrow(
+				"Update the device agent",
+			);
+			expect(sockets).toHaveLength(socketCount);
+			expect(commands).toEqual([]);
+			connection.close();
+		}
+	});
+	test("requires an authenticated streaming capability before opening a bulk tunnel", async () => {
+		for (const feature of [undefined, 2, "1"]) {
+			script.ready = () => ({
+				ready: true,
+				device_id: DEVICE,
+				expires_at: nowS() + 300,
+				boot_id: "boot-1",
+				data_tunnel: feature,
+			});
+			const { result } = await connect();
+			const connection = result as DeviceManagementConnection;
+			const socketCount = sockets.length;
+			await expect(
+				connection.request({ type: "inspect_page" }),
+			).rejects.toThrow("Update the device agent");
+			expect(sockets).toHaveLength(socketCount);
+			expect(commands).toEqual([]);
+			connection.close();
+		}
+	});
+	test("routes bulk reads separately so an active read does not block a control request", async () => {
+		script.ready = () => ({
+			ready: true,
+			device_id: DEVICE,
+			expires_at: nowS() + 300,
+			boot_id: "boot-1",
+			data_tunnel: 1,
+		});
+		const { result } = await connect();
+		const connection = result as DeviceManagementConnection;
+		let reply: (response: ManagementResponse) => void = () => {};
+		class Bulk extends DeviceTunnelDataClient {
+			calls: string[] = [];
+			override async request(
+				command: Record<string, unknown>,
+			): Promise<ManagementResponse> {
+				this.calls.push(String(command.type));
+				return new Promise((resolve) => {
+					reply = resolve;
+				});
+			}
+		}
+		const bulk = new Bulk({
+			api: api(() => admission()),
+			profile: {} as IProfile,
+			controller,
+			receipt,
+			grantId: "owner",
+		});
+		connection.adoptDataTunnel(bulk);
+		const reading = connection.request({ type: "logs" }, "logs-op");
+		await Promise.resolve();
+		expect(
+			(await connection.request({ type: "restart" }, "restart-op")).state,
+		).toBe("completed");
+		expect(bulk.calls).toEqual(["logs"]);
+		expect(commands).toEqual(["restart"]);
+		reply({
+			operation_id: "logs-op",
+			state: "completed",
+			result: { lines: [] },
+		});
+		await reading;
+		connection.close();
+	});
+	test("routes model statistics over the data tunnel and other models commands over the management connection", async () => {
+		script.ready = () => ({
+			ready: true,
+			device_id: DEVICE,
+			expires_at: nowS() + 300,
+			boot_id: "boot-1",
+			data_tunnel: 1,
+		});
+		const { result } = await connect();
+		const connection = result as DeviceManagementConnection;
+		class Bulk extends DeviceTunnelDataClient {
+			calls: Record<string, unknown>[] = [];
+			override async request(
+				command: Record<string, unknown>,
+				operationId: string,
+			): Promise<ManagementResponse> {
+				this.calls.push(command);
+				return { operation_id: operationId, state: "completed", result: {} };
+			}
+		}
+		const bulk = new Bulk({
+			api: api(() => admission()),
+			profile: {} as IProfile,
+			controller,
+			receipt,
+			grantId: "owner",
+		});
+		connection.adoptDataTunnel(bulk);
+		const stats = { type: "models", request: { kind: "stats" } };
+		await connection.request(stats, "stats-op");
+		await connection.request(
+			{ type: "models", request: { kind: "overview" } },
+			"overview-op",
+		);
+		expect(bulk.calls).toEqual([stats]);
+		expect(commands).toEqual(["models"]);
+		connection.close();
+	});
+	test("sends model asset pushes over the data tunnel", async () => {
+		script.ready = () => ({
+			ready: true,
+			device_id: DEVICE,
+			expires_at: nowS() + 300,
+			boot_id: "boot-1",
+			data_tunnel: 1,
+		});
+		const { result } = await connect();
+		const connection = result as DeviceManagementConnection;
+		class Bulk extends DeviceTunnelDataClient {
+			pushes: TunnelModelAssetPush[] = [];
+			override async pushModelAsset(
+				input: TunnelModelAssetPush,
+			): Promise<ModelAssetStatus> {
+				this.pushes.push(input);
+				return {
+					digest: { algorithm: "sha256", hex: "a".repeat(64) },
+					job_id: input.jobId,
+					state: "awaiting_push",
+					bytes: 7,
+				};
+			}
+		}
+		const bulk = new Bulk({
+			api: api(() => admission()),
+			profile: {} as IProfile,
+			controller,
+			receipt,
+			grantId: "owner",
+		});
+		connection.adoptDataTunnel(bulk);
+		const probe = { jobId: "12345678-1234-4234-8234-123456789abc", offset: 0 };
+		const status = await connection.pushModelAsset(probe);
+		expect(status).toMatchObject({ state: "awaiting_push", bytes: 7 });
+		expect(bulk.pushes).toEqual([probe]);
+		expect(commands).toEqual([]);
+		connection.close();
+	});
 	test("reports every step and why the session runs over the relay", async () => {
 		const { result, steps } = await connect();
 		expect(result).toBeInstanceOf(DeviceManagementConnection);
@@ -252,6 +447,136 @@ describe("connect progress and fallback", () => {
 		expect((turn.result as DeviceManagementConnection).fallbackReason).toBe(
 			"webrtc_failed",
 		);
+	});
+
+	test("connected ICE without an open data channel times out and starts a fresh relay handshake", async () => {
+		class StalledChannel extends EventTarget {
+			readyState = "connecting";
+			onclose: (() => void) | null = null;
+			close() {
+				this.readyState = "closed";
+				this.dispatchEvent(new Event("close"));
+				this.onclose?.();
+			}
+		}
+		const channel = new StalledChannel();
+		let awaitingChannel = false;
+		const peers: ConnectedPeer[] = [];
+		class ConnectedPeer extends EventTarget {
+			iceGatheringState = "complete";
+			iceConnectionState = "new";
+			connectionState = "new";
+			localDescription = { type: "offer", sdp: "test offer" };
+			constructor() {
+				super();
+				peers.push(this);
+			}
+			createDataChannel() {
+				return channel;
+			}
+			async createOffer() {
+				return this.localDescription;
+			}
+			async setLocalDescription() {}
+			async setRemoteDescription() {
+				this.iceConnectionState = "connected";
+				this.connectionState = "connected";
+				awaitingChannel = true;
+			}
+			close() {
+				this.iceConnectionState = "closed";
+				this.connectionState = "closed";
+			}
+		}
+		globals.RTCPeerConnection = ConnectedPeer;
+		const handshakes: { id: string; closed: boolean; freed: boolean }[] = [];
+		const freshController = {
+			beginNoise: () => {
+				const state = {
+					id: `attempt-${handshakes.length + 1}`,
+					closed: false,
+					freed: false,
+				};
+				handshakes.push(state);
+				return {
+					...controller.beginNoise("owner", new Uint8Array([1]), nowS()),
+					sessionId: () => state.id,
+					close: () => {
+						state.closed = true;
+					},
+					free: () => {
+						state.freed = true;
+					},
+				};
+			},
+		} as unknown as BrowserController;
+		const offered: string[] = [];
+		const authenticated: string[] = [];
+		script.offer = (sessionId) => {
+			offered.push(sessionId);
+			return { kind: "answer", session_id: sessionId, sdp: "test answer" };
+		};
+		script.hello = (sessionId) => {
+			authenticated.push(sessionId);
+			return {
+				kind: "handshake",
+				session_id: sessionId,
+				data: base64url(new Uint8Array([1])),
+			};
+		};
+		type Deadline = { delay: number; fire: () => void };
+		let captureDeadline: (deadline: Deadline) => void = () => {};
+		const waitingForChannel = new Promise<Deadline>((resolve) => {
+			captureDeadline = resolve;
+		});
+		const nativeSetTimeout = globalThis.setTimeout;
+		globals.setTimeout = (callback: () => void, delay: number) => {
+			const timer = nativeSetTimeout(callback, delay);
+			if (awaitingChannel) {
+				awaitingChannel = false;
+				captureDeadline({ delay, fire: callback });
+			}
+			return timer;
+		};
+		let connection: DeviceManagementConnection | undefined;
+		const steps: ConnectProgress[] = [];
+		try {
+			const connecting = DeviceManagementConnection.connect(
+				api(() =>
+					admission({ ice_servers: [{ urls: ["turn:turn.test:3478"] }] }),
+				),
+				{} as IProfile,
+				freshController,
+				receipt,
+				"owner",
+				undefined,
+				{ onStep: (step) => steps.push(step) },
+			);
+			const deadline = await waitingForChannel;
+			const peer = peers[0];
+			expect(deadline.delay).toBe(15_000);
+			expect(peer.iceConnectionState).toBe("connected");
+			expect(peer.connectionState).toBe("connected");
+			expect(channel.readyState).toBe("connecting");
+			expect(authenticated).toEqual([]);
+			expect(steps.at(-1)).toEqual({ step: "trying_direct", state: "active" });
+			deadline.fire();
+			connection = await connecting;
+			expect(connection.transport).toBe("websocket");
+			expect(channel.readyState).toBe("closed");
+			expect(peer.connectionState).toBe("closed");
+			expect(sockets).toHaveLength(1);
+			expect(offered).toEqual(["attempt-1"]);
+			expect(authenticated).toEqual(["attempt-2"]);
+			expect(handshakes).toEqual([
+				{ id: "attempt-1", closed: true, freed: true },
+				{ id: "attempt-2", closed: false, freed: false },
+			]);
+			expect(steps.at(-1)).toEqual({ step: "securing", state: "done" });
+		} finally {
+			globals.setTimeout = nativeSetTimeout;
+			connection?.close();
+		}
 	});
 });
 
@@ -317,6 +642,12 @@ describe("typed connect errors", () => {
 			"handshake_failed",
 			"Unexpected Noise handshake.",
 		]);
+		expect(handshake.diagnostic).toEqual({
+			transport: "websocket",
+			phase: "securing",
+			cause: "handshake_failed",
+			fallbackReason: "webrtc_unavailable",
+		});
 		script = {
 			ready: () => ({
 				ready: true,

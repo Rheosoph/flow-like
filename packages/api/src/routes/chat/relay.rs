@@ -180,7 +180,7 @@ impl HostedProvider {
         }
     }
 
-    fn env_endpoint_key(&self) -> &'static str {
+    pub(super) fn env_endpoint_key(&self) -> &'static str {
         match self {
             Self::OpenRouter => "OPENROUTER_ENDPOINT",
             Self::OpenAI => "HOSTED_OPENAI_ENDPOINT",
@@ -191,7 +191,7 @@ impl HostedProvider {
         }
     }
 
-    fn env_api_key(&self) -> &'static str {
+    pub(super) fn env_api_key(&self) -> &'static str {
         match self {
             Self::OpenRouter => "OPENROUTER_API_KEY",
             Self::OpenAI => "HOSTED_OPENAI_API_KEY",
@@ -202,7 +202,7 @@ impl HostedProvider {
         }
     }
 
-    fn default_endpoint(&self) -> Option<&'static str> {
+    pub(super) fn default_endpoint(&self) -> Option<&'static str> {
         match self {
             Self::OpenRouter => Some("https://openrouter.ai/api"),
             Self::OpenAI => Some("https://api.openai.com"),
@@ -442,43 +442,6 @@ pub(super) fn deduplicate_tools(body: &mut JsonValue) {
             }
         });
     }
-}
-
-pub(super) async fn build_provider_url(
-    state: &AppState,
-    hosted_provider: &HostedProvider,
-    surface: ModelApiSurface,
-) -> Result<(String, String), ApiError> {
-    use flow_like_secrets::{ExposeSecret, SecretRef};
-
-    let endpoint_key = hosted_provider.env_endpoint_key();
-    let api_key_key = hosted_provider.env_api_key();
-
-    let endpoint = state
-        .secrets
-        .get_secret_string(&SecretRef::new(endpoint_key))
-        .await
-        .ok()
-        .map(|s| s.expose_secret().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| hosted_provider.default_endpoint().map(String::from))
-        .ok_or_else(|| ApiError::internal(format!("{} not configured", endpoint_key)))?;
-
-    let api_key = state
-        .secrets
-        .get_secret_string(&SecretRef::new(api_key_key))
-        .await
-        .map(|s| s.expose_secret().to_string())
-        .unwrap_or_default();
-    if api_key.is_empty() {
-        return Err(ApiError::internal(format!(
-            "{} not configured",
-            api_key_key
-        )));
-    }
-
-    let url = hosted_provider.endpoint_url(&endpoint, surface);
-    Ok((url, api_key))
 }
 
 // Accumulator for streaming usage/cost extraction
@@ -1167,13 +1130,42 @@ async fn relay_authorized_request(
         tracking_id_opt.as_deref(),
         &hosted_provider,
     );
-    let (url, api_key) = build_provider_url(&state, &hosted_provider, surface).await?;
+    let connection = super::hosted_connection::resolve(&state, &hosted_provider, surface).await?;
+    let url = connection.url.clone();
     let provider_label = hosted_provider.label().to_string();
     let user_sub = usage_context.user_id.clone();
     let (mut rate, _) = crate::bit_pricing::hosted_bit_rate(&bit);
     super::hosted_worker::apply_worker_tariff(&mut rate);
     let (estimated_tokens, estimated_cost) =
         bound_hosted_request(&mut upstream_body, surface, &rate, &hosted_provider)?;
+    let use_worker = super::hosted_worker::enabled();
+    // Authenticate before reserving usage when sending directly. Queued work
+    // obtains fresh credentials in the worker and rechecks the catalog there.
+    let request = if use_worker {
+        connection
+            .authorize(
+                &state,
+                Some(&bit.id),
+                &upstream_model_id,
+                surface,
+                &upstream_body,
+            )
+            .await?;
+        None
+    } else {
+        Some(
+            connection
+                .request(
+                    &state,
+                    Some(&bit.id),
+                    &upstream_model_id,
+                    surface,
+                    &upstream_body,
+                    std::time::Duration::from_millis(rate.max_request_ms as u64),
+                )
+                .await?,
+        )
+    };
     let start = UsageInvocationStart {
         kind: "llm",
         user_id: Some(&user_sub),
@@ -1196,12 +1188,13 @@ async fn relay_authorized_request(
     let id = invocation_id
         .as_deref()
         .ok_or_else(|| ApiError::internal("Hosted AI reservation is missing"))?;
-    if super::hosted_worker::enabled() {
+    if use_worker {
         return super::hosted_worker::dispatch(
             state,
             super::hosted_worker::HostedAiJob {
                 operation_id: id.to_owned(),
                 request: super::hosted_worker::HostedWork::Chat {
+                    bit_id: Some(bit.id.clone()),
                     body: upstream_body,
                     responses_api: surface == ModelApiSurface::Responses,
                     stream,
@@ -1219,19 +1212,8 @@ async fn relay_authorized_request(
             "Hosted AI operation has already started",
         ));
     }
-    let client = flow_like_types::reqwest::Client::new();
-
-    let mut request_builder = client
-        .post(&url)
-        .bearer_auth(&api_key)
-        .json(&upstream_body)
-        .timeout(std::time::Duration::from_millis(rate.max_request_ms as u64));
-
-    if hosted_provider == HostedProvider::OpenRouter {
-        request_builder = request_builder
-            .header("HTTP-Referer", "https://flow-like.com")
-            .header("X-Title", "Flow-Like");
-    }
+    let mut request_builder =
+        request.ok_or_else(|| ApiError::internal("Hosted request is missing"))?;
 
     if let Some(tracking_id) = &tracking_id_opt {
         request_builder = request_builder.header("X-User-Id", tracking_id);

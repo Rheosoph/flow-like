@@ -314,13 +314,26 @@ export function CloudApprovalFields({
 
 	const options = useMemo(() => {
 		const known = new Set(offered.models.map((model) => model.id));
+		const local = new Map(
+			offered.localModels.map((model) => [model.id, model]),
+		);
 		return [
 			...offered.models,
 			...value.models
 				.filter((model) => !known.has(model))
-				.map((model) => ({ id: model, name: nameOf(model) })),
+				.map(
+					(model) =>
+						local.get(model) ?? {
+							id: model,
+							name: nameOf(model),
+							access: "unknown",
+						},
+				),
 		];
-	}, [offered.models, value.models, nameOf]);
+	}, [offered.models, offered.localModels, value.models, nameOf]);
+	const localModels = offered.localModels.filter(
+		(model) => !value.models.includes(model.id),
+	);
 
 	const issues = checkApprovalDraft(value, {
 		appId,
@@ -394,18 +407,40 @@ export function CloudApprovalFields({
 				className="m-0 flex min-w-0 flex-col gap-1.5 border-0 p-0"
 			>
 				<legend className="mb-1.5 p-0 text-[13px]/[18px] font-medium">
-					{t("cloud.fields.models", "Models it may call")}
+					{t("cloud.fields.models", "Hosted model access")}
 				</legend>
+				<p className="text-xs text-muted-foreground">
+					{t(
+						"cloud.fields.modelsHint",
+						"Optional cloud access for the app's declared model dependencies. Ticking a model requires a spending limit. Local execution stays preferred where the device supports it.",
+					)}
+				</p>
 				{options.map((model) => (
-					<CheckField
-						key={model.id}
-						id={`${id}-model-${model.id}`}
-						checked={value.models.includes(model.id)}
-						disabled={disabled}
-						onCheckedChange={(on) => toggleModel(model.id, on)}
-					>
-						{model.name}
-					</CheckField>
+					<div key={model.id} className="flex flex-col gap-1">
+						<CheckField
+							id={`${id}-model-${model.id}`}
+							checked={value.models.includes(model.id)}
+							disabled={disabled}
+							onCheckedChange={(on) => toggleModel(model.id, on)}
+						>
+							{model.name}
+						</CheckField>
+						{model.access === "local_with_hosted_fallback" ? (
+							<p className="pl-6 text-xs text-muted-foreground">
+								{t(
+									"cloud.fields.modelHostedFallback",
+									"Runs on the device when supported. Tick to allow hosted fallback.",
+								)}
+							</p>
+						) : model.access === "local" ? (
+							<p className="pl-6 text-xs text-muted-foreground">
+								{t(
+									"cloud.fields.modelLocalApproved",
+									"This model requires a compatible on-device runtime and needs no cloud approval. Untick to remove its existing approval.",
+								)}
+							</p>
+						) : null}
+					</div>
 				))}
 				{options.length ? null : (
 					<p className="text-xs text-muted-foreground">
@@ -414,7 +449,7 @@ export function CloudApprovalFields({
 							: offered.known
 								? t(
 										"cloud.fields.modelsNone",
-										"{{app}} doesn't use a hosted model, so there's nothing to tick.",
+										"No hosted models were found in {{app}}'s model dependencies.",
 										{ app },
 									)
 								: t(
@@ -428,6 +463,24 @@ export function CloudApprovalFields({
 					<p className="text-xs text-critical">{issueOf("models", false)}</p>
 				) : null}
 			</fieldset>
+			{localModels.length ? (
+				<div data-local-models="" className="flex flex-col gap-1.5">
+					<span className="text-[13px]/[18px] font-medium">
+						{t("cloud.fields.localModels", "On-device models")}
+					</span>
+					<p className="text-xs text-muted-foreground">
+						{t(
+							"cloud.fields.localModelsHint",
+							"These models need a compatible runtime on the device. They need no cloud approval or spending limit.",
+						)}
+					</p>
+					<ul className="list-disc pl-5 text-sm">
+						{localModels.map((model) => (
+							<li key={model.id}>{model.name}</li>
+						))}
+					</ul>
+				</div>
+			) : null}
 			<div className="grid min-w-0 gap-3 @min-[520px]/devices:grid-cols-2">
 				<Field
 					id={`${id}-instances`}

@@ -8,6 +8,16 @@ import {
 import type { IBoard } from "../../lib/schema/flow/board";
 import type { IBoardState } from "../../state/backend-state/board-state";
 import {
+	type BoardEditAcquireOptions,
+	type BoardEditCoordinator,
+	boardEditCoordinator,
+	boardEditLockKey,
+} from "../flowpilot/board-edit-guard";
+import {
+	type FlowPilotBoardActivity,
+	flowPilotBoardActivity,
+} from "./flowpilot-board-activity";
+import {
 	WORKFLOW_EVENT_ENTRY_NODE_NAMES,
 	collectRunnableWorkflowEventEntries,
 } from "./workflow-event-entries";
@@ -27,6 +37,50 @@ type BoardInspectionBackend = Pick<
 	| "getBoardAuthoritative"
 	| "getFlowScriptAuthoritative"
 >;
+
+/** A status probe must not wait behind the operation whose progress it is checking. */
+export async function inspectFlowPilotBoardWhenIdle(
+	boardState: BoardInspectionBackend,
+	target: BoardInspectionTarget,
+	options: {
+		assertActive: () => void;
+		acquireOptions?: BoardEditAcquireOptions;
+		coordinator?: BoardEditCoordinator;
+		activity?: FlowPilotBoardActivity;
+	},
+) {
+	options.assertActive();
+	const reservation = (options.coordinator ?? boardEditCoordinator).tryAcquire(
+		boardEditLockKey(target.appId, target.boardId),
+		options.acquireOptions,
+	);
+	if (!reservation) {
+		return {
+			status: "in_progress" as const,
+			mode: "inspect" as const,
+			app_id: target.appId,
+			board_id: target.boardId,
+			read_only: true,
+			persisted_readback_verified: false,
+			active_run:
+				(options.activity ?? flowPilotBoardActivity).snapshot(
+					target.appId,
+					target.boardId,
+				) ?? null,
+			message:
+				"A board operation still owns this target. This status probe did not read the saved board. Wait for the existing operation; inspect again to observe progress or read its result after it settles. Do not start another edit to recover this wait.",
+		};
+	}
+	const release = await reservation;
+	try {
+		options.assertActive();
+		const result = await inspectFlowPilotBoard(boardState, target);
+		options.assertActive();
+		return result;
+	} finally {
+		release();
+	}
+}
 
 /** Read canonical source and graph facts without drafts, specialist prose or write APIs. */
 export async function inspectFlowPilotBoard(

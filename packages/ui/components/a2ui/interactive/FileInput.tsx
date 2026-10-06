@@ -4,6 +4,7 @@ import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { File, Folder, Loader2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { IBulkUploadProgress } from "../../../lib/bulk-upload";
+import { runtimeDomEventName } from "../../../lib/service-runtime/session-scope";
 import {
 	type ITemporaryUploadResult,
 	uploadTemporaryFilesLocally,
@@ -194,6 +195,7 @@ export function A2UIFileInput({
 	);
 
 	useEffect(() => {
+		const eventName = runtimeDomEventName("a2ui:clearFileInput", appId);
 		const handleClearFileInput = (event: Event) => {
 			const { detail } = event as CustomEvent<{
 				surfaceId: string;
@@ -207,11 +209,11 @@ export function A2UIFileInput({
 			}
 		};
 
-		window.addEventListener("a2ui:clearFileInput", handleClearFileInput);
+		window.addEventListener(eventName, handleClearFileInput);
 		return () => {
-			window.removeEventListener("a2ui:clearFileInput", handleClearFileInput);
+			window.removeEventListener(eventName, handleClearFileInput);
 		};
-	}, [surfaceId, componentId, clearFiles]);
+	}, [appId, surfaceId, componentId, clearFiles]);
 
 	const uploadTemporaryFiles = async (
 		files: File[],

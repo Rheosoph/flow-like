@@ -83,9 +83,13 @@ impl NodeLogic for GrabFrameNode {
         let mut buf: Vec<u8> = Vec::new();
 
         let mut frame = Vec::new();
+        let mut received = 0u64;
+        let limit = crate::web::api::response_limit();
 
         while let Some(chunk_res) = stream.next().await {
-            let chunk: Bytes = chunk_res.unwrap();
+            let chunk: Bytes = chunk_res?;
+            received = received.saturating_add(chunk.len() as u64);
+            crate::web::api::check_response_size(Some(received), limit)?;
             buf.extend_from_slice(&chunk);
 
             if let Some(start) = buf.windows(2).position(|w| w == [0xFF, 0xD8]) {

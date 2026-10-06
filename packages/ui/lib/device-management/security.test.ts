@@ -15,10 +15,12 @@ import {
 function connection(options: {
 	send?: () => void;
 	next?: () => Promise<string>;
+	decrypt?: () => Uint8Array;
+	transport?: "webrtc" | "websocket";
 }) {
 	const events: string[] = [];
 	const pipe = {
-		kind: "websocket",
+		kind: options.transport ?? "websocket",
 		send: () => {
 			events.push("send");
 			options.send?.();
@@ -31,7 +33,7 @@ function connection(options: {
 			events.push("encrypt");
 			return bytes.slice(0, 16);
 		},
-		decrypt: () => new Uint8Array(),
+		decrypt: options.decrypt ?? (() => new Uint8Array()),
 		close: () => events.push("session-close"),
 		free: () => {},
 	};
@@ -211,6 +213,74 @@ describe("browser management boundaries", () => {
 		expect(error).toBeInstanceOf(ManagementUnconfirmedError);
 		expect(error.operationId).toBe("op-lost");
 		expect(value.open).toBe(false);
+	});
+	test("unconfirmed replies preserve fixed transport causes without copying private errors or payloads", async () => {
+		const envelope = JSON.stringify({
+			kind: "message",
+			session_id: "session",
+			data: base64url(new Uint8Array([1])),
+		});
+		const cases = [
+			{
+				phase: "wait_reply",
+				cause: "timeout",
+				next: () => new FrameQueue<string>().next(1),
+			},
+			{
+				phase: "wait_reply",
+				cause: "connection_closed",
+				next: () => {
+					const queue = new FrameQueue<string>();
+					queue.close();
+					return queue.next();
+				},
+			},
+			{
+				phase: "envelope",
+				cause: "invalid_reply",
+				next: async () => "private invalid frame",
+			},
+			{
+				phase: "decrypt",
+				cause: "decrypt_failed",
+				next: async () => envelope,
+				decrypt: () => {
+					throw new Error("private native error");
+				},
+			},
+			{
+				phase: "response",
+				cause: "invalid_reply",
+				next: async () => envelope,
+				decrypt: () =>
+					new TextEncoder().encode(
+						JSON.stringify({
+							operation_id: "different",
+							state: "completed",
+							result: { secret: "private response" },
+						}),
+					),
+			},
+		];
+		for (const transport of ["websocket", "webrtc"] as const) {
+			for (const sample of cases) {
+				const { value, events } = connection({ ...sample, transport });
+				const error = await value
+					.request({ type: "stop", secret: "private command" }, "op-lost")
+					.catch((failure) => failure);
+				expect(error).toBeInstanceOf(ManagementUnconfirmedError);
+				expect(error.operationId).toBe("op-lost");
+				expect(error.diagnostic).toEqual({
+					transport,
+					phase: sample.phase,
+					cause: sample.cause,
+				});
+				expect(JSON.stringify(error)).not.toContain("private");
+				expect(error.message).not.toContain("private");
+				expect(value.open).toBe(false);
+				expect(events.filter((event) => event === "send")).toHaveLength(1);
+			}
+		}
 	});
 	test("coded rejections surface the device reason, and older agents keep the legacy path", () => {
 		expect(

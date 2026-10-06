@@ -61,6 +61,10 @@ curl -X POST "https://your-domain.com/api/v1/sink/trigger/http/app_abc123/webhoo
 
 ## On a device
 
+Use [Device deployment](/devices/) to install and operate the standalone
+runtime. [Service access and port forwarding](/devices/service-access/) explains
+listener addresses, browser access, and private connections to deployed services.
+
 An `http` event, or an Endpoint (`api` event), that is deployed to a device is served by the service it is deployed to, at that service's own address:
 
 ```
@@ -72,10 +76,10 @@ The address has no `app_id`. The device answers with the event and Flow version 
 ### Who can call it
 
 - **Who can reach it** is the service's exposure: only this device, one address, or all networks.
-- **Who may call it** is whoever holds the service's access token, sent as `Authorization: Bearer <token>`. The token is shown once after the deploy and can be replaced on the service's Endpoint tab. One token covers every endpoint, page and chat of the service; deploy an endpoint as a service of its own to give it a token of its own.
-- The event's `auth_token` never reaches a device and is not used there. `public_endpoint` is not read: an endpoint that is open on the hub needs the service's token on a device.
-- Without a certificate on the service, the token travels unencrypted.
-- Senders that cannot set an `Authorization` header, such as many third-party webhooks, cannot call an endpoint on a device. A device sends no CORS headers and answers a browser's preflight request with `401`, so web pages on other origins cannot call it either.
+- **Who may call it** follows the service's access settings. By default, callers send `Authorization: Bearer <token>`. The token is shown once after deployment and can be replaced on the service's Endpoint tab. Choose **No token** under **Endpoint & limits** to allow anyone who can reach the listener to call it. This choice applies to every endpoint, Page, chat, and action in that service. Use separate services when they need different access settings.
+- The event's `auth_token` is not used on a device. `public_endpoint` is not read: the service's access settings apply regardless of whether the endpoint is open on the hub.
+- Without a certificate on the service, requests and any service token travel unencrypted.
+- Senders that cannot set an `Authorization` header can call a service configured with **No token**. The service sends no CORS headers, so removing the token requirement does not enable web pages on other origins to call it.
 
 ```bash
 curl -X POST "https://device.example:8443/webhook" \
@@ -83,6 +87,8 @@ curl -X POST "https://device.example:8443/webhook" \
   -H "Content-Type: application/json" \
   -d '{"event": "test"}'
 ```
+
+Omit the `Authorization` header when the service uses **No token**.
 
 ### The route
 
@@ -110,14 +116,14 @@ Within one service a method and path can be used once. Two endpoints with the sa
 |---|---|
 | `200 OK` | The Flow finished; the body is its result |
 | `400 Bad Request` | The query or the body cannot be read |
-| `401 Unauthorized` | The service's access token is missing or wrong |
+| `401 Unauthorized` | The service requires an access token, and the request's token is missing or wrong |
 | `404 Not Found` | The service has no endpoint with this method and path |
 | `408 Request Timeout` | The body did not arrive within the time limit |
 | `413 Payload Too Large` | The body is larger than 10 MiB |
 | `415 Unsupported Media Type` | The body is multipart |
 | `429 Too Many Requests` | The service runs as many requests as it allows at once |
 | `502 Bad Gateway` | The Flow failed or ran past the time limit |
-| `503 Service Unavailable` | The service is stopping, or its access token cannot be read |
+| `503 Service Unavailable` | The service is stopping, or a required access token cannot be read |
 
 ## Authentication
 

@@ -30,6 +30,7 @@ import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import {
 	IBitTypes,
+	deviceOfModelBit,
 	isFreeLlmModel,
 	isHostedLlmModel,
 	selectProfileLlmModels,
@@ -1165,15 +1166,24 @@ function FlowPilotImpl({
 	);
 
 	// Filter profile and custom models to runtimes supported by this host.
-	const { canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders } =
-		backendContext.capabilities();
+	const {
+		canHostLlamaCPP,
+		canHostMLX,
+		canUseNativeAgentProviders,
+		deviceModels,
+	} = backendContext.capabilities();
 	const bitsModels = useMemo(
 		() =>
 			selectProfileLlmModels(
 				foundBits.data,
 				customBits.data,
 				profile.data?.hub_profile.bits,
-				{ canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders },
+				{
+					canHostLlamaCPP,
+					canHostMLX,
+					canUseNativeAgentProviders,
+					deviceModels,
+				},
 			),
 		[
 			foundBits.data,
@@ -1182,6 +1192,7 @@ function FlowPilotImpl({
 			canHostLlamaCPP,
 			canHostMLX,
 			canUseNativeAgentProviders,
+			deviceModels,
 		],
 	);
 
@@ -4579,6 +4590,7 @@ const Header = memo(function Header({
 					label:
 						model.meta?.en?.name ?? model.friendly_name ?? (model.id as string),
 					isFree: isFreeLlmModel(model),
+					deviceId: deviceOfModelBit(model),
 				}))
 			: copilotSDK.models.map((model) => ({
 					id: model.id,

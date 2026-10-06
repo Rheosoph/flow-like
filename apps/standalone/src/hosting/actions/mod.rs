@@ -1,4 +1,4 @@
-use super::{HostState, read_token};
+use super::{HostState, service_fingerprint};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand_core::RngCore;
@@ -223,7 +223,10 @@ impl Registry {
             "Page capability belongs to another worker"
         );
         ensure!(
-            blake3::hash(&read_token(&host.secret)?).to_hex().as_str() == fingerprint,
+            service_fingerprint(host.secret.as_deref())?
+                .to_hex()
+                .as_str()
+                == fingerprint,
             "Service access was rotated"
         );
         let entries = self

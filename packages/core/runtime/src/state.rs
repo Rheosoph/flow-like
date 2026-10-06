@@ -35,11 +35,17 @@ use crate::flow::node::Node;
 use crate::flow::node::NodeLogic;
 
 #[cfg(feature = "model")]
+use crate::models::device::{
+    DeviceModelConnector, DeviceModelProbe, Interaction, LocalModelRouter,
+};
+#[cfg(feature = "model")]
 use crate::models::embedding_factory::EmbeddingFactory;
 #[cfg(feature = "model")]
 use crate::models::llm::ModelFactory;
 #[cfg(feature = "bit")]
 use crate::utils::download_manager::DownloadManager;
+#[cfg(feature = "model")]
+use crate::utils::execute::RuntimeLocator;
 use crate::utils::http::HTTPClient;
 #[cfg(feature = "model")]
 use flow_like_model_provider::provider::ModelProviderConfiguration;
@@ -578,9 +584,20 @@ pub struct FlowLikeState {
     pub model_provider_config: Arc<ModelProviderConfiguration>,
 
     #[cfg(feature = "model")]
-    pub model_factory: Arc<Mutex<ModelFactory>>,
+    pub model_factory: Arc<ModelFactory>,
     #[cfg(feature = "model")]
-    pub embedding_factory: Arc<Mutex<EmbeddingFactory>>,
+    pub embedding_factory: Arc<EmbeddingFactory>,
+
+    /// Reaches models hosted on other devices; only the desktop provides one.
+    #[cfg(feature = "model")]
+    pub device_model_connector: Option<Arc<dyn DeviceModelConnector>>,
+    /// On a device, serves Local, MLX and its own device Bits from its model host.
+    #[cfg(feature = "model")]
+    pub local_model_router: Option<Arc<dyn LocalModelRouter>>,
+    /// Where Local and MLX Bits find llama-server and the MLX helper; next to the executable
+    /// unless the host installs runtime packs elsewhere.
+    #[cfg(feature = "model")]
+    pub runtime_locator: Arc<RuntimeLocator>,
 
     /// Run-scoped credential for hosted model calls. A trusted server executor
     /// sets this for a public frontend so model billing can use the app's
@@ -623,12 +640,16 @@ pub struct FlowLikeState {
 /// The llama-server runtime cannot run on mobile targets. MLX has its own
 /// Apple-silicon platform constraint, so a local Bit store and the `local-ml`
 /// feature do not by themselves make every local completion Bit executable.
+/// Both also need their executable where the host's runtime locator points,
+/// except MLX on iOS, which runs in-process.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CompletionModelCapabilities {
     pub local_server: bool,
     pub mlx: bool,
     /// Local CLI execution and the current desktop user's credentials.
     pub local_credentials: bool,
+    /// Models hosted on other devices, reachable through a device model connector.
+    pub device_models: bool,
 }
 
 impl FlowLikeState {
@@ -649,10 +670,16 @@ impl FlowLikeState {
             #[cfg(feature = "model")]
             model_provider_config: Arc::new(ModelProviderConfiguration::default()),
             #[cfg(feature = "model")]
-            model_factory: Arc::new(Mutex::new(ModelFactory::new())),
+            model_factory: Arc::new(ModelFactory::new()),
 
             #[cfg(feature = "model")]
-            embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
+            embedding_factory: Arc::new(EmbeddingFactory::new()),
+            #[cfg(feature = "model")]
+            device_model_connector: None,
+            #[cfg(feature = "model")]
+            local_model_router: None,
+            #[cfg(feature = "model")]
+            runtime_locator: Arc::new(RuntimeLocator::beside_current_exe()),
 
             #[cfg(feature = "model")]
             hosted_model_token: None,
@@ -694,8 +721,11 @@ impl FlowLikeState {
             download_manager: Arc::new(Mutex::new(DownloadManager::new())),
 
             model_provider_config: Arc::new(model_provider_config),
-            model_factory: Arc::new(Mutex::new(ModelFactory::new())),
-            embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
+            model_factory: Arc::new(ModelFactory::new()),
+            embedding_factory: Arc::new(EmbeddingFactory::new()),
+            device_model_connector: None,
+            local_model_router: None,
+            runtime_locator: Arc::new(RuntimeLocator::beside_current_exe()),
             hosted_model_token: None,
 
             #[cfg(feature = "flow-metadata")]
@@ -751,8 +781,19 @@ impl FlowLikeState {
     }
 
     #[cfg(feature = "model")]
-    pub fn model_factory(&self) -> Arc<Mutex<ModelFactory>> {
+    pub fn model_factory(&self) -> Arc<ModelFactory> {
         self.model_factory.clone()
+    }
+
+    /// Lets model selection try device Bits and, on a device, the Bits its model host serves;
+    /// `None` where neither a connector nor a router exists.
+    #[cfg(feature = "model")]
+    pub fn device_model_probe(&self, interaction: Interaction) -> Option<DeviceModelProbe> {
+        DeviceModelProbe::for_host(
+            self.device_model_connector.clone(),
+            self.local_model_router.clone(),
+            interaction,
+        )
     }
 
     #[cfg(feature = "flow-runtime")]
@@ -842,6 +883,12 @@ impl FlowLikeState {
             model_factory: self.model_factory.clone(),
             #[cfg(feature = "model")]
             embedding_factory: self.embedding_factory.clone(),
+            #[cfg(feature = "model")]
+            device_model_connector: self.device_model_connector.clone(),
+            #[cfg(feature = "model")]
+            local_model_router: self.local_model_router.clone(),
+            #[cfg(feature = "model")]
+            runtime_locator: self.runtime_locator.clone(),
             #[cfg(feature = "model")]
             hosted_model_token: self.hosted_model_token.clone(),
 
@@ -1195,11 +1242,11 @@ impl FlowLikeState {
     pub async fn completion_model_capabilities(
         state: &Arc<FlowLikeState>,
     ) -> CompletionModelCapabilities {
-        let mut capabilities = completion_model_capabilities_for_host(
-            Self::can_execute_local_bit_models(state).await,
-            cfg!(any(target_os = "ios", target_os = "android")),
-            crate::bit::can_host_mlx(),
-        );
+        let installed = InstalledRuntimes {
+            llama_server: state.runtime_locator.installed_llama_server().is_ok(),
+            mlx_service: state.runtime_locator.installed_mlx_service().is_ok(),
+        };
+        let mut capabilities = Self::local_completion_runtimes(state, installed).await;
         capabilities.local_credentials = matches!(
             state.execution_environment,
             ExecutionEnvironment::Local | ExecutionEnvironment::Desktop
@@ -1208,7 +1255,33 @@ impl FlowLikeState {
             target_os = "ios",
             target_os = "android"
         ));
+        capabilities.device_models = state.device_model_connector.is_some();
         capabilities
+    }
+
+    /// The local completion runtimes this host could execute once their executables are installed.
+    #[cfg(feature = "model")]
+    pub(crate) async fn installable_completion_runtimes(
+        state: &Arc<FlowLikeState>,
+    ) -> CompletionModelCapabilities {
+        let every_runtime = InstalledRuntimes {
+            llama_server: true,
+            mlx_service: true,
+        };
+        Self::local_completion_runtimes(state, every_runtime).await
+    }
+
+    #[cfg(feature = "model")]
+    async fn local_completion_runtimes(
+        state: &Arc<FlowLikeState>,
+        installed: InstalledRuntimes,
+    ) -> CompletionModelCapabilities {
+        completion_model_capabilities_for_host(
+            Self::can_execute_local_bit_models(state).await,
+            cfg!(any(target_os = "ios", target_os = "android")),
+            crate::bit::can_host_mlx(),
+            installed,
+        )
     }
 
     #[inline]
@@ -1228,15 +1301,27 @@ fn local_ml_execution_available(local_ml_enabled: bool, has_local_bit_store: boo
     local_ml_enabled && has_local_bit_store
 }
 
+/// Which local runtime executables the host's runtime locator resolves.
+#[cfg(feature = "model")]
+#[derive(Clone, Copy, Default)]
+struct InstalledRuntimes {
+    llama_server: bool,
+    mlx_service: bool,
+}
+
+#[cfg(feature = "model")]
 fn completion_model_capabilities_for_host(
     local_bit_models_available: bool,
     is_mobile: bool,
     can_host_mlx: bool,
+    installed: InstalledRuntimes,
 ) -> CompletionModelCapabilities {
     CompletionModelCapabilities {
-        local_server: local_bit_models_available && !is_mobile,
-        mlx: local_bit_models_available && can_host_mlx,
+        local_server: local_bit_models_available && !is_mobile && installed.llama_server,
+        // Mobile MLX runs in-process rather than in the helper.
+        mlx: local_bit_models_available && can_host_mlx && (is_mobile || installed.mlx_service),
         local_credentials: false,
+        device_models: false,
     }
 }
 
@@ -1529,28 +1614,98 @@ mod tests {
         assert!(!local_ml_execution_available(false, false));
     }
 
+    const ALL_RUNTIMES: InstalledRuntimes = InstalledRuntimes {
+        llama_server: true,
+        mlx_service: true,
+    };
+
     #[test]
     fn completion_capabilities_keep_mobile_and_mlx_constraints_separate() {
         assert_eq!(
-            completion_model_capabilities_for_host(true, true, true),
+            completion_model_capabilities_for_host(true, true, true, ALL_RUNTIMES),
             CompletionModelCapabilities {
                 local_server: false,
                 mlx: true,
                 local_credentials: false,
+                device_models: false,
             }
         );
         assert_eq!(
-            completion_model_capabilities_for_host(true, false, false),
+            completion_model_capabilities_for_host(true, false, false, ALL_RUNTIMES),
             CompletionModelCapabilities {
                 local_server: true,
                 mlx: false,
                 local_credentials: false,
+                device_models: false,
             }
         );
         assert_eq!(
-            completion_model_capabilities_for_host(false, false, true),
+            completion_model_capabilities_for_host(false, false, true, ALL_RUNTIMES),
             CompletionModelCapabilities::default()
         );
+    }
+
+    #[test]
+    fn local_runtimes_count_only_once_their_executables_exist() {
+        let none = InstalledRuntimes::default();
+        assert_eq!(
+            completion_model_capabilities_for_host(true, false, true, none),
+            CompletionModelCapabilities::default()
+        );
+        assert_eq!(
+            completion_model_capabilities_for_host(
+                true,
+                false,
+                true,
+                InstalledRuntimes {
+                    llama_server: true,
+                    mlx_service: false,
+                },
+            ),
+            CompletionModelCapabilities {
+                local_server: true,
+                ..CompletionModelCapabilities::default()
+            }
+        );
+        assert_eq!(
+            completion_model_capabilities_for_host(
+                true,
+                false,
+                true,
+                InstalledRuntimes {
+                    llama_server: false,
+                    mlx_service: true,
+                },
+            ),
+            CompletionModelCapabilities {
+                mlx: true,
+                ..CompletionModelCapabilities::default()
+            }
+        );
+        assert!(
+            completion_model_capabilities_for_host(true, true, true, none).mlx,
+            "mobile MLX runs in-process and needs no helper"
+        );
+    }
+
+    #[test]
+    fn states_find_runtimes_next_to_the_executable_and_share_them_with_runs() {
+        let mut state = FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ))),
+            HTTPClient::new_without_refetch(),
+        );
+        assert_eq!(*state.runtime_locator, RuntimeLocator::beside_current_exe());
+
+        let packs = Arc::new(RuntimeLocator::bundled_in(std::path::Path::new(
+            "/var/lib/flow-like/runtimes",
+        )));
+        state.runtime_locator = packs.clone();
+        assert!(Arc::ptr_eq(
+            &state.for_execution_run().runtime_locator,
+            &packs
+        ));
     }
 
     #[tokio::test]
@@ -1584,6 +1739,37 @@ mod tests {
                 "{environment:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn device_models_follow_the_connector_into_execution_runs() {
+        use crate::models::device::testing::{FakeConnector, FakeRouter, endpoint};
+
+        let mut state = FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ))),
+            HTTPClient::new_without_refetch(),
+        );
+        let without = Arc::new(state.for_execution_run());
+        assert!(
+            !FlowLikeState::completion_model_capabilities(&without)
+                .await
+                .device_models
+        );
+        assert!(without.device_model_probe(Interaction::Forbidden).is_none());
+
+        state.device_model_connector =
+            Some(FakeConnector::serving(endpoint("http://127.0.0.1:9/v1")));
+        state.local_model_router = Some(Arc::new(FakeRouter(endpoint("http://127.0.0.1:9/v1"))));
+        let run = Arc::new(state.for_execution_run());
+        assert!(
+            FlowLikeState::completion_model_capabilities(&run)
+                .await
+                .device_models
+        );
+        assert!(run.local_model_router.is_some());
+        assert!(run.device_model_probe(Interaction::Forbidden).is_some());
     }
 
     #[tokio::test]

@@ -106,6 +106,9 @@ tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-rem
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 flow-like-browser.workspace = true
+flow-like-device-client.workspace = true
+flow-like-device-crypto.workspace = true
+zeroize.workspace = true
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"

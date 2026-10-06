@@ -26,10 +26,10 @@ export class Download {
 
 	constructor(parent: IBit, bits: IBit[]) {
 		this._parent = parent;
-		const map = new Map();
-		bits.forEach((bit) => {
+		const map = new Map<string, IBit>();
+		for (const bit of bits) {
 			map.set(bit.hash, bit);
-		});
+		}
 		this._bits = map;
 	}
 
@@ -78,9 +78,9 @@ export class Download {
 		this.speed.lastMeasured = now;
 		this.speed.lastPoints.clear();
 
-		this._progress.forEach((progress) => {
+		for (const progress of this._progress.values()) {
 			this.speed.lastPoints.set(progress.hash, progress.downloaded);
-		});
+		}
 
 		return {
 			bytesPerSecond,
@@ -143,27 +143,29 @@ export class Bit implements IBit {
 	}
 
 	public toObject(): IBit {
-		const obj: Record<string, any> = {};
-		Object.keys(this).forEach((key) => {
-			if (key !== "backend" && typeof (this as any)[key] !== "function") {
-				obj[key] = (this as any)[key];
+		const obj: Record<string, unknown> = {};
+		const values = this as unknown as Record<string, unknown>;
+		for (const key of Object.keys(this)) {
+			if (key !== "backend" && typeof values[key] !== "function") {
+				obj[key] = values[key];
 			}
-		});
+		}
 		return obj as IBit;
 	}
 
 	public static fromObject(obj: IBit): Bit {
 		const bit = new Bit();
+		const values = bit as unknown as Record<string, unknown>;
 
 		for (const key of Object.keys(obj)) {
-			(bit as any)[key] = obj[key];
+			values[key] = obj[key];
 		}
 
 		return bit;
 	}
 
 	public async fetchDependencies(): Promise<BitPack> {
-		// An empty hash is not a usable cache key — every bit lacking one would
+		// An empty hash is not a usable cache key. Every bit lacking one would
 		// otherwise share a single entry and read back foreign dependencies.
 		const cacheKey = this.dependency_tree_hash || undefined;
 		const cachedDependencies: unknown = cacheKey

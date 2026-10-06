@@ -36,6 +36,7 @@ pub const BACKEND_PUB_ENV: &str = "BACKEND_PUB";
 pub const BACKEND_KID_ENV: &str = "BACKEND_KID";
 
 const ISSUER: &str = "flow-like";
+const DEFAULT_CLOCK_LEEWAY_SECONDS: u64 = 60;
 
 // ============================================================================
 // Token Types & Audiences
@@ -281,7 +282,13 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
     let mut validation = Validation::new(Algorithm::ES256);
     validation.set_issuer(&[ISSUER]);
     validation.set_audience(&[expected_type.audience()]);
+    validation.leeway = DEFAULT_CLOCK_LEEWAY_SECONDS;
     decode_with(token, &validation)
+}
+
+/// Cached tokens retain the same clock allowance as the signature verifier.
+pub(crate) fn cached_token_is_current(exp: i64, now: i64) -> bool {
+    exp >= now.saturating_sub(DEFAULT_CLOCK_LEEWAY_SECONDS as i64)
 }
 
 /// Verify like [`verify`], but with an explicit clock leeway applied to both
@@ -456,6 +463,32 @@ mod tests {
     }
 
     #[test]
+    fn cached_expiry_preserves_verifier_clock_leeway() {
+        assert!(cached_token_is_current(1_000, 1_060));
+        assert!(!cached_token_is_current(1_000, 1_061));
+
+        init_for_tests();
+        let now = chrono::Utc::now().timestamp();
+        for (elapsed, expected) in [(30, true), (90, false)] {
+            let claims = TestClaims {
+                sub: "test-user".into(),
+                token_type: TokenType::Executor,
+                iss: ISSUER.into(),
+                aud: TokenType::Executor.audience().into(),
+                iat: now - 120,
+                nbf: now - 120,
+                exp: now - elapsed,
+            };
+            let token = sign(&claims).unwrap();
+            assert_eq!(
+                verify::<TestClaims>(&token, TokenType::Executor).is_ok(),
+                expected
+            );
+            assert_eq!(cached_token_is_current(claims.exp, now), expected);
+        }
+    }
+
+    #[test]
     fn test_jwt_roundtrip() {
         init_for_tests();
 
@@ -475,5 +508,100 @@ mod tests {
 
         assert_eq!(decoded.sub, claims.sub);
         assert_eq!(decoded.token_type, TokenType::Executor);
+    }
+}
+
+/// Prepare the signed claims before moving a staged payload into object storage.
+pub struct ClaimCheckSigner(serde_json::Value);
+
+impl ClaimCheckSigner {
+    pub fn new(payload: &[u8]) -> Result<Self, BackendJwtError> {
+        let payload_json: serde_json::Value = serde_json::from_slice(payload)
+            .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
+        let token = payload_json
+            .get("executor_jwt")
+            .or_else(|| payload_json.get("compiler_jwt"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                BackendJwtError::DecodingError("Staged payload has no worker JWT".to_string())
+            })?;
+        let original: serde_json::Value = verify_any(token)?;
+        let mut claims = serde_json::json!({
+            "iss": original["iss"], "aud": original["aud"], "typ": original["typ"],
+            "exp": original["exp"], "purpose": "claim-check",
+            "claim_check": {"remote_url_hash": "", "content_hash": blake3::hash(payload).to_hex().to_string()}
+        });
+        for field in ["iat", "nbf"] {
+            if let Some(value) = original.get(field) {
+                claims[field] = value.clone();
+            }
+        }
+        Ok(Self(claims))
+    }
+
+    pub fn sign_url(self, remote_url: &str) -> Result<String, BackendJwtError> {
+        let proof = self.sign(remote_url)?;
+        Ok(flow_like_types::dispatch::signed_claim_check_url(
+            remote_url, &proof,
+        ))
+    }
+
+    pub fn sign(mut self, remote_url: &str) -> Result<String, BackendJwtError> {
+        self.0["claim_check"]["remote_url_hash"] = blake3::hash(remote_url.as_bytes())
+            .to_hex()
+            .to_string()
+            .into();
+        sign(&self.0)
+    }
+}
+
+#[cfg(test)]
+mod claim_check_signer_tests {
+    use super::*;
+
+    #[test]
+    fn signature_binds_destination_contents_and_original_expiry() {
+        init_for_tests();
+        let exp = chrono::Utc::now().timestamp() + 300;
+        let original = sign(&serde_json::json!({
+            "sub":"user", "typ":"executor", "iss":"flow-like",
+            "aud":"flow-like-executor", "exp":exp
+        }))
+        .unwrap();
+        let body =
+            serde_json::to_vec(&serde_json::json!({"executor_jwt":original,"input":"value"}))
+                .unwrap();
+        let remote_url = "https://storage.example/bucket/object?signature=one";
+        let token = ClaimCheckSigner::new(&body)
+            .unwrap()
+            .sign(remote_url)
+            .unwrap();
+        let claims: serde_json::Value = verify(&token, TokenType::Executor).unwrap();
+        assert_eq!(claims["exp"], exp);
+        assert_eq!(claims["purpose"], "claim-check");
+        assert!(claims.get("sub").is_none());
+        let binding: flow_like_types::dispatch::ClaimCheckBinding =
+            serde_json::from_value(claims["claim_check"].clone()).unwrap();
+        assert!(binding.matches_url(remote_url));
+        assert!(binding.matches_body(&body));
+        assert!(!binding.matches_url("http://169.254.169.254/metadata"));
+        assert!(!binding.matches_body(b"replaced"));
+        assert!(ClaimCheckSigner::new(br#"{"executor_jwt":"unsigned"}"#).is_err());
+    }
+    #[test]
+    fn large_worker_claims_do_not_inflate_the_queue_proof() {
+        init_for_tests();
+        let original = sign(&serde_json::json!({
+            "sub":"user", "typ":"executor", "iss":"flow-like",
+            "aud":"flow-like-executor", "exp":chrono::Utc::now().timestamp()+300,
+            "large_existing_claim":"x".repeat(32*1024)
+        }))
+        .unwrap();
+        let body = serde_json::to_vec(&serde_json::json!({"executor_jwt":original})).unwrap();
+        let proof = ClaimCheckSigner::new(&body)
+            .unwrap()
+            .sign("https://store.example/job")
+            .unwrap();
+        assert!(proof.len() < 1024);
     }
 }

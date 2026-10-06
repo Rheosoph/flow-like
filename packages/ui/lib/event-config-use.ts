@@ -1,5 +1,5 @@
 import { ChatInterface } from "../components/interfaces/chat-default";
-import { GenericEventFormInterface } from "../components/interfaces/generic-event-form";
+import { FormWorkbenchInterface } from "../components/interfaces/form-workbench";
 import type { IUseEventMapping } from "../components/interfaces/interfaces";
 import { BUILTIN_RUNTIME_EVENT_TYPES } from "./runtime-route";
 
@@ -29,7 +29,7 @@ export const USE_EVENT_CONFIG: IUseEventMapping = {
 	events_generic: {
 		eventTypes: ["generic_form", "api", "deeplink"],
 		useInterfaces: {
-			[BUILTIN_RUNTIME_EVENT_TYPES.form]: GenericEventFormInterface,
+			[BUILTIN_RUNTIME_EVENT_TYPES.form]: FormWorkbenchInterface,
 		},
 	},
 	events_simple: {
@@ -43,7 +43,7 @@ export const USE_EVENT_CONFIG: IUseEventMapping = {
 			"mcp",
 		],
 		useInterfaces: {
-			[BUILTIN_RUNTIME_EVENT_TYPES.quickAction]: GenericEventFormInterface,
+			[BUILTIN_RUNTIME_EVENT_TYPES.quickAction]: FormWorkbenchInterface,
 		},
 	},
 };

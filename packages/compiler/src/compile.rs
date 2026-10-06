@@ -1,13 +1,16 @@
 use crate::config::CompilerConfig;
 use crate::error::CompilerError;
-use crate::jwt::{verify_jwt_async, CompilerClaims};
+use crate::jwt::{CompilerClaims, verify_jwt_async};
 use crate::metadata::extract_nodes;
 use flow_like_types_contracts::dispatch::{
-    compilation_job_payload_hash, CompilationJob, CompilationResult, CompilationStatus,
-    CompilationStorageProvider, CompilationTarget,
+    CompilationJob, CompilationResult, CompilationStatus, CompilationStorageProvider,
+    CompilationTarget, compilation_job_payload_hash,
 };
-use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
+use flow_like_wasm::aot_cache::{WASM_ARTIFACT_VERSION, artifact_target};
 use flow_like_wasm::{WasmConfig, WasmEngine};
+
+#[cfg(test)]
+use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
 use reqwest::{Client, Url};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -363,21 +366,21 @@ fn validate_job_envelope(
     let mut platforms = HashSet::with_capacity(job.targets.len());
     for target in &job.targets {
         validate_identifier("platform_key", &target.platform_key, 128)?;
-        if target
-            .platform_key
-            .rsplit_once("-wt")
-            .map(|(_, version)| version)
-            != Some(WASMTIME_MAJOR_VERSION)
-        {
+        let Some(portable_triple) = artifact_target(&target.platform_key) else {
             return Err(invalid_job(format!(
-                "compilation target must use this worker's Wasmtime version (-wt{WASMTIME_MAJOR_VERSION})"
+                "compilation target must use a supported platform and this worker's artifact version (-wt{WASM_ARTIFACT_VERSION})"
             )));
-        }
+        };
         if !platforms.insert(target.platform_key.as_str()) {
             return Err(invalid_job("compilation target platform is duplicated"));
         }
         if let Some(triple) = &target.cross_triple {
             validate_identifier("cross_triple", triple, 128)?;
+            if triple != portable_triple {
+                return Err(invalid_job(
+                    "compilation target triple does not match its portable platform",
+                ));
+            }
         }
 
         let artifact_root = match &claims.artifact_generation {
@@ -860,7 +863,6 @@ async fn compile_inner(
     for target in &job.targets {
         let bytes = wasm_bytes.clone();
         let platform_key = target.platform_key.clone();
-        let cross_triple = target.cross_triple.clone();
         let target = target.clone();
         let storage_client = storage_client.clone();
         let max_artifact_bytes = config.max_artifact_bytes;
@@ -878,14 +880,13 @@ async fn compile_inner(
             info!(platform = %platform_key, "Compiling target");
 
             let pk = platform_key.clone();
-            let ct = cross_triple.clone();
             let b = bytes.clone();
 
             let serialized = tokio::task::spawn_blocking(move || {
-                let mut wasm_config = WasmConfig::default().without_cache();
-                if let Some(triple) = &ct {
-                    wasm_config = wasm_config.with_target(triple);
-                }
+                let triple = artifact_target(&pk).ok_or_else(|| {
+                    CompilerError::Compilation("Unsupported artifact platform".to_string())
+                })?;
+                let mut wasm_config = WasmConfig::default().without_cache().with_target(triple);
                 if pk.starts_with("ios-") {
                     wasm_config = wasm_config.with_ios_memory_layout();
                 }
@@ -976,7 +977,7 @@ async fn send_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types_contracts::dispatch::{compilation_job_payload_hash, CompilationTarget};
+    use flow_like_types_contracts::dispatch::{CompilationTarget, compilation_job_payload_hash};
 
     fn azure_config() -> CompilerConfig {
         CompilerConfig {
@@ -1002,7 +1003,7 @@ mod tests {
     fn azure_job() -> CompilationJob {
         let package_id = "pkg_123";
         let version = "1.2.3";
-        let platform = format!("linux-x86_64-wt{WASMTIME_MAJOR_VERSION}");
+        let platform = format!("linux-x86_64-wt{WASM_ARTIFACT_VERSION}");
         CompilationJob {
             job_id: "job_123".to_string(),
             package_id: package_id.to_string(),
@@ -1176,6 +1177,7 @@ mod tests {
 
         let current = WASMTIME_MAJOR_VERSION.parse::<u32>().unwrap();
         for platform in [
+            format!("linux-x86_64-wt{current}"),
             format!("linux-x86_64-wt{}", current - 1),
             format!("linux-x86_64-wt{}", current + 1),
             "linux-x86_64".to_string(),
@@ -1196,8 +1198,25 @@ mod tests {
                 validate_job_envelope(&mismatched, &claims_for(&mismatched), &azure_config())
                     .unwrap_err();
             assert!(matches!(error, CompilerError::InvalidJob(_)));
-            assert!(error.to_string().contains("worker's Wasmtime version"));
+            assert!(error.to_string().contains("worker's artifact version"));
         }
+    }
+
+    #[test]
+    fn signed_target_cannot_substitute_another_cpu_baseline() {
+        let mut job = azure_job();
+        // Omitted triples are derived from the platform key by the worker.
+        job.targets[0].cross_triple = None;
+        assert!(validate_job_envelope(&job, &claims_for(&job), &azure_config()).is_ok());
+        job.targets[0].cross_triple = Some("x86_64-unknown-linux-gnu".into());
+        assert!(validate_job_envelope(&job, &claims_for(&job), &azure_config()).is_ok());
+        job.targets[0].cross_triple = Some("aarch64-unknown-linux-gnu".into());
+        let error = validate_job_envelope(&job, &claims_for(&job), &azure_config()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its portable platform")
+        );
     }
 
     #[test]
@@ -1372,7 +1391,7 @@ mod tests {
 
     fn capture_target(url: &str, provider: CompilationStorageProvider) -> CompilationTarget {
         CompilationTarget {
-            platform_key: format!("linux-x86_64-wt{WASMTIME_MAJOR_VERSION}"),
+            platform_key: format!("linux-x86_64-wt{WASM_ARTIFACT_VERSION}"),
             cross_triple: None,
             cwasm_upload_url: format!("{url}/artifact"),
             checksum_upload_url: format!("{url}/checksum"),
@@ -1662,26 +1681,30 @@ mod tests {
             "https://flowlikedevdata.blob.core.windows.net/content/{path}?{}&sig=second",
             sas_query("r")
         );
-        assert!(validate_storage_url(
-            &duplicate_signature,
-            CompilationStorageProvider::AzureBlob,
-            StorageOperation::Download,
-            path,
-            Some("content"),
-            &config,
-        )
-        .is_err());
+        assert!(
+            validate_storage_url(
+                &duplicate_signature,
+                CompilationStorageProvider::AzureBlob,
+                StorageOperation::Download,
+                path,
+                Some("content"),
+                &config,
+            )
+            .is_err()
+        );
 
         let cleartext = duplicate_signature.replacen("https://", "http://", 1);
-        assert!(validate_storage_url(
-            &cleartext,
-            CompilationStorageProvider::AzureBlob,
-            StorageOperation::Download,
-            path,
-            Some("content"),
-            &config,
-        )
-        .is_err());
+        assert!(
+            validate_storage_url(
+                &cleartext,
+                CompilationStorageProvider::AzureBlob,
+                StorageOperation::Download,
+                path,
+                Some("content"),
+                &config,
+            )
+            .is_err()
+        );
     }
 
     fn aws_query() -> &'static str {

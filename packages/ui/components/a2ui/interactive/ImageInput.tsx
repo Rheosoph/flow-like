@@ -3,6 +3,7 @@
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { ImagePlus, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { runtimeDomEventName } from "../../../lib/service-runtime/session-scope";
 import { cn } from "../../../lib/utils";
 import {
 	type ITemporaryFlowPath,
@@ -149,6 +150,7 @@ export function A2UIImageInput({
 	);
 
 	useEffect(() => {
+		const eventName = runtimeDomEventName("a2ui:clearFileInput", appId);
 		const handleClear = (
 			e: CustomEvent<{ surfaceId: string; componentId: string }>,
 		) => {
@@ -159,17 +161,11 @@ export function A2UIImageInput({
 				clearImages();
 			}
 		};
-		window.addEventListener(
-			"a2ui:clearFileInput",
-			handleClear as EventListener,
-		);
+		window.addEventListener(eventName, handleClear as EventListener);
 		return () => {
-			window.removeEventListener(
-				"a2ui:clearFileInput",
-				handleClear as EventListener,
-			);
+			window.removeEventListener(eventName, handleClear as EventListener);
 		};
-	}, [surfaceId, componentId, clearImages]);
+	}, [appId, surfaceId, componentId, clearImages]);
 
 	const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
 		const selectedFiles = Array.from(e.target.files || []);

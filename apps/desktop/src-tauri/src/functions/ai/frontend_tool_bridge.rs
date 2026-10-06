@@ -43,16 +43,16 @@ struct ScopedToolExecution {
 }
 
 thread_local! {
-    /// Cancellation inherited from the MCP request currently executing on this blocking worker.
+    /// Cancellation inherited from the request or chat run that owns this blocking worker.
     ///
-    /// `copilot_sdk::ToolHandler` is synchronous and does not carry an async request context. The
-    /// MCP adapter scopes the request token around the handler so a dropped HTTP/MCP request can
-    /// still interrupt this bridge's blocking channel wait instead of leaving an orphaned frontend
-    /// mutation alive until its independent per-tool deadline.
+    /// `copilot_sdk::ToolHandler` is synchronous and does not carry an async request context.
+    /// The MCP adapter scopes the owner token around the handler. Ordinary calls follow the HTTP
+    /// request; delegated specialists follow the chat run so its completion check can await them.
+    /// Cancelling that owner interrupts the bridge's blocking channel wait.
     static SCOPED_TOOL_EXECUTIONS: RefCell<Vec<ScopedToolExecution>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Run a synchronous SDK tool handler with cancellation inherited from its owning MCP request.
+/// Run a synchronous SDK tool handler with cancellation inherited from its request or chat run.
 /// Nested scopes are supported because a handler can itself delegate to another reviewed tool.
 pub(super) fn with_frontend_tool_execution_scope<T>(
     cancellation: CancellationToken,
@@ -87,7 +87,7 @@ pub(super) fn current_tool_execution_for_test() -> Option<(CancellationToken, Op
     current_tool_execution().map(|execution| (execution.cancellation, execution.deadline))
 }
 
-/// Whether the synchronous tool currently running on this worker has lost its owning request.
+/// Whether the synchronous tool currently running on this worker has lost its request or chat run.
 ///
 /// Most frontend-backed tools observe this through the bridge's cancellable channel wait.
 /// CPU-only handlers such as FlowScript reconciliation do not wait on the channel, so they must

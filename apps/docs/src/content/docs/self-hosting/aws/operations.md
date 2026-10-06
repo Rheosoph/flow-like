@@ -33,6 +33,75 @@ PostgreSQL or CockroachDB deployment. The
 [database environment contract](/self-hosting/aws/database/#environment-contract)
 lists the DSQL settings, forbidden password sources, and IAM permissions.
 
+## Hosted Bedrock models
+
+The API can proxy Bedrock models using its Lambda execution role or ECS task
+role. Publish each model as an official catalog Bit through the admin Bit editor:
+select `hosted:bedrock`, set the provider's model ID, and configure hosted usage
+pricing. The standard workflow client uses Chat Completions for hosted Bedrock
+models. Personal custom models cannot use the installation's Bedrock credentials.
+The proxy loads the admin-controlled Bit before signing each upstream request.
+
+A nonempty `HOSTED_BEDROCK_API_KEY` in the API's secret store takes precedence.
+A rejected API key does not trigger an IAM retry.
+When that key is absent or blank, the API obtains temporary credentials through
+the AWS SDK credential chain and signs the request with SigV4. If credentials
+are unavailable or their lookup times out, direct requests return HTTP 503 and
+the durable worker reports a failed response. This does not prevent API startup.
+Executors call the authenticated API proxy and do not receive these credentials.
+
+Without `HOSTED_BEDROCK_ENDPOINT`, IAM requests use the Bedrock Runtime endpoint
+in the region resolved by the backend AWS SDK. To select a region explicitly,
+set the endpoint in SSM under `SECRET_PREFIX` or in the API environment:
+
+```text
+HOSTED_BEDROCK_ENDPOINT=https://bedrock-runtime.eu-central-1.amazonaws.com/openai/v1
+```
+
+The signer accepts official regional Bedrock Runtime endpoints with
+`/openai/v1` and Mantle endpoints with `/v1`; it rejects other hosts and paths.
+Choose a model supported by the endpoint and API surface. See
+[Bedrock Chat Completions](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html)
+for endpoint-specific model IDs.
+
+Grant model invocation permissions to the API role before enabling the Bit.
+This example permits streaming and non-streaming Chat Completions for one
+foundation model. Replace `<region>` and `<model-id>` with the approved target:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "arn:aws:bedrock:<region>::foundation-model/<model-id>"
+    }
+  ]
+}
+```
+
+For an inference profile, also grant `bedrock:GetInferenceProfile` on its ARN
+and invocation access to the profile and each destination foundation model.
+Follow AWS's [inference profile permissions](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-prereq.html)
+to restrict those resources. Direct calls to the runtime Responses API require
+`bedrock:InvokeModel` on the account's default project,
+`arn:aws:bedrock:<region>:<account-id>:project/default`, including when the
+response is streamed. See the [Responses permission contract](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html).
+Mantle uses `bedrock-mantle:CreateInference`; apply its
+[endpoint-specific permissions](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html)
+instead of the runtime policy above.
+
+The base API role is managed outside this repository. Deploying the API does
+not add these IAM grants; apply them in the infrastructure that owns the role.
+After deployment, test both a regular request and a streamed request through
+the published Bit. An upstream access denial requires checking the role's
+model and region permissions. For credential lookup errors, check the API's
+AWS identity configuration.
+
 ## Asynchronous execution
 
 Configure the API's SQS execution backend and attach the queue to the

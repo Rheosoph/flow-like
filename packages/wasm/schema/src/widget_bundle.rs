@@ -862,6 +862,78 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn accepts_high_ratio_chunks_and_large_entry_counts() {
+        let mut builder = WidgetBundleBuilder::new("com.example.large", "1.0.0")
+            .add_shared_chunk("react-abc123.js", vec![0; 2 * 1024 * 1024])
+            .add_widget(sample_widget("large"));
+        for index in 0..4100 {
+            builder = builder.add_shared_chunk(&format!("chunk-{index}.js"), vec![1]);
+        }
+        let (bytes, _) = builder.build().unwrap();
+        let mut reader = WidgetBundleReader::from_bytes(bytes).unwrap();
+        reader.validate().unwrap();
+        assert_eq!(
+            reader.read_entry("shared/react-abc123.js").unwrap().len(),
+            2 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn accepts_large_archives_within_the_existing_per_entry_limit() {
+        let (bytes, _) = sample_bundle();
+        let mut entries = archive_entries(bytes);
+        let manifest_entry = entries
+            .iter_mut()
+            .find(|(name, _)| name == BUNDLE_MANIFEST_PATH)
+            .unwrap();
+        let mut manifest: WidgetBundleManifest = serde_json::from_slice(&manifest_entry.1).unwrap();
+        let data = vec![0; 24 * 1024 * 1024];
+        let hash = entry_hash(&data);
+        for index in 0..6 {
+            manifest.shared.push(BundleSharedEntry {
+                path: format!("shared/large-{index}.bin"),
+                hash: hash.clone(),
+            });
+        }
+        manifest_entry.1 = serde_json::to_vec(&manifest).unwrap();
+        let file = tempfile::tempfile().unwrap();
+        let mut writer = ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        for index in 0..6 {
+            writer
+                .start_file(format!("shared/large-{index}.bin"), options)
+                .unwrap();
+            writer.write_all(&data).unwrap();
+        }
+        let file = writer.finish().unwrap();
+        assert!(file.metadata().unwrap().len() > 128 * 1024 * 1024);
+        let mut reader = WidgetBundleReader::new(file).unwrap();
+        reader.validate().unwrap();
+    }
+
+    #[test]
+    fn safe_extra_assets_remain_valid_and_are_unpacked() {
+        let (bytes, _) = sample_bundle();
+        let mut entries = archive_entries(bytes);
+        let path = "assets/extra/source-map.json";
+        entries.push((path.to_string(), b"{\"version\":3}".to_vec()));
+        let mut reader = WidgetBundleReader::from_bytes(write_archive(&entries)).unwrap();
+        reader.validate().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let output = staging.path().join("bundle");
+        reader.unpack(&output).unwrap();
+        assert_eq!(
+            std::fs::read(output.join(path)).unwrap(),
+            b"{\"version\":3}"
+        );
+    }
+
     fn with_claimed_size(mut bytes: Vec<u8>, name: &str, size: u32) -> Vec<u8> {
         let signature = 0x0201_4b50u32.to_le_bytes();
         let mut offset = 0;

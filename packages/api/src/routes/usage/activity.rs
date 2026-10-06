@@ -17,14 +17,15 @@ use axum::{
     Extension, Json,
     extract::{Query, State},
 };
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
 use sea_orm::{
-    ColumnTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
-    Select,
+    ColumnTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, Select,
     sea_query::{Alias, Expr, ExprTrait, SimpleExpr},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::Instrument;
 use utoipa::{IntoParams, ToSchema};
 
 use super::history::ExecutionUsageRecord;
@@ -85,30 +86,25 @@ pub struct ExecutionActivityResponse {
 }
 
 #[derive(Debug, FromQueryResult)]
-struct BucketStatusCount {
+struct ActivityCount {
     bucket: String,
+    app_id: Option<String>,
     status: ExecutionStatus,
     cnt: i64,
     total_microseconds: i64,
 }
 
-#[derive(Debug, FromQueryResult)]
-struct AppStatusCount {
-    app_id: Option<String>,
-    status: ExecutionStatus,
-    cnt: i64,
-}
-
 type ActivitySelect = Select<execution_usage_tracking::Entity>;
 
-/// Records per UTC day and severity, with the duration each group contributes.
+/// One scan supplies both the daily and per-app totals, including null app ids.
 ///
 /// `total_microseconds` is cast because Postgres widens `SUM` over a 64 bit
 /// column to NUMERIC, which never decodes into the `i64` it lands in.
-fn day_select(base: ActivitySelect, backend: DbBackend) -> ActivitySelect {
+fn activity_select(base: ActivitySelect, backend: DbBackend) -> ActivitySelect {
     let bucket_expr = StatsPeriod::Day.bucket_expr(backend, "createdAt");
     base.select_only()
         .expr_as(bucket_expr.clone(), "bucket")
+        .column_as(Expr::col(execution_usage_tracking::Column::AppId), "app_id")
         .column(execution_usage_tracking::Column::Status)
         .expr_as(
             Expr::col(execution_usage_tracking::Column::Id).count(),
@@ -119,22 +115,6 @@ fn day_select(base: ActivitySelect, backend: DbBackend) -> ActivitySelect {
             "total_microseconds",
         )
         .group_by(bucket_expr)
-        .group_by(Expr::col(execution_usage_tracking::Column::Status))
-}
-
-/// Records per app and severity.
-///
-/// The app column is aliased because its database label is `appId` while the
-/// row it decodes into names the field `app_id`; without the alias every app
-/// comes back as the null group.
-fn app_select(base: ActivitySelect) -> ActivitySelect {
-    base.select_only()
-        .column_as(Expr::col(execution_usage_tracking::Column::AppId), "app_id")
-        .column(execution_usage_tracking::Column::Status)
-        .expr_as(
-            Expr::col(execution_usage_tracking::Column::Id).count(),
-            "cnt",
-        )
         .group_by(Expr::col(execution_usage_tracking::Column::AppId))
         .group_by(Expr::col(execution_usage_tracking::Column::Status))
 }
@@ -189,37 +169,64 @@ pub async fn get_execution_activity(
     Query(params): Query<ActivityParams>,
 ) -> Result<Json<ExecutionActivityResponse>, ApiError> {
     let sub = user.sub()?;
+    execution_activity(&state.db, &sub, params, Utc::now().fixed_offset())
+        .await
+        .map(Json)
+}
+
+async fn execution_activity(
+    db: &DatabaseConnection,
+    sub: &str,
+    params: ActivityParams,
+    now: DateTime<FixedOffset>,
+) -> Result<ExecutionActivityResponse, ApiError> {
     let days = params.days.clamp(1, MAX_DAYS);
-    let now = Utc::now();
     let keys = window_days(now.date_naive(), days);
     let from = utc_midnight(keys[0]);
 
     let base = || {
         let mut query = execution_usage_tracking::Entity::find()
-            .filter(execution_usage_tracking::Column::UserId.eq(&sub))
-            .filter(execution_usage_tracking::Column::CreatedAt.gte(from));
+            .filter(execution_usage_tracking::Column::UserId.eq(sub))
+            .filter(execution_usage_tracking::Column::CreatedAt.gte(from))
+            .filter(execution_usage_tracking::Column::CreatedAt.lte(now.fixed_offset()));
         if let Some(ref app_id) = params.app_id {
             query = query.filter(execution_usage_tracking::Column::AppId.eq(app_id));
         }
         query
     };
 
-    let (day_rows, app_rows) = flow_like_types::tokio::join!(
-        day_select(base(), state.db.get_database_backend())
-            .into_model::<BucketStatusCount>()
-            .all(&state.db),
-        app_select(base())
-            .into_model::<AppStatusCount>()
-            .all(&state.db),
-    );
-    let day_rows = day_rows.map_err(|e| ApiError::internal_error(e.into()))?;
-    let app_rows = app_rows.map_err(|e| ApiError::internal_error(e.into()))?;
+    let (rows, attention) = flow_like_types::tokio::try_join!(
+        activity_select(base(), db.get_database_backend())
+            .into_model::<ActivityCount>()
+            .all(db)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "usage.executions.activity",
+                db.operation = "select",
+                db.table = "ExecutionUsageTracking",
+            )),
+        base()
+            .filter(
+                execution_usage_tracking::Column::Status
+                    .is_in([ExecutionStatus::Error, ExecutionStatus::Fatal]),
+            )
+            .order_by_desc(execution_usage_tracking::Column::CreatedAt)
+            .order_by_desc(execution_usage_tracking::Column::Id)
+            .limit(ATTENTION_SAMPLE)
+            .all(db)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "usage.executions.attention",
+                db.operation = "select",
+                db.table = "ExecutionUsageTracking",
+            )),
+    )
+    .map_err(|e| ApiError::internal_error(e.into()))?;
 
-    let total_microseconds: i64 = day_rows.iter().map(|row| row.total_microseconds).sum();
+    let total_microseconds: i64 = rows.iter().map(|row| row.total_microseconds).sum();
     let per_day = fold_counts(
-        day_rows
-            .into_iter()
-            .map(|row| (row.bucket, row.status, row.cnt)),
+        rows.iter()
+            .map(|row| (row.bucket.clone(), row.status.clone(), row.cnt)),
     );
 
     let buckets: Vec<ExecutionActivityBucket> = keys
@@ -239,8 +246,7 @@ pub async fn get_execution_activity(
     let attention_total: i64 = buckets.iter().map(|bucket| bucket.attention_count).sum();
 
     let mut apps: Vec<ExecutionActivityApp> = fold_counts(
-        app_rows
-            .into_iter()
+        rows.into_iter()
             .map(|row| (row.app_id, row.status, row.cnt)),
     )
     .into_iter()
@@ -252,25 +258,12 @@ pub async fn get_execution_activity(
     .collect();
     apps.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.app_id.cmp(&b.app_id)));
 
-    let attention = if attention_total > 0 {
-        base()
-            .filter(
-                execution_usage_tracking::Column::Status
-                    .is_in([ExecutionStatus::Error, ExecutionStatus::Fatal]),
-            )
-            .order_by_desc(execution_usage_tracking::Column::CreatedAt)
-            .limit(ATTENTION_SAMPLE)
-            .all(&state.db)
-            .await
-            .map_err(|e| ApiError::internal_error(e.into()))?
-            .into_iter()
-            .map(ExecutionUsageRecord::from)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let attention = attention
+        .into_iter()
+        .map(ExecutionUsageRecord::from)
+        .collect();
 
-    Ok(Json(ExecutionActivityResponse {
+    Ok(ExecutionActivityResponse {
         days,
         from: from.to_rfc3339(),
         to: now.fixed_offset().to_rfc3339(),
@@ -280,7 +273,7 @@ pub async fn get_execution_activity(
         attention_total,
         average_microseconds: (total > 0).then(|| total_microseconds as f64 / total as f64),
         attention,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -325,7 +318,7 @@ mod tests {
     /// builds either way and only comes back wrong at runtime.
     #[test]
     fn the_day_rollup_casts_its_sum_so_postgres_numeric_still_decodes() {
-        let sql = day_select(
+        let sql = activity_select(
             execution_usage_tracking::Entity::find(),
             DbBackend::Postgres,
         )
@@ -340,9 +333,12 @@ mod tests {
 
     #[test]
     fn the_app_rollup_aliases_the_column_its_row_reads() {
-        let sql = app_select(execution_usage_tracking::Entity::find())
-            .build(DbBackend::Postgres)
-            .to_string();
+        let sql = activity_select(
+            execution_usage_tracking::Entity::find(),
+            DbBackend::Postgres,
+        )
+        .build(DbBackend::Postgres)
+        .to_string();
         assert!(sql.contains("\"appId\" AS \"app_id\""), "{sql}");
         assert!(sql.contains("GROUP BY"), "{sql}");
     }
@@ -357,5 +353,122 @@ mod tests {
         ]);
         assert_eq!(folded["2026-09-11"], (43, 3));
         assert_eq!(folded["2026-09-10"], (5, 0));
+    }
+
+    #[tokio::test]
+    async fn one_rollup_preserves_scoping_null_apps_window_totals_and_attention_limit() {
+        use super::super::test_db::{database, insert};
+
+        let db = database().await;
+        let now = DateTime::parse_from_rfc3339("2026-10-04T12:00:00Z").unwrap();
+        for i in 0..70 {
+            insert(
+                &db,
+                &format!("a-{i:03}"),
+                "alice",
+                Some("a"),
+                now - Duration::hours(1),
+                ExecutionStatus::Error,
+                100,
+            )
+            .await;
+        }
+        for i in 0..20 {
+            insert(
+                &db,
+                &format!("b-{i:03}"),
+                "alice",
+                Some("b"),
+                now - Duration::days(1),
+                ExecutionStatus::Info,
+                200,
+            )
+            .await;
+        }
+        for i in 0..3 {
+            insert(
+                &db,
+                &format!("null-{i}"),
+                "alice",
+                None,
+                now,
+                ExecutionStatus::Fatal,
+                300,
+            )
+            .await;
+        }
+        for (id, user, at) in [
+            ("foreign", "bob", now),
+            ("too-old", "alice", now - Duration::days(4)),
+            ("future", "alice", now + Duration::days(1)),
+        ] {
+            insert(&db, id, user, Some("a"), at, ExecutionStatus::Fatal, 9_000).await;
+        }
+        let report = execution_activity(
+            &db,
+            "alice",
+            ActivityParams {
+                days: 3,
+                app_id: None,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!((report.total, report.attention_total), (93, 73));
+        assert_eq!(
+            report
+                .buckets
+                .iter()
+                .map(|b| (b.count, b.attention_count))
+                .collect::<Vec<_>>(),
+            [(0, 0), (20, 0), (73, 73)]
+        );
+        assert_eq!(
+            report
+                .apps
+                .iter()
+                .map(|a| (a.app_id.as_deref(), a.count, a.attention_count))
+                .collect::<Vec<_>>(),
+            [(Some("a"), 70, 70), (Some("b"), 20, 0), (None, 3, 3)]
+        );
+        assert_eq!(report.average_microseconds, Some(11_900.0 / 93.0));
+        assert_eq!(report.attention.len(), ATTENTION_SAMPLE as usize);
+        assert_eq!(report.attention[0].id, "null-2");
+        assert!(
+            report
+                .attention
+                .iter()
+                .all(|r| r.id.starts_with("null-") || r.id.starts_with("a-"))
+        );
+        let scoped = execution_activity(
+            &db,
+            "alice",
+            ActivityParams {
+                days: 3,
+                app_id: Some("b".into()),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!((scoped.total, scoped.attention_total), (20, 0));
+        assert!(scoped.attention.is_empty());
+        assert_eq!(scoped.apps.len(), 1);
+        assert_eq!(scoped.average_microseconds, Some(200.0));
+        let empty = execution_activity(
+            &db,
+            "nobody",
+            ActivityParams {
+                days: 0,
+                app_id: None,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!((empty.days, empty.total), (1, 0));
+        assert!(empty.apps.is_empty());
+        assert_eq!(empty.average_microseconds, None);
     }
 }

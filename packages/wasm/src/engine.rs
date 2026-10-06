@@ -224,21 +224,14 @@ impl WasmConfig {
         let limits = &self.default_security.limits;
         config.max_wasm_stack(limits.max_stack_depth as usize * 1024);
 
-        // Cross-compilation target. iOS must execute through Pulley because
-        // App Store/TestFlight builds cannot jump into Wasmtime native-code
-        // artifacts.
-        let target = if cfg!(target_os = "ios") && self.target.is_none() {
-            Some("pulley64")
-        } else {
-            self.target.as_deref()
-        };
-
-        if let Some(triple) = target {
+        // Explicitly select the host baseline too. Without this, Wasmtime
+        // infers CPU features from the compiler machine and its serialized
+        // output may be rejected by another machine of the same architecture.
+        if let Some(triple) = self.target.as_deref().or_else(|| {
+            crate::aot_cache::portable_target(std::env::consts::OS, std::env::consts::ARCH)
+        }) {
             config.target(triple).map_err(|e| {
-                WasmError::compilation(format!(
-                    "Unsupported cross-compilation target '{}': {}",
-                    triple, e
-                ))
+                WasmError::compilation(format!("Unsupported compilation target '{triple}': {e}"))
             })?;
         }
 

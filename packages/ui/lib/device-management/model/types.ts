@@ -406,6 +406,12 @@ export const AGENT_FEATURES = [
 	"on_demand_events",
 	"telegram_bots",
 	"discord_bots",
+	"model_store",
+	"model_host",
+	"model_runtime_manifest",
+	"model_runtime_llamacpp",
+	"model_runtime_mlx",
+	"model_runtime_onnx",
 ] as const;
 export type AgentFeature = (typeof AGENT_FEATURES)[number];
 export type AgentFeatures = Partial<Record<AgentFeature, 1>>;
@@ -698,6 +704,7 @@ export const DEVICE_TABS = [
 	"services",
 	"activity",
 	"metrics",
+	"models",
 	"certificates",
 	"access",
 	"keys",
@@ -939,7 +946,11 @@ export type ActionId =
 	| "download_key_file"
 	| "change_device_password"
 	| "delete_local_keys"
-	| "forget_identity";
+	| "forget_identity"
+	| "models_view"
+	| "models_manage"
+	| "models_use"
+	| "models_ensure";
 
 /** One code per IA §3.3 reason; `DV/copy/gate-copy.ts` maps each to a literal t() call. */
 export type GateReason =

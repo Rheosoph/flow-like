@@ -7,6 +7,7 @@ use text_splitter::Characters;
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tiktoken_rs::CoreBPE;
 
+pub mod endpoint;
 pub mod openai;
 pub mod proxy_config;
 

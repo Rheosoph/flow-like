@@ -381,6 +381,24 @@ async fn resolve_candidate(
 /// the pollable `suite_run_id` plus the row's initial status; any later
 /// failure lands on the row as `errored`.
 ///
+/// A suite that replays an event must not run it where the event may not run: a device-only
+/// event executes on its deployed devices, never on the hub. Checked when a run starts and
+/// again when a queued run is picked up, since the event can change in between.
+async fn ensure_suite_event_may_run_here(
+    state: &AppState,
+    app_id: &str,
+    suite: &CoreRegressionSuite,
+) -> Result<(), ApiError> {
+    let Some(event_id) = suite.event_id.as_deref() else {
+        return Ok(());
+    };
+    match crate::routes::app::events::db::get_event_from_db_opt(&state.db, event_id, app_id).await?
+    {
+        Some(event) => crate::routes::app::events::ensure_source_execution_allowed(&event),
+        None => Ok(()),
+    }
+}
+
 /// Fire-and-forget by default; when [`detached_tasks_unreliable`] the row is
 /// inserted [`SUITE_RUN_QUEUED`] instead and nothing is spawned — the
 /// RegressionSuites maintenance job executes it inline.
@@ -410,13 +428,7 @@ pub async fn spawn_suite_run(
         )));
     }
 
-    if let Some(event_id) = suite.event_id.as_deref()
-        && let Some(event) =
-            crate::routes::app::events::db::get_event_from_db_opt(&state.db, event_id, &app_id)
-                .await?
-    {
-        crate::routes::app::events::ensure_source_execution_allowed(&event)?;
-    }
+    ensure_suite_event_may_run_here(&state, &app_id, &suite).await?;
 
     let (dispatch_version, version_label) =
         resolve_candidate(&state, &app_id, &suite.board_id, candidate).await?;
@@ -1219,6 +1231,12 @@ async fn execute_claimed_suite_run(state: &AppState, row: &regression_suite_run:
             .await
             .map_err(|e| format!("failed to load the app: {e}"))?;
         let suite = load_core_suite(&app, &suite_row).await;
+        ensure_suite_event_may_run_here(state, &row.app_id, &suite)
+            .await
+            .map_err(|e| {
+                e.public_message()
+                    .map_or_else(|| e.to_string(), str::to_owned)
+            })?;
         let dispatch_version = if row.board_version == DRAFT_VERSION_LABEL {
             None
         } else {

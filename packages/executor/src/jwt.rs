@@ -1,5 +1,5 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
@@ -178,9 +178,9 @@ async fn fetch_public_key_from_api() -> Result<Vec<u8>, ExecutorError> {
     point.extend_from_slice(&y_bytes);
 
     // Convert to PEM format using p256 crate
-    use p256::elliptic_curve::sec1::FromEncodedPoint;
     use p256::EncodedPoint;
     use p256::PublicKey;
+    use p256::elliptic_curve::sec1::FromEncodedPoint;
 
     let encoded_point = EncodedPoint::from_bytes(&point)
         .map_err(|e| ExecutorError::Jwt(format!("Invalid EC point: {}", e)))?;
@@ -240,6 +240,23 @@ pub async fn verify_jwt_async(token: &str) -> Result<ExecutorClaims, ExecutorErr
     let token_data = decode::<ExecutorClaims>(token, decoding_key, &validation)?;
 
     Ok(token_data.claims)
+}
+
+pub(crate) async fn verify_claim_check(
+    token: &str,
+) -> Result<flow_like_types::dispatch::ClaimCheckClaims, ExecutorError> {
+    let key = prepare_verification_key().await?;
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_audience(&["flow-like-executor"]);
+    validation.set_issuer(&["flow-like"]);
+    let claims =
+        decode::<flow_like_types::dispatch::ClaimCheckClaims>(token, key, &validation)?.claims;
+    if claims.purpose != "claim-check" || claims.token_type != "executor" {
+        return Err(ExecutorError::Jwt(
+            "Invalid claim-check purpose".to_string(),
+        ));
+    }
+    Ok(claims)
 }
 
 /// Verify and decode the executor JWT (sync version - requires BACKEND_PUB env var)

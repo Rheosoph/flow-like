@@ -80,6 +80,7 @@ import {
 	type DeploySummaryInput,
 	canVisit,
 } from "./deploy-summary";
+import { targetsHaveModelStore } from "./desktop-export";
 import type { DeployStepProps, PlanStepProps } from "./step-props";
 import { AccessCostStep } from "./steps/access-cost-step";
 import { CopyUploadStep } from "./steps/copy-upload-step";
@@ -1118,6 +1119,10 @@ function Wizard({
 	const prepare = useDeployPrepare(plan, {
 		enabled: PREPARING.includes(step),
 		hubTypes: state.facts.hub?.hubTypes,
+		modelStore: targetsHaveModelStore(
+			plan.targets,
+			(deviceId) => state.facts.devices[deviceId]?.features,
+		),
 	});
 	const limitsOnly =
 		plan.services.length > 0 && !plan.services.some((row) => row.hosted);

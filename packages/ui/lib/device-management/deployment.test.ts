@@ -1173,6 +1173,97 @@ test("placement metadata excludes private values and every operation remains sto
 	expect(plan.steps[1].command.value).toBe('"workflow-secret"');
 	expect(plan.steps[2].command.value).toBe(input().serviceToken);
 });
+
+test("token-free hosting requires an explicit choice and saves only workflow secrets", () => {
+	const plan = createDeploymentPlan({
+		...input(),
+		serviceAuthentication: "none",
+		serviceToken: "",
+	});
+	expect(plan.config.hosting).toMatchObject({ authentication: "none" });
+	expect(plan.config.hosting).not.toHaveProperty("auth_secret");
+	expect(plan.steps.map((step) => step.command.type)).toEqual([
+		"apply",
+		"set_secret",
+	]);
+	expect(plan.steps[1].command.value).toBe('"workflow-secret"');
+	expect(() => createDeploymentPlan({ ...input(), serviceToken: "" })).toThrow(
+		"service token",
+	);
+});
+
+test("updates can remove token authentication, preserve that choice, and enable it again", async () => {
+	const base = await updateInput();
+	const removed = createDeploymentPlan({
+		...base,
+		serviceAuthentication: "none",
+	});
+	expect(removed.config.hosting).toMatchObject({ authentication: "none" });
+	expect(removed.config.hosting).not.toHaveProperty("auth_secret");
+	expect(removed.steps.map((step) => step.command.type)).toEqual(["apply"]);
+	if (!base.existing.config.hosting) throw new Error("Expected hosted fixture");
+	const { auth_secret: _authSecret, ...hosting } = base.existing.config.hosting;
+	const existing = {
+		...base.existing,
+		config: {
+			...base.existing.config,
+			hosting: {
+				...hosting,
+				authentication: "none" as const,
+			},
+		},
+	};
+	expect(
+		createDeploymentPlan({ ...base, existing }).config.hosting,
+	).toMatchObject({
+		authentication: "none",
+	});
+	expect(() =>
+		createDeploymentPlan({
+			...base,
+			existing,
+			serviceAuthentication: "token",
+		}),
+	).toThrow("service token");
+	const protectedPlan = createDeploymentPlan({
+		...base,
+		existing,
+		serviceAuthentication: "token",
+		serviceToken: "new-service-token-".repeat(3),
+	});
+	expect(protectedPlan.config.hosting).toMatchObject({
+		authentication: "token",
+	});
+	expect(protectedPlan.steps.map((step) => step.command.type)).toEqual([
+		"apply",
+		"set_secret",
+	]);
+	expect(protectedPlan.steps[1].command.value).toBe(
+		"new-service-token-".repeat(3),
+	);
+	expect(() =>
+		createDeploymentPlan({
+			...base,
+			existing: { ...existing, config: { ...existing.config, hosting } },
+		}),
+	).toThrow();
+	expect(() =>
+		createDeploymentPlan({
+			...base,
+			existing: {
+				...existing,
+				config: {
+					...existing.config,
+					hosting: {
+						...existing.config.hosting,
+						auth_secret: "leftover-token",
+					},
+				},
+			},
+		}),
+	).toThrow();
+});
+
 test("selection forbids floating pins, replicated daemons, unknown overrides and missing online grant", () => {
 	expect(() =>
 		createDeploymentPlan({
@@ -1850,6 +1941,115 @@ const FORM: DeploymentEvent = discovered({
 	rollout_supported: true,
 });
 const TOKEN = "123456789:AAH-secret_token_value_123";
+
+test("hosting forms and quick actions requires an explicit opt-in and reuses service authentication", () => {
+	const base = { ...input(), events: [FORM], replicas: 1 };
+	expect(createDeploymentPlan(base).config.hosting).toBeUndefined();
+	const hosted = createDeploymentPlan({ ...base, hostOnDemand: true });
+	expect(hosted.config.hosting).toMatchObject({
+		host: "127.0.0.1",
+		port: 8080,
+		auth_secret: "service-access",
+	});
+	expect(
+		hosted.steps.some(
+			(step) =>
+				step.command.type === "set_secret" &&
+				step.command.value === base.serviceToken,
+		),
+	).toBe(true);
+	expect(() =>
+		createDeploymentPlan({ ...base, hostOnDemand: true, serviceToken: "" }),
+	).toThrow("service token");
+	const publicPlan = createDeploymentPlan({
+		...base,
+		hostOnDemand: true,
+		serviceToken: "",
+		serviceAuthentication: "none",
+	});
+	expect(publicPlan.config.hosting).toMatchObject({ authentication: "none" });
+	expect(publicPlan.config.hosting).not.toHaveProperty("auth_secret");
+	const botOnly = createDeploymentPlan({
+		...base,
+		events: [BOT],
+		hostOnDemand: true,
+		overrides: { ...base.overrides, [botTokenKey(BOT.id)]: TOKEN },
+	});
+	expect(botOnly.config.hosting).toBeUndefined();
+});
+
+test("enabling a form listener stages its token before a health-checked update", async () => {
+	const base = await updateInput();
+	const { hosting: _hosting, ...unhosted } = base.existing.config;
+	const token = "new-form-listener-access-token-0123456789";
+	const plan = createDeploymentPlan({
+		...base,
+		events: [FORM],
+		replicas: 1,
+		existing: { ...base.existing, config: { ...unhosted, max_replicas: 1 } },
+		hostOnDemand: true,
+		healthChecked: true,
+		serviceToken: token,
+	});
+	expect(plan.steps.map((step) => step.command.type)).toEqual([
+		"stage_rollout",
+		"rollout_secret",
+		"activate_rollout",
+	]);
+	const hosting = plan.config.hosting as Record<string, unknown>;
+	expect(hosting.auth_secret).toBeTruthy();
+	expect(plan.steps[1].command).toMatchObject({
+		name: hosting.auth_secret,
+		value: token,
+		rollout_id: plan.rollout_id,
+	});
+	expect(JSON.stringify(plan.config)).not.toContain(token);
+});
+
+test("an on-demand-only update preserves its explicitly configured Studio listener", async () => {
+	const update = await updateInput();
+	const hosting = update.existing.config.hosting;
+	if (!hosting) throw new Error("Missing fixture hosting settings");
+	const { auth_secret: _authSecret, ...publicHosting } = hosting;
+	const plan = createDeploymentPlan({ ...update, events: [FORM] });
+	expect(plan.config.hosting).toMatchObject({
+		...update.existing.config.hosting,
+		host: update.host,
+		port: update.port,
+	});
+	expect(plan.config.max_replicas).toBe(2);
+	expect(plan.steps.some((step) => step.command.type === "set_secret")).toBe(
+		false,
+	);
+	const publicUpdate = {
+		...update,
+		existing: {
+			...update.existing,
+			config: {
+				...update.existing.config,
+				hosting: {
+					...publicHosting,
+					authentication: "none" as const,
+				},
+			},
+		},
+	};
+	expect(
+		createDeploymentPlan({ ...publicUpdate, events: [FORM] }).config.hosting,
+	).toMatchObject({ authentication: "none" });
+	expect(
+		createDeploymentPlan({
+			...update,
+			existing: {
+				...update.existing,
+				config: { ...update.existing.config, max_replicas: 1 },
+			},
+			events: [BOT],
+			replicas: 1,
+			overrides: { ...update.overrides, [botTokenKey(BOT.id)]: TOKEN },
+		}).config.hosting,
+	).toBeUndefined();
+});
 
 test("a form beside a served event keeps its instances; a bot or an older row without a kind keeps one", () => {
 	const plan = createDeploymentPlan({ ...input(), events: [event, FORM] });

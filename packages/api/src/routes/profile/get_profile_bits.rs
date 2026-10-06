@@ -2,7 +2,7 @@ use crate::{
     entity::{bit, meta, profile},
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::LanguageParams,
+    routes::user::bits::served_to_client,
     state::AppState,
 };
 use axum::{
@@ -12,10 +12,20 @@ use axum::{
 use flow_like::bit::{Bit, Metadata};
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use serde::Deserialize;
 
 use crate::routes::bit::get_bit::temporary_bit;
 
 const MAX_BITS: u64 = 100;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProfileBitsQuery {
+    pub language: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub device_models: bool,
+}
 
 #[utoipa::path(
     get,
@@ -26,6 +36,7 @@ const MAX_BITS: u64 = 100;
         ("language" = Option<String>, Query, description = "Language code for metadata"),
         ("limit" = Option<u64>, Query, description = "Max items to return (max 100)"),
         ("offset" = Option<u64>, Query, description = "Offset for pagination"),
+        ("device_models" = Option<bool>, Query, description = "Include models hosted on your devices; apps that can't use them leave this off"),
     ),
     responses(
         (status = 200, description = "Resolved bits in the profile", body = Vec<Bit>),
@@ -37,7 +48,7 @@ pub async fn get_profile_bits(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(profile_id): Path<String>,
-    Query(query): Query<LanguageParams>,
+    Query(query): Query<ProfileBitsQuery>,
 ) -> Result<Json<Vec<Bit>>, ApiError> {
     let sub = user.sub()?;
     let language = query.language.as_deref().unwrap_or("en");
@@ -45,8 +56,8 @@ pub async fn get_profile_bits(
     let offset = query.offset.unwrap_or(0);
 
     let cache_key = format!(
-        "profile_bits:{}:{}:{}:{}:{}",
-        sub, profile_id, language, limit, offset
+        "profile_bits:{}:{}:{}:{}:{}:{}",
+        sub, profile_id, language, limit, offset, query.device_models
     );
 
     if let Some(cached) = state.get_cache::<Vec<Bit>>(&cache_key) {
@@ -68,10 +79,11 @@ pub async fn get_profile_bits(
 
     // Custom bits this profile activated (without provider secrets — this
     // response feeds UI lists). The full library lives at GET /user/bits.
-    let custom_bits =
+    let mut custom_bits =
         crate::routes::user::bits::load_custom_bits_for_profile(&state, &sub, &bit_ids, false)
             .await
             .unwrap_or_default();
+    custom_bits.retain(|bit| served_to_client(bit, query.device_models));
 
     if bit_ids.is_empty() {
         state.set_cache(cache_key, &custom_bits);
@@ -134,4 +146,23 @@ pub async fn get_profile_bits(
     state.set_cache(cache_key, &bits);
 
     Ok(Json(bits))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_models_are_opt_in_beside_pagination() {
+        let parse = |uri: &str| {
+            let uri = uri.parse().expect("a valid request URI");
+            Query::<ProfileBitsQuery>::try_from_uri(&uri)
+                .expect("a valid query")
+                .0
+        };
+        let older = parse("/profile/p/bits?limit=100");
+        assert_eq!((older.limit, older.device_models), (Some(100), false));
+        let newer = parse("/profile/p/bits?limit=100&device_models=true");
+        assert_eq!((newer.limit, newer.device_models), (Some(100), true));
+    }
 }

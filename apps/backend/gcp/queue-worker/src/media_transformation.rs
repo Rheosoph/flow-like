@@ -18,7 +18,9 @@ use flow_like_storage::object_store::{
     Attribute, AttributeValue, Attributes, ObjectStore, PutOptions, PutPayload, path::Path,
 };
 use image::{GenericImageView, ImageReader};
+#[cfg(test)]
 use std::io::Cursor;
+use std::io::{BufRead, BufReader, Seek};
 use std::sync::Arc;
 use webp::Encoder;
 
@@ -165,10 +167,14 @@ async fn convert_and_store(
 
     let source = stored_key(source_key)?;
     let image_data = match ctx.store.get(&source).await {
-        Ok(result) => result
-            .bytes()
+        Ok(result) => flow_like_storage::files::bounded::spool_object(result)
             .await
-            .map_err(|error| map_store_error("get", error))?,
+            .map_err(
+                |error| match error.downcast::<flow_like_storage::object_store::Error>() {
+                    Ok(error) => map_store_error("get", error),
+                    Err(_) => MediaTransformationError::Retryable("media_staging_failed"),
+                },
+            )?,
         // The original is already gone (a redelivery after a completed run); the
         // webp exists or nothing is left to convert either way.
         Err(flow_like_storage::object_store::Error::NotFound { .. }) => return Ok(()),
@@ -176,13 +182,19 @@ async fn convert_and_store(
     };
 
     let key_for_log = source_key.to_string();
-    let webp_data = tokio::task::spawn_blocking(move || decode_resize_encode_webp(&image_data))
-        .await
-        .map_err(|_| MediaTransformationError::Retryable("media_transform_task_failed"))?
-        .map_err(|error| {
-            tracing::warn!(error = %error, key = %key_for_log, "image could not be transformed");
+    let webp_data = tokio::task::spawn_blocking(move || {
+        decode_resize_encode_webp(BufReader::new(image_data))
+    })
+    .await
+    .map_err(|_| MediaTransformationError::Retryable("media_transform_task_failed"))?
+    .map_err(|error| {
+        tracing::warn!(error = %error, key = %key_for_log, "image could not be transformed");
+        if error.retryable {
+            MediaTransformationError::Retryable("media_transform_read_failed")
+        } else {
             MediaTransformationError::Permanent("media_transform_failed")
-        })?;
+        }
+    })?;
 
     let attributes = Attributes::from_iter([
         (Attribute::ContentType, AttributeValue::from("image/webp")),
@@ -205,13 +217,50 @@ async fn convert_and_store(
     Ok(())
 }
 
-fn decode_resize_encode_webp(image_data: &[u8]) -> Result<Vec<u8>, String> {
-    let reader = ImageReader::new(Cursor::new(image_data))
+#[derive(Debug)]
+struct MediaDecodeError {
+    reason: String,
+    retryable: bool,
+}
+
+impl std::fmt::Display for MediaDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.reason.fmt(f)
+    }
+}
+
+impl MediaDecodeError {
+    fn io(error: std::io::Error) -> Self {
+        let retryable = !matches!(
+            error.kind(),
+            std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::InvalidData
+                | std::io::ErrorKind::InvalidInput
+        );
+        Self {
+            reason: error.to_string(),
+            retryable,
+        }
+    }
+}
+
+fn decode_resize_encode_webp<R: BufRead + Seek>(
+    image_data: R,
+) -> Result<Vec<u8>, MediaDecodeError> {
+    let reader = ImageReader::new(image_data)
         .with_guessed_format()
-        .map_err(|error| error.to_string())?;
-    let decoded = reader.decode().map_err(|error| error.to_string())?;
-    let resized = resize_image(decoded);
-    encode_as_webp(resized)
+        .map_err(MediaDecodeError::io)?;
+    let decoded = reader.decode().map_err(|error| match error {
+        image::ImageError::IoError(error) => MediaDecodeError::io(error),
+        error => MediaDecodeError {
+            reason: error.to_string(),
+            retryable: false,
+        },
+    })?;
+    encode_as_webp(resize_image(decoded)).map_err(|reason| MediaDecodeError {
+        reason,
+        retryable: false,
+    })
 }
 
 fn resize_image(img: image::DynamicImage) -> image::DynamicImage {
@@ -240,6 +289,37 @@ fn encode_as_webp(img: image::DynamicImage) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disk_io_failures_retry_while_malformed_media_remains_permanent() {
+        assert!(MediaDecodeError::io(std::io::ErrorKind::Other.into()).retryable);
+        assert!(!MediaDecodeError::io(std::io::ErrorKind::UnexpectedEof.into()).retryable);
+        assert!(
+            !decode_resize_encode_webp(Cursor::new(b"invalid image"))
+                .unwrap_err()
+                .retryable
+        );
+    }
+
+    #[test]
+    fn buffered_decode_preserves_legacy_landscape_pixels() {
+        let image = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(33, 20, |x, y| {
+            image::Rgb([(x * 7) as u8, (y * 11) as u8, ((x + y) * 4) as u8])
+        }));
+        let expected = encode_as_webp(image.resize_to_fill(
+            1280,
+            720,
+            image::imageops::FilterType::CatmullRom,
+        ))
+        .unwrap();
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Bmp)
+            .unwrap();
+        encoded.set_position(0);
+        let output = decode_resize_encode_webp(BufReader::new(encoded)).unwrap();
+        assert_eq!(output, expected);
+    }
 
     #[test]
     fn course_asset_keys_exclude_banners_and_other_prefixes() {

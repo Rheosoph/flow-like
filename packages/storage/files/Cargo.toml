@@ -11,7 +11,8 @@ async-trait.workspace = true
 bytes = "1.10.1"
 mime_guess = "2.0.5"
 reqwest = { workspace = true, features = ["gzip", "brotli", "socks", "http2"] }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "fs", "io-util"] }
+tempfile = "3"
 object_store = { version = "=0.13.2", features = ["gcp", "aws", "azure", "serde", "serde_json", "cloud"] }
 chrono = { workspace = true, optional = true }
 smb2 = { version = "0.11.3", optional = true }

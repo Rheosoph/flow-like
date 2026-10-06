@@ -26,6 +26,7 @@ import {
 	readCertificateInventory,
 	readFlowVersion,
 	readHubStandalone,
+	readPolicyView,
 	releaseSchedule,
 	sendTestCertificateNotice,
 	toHubError,
@@ -902,4 +903,28 @@ describe("hub device support (GET /api/v1)", () => {
 			"invalid_response",
 		);
 	});
+});
+
+test("policy capability signals are optional and preserve unknown future capabilities", async () => {
+	const baseline = {
+		policy_jws: null,
+		version: 0,
+		digest: null,
+		applied_version: 0,
+		applied_digest: null,
+	};
+	for (const signal of [
+		undefined,
+		["status", "model_use", "future_capability"],
+		"invalid",
+	]) {
+		const { api } = fakeApi(() => ({
+			...baseline,
+			supported_capabilities: signal,
+		}));
+		const view = await readPolicyView(api, profile, "device");
+		expect(view.supported_capabilities).toEqual(
+			Array.isArray(signal) ? signal : undefined,
+		);
+	}
 });

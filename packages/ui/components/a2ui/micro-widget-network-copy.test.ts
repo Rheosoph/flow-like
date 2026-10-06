@@ -28,7 +28,7 @@ import {
 } from "./micro-widget-policy";
 import { RUNTIME_VALUE_ISSUE_CODES } from "./micro-widget-runtime-sources";
 
-const en = SOURCE_RESOURCES.common as Record<string, string>;
+const en = SOURCE_RESOURCES.common as unknown as Record<string, string>;
 const SCHEMA = join(import.meta.dir, "../../../wasm/schema");
 
 function readJson<T>(path: string): T {

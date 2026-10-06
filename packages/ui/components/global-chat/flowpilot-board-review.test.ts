@@ -83,6 +83,50 @@ function harness(job = review()) {
 }
 
 describe("retained board review tool", () => {
+	test("an empty review queue exposes active generation without treating it as a failed apply", async () => {
+		const { options, calls } = harness();
+		options.boardState.listBoardEditJobs = async () => [];
+		const result = await executeFlowPilotBoardReview({
+			...options,
+			action: "list",
+			getActiveRun: (appId, boardId) => ({
+				app_id: appId,
+				board_id: boardId,
+				request_id: "active",
+				mode: "edit",
+				stage: "generating",
+				started_at_ms: 1,
+				last_activity_at_ms: 2,
+				draft_id: "draft",
+				revision: 15,
+				commit_state: "not_observed",
+			}),
+		});
+		expect(result).toMatchObject({
+			status: "ok",
+			reviews: [],
+			active_run: { request_id: "active", revision: 15 },
+		});
+		expect(result.message).toContain("still running");
+		expect(calls).toEqual([]);
+	});
+
+	test("out-of-scope apps cannot probe active-run metadata", async () => {
+		const { options } = harness();
+		let readActivity = false;
+		const result = await executeFlowPilotBoardReview({
+			...options,
+			action: "list",
+			getVisibleAppIds: async () => new Set(),
+			getActiveRun: () => {
+				readActivity = true;
+				return undefined;
+			},
+		});
+		expect(result.code).toBe("BOARD_REVIEW_APP_OUT_OF_SCOPE");
+		expect(readActivity).toBe(false);
+	});
+
 	test("lists applied reviews and excludes foreign jobs and source payloads", async () => {
 		const { options, calls } = harness(review("applied"));
 		const result = await executeFlowPilotBoardReview({

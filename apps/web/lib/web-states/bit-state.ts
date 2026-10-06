@@ -212,7 +212,7 @@ export class WebBitState implements IBitState {
 			if (!profileId) return [];
 			return (
 				(await apiGet<IBit[]>(
-					`profile/${profileId}/bits?limit=100`,
+					`profile/${profileId}/bits?limit=100&device_models=true`,
 					this.backend.auth,
 				)) ?? []
 			);
@@ -223,7 +223,12 @@ export class WebBitState implements IBitState {
 
 	async listCustomBits(): Promise<IBit[]> {
 		try {
-			return (await apiGet<IBit[]>("user/bits", this.backend.auth)) ?? [];
+			return (
+				(await apiGet<IBit[]>(
+					"user/bits?device_models=true",
+					this.backend.auth,
+				)) ?? []
+			);
 		} catch {
 			return [];
 		}

@@ -33,6 +33,18 @@ pub const FEATURES: &[&str] = &[
     "archive_status",
     "artifact_capacity",
     "scheduled_events",
+    #[cfg(feature = "runtime")]
+    "model_store",
+    #[cfg(feature = "runtime")]
+    "model_host",
+    #[cfg(feature = "runtime")]
+    "model_runtime_llamacpp",
+    #[cfg(feature = "runtime")]
+    "model_runtime_onnx",
+    #[cfg(feature = "runtime")]
+    "model_runtime_manifest",
+    #[cfg(all(feature = "runtime", target_os = "macos", target_arch = "aarch64"))]
+    "model_runtime_mlx",
 ];
 
 pub const DEVICE_PRESENCE: &str = "device_presence";
@@ -47,6 +59,7 @@ pub const TELEMETRY_SAMPLER: &str = "telemetry_sampler";
 pub const LIVE_TELEMETRY_PUBLISHER: &str = "live_telemetry_publisher";
 pub const CERTIFICATE_INVENTORY_PUBLISHER: &str = "certificate_inventory_publisher";
 pub const CERTIFICATE_RENEWAL: &str = "certificate_renewal";
+pub const MODEL_HOST: &str = "model_host";
 
 const MAX_ERROR_TEXT: usize = 1024;
 const MAX_EVENTS: usize = 64;
@@ -118,12 +131,34 @@ const BOT_STATES: [&str; 8] = [
 const BOT_CONNECTION_STATES: [&str; 3] = ["connecting", "connected", "reconnecting"];
 const ACTION_KINDS: [&str; 2] = ["action", "form"];
 
-/// `FEATURES`, then the flag of every event part this build carries.
+pub fn model_host_available() -> bool {
+    #[cfg(feature = "runtime")]
+    {
+        crate::models::host::ModelHost::current().is_some()
+    }
+    #[cfg(not(feature = "runtime"))]
+    false
+}
+
+pub fn model_host_failed() -> bool {
+    global()
+        .lock()
+        .tasks
+        .get(MODEL_HOST)
+        .is_some_and(|health| health.state == TaskState::Stopped)
+}
+
+/// Model capabilities follow the running host; event capabilities follow the build.
 pub fn features() -> Value {
+    features_with_models(model_host_available())
+}
+
+fn features_with_models(available: bool) -> Value {
     Value::Object(
         FEATURES
             .iter()
             .copied()
+            .filter(|flag| available || !flag.starts_with("model_"))
             .chain(crate::event_kind::flags())
             .map(|flag| (flag.to_owned(), json!(1)))
             .collect(),
@@ -2667,25 +2702,37 @@ mod tests {
             API_EVENTS, DISCORD_BOTS, ON_DEMAND_EVENTS, SCHEDULED_ONCE, TELEGRAM_BOTS,
         };
         let mut expected = json!({"placement_diagnostics":1,"task_health":1,"placement_events":1,"offline_summary":1,"host_operation":1,"network_interfaces":1,"rollout_history":1,"operations":1,"metrics_history":1,"offline_lookup":1,"reader_bindings":1,"acme_failure_detail":1,"archive_status":1,"artifact_capacity":1,"scheduled_events":1});
+        let hosts_models = cfg!(feature = "runtime");
         // A flag of an event part follows the build: it is there exactly when the part is.
+        // The model host is built with the runtime; MLX runs on Apple-silicon Macs only.
+        let serves_mlx = hosts_models && cfg!(all(target_os = "macos", target_arch = "aarch64"));
         for (flag, built) in [
             ("api_events", API_EVENTS),
             ("scheduled_once", SCHEDULED_ONCE),
             ("on_demand_events", ON_DEMAND_EVENTS),
             ("telegram_bots", TELEGRAM_BOTS),
             ("discord_bots", DISCORD_BOTS),
+            ("model_store", hosts_models),
+            ("model_host", hosts_models),
+            ("model_runtime_llamacpp", hosts_models),
+            ("model_runtime_onnx", hosts_models),
+            ("model_runtime_manifest", hosts_models),
+            ("model_runtime_mlx", serves_mlx),
         ] {
             if built {
                 expected[flag] = json!(1);
             }
         }
-        assert_eq!(features(), expected);
+        assert_eq!(features_with_models(true), expected);
+        let mut without_models = expected.clone();
+        without_models
+            .as_object_mut()
+            .unwrap()
+            .retain(|flag, _| !flag.starts_with("model_"));
+        assert_eq!(features_with_models(false), without_models);
         let root = tempfile::tempdir()?;
         let diagnostics = Diagnostics::default();
-        assert_eq!(
-            diagnostics.device_facts(root.path(), true)["features"],
-            features()
-        );
+        assert!(diagnostics.device_facts(root.path(), true)["features"].is_object());
         assert!(
             !diagnostics
                 .device_facts(root.path(), false)

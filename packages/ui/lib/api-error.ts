@@ -156,6 +156,31 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
 		: fallback;
 }
 
+const quietPlanLimits = new Map<string, number>();
+
+/**
+ * Keeps refusals for a quota `resource` out of the upgrade dialog until the
+ * returned release runs, for a caller that answers them itself. Holders are
+ * counted, so the resource stays quiet until the last one releases; calling a
+ * release twice counts once.
+ */
+export function quietPlanLimit(resource: string): () => void {
+	quietPlanLimits.set(resource, (quietPlanLimits.get(resource) ?? 0) + 1);
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		const holders = (quietPlanLimits.get(resource) ?? 1) - 1;
+		if (holders > 0) quietPlanLimits.set(resource, holders);
+		else quietPlanLimits.delete(resource);
+	};
+}
+
+function isQuietPlanLimit(error: ApiResponseError) {
+	const resource = error.quota?.resource;
+	return resource !== undefined && quietPlanLimits.has(resource);
+}
+
 function nonEmptyString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -242,7 +267,11 @@ export function apiResponseError(
 			bodyRetryAfter,
 		),
 	});
-	if (typeof window !== "undefined" && isUpgradeRequiredError(error)) {
+	if (
+		typeof window !== "undefined" &&
+		isUpgradeRequiredError(error) &&
+		!isQuietPlanLimit(error)
+	) {
 		window.dispatchEvent(
 			new window.CustomEvent(PLAN_LIMIT_EVENT, { detail: error }),
 		);

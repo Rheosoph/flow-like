@@ -38,7 +38,8 @@ export interface HostingView {
 	port: number;
 	maxInFlight: number;
 	timeoutS: number;
-	authSecret: string;
+	authentication: "token" | "none";
+	authSecret?: string;
 	origins: string[];
 	exposure: Exposure;
 }
@@ -59,7 +60,8 @@ export function hostingOf(config: PlacementConfig): HostingView | null {
 		port: hosting.port,
 		maxInFlight: hosting.max_in_flight,
 		timeoutS: hosting.request_timeout_secs,
-		authSecret: hosting.auth_secret,
+		authentication: hosting.authentication ?? "token",
+		authSecret: hosting.auth_secret ?? undefined,
 		origins: Array.isArray(origins) ? origins.filter(isText) : [],
 		exposure: exposureOf(hosting.host),
 	};
@@ -965,6 +967,7 @@ const COVERED = new Set([
 const COVERED_HOSTING = new Set([
 	"host",
 	"port",
+	"authentication",
 	"auth_secret",
 	"max_in_flight",
 	"request_timeout_secs",

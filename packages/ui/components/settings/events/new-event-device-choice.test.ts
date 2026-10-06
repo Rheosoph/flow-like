@@ -12,6 +12,7 @@ import {
 	listDevices,
 	matchesDeviceFilter,
 	pickableDevices,
+	resultFooterAction,
 	stepTab,
 	unavailableSelectedDevice,
 } from "./new-event-device-choice";
@@ -202,4 +203,11 @@ test("a saved event opens on the first step that needs input, else Review", () =
 	expect(stepTab("settings")).toBe("settings");
 	expect(stepTab("what")).toBe("where");
 	expect(stepTab("how")).toBe("where");
+});
+
+test("the footer says Done only when every device took the event", () => {
+	expect(resultFooterAction(null)).toBeNull();
+	expect(resultFooterAction({ outcome: "all" })).toBe("done");
+	expect(resultFooterAction({ outcome: "partial" })).toBeNull();
+	expect(resultFooterAction({ outcome: "none" })).toBeNull();
 });

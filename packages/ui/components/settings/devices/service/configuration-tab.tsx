@@ -1460,7 +1460,9 @@ function EndpointRows({
 						)}
 					</KvRow>
 					<KvRow label={t("serviceConfig.token.name", "Access token")}>
-						{t("serviceConfig.endpoint.tokenSet", "Set")}
+						{hosting.authentication === "none"
+							? t("serviceConfig.endpoint.tokenNone", "Not required")
+							: t("serviceConfig.endpoint.tokenSet", "Set")}
 					</KvRow>
 				</>
 			) : null}

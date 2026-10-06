@@ -64,13 +64,12 @@ describe("the line", () => {
 		expect(line(view.container)?.classList.contains("x")).toBe(true);
 	});
 
-	test("renders nothing for an event that is no bot or settings a device can't read", async () => {
+	test("renders nothing for an event that is no bot or settings the desktop app can't read", async () => {
 		const silent: [string, unknown][] = [
 			["teams", {}],
 			["telegram", null],
 			["telegram", { chat_whitelist: "all" }],
 			["discord", { command_prefix: 7 }],
-			["discord", { command_prefix: "x".repeat(17) }],
 		];
 		const view = await dom.render(null);
 		for (const [eventType, config] of silent) {
@@ -83,6 +82,14 @@ describe("the line", () => {
 				"",
 			]);
 		}
+		// Over a device's bounds the desktop app still runs the bot by its prefix.
+		await view.rerender(
+			<BotAnswersLine
+				eventType="discord"
+				config={{ command_prefix: "x".repeat(17), intents: ["Everything"] }}
+			/>,
+		);
+		expect(answers(view.container)).toBe(SENTENCE.prefix("x".repeat(17)));
 	});
 });
 
@@ -180,6 +187,11 @@ describe("Events editor · Telegram", () => {
 		expect(field?.value).toBe("");
 		expect(field?.hasAttribute("placeholder")).toBe(false);
 		expect(answers(view.container)).toBe(SENTENCE.every);
+		// There is no default prefix to name.
+		expect(view.container.textContent).toContain(
+			"Prefix for bot commands (e.g., /start)",
+		);
+		expect(view.container.textContent).not.toContain("(default: /)");
 
 		await typeInto(field as Element, "/");
 		expect(written).toEqual({ command_prefix: "/" });
@@ -191,9 +203,9 @@ describe("Events editor · Telegram", () => {
 			respond_to_mentions: false,
 		});
 		expect(answers(view.container)).toBe(SENTENCE.prefixOnly("/"));
-		// A prefix a device can't read: the wizard shows no sentence for it either.
+		// Longer than a device reads: the desktop app still answers by it.
 		await typeInto(prefixField(view.container) as Element, "x".repeat(17));
-		expect(line(view.container)).toBeNull();
+		expect(answers(view.container)).toBe(SENTENCE.prefixOnly("x".repeat(17)));
 	});
 
 	test("read-only shows the saved prefix, nothing when none is saved, and the same line", async () => {

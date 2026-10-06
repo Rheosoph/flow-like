@@ -173,6 +173,8 @@ const FIELD_LABEL: Record<
 	endpoint_host: (t) =>
 		t("devices:serviceConfig.field.bind", "Who can reach it"),
 	endpoint_port: (t) => t("devices:serviceConfig.field.port", "Port"),
+	authentication: (t) =>
+		t("devices:serviceConfig.diff.authentication", "Service access"),
 	token: (t) => t("devices:serviceConfig.token.name", "Access token"),
 	certificate: (t) => t("devices:serviceConfig.field.cert", "Certificate"),
 	instances: (t) => t("devices:serviceConfig.field.max", "Max instances"),
@@ -217,6 +219,10 @@ const VALUE: Partial<
 		</>
 	),
 	endpoint_port: (_format, value) => <Mono>{String(value)}</Mono>,
+	authentication: ({ t }, value) =>
+		value === "none"
+			? t("devices:serviceConfig.endpoint.tokenNone", "Not required")
+			: t("devices:serviceConfig.diff.tokenRequired", "Token required"),
 	certificate: ({ names }, value) => names.certificate(String(value)),
 	instances: (_format, value) => <Mono>{String(value)}</Mono>,
 	write_buffering: ({ t }, value) => bufferingBudgets(t, value),

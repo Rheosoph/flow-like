@@ -35,7 +35,12 @@ export interface KeySessionRow {
 	renewsAt?: number;
 }
 
-const OPEN_STATES = new Set<KeyChipState>(["live", "reconnecting", "unlocked"]);
+const OPEN_STATES = new Set<KeyChipState>([
+	"live",
+	"reconnecting",
+	"unlocked",
+	"models",
+]);
 const NO_ACTION = new Set<KeyChipState>(["unlocking", "blocked", "stale"]);
 
 /** Keys are open on this computer: the row offers Lock. */
@@ -214,11 +219,13 @@ export function keySessionRows(
 		input.devices.map((row) => [row.device_id, deviceName(row)]),
 	);
 	return sessions
-		.filter((session) => session.state !== "none")
+		.filter((session) => session.state !== "none" || session.heldForModels)
 		.map((session) => ({
 			deviceId: session.deviceId,
 			name: names.get(session.deviceId) ?? session.deviceId.slice(0, 8),
-			...keyChipOf(session, input.live[session.deviceId]?.state),
+			...(session.heldForModels
+				? { state: "models" as const }
+				: keyChipOf(session, input.live[session.deviceId]?.state)),
 		}))
 		.sort(
 			(a, b) =>

@@ -271,7 +271,18 @@ fn copy_tree(
 
 /// The source must be a stopped project or a consistent database snapshot. Copying
 /// files cannot manufacture a transactionally consistent snapshot of a live database.
+/// The reconciler acquires model assets separately after this disk-copy slot is released.
 pub(crate) fn prepare_for_launch(
+    root: &Path,
+    config: &PlacementConfig,
+    revision: u64,
+    intent: u64,
+    cancel: &CancellationToken,
+) -> Result<PathBuf> {
+    prepare_data(root, config, revision, intent, cancel)
+}
+
+fn prepare_data(
     root: &Path,
     config: &PlacementConfig,
     revision: u64,

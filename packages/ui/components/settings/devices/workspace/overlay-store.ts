@@ -9,6 +9,8 @@ export interface UnlockRequest {
 	connectLive?: boolean;
 	/** Where to land after unlocking (deep link to a locked section). */
 	returnTo?: DevicesRoute;
+	/** Unlocked for the device's models: offers "Keep unlocked for model access" (§9 Q2). */
+	forModels?: boolean;
 }
 
 /** "Run now…" of one quick action or form a service runs (design R2 §6.5). */
@@ -26,7 +28,11 @@ export type OverlayState =
 	| { kind: "unlock_several" }
 	| { kind: "diagnose"; deviceId: string; serviceId?: string }
 	| { kind: "plane"; plane: PlaneSegmentId }
-	| ({ kind: "run_now" } & RunNowRequest);
+	| ({ kind: "run_now" } & RunNowRequest)
+	/** Models tab › Add model (plan §3.7 wizard). */
+	| { kind: "model_add"; deviceId: string }
+	/** Models tab › a hosted model's settings sheet. */
+	| { kind: "model_settings"; deviceId: string; modelId: string };
 
 interface OverlayStore {
 	overlay: OverlayState;
@@ -35,6 +41,8 @@ interface OverlayStore {
 	openDiagnose(deviceId: string, serviceId?: string): void;
 	openPlane(plane: PlaneSegmentId): void;
 	openRunNow(request: RunNowRequest): void;
+	openModelAdd(deviceId: string): void;
+	openModelSettings(deviceId: string, modelId: string): void;
 	close(): void;
 }
 
@@ -69,6 +77,9 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
 				...(operationId ? { operationId } : {}),
 			},
 		}),
+	openModelAdd: (deviceId) => set({ overlay: { kind: "model_add", deviceId } }),
+	openModelSettings: (deviceId, modelId) =>
+		set({ overlay: { kind: "model_settings", deviceId, modelId } }),
 	close: () => set({ overlay: NONE }),
 }));
 

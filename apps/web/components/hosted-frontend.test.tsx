@@ -21,6 +21,9 @@ const harness = vi.hoisted(() => {
 	let state = {} as AuthState;
 	const listeners = new Set<() => void>();
 	return {
+		kind: "u" as "u" | "c" | "f",
+		formProps: [] as Record<string, unknown>[],
+		chatRenders: 0,
 		pageMounts: 0,
 		pageUnmounts: 0,
 		bootstrapTokens: [] as (string | undefined)[],
@@ -84,7 +87,7 @@ vi.mock("../lib/hosted-backend", () => {
 				return new Response(
 					JSON.stringify({
 						app_id: "app-1",
-						kind: "u",
+						kind: harness.kind,
 						auth_proxy: false,
 						bootstrap: {
 							event: { id: "event-1", name: "Home", config: [] },
@@ -124,7 +127,10 @@ const passthrough = ({ children }: { children?: React.ReactNode }) => (
 );
 
 vi.mock("@flow-like/flow-like-ui/components/interfaces/chat-default", () => ({
-	ChatInterface: () => null,
+	ChatInterface: () => {
+		harness.chatRenders += 1;
+		return null;
+	},
 }));
 vi.mock(
 	"@flow-like/flow-like-ui/components/interfaces/chat-default/message",
@@ -135,10 +141,12 @@ vi.mock("@flow-like/flow-like-ui/components/interfaces/container", () => ({
 		({ children }, ref) => <div ref={ref}>{children}</div>,
 	),
 }));
-vi.mock(
-	"@flow-like/flow-like-ui/components/interfaces/generic-event-form",
-	() => ({ GenericEventFormInterface: () => null }),
-);
+vi.mock("@flow-like/flow-like-ui/components/interfaces/form-workbench", () => ({
+	FormWorkbenchInterface: (props: Record<string, unknown>) => {
+		harness.formProps.push(props);
+		return null;
+	},
+}));
 vi.mock("@flow-like/flow-like-ui/components/scoped-custom-css", () => ({
 	ScopedCustomCss: () => null,
 }));
@@ -208,6 +216,9 @@ beforeEach(() => {
 		globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 	).IS_REACT_ACT_ENVIRONMENT = true;
 	window.history.replaceState(null, "", "/a/app-1/home");
+	harness.kind = "u";
+	harness.formProps = [];
+	harness.chatRenders = 0;
 	harness.pageMounts = 0;
 	harness.pageUnmounts = 0;
 	harness.bootstrapTokens = [];
@@ -290,5 +301,42 @@ describe("HostedSession", () => {
 		expect(harness.pageUnmounts).toBe(1);
 		expect(harness.bootstrapTokens).toEqual(["token-1", undefined]);
 		expect(harness.auth.get().signinRedirect).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens a form link as the hosted host, with the hosted header as its toolbar", async () => {
+		harness.kind = "f";
+		await act(async () => root.render(<HostedSession />));
+		await flush();
+
+		expect(harness.formProps.at(-1)).toMatchObject({
+			host: "hosted",
+			appId: "app-1",
+			event: { id: "event-1" },
+			onNavigate: expect.any(Function),
+			toolbarRef: {
+				current: {
+					pushToolbarElements: expect.any(Function),
+					pushNavElements: expect.any(Function),
+				},
+			},
+		});
+		expect(harness.chatRenders).toBe(0);
+		expect(harness.pageMounts).toBe(0);
+	});
+
+	it("never mounts the form for a chat or Page link", async () => {
+		harness.kind = "c";
+		await act(async () => root.render(<HostedSession />));
+		await flush();
+		expect(harness.chatRenders).toBeGreaterThan(0);
+
+		await act(async () => root.unmount());
+		root = createRoot(container);
+		harness.kind = "u";
+		await act(async () => root.render(<HostedSession />));
+		await flush();
+		expect(harness.pageMounts).toBe(1);
+
+		expect(harness.formProps).toEqual([]);
 	});
 });

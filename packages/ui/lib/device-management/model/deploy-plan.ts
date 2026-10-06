@@ -64,7 +64,7 @@ export type DeployEntryKind = "app" | "event" | "device" | "update";
 export type DeployOrder = "one" | "all" | "first";
 export type DeployStrategy = "auto" | "safe" | "quick";
 export type ServiceSplit = "one" | "per_event";
-export type TokenMode = "per_device" | "same" | "own" | "keep";
+export type TokenMode = "per_device" | "same" | "own" | "keep" | "none";
 export type IsolationProfile = "auto" | "linux_sandbox" | "trusted_process";
 
 export interface IsolationDraft {
@@ -163,6 +163,8 @@ export interface DeployDraft {
 	/** Variable ids changed in this draft; updates send only these. */
 	edited: string[];
 	endpoint: EndpointDraft;
+	/** Offer forms and quick actions through the service page and Studio tunnel. */
+	hostOnDemand?: boolean;
 	/** undefined keeps each service's limits (updates). */
 	isolation?: IsolationDraft;
 	approval: ApprovalDraft;
@@ -200,6 +202,8 @@ export interface PlanDeviceService {
 	desired?: string;
 	/** The most instances the service may run. */
 	maxInstances?: number;
+	/** A listener already configured on this deployed service. */
+	hosted?: boolean;
 }
 
 export interface PlanDevice {
@@ -842,6 +846,7 @@ export function planServices(
 	draft: DeployDraft,
 	app: PlanApp | null,
 	hub?: AppHubFacts,
+	devices: Readonly<Record<string, PlanDevice>> = {},
 ): PlannedService[] {
 	if (!app) return [];
 	const chosen = eligibleEvents(app, hub).filter((event) =>
@@ -861,7 +866,31 @@ export function planServices(
 			id: draft.serviceIds[key] ?? defaultServiceId(draft, app, first, index),
 			events: group.events.map((event) => event.id),
 			maxInstances: limit.max,
-			hosted: group.events.some(isHosted),
+			hosted:
+				group.events.some(isHosted) ||
+				(group.events.some((event) => eventKind(event) === "on_demand") &&
+					(draft.hostOnDemand === true ||
+						draft.targets.some((target) => {
+							if (draft.keepEvents)
+								return devices[target.deviceId]?.services?.some(
+									(service) =>
+										service.projectId === app.id &&
+										service.hosted === true &&
+										service.events?.some((eventId) =>
+											group.events.some((event) => event.id === eventId),
+										),
+								);
+							const choice = target.choices[key];
+							return (
+								choice &&
+								choice.kind !== "new" &&
+								devices[target.deviceId]?.services?.some(
+									(service) =>
+										service.serviceId === choice.serviceId &&
+										service.hosted === true,
+								)
+							);
+						}))),
 			why: [...group.why, ...limit.why],
 		};
 	});
@@ -1176,7 +1205,7 @@ function planTarget(
 
 /** Derives services and per-device plans; the same function serves the wizard and Update everywhere. */
 export function resolvePlan(draft: DeployDraft, facts: PlanFacts): DeployPlan {
-	const services = planServices(draft, facts.app, facts.hub);
+	const services = planServices(draft, facts.app, facts.hub, facts.devices);
 	const index = planIndex(facts.app);
 	return {
 		draft,
@@ -1582,6 +1611,7 @@ function checkToken(draft: DeployDraft, target: PlanTarget, issues: Issues) {
 	const own = draft.targets.find((value) => value.deviceId === deviceId);
 	const creates = target.services.some((service) => service.kind === "new");
 	const mode = draft.endpoint.token;
+	if (mode === "none") return;
 	const token = own ? tokenFor(draft, own) : "";
 	const invalid =
 		mode === "keep" ? creates : mode !== "per_device" && !TOKEN.test(token);
@@ -2229,7 +2259,7 @@ function tooManyClaimed(
 		: [];
 }
 
-/** A form that takes a file, in a service without a page, chat or Endpoint: nothing can send it the file. */
+/** A form that takes a file needs a service listener to accept the upload. */
 function fileFormIssues(
 	events: readonly AppEventInput[],
 	at: ServiceAt,
@@ -2256,19 +2286,34 @@ function checkServices(
 			const at = { deviceId: target.deviceId, serviceKey: service.key };
 			const events = serviceEvents(index, service);
 			const served = events.filter(isHosted);
+			const hasWebEndpoint =
+				served.length > 0 ||
+				Boolean(
+					events.some((event) => eventKind(event) === "on_demand") &&
+						(plan.draft.hostOnDemand === true ||
+							(service.kind !== "new" &&
+								facts.devices[target.deviceId]?.services?.some(
+									(current) =>
+										current.serviceId === service.serviceId &&
+										current.hosted === true,
+								))),
+				);
 			issues.push(
-				...routeIssues(events, at, served.length > 0),
+				...routeIssues(events, at, hasWebEndpoint),
 				...tooManyClaimed(index, service, at),
-				...(served.length ? [] : fileFormIssues(events, at, service.serviceId)),
+				...(hasWebEndpoint
+					? []
+					: fileFormIssues(events, at, service.serviceId)),
 			);
-			exceptions.push(
-				...sharedTokenExceptions(
-					served,
-					currentEvents(facts, target.deviceId, service),
-					target.deviceId,
-					service.serviceId,
-				),
-			);
+			if (plan.draft.endpoint.token !== "none")
+				exceptions.push(
+					...sharedTokenExceptions(
+						served,
+						currentEvents(facts, target.deviceId, service),
+						target.deviceId,
+						service.serviceId,
+					),
+				);
 		}
 }
 
@@ -2370,7 +2415,7 @@ export interface WireFacts {
 	events: readonly DeploymentEvent[];
 	variables: Readonly<Record<string, readonly DeploymentVariable[]>>;
 	previousVariables?: DeploymentVariable[];
-	/** This device's token: generated, shared or typed; "" keeps the current one. */
+	/** This device's token; empty when preserving access settings or requiring no token. */
 	serviceToken: string;
 	resourceGrant?: Record<string, unknown>;
 	canManageCertificates: boolean;
@@ -2488,6 +2533,13 @@ export function wirePlan(
 		port: service.port ?? target.endpoint.port ?? hosting?.port ?? 8080,
 		replicas: existing?.config.max_replicas ?? planned?.maxInstances ?? 1,
 		serviceToken: facts.serviceToken,
+		...(plan.draft.hostOnDemand === true ? { hostOnDemand: true } : {}),
+		...(plan.draft.endpoint.token === "none"
+			? { serviceAuthentication: "none" as const }
+			: plan.draft.endpoint.token !== "keep" &&
+					hosting?.authentication === "none"
+				? { serviceAuthentication: "token" as const }
+				: {}),
 		tlsCertificateId: wireCertificate(target, facts),
 		offlineWrites: plan.draft.writes,
 		resourceLimits: target.resources,
@@ -2577,6 +2629,7 @@ export type DiffField =
 	| "secret"
 	| "endpoint_host"
 	| "endpoint_port"
+	| "authentication"
 	| "token"
 	| "certificate"
 	| "instances"
@@ -2692,6 +2745,13 @@ function endpointRows(old: Config, after: Config) {
 	return [
 		...scalarRow("endpoint_host", before.host, next.host),
 		...scalarRow("endpoint_port", before.port, next.port),
+		...(old.hosting && after.hosting
+			? scalarRow(
+					"authentication",
+					before.authentication ?? "token",
+					next.authentication ?? "token",
+				)
+			: []),
 		...scalarRow("token", before.auth_secret, next.auth_secret).map(
 			(row): ConfigDiffRow => ({ kind: row.kind, field: "token" }),
 		),

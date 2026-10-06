@@ -1,0 +1,235 @@
+{
+	"overview": {
+		"observed_at": 1759651200,
+		"system": {
+			"cpu": {
+				"brand": "AMD Ryzen 9 7950X 16-Core Processor",
+				"arch": "x86_64",
+				"features": ["avx2", "avx512f"],
+				"physical_cores": 16
+			},
+			"ram": { "total": 68719476736, "free": 34359738368 },
+			"gpus": [
+				{
+					"name": "NVIDIA GeForce RTX 4090",
+					"backend": "vulkan",
+					"memory_total": 25757220864,
+					"memory_free": 20000000000
+				},
+				{
+					"name": "Intel UHD Graphics 770",
+					"backend": "vulkan",
+					"memory_total": null,
+					"memory_free": null
+				}
+			],
+			"model_volume": { "total": 2000000000000, "free": 1500000000000 }
+		},
+		"runtimes": [
+			{
+				"runtime": "llamacpp",
+				"backend": "vulkan",
+				"build": "b10809",
+				"installed": true,
+				"size": 33799345
+			},
+			{
+				"runtime": "llamacpp",
+				"backend": "cpu",
+				"build": "b10809",
+				"installed": false,
+				"size": 16734586
+			}
+		],
+		"summary": {
+			"models": 2,
+			"loaded": 1,
+			"failed": 0,
+			"requests_24h": 1200,
+			"tokens_24h": 1200000,
+			"errors_24h": 3,
+			"store_bytes": 9800000000,
+			"store_budget_bytes": 1350000000000
+		},
+		"recommendations": [
+			{
+				"code": "kv_pressure",
+				"tier": "now",
+				"model_id": "qwen3-8b",
+				"params": { "kv_percent": 93 },
+				"fix": {
+					"kind": "configure",
+					"model_id": "qwen3-8b",
+					"expected_revision": 3,
+					"settings": {
+						"ctx_per_slot": 8192,
+						"parallel": 4,
+						"kv_cache_type": "q8_0"
+					},
+					"residency": { "mode": "always_on" }
+				}
+			},
+			{
+				"code": "gpu_unused",
+				"tier": "soon",
+				"params": { "gpu": "NVIDIA GeForce RTX 4090" },
+				"fix": {
+					"kind": "install_runtime",
+					"runtime": "llamacpp",
+					"backend": "vulkan"
+				}
+			}
+		],
+		"models": [
+			{
+				"id": "qwen3-8b",
+				"display_name": "Qwen3 8B",
+				"kind": "chat",
+				"engine": "llamacpp",
+				"assets": [
+					{
+						"algorithm": "blake3",
+						"hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+					}
+				],
+				"settings": {
+					"ctx_per_slot": 16384,
+					"parallel": 4,
+					"gpu_layers": { "count": 37 }
+				},
+				"residency": { "mode": "always_on" },
+				"revision": 3,
+				"state": "loaded",
+				"ram_bytes": 1073741824,
+				"vram_bytes": 6442450944,
+				"slots": 4,
+				"slots_busy": 1
+			},
+			{
+				"id": "nomic-embed-v1.5",
+				"display_name": "Nomic Embed v1.5",
+				"kind": "embedding",
+				"engine": "onnx",
+				"assets": [
+					{
+						"algorithm": "sha256",
+						"hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+					},
+					{
+						"algorithm": "sha256",
+						"hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+					}
+				],
+				"settings": {},
+				"residency": { "mode": "on_demand", "idle_unload_after_seconds": 900 },
+				"revision": 1,
+				"state": "acquiring"
+			}
+		],
+		"next": null
+	},
+	"jobs": {
+		"jobs": [
+			{
+				"job_id": "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+				"digest": {
+					"algorithm": "sha256",
+					"hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+				},
+				"size": 4920000000,
+				"file_name": "model.onnx",
+				"source_host": "cdn.flow-like.com",
+				"bytes_per_second": 52428800,
+				"updated_at": 1759651200,
+				"state": "fetching",
+				"source_index": 0,
+				"bytes": 2100000000
+			},
+			{
+				"job_id": "7a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d",
+				"digest": {
+					"algorithm": "sha256",
+					"hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+				},
+				"size": 711396,
+				"file_name": "tokenizer.json",
+				"sources": [
+					"https://huggingface.co/nomic-ai/nomic-embed-text-v1.5/resolve/0123456789abcdef0123456789abcdef01234567/tokenizer.json"
+				],
+				"updated_at": 1759651100,
+				"state": "failed",
+				"reason": "egress_blocked"
+			}
+		],
+		"next": "7a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+	},
+	"installed": {
+		"model": {
+			"id": "nomic-embed-v1.5",
+			"display_name": "Nomic Embed v1.5",
+			"kind": "embedding",
+			"engine": "onnx",
+			"assets": [
+				{
+					"algorithm": "sha256",
+					"hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+				},
+				{
+					"algorithm": "sha256",
+					"hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+				}
+			],
+			"settings": {},
+			"residency": { "mode": "on_demand", "idle_unload_after_seconds": 900 },
+			"revision": 1,
+			"state": "acquiring"
+		},
+		"assets": {
+			"total": 2,
+			"present": 1,
+			"pending": [
+				{
+					"digest": {
+						"algorithm": "sha256",
+						"hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+					},
+					"job_id": "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+					"state": "awaiting_push",
+					"bytes": 0
+				}
+			]
+		}
+	},
+	"stats": {
+		"model_id": "qwen3-8b",
+		"from": 1759647600,
+		"step": "hour",
+		"series": {
+			"requests": [40, 0],
+			"errors": [1, 0],
+			"prompt_tokens": [52000, 0],
+			"completion_tokens": [18000, 0],
+			"cached_tokens": [30000, 0],
+			"decode_ms": [450000, 0],
+			"ttft_p50_ms": [180, null],
+			"ttft_p95_ms": [620, null],
+			"queue_wait_p95_ms": [0, null]
+		},
+		"consumers": [
+			{
+				"consumer": { "kind": "owner" },
+				"requests": 30,
+				"errors": 0,
+				"prompt_tokens": 40000,
+				"completion_tokens": 15000
+			},
+			{
+				"consumer": { "kind": "grant", "grant_id": "grant-1" },
+				"requests": 10,
+				"errors": 1,
+				"prompt_tokens": 12000,
+				"completion_tokens": 3000
+			}
+		]
+	}
+}

@@ -30,6 +30,10 @@ ISSUED_BACKDATE_SECONDS = 300
 # At setup an agent checks the list of its own release with the cap it was built with.
 AGENT_LIFETIME_CAP_DAYS = {"0.1.0": 30}
 RELEASE_DATES = ("issued_at", "expires_at")
+RELEASE_JWS_TYPE, RUNTIME_MANIFEST_JWS_TYPE = "flow-like-standalone-release+jws", "flow-like-runtime-manifest"
+# The release keys sign both documents; the JWS type keeps them apart. Each names its signature and its document.
+SIGNED_DOCUMENTS = {RELEASE_JWS_TYPE: ("release", "release manifest"),
+                    RUNTIME_MANIFEST_JWS_TYPE: ("runtime manifest", "runtime manifest")}
 
 
 def usable_package_modes(records, container):
@@ -134,19 +138,19 @@ def decode64(value):
     return result
 
 
-def verified_release(compact, public_keys, current=True):
+def verified_release(compact, public_keys, current=True, jws_type=RELEASE_JWS_TYPE):
+    subject, document = SIGNED_DOCUMENTS[jws_type]
     if not isinstance(compact, bytes) or len(compact) > 16384:
-        raise ValueError("Release signature exceeds its limit")
+        raise ValueError(f"{subject.capitalize()} signature exceeds its limit")
     parts = compact.decode("ascii").split(".")
     if len(parts) != 3:
-        raise ValueError("Expected a signed release manifest")
+        raise ValueError(f"Expected a signed {document}")
     header = json.loads(decode64(parts[0]))
-    if (set(header) != {"alg", "typ", "kid"} or header["alg"] != "EdDSA"
-            or header["typ"] != "flow-like-standalone-release+jws"):
-        raise ValueError("Unexpected release signature type")
+    if set(header) != {"alg", "typ", "kid"} or header["alg"] != "EdDSA" or header["typ"] != jws_type:
+        raise ValueError(f"Unexpected {subject} signature type")
     signature = decode64(parts[2])
     if len(signature) != 64:
-        raise ValueError("Invalid release signature")
+        raise ValueError(f"Invalid {subject} signature")
     for encoded in public_keys:
         public = decode64(encoded)
         if len(public) != 32:
@@ -162,17 +166,17 @@ def verified_release(compact, public_keys, current=True):
             (directory / "message").write_bytes(".".join(parts[:2]).encode())
             result = subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-keyform", "DER", "-inkey", str(directory / "public.der"), "-rawin", "-in", str(directory / "message"), "-sigfile", str(directory / "signature")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
             if result.returncode:
-                raise ValueError("Release signature verification failed")
+                raise ValueError(f"{subject.capitalize()} signature verification failed")
         value = json.loads(decode64(parts[1]))
         if (type(value.get("sequence")) is not int or not 0 < value["sequence"] <= 9007199254740991
                 or value.get("version") != 1 or type(value.get("issued_at")) is not int
                 or type(value.get("expires_at")) is not int or value["issued_at"] < 0
                 or not 0 < value["expires_at"] - value["issued_at"] <= MAX_RELEASE_LIFETIME_DAYS * DAY_SECONDS):
-            raise ValueError("Invalid signed release version, sequence or lifetime")
+            raise ValueError(f"Invalid signed {subject} version, sequence or lifetime")
         if current and not value["issued_at"] <= int(time.time()) < value["expires_at"]:
-            raise ValueError("Release manifest is expired or not yet valid")
+            raise ValueError(f"{document.capitalize()} is expired or not yet valid")
         return value
-    raise ValueError("Release signature is not trusted by STANDALONE_RELEASE_PUBLIC_KEYS")
+    raise ValueError(f"{subject.capitalize()} signature is not trusted by STANDALONE_RELEASE_PUBLIC_KEYS")
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -264,22 +268,54 @@ def renewable(value, sequence, validity_days):
                          f"renew for {cap} days or less, or publish a newer release")
 
 
+def published_runtime_manifests(base_url, public_keys, sequence):
+    """Each target's published runtime manifest. A renewal keeps its number: devices refuse only lower ones."""
+    manifests = {}
+    for target in TARGETS:
+        compact = published_object(f"{base_url}/runtimes/{target}.jws")
+        if compact is None:
+            continue
+        value = verified_release(compact, public_keys, False, RUNTIME_MANIFEST_JWS_TYPE)
+        if value["sequence"] > sequence:
+            raise ValueError(f"The {target} runtime manifest is number {value['sequence']}, newer than release {sequence}, "
+                             "which no release run publishes; nothing was renewed")
+        if value["sequence"] < sequence:
+            print(f"::warning::The {target} runtime manifest is number {value['sequence']}, older than release {sequence}; "
+                  "it is renewed under its own number")
+        manifests[target] = value
+    return manifests
+
+
+def renewal_due(value, runtimes, only_if_days_left):
+    remaining = min(listed["expires_at"] for listed in [value, *runtimes.values()]) - int(time.time())
+    if only_if_days_left is None or remaining <= only_if_days_left * DAY_SECONDS:
+        return True
+    lists = " and its runtime pack lists are" if runtimes else " is"
+    print(f"::notice::Release {value['sequence']}{lists} valid for {remaining // DAY_SECONDS} more days, "
+          f"more than {only_if_days_left}; nothing was renewed")
+    return False
+
+
 def renew_manifest(base_url, public_keys, output, validity_days=DEFAULT_RELEASE_LIFETIME_DAYS,
-                   sequence=None, only_if_days_left=None):
+                   sequence=None, only_if_days_left=None, runtime_output=None):
     dates = validity(validity_days)
     if only_if_days_left is not None and only_if_days_left < 0:
         raise ValueError("Expected a number of remaining days of zero or more")
-    stable = published_object(f"{secure_prefix(base_url)}/release.jws")
+    base_url, keys = secure_prefix(base_url), json.loads(public_keys)
+    stable = published_object(f"{base_url}/release.jws")
     if stable is None:
         raise ValueError("No published release to renew")
     # The published list may have run out already: a renewal is how it becomes usable again.
-    value = verified_release(stable, json.loads(public_keys), current=False)
+    value = verified_release(stable, keys, current=False)
     renewable(value, sequence, validity_days)
-    remaining = value["expires_at"] - int(time.time())
-    if only_if_days_left is not None and remaining > only_if_days_left * DAY_SECONDS:
-        print(f"::notice::Release {value['sequence']} is valid for {remaining // DAY_SECONDS} more days, "
-              f"more than {only_if_days_left}; nothing was renewed")
+    runtimes = published_runtime_manifests(base_url, keys, value["sequence"]) if runtime_output else {}
+    if not renewal_due(value, runtimes, only_if_days_left):
         return None
+    # Every list takes the release's new dates. The release file is written last: it marks a complete renewal.
+    for target, runtime in runtimes.items():
+        runtime.update(dates)
+        runtime_output.mkdir(parents=True, exist_ok=True)
+        (runtime_output / f"{target}.json").write_text(json.dumps(runtime, separators=(",", ":")))
     value.update(dates)
     output.write_text(json.dumps(value, separators=(",", ":")))
     return value
@@ -388,17 +424,20 @@ def holds(stored, signed):
     return bool(stored) and stored["body"] == signed
 
 
-def promote(store, stable_key, signed_path, signed, previous, public_keys):
+def promote(store, stable_key, signed_path, signed, previous, public_keys, jws_type=RELEASE_JWS_TYPE):
     # The ETag read before any upload still guards this write. A competing publisher wins once.
-    verified_release(signed, public_keys)
+    verified_release(signed, public_keys, jws_type=jws_type)
+    subject = SIGNED_DOCUMENTS[jws_type][0]
+    # One release list, but one runtime list per target: those name their object.
+    stable = subject if jws_type == RELEASE_JWS_TYPE else f"{subject} {stable_key}"
     if not holds(previous, signed):
         try:
             store.put(stable_key, signed_path, etag=previous["etag"] if previous else None, immutable=False)
         except FileExistsError as error:
             if not holds(store.read(stable_key), signed):
-                raise ValueError("Stable release changed concurrently; refusing to overwrite it") from error
+                raise ValueError(f"Stable {stable} changed concurrently; refusing to overwrite it") from error
     if not holds(store.read(stable_key), signed):
-        raise ValueError("Stable release acknowledgement could not be verified")
+        raise ValueError(f"Stable {stable} acknowledgement could not be verified")
 
 
 def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=public_readback,
@@ -454,6 +493,31 @@ def undated(value):
     return {name: field for name, field in value.items() if name not in RELEASE_DATES}
 
 
+def redated(path, previous, key, public_keys):
+    """The re-dated copy of a stable runtime manifest, if nothing but its dates changed."""
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 16384:
+        raise ValueError(f"Expected a bounded signed runtime manifest at {path}")
+    signed = path.read_bytes()
+    published = verified_release(previous["body"], public_keys, False, RUNTIME_MANIFEST_JWS_TYPE)
+    if undated(published) != undated(verified_release(signed, public_keys, True, RUNTIME_MANIFEST_JWS_TYPE)):
+        raise ValueError(f"A renewal may change only the dates of {key}; it differs in other fields")
+    return signed
+
+
+def runtime_renewals(artifacts, prefix, public_keys, store):
+    """Each stable runtime manifest with its re-dated copy: every published one is renewed, and only its dates change."""
+    renewals = []
+    for target in TARGETS:
+        key, path = f"{prefix}/runtimes/{target}.jws", artifacts / "runtimes" / f"{target}.jws"
+        previous, copied = store.read(key), path.exists() or path.is_symlink()
+        if bool(previous) != copied:
+            raise ValueError(f"{key} is published, but this renewal carries no re-dated copy of it; renew again" if previous
+                             else f"No published runtime manifest {key} to renew")
+        if previous:
+            renewals.append((target, path, redated(path, previous, key, public_keys), previous))
+    return renewals
+
+
 def renew_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=public_readback):
     base_url, signed_path, signed, value = signed_manifest(artifacts, base_url, prefix, public_keys)
     stable_key = f"{prefix}/release.jws"
@@ -463,6 +527,10 @@ def renew_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=
     # releases/<sequence>/release.jws keeps the first signature; only the stable list is re-signed.
     if undated(verified_release(previous["body"], public_keys, current=False)) != undated(value):
         raise ValueError("A renewal may change only the dates of the published release; it differs in other fields")
+    # Runtime lists advance first, so a run that stops early leaves the release list due for the next renewal.
+    for target, path, compact, stable in runtime_renewals(artifacts, prefix, public_keys, store):
+        promote(store, f"{prefix}/runtimes/{target}.jws", path, compact, stable, public_keys, RUNTIME_MANIFEST_JWS_TYPE)
+        verify_public(f"{base_url}/runtimes/{target}.jws", len(compact), hashlib.sha256(compact).hexdigest())
     promote(store, stable_key, signed_path, signed, previous, public_keys)
     verify_public(f"{base_url}/release.jws", len(signed), hashlib.sha256(signed).hexdigest())
     return {"sequence": value["sequence"], "manifest_url": f"{base_url}/release.jws"}
@@ -474,8 +542,15 @@ def renew_publish(artifacts, base_url, bucket, prefix, public_keys, endpoint=Non
     print(json.dumps(result, separators=(",", ":")))
 
 
+def runtime_lists(artifacts, public_keys):
+    numbers = {path.stem: verified_release(path.read_bytes(), public_keys, False, RUNTIME_MANIFEST_JWS_TYPE)["sequence"]
+               for path in sorted((artifacts / "runtimes").glob("*.jws"))}
+    return ", ".join(f"{target} (number {number})" for target, number in numbers.items()) or "none published"
+
+
 def summary(artifacts, public_keys, renewed=False):
-    value = verified_release((artifacts / "release.jws").read_bytes(), json.loads(public_keys), current=False)
+    keys = json.loads(public_keys)
+    value = verified_release((artifacts / "release.jws").read_bytes(), keys, current=False)
     sequence = value["sequence"]
     until = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(value["expires_at"]))
     days = (value["expires_at"] - value["issued_at"]) / DAY_SECONDS
@@ -484,12 +559,13 @@ def summary(artifacts, public_keys, renewed=False):
     next_step = (f"{minimum} (`standalone.release_trust.minimum_sequence` in the hub config) and deploy the hub. "
                  "While the minimum is lower, an older genuine release can still be served to new devices "
                  "for as long as that older release is valid.")
+    rows = [f"| Release number | {sequence} |", f"| Agent version | {value.get('release_version')} |",
+            f"| Valid until | {until} ({days:g} days) |"]
+    if renewed:
+        rows.append(f"| Runtime pack lists | {runtime_lists(artifacts, keys)} |")
     print("\n".join([
         f"### Standalone release {sequence} {'renewed' if renewed else 'published'}", "",
-        "| | |", "|---|---|",
-        f"| Release number | {sequence} |",
-        f"| Agent version | {value.get('release_version')} |",
-        f"| Valid until | {until} ({days:g} days) |", "",
+        "| | |", "|---|---|", *rows, "",
         next_step,
     ]))
 
@@ -581,6 +657,7 @@ def main(argv=None):
     renew_parser.add_argument("--validity-days", type=int, default=DEFAULT_RELEASE_LIFETIME_DAYS)
     renew_parser.add_argument("--sequence", type=int)
     renew_parser.add_argument("--only-if-days-left", type=int)
+    renew_parser.add_argument("--runtime-output", type=Path)
     summary_parser = commands.add_parser("summary")
     summary_parser.add_argument("--artifacts", type=Path, required=True)
     summary_parser.add_argument("--public-keys", required=True)

@@ -312,6 +312,18 @@ describe("What · Endpoints, forms, one-time schedules and bots (R2 §6.4)", () 
 		expect(telegram).not.toContain("mentions");
 	});
 
+	test("a Discord bot with a prefix and mentions off answers only the prefix", async () => {
+		const apps = shopWithBots({
+			[DISCORD]: { ...BOTS.discord, respond_to_mentions: false },
+		});
+		const view = await kit.mountApp(mountDevices, SHOP, {}, { apps });
+		const discord = rowOf(view.container, DISCORD);
+		expect(discord).toContain(
+			"In groups and servers it answers every message that starts with !.",
+		);
+		expect(discord).not.toContain("mentions");
+	});
+
 	test("a bot ticked by hand gives its service one instance, with the reason", async () => {
 		const view = await kit.mountApp(mountDevices, SHOP);
 		await click(checkbox(view.container, TELEGRAM) as Element);

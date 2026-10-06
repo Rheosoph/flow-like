@@ -761,7 +761,7 @@ impl WriteBudget {
     pub(super) fn try_charge(&self, bytes: u64) -> bool {
         let maximum = self.maximum();
         self.used
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
                 |used| used.checked_add(bytes).filter(|next| *next <= maximum),
@@ -786,7 +786,7 @@ impl WriteBudget {
     }
 
     pub(super) fn release(&self, bytes: u64) {
-        let _ = self.used.fetch_update(
+        let _ = self.used.try_update(
             std::sync::atomic::Ordering::AcqRel,
             std::sync::atomic::Ordering::Acquire,
             |used| Some(used.saturating_sub(bytes)),

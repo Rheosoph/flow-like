@@ -799,7 +799,7 @@ test("a saved event lands on the step that needs input, with a heading to focus,
 	expect(byRole("tab", "Review").getAttribute("aria-selected")).toBe("true");
 }, 30_000);
 
-test("the footer carries Review, a blocked Deploy with its reason, the running state and Done", async () => {
+test("the footer carries Review, a blocked Deploy with its reason and the running state, and offers no Done after a failed rollout", async () => {
 	const footer = mountFooter();
 	const completed: IEvent[] = [];
 	const deployed: boolean[] = [];
@@ -841,8 +841,10 @@ test("the footer carries Review, a blocked Deploy with its reason, the running s
 	expect(ready.disabled).toBe(false);
 	await click(ready);
 	await view.settle();
-	await click(byRole("button", "Done", footer));
-	expect(completed).toEqual([saved]);
+	// The fake device refuses the upload, so nothing was deployed: Done would claim otherwise.
+	expect(view.container.textContent).toContain("wasn't deployed");
+	expect(footer.textContent).not.toContain("Done");
+	expect(completed).toEqual([]);
 	expect(deployed.at(-1)).toBe(false);
 }, 30_000);
 

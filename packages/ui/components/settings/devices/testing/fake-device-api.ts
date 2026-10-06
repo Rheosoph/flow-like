@@ -29,10 +29,12 @@ import {
 	VISITOR_PLAN_APP,
 } from "../../../../lib/device-management/model/__fixtures__/apps";
 import { sampleFleet } from "../../../../lib/device-management/model/__fixtures__/sample-fleet";
+import type { ModelHostSample } from "../../../../lib/device-management/model/__fixtures__/sample-models";
 import type {
 	AppEventInput,
 	AppInput,
 } from "../../../../lib/device-management/model/app-plan";
+import { KNOWN_CAPABILITIES } from "../../../../lib/device-management/model/permissions";
 import { presence } from "../../../../lib/device-management/model/presence";
 import type {
 	AccountBackupList,
@@ -61,6 +63,21 @@ import type {
 	DeviceAccountScope,
 	LocalDeviceVault,
 } from "../../../../lib/device-management/storage";
+import {
+	TUNNEL_MAX_DATA,
+	TUNNEL_MAX_STREAMS,
+	TUNNEL_WINDOW,
+	type TunnelDataOpen,
+	type TunnelEnvelopeKind,
+	TunnelKind,
+	decodeTunnelEnvelope,
+	decodeTunnelFrame,
+	encodeTunnelEnvelope,
+	encodeTunnelFrame,
+	readTunnelJson,
+	tunnelJson,
+} from "../../../../lib/device-management/tunnel-protocol";
+import { configuredTunnelServices } from "../../../../lib/device-management/tunnel-services";
 import type {
 	AccountRecoveryContext,
 	ArchiveRoster,
@@ -106,6 +123,7 @@ import {
 	stableSchedule,
 	startRefusal,
 } from "./fake-events";
+import { FakeModelHost, isModelsRead, modelsFeature } from "./fake-models";
 import {
 	type FakeEventForm,
 	FakeRuns,
@@ -314,6 +332,8 @@ export interface FakeDeviceApiOptions {
 	hubVersion?: HubVersion;
 	/** One feature set for every agent, or one per device id. `{}` is an agent from before the `features` map. */
 	agentFeatures?: AgentFeatures | Record<string, AgentFeatures>;
+	/** What each device's model host holds, by device id; `emptyModels()` for the rest. */
+	modelHosts?: Record<string, ModelHostSample>;
 	origin?: string;
 	issuer?: string;
 	profileId?: string;
@@ -592,6 +612,11 @@ const ALL_FEATURES: AgentFeatures = {
 	on_demand_events: 1,
 	telegram_bots: 1,
 	discord_bots: 1,
+	model_store: 1,
+	model_host: 1,
+	model_runtime_llamacpp: 1,
+	model_runtime_mlx: 1,
+	model_runtime_onnx: 1,
 };
 
 /** The feature flag each command of plan §3.4.3 and of person-started runs needs. */
@@ -605,6 +630,8 @@ const COMMAND_FEATURE: Record<string, AgentFeature> = {
 	run_event: "on_demand_events",
 	cancel_run: "on_demand_events",
 	event_form: "on_demand_events",
+	/** Downloads and the deploy step need only `model_store` (`modelsFeature`). */
+	models: "model_host",
 };
 /** Refused before anything is journaled: a refusal leaves no row. */
 const UNJOURNALED_REFUSALS = new Set(["run_event"]);
@@ -673,6 +700,7 @@ interface AgentSeed {
 	bootId: string;
 	live?: DeviceSeed["live"][string];
 	transfers: FakeTransfer[];
+	models?: ModelHostSample;
 }
 
 /** A running process of a service: what its one claim call answered (round one's gate per event). */
@@ -778,6 +806,8 @@ export class FakeAgent {
 	onceOutcome: ScheduleOutcome = "succeeded";
 	/** What a test says about a bot beyond its hold, by event id: a state, a name, counters. */
 	readonly botFacts = new Map<string, Partial<ServiceBot>>();
+	/** The model host: hosted models, downloads, runtimes and their usage (`models` commands). */
+	readonly models: FakeModelHost;
 	private readonly stopping = new Map<string, number>();
 	private readonly handlers = new Map<string, CommandHandler>();
 	private readonly drops: (string | undefined)[] = [];
@@ -805,6 +835,7 @@ export class FakeAgent {
 		);
 		const inspection = seed.inspection;
 		this.features = features ?? inspection?.features ?? ALL_FEATURES;
+		this.models = new FakeModelHost(seed.models, () => this.now());
 		this.bootId = seed.bootId;
 		this.placements = structuredClone(seed.placements);
 		this.facts = inspection ? inspectionFacts(inspection) : {};
@@ -1351,6 +1382,7 @@ export class FakeAgent {
 	async receive(
 		socket: { remoteClose(): void },
 		request: { operation_id: string; command: Record<string, unknown> },
+		maxReplyBytes = MAX_AGENT_REPLY_BYTES,
 	): Promise<Record<string, unknown> | undefined> {
 		const { command, operation_id: operationId } = request;
 		const type = text(command.type);
@@ -1376,7 +1408,7 @@ export class FakeAgent {
 		const reply = await this.answer(type, command, operationId);
 		if (
 			type !== "operation" &&
-			!READS.has(type) &&
+			!isRead(type, command) &&
 			!(reply.state === "rejected" && UNJOURNALED_REFUSALS.has(type))
 		)
 			this.journal.set(operationId, {
@@ -1393,7 +1425,11 @@ export class FakeAgent {
 			type === "operation" && reply.state !== "rejected"
 				? text(command.operation_id)
 				: operationId;
-		return this.bounded({ operation_id: lookup, ...reply }, operationId);
+		return this.bounded(
+			{ operation_id: lookup, ...reply },
+			operationId,
+			maxReplyBytes,
+		);
 	}
 
 	/** A run's recorded command: the values of the form's sensitive fields never reach `commands`. */
@@ -1422,9 +1458,12 @@ export class FakeAgent {
 		};
 	}
 
-	private bounded(reply: Record<string, unknown>, operationId: string) {
-		if (utf8(JSON.stringify(reply)).length <= MAX_AGENT_REPLY_BYTES)
-			return reply;
+	private bounded(
+		reply: Record<string, unknown>,
+		operationId: string,
+		maxBytes = MAX_AGENT_REPLY_BYTES,
+	) {
+		if (utf8(JSON.stringify(reply)).length <= maxBytes) return reply;
 		return {
 			operation_id: operationId,
 			...rejected("limit", "The answer exceeds one management message."),
@@ -1447,7 +1486,9 @@ export class FakeAgent {
 		const feature =
 			type === "artifact"
 				? artifactFeature(command)
-				: (COMMAND_FEATURE[type] as AgentFeature | undefined);
+				: type === "models"
+					? modelsFeature(command)
+					: (COMMAND_FEATURE[type] as AgentFeature | undefined);
 		return !feature || this.features[feature] === 1;
 	}
 
@@ -1546,6 +1587,7 @@ const READS = new Set([
 	"inspect_page",
 	"operation",
 	"placement_configuration",
+	"service_listeners",
 	"rollout",
 	"metrics",
 	"project_metrics",
@@ -1567,6 +1609,10 @@ const READS = new Set([
 	"offline_queue_lookup",
 	"event_form",
 ]);
+
+/** `models` carries reads and writes: its request kind decides. */
+const isRead = (type: string, command: Record<string, unknown>) =>
+	READS.has(type) || (type === "models" && isModelsRead(command));
 
 const revisionConflict = (placementId: unknown) =>
 	rejected(
@@ -1817,6 +1863,26 @@ const placementConfiguration: CommandHandler = (command, { agent }) => {
 		desired_state: row.desired_state === "running" ? "running" : "stopped",
 		rollout_sources: ["offline", "online"],
 		rollout: activeRollout(agent, row.id),
+	});
+};
+
+const serviceListeners: CommandHandler = (command, { agent }) => {
+	const row = agent.placement(command.placement_id);
+	if (!row) return rejected("unauthorized", "No access to this placement.");
+	const config = agent.configs.get(row.id) ?? derivedConfig(agent, row);
+	return completed({
+		placement_id: row.id,
+		project_id: row.project_id,
+		config_revision: row.config_revision,
+		services: configuredTunnelServices(config).map(
+			({ id, host, port, protocol, tls_server_name }) => ({
+				id,
+				host,
+				port,
+				protocol,
+				...(tls_server_name ? { tls_server_name } : {}),
+			}),
+		),
 	});
 };
 
@@ -2326,6 +2392,7 @@ const DEFAULT_HANDLERS: Record<string, CommandHandler> = {
 	logs: telemetry("logs"),
 	messages: telemetry("messages"),
 	placement_configuration: placementConfiguration,
+	service_listeners: serviceListeners,
 	rollout,
 	operation,
 	certificates,
@@ -2365,6 +2432,7 @@ const DEFAULT_HANDLERS: Record<string, CommandHandler> = {
 			error_code: null,
 		}),
 	artifact,
+	models: (command, { agent }) => agent.models.answer(command),
 	start: lifecycle(true, false),
 	restart: lifecycle(true, true),
 	stop: lifecycle(false, true),
@@ -2601,6 +2669,7 @@ function releaseTrustOf(value: unknown): ReleaseTrust | null {
 }
 
 export class FakeHub {
+	supportedCapabilities: string[] | undefined = [...KNOWN_CAPABILITIES];
 	readonly me: string;
 	readonly origin: string;
 	readonly issuer: string;
@@ -3237,6 +3306,9 @@ export class FakeHub {
 	policyView(deviceId: string): PolicyView {
 		const entry = this.policies.get(deviceId);
 		return {
+			...(this.supportedCapabilities
+				? { supported_capabilities: [...this.supportedCapabilities] }
+				: {}),
 			policy_jws: entry?.jws ?? null,
 			version: entry?.version ?? 0,
 			digest: entry?.digest ?? null,
@@ -4856,6 +4928,7 @@ class World {
 						base64url(fakeBytes(`boot:${deviceId}`)).slice(0, 16),
 					live,
 					transfers: this.seededTransfers(deviceId),
+					models: this.options.modelHosts?.[deviceId],
 				},
 				this.featuresFor(deviceId),
 			);
@@ -5054,6 +5127,8 @@ class World {
 						device_id: admission.deviceId,
 						expires_at: admission.expiresAt,
 						boot_id: agent.bootId,
+						data_tunnel: 1,
+						service_tunnel: 1,
 					}),
 				),
 			);
@@ -5072,6 +5147,19 @@ interface RelaySocket {
 	remoteClose(): void;
 }
 
+interface FakeTunnelStream {
+	input: TunnelDataOpen;
+	chain: Promise<void>;
+	receiveCredit: number;
+	sendCredit: number;
+	pendingCredit: number;
+	offset: number;
+	ended: boolean;
+	status?: Record<string, unknown>;
+	output?: Uint8Array;
+	outputOffset: number;
+}
+
 type SocketEvent = { data: string };
 
 function relaySocketClass(world: World): typeof WebSocket {
@@ -5087,7 +5175,13 @@ function relaySocketClass(world: World): typeof WebSocket {
 		onclose: (() => void) | null = null;
 		onerror: (() => void) | null = null;
 		onmessage: ((event: SocketEvent) => void) | null = null;
-		private readonly admission?: Admission;
+		private admission?: Admission;
+		private tunnelSession?: string;
+		private tunnelSendSequence = 0n;
+		private tunnelReceiveSequence = 0n;
+		private tunnelLastStream = 0;
+		private tunnelRenewing = false;
+		private readonly tunnelStreams = new Map<number, FakeTunnelStream>();
 
 		constructor(
 			readonly url: string,
@@ -5142,12 +5236,299 @@ function relaySocketClass(world: World): typeof WebSocket {
 			);
 		}
 
+		private tunnelEnvelope(kind: TunnelEnvelopeKind, body: Uint8Array) {
+			const admission = this.admission;
+			if (!admission || !this.tunnelSession) return;
+			this.deliver({
+				type: "frame",
+				to: admission.participant,
+				from: admission.deviceId,
+				from_role: "device",
+				channel: "tunnel",
+				payload: base64url(
+					encodeTunnelEnvelope(kind, this.tunnelSession, body),
+				),
+			});
+		}
+
+		private tunnelFrame(
+			kind: TunnelKind,
+			stream = 0,
+			body: Uint8Array = new Uint8Array(),
+		) {
+			this.tunnelEnvelope(
+				"message",
+				encodeTunnelFrame({
+					kind,
+					stream,
+					body,
+					sequence: this.tunnelSendSequence++,
+				}),
+			);
+		}
+
+		private resetTunnelStream(id: number, message: string) {
+			const stream = this.tunnelStreams.get(id);
+			stream?.output?.fill(0);
+			this.tunnelStreams.delete(id);
+			this.tunnelFrame(
+				TunnelKind.Reset,
+				id,
+				tunnelJson({ code: "failed", message: message.slice(0, 128) }),
+			);
+		}
+
+		private flushTunnelStream(id: number, stream: FakeTunnelStream) {
+			if (this.tunnelRenewing || this.tunnelStreams.get(id) !== stream) return;
+			if (stream.pendingCredit) {
+				const credit = new Uint8Array(4);
+				new DataView(credit.buffer).setUint32(0, stream.pendingCredit);
+				stream.pendingCredit = 0;
+				this.tunnelFrame(TunnelKind.Window, id, credit);
+			}
+			const output = stream.output;
+			if (!output) return;
+			while (stream.outputOffset < output.length && stream.sendCredit > 0) {
+				const length = Math.min(
+					TUNNEL_MAX_DATA,
+					stream.sendCredit,
+					output.length - stream.outputOffset,
+				);
+				const part = output.subarray(
+					stream.outputOffset,
+					stream.outputOffset + length,
+				);
+				stream.sendCredit -= length;
+				stream.outputOffset += length;
+				this.tunnelFrame(TunnelKind.Data, id, part);
+			}
+			if (stream.outputOffset === output.length) {
+				this.tunnelFrame(TunnelKind.Fin, id);
+				output.fill(0);
+				this.tunnelStreams.delete(id);
+			}
+		}
+
+		private async artifactTunnelChunk(
+			stream: FakeTunnelStream,
+			bytes: Uint8Array,
+		) {
+			if (stream.input.kind !== "artifact" || !this.admission)
+				throw new Error("Invalid artifact stream.");
+			const input = stream.input;
+			const reply = await world.agent(this.admission.deviceId).receive(this, {
+				operation_id: crypto.randomUUID(),
+				command: {
+					type: "artifact",
+					request: {
+						kind: "chunk",
+						project_id: input.project_id,
+						transfer_id: input.transfer_id,
+						file_index: input.file_index ?? null,
+						offset: stream.offset,
+						data: base64url(bytes),
+					},
+				},
+			});
+			if (!reply) throw new Error("The artifact connection closed.");
+			if (reply.state !== "completed")
+				throw new Error("The artifact chunk was rejected.");
+			stream.offset += bytes.length;
+			stream.status = reply.result as Record<string, unknown>;
+		}
+
+		private forwardTunnel(admission: Admission, bytes: Uint8Array) {
+			const envelope = decodeTunnelEnvelope(bytes);
+			const agent = world.agent(admission.deviceId);
+			if (!agent.reachable) {
+				this.remoteClose();
+				return;
+			}
+			if (envelope.kind === "hello") {
+				if (this.tunnelSession) throw new Error("Duplicate tunnel session.");
+				this.tunnelSession = envelope.sessionId;
+				agent.attach(this);
+				this.tunnelEnvelope(
+					"handshake",
+					fakeBytes(`noise:${envelope.sessionId}`),
+				);
+				return;
+			}
+			if (envelope.sessionId !== this.tunnelSession)
+				throw new Error("Wrong tunnel session.");
+			if (envelope.kind === "close") {
+				this.remoteClose();
+				return;
+			}
+			if (envelope.kind === "handshake") {
+				this.tunnelFrame(
+					TunnelKind.Renewed,
+					0,
+					tunnelJson({ expires_at: admission.expiresAt }),
+				);
+				return;
+			}
+			const frame = decodeTunnelFrame(envelope.body);
+			if (frame.sequence !== this.tunnelReceiveSequence++)
+				throw new Error("Lost tunnel frame.");
+			if (frame.kind === TunnelKind.Ping) {
+				this.tunnelFrame(TunnelKind.Pong, 0, frame.body);
+				return;
+			}
+			if (frame.kind === TunnelKind.Pong) return;
+			if (frame.kind === TunnelKind.RenewStart) {
+				this.tunnelRenewing = true;
+				this.tunnelFrame(TunnelKind.RenewReply, 0, fakeBytes("noise:renew"));
+				return;
+			}
+			if (frame.kind === TunnelKind.RenewFinish) {
+				this.tunnelFrame(
+					TunnelKind.Renewed,
+					0,
+					tunnelJson({ expires_at: admission.expiresAt }),
+				);
+				this.tunnelRenewing = false;
+				for (const [id, stream] of this.tunnelStreams)
+					this.flushTunnelStream(id, stream);
+				return;
+			}
+			if (frame.kind === TunnelKind.OpenData) {
+				if (
+					frame.stream <= this.tunnelLastStream ||
+					this.tunnelStreams.size >= TUNNEL_MAX_STREAMS
+				)
+					throw new Error("Tunnel stream limit.");
+				this.tunnelLastStream = frame.stream;
+				const input = readTunnelJson(frame.body) as TunnelDataOpen;
+				if (
+					input.kind === "request" &&
+					input.request.device_id !== admission.deviceId
+				)
+					throw new Error("Wrong request device.");
+				this.tunnelStreams.set(frame.stream, {
+					input,
+					chain: Promise.resolve(),
+					receiveCredit: TUNNEL_WINDOW,
+					sendCredit: TUNNEL_WINDOW,
+					pendingCredit: 0,
+					offset: input.kind === "artifact" ? input.offset : 0,
+					ended: false,
+					outputOffset: 0,
+				});
+				this.tunnelFrame(TunnelKind.Opened, frame.stream);
+				return;
+			}
+			const stream = this.tunnelStreams.get(frame.stream);
+			if (!stream) {
+				if (frame.kind === TunnelKind.Window || frame.kind === TunnelKind.Reset)
+					return;
+				throw new Error("Unknown tunnel stream.");
+			}
+			if (frame.kind === TunnelKind.Reset) {
+				stream.output?.fill(0);
+				this.tunnelStreams.delete(frame.stream);
+				return;
+			}
+			if (frame.kind === TunnelKind.Window) {
+				stream.sendCredit += new DataView(
+					frame.body.buffer,
+					frame.body.byteOffset,
+					4,
+				).getUint32(0);
+				if (stream.sendCredit > TUNNEL_WINDOW)
+					throw new Error("Tunnel credit overflow.");
+				this.flushTunnelStream(frame.stream, stream);
+				return;
+			}
+			if (frame.kind === TunnelKind.Data) {
+				if (
+					stream.ended ||
+					stream.input.kind !== "artifact" ||
+					frame.body.length > stream.receiveCredit
+				)
+					throw new Error("Unexpected tunnel data.");
+				stream.receiveCredit -= frame.body.length;
+			} else if (frame.kind === TunnelKind.Fin) {
+				if (stream.ended) throw new Error("Duplicate tunnel FIN.");
+				stream.ended = true;
+			} else throw new Error("Unexpected tunnel frame.");
+			stream.chain = stream.chain
+				.then(async () => {
+					if (this.tunnelStreams.get(frame.stream) !== stream) return;
+					if (frame.kind === TunnelKind.Data) {
+						try {
+							for (let offset = 0; offset < frame.body.length; offset += 8192)
+								await this.artifactTunnelChunk(
+									stream,
+									frame.body.subarray(offset, offset + 8192),
+								);
+						} finally {
+							frame.body.fill(0);
+						}
+						stream.receiveCredit += frame.body.length;
+						stream.pendingCredit += frame.body.length;
+						this.flushTunnelStream(frame.stream, stream);
+						return;
+					}
+					let result: Record<string, unknown> | undefined;
+					if (stream.input.kind === "request")
+						result = await agent.receive(
+							this,
+							stream.input.request,
+							1024 * 1024,
+						);
+					else {
+						if (!stream.status)
+							await this.artifactTunnelChunk(stream, new Uint8Array());
+						result = stream.status;
+					}
+					if (!result || this.tunnelStreams.get(frame.stream) !== stream)
+						return;
+					const output = utf8(JSON.stringify(result));
+					if (
+						output.length >
+						(stream.input.kind === "request" ? 1024 * 1024 : 64 * 1024)
+					)
+						throw new Error("Tunnel response exceeds its bound.");
+					stream.output = output;
+					this.flushTunnelStream(frame.stream, stream);
+				})
+				.catch((error: unknown) => {
+					if (this.tunnelStreams.get(frame.stream) === stream)
+						this.resetTunnelStream(
+							frame.stream,
+							error instanceof Error ? error.message : "Tunnel request failed.",
+						);
+				});
+		}
+
 		send(data: string) {
 			const admission = this.admission;
 			if (this.readyState !== 1 || !admission) return;
 			const frame = JSON.parse(data) as Record<string, unknown>;
 			if (frame.type === "ping") {
 				this.deliver({ type: "pong" });
+				return;
+			}
+			if (frame.type === "reauthorize") {
+				const renewed = world.admissions.get(String(frame.token));
+				if (!renewed || renewed.deviceId !== admission.deviceId) {
+					this.remoteClose();
+					return;
+				}
+				this.admission = renewed;
+				this.deliver({ type: "reauthorized", expires_at: renewed.expiresAt });
+				return;
+			}
+			if (frame.type === "frame" && frame.channel === "tunnel") {
+				try {
+					this.forwardTunnel(
+						admission,
+						unbase64url(String(frame.payload), 32_768),
+					);
+				} catch {
+					this.remoteClose();
+				}
 				return;
 			}
 			if (frame.type !== "frame" || frame.channel !== "noise") return;
@@ -5170,6 +5551,8 @@ function relaySocketClass(world: World): typeof WebSocket {
 		private end(): boolean {
 			if (this.readyState === 3) return false;
 			this.readyState = 3;
+			for (const stream of this.tunnelStreams.values()) stream.output?.fill(0);
+			this.tunnelStreams.clear();
 			if (this.admission) world.agent(this.admission.deviceId).detach(this);
 			return true;
 		}

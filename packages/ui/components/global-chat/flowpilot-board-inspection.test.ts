@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { IBoard } from "../../lib/schema/flow/board";
 import type { IBoardState } from "../../state/backend-state/board-state";
-import { inspectFlowPilotBoard } from "./flowpilot-board-inspection";
+import {
+	BoardEditCoordinator,
+	boardEditLockKey,
+} from "../flowpilot/board-edit-guard";
+import { FlowPilotBoardActivity } from "./flowpilot-board-activity";
+import {
+	inspectFlowPilotBoard,
+	inspectFlowPilotBoardWhenIdle,
+} from "./flowpilot-board-inspection";
 
 const canonical = `eventsGeneric @["submit-entry"](payload: Struct) {
   logInfo @["shared-node"](stringConcat @["same-expression"]("prefix", "value"))
@@ -77,6 +85,170 @@ function reader(board = savedBoard(), source = canonical) {
 	};
 }
 const target = { appId: "app", boardId: "board" };
+
+describe("board inspection while a specialist owns the board", () => {
+	test("reports live draft progress immediately without queueing a saved-board read", async () => {
+		const coordinator = new BoardEditCoordinator();
+		const activity = new FlowPilotBoardActivity();
+		const release = await coordinator.acquire(boardEditLockKey("app", "board"));
+		const run = activity.begin("app", "board", "edit-1", { mode: "edit" });
+		run.update({
+			stage: "generating",
+			draft_id: "retained",
+			revision: 15,
+			diagnostic_count: 0,
+			workspace_status: "submitted",
+		});
+		const { calls, backend } = reader();
+		try {
+			const result = await inspectFlowPilotBoardWhenIdle(backend, target, {
+				coordinator,
+				activity,
+				assertActive: () => {},
+			});
+			expect(result).toMatchObject({
+				status: "in_progress",
+				active_run: {
+					request_id: "edit-1",
+					revision: 15,
+					diagnostic_count: 0,
+					commit_state: "not_observed",
+				},
+			});
+			expect(result).not.toHaveProperty("flowscript");
+			expect(calls).toEqual([]);
+			expect(
+				coordinator.tryAcquire(boardEditLockKey("app", "board")),
+			).toBeUndefined();
+		} finally {
+			run.finish();
+			release();
+		}
+		expect(
+			(
+				await inspectFlowPilotBoardWhenIdle(backend, target, {
+					coordinator,
+					activity,
+					assertActive: () => {},
+				})
+			).status,
+		).toBe("ok");
+		expect(calls.length).toBe(4);
+	});
+
+	test("an idle inspection reserves the board before an edit can race its readback", async () => {
+		const coordinator = new BoardEditCoordinator();
+		const { backend } = reader();
+		let editing = false;
+		const inspection = inspectFlowPilotBoardWhenIdle(backend, target, {
+			coordinator,
+			assertActive: () => {},
+		});
+		const edit = coordinator
+			.acquire(boardEditLockKey("app", "board"))
+			.then((release) => {
+				editing = true;
+				return release;
+			});
+		expect(editing).toBe(false);
+		expect((await inspection).status).toBe("ok");
+		(await edit)();
+		expect(editing).toBe(true);
+	});
+
+	test("a sibling board edit does not block this board's persisted inspection", async () => {
+		const coordinator = new BoardEditCoordinator();
+		const release = await coordinator.acquire(
+			boardEditLockKey("app", "sibling"),
+		);
+		try {
+			const { backend } = reader();
+			expect(
+				(
+					await inspectFlowPilotBoardWhenIdle(backend, target, {
+						coordinator,
+						assertActive: () => {},
+					})
+				).status,
+			).toBe("ok");
+		} finally {
+			release();
+		}
+	});
+
+	test("cancellation reports settling ownership until the old edit actually releases", async () => {
+		const coordinator = new BoardEditCoordinator();
+		const activity = new FlowPilotBoardActivity();
+		const controller = new AbortController();
+		const release = await coordinator.acquire(
+			boardEditLockKey("app", "board"),
+			{ signal: controller.signal },
+		);
+		const run = activity.begin("app", "board", "edit-1", {
+			mode: "edit",
+			signal: controller.signal,
+		});
+		const { backend, calls } = reader();
+		controller.abort();
+		try {
+			expect(
+				await inspectFlowPilotBoardWhenIdle(backend, target, {
+					coordinator,
+					activity,
+					assertActive: () => {},
+				}),
+			).toMatchObject({
+				status: "in_progress",
+				active_run: { stage: "cancelling" },
+			});
+			expect(calls).toEqual([]);
+		} finally {
+			run.finish();
+			release();
+		}
+	});
+
+	test("untracked board operations report contention without leaking another board's draft", async () => {
+		const coordinator = new BoardEditCoordinator();
+		const activity = new FlowPilotBoardActivity();
+		activity
+			.begin("other-app", "board", "foreign", { mode: "edit" })
+			.update({ draft_id: "secret" });
+		const release = await coordinator.acquire(boardEditLockKey("app", "board"));
+		try {
+			const { backend } = reader();
+			expect(
+				await inspectFlowPilotBoardWhenIdle(backend, target, {
+					coordinator,
+					activity,
+					assertActive: () => {},
+				}),
+			).toMatchObject({ status: "in_progress", active_run: null });
+		} finally {
+			release();
+		}
+	});
+
+	test("cancelled inspections cannot read the board and always release their reservation", async () => {
+		const coordinator = new BoardEditCoordinator();
+		const { backend, calls } = reader();
+		let assertions = 0;
+		await expect(
+			inspectFlowPilotBoardWhenIdle(backend, target, {
+				coordinator,
+				assertActive: () => {
+					if (++assertions > 1) throw new Error("cancelled");
+				},
+			}),
+		).rejects.toThrow("cancelled");
+		expect(calls).toEqual([]);
+		const reservation = coordinator.tryAcquire(
+			boardEditLockKey("app", "board"),
+		);
+		expect(reservation).toBeDefined();
+		(await reservation)?.();
+	});
+});
 
 describe("direct authoritative board inspection", () => {
 	test("returns exact canonical source and entry IDs without a specialist or writes", async () => {

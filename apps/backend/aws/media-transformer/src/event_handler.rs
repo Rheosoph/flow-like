@@ -3,10 +3,12 @@ use aws_lambda_events::{
     s3::S3EventRecord,
     sqs::{SqsBatchResponse, SqsEvent},
 };
-use aws_sdk_s3::{primitives::ByteStream, Client as S3Client};
+use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
 use image::{GenericImageView, ImageReader};
-use lambda_runtime::{tracing, Error, LambdaEvent};
+use lambda_runtime::{Error, LambdaEvent, tracing};
 use std::io::Cursor;
+use std::io::{BufRead, BufReader, Seek};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use webp::Encoder;
 
 const WEBP_QUALITY: f32 = 92.0;
@@ -242,12 +244,34 @@ async fn convert_and_store_image(
             Error::from(format!("Failed to download image {}: {}", source_key, e))
         })?;
 
-    let image_data = response
-        .body
-        .collect()
-        .await
-        .map_err(|e| Error::from(format!("Failed to read image data: {}", e)))?
-        .into_bytes();
+    let staged = async {
+        let mut image_data = tokio::fs::File::from_std(tempfile::tempfile()?);
+        let mut body = response.body;
+        while let Some(chunk) = body.try_next().await? {
+            image_data.write_all(&chunk).await?;
+        }
+        image_data.flush().await?;
+        image_data.rewind().await?;
+        Ok::<_, Error>(image_data.into_std().await)
+    }
+    .await;
+    let image_data: Box<dyn MediaReader> = match staged {
+        Ok(file) => Box::new(BufReader::new(file)),
+        Err(_) => {
+            // Preserve the original in-memory path when temporary storage is unavailable.
+            let bytes = s3_client
+                .get_object()
+                .bucket(bucket_name)
+                .key(source_key)
+                .send()
+                .await?
+                .body
+                .collect()
+                .await?
+                .into_bytes();
+            Box::new(Cursor::new(bytes))
+        }
+    };
 
     let source_key_for_transform = source_key.to_string();
     let webp_data = tokio::task::spawn_blocking(move || {
@@ -280,12 +304,14 @@ async fn convert_and_store_image(
     Ok(())
 }
 
-fn decode_resize_encode_webp(
-    image_data: impl AsRef<[u8]>,
+trait MediaReader: BufRead + Seek + Send {}
+impl<R: BufRead + Seek + Send> MediaReader for R {}
+
+fn decode_resize_encode_webp<R: BufRead + Seek>(
+    image_data: R,
     source_key: &str,
 ) -> Result<Vec<u8>, Error> {
-    let cursor = Cursor::new(image_data);
-    let img = ImageReader::new(cursor)
+    let img = ImageReader::new(image_data)
         .with_guessed_format()
         .map_err(|e| {
             Error::from(format!(
@@ -334,6 +360,28 @@ fn encode_as_webp(img: image::DynamicImage) -> Result<Vec<u8>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_backed_decode_preserves_legacy_landscape_pixels() {
+        let image = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(33, 20, |x, y| {
+            image::Rgb([(x * 7) as u8, (y * 11) as u8, ((x + y) * 4) as u8])
+        }));
+        let expected = encode_as_webp(image.resize_to_fill(
+            1280,
+            720,
+            image::imageops::FilterType::CatmullRom,
+        ))
+        .unwrap();
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Bmp)
+            .unwrap();
+        let mut file = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut file, &encoded.into_inner()).unwrap();
+        std::io::Seek::rewind(&mut file).unwrap();
+        let output = decode_resize_encode_webp(BufReader::new(file), "media/test.bmp").unwrap();
+        assert_eq!(output, expected);
+    }
 
     #[test]
     fn course_assets_keep_their_original_format() {

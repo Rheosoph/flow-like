@@ -1501,6 +1501,7 @@ dependencies = [
  "flow-like-storage",
  "flow-like-types",
  "hyper 1.10.1",
+ "hyper-util",
  "lambda_http",
  "mimalloc",
  "opentelemetry",
@@ -8214,6 +8215,7 @@ dependencies = [
  "async-stripe",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-cloudwatch",
  "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
@@ -8225,6 +8227,7 @@ dependencies = [
  "aws-sdk-sns",
  "aws-sdk-sqs",
  "aws-sdk-sts",
+ "aws-sigv4",
  "aws_lambda_events 1.1.2",
  "axum 0.8.8",
  "azure_core 0.32.0",
@@ -9359,6 +9362,8 @@ dependencies = [
  "flow-like-bots",
  "flow-like-browser",
  "flow-like-catalog",
+ "flow-like-device-client",
+ "flow-like-device-crypto",
  "flow-like-device-protocol",
  "flow-like-offline-writes",
  "flow-like-types",
@@ -9414,6 +9419,7 @@ dependencies = [
  "webview2-com",
  "windows 0.61.3",
  "xcap",
+ "zeroize",
 ]
 
 [[package]]
@@ -9421,6 +9427,41 @@ name = "flow-like-dev-check"
 version = "0.1.0"
 dependencies = [
  "flow-like",
+]
+
+[[package]]
+name = "flow-like-device-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "constant_time_eq",
+ "flow-like-device-crypto",
+ "flow-like-device-protocol",
+ "futures-util",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper 1.10.1",
+ "hyper-util",
+ "rand_core 0.6.4",
+ "reqwest 0.12.28",
+ "rustls 0.23.45",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tokio-util",
+ "tower-service",
+ "tracing",
+ "uuid 1.23.1",
+ "webpki-root-certs",
+ "webrtc",
+ "x25519-dalek 2.0.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -9851,6 +9892,7 @@ dependencies = [
  "clap",
  "croner",
  "dotenvy",
+ "flate2",
  "flow-like-bots",
  "flow-like-catalog",
  "flow-like-device-crypto",
@@ -9881,7 +9923,8 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snow",
- "sysinfo 0.37.2",
+ "sysinfo 0.38.4",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tls_codec 0.5.0",
@@ -9975,6 +10018,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "smb2",
+ "tempfile",
  "tokio",
  "tracing",
  "urlencoding",
@@ -12935,16 +12979,17 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
+checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-channel",
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
+ "httparse",
  "hyper 1.10.1",
  "ipnet",
  "libc",
@@ -16977,6 +17022,7 @@ dependencies = [
  "lambda_runtime 0.14.4",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -1,4 +1,9 @@
 import { APP_QUERY_PARAM, appQueryContext } from "../../lib/app-route-url";
+import {
+	type RuntimeNavigation,
+	isRuntimeNamespace,
+	runtimeNavigation,
+} from "../../lib/service-runtime/session-scope";
 import { readUseRoutePath } from "../../lib/use-route-url";
 import { getFrontendStateStore } from "./frontend-state";
 
@@ -13,10 +18,17 @@ export function buildFrontendContextPayload(
 	pageId: string | null | undefined,
 	globalState: Record<string, unknown> | undefined,
 	pageState: Record<string, unknown> | undefined,
+	context?: RuntimeNavigation,
 ): Record<string, unknown> {
 	let queryContext: ReturnType<typeof appQueryContext> = { _query_params: {} };
 	let route = "";
-	if (typeof window !== "undefined") {
+	if (context) {
+		route = context.route;
+		queryContext = {
+			_query_params: { ...context.queryParams },
+			_query_params_format: "app",
+		};
+	} else if (typeof window !== "undefined") {
 		const searchParams = new URLSearchParams(window.location.search);
 		queryContext = appQueryContext(window.location.search);
 		route =
@@ -48,6 +60,7 @@ export async function buildWorkflowFrontendContext(
 		stateId,
 		snapshot.globalState,
 		snapshot.pageStates[stateId],
+		isRuntimeNamespace(appId) ? runtimeNavigation(appId) : undefined,
 	);
 }
 

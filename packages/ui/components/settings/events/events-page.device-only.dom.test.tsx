@@ -155,7 +155,10 @@ async function mountEditor(stored: IEvent) {
 	return { ...view, upserts, pushes };
 }
 
-const toasts = () => toast.getHistory().map((entry) => entry.title);
+const toasts = () =>
+	toast
+		.getHistory()
+		.flatMap((entry) => ("title" in entry ? [entry.title] : []));
 
 describe("the editor of a device-only event", () => {
 	test("reads Devices only, explains it and keeps the ordinary status for others", async () => {
@@ -181,19 +184,30 @@ describe("the editor of a device-only event", () => {
 		]);
 	});
 
-	test("pausing it names what keeps running and saving asks for no token", async () => {
+	test("pausing it saves without a token, then names what keeps running", async () => {
 		const before = toasts().length;
 		const view = await mountEditor(withDeviceEventSource(baseEvent));
 		await click(byRole("button", "Deactivate"));
-		expect(toasts().slice(before)).toEqual([
-			"Devices that already run it keep running until you update or stop their service.",
-		]);
+		expect(toasts().slice(before)).toEqual([]);
 		await click(byRole("button", /^Save/));
 		await view.settle();
 		expect(queryByRole("dialog")).toBeNull();
 		expect(view.upserts).toHaveLength(1);
 		expect(view.upserts[0].event.active).toBe(false);
 		expect(view.upserts[0].pat).toBeUndefined();
+		expect(toasts().slice(before)).toEqual([
+			'"Nightly digest" saved',
+			"Devices that already run it keep running until you update or stop their service.",
+		]);
+	});
+
+	test("a pause that is toggled back and never saved says nothing about devices", async () => {
+		const before = toasts().length;
+		const view = await mountEditor(withDeviceEventSource(baseEvent));
+		await click(byRole("button", "Deactivate"));
+		await click(byRole("button", "Activate"));
+		expect(toasts().slice(before)).toEqual([]);
+		expect(view.upserts).toEqual([]);
 	});
 
 	test("an ordinary sink event asks for a token when saved", async () => {

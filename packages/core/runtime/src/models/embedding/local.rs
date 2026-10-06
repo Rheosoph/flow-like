@@ -573,7 +573,7 @@ mod tests {
         let embedding_bit = PathBuf::from("../../tests/data/embedding-bit.json");
         let embedding_bit = std::fs::read(embedding_bit).unwrap();
         let bit: Bit = flow_like_types::json::from_slice(&embedding_bit).unwrap();
-        let mut factory = EmbeddingFactory::new();
+        let factory = EmbeddingFactory::new();
 
         let model = factory.build_text(&bit, app_state).await.unwrap();
 
@@ -605,7 +605,7 @@ mod tests {
         let embedding_bit = PathBuf::from("../../tests/data/embedding-bit.json");
         let embedding_bit = std::fs::read(embedding_bit).unwrap();
         let bit: Bit = flow_like_types::json::from_slice(&embedding_bit).unwrap();
-        let mut factory = EmbeddingFactory::new();
+        let factory = EmbeddingFactory::new();
 
         let model = factory.build_text(&bit, app_state).await.unwrap();
         let any = model.as_cacheable();
@@ -632,7 +632,7 @@ mod tests {
         let embedding_bit = PathBuf::from("../../tests/data/embedding-bit.json");
         let embedding_bit = std::fs::read(embedding_bit).unwrap();
         let bit: Bit = flow_like_types::json::from_slice(&embedding_bit).unwrap();
-        let mut factory = EmbeddingFactory::new();
+        let factory = EmbeddingFactory::new();
 
         // Create a new LocalImageEmbeddingModel instance
         let model = factory.build_text(&bit, app_state).await.unwrap();

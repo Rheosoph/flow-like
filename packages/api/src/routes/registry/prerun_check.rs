@@ -64,24 +64,14 @@ struct PinnedVersion {
 }
 
 /// Whether the user holds any permission on each package, keyed by package id.
-/// Answers come from the permission cache; the misses share one query and
-/// fill the cache the same way `check_wasm_access!` does.
+/// One authoritative query keeps revocations effective across API replicas.
 async fn load_user_access(
     state: &AppState,
     user_id: &str,
     package_ids: Vec<String>,
 ) -> Result<HashMap<String, bool>, ApiError> {
     let mut access = HashMap::with_capacity(package_ids.len());
-    let mut uncached = Vec::new();
-    for package_id in package_ids {
-        match state.check_wasm_permission(user_id, &package_id) {
-            Some(permission) => {
-                access.insert(package_id, !permission.is_empty());
-            }
-            None => uncached.push(package_id),
-        }
-    }
-    if uncached.is_empty() {
+    if package_ids.is_empty() {
         return Ok(access);
     }
 
@@ -90,7 +80,7 @@ async fn load_user_access(
         .column(wasm_package_user::Column::PackageId)
         .column(wasm_package_user::Column::Permission)
         .filter(wasm_package_user::Column::UserId.eq(user_id))
-        .filter(wasm_package_user::Column::PackageId.is_in(uncached.clone()))
+        .filter(wasm_package_user::Column::PackageId.is_in(package_ids.clone()))
         .into_tuple::<(String, i64)>()
         .all(&state.db)
         .await
@@ -98,12 +88,11 @@ async fn load_user_access(
         .into_iter()
         .collect();
 
-    for package_id in uncached {
+    for package_id in package_ids {
         let permission = granted
             .get(&package_id)
             .map(|bits| WasmPackagePermission::from_bits_truncate(*bits))
             .unwrap_or(WasmPackagePermission::empty());
-        state.put_wasm_permission(user_id, &package_id, permission);
         access.insert(package_id, !permission.is_empty());
     }
 
@@ -122,13 +111,15 @@ fn resolve_compilation(
                 WasmCompilationStatus::LocalOnly => "local_only",
                 WasmCompilationStatus::Pending => "pending",
             };
-            let compiled = v.compilation_status == WasmCompilationStatus::Compiled
-                && v.compiled_platforms
+            let compiled = crate::execution::wasm_resolve::selected_artifact_platform(
+                &v.compilation_status,
+                v.compiled_platforms
                     .as_deref()
                     .map(Vec::as_slice)
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|k| k == platform_key);
+                    .unwrap_or_default(),
+                platform_key,
+            )
+            .is_some();
             (Some(status_str.to_string()), compiled)
         }
         None => (None, false),
@@ -169,7 +160,7 @@ pub async fn prerun_check(
         .sub()
         .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
-    let platform_key = super::server::host_platform_key();
+    let platform_key = super::server::executor_target_platform();
 
     if request.packages.is_empty() {
         return Ok(Json(PrerunCheckResponse {
@@ -289,4 +280,37 @@ pub async fn prerun_check(
         has_remote_only,
         has_unavailable,
     }))
+}
+
+#[cfg(test)]
+mod artifact_availability_tests {
+    use super::*;
+    use flow_like_wasm_schema::runtime::{WASMTIME_MAJOR_VERSION, artifact_platform_key};
+
+    #[test]
+    fn pending_upgrade_keeps_published_artifacts_available() {
+        let target = artifact_platform_key("linux", "x86_64");
+        let mut version = PinnedVersion {
+            yanked: false,
+            compilation_status: WasmCompilationStatus::Pending,
+            compiled_platforms: Some(
+                vec![format!("linux-x86_64-wt{WASMTIME_MAJOR_VERSION}")].into(),
+            ),
+        };
+        assert_eq!(
+            resolve_compilation(Some(&version), &target),
+            (Some("pending".into()), true)
+        );
+        version.compiled_platforms = Some(Vec::<String>::new().into());
+        assert_eq!(
+            resolve_compilation(Some(&version), &target),
+            (Some("pending".into()), false)
+        );
+        version.compiled_platforms = Some(vec![target.clone()].into());
+        version.yanked = true;
+        assert_eq!(
+            resolve_compilation(Some(&version), &target),
+            (Some("yanked".into()), false)
+        );
+    }
 }

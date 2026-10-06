@@ -8,8 +8,11 @@ use axum::{
     Extension, Json,
     extract::{Query, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+};
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use utoipa::{IntoParams, ToSchema};
 
 #[derive(Clone, Debug, Deserialize, IntoParams)]
@@ -243,39 +246,57 @@ pub async fn get_execution_history(
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<ExecutionUsageRecord>>, ApiError> {
     let sub = user.sub()?;
-    let page_size = params.page_size.min(100);
+    execution_history(&state.db, &sub, params).await.map(Json)
+}
+
+async fn execution_history(
+    db: &DatabaseConnection,
+    sub: &str,
+    params: PaginationParams,
+) -> Result<PaginatedResponse<ExecutionUsageRecord>, ApiError> {
+    let page_size = params.page_size.clamp(1, 100);
 
     let mut query = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::UserId.eq(&sub));
+        .filter(execution_usage_tracking::Column::UserId.eq(sub));
 
     if let Some(ref app_id) = params.app_id {
         query = query.filter(execution_usage_tracking::Column::AppId.eq(app_id));
     }
 
-    let total = query
-        .clone()
-        .count(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-
-    let records = query
+    let count_query = query.clone();
+    let page_query = query
         .order_by_desc(execution_usage_tracking::Column::CreatedAt)
-        .paginate(&state.db, page_size)
-        .fetch_page(params.page)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+        .order_by_desc(execution_usage_tracking::Column::Id)
+        .paginate(db, page_size);
+    let (total, records) = flow_like_types::tokio::try_join!(
+        count_query.count(db).instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "usage.executions.count",
+            db.operation = "select",
+            db.table = "ExecutionUsageTracking",
+        )),
+        page_query
+            .fetch_page(params.page)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "usage.executions.page",
+                db.operation = "select",
+                db.table = "ExecutionUsageTracking",
+            )),
+    )
+    .map_err(|e| ApiError::internal_error(e.into()))?;
 
     let items: Vec<ExecutionUsageRecord> = records
         .into_iter()
         .map(ExecutionUsageRecord::from)
         .collect();
 
-    Ok(Json(PaginatedResponse {
+    Ok(PaginatedResponse {
         items,
         total,
         page: params.page,
         page_size,
-    }))
+    })
 }
 
 // -- Usage Summary --
@@ -329,4 +350,91 @@ pub async fn get_usage_summary(
         total_embedding_invocations: embedding_count,
         total_executions: execution_count,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_db::{database, insert};
+    use super::*;
+    use crate::entity::sea_orm_active_enums::ExecutionStatus;
+
+    #[tokio::test]
+    async fn execution_pages_keep_exact_scoped_totals_and_stable_timestamp_ties() {
+        let db = database().await;
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-04T12:00:00Z").unwrap();
+        for id in ["a", "b", "c"] {
+            insert(
+                &db,
+                id,
+                "alice",
+                Some("app"),
+                at,
+                ExecutionStatus::Info,
+                100,
+            )
+            .await;
+        }
+        insert(
+            &db,
+            "other-app",
+            "alice",
+            Some("other"),
+            at,
+            ExecutionStatus::Error,
+            100,
+        )
+        .await;
+        insert(
+            &db,
+            "other-user",
+            "bob",
+            Some("app"),
+            at,
+            ExecutionStatus::Fatal,
+            100,
+        )
+        .await;
+        let page = |page| PaginationParams {
+            page,
+            page_size: 2,
+            app_id: Some("app".into()),
+        };
+        let first = execution_history(&db, "alice", page(0)).await.unwrap();
+        let second = execution_history(&db, "alice", page(1)).await.unwrap();
+        assert_eq!((first.total, second.total), (3, 3));
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "b"]
+        );
+        assert_eq!(
+            second
+                .items
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a"]
+        );
+        let empty = execution_history(&db, "alice", page(10)).await.unwrap();
+        assert_eq!(empty.total, 3);
+        assert!(empty.items.is_empty());
+        let all_apps = execution_history(
+            &db,
+            "alice",
+            PaginationParams {
+                page: 0,
+                page_size: 0,
+                app_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (all_apps.total, all_apps.page_size, all_apps.items.len()),
+            (4, 1, 1)
+        );
+    }
 }

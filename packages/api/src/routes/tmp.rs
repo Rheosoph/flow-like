@@ -24,7 +24,7 @@ use utoipa::ToSchema;
 const MAX_DOWNLOAD_TTL_SECS: u64 = 60 * 60 * 24 * 31;
 const DEFAULT_DOWNLOAD_TTL_SECS: u64 = 60 * 60 * 24 * 7;
 const UPLOAD_TTL_SECS: u64 = 60 * 15;
-// Optional soft client hint (not enforced by PUT presign; enforce on POST policies or server finalize step)
+// Client hint only; direct signed PUTs do not enforce a byte limit.
 const DEFAULT_SIZE_LIMIT_BYTES: Option<u64> = Some(1024 * 1024 * 35); // 35 MB
 /// Upper bound on one batch presign request. Folder uploads chunk client-side to this size.
 const MAX_BATCH_FILES: usize = 100;

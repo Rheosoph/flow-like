@@ -387,6 +387,8 @@ async fn publish_pass(
         .collect();
     ordered.sort_unstable_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
     let mut projections = BTreeMap::new();
+    let model_readers = model_readers(&store, device.manifest(), now);
+    let mut models = None;
     let mut attempts = 0;
     for (_, stream_id, (reader, _, audience)) in ordered {
         if attempts >= 32 {
@@ -415,29 +417,22 @@ async fn publish_pass(
             }
             projections.insert(projection_key.clone(), projection.ok());
         }
-        let Some(value) = &projections[&projection_key] else {
+        let Some(projection) = &projections[&projection_key] else {
             // No ciphertext was queued for this scope. Its previous full
             // snapshot remains stale while other authorized streams progress.
             continue;
         };
+        let value = audience_value(projection, audience, &model_readers, &mut models);
         if !due(
             &store,
             &stream_id,
             audience.kind,
-            &content_digest(value)?,
+            &content_digest(&value)?,
             now,
         )? {
             continue;
         }
-        let pending = queue(
-            &store,
-            device,
-            boot,
-            reader,
-            audience.clone(),
-            value.clone(),
-            now,
-        )?;
+        let pending = queue(&store, device, boot, reader, audience.clone(), value, now)?;
         attempts += 1;
         match tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_fleet(&pending.bundle)=>result}
         {
@@ -450,6 +445,71 @@ async fn publish_pass(
         }
     }
     Ok(())
+}
+
+/// The grants whose device metrics carry the model summary: the owner's and every grant
+/// that may read the models.
+fn model_readers(store: &StateStore, device: &OnboardingManifest, now: i64) -> Vec<String> {
+    let grants = store
+        .management_policy(&device.owner_invitation_key, now)
+        .ok()
+        .flatten()
+        .map_or_else(Vec::new, |policy| policy.grants);
+    let reads_models = |grant: &ManagementGrant| {
+        grant.capabilities.iter().any(|capability| {
+            matches!(
+                capability,
+                ManagementCapability::ModelUse | ManagementCapability::ModelManage
+            )
+        })
+    };
+    std::iter::once("owner".to_owned())
+        .chain(
+            grants
+                .into_iter()
+                .filter(|grant| reads_models(grant))
+                .map(|grant| grant.grant_id),
+        )
+        .collect()
+}
+
+/// What an audience receives: the device metrics of a model reader carry the host's
+/// headline counters, read at most once per pass.
+fn audience_value(
+    projection: &serde_json::Value,
+    audience: &FleetAudience,
+    readers: &[String],
+    models: &mut Option<Option<serde_json::Value>>,
+) -> serde_json::Value {
+    let mut value = projection.clone();
+    let reads = audience.kind == FleetKind::Metrics
+        && audience.scope == ManagementScope::Device
+        && readers.contains(&audience.grant_id);
+    if reads
+        && let (Some(summary), Some(object)) = (
+            models.get_or_insert_with(models_summary),
+            value.as_object_mut(),
+        )
+    {
+        object.insert("models".into(), summary.clone());
+    }
+    value
+}
+
+/// The model host's summary; `None` while no host runs.
+fn models_summary() -> Option<serde_json::Value> {
+    #[cfg(feature = "runtime")]
+    {
+        let summary = crate::models::host::ModelHost::current()?.summary();
+        summary
+            .and_then(|summary| Ok(serde_json::to_value(summary)?))
+            .inspect_err(|error| {
+                tracing::warn!("Read the model summary for the fleet snapshot: {error:#}")
+            })
+            .ok()
+    }
+    #[cfg(not(feature = "runtime"))]
+    None
 }
 
 #[cfg(test)]
@@ -1047,5 +1107,105 @@ mod tests {
             device_id
         );
         Ok(())
+    }
+
+    #[test]
+    fn model_readers_are_the_owner_and_grants_that_may_read_models() {
+        let directory = tempfile::tempdir().expect("a state directory");
+        let store = StateStore::open(&directory.path().join("management.sqlite"))
+            .expect("the management store");
+        let signer = SigningKey::generate();
+        let now = unix_time().expect("a clock");
+        let mut manifest = test_manifest(now);
+        manifest.owner_invitation_key = signer.public_key();
+        assert_eq!(model_readers(&store, &manifest, now), ["owner"]);
+        let grant = |id: &str, capability| ManagementGrant {
+            grant_id: id.into(),
+            user_id: id.into(),
+            controller_key: SigningKey::generate().public_key(),
+            scope: ManagementScope::Device,
+            capabilities: vec![capability],
+            expires_at: now + 600,
+            group_id: None,
+            group_version: None,
+        };
+        let policy = ManagementPolicy {
+            version: 1,
+            device_id: "device".into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: vec![
+                grant("models", ManagementCapability::ModelUse),
+                grant("metrics", ManagementCapability::Metrics),
+            ],
+            issued_at: now,
+            expires_at: now + 600,
+        };
+        let signed = sign_management_policy(&policy, &signer).expect("a signed policy");
+        store
+            .accept_management_policy(&signed, &signer.public_key(), "device", now)
+            .expect("an accepted policy");
+        assert_eq!(model_readers(&store, &manifest, now), ["owner", "models"]);
+    }
+
+    fn test_manifest(now: i64) -> OnboardingManifest {
+        OnboardingManifest {
+            version: 1,
+            enrollment_id: "enrollment".into(),
+            device_id: "device".into(),
+            owner_id: "owner-user".into(),
+            name: "Model box".into(),
+            api_base_url: "https://hub.example/api/v1".into(),
+            bootstrap_key: SigningKey::generate().public_key(),
+            controller_key: SigningKey::generate().public_key(),
+            owner_invitation_key: SigningKey::generate().public_key(),
+            issued_at: now,
+            expires_at: now + 600,
+        }
+    }
+
+    fn audience(grant: &str, kind: FleetKind, scope: ManagementScope) -> FleetAudience {
+        FleetAudience {
+            reader_digest: "reader".into(),
+            grant_id: grant.into(),
+            scope,
+            kind,
+            policy_digest: None,
+        }
+    }
+
+    #[test]
+    fn device_metrics_of_model_readers_carry_the_model_summary() {
+        let readers = ["owner".to_owned(), "models".to_owned()];
+        let projection = serde_json::json!({"records": []});
+        let summary = ModelsSummary {
+            models: 2,
+            loaded: 1,
+            tokens_24h: 1_200_000,
+            ..ModelsSummary::default()
+        };
+        let summary = serde_json::to_value(summary).expect("a summary");
+        let mut models = Some(Some(summary.clone()));
+        let device = || ManagementScope::Device;
+        for reader in ["owner", "models"] {
+            let metrics = audience(reader, FleetKind::Metrics, device());
+            let value = audience_value(&projection, &metrics, &readers, &mut models);
+            assert_eq!(value["models"], summary);
+            assert_eq!(value["records"], serde_json::json!([]));
+        }
+        let project = ManagementScope::Project {
+            project_id: "project".into(),
+        };
+        for unread in [
+            audience("metrics", FleetKind::Metrics, device()),
+            audience("owner", FleetKind::Status, device()),
+            audience("models", FleetKind::Metrics, project),
+        ] {
+            let value = audience_value(&projection, &unread, &readers, &mut models);
+            assert!(value.get("models").is_none());
+        }
+        let owner = audience("owner", FleetKind::Metrics, device());
+        let without_host = audience_value(&projection, &owner, &readers, &mut Some(None));
+        assert!(without_host.get("models").is_none());
     }
 }

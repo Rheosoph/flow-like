@@ -4,6 +4,7 @@ import type {
 	ApprovalDraft,
 	SpendingDraft,
 } from "../../../../lib/device-management/model/deploy-plan";
+import type { IBackendState } from "../../../../state/backend-state";
 import {
 	byRole,
 	click,
@@ -116,6 +117,91 @@ const online: FieldProps = {
 };
 
 describe("CloudApprovalFields", () => {
+	test("cloud approval distinguishes local dependencies from optional hosted fallback without selecting models", async () => {
+		const bits = {
+			"local-text": {
+				type: "Embedding",
+				parameters: { provider: { provider_name: " LoCaL " } },
+			},
+			"local-image": {
+				type: "ImageEmbedding",
+				parameters: {
+					provider: { provider_name: "Local" },
+					remote: { model_id: "future" },
+				},
+			},
+			"fallback-text": {
+				type: "Embedding",
+				parameters: {
+					provider: { provider_name: "Local" },
+					remote: { model_id: "embed" },
+				},
+			},
+			"hosted-chat": {
+				type: "Llm",
+				parameters: { provider: { provider_name: "hosted:openai" } },
+			},
+			"unknown-chat": { type: "Llm", parameters: {} },
+		};
+		const view = await mount(<Approval {...online} initial={draft()} />, {
+			appModels: { [APP]: Object.keys(bits) },
+			backend: {
+				bitState: {
+					getBit: async (id: string) => ({
+						id,
+						meta: { en: { name: id } },
+						...bits[id as keyof typeof bits],
+					}),
+				} as unknown as IBackendState["bitState"],
+			},
+		});
+		const { container } = view;
+		expect(textOf(container)).toContain("Hosted model access");
+		expect(textOf(container)).toContain("Tick to allow hosted fallback.");
+		expect(
+			textOf(container.querySelector("[data-local-models]") as HTMLElement),
+		).toContain("local-text");
+		expect(
+			textOf(container.querySelector("[data-local-models]") as HTMLElement),
+		).toContain("local-image");
+		expect(queryByRole("checkbox", "local-text", container)).toBeNull();
+		expect(queryByRole("checkbox", "local-image", container)).toBeNull();
+		expect(byRole("checkbox", "hosted-chat", container)).not.toBeNull();
+		expect(byRole("checkbox", "unknown-chat", container)).not.toBeNull();
+		expect(read<ApprovalDraft>(container).models).toEqual([]);
+		await click(byRole("checkbox", "fallback-text", container));
+		expect(read<ApprovalDraft>(container).models).toEqual(["fallback-text"]);
+	});
+
+	test("an existing cloud approval for a local-only model remains removable", async () => {
+		const view = await mount(
+			<Approval {...online} initial={draft({ models: ["local-text"] })} />,
+			{
+				appModels: { [APP]: ["local-text"] },
+				backend: {
+					bitState: {
+						getBit: async (id: string) => ({
+							id,
+							type: "Embedding",
+							meta: { en: { name: "Local text model" } },
+							parameters: { provider: { provider_name: "Local" } },
+						}),
+					} as unknown as IBackendState["bitState"],
+				},
+			},
+		);
+		const { container } = view;
+		expect(textOf(container)).toContain(
+			"Untick to remove its existing approval.",
+		);
+		await click(byRole("checkbox", "Local text model", container));
+		expect(read<ApprovalDraft>(container).models).toEqual([]);
+		expect(queryByRole("checkbox", "Local text model", container)).toBeNull();
+		expect(
+			textOf(container.querySelector("[data-local-models]") as HTMLElement),
+		).toContain("Local text model");
+	});
+
 	test("project files need the owner's tick; models come from the app", async () => {
 		const view = await mount(
 			<Approval {...online} initial={draft({ maxInstances: 2 })} />,

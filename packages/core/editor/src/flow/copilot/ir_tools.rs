@@ -41,8 +41,8 @@ use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata, PinMetadata};
 use crate::flow::ast::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
     FlowScriptDiagnosticPhase, ReconcileMode, ReconcileResult, RenderOptions, board_to_flowscript,
-    catalog_names, destructive_flowscript_command_summaries, parse_pin_occurrence_ref,
-    reconcile_with_catalog_mode,
+    catalog_names, destructive_flowscript_command_summaries, flowscript_analysis_ast,
+    parse_pin_occurrence_ref, reconcile_with_catalog_mode,
 };
 use crate::flow::board::Board;
 
@@ -5096,7 +5096,9 @@ fn compact_catalog_declaration(signature: &flow_like_ast::Signature) -> String {
 /// purpose is proving that reachable source code still covers the immutable raw request.
 struct FlowScriptAcceptanceProjection<'a> {
     catalog: &'a [NodeMetadata],
-    function_names: HashSet<String>,
+    // Evidence evaluators strip punctuation from names. Assign distinct internal IDs so paths
+    // such as `a::bc::send` and `ab::c::send` cannot collapse onto the same helper.
+    function_names: HashMap<String, String>,
     next_id: u64,
 }
 
@@ -5107,7 +5109,10 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
             function_names: ast
                 .functions
                 .iter()
-                .map(|function| normalize(&function.name))
+                .enumerate()
+                .map(|(index, function)| {
+                    (function.name.clone(), format!("source_function_{index}"))
+                })
                 .collect(),
             next_id: 0,
         }
@@ -5165,7 +5170,7 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
         let mut steps = Vec::new();
         self.project_block(&event.body, &format!("{path}/body"), &mut steps);
         FlowIrModule::Event {
-            name: event.name.clone(),
+            name: event.event_name.as_ref().unwrap_or(&event.name).clone(),
             node_type: self.resolve_catalog_node_type(&event.node_type, &event.name),
             params: project_ast_params(&event.params),
             steps,
@@ -5177,7 +5182,7 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
         let mut steps = Vec::new();
         self.project_block(&function.body, &format!("{path}/body"), &mut steps);
         FlowIrModule::Function {
-            name: function.name.clone(),
+            name: self.function_names[&function.name].clone(),
             params: project_ast_params(&function.params),
             returns: project_ast_params(&function.returns),
             cache: function.cache.as_ref().map(|cache| FlowIrFunctionCache {
@@ -5452,10 +5457,14 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
                 self.project_arg(argument, &format!("{path}/args/{index}"), prefix_steps)
             })
             .collect::<Vec<_>>();
-        if self.function_names.contains(&normalize(&call.display)) {
+        if call.node_type.is_empty()
+            && call.path.is_empty()
+            && call.receiver.is_none()
+            && let Some(function) = self.function_names.get(&call.display)
+        {
             FlowIrStep::CallFunction {
                 id,
-                function: call.display.clone(),
+                function: function.clone(),
                 args,
                 anchor,
             }
@@ -5815,7 +5824,8 @@ fn flowscript_acceptance_diagnostics(
     ast: &BoardAst,
     catalog: &[NodeMetadata],
 ) -> Vec<FlowScriptDiagnostic> {
-    let projection = FlowScriptAcceptanceProjection::new(ast, catalog).project(ast);
+    let ast = flowscript_analysis_ast(ast, catalog);
+    let projection = FlowScriptAcceptanceProjection::new(&ast, catalog).project(&ast);
     acceptance_contract_diagnostics(contract, &projection, catalog)
         .into_iter()
         .map(project_acceptance_diagnostic_for_flowscript)
@@ -12320,6 +12330,100 @@ eventsSimple() {
         )
         .expect("called helper source parses");
         assert!(flowscript_acceptance_diagnostics(&request, &reachable, &catalog).is_empty());
+    }
+
+    #[test]
+    fn flowscript_acceptance_follows_nested_module_helpers_and_namespace_aliases() {
+        let source = r#"use delivery::notifications as notices
+module delivery {
+    module notifications {
+        function format(message: string): (text: string) {
+            return stringFormat({ formatString: message }).string
+        }
+        function send(message: string) {
+            slackSend({ message: format(message) })
+        }
+    }
+    eventsSimple notify() {
+        notices::send("customer message")
+    }
+}
+"#;
+        let mut catalog = acceptance_flowscript_catalog();
+        catalog.push(metadata(
+            "control_call_function",
+            vec![pin("function_layer_id", "String")],
+            Vec::new(),
+        ));
+        let (_, _, _, checked) = check_bound_flowscript(
+            "Format the customer message, then send a Slack notification.",
+            source.to_string(),
+            &catalog,
+        );
+        assert_eq!(checked.status, "valid", "{checked:#?}");
+        assert!(checked.review_notes.is_empty(), "{checked:#?}");
+    }
+
+    #[test]
+    fn flowscript_acceptance_keeps_same_named_module_helpers_distinct() {
+        // Both qualified names collapse to `abcsend` under punctuation stripping.
+        let source = r#"use a::bc as selected
+module a {
+    module bc {
+        function send() { slackSend({ message: "customer message" }) }
+        function run() { send() }
+    }
+}
+module ab {
+    module c {
+        function send() { emailSend({ message: "do not send" }) }
+        function run() { send() }
+    }
+}
+eventsSimple notify() { selected::run() }
+"#;
+        let request =
+            derive_request_acceptance_contract("Send a Slack notification. Never send email.");
+        let catalog = acceptance_flowscript_catalog();
+        let allowed = flow_like_ast::parse(source).unwrap();
+        assert!(flowscript_acceptance_diagnostics(&request, &allowed, &catalog).is_empty());
+
+        let forbidden =
+            flow_like_ast::parse(&source.replace("selected::run()", "ab::c::run()")).unwrap();
+        let diagnostics = flowscript_acceptance_diagnostics(&request, &forbidden, &catalog);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == FlowScriptDiagnosticCode::FsRequestAcceptanceForbidden
+            }),
+            "{diagnostics:#?}"
+        );
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == FlowScriptDiagnosticCode::FsRequestAcceptanceIncomplete
+            }),
+            "{diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn flowscript_acceptance_does_not_treat_a_catalog_alias_as_a_helper() {
+        let mut catalog = acceptance_flowscript_catalog();
+        let slack = catalog
+            .iter_mut()
+            .find(|node| node.name == "slack_send")
+            .unwrap();
+        slack.namespace = Some("slack".to_string());
+        slack.alias = Some("send".to_string());
+        let request =
+            derive_request_acceptance_contract("Send a Slack notification. Never send email.");
+        let ast = flow_like_ast::parse(
+            r#"use slack as notify
+function send() { emailSend({ message: "unreachable" }) }
+eventsSimple() { notify::send({ message: "customer message" }) }
+"#,
+        )
+        .unwrap();
+        assert!(flowscript_acceptance_diagnostics(&request, &ast, &catalog).is_empty());
     }
 
     #[test]

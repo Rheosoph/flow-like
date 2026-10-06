@@ -522,6 +522,24 @@ pub(super) struct Sandbox {
     scopes: File,
     preserve_listener: bool,
 }
+static CGROUP_ADMISSION: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+fn remove_stale_engine(path: &Path, active: &std::collections::HashSet<PathBuf>) -> Result<bool> {
+    if !path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with("engine-"))
+        || active.contains(path)
+        || !read(&path.join("cgroup.events"))?
+            .lines()
+            .any(|line| line == "populated 0")
+    {
+        return Ok(false);
+    }
+    std::fs::remove_dir(path).context("Remove an empty engine cgroup left by an earlier agent")?;
+    Ok(true)
+}
+
 struct Cgroup {
     root: PathBuf,
     procs: File,
@@ -535,12 +553,16 @@ impl Cgroup {
         placement: &str,
         slot: u8,
     ) -> Result<Self> {
+        let mut active = CGROUP_ADMISSION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let root = cgroup_root(state_dir)?;
         let maximum = capacity(&root)?;
         let identity = blake3::hash(placement.as_bytes()).to_hex().to_string();
         let name = format!("p{project}-{}-{slot}", &identity[..24]);
         let path = root.join(&name);
         if path.try_exists()?
+            && !active.contains(&path)
             && read(&path.join("cgroup.events"))?
                 .lines()
                 .any(|line| line == "populated 0")
@@ -553,7 +575,7 @@ impl Cgroup {
         let mut children = 0;
         for entry in std::fs::read_dir(&root)? {
             let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+            if !entry.file_type()?.is_dir() || remove_stale_engine(&entry.path(), &active)? {
                 continue;
             }
             children += 1;
@@ -568,9 +590,14 @@ impl Cgroup {
                 "Different placements cannot share a disk project quota"
             );
             let limits = capacity(&entry.path())?;
+            // Engine CPU is shared under the parent ceiling; placements reserve CPU.
             used.0 = used
                 .0
-                .checked_add(limits.0)
+                .checked_add(if entry_name.starts_with("engine-") {
+                    0
+                } else {
+                    limits.0
+                })
                 .context("CPU admission overflow")?;
             used.1 = used
                 .1
@@ -592,8 +619,16 @@ impl Cgroup {
                 && used.2.saturating_add(requested.2) <= maximum.2,
             "Placement exceeds the agent's remaining CPU, memory, or process admission budget"
         );
+        Self::create(path, requested, &mut active)
+    }
+
+    fn create(
+        path: PathBuf,
+        requested: (u64, u64, u64),
+        active: &mut std::collections::HashSet<PathBuf>,
+    ) -> Result<Self> {
         std::fs::create_dir(&path).context(
-            "Create exclusive placement cgroup (remove stale empty groups before restarting)",
+            "Create exclusive workload cgroup (remove stale empty groups before restarting)",
         )?;
         let result = (|| -> Result<Self> {
             for (name, value) in [
@@ -620,9 +655,62 @@ impl Cgroup {
         })();
         if result.is_err() {
             let _ = std::fs::remove_dir(&path);
+        } else {
+            active.insert(path);
         }
         result
     }
+    fn engine(state_dir: &Path, model_id: &str, memory: u64, threads: u64) -> Result<Self> {
+        let mut active = CGROUP_ADMISSION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = cgroup_root(state_dir)?;
+        let maximum = capacity(&root)?;
+        let identity = blake3::hash(model_id.as_bytes()).to_hex();
+        let path = root.join(format!("engine-{}", &identity[..24]));
+        if path.try_exists()?
+            && !active.contains(&path)
+            && read(&path.join("cgroup.events"))?
+                .lines()
+                .any(|line| line == "populated 0")
+        {
+            std::fs::remove_dir(&path).context("Remove the previous empty engine cgroup")?;
+        }
+        let mut used = (0_u64, 0_u64);
+        let mut count = 0;
+        for entry in std::fs::read_dir(&root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() || remove_stale_engine(&entry.path(), &active)? {
+                continue;
+            }
+            count += 1;
+            ensure!(
+                count <= 1024,
+                "Cgroup admission inventory exceeds 1024 workloads"
+            );
+            let limits = capacity(&entry.path())?;
+            used.0 = used
+                .0
+                .checked_add(limits.1)
+                .context("Memory admission overflow")?;
+            used.1 = used
+                .1
+                .checked_add(limits.2)
+                .context("Process admission overflow")?;
+        }
+        // Loading needs temporary allocations beyond steady-state weights and cache.
+        let memory = memory
+            .saturating_add((memory / 4).min(1024 * 1024 * 1024))
+            .max(64 * 1024 * 1024);
+        let pids = threads.saturating_mul(4).saturating_add(32).clamp(64, 1024);
+        let cpu = threads.saturating_mul(1000).min(maximum.0).max(1);
+        ensure!(
+            used.0.saturating_add(memory) <= maximum.1 && used.1.saturating_add(pids) <= maximum.2,
+            "Engine exceeds the agent's remaining memory or process admission budget"
+        );
+        Self::create(path, (cpu, memory, pids), &mut active)
+    }
+
     fn signal(&self, force: bool) -> Result<()> {
         if force {
             std::fs::write(self.root.join("cgroup.kill"), "1")?;
@@ -661,8 +749,12 @@ impl Cgroup {
 }
 impl Drop for Cgroup {
     fn drop(&mut self) {
+        let mut active = CGROUP_ADMISSION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let _ = std::fs::write(self.root.join("cgroup.kill"), "1");
         let _ = std::fs::remove_dir(&self.root);
+        active.remove(&self.root);
     }
 }
 
@@ -803,6 +895,11 @@ fn scope_rules() -> Result<File> {
 }
 
 fn filter_file() -> Result<File> {
+    policy_file(&filter())
+}
+
+/// A sealed memory file with the seccomp program, which bubblewrap reads by descriptor.
+fn policy_file(filters: &[libc::sock_filter]) -> Result<File> {
     let name = CString::new("flow-like-worker-seccomp")?;
     let fd = unsafe {
         libc::syscall(
@@ -813,7 +910,6 @@ fn filter_file() -> Result<File> {
     };
     ensure!(fd >= 0, "Cannot create sandbox seccomp policy");
     let mut file = unsafe { File::from_raw_fd(fd as i32) };
-    let filters = filter();
     let bytes = unsafe {
         std::slice::from_raw_parts(
             filters.as_ptr().cast::<u8>(),
@@ -941,6 +1037,7 @@ pub(super) fn command(
         .arg("--bind")
         .arg(data)
         .arg(data)
+        .args(model_asset_mounts(config, data)?)
         .arg("--bind")
         .arg(&scratch)
         .arg("/tmp")
@@ -971,6 +1068,33 @@ pub(super) fn command(
         .arg(sandbox.program.as_raw_fd().to_string())
         .args(["--", "/run/flow-like-worker"]);
     Ok((command, sandbox))
+}
+
+/// `--ro-bind <blob> <mount point>` for each model-store file the workload reads directly;
+/// the agent left an empty mount point for each inside the placement data.
+fn model_asset_mounts(
+    config: &crate::config::PlacementConfig,
+    data: &Path,
+) -> Result<Vec<std::ffi::OsString>> {
+    #[cfg(feature = "runtime")]
+    {
+        let binds = crate::dependencies::model_asset_binds(config, data)?;
+        Ok(binds
+            .into_iter()
+            .flat_map(|(blob, mount_point)| {
+                [
+                    "--ro-bind".into(),
+                    blob.into_os_string(),
+                    mount_point.into_os_string(),
+                ]
+            })
+            .collect())
+    }
+    #[cfg(not(feature = "runtime"))]
+    {
+        let _ = (config, data);
+        Ok(Vec::new())
+    }
 }
 
 impl Sandbox {
@@ -1005,9 +1129,266 @@ impl Sandbox {
     }
 }
 
+const LANDLOCK_NET_BIND_TCP: u64 = 1;
+const LANDLOCK_NET_CONNECT_TCP: u64 = 1 << 1;
+/// What GPU drivers enumerate devices through.
+const ENGINE_SYSFS: [&str; 5] = [
+    "/sys/dev",
+    "/sys/devices",
+    "/sys/bus/pci",
+    "/sys/class/drm",
+    "/sys/module/nvidia",
+];
+const ENGINE_CONFIG: [&str; 3] = ["/etc/ld.so.cache", "/etc/vulkan", "/etc/OpenCL"];
+
+/// Filesystem sockets need no TCP bind or connect permission.
+fn engine_rules() -> Result<File> {
+    #[repr(C)]
+    struct Rules {
+        fs: u64,
+        net: u64,
+        scopes: u64,
+    }
+    let rules = Rules {
+        fs: 0,
+        net: LANDLOCK_NET_BIND_TCP | LANDLOCK_NET_CONNECT_TCP,
+        scopes: 3,
+    };
+    // SAFETY: the kernel reads `size_of::<Rules>()` bytes of the live struct.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            &rules,
+            std::mem::size_of::<Rules>(),
+            0,
+        )
+    };
+    ensure!(fd >= 0, "Cannot create the engine's Landlock network rules");
+    // SAFETY: the syscall returned a new descriptor that nothing else owns.
+    Ok(unsafe { File::from_raw_fd(fd as i32) })
+}
+
+/// Landlock denies TCP bind and connect. Seccomp also refuses UDP, raw, SCTP and MPTCP
+/// sockets, while the engine's private network namespace keeps host interfaces out of reach.
+fn engine_filter() -> Vec<libc::sock_filter> {
+    let statement = |code, k| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let jump = |k, jt, jf| libc::sock_filter {
+        code: 0x15,
+        jt,
+        jf,
+        k,
+    };
+    let mut program = filter();
+    let allow = program.pop();
+    program.extend([
+        jump(libc::SYS_socket as u32, 0, 10),
+        statement(0x20, 16),
+        jump(libc::AF_INET as u32, 1, 0),
+        jump(libc::AF_INET6 as u32, 0, 7),
+        statement(0x20, 24),
+        statement(0x54, 0xf),
+        jump(libc::SOCK_STREAM as u32, 0, 3),
+        statement(0x20, 32),
+        jump(0, 2, 0),
+        jump(libc::IPPROTO_TCP as u32, 1, 0),
+        statement(0x06, 0x0005_0000 | libc::EPERM as u32),
+    ]);
+    program.extend(allow);
+    program
+}
+
+fn gpu_devices() -> Vec<PathBuf> {
+    let mut devices: Vec<PathBuf> = ["/dev/dri", "/dev/kfd"]
+        .iter()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .collect();
+    if let Ok(entries) = std::fs::read_dir("/dev") {
+        let mut nvidia: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("nvidia"))
+            .map(|entry| entry.path())
+            .collect();
+        nvidia.sort();
+        devices.extend(nvidia);
+    }
+    devices
+}
+
+/// The engine profile: the system read-only, the runtime and model files read-only where
+/// they are, GPU device nodes, a private `/tmp` and network namespace, and a writable
+/// private socket directory. Its cgroup bounds memory, CPU and process creation.
+pub(crate) struct EngineIsolation {
+    _cgroup: std::sync::Arc<Cgroup>,
+}
+
+pub(crate) fn engine_command(
+    program: &Path,
+    args: &[std::ffi::OsString],
+    read_only: &[PathBuf],
+    socket: &Path,
+    state_dir: &Path,
+    memory: u64,
+    model_id: &str,
+) -> Result<(tokio::process::Command, EngineIsolation)> {
+    landlock_abi()?;
+    let socket_dir = socket.parent().context("Engine socket has no directory")?;
+    let socket_directory = File::open(socket_dir)?;
+    let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // The writable socket mount must charge file contents to the engine's memory cgroup.
+    // SAFETY: fstatfs writes the live statfs buffer for this open directory.
+    ensure!(
+        unsafe { libc::fstatfs(socket_directory.as_raw_fd(), filesystem.as_mut_ptr()) } == 0,
+        "Cannot inspect the engine socket filesystem"
+    );
+    ensure!(
+        unsafe { filesystem.assume_init() }.f_type == libc::TMPFS_MAGIC,
+        "The sandboxed engine socket needs a tmpfs directory in /dev/shm"
+    );
+    let metadata = std::fs::metadata(program)?;
+    ensure!(
+        metadata.is_file() && metadata.mode() & 0o022 == 0,
+        "Engine {} must not be group- or world-writable",
+        program.display()
+    );
+    let seccomp = policy_file(&engine_filter())?;
+    let rules = engine_rules()?;
+    let threads = args
+        .windows(2)
+        .find(|pair| pair[0] == "--threads")
+        .and_then(|pair| pair[1].to_str()?.parse::<u64>().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get() as u64))
+        .max(1);
+    let cgroup = std::sync::Arc::new(Cgroup::engine(state_dir, model_id, memory, threads)?);
+    let mut command = tokio::process::Command::new(bubblewrap()?);
+    command.args([
+        "--unshare-user",
+        "--unshare-net",
+        "--unshare-ipc",
+        "--unshare-pid",
+        "--unshare-uts",
+        "--unshare-cgroup",
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--disable-userns",
+    ]);
+    engine_mounts(&mut command, program, read_only)?;
+    command.arg("--bind").arg(socket_dir).arg(socket_dir);
+    command
+        .args(["--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp"])
+        .arg("--seccomp")
+        .arg(seccomp.as_raw_fd().to_string())
+        .arg("--")
+        .arg(program)
+        .args(args);
+    restrict_engine(&mut command, seccomp, rules, std::sync::Arc::clone(&cgroup));
+    Ok((command, EngineIsolation { _cgroup: cgroup }))
+}
+
+/// The system read-only, the engine's files read-only where they are, GPU devices, and a
+/// private `/tmp`.
+fn engine_mounts(
+    command: &mut tokio::process::Command,
+    program: &Path,
+    read_only: &[PathBuf],
+) -> Result<()> {
+    let system = ["/usr", "/bin", "/lib", "/lib64"]
+        .iter()
+        .chain(ENGINE_CONFIG.iter())
+        .chain(ENGINE_SYSFS.iter())
+        .map(Path::new)
+        .filter(|path| path.exists());
+    for path in system {
+        command.arg("--ro-bind").arg(path).arg(path);
+    }
+    command.args(["--tmpfs", "/tmp"]);
+    for path in read_only.iter().map(PathBuf::as_path).chain([program]) {
+        ensure!(
+            path.is_absolute(),
+            "Engine path {} must be absolute",
+            path.display()
+        );
+        command.arg("--ro-bind").arg(path).arg(path);
+    }
+    command.args(["--proc", "/proc", "--dev", "/dev"]);
+    for device in gpu_devices() {
+        command.arg("--dev-bind").arg(&device).arg(&device);
+    }
+    command.args(["--remount-ro", "/"]);
+    Ok(())
+}
+
+/// Bubblewrap starts without privileges, inside the network rules, and dies with the agent;
+/// it receives the seccomp policy by descriptor.
+fn restrict_engine(
+    command: &mut tokio::process::Command,
+    seccomp: File,
+    rules: File,
+    cgroup: std::sync::Arc<Cgroup>,
+) {
+    let seccomp_fd = seccomp.as_raw_fd();
+    let rules_fd = rules.as_raw_fd();
+    let group = cgroup.procs.as_raw_fd();
+    // The queued command owns the cgroup too: cancellation before fork cannot close
+    // its descriptor or remove its limits while the spawner still holds the command.
+    let held = (seccomp, rules, cgroup);
+    // SAFETY: only async-signal-safe calls run between fork and exec.
+    unsafe {
+        command.pre_exec(move || {
+            let _ = &held;
+            if libc::write(group, b"0".as_ptr().cast(), 1) != 1
+                || libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0
+                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                || libc::syscall(libc::SYS_landlock_restrict_self, rules_fd, 0) != 0
+                // Existing sockets bypass connect rules. Preserve only stdio and
+                // the seccomp policy that bubblewrap consumes before engine exec.
+                || libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, 4_u32) != 0
+                || libc::fcntl(seccomp_fd, libc::F_SETFD, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_engine_command_keeps_its_cgroup_until_the_command_is_dropped() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("engine");
+        std::fs::create_dir(&root)?;
+        let cgroup = std::sync::Arc::new(Cgroup {
+            root,
+            procs: tempfile::tempfile()?,
+        });
+        let weak = std::sync::Arc::downgrade(&cgroup);
+        let mut command = tokio::process::Command::new("/bin/true");
+        restrict_engine(
+            &mut command,
+            tempfile::tempfile()?,
+            tempfile::tempfile()?,
+            std::sync::Arc::clone(&cgroup),
+        );
+        drop(cgroup);
+        assert!(
+            weak.upgrade().is_some(),
+            "the queued command owns the resource lease"
+        );
+        drop(command);
+        assert!(weak.upgrade().is_none());
+        Ok(())
+    }
     #[test]
     fn mount_escape_and_cpu_quota_parsing_are_exact() {
         assert_eq!(
@@ -1019,6 +1400,91 @@ mod tests {
         assert_eq!(cpu("150000 100000").unwrap(), 1500);
         assert!(cpu("max 100000").is_err());
         assert!(cpu("1 0").is_err());
+    }
+
+    /// The call data the kernel hands a seccomp program: number, architecture, arguments.
+    fn call_data(call: libc::c_long, args: [u64; 3]) -> [u8; 64] {
+        #[cfg(target_arch = "x86_64")]
+        let architecture: u32 = 0xc000_003e;
+        #[cfg(target_arch = "aarch64")]
+        let architecture: u32 = 0xc000_00b7;
+        let mut data = [0_u8; 64];
+        data[..4].copy_from_slice(&(call as u32).to_ne_bytes());
+        data[4..8].copy_from_slice(&architecture.to_ne_bytes());
+        for (index, arg) in args.iter().enumerate() {
+            data[16 + index * 8..24 + index * 8].copy_from_slice(&arg.to_ne_bytes());
+        }
+        data
+    }
+
+    /// Runs a seccomp program on one call, for the instructions the policies use: loads of the
+    /// call data, AND, equality and bit tests, and returns.
+    fn verdict(program: &[libc::sock_filter], call: libc::c_long, args: [u64; 3]) -> u32 {
+        let data = call_data(call, args);
+        let (mut next, mut accumulator) = (0, 0_u32);
+        loop {
+            let instruction = program[next];
+            next += 1;
+            let at = instruction.k as usize;
+            let skip = |taken: bool| {
+                usize::from(if taken {
+                    instruction.jt
+                } else {
+                    instruction.jf
+                })
+            };
+            match instruction.code {
+                0x20 => {
+                    accumulator =
+                        u32::from_ne_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
+                }
+                0x54 => accumulator &= instruction.k,
+                0x15 => next += skip(accumulator == instruction.k),
+                0x45 => next += skip(accumulator & instruction.k != 0),
+                0x06 => return instruction.k,
+                code => panic!("unexpected seccomp instruction {code:#x}"),
+            }
+        }
+    }
+
+    #[test]
+    fn engines_open_no_internet_socket_but_tcp() {
+        let (engine, workload) = (engine_filter(), filter());
+        let allowed = 0x7fff_0000;
+        let refused = 0x0005_0000 | libc::EPERM as u32;
+        let socket = |program: &[libc::sock_filter], domain: i32, kind: i32, protocol: i32| {
+            let args = [domain as u64, kind as u64, protocol as u64];
+            verdict(program, libc::SYS_socket, args)
+        };
+        let stream = libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK;
+        let others = [
+            (libc::SOCK_DGRAM, 0),
+            (libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, libc::IPPROTO_ICMP),
+            (libc::SOCK_RAW, libc::IPPROTO_RAW),
+            (libc::SOCK_SEQPACKET, 0),
+            (libc::SOCK_STREAM, libc::IPPROTO_SCTP),
+            (libc::SOCK_STREAM, 262),
+        ];
+        for domain in [libc::AF_INET, libc::AF_INET6] {
+            assert_eq!(socket(&engine[..], domain, stream, 0), allowed);
+            let tcp = socket(&engine[..], domain, libc::SOCK_STREAM, libc::IPPROTO_TCP);
+            assert_eq!(tcp, allowed);
+            for (kind, protocol) in others {
+                let answer = socket(&engine[..], domain, kind, protocol);
+                assert_eq!(answer, refused, "{domain} {kind} {protocol}");
+            }
+            assert_eq!(socket(&workload[..], domain, libc::SOCK_DGRAM, 0), allowed);
+        }
+        assert_eq!(
+            socket(&engine[..], libc::AF_UNIX, libc::SOCK_DGRAM, 0),
+            allowed
+        );
+        assert_eq!(
+            socket(&engine[..], libc::AF_NETLINK, libc::SOCK_RAW, 0),
+            allowed
+        );
+        assert_eq!(verdict(&engine, libc::SYS_ptrace, [0; 3]), refused);
+        assert_eq!(verdict(&engine, libc::SYS_read, [0; 3]), allowed);
     }
 
     #[test]
@@ -1056,6 +1522,111 @@ mod tests {
         if unsafe { libc::geteuid() } != 0 {
             assert_eq!(result?, None);
         }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "Requires the explicit Linux quota/cgroup acceptance harness"]
+    async fn linux_engine_boundary_acceptance() -> Result<()> {
+        let root = PathBuf::from(
+            std::env::var_os("FLOW_LIKE_ISOLATION_TEST_ROOT")
+                .context("Run the Linux isolation acceptance harness")?,
+        )
+        .canonicalize()?;
+        let state = root.join("state");
+        let socket_dir = tempfile::Builder::new()
+            .prefix("flow-engine-test-")
+            .tempdir_in("/dev/shm")?;
+        let socket = socket_dir.path().join("engine.sock");
+        let outside = std::net::TcpListener::bind("127.0.0.1:0")?;
+        // Native dependencies can open descriptors without CLOEXEC. None may pass.
+        let inherited = unsafe { libc::fcntl(outside.as_raw_fd(), libc::F_DUPFD, 64) };
+        ensure!(inherited >= 64, "Cannot duplicate the host listener");
+        let inherited = unsafe { File::from_raw_fd(inherited) };
+        let namespace = std::fs::metadata("/proc/self/ns/net")?.ino();
+        let python = Path::new("/usr/bin/python3").canonicalize()?;
+        for mode in ["boundary", "memory"] {
+            let _ = std::fs::remove_file(&socket);
+            let args = [
+                "-c",
+                include_str!("../../tests/fixtures/linux_engine_probe.py"),
+                mode,
+            ]
+            .map(std::ffi::OsString::from);
+            let (mut command, isolation) = engine_command(
+                &python,
+                &args,
+                &[],
+                &socket,
+                &state,
+                64 * 1024 * 1024,
+                "engine-acceptance",
+            )?;
+            command
+                .env_clear()
+                .env("ENGINE_SOCKET", &socket)
+                .env("OUTSIDE_PORT", outside.local_addr()?.port().to_string())
+                .env("OUTSIDE_NET", namespace.to_string())
+                .env("INHERITED_FD", inherited.as_raw_fd().to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true);
+            let child = crate::process_spawner::spawn(command).await?;
+            let limits = capacity(&isolation._cgroup.root)?;
+            assert!(limits.0 > 0 && limits.0 <= capacity(&cgroup_root(&state)?)?.0);
+            assert_eq!(limits.1, 80 * 1024 * 1024);
+            assert!((64..=1024).contains(&limits.2));
+            if mode == "boundary" {
+                let client = reqwest::Client::builder()
+                    .no_proxy()
+                    .unix_socket(socket.clone())
+                    .build()?;
+                let ready = async {
+                    loop {
+                        if let Ok(response) = client.get("http://localhost/health").send().await {
+                            return response.text().await;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                };
+                assert_eq!(
+                    tokio::time::timeout(std::time::Duration::from_secs(10), ready).await??,
+                    "ready"
+                );
+                // Engine CPU is shared; a placement may still reserve the parent's CPU.
+                let requested = super::PlacementResources {
+                    cpu_millis: Some(4_000),
+                    memory_bytes: Some(64 * 1024 * 1024),
+                    max_processes: Some(16),
+                    profile: super::super::IsolationProfile::LinuxSandbox,
+                    disk_bytes: Some(16 * 1024 * 1024),
+                };
+                let placement = Cgroup::new(&requested, &state, 314160, "with-engine", 0)?;
+                drop(placement);
+            }
+            let output =
+                tokio::time::timeout(std::time::Duration::from_secs(20), child.wait_with_output())
+                    .await??;
+            if mode == "memory" {
+                assert!(!output.status.success());
+                assert!(
+                    read(&isolation._cgroup.root.join("memory.events"))?
+                        .lines()
+                        .any(|line| line
+                            .strip_prefix("oom_kill ")
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .is_some_and(|count| count > 0))
+                );
+            } else {
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            drop(isolation);
+        }
+        std::fs::remove_dir_all(socket_dir)?;
         Ok(())
     }
 

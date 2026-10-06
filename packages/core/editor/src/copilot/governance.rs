@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
 use crate::flow::ast::{RenderOptions, board_to_flowscript};
 use crate::flow::board::Board;
-use crate::models::llm::ModelUsageContext;
+use crate::models::{device::Interaction, llm::ModelUsageContext};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use flow_like_model_provider::provider::ModelProvider;
@@ -118,12 +118,19 @@ impl GovernanceCopilot {
                 ..Default::default()
             };
             let capabilities = FlowLikeState::completion_model_capabilities(&self.state).await;
+            let devices = self.state.device_model_probe(Interaction::Allowed {
+                run_label: self
+                    .usage_context
+                    .as_ref()
+                    .and_then(|context| context.run_id.clone()),
+            });
             profile
                 .resolve_completion_model(
                     model_id.as_deref(),
                     &preference,
                     false,
                     capabilities,
+                    devices.as_ref(),
                     self.state.http_client.clone(),
                 )
                 .await?
@@ -149,8 +156,6 @@ impl GovernanceCopilot {
 
         let model_factory = self.state.model_factory.clone();
         let model = model_factory
-            .lock()
-            .await
             .build(&bit, self.state.clone(), token, self.usage_context.clone())
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());

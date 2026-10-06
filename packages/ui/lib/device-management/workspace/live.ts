@@ -1,16 +1,26 @@
+import type { ArtifactTransferStatus } from "../artifacts";
 import {
 	type InspectionReadOptions,
 	readDeviceInspection,
 } from "../inspection";
 import { type InventoryWriter, createInventoryWriter } from "../inventory";
 import type { InspectionPlus } from "../model/types";
+import type { ModelAssetStatus } from "../models";
 import type { ManagementCall } from "../telemetry";
 import {
 	type ConnectProgress,
 	DeviceManagementConnection,
 	ManagementRequestNotSentError,
 	ManagementUnconfirmedError,
+	managementFailureDiagnostic,
 } from "../transport";
+import type { DeviceServiceStream, TunnelServiceOptions } from "../tunnel";
+import {
+	type DeviceTunnelDataClient,
+	type TunnelArtifactUpload,
+	type TunnelModelAssetPush,
+	isTunnelReadCommand,
+} from "../tunnel-data";
 import {
 	type BrowserController,
 	type DeviceReceipt,
@@ -60,6 +70,7 @@ export const LIVE_TIMING = {
 
 /** Reads may be retried once after an unconfirmed reply; everything else never is. */
 export const READ_COMMANDS: ReadonlySet<string> = new Set([
+	"service_listeners",
 	"inspect_page",
 	"inspect",
 	"operation",
@@ -86,6 +97,25 @@ export const READ_COMMANDS: ReadonlySet<string> = new Set([
 	"offline_queue_operations",
 	"offline_queue_lookup",
 ]);
+
+/** `models` carries reads and writes; these request kinds only read. */
+const MODELS_READ_KINDS: ReadonlySet<string> = new Set([
+	"overview",
+	"models",
+	"jobs",
+	"recommendations",
+	"probe",
+	"stats",
+]);
+
+/** A read: `READ_COMMANDS`, or a `models` request of a read kind. */
+export function isReadCommand(command: Record<string, unknown>): boolean {
+	if (READ_COMMANDS.has(String(command.type))) return true;
+	const request = command.request as Record<string, unknown> | undefined;
+	return (
+		command.type === "models" && MODELS_READ_KINDS.has(String(request?.kind))
+	);
+}
 
 /** User commands after which the inspection is read again. */
 const STATE_CHANGING: ReadonlySet<string> = new Set([
@@ -124,6 +154,23 @@ export interface LiveConnection {
 		command: Record<string, unknown>,
 		operationId?: string,
 	): Promise<ManagementResponse>;
+	requestData?(
+		command: Record<string, unknown>,
+		operationId?: string,
+		signal?: AbortSignal,
+	): Promise<ManagementResponse>;
+	uploadArtifact?(input: TunnelArtifactUpload): Promise<ArtifactTransferStatus>;
+	pushModelAsset?(input: TunnelModelAssetPush): Promise<ModelAssetStatus>;
+	openService?(
+		placementId: string,
+		serviceId: string,
+		options?: TunnelServiceOptions,
+	): Promise<DeviceServiceStream>;
+	openModelGateway?(options?: {
+		signal?: AbortSignal;
+	}): Promise<DeviceServiceStream>;
+	detachDataTunnel?(): DeviceTunnelDataClient | undefined;
+	adoptDataTunnel?(client: DeviceTunnelDataClient): void;
 	close(): void;
 	onClosed(listener: (reason: "local" | "remote") => void): () => void;
 }
@@ -185,6 +232,7 @@ type Reason = "view" | "operation" | "stream";
 
 interface RequestTask {
 	kind: "request";
+	generation: number;
 	lane: CallLane;
 	command: Record<string, unknown>;
 	operationId?: string;
@@ -200,6 +248,7 @@ interface RequestTask {
 
 interface ExclusiveTask {
 	kind: "exclusive";
+	generation: number;
 	lane: CallLane;
 	signal?: AbortSignal;
 	run: (call: ManagementCall) => Promise<void>;
@@ -211,6 +260,7 @@ type TimerName = "retry" | "renew" | "presence" | "inspect" | "linger";
 
 interface Entry {
 	id: string;
+	generation: number;
 	demand: Record<Reason, number>;
 	state: LiveState;
 	conn?: LiveConnection;
@@ -224,6 +274,8 @@ interface Entry {
 	queues: Record<CallLane, Task[]>;
 	coalesced: Map<string, RequestTask>;
 	draining: boolean;
+	bulkActive: number;
+	dataTunnel?: DeviceTunnelDataClient;
 	timers: Partial<Record<TimerName, () => void>>;
 	inspection?: LiveInspection;
 	inspecting?: Promise<void>;
@@ -274,7 +326,12 @@ function freshSteps(): UnlockStep[] {
 }
 
 function totalDemand(entry: Entry): number {
-	return entry.demand.view + entry.demand.operation + entry.demand.stream;
+	return (
+		entry.demand.view +
+		entry.demand.operation +
+		entry.demand.stream +
+		entry.bulkActive
+	);
 }
 
 function hasTasks(entry: Entry): boolean {
@@ -370,6 +427,127 @@ class LiveManager implements LiveSessionManagerImpl {
 		return (command, operationId) =>
 			this.request(deviceId, command, operationId, options);
 	}
+	openService(
+		deviceId: string,
+		placementId: string,
+		serviceId = "hosting",
+		options: TunnelServiceOptions = {},
+	): Promise<DeviceServiceStream> {
+		return this.openStream(deviceId, options.signal, (connection) => {
+			if (!connection.openService)
+				throw new Error("Update Studio to connect to deployed services.");
+			return connection.openService(placementId, serviceId, options);
+		});
+	}
+	/** Only for agents with `model_host`: an older one closes the whole tunnel on the unknown target. */
+	openModelGateway(
+		deviceId: string,
+		options: { signal?: AbortSignal } = {},
+	): Promise<DeviceServiceStream> {
+		const entry = this.entry(deviceId);
+		return this.openStream(deviceId, options.signal, (connection) => {
+			if (!connection.openModelGateway)
+				throw new Error("Update Studio to send requests to models on devices.");
+			const features = entry.inspection?.value.features;
+			if (features && features.model_host !== 1)
+				throw new LiveCallError(
+					"rejected_unsupported",
+					"Update the device agent to send requests to its models.",
+				);
+			return connection.openModelGateway(options);
+		});
+	}
+	/** One stream of the session; its demand holds the session until the stream closes. */
+	private async openStream(
+		deviceId: string,
+		signal: AbortSignal | undefined,
+		open: (connection: LiveConnection) => Promise<DeviceServiceStream>,
+	): Promise<DeviceServiceStream> {
+		const entry = this.entry(deviceId);
+		const refused = this.refusal(entry);
+		if (refused) throw refused;
+		signal?.throwIfAborted();
+		const generation = entry.generation;
+		const release = this.acquire(deviceId, "stream");
+		let stream: DeviceServiceStream | undefined;
+		try {
+			const connection = await this.sessionFor(entry);
+			if (generation !== entry.generation)
+				throw new LiveCallError(
+					"session_closed",
+					"The live session was closed.",
+				);
+			signal?.throwIfAborted();
+			stream = await open(connection);
+			if (generation !== entry.generation)
+				throw new LiveCallError(
+					"session_closed",
+					"The live session was closed.",
+				);
+			signal?.throwIfAborted();
+			void stream.closed.then(release);
+			return stream;
+		} catch (error) {
+			stream?.reset();
+			release();
+			throw error;
+		}
+	}
+	uploadArtifact(
+		deviceId: string,
+		input: TunnelArtifactUpload,
+	): Promise<ArtifactTransferStatus> {
+		return this.transfer(deviceId, input.signal, (connection) => {
+			if (!connection.uploadArtifact)
+				throw new Error(
+					"This device connection does not support streamed uploads.",
+				);
+			return connection.uploadArtifact(input);
+		});
+	}
+	/** One model asset push, or the probe that opens its push session (plan §3.1). */
+	pushModelAsset(
+		deviceId: string,
+		input: TunnelModelAssetPush,
+	): Promise<ModelAssetStatus> {
+		return this.transfer(deviceId, input.signal, (connection) => {
+			if (!connection.pushModelAsset)
+				throw new Error(
+					"This device connection does not support streamed uploads.",
+				);
+			return connection.pushModelAsset(input);
+		});
+	}
+	/** A transfer over the session's data tunnel; its demand holds the session until it ends. */
+	private async transfer<T>(
+		deviceId: string,
+		signal: AbortSignal | undefined,
+		run: (connection: LiveConnection) => Promise<T>,
+	): Promise<T> {
+		const entry = this.entry(deviceId);
+		const generation = entry.generation;
+		const refused = this.refusal(entry);
+		if (refused) throw refused;
+		if (signal?.aborted) throw abortError(signal);
+		const release = this.acquire(deviceId, "stream");
+		try {
+			const connection = await this.sessionFor(entry);
+			if (generation !== entry.generation)
+				throw new LiveCallError(
+					"session_closed",
+					"The live session was closed.",
+				);
+			const result = await run(connection);
+			if (generation !== entry.generation)
+				throw new LiveCallError(
+					"session_closed",
+					"The live session was closed.",
+				);
+			return result;
+		} finally {
+			release();
+		}
+	}
 
 	exclusive<T>(
 		deviceId: string,
@@ -382,6 +560,7 @@ class LiveManager implements LiveSessionManagerImpl {
 		const result = deferred<T>();
 		this.enqueue(entry, {
 			kind: "exclusive",
+			generation: entry.generation,
 			lane: options.lane ?? "operation",
 			signal: options.signal,
 			reject: result.reject,
@@ -441,6 +620,7 @@ class LiveManager implements LiveSessionManagerImpl {
 		if (!entry) {
 			entry = {
 				id: deviceId,
+				generation: 0,
 				demand: { view: 0, operation: 0, stream: 0 },
 				state: { kind: "idle" },
 				connectedAtS: 0,
@@ -449,6 +629,7 @@ class LiveManager implements LiveSessionManagerImpl {
 				queues: { user: [], operation: [], poll: [] },
 				coalesced: new Map(),
 				draining: false,
+				bulkActive: 0,
 				timers: {},
 				inspectAgain: false,
 				steps: freshSteps(),
@@ -636,15 +817,21 @@ class LiveManager implements LiveSessionManagerImpl {
 	): LiveConnection {
 		if (
 			entry.abort?.signal.aborted ||
-			this.ports.keys.controller(entry.id) !== controller
+			this.ports.keys.controller(entry.id) !== controller ||
+			this.ports.keys.vault(entry.id)?.grantId !== grantId
 		) {
 			conn.close();
 			throw new LiveCallError(
 				"keys_locked",
-				"The device was locked while connecting.",
+				"Device access changed while connecting.",
 			);
 		}
 		entry.conn = conn;
+		if (entry.dataTunnel) {
+			if (conn.adoptDataTunnel) conn.adoptDataTunnel(entry.dataTunnel);
+			else entry.dataTunnel.close();
+			entry.dataTunnel = undefined;
+		}
 		entry.controller = controller;
 		entry.connectedAtS = this.nowS();
 		entry.attempt = 0;
@@ -668,6 +855,7 @@ class LiveManager implements LiveSessionManagerImpl {
 		controller: BrowserController,
 		grantId: string,
 	): Promise<void> {
+		const generation = entry.generation;
 		if (entry.writerController !== controller) {
 			entry.writerController = controller;
 			entry.writer = undefined;
@@ -681,6 +869,12 @@ class LiveManager implements LiveSessionManagerImpl {
 				if (!writer) entry.writerController = undefined;
 			}
 		}
+		if (
+			entry.generation !== generation ||
+			!entry.conn?.open ||
+			entry.controller !== controller
+		)
+			return;
 		this.markStep(entry, "reading_services", "active");
 		await this.inspect(entry, "operation");
 	}
@@ -718,7 +912,12 @@ class LiveManager implements LiveSessionManagerImpl {
 		else if (totalDemand(entry) > 0 || hasTasks(entry))
 			this.scheduleRetry(entry, cause);
 		else this.setState(entry, { kind: "idle" });
-		return new LiveCallError(liveErrorCode(cause), failure.message, cause);
+		return new LiveCallError(
+			liveErrorCode(cause),
+			failure.message,
+			cause,
+			managementFailureDiagnostic(error),
+		);
 	}
 
 	private scheduleRetry(entry: Entry, cause: LiveError): void {
@@ -768,6 +967,8 @@ class LiveManager implements LiveSessionManagerImpl {
 	/** Break-then-make: each grant has only two connection slots (IA §3.2, D12). */
 	private async renew(entry: Entry): Promise<LiveConnection> {
 		const conn = entry.conn;
+		const data = conn?.detachDataTunnel?.();
+		if (data) entry.dataTunnel = data;
 		if (conn)
 			this.setState(entry, {
 				kind: "renewing",
@@ -775,7 +976,13 @@ class LiveManager implements LiveSessionManagerImpl {
 				expiresAt: conn.expiresAt,
 			});
 		this.closeConnection(entry);
-		return this.connect(entry);
+		try {
+			return await this.connect(entry);
+		} catch (error) {
+			entry.dataTunnel?.close();
+			entry.dataTunnel = undefined;
+			throw error;
+		}
 	}
 
 	/** The connection stops being the entry's before it closes, so its close event is not taken for a drop. */
@@ -866,10 +1073,11 @@ class LiveManager implements LiveSessionManagerImpl {
 		const result = deferred<ManagementResponse>();
 		const task: RequestTask = {
 			kind: "request",
+			generation: entry.generation,
 			lane,
 			command,
 			operationId,
-			idempotent: options.idempotent ?? READ_COMMANDS.has(String(command.type)),
+			idempotent: options.idempotent ?? isReadCommand(command),
 			retried: false,
 			signal: options.signal,
 			track: options.trackUnconfirmed,
@@ -888,10 +1096,20 @@ class LiveManager implements LiveSessionManagerImpl {
 	}
 
 	private dequeue(entry: Entry): Task | undefined {
+		const exclusiveWaiting = LANES.some((lane) =>
+			entry.queues[lane].some((task) => task.kind === "exclusive"),
+		);
 		for (const lane of LANES) {
 			const queue = entry.queues[lane];
 			while (queue.length) {
-				const task = queue.shift() as Task;
+				const index = queue.findIndex((task) => {
+					if (task.kind === "exclusive") return entry.bulkActive === 0;
+					if (!entry.conn?.requestData || !isTunnelReadCommand(task.command))
+						return true;
+					return !exclusiveWaiting && entry.bulkActive < 8;
+				});
+				if (index < 0) break;
+				const task = queue.splice(index, 1)[0] as Task;
 				if (task.kind === "request" && task.coalesceKey)
 					entry.coalesced.delete(task.coalesceKey);
 				if (task.signal?.aborted) {
@@ -926,7 +1144,14 @@ class LiveManager implements LiveSessionManagerImpl {
 				const task = this.dequeue(entry);
 				if (!task) break;
 				if (task.kind === "exclusive") await this.runExclusive(entry, task);
-				else await this.runRequest(entry, task);
+				else if (entry.conn?.requestData && isTunnelReadCommand(task.command)) {
+					entry.bulkActive++;
+					void this.runRequest(entry, task).finally(() => {
+						entry.bulkActive--;
+						if (!entry.draining) this.afterDrain(entry);
+						if (hasTasks(entry)) this.drain(entry).catch(() => {});
+					});
+				} else await this.runRequest(entry, task);
 			}
 		} finally {
 			entry.draining = false;
@@ -966,10 +1191,12 @@ class LiveManager implements LiveSessionManagerImpl {
 		const call: ManagementCall = (command, operationId) => {
 			const next = chain.then(() =>
 				this.transmit(entry, {
+					generation: task.generation,
+					signal: task.signal,
 					lane: task.lane,
 					command,
 					operationId,
-					idempotent: READ_COMMANDS.has(String(command.type)),
+					idempotent: isReadCommand(command),
 					retried: false,
 				}),
 			);
@@ -991,13 +1218,40 @@ class LiveManager implements LiveSessionManagerImpl {
 		entry: Entry,
 		task: Pick<
 			RequestTask,
-			"lane" | "command" | "operationId" | "idempotent" | "retried" | "track"
+			| "lane"
+			| "command"
+			| "operationId"
+			| "idempotent"
+			| "retried"
+			| "track"
+			| "signal"
+			| "generation"
 		>,
 	): Promise<ManagementResponse> {
 		for (;;) {
+			if (task.generation !== entry.generation)
+				throw new LiveCallError(
+					"session_closed",
+					"The live session was closed.",
+				);
+			if (task.signal?.aborted) throw abortError(task.signal);
 			const conn = await this.sessionFor(entry);
+			if (task.generation !== entry.generation)
+				throw new LiveCallError(
+					"session_closed",
+					"The live session was closed.",
+				);
 			try {
-				return await conn.request(task.command, task.operationId);
+				const response = await (conn.requestData &&
+				isTunnelReadCommand(task.command)
+					? conn.requestData(task.command, task.operationId, task.signal)
+					: conn.request(task.command, task.operationId));
+				if (task.generation !== entry.generation)
+					throw new LiveCallError(
+						"session_closed",
+						"The live session was closed.",
+					);
+				return response;
 			} catch (error) {
 				if (!task.retried && this.retryable(conn, task, error)) {
 					task.retried = true;
@@ -1071,6 +1325,7 @@ class LiveManager implements LiveSessionManagerImpl {
 		entry: Entry,
 		lane: CallLane,
 	): Promise<void> {
+		const generation = entry.generation;
 		let rejection: ManagementRejection | undefined;
 		const call = this.call(entry.id, { lane, idempotent: true });
 		const tracked: ManagementCall = async (command, operationId) => {
@@ -1084,11 +1339,13 @@ class LiveManager implements LiveSessionManagerImpl {
 				expectedPlacements: previous?.value.placements.length,
 				now: () => Math.round(this.ports.clock.now()),
 				onPage: (pages) => {
+					if (entry.generation !== generation) return;
 					if (entry.inspection)
 						entry.inspection = { ...entry.inspection, progress: { pages } };
 					this.notify();
 				},
 			});
+			if (entry.generation !== generation) return;
 			const inspection: LiveInspection = {
 				value,
 				readAt: Math.floor(this.ports.clock.now() / 1000),
@@ -1098,6 +1355,7 @@ class LiveManager implements LiveSessionManagerImpl {
 			this.retain(entry, value);
 			this.options.onInspection?.(entry.id, inspection);
 		} catch (error) {
+			if (entry.generation !== generation) return;
 			this.inspectionFailed(entry, error, rejection);
 		}
 	}
@@ -1168,7 +1426,11 @@ class LiveManager implements LiveSessionManagerImpl {
 	}
 
 	private shutdown(entry: Entry, error: LiveCallError): void {
+		entry.generation++;
+		entry.inspectAgain = false;
 		entry.abort?.abort();
+		entry.dataTunnel?.close();
+		entry.dataTunnel = undefined;
 		this.closeConnection(entry);
 		for (const name of Object.keys(entry.timers) as TimerName[])
 			if (name !== "inspect") this.cancel(entry, name);

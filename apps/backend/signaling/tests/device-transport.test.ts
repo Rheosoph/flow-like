@@ -137,6 +137,93 @@ const opaque = Buffer.from([0, 255, 1, 2, 3]).toString("base64url");
 const frame = (to: string) =>
 	JSON.stringify({ type: "frame", to, channel: "noise", payload: opaque });
 
+test("tunnel frames and management remain routable after in-place lease renewal", async () => {
+	try {
+		const server = await replica();
+		const device = await connection(server.port, "device", "device", 1, 2);
+		const controller = await connection(
+			server.port,
+			"controller",
+			"studio",
+			1,
+			2,
+		);
+		for (const [peer, role, participant] of [
+			[device, "device", "device"],
+			[controller, "controller", "studio"],
+		] as const) {
+			const renewedToken = await credential(role, participant);
+			peer.socket.send(
+				JSON.stringify({
+					type: "reauthorize",
+					token: renewedToken,
+				}),
+			);
+			await eventually(
+				() => peer.messages.find((message) => message.type === "reauthorized"),
+				"in-place renewal",
+			);
+			if (role === "controller") {
+				const duplicate = new WebSocket(
+					`ws://127.0.0.1:${server.port}/ws/devices`,
+					{
+						protocols: [
+							DEVICE_SIGNALING_PROTOCOL,
+							`flowlike.jwt.${renewedToken}`,
+						],
+						headers: { Origin: origin },
+					},
+				);
+				channels.add(duplicate);
+				let refused: boolean | undefined;
+				duplicate.onerror = () => {
+					refused = true;
+				};
+				duplicate.onopen = () => {
+					refused = false;
+				};
+				expect(
+					await eventually(
+						() => refused,
+						"renewal ticket keeps its exclusive slot",
+					),
+				).toBe(true);
+			}
+		}
+		await Bun.sleep(2200);
+		expect(device.closed()).toBeUndefined();
+		expect(controller.closed()).toBeUndefined();
+		controller.socket.send(
+			JSON.stringify({
+				type: "frame",
+				to: "device",
+				channel: "tunnel",
+				payload: opaque,
+			}),
+		);
+		await eventually(
+			() => device.messages.find((message) => message.channel === "tunnel"),
+			"tunnel after renewal",
+		);
+		controller.socket.send(frame("device"));
+		await eventually(
+			() => device.messages.find((message) => message.channel === "noise"),
+			"management after renewal",
+		);
+		controller.socket.send(
+			JSON.stringify({
+				type: "reauthorize",
+				token: await credential("controller", "other"),
+			}),
+		);
+		expect(
+			await eventually(controller.closed, "renewal cannot change participant"),
+		).toBe(1008);
+	} finally {
+		await cleanup();
+	}
+}, 15_000);
+
 test("dedicated management sockets enforce routing, expiry and replacement credentials", async () => {
 	try {
 		const server = await replica();

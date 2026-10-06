@@ -1,12 +1,13 @@
 "use client";
 
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { stopAllFrontendAudio } from "../lib/frontend-audio";
+import { useClientSearchParams } from "../lib/set-query-params";
 
 export function FrontendAudioLifecycle({ scope }: { scope: string }) {
 	const pathname = usePathname();
-	const search = useSearchParams()?.toString() ?? "";
+	const search = useClientSearchParams()?.toString() ?? "";
 	// Playback belongs to the screen and account that started its Event.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Changes invalidate sounds and pending requests from the previous screen.
 	useEffect(() => {

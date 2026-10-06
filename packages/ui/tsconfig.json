@@ -1,6 +1,5 @@
 {
 	"compilerOptions": {
-		"ignoreDeprecations": "6.0",
 		// Enable latest features
 		"lib": ["ESNext", "DOM", "DOM.Iterable"],
 		"target": "ESNext",
@@ -15,7 +14,6 @@
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true,
 		"noEmit": true,
-		"baseUrl": ".",
 		"paths": {
 			"@/*": ["./*"]
 		},

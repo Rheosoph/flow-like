@@ -374,10 +374,10 @@ describe("Where · Endpoints, one-time schedules and bots (R2 §6.2)", () => {
 		const view = await where(SHOP, { device: EDGE }, { apps });
 		await view.settle();
 		const sentence =
-			"Orders has its own token in Events. On edge-berlin-01 everyone with shop-assistant's access token can call it, like every other endpoint, page and chat of shop-assistant.";
+			"Orders has its own token in Events. On edge-berlin-01 it uses shop-assistant's access settings, like every other endpoint, Page and chat of shop-assistant. Its token from Events is not used.";
 		expect(text(view.container)).toContain(sentence);
 		expect(kit.footBlocking(view.container)).toBe(
-			"Confirm on edge-berlin-01 that an Endpoint with its own token shares the service's access token, or deploy it as its own service.",
+			"Confirm on edge-berlin-01 that the Endpoint uses the service's access settings. Its token from Events is not used.",
 		);
 		await click(
 			byRole("button", "Deploy it as its own service", view.container),

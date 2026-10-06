@@ -14,6 +14,7 @@ import {
 	inventoryScopeKey,
 } from "./inventory";
 import type { PlacementStatusPlus } from "./model/types";
+import { type ModelsSummary, modelsSummarySchema } from "./models";
 import {
 	type DeviceAccountScope,
 	type LocalDeviceVault,
@@ -45,6 +46,8 @@ export interface FleetMetrics {
 	scope: FleetAudience["scope"];
 	observedAt: number;
 	sample: Record<string, unknown>;
+	/** The model host's counters; only device metrics of model readers carry them (plan §3.6). */
+	models?: ModelsSummary;
 }
 export interface OpenFleet {
 	observations: RetainedObservation[];
@@ -389,10 +392,16 @@ function metricsSample(
 		value.metrics.records.length > 1024
 	)
 		throw new SnapshotIntegrityError("Invalid fleet metrics.");
+	// A summary this client can't read is left out; the metrics stay.
+	const models =
+		manifest.audience.scope.kind === "device"
+			? modelsSummarySchema.safeParse(value.metrics.models)
+			: undefined;
 	return {
 		scope: manifest.audience.scope,
 		observedAt: manifest.observed_at,
 		sample: value.metrics,
+		...(models?.success ? { models: models.data } : {}),
 	};
 }
 

@@ -17,10 +17,15 @@ export const MLX_PROVIDER_NAMES: ReadonlySet<string> = new Set(["mlx"]);
 export const LOCAL_LLM_PROVIDER_NAMES: ReadonlySet<string> =
 	LLAMA_CPP_PROVIDER_NAMES;
 
+/** Provider of Bits a model host on one of the user's devices serves (plan §3.8). */
+export const DEVICE_PROVIDER_NAME = "device";
+
 export interface LocalModelHostCapabilities {
 	canHostLlamaCPP: boolean;
 	canHostMLX: boolean;
 	canUseNativeAgentProviders?: boolean;
+	/** `ICapabilities.deviceModels`: this host can reach a device's models (the desktop connector); never the web. */
+	deviceModels?: boolean;
 }
 
 function normalizedProviderName(bit: IBit): string | undefined {
@@ -49,6 +54,18 @@ export function isLocalLlmModel(bit: IBit): boolean {
 	return isLlamaCppLlmModel(bit) || isMlxLlmModel(bit);
 }
 
+/** A Bit served by a model host on one of the user's devices: LLM, VLM or embedding. */
+export function isDeviceModelBit(bit: IBit): boolean {
+	return normalizedProviderName(bit) === DEVICE_PROVIDER_NAME;
+}
+
+/** The device a device Bit's model runs on; `undefined` for any other Bit. */
+export function deviceOfModelBit(bit: IBit): string | undefined {
+	if (!isDeviceModelBit(bit)) return undefined;
+	const deviceId = bit.parameters?.provider?.params?.device_id;
+	return typeof deviceId === "string" && deviceId ? deviceId : undefined;
+}
+
 /** Whether the hub can run this model itself, whatever the client can host. */
 export function hasRemoteImplementation(bit: IBit): boolean {
 	return Boolean(bit.parameters?.remote);
@@ -61,6 +78,9 @@ export function isHostableLlmModel(
 	if (normalizedProviderName(bit) === "custom:claude-code") {
 		return capabilities.canUseNativeAgentProviders === true;
 	}
+	// Only a host with a device connector reaches a device's models; runs
+	// elsewhere (the web, the cloud) skip them (plan §3.8).
+	if (isDeviceModelBit(bit)) return capabilities.deviceModels === true;
 	if (isMlxLlmModel(bit)) return capabilities.canHostMLX;
 	if (!isLlamaCppLlmModel(bit)) return true;
 	if (capabilities.canHostLlamaCPP) return true;
@@ -110,7 +130,8 @@ export function filterHostableLlmModels(
 	if (
 		capabilities.canHostLlamaCPP &&
 		capabilities.canHostMLX &&
-		capabilities.canUseNativeAgentProviders
+		capabilities.canUseNativeAgentProviders &&
+		capabilities.deviceModels
 	)
 		return models;
 	return models.filter((model) => isHostableLlmModel(model, capabilities));

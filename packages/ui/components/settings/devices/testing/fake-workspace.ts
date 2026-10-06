@@ -681,6 +681,10 @@ function createController(
 			alive();
 			return fakeHandshake(grantId, bundle.controller_key);
 		},
+		beginTunnelNoise: (grantId) => {
+			alive();
+			return fakeHandshake(grantId, bundle.controller_key);
+		},
 		createTelemetry: () => fakeMlsEndpoint(),
 		openTelemetry: () => fakeMlsEndpoint(),
 		close() {

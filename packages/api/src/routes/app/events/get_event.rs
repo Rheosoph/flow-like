@@ -10,6 +10,7 @@ use flow_like::flow::event::Event;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
+use super::current_inputs::event_with_current_inputs;
 use super::db::{
     filter_event_list_execution, filter_event_secrets, get_event_from_db_opt,
     redact_page_event_board_metadata, sync_event_to_db,
@@ -127,6 +128,7 @@ pub async fn get_event(
             .map_err(|error| map_missing_event_artifact(&event_id, error))?
     };
 
+    let event = event_with_current_inputs(&state, &app_id, event).await;
     let event = filter_event_secrets(event);
     let mut event = if has_read {
         event

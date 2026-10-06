@@ -1,10 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	ApiResponseError,
+	PLAN_LIMIT_EVENT,
 	UPSTREAM_UNAVAILABLE_CODE,
 	apiResponseError,
 	isMissingResourceError,
 	isTransportFailure,
+	isUpgradeRequiredError,
+	quietPlanLimit,
 	upstreamFailureInSuccess,
 } from "./api-error";
 
@@ -121,6 +124,89 @@ describe("apiResponseError retryAfter", () => {
 		);
 		expect(error.retryAfter).toBe(7);
 		expect(error.serverMessage).toBe("slow down");
+	});
+});
+
+describe("quietPlanLimit", () => {
+	const globals = globalThis as { window?: unknown };
+	const hadWindow = "window" in globals;
+	const previousWindow = globals.window;
+	const concurrency = "concurrent_cloud_executions";
+	let announced: string[] = [];
+	let holders: (() => void)[] = [];
+
+	const quiet = (resource: string) => {
+		const release = quietPlanLimit(resource);
+		holders.push(release);
+		return release;
+	};
+
+	const refusal = (resource: string) =>
+		apiResponseError(
+			{ status: 402, statusText: "Payment Required", headers: new Headers() },
+			JSON.stringify({
+				error: {
+					code: "PLAN_LIMIT_EXCEEDED",
+					message: "Every cloud run of your plan is in use",
+					quota: {
+						resource,
+						scope: "account",
+						payerId: "payer",
+						plan: "FREE",
+						used: 2,
+						reserved: 0,
+						limit: 2,
+						unit: "executions",
+					},
+				},
+			}),
+			"apps/a/events/e/invoke",
+		);
+
+	beforeEach(() => {
+		announced = [];
+		holders = [];
+		const target = new EventTarget();
+		target.addEventListener(PLAN_LIMIT_EVENT, (event) => {
+			const { detail } = event as CustomEvent<ApiResponseError>;
+			announced.push(detail.quota?.resource ?? "");
+		});
+		globals.window = Object.assign(target, { CustomEvent });
+	});
+
+	afterEach(() => {
+		for (const release of holders) release();
+		if (hadWindow) globals.window = previousWindow;
+		else Reflect.deleteProperty(globals, "window");
+	});
+
+	test("a plan limit opens the upgrade dialog while nothing holds it quiet", () => {
+		refusal(concurrency);
+		expect(announced).toEqual([concurrency]);
+	});
+
+	test("a quiet resource stays out of the upgrade dialog, other resources do not", () => {
+		const release = quiet(concurrency);
+		const refused = refusal(concurrency);
+		refusal("cloud_runtime_ms");
+		release();
+
+		expect(announced).toEqual(["cloud_runtime_ms"]);
+		expect(isUpgradeRequiredError(refused)).toBe(true);
+		expect(refused.quota?.resource).toBe(concurrency);
+	});
+
+	test("the resource speaks again only after every holder released, each once", () => {
+		const first = quiet(concurrency);
+		const second = quiet(concurrency);
+		first();
+		first();
+		refusal(concurrency);
+		expect(announced).toEqual([]);
+
+		second();
+		refusal(concurrency);
+		expect(announced).toEqual([concurrency]);
 	});
 });
 

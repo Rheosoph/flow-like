@@ -1,4 +1,5 @@
 //! Imported revisions bind a complete initial project snapshot. Runtime databases may change later.
+use crate::models::acquire::AcquisitionManager;
 use crate::{enrollment::unix_time, state::StateStore, supervisor, vault};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -7,6 +8,11 @@ use flow_like_device_protocol::{
     PROJECT_ARTIFACT_TTL_SECONDS, ProjectArtifactDescriptor, ProjectArtifactManifest,
     artifact_sha256, validate_artifact_digest, validate_artifact_project_id,
     validate_artifact_prune,
+};
+use flow_like_device_protocol::{
+    MODEL_ASSET_MAX_SOURCES, MODEL_ENSURE_MAX_PINS, MODEL_MAX_PENDING_ASSETS, ModelAssetDescriptor,
+    ModelAssetDigest, ModelAssetState, ModelAssetSummary, PACKAGED_BIT_METADATA_MAX_BYTES,
+    PackagedBitMetadata, ProjectBitPin,
 };
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -27,6 +33,7 @@ const MAX_TRANSFERS_PER_PRINCIPAL: u64 = 256;
 const MAX_RECEIVING_BYTES_PER_PRINCIPAL: u64 = 16 * 1024 * 1024 * 1024;
 const MAX_RECEIVING: u64 = 64;
 const MAX_TRANSFERS: u64 = 4096;
+pub const RAW_ARTIFACT_CHUNK_BYTES: usize = 256 * 1024;
 
 fn artifact_lock(root: &Path) -> Result<File> {
     supervisor::lock_file_within(&root.join("artifact.lock"), ARTIFACT_LOCK_WAIT)
@@ -1486,6 +1493,33 @@ pub fn chunk(
         bytes.len() <= PROJECT_ARTIFACT_CHUNK_BYTES && URL_SAFE_NO_PAD.encode(&bytes) == data,
         "Invalid artifact chunk encoding"
     );
+    chunk_bytes(
+        store,
+        root,
+        project,
+        transfer_id,
+        owner,
+        index,
+        offset,
+        &bytes,
+    )
+}
+
+/// Tunnel uploads use raw bytes and retain the same durable offsets and checksum checks.
+pub fn chunk_bytes(
+    store: &StateStore,
+    root: &Path,
+    project: &str,
+    transfer_id: &str,
+    owner: &str,
+    index: Option<u32>,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<ArtifactTransferStatus> {
+    ensure!(
+        bytes.len() <= RAW_ARTIFACT_CHUNK_BYTES,
+        "Artifact chunk exceeds its bound"
+    );
     let mut pending = {
         let _lock = artifact_lock(root)?;
         let value = load(store, transfer_id, project, owner, false)?;
@@ -1515,7 +1549,7 @@ pub fn chunk(
             );
         } else {
             file.seek(SeekFrom::Start(offset))?;
-            file.write_all(&bytes)?;
+            file.write_all(bytes)?;
             file.sync_all()?;
         }
         let verified = match &marker {
@@ -1643,6 +1677,24 @@ pub fn commit(
     transfer_id: &str,
     owner: &str,
 ) -> Result<ArtifactTransferStatus> {
+    commit_with(
+        store,
+        root,
+        project,
+        transfer_id,
+        owner,
+        model_store_supported(),
+    )
+}
+
+fn commit_with(
+    store: &StateStore,
+    root: &Path,
+    project: &str,
+    transfer_id: &str,
+    owner: &str,
+    model_store: bool,
+) -> Result<ArtifactTransferStatus> {
     let _lock = artifact_lock(root)?;
     let value = load(store, transfer_id, project, owner, true)?;
     if value.state == ArtifactTransferState::Committed {
@@ -1683,7 +1735,7 @@ pub fn commit(
     } else {
         final_path.clone()
     };
-    validate_selected_assets(&verification_root, &manifest)?;
+    validate_selected_assets(&verification_root, &manifest, model_store)?;
     let canonical = manifest.canonical_bytes()?;
     ensure!(
         !final_path.try_exists()? || receipt.try_exists()?,
@@ -1810,88 +1862,46 @@ fn selected_source(root: &Path, relative: &str) -> Result<PathBuf> {
     }
     Ok(path)
 }
-fn metadata_assets(
-    bytes: &[u8],
-    pin: &flow_like_device_protocol::ProjectBitPin,
-) -> Result<std::collections::BTreeMap<String, (u64, String)>> {
+/// The metadata a pin names, checked against its digest and against the files it lists.
+pub(crate) fn packaged_metadata(bytes: &[u8], pin: &ProjectBitPin) -> Result<PackagedBitMetadata> {
     ensure!(
-        bytes.len() <= 16 * 1024 * 1024 && artifact_sha256(bytes) == pin.metadata_sha256,
+        bytes.len() as u64 <= PACKAGED_BIT_METADATA_MAX_BYTES
+            && artifact_sha256(bytes) == pin.metadata_sha256,
         "Selected Bit metadata digest differs"
     );
-    let value: serde_json::Value = serde_json::from_slice(bytes)?;
-    let wrapper = value.as_object().context("Invalid Bit metadata")?;
-    ensure!(
-        wrapper.len() == 3
-            && wrapper.contains_key("bit")
-            && wrapper.contains_key("dependencies")
-            && wrapper.contains_key("artifacts"),
-        "Invalid Bit metadata fields"
-    );
-    let bit = value.get("bit").context("Missing Bit metadata")?;
-    ensure!(
-        bit.get("id").and_then(serde_json::Value::as_str) == Some(pin.bit_id.as_str()),
-        "Selected Bit identity differs"
-    );
-    let dependencies = value
-        .get("dependencies")
-        .and_then(serde_json::Value::as_array)
-        .context("Missing Bit dependencies")?;
-    ensure!(
-        dependencies.len() <= 2048,
-        "Too many selected Bit dependencies"
-    );
-    let mut paths = std::collections::BTreeMap::new();
-    for bit in std::iter::once(bit).chain(dependencies.iter()) {
-        if let Some(name) = bit.get("file_name").filter(|v| !v.is_null()) {
-            let name = name.as_str().context("Invalid Bit asset name")?;
-            let hash = bit
-                .get("hash")
-                .and_then(serde_json::Value::as_str)
-                .context("Missing Bit asset hash")?;
-            ensure!(
-                !hash.contains('/') && hash != "metadata" && hash != "deps-cache",
-                "Invalid selected Bit asset path"
-            );
-            let path = format!("bits/{hash}/{name}");
-            flow_like_device_protocol::validate_artifact_relative_path(&path)?;
-            let size = bit
-                .get("size")
-                .filter(|v| !v.is_null())
-                .map(|v| v.as_u64().context("Invalid Bit asset size"))
-                .transpose()?;
-            if let Some(previous) = paths.insert(path, size) {
-                ensure!(previous == size, "Conflicting selected Bit assets");
-            }
-        }
-    }
-    let artifacts: Vec<flow_like_device_protocol::ProjectArtifactFile> = serde_json::from_value(
-        value
-            .get("artifacts")
-            .context("Missing Bit asset digests")?
-            .clone(),
-    )?;
-    ensure!(
-        artifacts.len() <= 2048 && artifacts.len() == paths.len(),
-        "Bit assets must match metadata exactly"
-    );
-    let mut selected = std::collections::BTreeMap::new();
-    for file in artifacts {
-        let size = paths
-            .get(&file.path)
-            .context("Unselected Bit asset digest")?;
-        validate_artifact_digest(&file.sha256)?;
-        ensure!(
-            size.is_none_or(|size| size == file.size)
-                && file.size <= flow_like_device_protocol::PROJECT_ARTIFACT_MAX_FILE_BYTES
-                && selected
-                    .insert(file.path, (file.size, file.sha256))
-                    .is_none(),
-            "Selected Bit asset size or identity differs"
-        );
-    }
-    Ok(selected)
+    let metadata: PackagedBitMetadata = serde_json::from_slice(bytes)
+        .with_context(|| format!("Read the metadata of Bit {}", pin.bit_id))?;
+    metadata
+        .validate(&pin.bit_id)
+        .with_context(|| format!("Check the metadata of Bit {}", pin.bit_id))?;
+    Ok(metadata)
 }
-fn read_selected_metadata(
+
+/// The agent advertises its model store once placements can use it; only then may metadata
+/// leave model weights out of the artifact.
+fn model_store_supported() -> bool {
+    crate::diagnostics::model_host_available()
+}
+
+/// The artifact files a pin's metadata lists, by path.
+fn metadata_assets(
+    bytes: &[u8],
+    pin: &ProjectBitPin,
+    model_store: bool,
+) -> Result<std::collections::BTreeMap<String, (u64, String)>> {
+    let metadata = packaged_metadata(bytes, pin)?;
+    ensure!(
+        model_store || matches!(metadata, PackagedBitMetadata::V1(_)),
+        "Bit {} uses metadata version 2, whose model assets need an agent with a model store",
+        pin.bit_id
+    );
+    Ok(metadata
+        .artifacts()
+        .iter()
+        .map(|file| (file.path.clone(), (file.size, file.sha256.clone())))
+        .collect())
+}
+pub(crate) fn read_selected_metadata(
     root: &Path,
     pin: &flow_like_device_protocol::ProjectBitPin,
 ) -> Result<Vec<u8>> {
@@ -1912,30 +1922,20 @@ fn read_selected_metadata(
     file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
-fn validate_selected_assets(root: &Path, manifest: &ProjectArtifactManifest) -> Result<()> {
+/// Every Bit file the pinned metadata lists as an artifact file is in the manifest, and the
+/// manifest holds no other Bit file. Model-store assets are not artifact files.
+fn validate_selected_assets(
+    root: &Path,
+    manifest: &ProjectArtifactManifest,
+    model_store: bool,
+) -> Result<()> {
     if manifest.source == flow_like_device_protocol::ProjectArtifactSource::Online {
-        let path = selected_source(
-            root,
-            &format!("apps/{}/online-source.json", manifest.project_id),
-        )?;
-        let file = open(&path, false, false)?;
-        ensure!(
-            file.metadata()?.len() <= 512,
-            "Online source marker exceeds its bound"
-        );
-        let mut bytes = Vec::new();
-        file.take(513).read_to_end(&mut bytes)?;
-        let marker: serde_json::Value = serde_json::from_slice(&bytes)?;
-        ensure!(
-            marker
-                == serde_json::json!({"version":1,"project_id":manifest.project_id,"source":"online"}),
-            "Online source marker differs from its artifact"
-        );
+        validate_online_marker(root, manifest)?;
     }
     let mut selected = std::collections::BTreeMap::new();
     for pin in &manifest.bit_pins {
         let bytes = read_selected_metadata(root, pin)?;
-        for (path, size) in metadata_assets(&bytes, pin)? {
+        for (path, size) in metadata_assets(&bytes, pin, model_store)? {
             if let Some(previous) = selected.insert(path, size.clone()) {
                 ensure!(previous == size, "Conflicting selected Bit asset sizes");
             }
@@ -1959,6 +1959,242 @@ fn validate_selected_assets(root: &Path, manifest: &ProjectArtifactManifest) -> 
         }
     }
     Ok(())
+}
+
+/// An online revision carries its source marker and nothing else names its source.
+fn validate_online_marker(root: &Path, manifest: &ProjectArtifactManifest) -> Result<()> {
+    let path = selected_source(
+        root,
+        &format!("apps/{}/online-source.json", manifest.project_id),
+    )?;
+    let file = open(&path, false, false)?;
+    ensure!(
+        file.metadata()?.len() <= 512,
+        "Online source marker exceeds its bound"
+    );
+    let mut bytes = Vec::new();
+    file.take(513).read_to_end(&mut bytes)?;
+    let marker: serde_json::Value = serde_json::from_slice(&bytes)?;
+    ensure!(
+        marker
+            == serde_json::json!({"version":1,"project_id":manifest.project_id,"source":"online"}),
+        "Online source marker differs from its artifact"
+    );
+    Ok(())
+}
+
+/// `Models.Ensure`, the deploy step after an upload: starts or joins the acquisition of every
+/// model-store asset that the pinned Bits name, deduplicated by digest. Each pin must belong to
+/// a committed revision of the project; metadata v1 names no assets.
+pub async fn ensure_project_models(
+    root: &Path,
+    acquisition: &AcquisitionManager,
+    project_id: &str,
+    pins: &[ProjectBitPin],
+    operation_id: Option<&str>,
+) -> Result<ModelAssetSummary> {
+    let assets = {
+        let (root, project, pins) = (root.to_owned(), project_id.to_owned(), pins.to_vec());
+        tokio::task::spawn_blocking(move || committed_model_assets(&root, &project, &pins))
+            .await??
+    };
+    summarize(acquisition, &assets, project_id, operation_id)
+        .with_context(|| format!("Ensure the models of project {project_id}"))
+}
+
+/// One job per asset, started or joined; present assets are counted, the others listed.
+/// The project leases each asset, so a collection under disk pressure keeps the files a
+/// deploy fetched until its placement starts and references them.
+fn summarize(
+    acquisition: &AcquisitionManager,
+    assets: &[ModelAssetDescriptor],
+    project_id: &str,
+    operation_id: Option<&str>,
+) -> Result<ModelAssetSummary> {
+    let mut summary = ModelAssetSummary {
+        total: u32::try_from(assets.len())?,
+        present: 0,
+        pending: Vec::new(),
+    };
+    for asset in assets {
+        acquisition.store().lease(&asset.digest, project_id)?;
+        let status = acquisition.ensure(asset, operation_id)?;
+        if status.state == ModelAssetState::Present {
+            summary.present += 1;
+        } else if summary.pending.len() < MODEL_MAX_PENDING_ASSETS {
+            summary.pending.push(status);
+        }
+    }
+    summary.validate()?;
+    Ok(summary)
+}
+
+fn committed_model_assets(
+    root: &Path,
+    project: &str,
+    pins: &[ProjectBitPin],
+) -> Result<Vec<ModelAssetDescriptor>> {
+    validate_artifact_project_id(project)?;
+    ensure!(
+        (1..=MODEL_ENSURE_MAX_PINS).contains(&pins.len()),
+        "Ensure models: {} Bit pins, expected 1 to {MODEL_ENSURE_MAX_PINS}",
+        pins.len()
+    );
+    for pin in pins {
+        pin.validate()?;
+    }
+    let mut assets: Vec<ModelAssetDescriptor> = Vec::new();
+    let mut listed = std::collections::HashMap::<ModelAssetDigest, usize>::new();
+    for metadata in committed_metadata(root, project, pins)? {
+        #[cfg(feature = "runtime")]
+        crate::models::router::validate_packaged_model(&metadata)?;
+        for asset in metadata.assets() {
+            let descriptor = &asset.descriptor;
+            let Some(&index) = listed.get(&descriptor.digest) else {
+                listed.insert(descriptor.digest.clone(), assets.len());
+                assets.push(descriptor.clone());
+                continue;
+            };
+            merge_sources(&mut assets[index], descriptor)?;
+        }
+    }
+    Ok(assets)
+}
+
+/// Two Bits naming the same digest name the same bytes; their sources add up.
+fn merge_sources(known: &mut ModelAssetDescriptor, other: &ModelAssetDescriptor) -> Result<()> {
+    ensure!(
+        known.size == other.size,
+        "Model asset {} is pinned with {} and with {} bytes",
+        known.digest.store_key(),
+        known.size,
+        other.size
+    );
+    for source in &other.sources {
+        if known.sources.len() < MODEL_ASSET_MAX_SOURCES && !known.sources.contains(source) {
+            known.sources.push(source.clone());
+        }
+    }
+    Ok(())
+}
+
+/// The metadata of each pin, read from a committed revision whose manifest pins it.
+fn committed_metadata(
+    root: &Path,
+    project: &str,
+    pins: &[ProjectBitPin],
+) -> Result<Vec<PackagedBitMetadata>> {
+    let _lock = artifact_lock(root)?;
+    let mut found: Vec<Option<PackagedBitMetadata>> = vec![None; pins.len()];
+    if let Some(revisions) = project_revisions(root, project)? {
+        scan_revisions(&revisions, project, pins, &mut found)?;
+    }
+    pins.iter()
+        .zip(found)
+        .map(|(pin, metadata)| {
+            metadata.with_context(|| {
+                format!(
+                    "Ensure models: no committed revision of project {project} pins Bit {} with metadata {}",
+                    pin.bit_id, pin.metadata_sha256
+                )
+            })
+        })
+        .collect()
+}
+
+fn project_revisions(root: &Path, project: &str) -> Result<Option<PathBuf>> {
+    match project_home(root, project)? {
+        Some(home) => existing_directory(&home.join("revisions")),
+        None => Ok(None),
+    }
+}
+
+/// Reads the receipts of a project's revisions until every pin is found.
+fn scan_revisions(
+    revisions: &Path,
+    project: &str,
+    pins: &[ProjectBitPin],
+    found: &mut [Option<PackagedBitMetadata>],
+) -> Result<()> {
+    for (count, entry) in std::fs::read_dir(revisions)?.enumerate() {
+        ensure!(
+            count < 32_768,
+            "Project {project} exceeds its revision entry bound"
+        );
+        let name = entry?.file_name();
+        if let Some(digest) = name
+            .to_str()
+            .and_then(|text| text.strip_suffix(".manifest.json"))
+        {
+            read_pinned_metadata(revisions, project, digest, pins, found)?;
+        }
+        if found.iter().all(Option::is_some) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Fills in the pins that one committed revision carries.
+fn read_pinned_metadata(
+    revisions: &Path,
+    project: &str,
+    digest: &str,
+    pins: &[ProjectBitPin],
+    found: &mut [Option<PackagedBitMetadata>],
+) -> Result<()> {
+    let Some(manifest) = revision_receipt(revisions, project, digest)? else {
+        return Ok(());
+    };
+    let revision = revisions.join(digest);
+    for (pin, slot) in pins.iter().zip(found.iter_mut()) {
+        if slot.is_none() && manifest.bit_pins.contains(pin) {
+            *slot = Some(packaged_metadata(
+                &read_selected_metadata(&revision, pin)?,
+                pin,
+            )?);
+        }
+    }
+    Ok(())
+}
+
+/// The manifest of a committed revision, or `None` when only its receipt is left.
+fn revision_receipt(
+    revisions: &Path,
+    project: &str,
+    digest: &str,
+) -> Result<Option<ProjectArtifactManifest>> {
+    validate_artifact_digest(digest)?;
+    if !is_revision_directory(&revisions.join(digest)) {
+        return Ok(None);
+    }
+    let bytes = read_receipt(&revisions.join(format!("{digest}.manifest.json")))?;
+    parse_receipt(&bytes, project, digest).map(Some)
+}
+
+fn parse_receipt(bytes: &[u8], project: &str, digest: &str) -> Result<ProjectArtifactManifest> {
+    let manifest: ProjectArtifactManifest = serde_json::from_slice(bytes)
+        .with_context(|| format!("Read the receipt of revision {digest}"))?;
+    ensure!(
+        manifest.project_id == project
+            && manifest.canonical_bytes()? == bytes
+            && artifact_sha256(bytes) == digest,
+        "The receipt of revision {digest} differs from its revision"
+    );
+    Ok(manifest)
+}
+
+fn is_revision_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+}
+
+fn read_receipt(path: &Path) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    open(path, false, false)?
+        .take(flow_like_device_protocol::PROJECT_ARTIFACT_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Import an existing object-store root. Other projects and global user data are never copied.
@@ -2048,7 +2284,7 @@ pub fn import_local_selected(
         pin.validate()?;
         let metadata = read_selected_metadata(&source, pin)?;
         selected.insert(format!("bits/metadata/{}.json", pin.bit_id));
-        selected.extend(metadata_assets(&metadata, pin)?.into_keys());
+        selected.extend(metadata_assets(&metadata, pin, model_store_supported())?.into_keys());
     }
     for pin in &assets.package_pins {
         pin.validate()?;
@@ -2107,7 +2343,7 @@ pub fn import_local_selected(
         files,
     };
     let descriptor = manifest.descriptor()?;
-    validate_selected_assets(&source, &manifest)?;
+    validate_selected_assets(&source, &manifest, model_store_supported())?;
     let id = uuid::Uuid::new_v4().to_string();
     let owner = "local-cli";
     begin_as_device_owner(store, root, &id, owner, &descriptor)?;
@@ -2769,6 +3005,213 @@ mod tests {
         assert!(commit(&store, dir.path(), "project", &id, "controller").is_ok());
         assert!(send(0, b"hello").is_err());
     }
+
+    #[test]
+    fn raw_chunks_resume_after_restart_and_keep_transfer_authority_and_bounds() {
+        let (dir, store, manifest) = setup();
+        let bytes = (0..RAW_ARTIFACT_CHUNK_BYTES + 10003)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let manifest = variant(&manifest, "project", &bytes);
+        let id = uuid::Uuid::new_v4().to_string();
+        begin(
+            &store,
+            dir.path(),
+            &id,
+            "controller",
+            &manifest.descriptor().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                None,
+                0,
+                &manifest.canonical_bytes().unwrap()
+            )
+            .unwrap()
+            .manifest_ready
+        );
+        assert!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "intruder",
+                Some(0),
+                0,
+                &bytes[..16]
+            )
+            .is_err()
+        );
+        assert!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "other",
+                &id,
+                "controller",
+                Some(0),
+                0,
+                &bytes[..16]
+            )
+            .is_err()
+        );
+        assert!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                Some(0),
+                0,
+                &bytes[..RAW_ARTIFACT_CHUNK_BYTES + 1]
+            )
+            .is_err()
+        );
+        assert!(
+            chunk(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                Some(0),
+                0,
+                &URL_SAFE_NO_PAD.encode(&bytes[..PROJECT_ARTIFACT_CHUNK_BYTES + 1])
+            )
+            .is_err()
+        );
+        let first = chunk_bytes(
+            &store,
+            dir.path(),
+            "project",
+            &id,
+            "controller",
+            Some(0),
+            0,
+            &bytes[..RAW_ARTIFACT_CHUNK_BYTES],
+        )
+        .unwrap();
+        assert_eq!(first.offset, RAW_ARTIFACT_CHUNK_BYTES as u64);
+        assert!(!first.complete);
+        assert_eq!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                Some(0),
+                0,
+                &bytes[..RAW_ARTIFACT_CHUNK_BYTES]
+            )
+            .unwrap()
+            .offset,
+            first.offset
+        );
+        assert!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                Some(0),
+                first.offset + 1,
+                &[1]
+            )
+            .is_err()
+        );
+        assert!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                Some(0),
+                first.offset - 1,
+                &[1, 2]
+            )
+            .is_err()
+        );
+        drop(store);
+        let store = StateStore::open(&dir.path().join("management.sqlite")).unwrap();
+        assert_eq!(
+            status(&store, dir.path(), "project", &id, "controller", Some(0))
+                .unwrap()
+                .offset,
+            first.offset
+        );
+        let finished = chunk_bytes(
+            &store,
+            dir.path(),
+            "project",
+            &id,
+            "controller",
+            Some(0),
+            first.offset,
+            &bytes[RAW_ARTIFACT_CHUNK_BYTES..],
+        )
+        .unwrap();
+        assert!(finished.complete);
+        let committed = commit(&store, dir.path(), "project", &id, "controller").unwrap();
+        assert_eq!(
+            std::fs::read(
+                PathBuf::from(committed.project_path.unwrap()).join("apps/project/manifest.app")
+            )
+            .unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn raw_chunks_reset_corrupt_files_before_accepting_a_verified_retry() {
+        let (dir, store, manifest) = setup();
+        let bytes = vec![42; 64 * 1024];
+        let manifest = variant(&manifest, "project", &bytes);
+        let id = start(&store, dir.path(), &manifest);
+        let mut corrupted = bytes.clone();
+        corrupted[bytes.len() - 1] ^= 1;
+        let error = chunk_bytes(
+            &store,
+            dir.path(),
+            "project",
+            &id,
+            "controller",
+            Some(0),
+            0,
+            &corrupted,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("SHA256 differs"));
+        let reset = status(&store, dir.path(), "project", &id, "controller", Some(0)).unwrap();
+        assert_eq!(reset.offset, 0);
+        assert!(!reset.complete);
+        assert!(reset.manifest_ready);
+        assert!(
+            chunk_bytes(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                Some(0),
+                0,
+                &bytes
+            )
+            .unwrap()
+            .complete
+        );
+        assert!(commit(&store, dir.path(), "project", &id, "controller").is_ok());
+    }
     #[test]
     fn corrupt_file_resets_only_that_file_and_enforces_transfer_quota() {
         let (dir, store, m) = setup();
@@ -2998,7 +3441,7 @@ mod tests {
                 bit_id: "model".into(),
                 metadata_sha256: artifact_sha256(&metadata),
             };
-            assert!(metadata_assets(&metadata, &pin).is_err(), "{name}");
+            assert!(metadata_assets(&metadata, &pin, true).is_err(), "{name}");
         }
     }
 
@@ -3337,5 +3780,245 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+    }
+
+    mod model_store {
+        use super::*;
+        use crate::models::{
+            acquire::{AcquisitionConfig, AcquisitionManager},
+            db::{AssetOwner, OwnerKind},
+            fetch::{AddressPolicy, Fetcher},
+            store::{ModelStore, ModelStoreConfig},
+        };
+        use flow_like_device_protocol::DigestAlgorithm;
+
+        /// Refused by the production address policy at once, so the job fails without network.
+        const UNREACHABLE: &str = "https://127.0.0.1:9/model.gguf";
+
+        fn weights(bytes: &[u8]) -> ModelAssetDescriptor {
+            ModelAssetDescriptor {
+                digest: ModelAssetDigest {
+                    algorithm: DigestAlgorithm::Blake3,
+                    hex: blake3::hash(bytes).to_hex().to_string(),
+                },
+                size: bytes.len() as u64,
+                file_name: "model.gguf".into(),
+                sources: vec![UNREACHABLE.into()],
+            }
+        }
+
+        /// Metadata v2 whose weights are a model-store asset and whose tokenizer, when given,
+        /// is an artifact file.
+        fn metadata(
+            bit_id: &str,
+            asset: &ModelAssetDescriptor,
+            tokenizer: Option<&[u8]>,
+        ) -> Vec<u8> {
+            let mut value = json!({
+                "version": 2,
+                "bit": {"id": bit_id, "hash": "weights-hash", "file_name": "model.gguf",
+                        "size": asset.size},
+                "dependencies": [],
+                "assets": [{"bit_id": bit_id, "descriptor": asset}],
+            });
+            if let Some(tokenizer) = tokenizer {
+                value["dependencies"] = json!([{"id": "tokenizer", "hash": "tokenizer-hash",
+                    "file_name": "tokenizer.json", "size": tokenizer.len()}]);
+                value["artifacts"] = json!([{"path": "bits/tokenizer-hash/tokenizer.json",
+                    "size": tokenizer.len(), "sha256": artifact_sha256(tokenizer)}]);
+            }
+            serde_json::to_vec(&value).unwrap()
+        }
+
+        fn v1_metadata() -> Vec<u8> {
+            serde_json::to_vec(&json!({
+                "bit": {"id": "model", "hash": "hash", "file_name": "model.bin", "size": 7},
+                "dependencies": [],
+                "artifacts": [{"path": "bits/hash/model.bin", "size": 7,
+                               "sha256": artifact_sha256(b"weights")}],
+            }))
+            .unwrap()
+        }
+
+        fn pin(bit_id: &str, metadata: &[u8]) -> ProjectBitPin {
+            ProjectBitPin {
+                bit_id: bit_id.into(),
+                metadata_sha256: artifact_sha256(metadata),
+            }
+        }
+
+        /// The project's manifest, its Bit metadata and further files, sorted by path.
+        fn files_of(
+            bits: &[(ProjectBitPin, Vec<u8>)],
+            extra: &[(&str, &[u8])],
+        ) -> Vec<(String, Vec<u8>)> {
+            let mut files = vec![("apps/project/manifest.app".to_owned(), b"hello".to_vec())];
+            files.extend(bits.iter().map(|(pin, metadata)| {
+                let path = format!("bits/metadata/{}.json", pin.bit_id);
+                (path, metadata.clone())
+            }));
+            files.extend(
+                extra
+                    .iter()
+                    .map(|(path, bytes)| (path.to_string(), bytes.to_vec())),
+            );
+            files.sort();
+            files
+        }
+
+        fn manifest_of(
+            files: &[(String, Vec<u8>)],
+            bits: &[(ProjectBitPin, Vec<u8>)],
+        ) -> ProjectArtifactManifest {
+            let file = |(path, bytes): &(String, Vec<u8>)| ProjectArtifactFile {
+                path: path.clone(),
+                size: bytes.len() as u64,
+                sha256: artifact_sha256(bytes),
+            };
+            ProjectArtifactManifest {
+                version: 1,
+                source: flow_like_device_protocol::ProjectArtifactSource::Offline,
+                project_id: "project".into(),
+                bit_pins: bits.iter().map(|(pin, _)| pin.clone()).collect(),
+                package_pins: vec![],
+                files: files.iter().map(file).collect(),
+            }
+        }
+
+        /// Uploads the project with these Bit metadata and further files, then commits it; a
+        /// refused commit is aborted.
+        fn commit_bits(
+            store: &StateStore,
+            root: &Path,
+            bits: &[(ProjectBitPin, Vec<u8>)],
+            extra: &[(&str, &[u8])],
+            model_store: bool,
+        ) -> Result<ArtifactTransferStatus> {
+            let files = files_of(bits, extra);
+            let id = start(store, root, &manifest_of(&files, bits));
+            for (index, (_, bytes)) in files.iter().enumerate() {
+                let data = URL_SAFE_NO_PAD.encode(bytes);
+                let index = Some(index as u32);
+                chunk(store, root, "project", &id, "controller", index, 0, &data).unwrap();
+            }
+            let committed = commit_with(store, root, "project", &id, "controller", model_store);
+            if committed.is_err() {
+                abort(store, root, "project", &id, "controller").unwrap();
+            }
+            committed
+        }
+
+        fn acquisition(root: &Path) -> AcquisitionManager {
+            let store = ModelStore::open(root, ModelStoreConfig::default()).unwrap();
+            let fetcher = Fetcher::new(AddressPolicy::global_only()).unwrap();
+            AcquisitionManager::start(Arc::new(store), fetcher, AcquisitionConfig::default())
+                .unwrap()
+        }
+
+        #[test]
+        fn only_model_store_agents_take_weights_that_are_not_in_the_artifact() {
+            let (dir, store, _) = setup();
+            let tokenizer: &[u8] = b"{}";
+            let bytes = metadata("model", &weights(b"weights"), Some(tokenizer));
+            let bits = [(pin("model", &bytes), bytes)];
+            let extra = [("bits/tokenizer-hash/tokenizer.json", tokenizer)];
+            let refused = commit_bits(&store, dir.path(), &bits, &extra, false).unwrap_err();
+            assert!(
+                format!("{refused:#}").contains("model store"),
+                "{refused:#}"
+            );
+            let unlisted = commit_bits(&store, dir.path(), &bits, &[], true).unwrap_err();
+            assert!(
+                format!("{unlisted:#}").contains("Selected Bit asset is missing"),
+                "{unlisted:#}"
+            );
+            let stray = [
+                extra[0],
+                ("bits/weights-hash/model.gguf", b"weights".as_slice()),
+            ];
+            assert!(commit_bits(&store, dir.path(), &bits, &stray, true).is_err());
+            let committed = commit_bits(&store, dir.path(), &bits, &extra, true).unwrap();
+            assert_eq!(committed.state, ArtifactTransferState::Committed);
+            let revision = PathBuf::from(committed.project_path.unwrap());
+            assert!(!revision.join("bits/weights-hash").exists());
+            let copied = std::fs::read(revision.join("bits/tokenizer-hash/tokenizer.json"));
+            assert_eq!(copied.unwrap(), tokenizer);
+        }
+
+        #[test]
+        fn v1_metadata_commits_whether_or_not_the_agent_has_a_model_store() {
+            let (dir, store, _) = setup();
+            let bytes = v1_metadata();
+            let bits = [(pin("model", &bytes), bytes)];
+            let extra = [("bits/hash/model.bin", b"weights".as_slice())];
+            for model_store in [false, true] {
+                let committed = commit_bits(&store, dir.path(), &bits, &extra, model_store);
+                assert_eq!(committed.unwrap().state, ArtifactTransferState::Committed);
+            }
+        }
+
+        #[tokio::test]
+        async fn ensure_starts_or_joins_one_job_per_asset_of_committed_pins() {
+            let (dir, store, _) = setup();
+            let asset = weights(b"weights");
+            let (first, second) = (
+                metadata("model", &asset, None),
+                metadata("copy", &asset, None),
+            );
+            let pins = vec![pin("model", &first), pin("copy", &second)];
+            let bits = [(pins[0].clone(), first), (pins[1].clone(), second)];
+            commit_bits(&store, dir.path(), &bits, &[], true).unwrap();
+            let acquisition = acquisition(dir.path());
+            let installing = acquisition.ensure(&asset, Some("install")).unwrap();
+            assert!(installing.job_id.is_some());
+            let root = dir.path();
+
+            let summary =
+                ensure_project_models(root, &acquisition, "project", &pins, Some("deploy"))
+                    .await
+                    .unwrap();
+            assert_eq!((summary.total, summary.present), (1, 0));
+            assert_eq!(summary.pending.len(), 1);
+            assert_eq!(summary.pending[0].job_id, installing.job_id);
+            let lease = AssetOwner::new(OwnerKind::Deploy, "project").unwrap();
+            let held = acquisition.store().refs(&asset.digest).unwrap();
+            assert_eq!(held, vec![lease], "the deploy holds what it fetches");
+            let again = ensure_project_models(root, &acquisition, "project", &pins[..1], None)
+                .await
+                .unwrap();
+            assert_eq!(again.pending[0].job_id, installing.job_id);
+            assert_eq!(acquisition.jobs().len(), 1);
+            assert_eq!(acquisition.jobs()[0].asset.sources, vec![UNREACHABLE]);
+
+            acquisition.begin_push(&asset.digest, true).await.unwrap();
+            let pushed = acquisition.push_chunk(&asset.digest, 0, b"weights").await;
+            assert_eq!(pushed.unwrap(), ModelAssetState::Present);
+            let present = ensure_project_models(root, &acquisition, "project", &pins, None)
+                .await
+                .unwrap();
+            assert_eq!((present.total, present.present), (1, 1));
+            assert!(present.pending.is_empty());
+
+            let uncommitted = [pin("model", b"metadata of another revision")];
+            let refused = ensure_project_models(root, &acquisition, "project", &uncommitted, None);
+            assert!(refused.await.is_err());
+            let elsewhere = ensure_project_models(root, &acquisition, "other", &pins, None);
+            assert!(elsewhere.await.is_err());
+        }
+
+        #[tokio::test]
+        async fn ensure_names_no_assets_for_v1_metadata() {
+            let (dir, store, _) = setup();
+            let bytes = v1_metadata();
+            let pins = vec![pin("model", &bytes)];
+            let extra = [("bits/hash/model.bin", b"weights".as_slice())];
+            let bits = [(pins[0].clone(), bytes)];
+            commit_bits(&store, dir.path(), &bits, &extra, false).unwrap();
+            let acquisition = acquisition(dir.path());
+            let summary = ensure_project_models(dir.path(), &acquisition, "project", &pins, None)
+                .await
+                .unwrap();
+            assert_eq!((summary.total, summary.present), (0, 0));
+        }
     }
 }

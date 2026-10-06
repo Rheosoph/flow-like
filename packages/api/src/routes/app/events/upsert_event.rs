@@ -75,6 +75,16 @@ pub async fn upsert_event(
     event.id = event_id.clone();
     let saved_event = super::db::get_event_from_db_opt(&state.db, &event_id, &app_id).await?;
     apply_register_source(&mut event, params.register_source, saved_event.as_ref())?;
+    if saved_event.as_ref().is_some_and(Event::is_device_source)
+        && !event.is_device_source()
+        && super::db::hub_route_holder(&state.db, &app_id, &event)
+            .await?
+            .is_some()
+    {
+        return Err(ApiError::conflict(
+            "Another event of this app already uses this path and method on the hub. Change the path before moving this event to the hub.",
+        ));
+    }
     crate::teams::management::validate_event_type(&state, saved_event.as_ref(), &event).await?;
     if event.event_type == "ontology_action"
         || saved_event

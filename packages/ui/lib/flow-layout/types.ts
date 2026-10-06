@@ -106,7 +106,7 @@ export interface StyleConfig {
 	hGap: number;
 	/** Edge-to-edge vertical gap between nodes in a column. */
 	vGap: number;
-	/** Extra room between parallel execution paths, when routing data wires. */
+	/** Extra room between parallel execution paths, when routing wires. */
 	branchGap?: number;
 	/** Gap between the exec spine and the pure-node band below it. */
 	pureVGap: number;
@@ -128,7 +128,7 @@ export interface LayoutResult {
 	reversedEdges: ReadonlyArray<{ from: string; to: string }>;
 	diagnostics: LayoutDiagnostics;
 	routing?: {
-		routes: import("./route").DataRoute[];
+		routes: import("./route").WireRoute[];
 		chains: import("./normalize-reroutes").AutoRerouteChain[];
 	};
 }

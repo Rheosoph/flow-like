@@ -269,16 +269,28 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		for (const bit of asArray(customBits.data)) merged.set(bit.id, bit);
 		return Array.from(merged.values());
 	}, [foundBits.data, customBits.data]);
-	const { canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders } =
-		backend.capabilities();
+	const {
+		canHostLlamaCPP,
+		canHostMLX,
+		canUseNativeAgentProviders,
+		deviceModels,
+	} = backend.capabilities();
 	const hostableBits = useMemo(
 		() =>
 			filterHostableLlmModels(allBits, {
 				canHostLlamaCPP,
 				canHostMLX,
 				canUseNativeAgentProviders: !webMode && canUseNativeAgentProviders,
+				deviceModels,
 			}),
-		[allBits, canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders, webMode],
+		[
+			allBits,
+			canHostLlamaCPP,
+			canHostMLX,
+			canUseNativeAgentProviders,
+			deviceModels,
+			webMode,
+		],
 	);
 
 	const imageBlacklist = useCallback(async () => {

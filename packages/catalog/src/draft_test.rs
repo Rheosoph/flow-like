@@ -546,7 +546,7 @@ impl NodeLogic for BoundedNode {
         if self
             .evidence
             .invocations
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 (n < MAX_INVOCATIONS).then_some(n + 1)
             })
             .is_err()

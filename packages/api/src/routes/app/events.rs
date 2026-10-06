@@ -1,5 +1,6 @@
 pub mod alias;
 pub mod canary;
+pub mod current_inputs;
 pub mod db;
 pub mod delete_event;
 pub mod get_event;
@@ -44,7 +45,7 @@ pub(crate) fn ensure_hub_trigger_allowed(
 ) -> Result<(), ApiError> {
     if event.is_device_source() {
         return Err(ApiError::bad_request(
-            "This event runs on its deployed devices, so its hub trigger cannot be turned on. Change where it runs in the event settings first.",
+            "This event runs on its deployed devices, so it has no hub trigger to turn on or change. Change where it runs in the event settings first.",
         ));
     }
     Ok(())
@@ -258,7 +259,11 @@ mod tests {
         event.set_device_source().unwrap();
         let error = ensure_hub_trigger_allowed(&event).unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
-        assert!(error.to_string().contains("deployed devices"));
+        assert!(
+            error
+                .public_message()
+                .is_some_and(|message| message.contains("deployed devices"))
+        );
         assert!(ensure_source_execution_allowed(&event).is_err());
     }
 

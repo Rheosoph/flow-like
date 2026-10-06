@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { parseWidgetQueryMessage } from "./widget-query-handler";
+import { registerScopedHttpChannel } from "../../lib/channel/http";
+import type { IChannelPush } from "../../lib/schema/channel";
+import { registerMicroWidgetBridge } from "./micro-widget-host";
+import {
+	handleWidgetQueryMessage,
+	parseWidgetQueryMessage,
+} from "./widget-query-handler";
 
 const channel = {
 	channel_id: "run-1",
@@ -9,6 +15,52 @@ const channel = {
 };
 
 describe("parseWidgetQueryMessage", () => {
+	it("refuses deployed queries before accessing a host widget and returns a scoped error", async () => {
+		let hostQueries = 0;
+		const unregister = registerMicroWidgetBridge("host-widget", {
+			query: async () => {
+				hostQueries++;
+				return "private Studio state";
+			},
+		});
+		let receive!: (push: IChannelPush) => void;
+		const reply = new Promise<IChannelPush>((resolve) => {
+			receive = resolve;
+		});
+		const scoped = registerScopedHttpChannel(async (_descriptor, push) => {
+			receive(push);
+		});
+		try {
+			expect(
+				handleWidgetQueryMessage({
+					type: "widgetQuery",
+					request_id: "remote-request",
+					instance_id: "host-widget",
+					query: "getSelection",
+					channel: {
+						...channel,
+						request_id: "remote-request",
+						transport: { type: "http", push_url: scoped.url, token: "token" },
+					},
+				}),
+			).toBe(true);
+			expect(await reply).toEqual({
+				channel_id: "run-1",
+				request_id: "remote-request",
+				kind: "reply",
+				value: {
+					ok: false,
+					error:
+						"Package widget queries are not available in deployed app sessions.",
+				},
+			});
+			expect(hostQueries).toBe(0);
+		} finally {
+			unregister();
+			scoped.close();
+		}
+	});
+
 	it("parses the snake_case wire form", () => {
 		const parsed = parseWidgetQueryMessage({
 			type: "widgetQuery",

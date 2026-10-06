@@ -12,6 +12,7 @@ import type {
 	IHomeLayout,
 } from "@flow-like/flow-like-ui/components/home/types";
 import { parseDateValue } from "@flow-like/flow-like-ui/lib/date";
+import { normalizePersonalAccessTokens } from "@flow-like/flow-like-ui/lib/personal-access-token";
 import {
 	type MediaUploadResponse,
 	updateAccountWithAvatar,
@@ -912,7 +913,7 @@ export class UserState implements IUserState {
 			this.backend.auth,
 		);
 
-		return asArray(result);
+		return normalizePersonalAccessTokens(result);
 	}
 
 	async deletePAT(id: string): Promise<void> {

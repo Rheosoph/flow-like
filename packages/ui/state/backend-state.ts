@@ -1,3 +1,6 @@
+"use client";
+
+import { createContext, useContext } from "react";
 import { create } from "zustand";
 
 import type { IProfile } from "../types";
@@ -234,6 +237,8 @@ export interface ICapabilities {
 	canExecuteLocally: boolean;
 	/** Desktop runtimes may reuse installed agent CLI credentials. */
 	canUseNativeAgentProviders?: boolean;
+	/** Runs here reach models hosted on the user's devices (the desktop connector); never the web. */
+	deviceModels?: boolean;
 }
 
 export interface IBackendState {
@@ -290,6 +295,11 @@ export const useBackendStore = create<BackendStoreState>((set) => ({
 	backend: null,
 	setBackend: (backend: IBackendState) => set({ backend }),
 }));
+
+/** Embedded runtimes supply a backend without changing the surrounding Studio session. */
+export const BackendContext = createContext<IBackendState | undefined>(
+	undefined,
+);
 
 interface AuthStatusState {
 	/** `undefined` until a host provider pushes its OIDC state. */
@@ -368,7 +378,9 @@ const serverBackend: IBackendState = {
 };
 
 export function useBackend(): IBackendState {
+	const scoped = useContext(BackendContext);
 	const backend = useBackendStore((state) => state.backend);
+	if (scoped) return scoped;
 	if (!backend) {
 		return serverBackend;
 	}
@@ -381,5 +393,7 @@ export function useBackend(): IBackendState {
  * published its backend gate on this.
  */
 export function useBackendReady(): boolean {
-	return useBackendStore((state) => state.backend !== null);
+	const scoped = useContext(BackendContext);
+	const ready = useBackendStore((state) => state.backend !== null);
+	return !!scoped || ready;
 }

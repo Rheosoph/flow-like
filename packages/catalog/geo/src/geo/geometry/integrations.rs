@@ -707,7 +707,7 @@ fn normalize_h3_dissolve(geometry: geo::MultiPolygon<f64>) -> Result<geo::MultiP
                 positions.saturating_add(part.coords_count())
             });
             emitted_positions
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
                 emitted.checked_add(positions).filter(|total| *total <= MAX_GEOMETRY_POSITIONS)
             })
             .map_err(|_| anyhow!(
@@ -999,7 +999,7 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 let mut cells = Vec::new();
                 for cell in tiler.into_coverage().take(maximum + 1) {
                     emitted_cells
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
                             emitted.checked_add(1).filter(|total| *total <= preflight_limit)
                         })
                         .map_err(|_| anyhow!(

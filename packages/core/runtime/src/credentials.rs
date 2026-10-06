@@ -72,6 +72,55 @@ pub enum SharedCredentials {
 }
 
 impl SharedCredentials {
+    /// Identity of a fixed content-storage lease, including its tokens, paths,
+    /// endpoints and permissions. Renewable and ambient credentials stay with
+    /// their owning runtime instead of entering a process-wide connection cache.
+    #[cfg(feature = "flow-runtime")]
+    pub fn database_cache_identity(&self) -> Result<Option<([u8; 32], std::time::SystemTime)>> {
+        let mut credentials = self;
+        for _ in 0..8 {
+            match credentials {
+                Self::Mixed(mixed) => credentials = &mixed.content,
+                _ => break,
+            }
+        }
+        let expiry = match credentials {
+            Self::Aws(value)
+                if value.access_key_id.as_ref().is_some_and(|v| !v.is_empty())
+                    && value
+                        .secret_access_key
+                        .as_ref()
+                        .is_some_and(|v| !v.is_empty()) =>
+            {
+                value.expiration
+            }
+            Self::Azure(value) if value.account_key.is_none() => value.expiration,
+            Self::Gcp(value)
+                if value
+                    .access_token
+                    .as_ref()
+                    .is_some_and(|v| !v.trim().is_empty()) =>
+            {
+                value.expiration
+            }
+            _ => return Ok(None),
+        };
+        let Some(expiry) = expiry else {
+            return Ok(None);
+        };
+        let expires_at = std::time::SystemTime::from(expiry);
+        if expires_at <= std::time::SystemTime::now() {
+            return Err(flow_like_types::anyhow!(
+                "Database storage credentials have expired"
+            ));
+        }
+        // Keep secrets out of keys and diagnostics; token rotation or a change
+        // to any serialized authority field always selects another connection.
+        let mut hasher = blake3::Hasher::new();
+        serde_json::to_writer(&mut hasher, credentials)?;
+        Ok(Some((*hasher.finalize().as_bytes(), expires_at)))
+    }
+
     pub async fn to_store(&self, meta: bool) -> Result<FlowLikeStore> {
         match self {
             SharedCredentials::Aws(aws) => aws.to_store(meta).await,
@@ -202,6 +251,100 @@ mod tests {
             content_path_prefix: None,
             user_content_path_prefix: None,
         }
+    }
+
+    #[test]
+    #[cfg(feature = "flow-runtime")]
+    fn database_cache_identity_tracks_storage_authority_and_expiry() {
+        let mut base = sample_aws();
+        base.expiration = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+        let identity = SharedCredentials::Aws(base.clone())
+            .database_cache_identity()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            identity,
+            SharedCredentials::Aws(base.clone())
+                .database_cache_identity()
+                .unwrap()
+                .unwrap()
+        );
+        let mut variants = Vec::new();
+        let mut changed = base.clone();
+        changed.session_token = Some("different-grant".into());
+        variants.push(changed);
+        let mut changed = base.clone();
+        changed.secret_access_key = Some("rotated-key".into());
+        variants.push(changed);
+        let mut changed = base.clone();
+        changed.content_bucket = "other-tenant".into();
+        variants.push(changed);
+        let mut changed = base.clone();
+        changed.content_path_prefix = Some("apps/other-tenant".into());
+        variants.push(changed);
+        let mut changed = base.clone();
+        changed.content_config = Some(BucketConfig {
+            endpoint: Some("https://other-storage.example".into()),
+            ..Default::default()
+        });
+        variants.push(changed);
+        for changed in variants {
+            assert_ne!(
+                identity.0,
+                SharedCredentials::Aws(changed)
+                    .database_cache_identity()
+                    .unwrap()
+                    .unwrap()
+                    .0
+            );
+        }
+        base.expiration = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+        assert!(
+            SharedCredentials::Aws(base.clone())
+                .database_cache_identity()
+                .is_err()
+        );
+        base.expiration = None;
+        assert!(
+            SharedCredentials::Aws(base)
+                .database_cache_identity()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "flow-runtime")]
+    fn database_cache_identity_separates_permissions_and_mixed_content() {
+        let mut gcp = sample_gcp();
+        gcp.access_token = Some("scoped-token".into());
+        gcp.expiration = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+        let content = SharedCredentials::Gcp(gcp.clone());
+        let base = content.database_cache_identity().unwrap().unwrap();
+        gcp.write_access = false;
+        assert_ne!(
+            base.0,
+            SharedCredentials::Gcp(gcp)
+                .database_cache_identity()
+                .unwrap()
+                .unwrap()
+                .0
+        );
+        let mixed = SharedCredentials::Mixed(MixedSharedCredentials {
+            meta: Box::new(SharedCredentials::Aws(sample_aws())),
+            content: Box::new(content),
+            logs: Box::new(SharedCredentials::Azure(sample_azure())),
+        });
+        assert_eq!(base, mixed.database_cache_identity().unwrap().unwrap());
+        let mut azure = sample_azure();
+        azure.account_key = Some("unserialized-master-key".into());
+        azure.expiration = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+        assert!(
+            SharedCredentials::Azure(azure)
+                .database_cache_identity()
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

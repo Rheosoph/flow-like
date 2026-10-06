@@ -2,6 +2,10 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
+import {
+	openRuntimeNamespace,
+	runtimeDomEventName,
+} from "../../lib/service-runtime/session-scope";
 import type { Action } from "./types";
 
 let root: Root | undefined;
@@ -21,6 +25,7 @@ describe("workflow state round trip", () => {
 			window,
 			document: window.document,
 			navigator: window.navigator,
+			CustomEvent: window.CustomEvent,
 			IS_REACT_ACT_ENVIRONMENT: true,
 		};
 		const descriptors = Object.keys(globals).map(
@@ -80,7 +85,18 @@ describe("workflow state round trip", () => {
 				) => {
 					payloads.push(run.payload);
 					onStarted("run-state");
-					if (run.id === "write") {
+					if (run.id === "clear-input") {
+						onEvents([
+							{
+								event_type: "a2ui",
+								payload: {
+									type: "clearFileInput",
+									surfaceId: "page-a",
+									componentId: "upload",
+								},
+							},
+						]);
+					} else if (run.id === "write") {
 						onEvents([
 							{
 								event_type: "a2ui",
@@ -120,6 +136,8 @@ describe("workflow state round trip", () => {
 			return null;
 		}
 		const appId = `state-roundtrip-${crypto.randomUUID()}`;
+		const runtimeAppId = `device-runtime:${crypto.randomUUID()}`;
+		cleanup.push(openRuntimeNamespace(runtimeAppId));
 		const host = window.document.createElement("div");
 		window.document.body.appendChild(host);
 		root = createRoot(host as unknown as HTMLElement);
@@ -127,10 +145,10 @@ describe("workflow state round trip", () => {
 			root?.render(
 				<AppRouterContext.Provider value={{} as never}>
 					<PathnameContext.Provider value="/use">
-						{["page-a", "page-b"].map((pageId) => (
+						{["page-a", "page-b", "runtime"].map((pageId) => (
 							<ActionProvider
 								key={pageId}
-								appId={appId}
+								appId={pageId === "runtime" ? runtimeAppId : appId}
 								surfaceId={pageId}
 								eventId="event-1"
 								governedPage
@@ -172,5 +190,26 @@ describe("workflow state round trip", () => {
 		expect(payloads[2]._global_state).toEqual({ theme: "dark" });
 		expect(payloads[4]._page_state).toEqual({});
 		expect(contexts["page-b"].globalState).toEqual({ theme: "dark" });
+
+		let hostClears = 0;
+		let runtimeClears = 0;
+		let otherRuntimeClears = 0;
+		window.addEventListener("a2ui:clearFileInput", () => hostClears++);
+		window.addEventListener(
+			runtimeDomEventName("a2ui:clearFileInput", runtimeAppId),
+			() => runtimeClears++,
+		);
+		window.addEventListener(
+			runtimeDomEventName("a2ui:clearFileInput", "device-runtime:another-view"),
+			() => otherRuntimeClears++,
+		);
+		await act(async () => {
+			await controls.runtime.executeAction(action("clear-input"));
+		});
+		expect([hostClears, runtimeClears, otherRuntimeClears]).toEqual([0, 1, 0]);
+		await act(async () => {
+			await runA(action("clear-input"));
+		});
+		expect([hostClears, runtimeClears, otherRuntimeClears]).toEqual([1, 1, 0]);
 	});
 });

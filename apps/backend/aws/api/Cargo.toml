@@ -30,3 +30,6 @@ tracing-opentelemetry.workspace = true
 hyper.workspace = true
 
 chrono.workspace = true
+
+[dev-dependencies]
+hyper-util.workspace = true

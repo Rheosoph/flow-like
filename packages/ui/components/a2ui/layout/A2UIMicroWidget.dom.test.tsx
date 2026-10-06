@@ -580,8 +580,8 @@ describe("micro widget SDK handshake", () => {
 		const wrapper = frame()?.contentWindow;
 		if (!wrapper) throw new Error("The widget frame is missing");
 		const events = new window.EventTarget();
-		const widgetDocument =
-			window.document.implementation.createHTMLDocument("Synthetic widget");
+		const widgetDocument = window.document.implementation.createHTMLDocument();
+		widgetDocument.title = "Synthetic widget";
 		const outbound: FlwEnvelope[] = [];
 		const parent = {
 			postMessage(envelope: FlwEnvelope) {

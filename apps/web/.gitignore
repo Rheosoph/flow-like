@@ -10,6 +10,9 @@
 /.next/
 /out/
 
+# Monaco assets copied from the installed package by next.config.mjs
+/public/monaco/
+
 # Production
 /build
 

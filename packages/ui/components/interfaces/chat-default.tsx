@@ -10,7 +10,7 @@ import {
 	Loader2Icon,
 	SquarePenIcon,
 } from "lucide-react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
 	type MutableRefObject,
 	type RefObject,
@@ -34,7 +34,11 @@ import type { ExecutionEngineProvider } from "../../lib/execution-engine";
 import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
-import { useSetQueryParams } from "../../lib/set-query-params";
+import { runtimeChatSessionId } from "../../lib/service-runtime/session-scope";
+import {
+	useClientSearchParams,
+	useSetQueryParams,
+} from "../../lib/set-query-params";
 import { captureTelemetryError } from "../../lib/telemetry/errors";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
@@ -577,14 +581,17 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const router = useClientRouter();
 	const backend = useBackend();
 	const executionEngine = useExecutionEngine();
-	const searchParams = useSearchParams();
+	const searchParams = useClientSearchParams();
 	const pathname = usePathname();
 	// A chat cannot read its history without a session, and the router only
 	// commits one a tick later. Deriving it on the first render keeps every live
 	// query on a single key instead of tearing them all down once it lands.
 	const [fallbackSessionId] = useState(() => createId());
 	const urlSessionId = searchParams.get("sessionId") ?? "";
-	const sessionIdParameter = urlSessionId || fallbackSessionId;
+	const sessionIdParameter = runtimeChatSessionId(
+		appId,
+		urlSessionId || fallbackSessionId,
+	);
 	const prefilledMessage = searchParams.get("message");
 	const setQueryParams = useSetQueryParams();
 	const chatRef = useRef<IChatRef>(null);
@@ -1343,7 +1350,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				await putChatMessage(userMessage);
 
 				const lastMessages =
-					messagesRef.current?.slice(-history_elements) ?? [];
+					messagesRef.current
+						?.filter((message) => message.id !== userMessage.id)
+						.slice(-history_elements) ?? [];
 
 				// Let vision-capable models see the rendered UI: snapshot the
 				// latest assistant message's embedded widgets and attach them to

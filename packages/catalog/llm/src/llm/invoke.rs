@@ -122,8 +122,6 @@ impl NodeLogic for InvokeLLM {
         let history = context.evaluate_pin::<History>("history").await?;
         let model_factory = context.app_state.model_factory.clone();
         let model = model_factory
-            .lock()
-            .await
             .build(
                 &model,
                 context.app_state.clone(),

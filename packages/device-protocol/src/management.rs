@@ -111,6 +111,33 @@ pub enum ManagementCapability {
     UpdateAgent,
     Reboot,
     ManageCertificates,
+    ServiceConnect,
+    /// Calls hosted models through the model gateway.
+    ModelUse,
+    /// Installs, configures and removes hosted models and runtimes.
+    ModelManage,
+    /// A capability added after this build. Signatures and digests cover the raw signed
+    /// bytes, so reading it this way changes no verification; it grants nothing.
+    #[serde(other)]
+    Unsupported,
+}
+
+pub const MAX_GRANT_CAPABILITIES: usize = 15;
+/// Includes capabilities a newer signer names which this build does not recognize.
+pub const MAX_WIRE_GRANT_CAPABILITIES: usize = 64;
+
+impl ManagementCapability {
+    /// Held only with whole-device scope.
+    pub fn device_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Reboot
+                | Self::UpdateAgent
+                | Self::ManageCertificates
+                | Self::ModelUse
+                | Self::ModelManage
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -394,6 +421,9 @@ pub enum ManagementCommand {
     PlacementConfiguration {
         placement_id: String,
     },
+    ServiceListeners {
+        placement_id: String,
+    },
     Apply {
         config: serde_json::Value,
         expected_revision: u64,
@@ -553,6 +583,10 @@ pub enum ManagementCommand {
         endpoint_id: String,
         sequence: u64,
         receipt_jws: String,
+    },
+    /// Model hosting; agents without the `model_host` flag answer `unsupported`.
+    Models {
+        request: crate::ModelsRequest,
     },
 }
 
@@ -753,7 +787,7 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
         grant.controller_key.validate()?;
         if !grants.insert(&grant.grant_id)
             || grant.capabilities.is_empty()
-            || grant.capabilities.len() > 13
+            || grant.capabilities.len() > MAX_WIRE_GRANT_CAPABILITIES
             || grant.expires_at > policy.expires_at
             || grant.expires_at <= policy.issued_at
             || grant.group_id.is_some() != grant.group_version.is_some()
@@ -764,8 +798,13 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
         if let Some(id) = &grant.group_id {
             validate_management_id(id)?;
         }
-        let caps: HashSet<_> = grant.capabilities.iter().collect();
-        if caps.len() != grant.capabilities.len() {
+        // Distinct newer capabilities all read as `Unsupported`, so only known ones must be unique.
+        let known = grant
+            .capabilities
+            .iter()
+            .filter(|cap| **cap != ManagementCapability::Unsupported);
+        let count = known.clone().count();
+        if count > MAX_GRANT_CAPABILITIES || known.collect::<HashSet<_>>().len() != count {
             return Err(ProtocolError::Invalid("duplicate capability"));
         }
         match &grant.scope {
@@ -773,14 +812,11 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
             ManagementScope::Project { project_id }
             | ManagementScope::Placement { project_id, .. } => {
                 validate_management_id(project_id)?;
-                if grant.capabilities.iter().any(|cap| {
-                    matches!(
-                        cap,
-                        ManagementCapability::Reboot
-                            | ManagementCapability::UpdateAgent
-                            | ManagementCapability::ManageCertificates
-                    )
-                }) {
+                if grant
+                    .capabilities
+                    .iter()
+                    .any(ManagementCapability::device_only)
+                {
                     return Err(ProtocolError::Invalid(
                         "host capability requires device scope",
                     ));
@@ -796,6 +832,16 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
 
 pub fn sign_management_policy(policy: &ManagementPolicy, key: &SigningKey) -> Result<String> {
     validate_policy(policy)?;
+    // Re-signing a newer capability that this build read as `Unsupported` would drop it.
+    if policy.grants.iter().any(|grant| {
+        grant
+            .capabilities
+            .contains(&ManagementCapability::Unsupported)
+    }) {
+        return Err(ProtocolError::Invalid(
+            "management policy holds a capability this build does not know",
+        ));
+    }
     sign_pinned(policy, key, POLICY_TYPE)
 }
 
@@ -1026,6 +1072,192 @@ mod tests {
         assert!(
             serde_json::from_value::<ManagementCommand>(
                 json!({"type":"start","placement_id":"notes","expected_revision":7,"event_id":"e"})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn models_command_nests_its_request_and_refuses_unknown_shapes() {
+        use serde_json::json;
+        let wire = json!({"type":"models","request":{"kind":"overview"}});
+        let command: ManagementCommand = serde_json::from_value(wire.clone()).unwrap();
+        assert!(matches!(
+            &command,
+            ManagementCommand::Models {
+                request: crate::ModelsRequest::Overview {}
+            }
+        ));
+        assert_eq!(serde_json::to_value(&command).unwrap(), wire);
+        for unknown in [
+            json!({"type":"models","request":{"kind":"overview"},"device":"gpu-box"}),
+            json!({"type":"models","request":{"kind":"benchmark"}}),
+            json!({"type":"models"}),
+        ] {
+            assert!(
+                serde_json::from_value::<ManagementCommand>(unknown.clone()).is_err(),
+                "{unknown}"
+            );
+        }
+    }
+
+    fn policy_with(
+        scope: ManagementScope,
+        capabilities: Vec<ManagementCapability>,
+    ) -> ManagementPolicy {
+        ManagementPolicy {
+            version: 1,
+            device_id: "device".into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: vec![ManagementGrant {
+                grant_id: "grant".into(),
+                user_id: "user".into(),
+                controller_key: SigningKey::generate().public_key(),
+                scope,
+                capabilities,
+                expires_at: 150,
+                group_id: None,
+                group_version: None,
+            }],
+            issued_at: 100,
+            expires_at: 200,
+        }
+    }
+
+    #[test]
+    fn model_capabilities_need_the_whole_device_and_fill_the_raised_cap() {
+        use ManagementCapability::*;
+        let owner = SigningKey::generate();
+        let all = vec![
+            Status,
+            Logs,
+            Metrics,
+            Deploy,
+            Start,
+            Stop,
+            Restart,
+            Remove,
+            Scale,
+            UpdateAgent,
+            Reboot,
+            ManageCertificates,
+            ServiceConnect,
+            ModelUse,
+            ModelManage,
+        ];
+        assert_eq!(all.len(), MAX_GRANT_CAPABILITIES);
+        let signed =
+            sign_management_policy(&policy_with(ManagementScope::Device, all.clone()), &owner)
+                .unwrap();
+        assert_eq!(
+            verify_management_policy(&signed, &owner.public_key(), 100)
+                .unwrap()
+                .grants[0]
+                .capabilities,
+            all
+        );
+        assert_eq!(
+            serde_json::to_value([ModelUse, ModelManage]).unwrap(),
+            serde_json::json!(["model_use", "model_manage"])
+        );
+        let project = ManagementScope::Project {
+            project_id: "invoice-ai".into(),
+        };
+        for capability in [ModelUse, ModelManage] {
+            assert!(capability.device_only());
+            assert!(
+                sign_management_policy(
+                    &policy_with(project.clone(), vec![Status, capability]),
+                    &owner
+                )
+                .is_err()
+            );
+        }
+        let mut twice = all;
+        twice[0] = ModelUse;
+        assert!(
+            sign_management_policy(&policy_with(ManagementScope::Device, twice), &owner).is_err()
+        );
+    }
+
+    #[test]
+    fn newer_capabilities_verify_grant_nothing_and_cannot_be_re_signed() {
+        use ManagementCapability::*;
+        let owner = SigningKey::generate();
+        let project = ManagementScope::Project {
+            project_id: "invoice-ai".into(),
+        };
+        let sign_raw = |capabilities: serde_json::Value, scope: &ManagementScope| {
+            let mut policy =
+                serde_json::to_value(policy_with(scope.clone(), vec![Status])).unwrap();
+            policy["grants"][0]["capabilities"] = capabilities;
+            sign_pinned(&policy, &owner, POLICY_TYPE).unwrap()
+        };
+        let signed = sign_raw(
+            serde_json::json!(["status", "model_tune", "model_share"]),
+            &project,
+        );
+        let verified = verify_management_policy(&signed, &owner.public_key(), 100).unwrap();
+        assert_eq!(
+            verified.grants[0].capabilities,
+            vec![Status, Unsupported, Unsupported]
+        );
+        assert!(
+            !verified.grants[0]
+                .capabilities
+                .iter()
+                .any(ManagementCapability::device_only)
+        );
+        assert!(sign_management_policy(&verified, &owner).is_err());
+        assert!(
+            verify_management_policy(
+                &sign_raw(serde_json::json!(["status", "status"]), &project),
+                &owner.public_key(),
+                100
+            )
+            .is_err()
+        );
+        let mut full = serde_json::to_value([
+            Status,
+            Logs,
+            Metrics,
+            Deploy,
+            Start,
+            Stop,
+            Restart,
+            Remove,
+            Scale,
+            UpdateAgent,
+            Reboot,
+            ManageCertificates,
+            ServiceConnect,
+            ModelUse,
+            ModelManage,
+        ])
+        .unwrap();
+        for index in MAX_GRANT_CAPABILITIES..MAX_WIRE_GRANT_CAPABILITIES {
+            full.as_array_mut()
+                .unwrap()
+                .push(format!("future_{index}").into());
+        }
+        let verified = verify_management_policy(
+            &sign_raw(full.clone(), &ManagementScope::Device),
+            &owner.public_key(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            verified.grants[0].capabilities.len(),
+            MAX_WIRE_GRANT_CAPABILITIES
+        );
+        assert!(sign_management_policy(&verified, &owner).is_err());
+        full.as_array_mut().unwrap().push("one_too_many".into());
+        assert!(
+            verify_management_policy(
+                &sign_raw(full, &ManagementScope::Device),
+                &owner.public_key(),
+                100,
             )
             .is_err()
         );

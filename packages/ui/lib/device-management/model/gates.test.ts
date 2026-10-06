@@ -61,7 +61,7 @@ const ctx = (patch: Partial<GateContext> = {}): GateContext => ({
 	keys: keys(),
 	live: LIVE,
 	features: {
-		flags: { on_demand_events: 1 },
+		flags: { on_demand_events: 1, model_store: 1, model_host: 1 },
 		hostOperations: { reboot: true, update_agent: true },
 		certificateManagement: true,
 		certificateIssuance: true,
@@ -229,6 +229,10 @@ const IA_MATRIX: Record<ActionId, Row> = {
 	change_device_password: p4("●", "password"),
 	delete_local_keys: p4("●", "–"),
 	forget_identity: p4("–", "–"),
+	models_view: p3({ any: ["model_use", "model_manage"] }),
+	models_manage: p3(["model_manage"]),
+	models_use: p3(["model_use"]),
+	models_ensure: p3(["deploy"]),
 };
 
 describe("IA §3.3 action matrix", () => {
@@ -1063,5 +1067,84 @@ describe("gate ladder", () => {
 		);
 		expect(Object.keys(results)).toEqual(["start", "stop", "reboot"]);
 		expect(failure(results.start).copy.code).toBe("locked_change");
+	});
+});
+
+describe("models", () => {
+	const MODEL_ACTIONS = ["models_view", "models_manage", "models_use"] as const;
+	const withFlags = (flags: GateFeatures["flags"]) =>
+		ctx({
+			features: {
+				flags,
+				source: { src: "live", age: "live" },
+				agentVersion: "0.9.3",
+			},
+		});
+
+	test("an agent without model hosting is asked to update, with the update fix", () => {
+		for (const action of MODEL_ACTIONS) {
+			const result = failure(evaluateGate(action, withFlags({})));
+			expect([action, result.gate, result.copy.code]).toEqual([
+				action,
+				"G9",
+				"agent_update_needed",
+			]);
+			expect(result.fix).toEqual({ kind: "update_agent", deviceId: "dev-1" });
+		}
+		expect(evaluateGate("models_view", withFlags({ model_host: 1 })).ok).toBe(
+			true,
+		);
+		expect(
+			failure(evaluateGate("models_ensure", withFlags({ model_host: 1 }))).copy
+				.code,
+		).toBe("agent_update_needed");
+		expect(
+			evaluateGate("models_ensure", withFlags({ model_store: 1 })).ok,
+		).toBe(true);
+	});
+
+	test("locked keys use the unlock gate that also connects live", () => {
+		for (const action of MODEL_ACTIONS) {
+			const result = failure(
+				evaluateGate(action, ctx({ keys: keys({ state: "locked" }) })),
+			);
+			expect(result.gate).toBe("G7");
+			expect(result.fix).toEqual({
+				kind: "unlock",
+				deviceId: "dev-1",
+				connectLive: true,
+			});
+		}
+	});
+
+	test("viewing needs either model permission on the whole device; managing and using need their own", () => {
+		expect(evaluateGate("models_view", recipient(["model_use"])).ok).toBe(true);
+		expect(evaluateGate("models_view", recipient(["model_manage"])).ok).toBe(
+			true,
+		);
+		expect(
+			failure(evaluateGate("models_manage", recipient(["model_use"]))).need,
+		).toEqual(["model_manage"]);
+		expect(
+			failure(evaluateGate("models_use", recipient(["model_manage"]))).need,
+		).toEqual(["model_use"]);
+		const project = recipient([], {
+			capabilities: [
+				{
+					scope: { kind: "project", project_id: "app_1" },
+					caps: ["model_use", "deploy"],
+					expiresAt: NOW + 3600,
+				},
+			],
+		});
+		const view = failure(evaluateGate("models_view", project));
+		expect(view.copy.code).toBe("needs_device_scope");
+		expect(view.fix?.kind).toBe("ask_owner");
+		expect(
+			evaluateGate("models_ensure", {
+				...project,
+				target: { projectId: "app_1" },
+			}).ok,
+		).toBe(true);
 	});
 });

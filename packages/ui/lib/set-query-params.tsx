@@ -1,12 +1,31 @@
 "use client";
 
-import { createContext, useCallback, useContext } from "react";
+import { useSearchParams } from "next/navigation";
+import { createContext, useCallback, useContext, useMemo } from "react";
 import { useClientRouter } from "./client-navigation";
 
 /** Static hosts update query state without requesting an unexported route. */
 export const QueryParamNavigationContext = createContext<
 	((href: string, replace: boolean) => void) | undefined
 >(undefined);
+
+/** An embedded app owns its query state independently of Studio's URL. */
+export const QueryParamScopeContext = createContext<
+	| {
+			search: string;
+			set: (key: string, value: string | undefined) => void;
+	  }
+	| undefined
+>(undefined);
+
+export function useClientSearchParams() {
+	const host = useSearchParams();
+	const scoped = useContext(QueryParamScopeContext);
+	return useMemo(
+		() => (scoped ? new URLSearchParams(scoped.search) : host),
+		[host, scoped],
+	);
+}
 
 export interface ISetQueryParamsOptions {
 	/** Rewrite the current history entry instead of pushing a new one. */
@@ -96,9 +115,14 @@ export function resetQueryParamRequests(): void {
 export function useSetQueryParams(): ISetQueryParams {
 	const router = useClientRouter();
 	const navigate = useContext(QueryParamNavigationContext);
+	const scoped = useContext(QueryParamScopeContext);
 
 	return useCallback(
 		(key, value, options) => {
+			if (scoped) {
+				scoped.set(key, value);
+				return;
+			}
 			if (typeof window === "undefined") return;
 
 			const request = nextQueryParamRequest(
@@ -121,6 +145,6 @@ export function useSetQueryParams(): ISetQueryParams {
 				router.push(href);
 			}
 		},
-		[router, navigate],
+		[router, navigate, scoped],
 	);
 }

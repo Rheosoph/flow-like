@@ -21,6 +21,24 @@ IMAGE = "ghcr.io/example/agent@sha256:" + "a" * 64
 BASE = "https://cdn.example/standalone"
 STABLE_URL, STABLE_KEY = f"{BASE}/release.jws", "standalone/release.jws"
 DATES = ("issued_at", "expires_at")
+LINUX, MAC = "x86_64-unknown-linux-gnu", "aarch64-apple-darwin"
+RUNTIME = release.RUNTIME_MANIFEST_JWS_TYPE
+
+
+def runtime_url(target):
+    return f"{BASE}/runtimes/{target}.jws"
+
+
+def runtime_key(target):
+    return f"standalone/runtimes/{target}.jws"
+
+
+def runtime_list(target, sequence, issued_at=None, validity_days=365):
+    pack = {"runtime": "llamacpp", "build": "b10809", "target": target, "backend": "cpu",
+            "url": f"{BASE}/releases/{sequence}/runtimes/llamacpp-b10809-{target}-cpu.tar.gz", "size": 4096,
+            "sha256": "a" * 64, "entrypoint": "llama-server",
+            "files": [{"path": "llama-server", "size": 4096, "sha256": "b" * 64, "executable": True}]}
+    return {"version": 1, "sequence": sequence, **release.validity(validity_days, issued_at), "packs": [pack]}
 
 
 def accepted_by_agent_0_1_0(value, clock):
@@ -144,17 +162,41 @@ class StandalonePublisherTests(unittest.TestCase):
     def tearDown(self):
         self.folder.cleanup()
 
-    def sign(self, value):
+    def jws(self, value, typ=release.RELEASE_JWS_TYPE):
         jwk = json.dumps({"crv":"Ed25519", "kty":"OKP", "x":self.key}, separators=(",", ":")).encode()
         def encode(value):
             return base64.urlsafe_b64encode(value).decode().rstrip("=")
-        header = {"alg":"EdDSA", "typ":"flow-like-standalone-release+jws", "kid":encode(hashlib.sha256(jwk).digest())}
+        header = {"alg":"EdDSA", "typ":typ, "kid":encode(hashlib.sha256(jwk).digest())}
         message = (encode(json.dumps(header).encode()) + "." + encode(json.dumps(value).encode())).encode()
         (self.directory / "message").write_bytes(message)
         signature = subprocess.check_output(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(self.directory / "private.pem"), "-in", str(self.directory / "message")], stderr=subprocess.DEVNULL)
-        compact = message + b"." + encode(signature).encode()
+        return message + b"." + encode(signature).encode()
+
+    def sign(self, value):
+        compact = self.jws(value)
         (self.directory / "release.jws").write_bytes(compact)
         return compact
+
+    def sign_runtime(self, target, value):
+        """A re-dated runtime list as the renewal's sign job leaves it beside release.jws."""
+        compact = self.jws(value, RUNTIME)
+        (self.directory / "runtimes").mkdir(exist_ok=True)
+        (self.directory / "runtimes" / f"{target}.jws").write_bytes(compact)
+        return compact
+
+    def runtime_renewal(self, store, target, **changes):
+        published = release.verified_release(store.objects[runtime_key(target)], [self.key], False, RUNTIME)
+        return self.sign_runtime(target, {**published, **release.validity(changes.pop("validity_days", 365)), **changes})
+
+    def published_with_runtime_lists(self, sequence, *targets, validity_days=30):
+        """A published release and its runtime lists, issued a day ago, as the release workflow leaves them."""
+        dates = {"issued_at": int(time.time()) - DAY, "validity_days": validity_days}
+        self.signed(sequence, **dates)
+        store = MemoryStore()
+        self.publish(store)
+        for target in targets:
+            store.objects[runtime_key(target)] = self.jws(runtime_list(target, sequence, **dates), RUNTIME)
+        return store
 
     def signed(self, sequence, **validity):
         return self.sign(release.manifest(self.directory, f"https://cdn.example/standalone/releases/{sequence}", sequence, IMAGE, self.directory / "release.json", **validity))
@@ -353,6 +395,134 @@ class StandalonePublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "only the dates"):
             self.renew(store)
         self.assertEqual(store.objects[STABLE_KEY], newer)
+
+    def test_release_and_runtime_lists_never_stand_in_for_each_other(self):
+        value = runtime_list(LINUX, 7)
+        compact = self.jws(value, RUNTIME)
+        self.assertEqual(release.verified_release(compact, [self.key], jws_type=RUNTIME), value)
+        with self.assertRaisesRegex(ValueError, "^Unexpected release signature type$"):
+            release.verified_release(compact, [self.key])
+        with self.assertRaisesRegex(ValueError, "^Unexpected runtime manifest signature type$"):
+            release.verified_release(self.signed(7), [self.key], jws_type=RUNTIME)
+        flipped = compact[:-2] + (b"AA" if compact[-2:] != b"AA" else b"BA")
+        untrusted = [base64.urlsafe_b64encode(bytes(32)).decode().rstrip("=")]
+        expired = self.jws(runtime_list(LINUX, 7, issued_at=100), RUNTIME)
+        for signed, keys, reason in [(flipped, [self.key], "Runtime manifest signature verification failed"),
+                                     (compact, untrusted, "Runtime manifest signature is not trusted by STANDALONE_RELEASE_PUBLIC_KEYS"),
+                                     (expired, [self.key], "Runtime manifest is expired or not yet valid")]:
+            with self.subTest(reason), self.assertRaisesRegex(ValueError, f"^{reason}$"):
+                release.verified_release(signed, keys, jws_type=RUNTIME)
+
+    def test_renewal_copies_each_runtime_list_with_the_release_dates_under_its_own_number(self):
+        stable = self.signed(7, validity_days=30)
+        published = {LINUX: self.jws(runtime_list(LINUX, 7, validity_days=30), RUNTIME),
+                     MAC: self.jws(runtime_list(MAC, 6, validity_days=30), RUNTIME)}
+        output, runtimes = self.directory / "renewal.json", self.directory / "renewed-runtimes"
+        warnings = io.StringIO()
+        with self.cdn({STABLE_URL: stable, **{runtime_url(target): compact for target, compact in published.items()}}), \
+                contextlib.redirect_stdout(warnings):
+            value = release.renew_manifest(BASE, self.keys, output, 365, sequence=7, runtime_output=runtimes)
+        self.assertEqual(self.requests, [("GET", url) for url in [STABLE_URL, *map(runtime_url, release.TARGETS)]])
+        self.assertEqual(warnings.getvalue(), f"::warning::The {MAC} runtime manifest is number 6, older than release 7; "
+                                              "it is renewed under its own number\n")
+        self.assertEqual(sorted(path.name for path in runtimes.iterdir()), [f"{MAC}.json", f"{LINUX}.json"])
+        for target, compact in published.items():
+            before = release.verified_release(compact, [self.key], False, RUNTIME)
+            after = json.loads((runtimes / f"{target}.json").read_text())
+            self.assertEqual(list(after), list(before))
+            self.assertEqual(without_dates(after), without_dates(before))
+            self.assertEqual({name: after[name] for name in DATES}, {name: value[name] for name in DATES})
+        self.assertEqual(value["expires_at"] - value["issued_at"], 365 * DAY)
+
+    def test_renewal_refuses_a_runtime_list_newer_than_the_release_or_signed_as_another_document(self):
+        stable = self.signed(7)
+        output, runtimes = self.directory / "renewal.json", self.directory / "renewed-runtimes"
+        for listed, reason in [(self.jws(runtime_list(LINUX, 8), RUNTIME), f"The {LINUX} runtime manifest is number 8, newer than release 7"),
+                               (self.jws(runtime_list(LINUX, 7)), "Unexpected runtime manifest signature type")]:
+            with self.subTest(reason), self.cdn({STABLE_URL: stable, runtime_url(LINUX): listed}), \
+                    self.assertRaisesRegex(ValueError, reason):
+                release.renew_manifest(BASE, self.keys, output, sequence=7, runtime_output=runtimes)
+        self.assertFalse(output.exists() or runtimes.exists())
+
+    def test_renewal_is_due_when_any_list_runs_short(self):
+        stable = self.signed(7)
+        output, runtimes = self.directory / "renewal.json", self.directory / "renewed-runtimes"
+        arguments = ["renew-manifest", "--base-url", BASE, "--public-keys", self.keys, "--output", str(output),
+                     "--only-if-days-left", "60", "--runtime-output", str(runtimes)]
+        notice = io.StringIO()
+        with self.cdn({STABLE_URL: stable, runtime_url(LINUX): self.jws(runtime_list(LINUX, 7), RUNTIME)}), \
+                contextlib.redirect_stdout(notice):
+            release.main(arguments)
+        self.assertRegex(notice.getvalue(), r"^::notice::Release 7 and its runtime pack lists are valid for 364 more days, "
+                                            r"more than 60; nothing was renewed\n$")
+        self.assertFalse(output.exists() or runtimes.exists())
+        with self.cdn({STABLE_URL: stable, runtime_url(LINUX): self.jws(runtime_list(LINUX, 7, validity_days=30), RUNTIME)}):
+            release.main(arguments)
+        renewed = json.loads(output.read_text())
+        self.assertEqual((renewed["sequence"], renewed["expires_at"] - renewed["issued_at"]), (7, 365 * DAY))
+        self.assertEqual(json.loads((runtimes / f"{LINUX}.json").read_text())["expires_at"], renewed["expires_at"])
+
+    def test_renewal_replaces_each_stable_runtime_list_before_the_release_and_reads_each_back(self):
+        store = self.published_with_runtime_lists(10, LINUX, MAC)
+        writes = list(store.writes)
+        renewed = {target: self.runtime_renewal(store, target) for target in (LINUX, MAC)}
+        signed = self.renewal(store)
+        read = []
+        self.assertEqual(self.renew(store, lambda *call: read.append(call)), {"sequence": 10, "manifest_url": STABLE_URL})
+        order = [target for target in release.TARGETS if target in renewed]
+        self.assertEqual(store.writes, writes + [(runtime_key(target), False) for target in order] + [(STABLE_KEY, False)])
+        self.assertEqual(read, [(runtime_url(target), len(renewed[target]), hashlib.sha256(renewed[target]).hexdigest())
+                                for target in order] + [(STABLE_URL, len(signed), hashlib.sha256(signed).hexdigest())])
+        self.assertEqual({target: store.objects[runtime_key(target)] for target in renewed}, renewed)
+        self.renew(store)
+        self.assertEqual(len(store.writes), len(writes) + 3, "a retry finds every list renewed")
+        summary = io.StringIO()
+        with contextlib.redirect_stdout(summary):
+            release.summary(self.directory, self.keys, renewed=True)
+        self.assertIn(f"| Runtime pack lists | {MAC} (number 10), {LINUX} (number 10) |\n", summary.getvalue())
+
+    def test_runtime_list_renewal_writes_nothing_unless_every_published_list_is_only_redated(self):
+        store = self.published_with_runtime_lists(10, LINUX)
+        stable, writes = dict(store.objects), list(store.writes)
+        self.renewal(store)
+        published = release.verified_release(store.objects[runtime_key(LINUX)], [self.key], False, RUNTIME)
+        pack = {**published["packs"][0], "sha256": "c" * 64}
+        for changes, reason in [({"packs": [pack]}, f"may change only the dates of {runtime_key(LINUX)}"),
+                                ({"sequence": 11}, f"may change only the dates of {runtime_key(LINUX)}"),
+                                ({"issued_at": 100, "expires_at": 200}, "Runtime manifest is expired")]:
+            with self.subTest(reason):
+                self.runtime_renewal(store, LINUX, **changes)
+                with self.assertRaisesRegex(ValueError, reason):
+                    self.renew(store)
+        (self.directory / "runtimes" / f"{LINUX}.jws").unlink()
+        with self.assertRaisesRegex(ValueError, f"{runtime_key(LINUX)} is published, but this renewal carries no re-dated copy"):
+            self.renew(store)
+        self.runtime_renewal(store, LINUX)
+        self.sign_runtime(MAC, runtime_list(MAC, 10))
+        with self.assertRaisesRegex(ValueError, f"No published runtime manifest {runtime_key(MAC)} to renew"):
+            self.renew(store)
+        self.assertEqual((store.objects, store.writes), (stable, writes))
+
+    def test_runtime_list_renewal_loses_to_a_concurrent_publisher_before_the_release_moves(self):
+        store = self.published_with_runtime_lists(10, LINUX)
+        release_list = store.objects[STABLE_KEY]
+        self.runtime_renewal(store, LINUX)
+        self.renewal(store)
+        newer = self.jws(runtime_list(LINUX, 11), RUNTIME)
+        store.race = newer
+        with self.assertRaisesRegex(ValueError, f"^Stable runtime manifest {runtime_key(LINUX)} changed concurrently; refusing to overwrite it$"):
+            self.renew(store)
+        self.assertEqual((store.objects[runtime_key(LINUX)], store.objects[STABLE_KEY]), (newer, release_list))
+
+    def test_only_a_renewal_summary_names_runtime_lists(self):
+        self.signed(7)
+        def summary(renewed):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                release.summary(self.directory, self.keys, renewed=renewed)
+            return output.getvalue()
+        self.assertIn("| Runtime pack lists | none published |\n", summary(True))
+        self.assertNotIn("Runtime pack lists", summary(False))
 
     def test_summary_states_number_version_end_date_and_the_next_step(self):
         self.signed(7, issued_at=1_800_000_000, validity_days=365)

@@ -16,7 +16,10 @@ use std::{
     },
 };
 
+mod model_access;
+mod models;
 pub mod run_queue;
+pub(crate) mod tunnel;
 
 /// Terminal rows stay replayable and readable by status lookups for this long.
 const JOURNAL_RETENTION_SECONDS: i64 = 86_400;
@@ -188,6 +191,12 @@ pub(crate) fn rejection_code(error: &anyhow::Error) -> RejectionCode {
                 .map(|_| RejectionCode::Invalid)
         })
         .unwrap_or(RejectionCode::Failed)
+}
+
+/// A refusal with `code`, for tests outside this module that map refusals.
+#[cfg(all(test, feature = "runtime"))]
+pub(crate) fn test_refusal(code: RejectionCode) -> anyhow::Error {
+    refusal(code, format!("Refused as {}", code.as_str()))
 }
 
 fn bounded_text(mut text: String) -> String {
@@ -587,7 +596,7 @@ impl ManagementConnection {
                 return Ok(response);
             }
             self.session = Some(handshake.finish()?);
-            return Ok(self.session.as_mut().context("Missing Noise session")?.encrypt(&serde_json::to_vec(&json!({"ready":true,"device_id":self.certificate.device_id,"boot_id":self.service.boot_id,"expires_at":self.certificate.expires_at}))?)?);
+            return Ok(self.session.as_mut().context("Missing Noise session")?.encrypt(&serde_json::to_vec(&json!({"ready":true,"device_id":self.certificate.device_id,"boot_id":self.service.boot_id,"expires_at":self.certificate.expires_at,"data_tunnel":1,"service_tunnel":1}))?)?);
         }
         let session = self
             .session
@@ -641,6 +650,9 @@ impl ManagementConnection {
             .await
             .map_err(anyhow::Error::from)
             .and_then(|result| result)
+        } else if matches!(request.command, ManagementCommand::Models { .. }) {
+            drop(store);
+            models::execute_async(&self.service, &authority, &request, now).await
         } else if matches!(
             request.command,
             ManagementCommand::TelemetryPolicy { .. }
@@ -2112,6 +2124,19 @@ fn execute(
                 },
             );
         }
+        ManagementCommand::ServiceListeners { placement_id } => {
+            return authorized_read(
+                store,
+                authority.read_guard(
+                    manifest,
+                    request,
+                    now,
+                    Some(ManagementCapability::ServiceConnect),
+                    Some(placement_id),
+                ),
+                || tunnel::service_listeners(store, authority, request, placement_id),
+            );
+        }
         ManagementCommand::PlacementConfiguration { placement_id } => {
             return authorized_read(
                 store,
@@ -2530,6 +2555,16 @@ fn execute(
                 },
             );
         }
+        ManagementCommand::Models { .. } => {
+            return models::read(
+                store,
+                authority,
+                request,
+                manifest,
+                now,
+                noise::MAX_PLAINTEXT,
+            );
+        }
         _ => (),
     }
     // Intent changes and their durable result share one write transaction. A caller can
@@ -2715,6 +2750,8 @@ fn require_buffered_writes_drained(
 /// gives a reserved queue place back.
 enum AfterCommit {
     Enqueue(run_queue::Reservation, run_queue::Admission),
+    #[cfg(feature = "runtime")]
+    ReleaseModels(String),
     Cancel {
         placement_id: String,
         operation_id: String,
@@ -2725,6 +2762,15 @@ impl AfterCommit {
     fn run(self, state_dir: &Path) {
         match self {
             Self::Enqueue(reservation, admission) => reservation.enqueue(admission),
+            #[cfg(feature = "runtime")]
+            Self::ReleaseModels(placement_id) => {
+                if let Some(host) = crate::models::host::ModelHost::current()
+                    .filter(|host| host.state_dir() == state_dir)
+                    && let Err(error) = host.supervisor().release_placement(&placement_id)
+                {
+                    tracing::warn!(placement = %placement_id, "Release removed placement model files: {error:#}");
+                }
+            }
             Self::Cancel {
                 placement_id,
                 operation_id,
@@ -3439,6 +3485,7 @@ fn execute_transaction(
                 &config,
             )?;
             validate_remote_project_path(state_dir, &config).reject_as(RejectionCode::Invalid)?;
+            model_access::require(authority, &config, &manifest.device_id)?;
             if let Some(id) = &config.tls_certificate_id {
                 crate::certificates::validate_binding(store, state_dir, id, now)
                     .reject_as(RejectionCode::Invalid)?;
@@ -3485,6 +3532,7 @@ fn execute_transaction(
                 Some(&rollout.project_id),
                 Some(&rollout.placement_id),
             )?;
+            model_access::require(authority, &rollout.candidate_config, &manifest.device_id)?;
             project = Some(rollout.project_id);
             placement = Some(rollout.placement_id);
             store.begin_rollout_validation(rollout_id, now)?.status()
@@ -3557,6 +3605,10 @@ fn execute_transaction(
             }
             if matches!(request.command, ManagementCommand::Remove { .. }) {
                 store.remove_placement(placement_id)?;
+                #[cfg(feature = "runtime")]
+                {
+                    after_commit = Some(AfterCommit::ReleaseModels(placement_id.clone()));
+                }
             } else {
                 store.set_desired_state(
                     placement_id,
@@ -3662,6 +3714,7 @@ fn execute_transaction(
                 &config,
             )?;
             validate_remote_project_path(state_dir, &config).reject_as(RejectionCode::Invalid)?;
+            model_access::require(authority, &config, &manifest.device_id)?;
             if let Some(id) = &config.tls_certificate_id {
                 crate::certificates::validate_binding(store, state_dir, id, now)
                     .reject_as(RejectionCode::Invalid)?;
@@ -4273,6 +4326,62 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM host_operations", [], |r| r.get(0))?;
             assert_eq!(queued, 0);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn model_reads_need_a_capability_and_writes_never_run_synchronously() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = crate::supervisor::prepare_state_dir(temp.path())?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let deployer = project_grant(
+            "deployer",
+            vec![ManagementCapability::Deploy, ManagementCapability::Status],
+            1000,
+        );
+        accept_grants(&store, &signing, &[&deployer], 100, 1000)?;
+        for (authority, id, models, code) in [
+            (
+                &deployer,
+                "models-read",
+                ModelsRequest::Overview {},
+                "unauthorized",
+            ),
+            (
+                &owner,
+                "models-write",
+                ModelsRequest::Load {
+                    model_id: "qwen3-8b".into(),
+                },
+                "invalid",
+            ),
+            (&owner, "models-probe", ModelsRequest::Probe {}, "invalid"),
+        ] {
+            let error = execute(
+                &mut store,
+                authority,
+                &request(id, ManagementCommand::Models { request: models }),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )
+            .unwrap_err();
+            let response = rejected(authority, id, rejection_code(&error), format!("{error:#}"));
+            assert_eq!(response.state, "rejected");
+            assert_eq!(response.result["code"], code);
+            assert_eq!(response.result["retryable"], false);
+        }
+        let journaled: u64 =
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM management_operations", [], |r| {
+                    r.get(0)
+                })?;
+        assert_eq!(journaled, 0);
         Ok(())
     }
 
@@ -4961,12 +5070,25 @@ mod tests {
         ] {
             assert_eq!(owned["features"][flag], 1, "{flag}");
         }
+        // Model readiness can change while parallel host fixtures start and stop.
+        // Each captured inspection must advertise the complete supported family together.
+        let hosts_models = owned["features"].get("model_host").is_some();
+        assert!(!hosts_models || cfg!(feature = "runtime"));
         for (flag, built) in [
             ("api_events", crate::event_kind::API_EVENTS),
             ("scheduled_once", crate::event_kind::SCHEDULED_ONCE),
             ("on_demand_events", crate::event_kind::ON_DEMAND_EVENTS),
             ("telegram_bots", crate::event_kind::TELEGRAM_BOTS),
             ("discord_bots", crate::event_kind::DISCORD_BOTS),
+            ("model_store", hosts_models),
+            ("model_host", hosts_models),
+            ("model_runtime_llamacpp", hosts_models),
+            ("model_runtime_onnx", hosts_models),
+            ("model_runtime_manifest", hosts_models),
+            (
+                "model_runtime_mlx",
+                hosts_models && cfg!(all(target_os = "macos", target_arch = "aarch64")),
+            ),
         ] {
             assert_eq!(owned["features"].get(flag).is_some(), built, "{flag}");
         }

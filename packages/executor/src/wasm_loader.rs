@@ -45,28 +45,18 @@ async fn wasm_engine() -> Result<Arc<WasmEngine>, ExecutorError> {
         .cloned()
 }
 
-fn package_cache_key(
-    app_id: &str,
-    board_id: &str,
-    board_version: Option<(u32, u32, u32)>,
-    package_id: &str,
-    pkg_ref: &WasmPackageRef,
-) -> String {
-    let board_version = match board_version {
-        Some((major, minor, patch)) => format!("{major}_{minor}_{patch}"),
-        None => "latest".to_string(),
-    };
-
-    format!(
-        "{}:{}:{}:{}@{}:{}:{}",
+fn package_cache_key(app_id: &str, package_id: &str, pkg_ref: &WasmPackageRef) -> String {
+    // Definitions and compiled code contain no board or run state. Keep the
+    // app boundary, but reuse them across boards and rotating presigned URLs.
+    serde_json::json!([
         app_id,
-        board_id,
-        board_version,
         package_id,
         pkg_ref.version,
         pkg_ref.wasm_hash,
-        pkg_ref.cwasm_checksum
-    )
+        pkg_ref.cwasm_checksum,
+        flow_like_wasm::aot_cache::WASM_ARTIFACT_VERSION,
+    ])
+    .to_string()
 }
 
 /// Load WASM packages from presigned URLs and return node logic instances.
@@ -77,7 +67,7 @@ fn package_cache_key(
 pub(crate) async fn load_wasm_packages(
     app_id: &str,
     board_id: &str,
-    board_version: Option<(u32, u32, u32)>,
+    _board_version: Option<(u32, u32, u32)>,
     wasm_packages: &HashMap<String, WasmPackageRef>,
 ) -> Result<WasmLoadReport, ExecutorError> {
     if wasm_packages.is_empty() {
@@ -93,7 +83,7 @@ pub(crate) async fn load_wasm_packages(
     let mut failed_package_ids = BTreeSet::new();
 
     for (package_id, pkg_ref) in wasm_packages {
-        let cache_key = package_cache_key(app_id, board_id, board_version, package_id, pkg_ref);
+        let cache_key = package_cache_key(app_id, package_id, pkg_ref);
         if let Some(cached_nodes) = WASM_PACKAGE_CACHE.get(&cache_key) {
             tracing::debug!(
                 app_id = %app_id,
@@ -304,11 +294,43 @@ async fn deserialize_cwasm(
                     Ok(LoadedWasm::Component(Arc::new(component)))
                 }
                 Err(component_error) => Err(ExecutorError::Execution(format!(
-                    "Failed to deserialize cwasm for {} v{} as module ({}) or component ({})",
+                    "Failed to deserialize cwasm for {} v{} as module ({:#}) or component ({:#})",
                     package_id, pkg_ref.version, module_error, component_error
                 ))),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package() -> WasmPackageRef {
+        WasmPackageRef {
+            version: "1.0.0".into(),
+            wasm_hash: "source-hash".into(),
+            wasm_url: "https://example.test/source?token=one".into(),
+            cwasm_url: "https://example.test/compiled?token=one".into(),
+            cwasm_checksum: "compiled-hash".into(),
+        }
+    }
+
+    #[test]
+    fn package_identity_reuses_rotating_urls_but_isolates_apps_and_recompiled_artifacts() {
+        let first = package();
+        let key = package_cache_key("app-one", "package", &first);
+        let mut refreshed = first.clone();
+        refreshed.wasm_url.push_str("-new");
+        refreshed.cwasm_url.push_str("-new");
+        assert_eq!(key, package_cache_key("app-one", "package", &refreshed));
+        assert_ne!(key, package_cache_key("app-two", "package", &first));
+        assert_ne!(key, package_cache_key("app-one", "other-package", &first));
+        refreshed.cwasm_checksum = "portable-rebuild".into();
+        assert_ne!(key, package_cache_key("app-one", "package", &refreshed));
+        refreshed = first.clone();
+        refreshed.wasm_hash = "new-source".into();
+        assert_ne!(key, package_cache_key("app-one", "package", &refreshed));
     }
 }
 
