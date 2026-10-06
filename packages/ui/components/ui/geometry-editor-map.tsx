@@ -1,5 +1,7 @@
 "use client";
 
+import type * as GeoJSON from "geojson";
+
 import { useTranslation } from "@flow-like/locales";
 import type { GeoJSONSource, MapMouseEvent } from "maplibre-gl";
 import { type MutableRefObject, useEffect, useId, useMemo, useRef } from "react";

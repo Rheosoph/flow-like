@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { prepareMapLibreAssets } from "../../packages/ui/scripts/prepare-maplibre.mjs";
 
 // @ts-expect-error process is a nodejs global
 const mobile = !!/android|ios/.exec(process.env.TAURI_ENV_PLATFORM);
@@ -7,6 +8,11 @@ const host = process.env.TAURI_DEV_HOST;
 
 // @ts-ignore
 export default defineConfig(async () => ({
+	define: {
+		"process.env.NEXT_PUBLIC_MAPLIBRE_WORKER_URL": JSON.stringify(
+			prepareMapLibreAssets(new URL("./public/", import.meta.url)),
+		),
+	},
 	plugins: [
 		react(),
 		// tailwindcss()

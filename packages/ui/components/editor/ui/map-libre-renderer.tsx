@@ -1,6 +1,7 @@
 "use client";
 
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import { configureMapLibreWorker } from "../../../lib/maplibre-worker";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "next-themes";
 import { useEffect, useRef } from "react";
@@ -146,7 +147,9 @@ export function MapLibreRenderer({
 	useEffect(() => {
 		if (!containerRef.current) return;
 
+		configureMapLibreWorker();
 		const map = new maplibregl.Map({
+			zoomLevelsToOverscale: undefined,
 			container: containerRef.current,
 			style: buildStyle(isDark),
 			center: [center[1], center[0]],

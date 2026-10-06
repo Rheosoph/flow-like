@@ -1,4 +1,4 @@
-import maplibregl, { type MapOptions } from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import { Component, type ReactNode, useEffect } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { BaseEditorKit } from "../../components/editor/editor-base-kit";
@@ -40,21 +40,21 @@ getStaticParseWorker(BaseEditorKit);
 const liveMaps = new Set<maplibregl.Map>();
 const busyMaps = new Set<maplibregl.Map>();
 
-class TrackedMap extends maplibregl.Map {
-	constructor(options: MapOptions) {
-		super(options);
-		liveMaps.add(this);
-		busyMaps.add(this);
-		this.once("idle", () => busyMaps.delete(this));
-	}
-
-	remove() {
+const fire = maplibregl.Map.prototype.fire;
+maplibregl.Map.prototype.fire = function (...args) {
+	const type = typeof args[0] === "string" ? args[0] : args[0].type;
+	if (type === "remove") {
 		liveMaps.delete(this);
 		busyMaps.delete(this);
-		super.remove();
+	} else {
+		if (!liveMaps.has(this)) {
+			liveMaps.add(this);
+			busyMaps.add(this);
+		}
+		if (type === "idle") busyMaps.delete(this);
 	}
-}
-Object.assign(maplibregl, { Map: TrackedMap });
+	return Reflect.apply(fire, this, args);
+};
 
 function pendingWork() {
 	const untracked =

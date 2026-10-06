@@ -1,7 +1,10 @@
 "use client";
 
+import type * as GeoJSON from "geojson";
+
 import { useTranslation } from "@flow-like/locales";
-import MapLibreGL, { type PopupOptions, type MarkerOptions } from "maplibre-gl";
+import * as MapLibreGL from "maplibre-gl";
+import type { PopupOptions, MarkerOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Loader2, Locate, Maximize, Minus, Plus, X } from "lucide-react";
 import {
@@ -20,6 +23,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { observeResize } from "../../lib/observe-resize";
+import { configureMapLibreWorker } from "../../lib/maplibre-worker";
 import type { LocationFix } from "../../lib/location";
 import { cn } from "../../lib/utils";
 import { useMapLocation, type MapLocationError } from "./map-location";
@@ -219,7 +223,10 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
 			resolvedTheme === "dark" ? mapStyles.dark : mapStyles.light;
 		currentStyleRef.current = initialStyle;
 
+		configureMapLibreWorker();
 		const map = new MapLibreGL.Map({
+			// Retain v5's tile overscaling and feature-query behavior.
+			zoomLevelsToOverscale: undefined,
 			container: containerRef.current,
 			style: initialStyle,
 			renderWorldCopies: false,
