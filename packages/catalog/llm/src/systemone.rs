@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
 
+use flow_like::bit::Bit;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
-    pin::{PinOptions, ValueType},
+    pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 use flow_like_model_provider::systemone::{
     NoulCriteria, SystemOneAnswer, SystemOneQuestion, SystemOneRequest, SystemOneResponse,
 };
@@ -17,7 +20,7 @@ fn base_node(name: &str, label: &str, description: &str, method: &str) -> Node {
     let mut node = Node::new(name, label, description, "AI/Decisions");
     node.set_flowscript_name("ai.systemone", method);
     node.add_icon("/flow/icons/bot-invoke.svg");
-    node.set_version(1);
+    node.set_version(2);
     node.set_long_running(true);
     node.add_input_pin(
         "exec_in",
@@ -28,9 +31,11 @@ fn base_node(name: &str, label: &str, description: &str, method: &str) -> Node {
     node.add_input_pin(
         "model",
         "Model",
-        "A SystemOne decision model from your profile",
-        VariableType::String,
-    );
+        "A SystemOne decision model Bit from Find Decision Model or Load Bit",
+        VariableType::Struct,
+    )
+    .set_schema::<Bit>()
+    .set_options(PinOptions::new().set_enforce_schema(true).build());
     node
 }
 
@@ -40,12 +45,7 @@ async fn invoke(
     request: &SystemOneRequest,
 ) -> Result<SystemOneResponse> {
     request.validate()?;
-    let model_ref: String = context.evaluate_pin("model").await?;
-    // Resolve at execution so the board stores a reference, without provider credentials.
-    let bit = context
-        .profile
-        .resolve_model_reference(&model_ref, context.app_state.http_client.clone())
-        .await?;
+    let bit: Bit = context.evaluate_pin("model").await?;
     let model = context
         .app_state
         .model_factory
@@ -152,13 +152,11 @@ fn decision_node(kind: DecisionKind) -> Node {
         ),
     };
     let mut node = base_node(name, label, description, method);
-    node.add_input_pin(
-        "state",
-        "State",
-        "Text or structured data to assess",
-        VariableType::Generic,
-    )
-    .set_default_value(Some(json!("I was charged twice for my order.")));
+    if !matches!(kind, DecisionKind::Noul) {
+        node.add_output_pin("done", "Done", "Decision complete", VariableType::Execution);
+    }
+    node.add_input_pin("state", "State", "Text to assess", VariableType::String)
+        .set_default_value(Some(json!("I was charged twice for my order.")));
     node.add_input_pin(
         "instructions",
         "Instructions",
@@ -169,9 +167,11 @@ fn decision_node(kind: DecisionKind) -> Node {
     node.add_input_pin(
         "images",
         "Images",
-        "Optional base64 image data URLs; requires an image-capable decision model and projector",
-        VariableType::String,
+        "Optional images; requires an image-capable decision model and projector",
+        VariableType::Struct,
     )
+    .set_schema::<NodeImage>()
+    .set_options(PinOptions::new().set_enforce_schema(true).build())
     .set_value_type(ValueType::Array)
     .set_default_value(Some(json!([])));
     match kind {
@@ -260,7 +260,6 @@ fn decision_node(kind: DecisionKind) -> Node {
         }
     }
     if !matches!(kind, DecisionKind::Noul) {
-        node.add_output_pin("done", "Done", "Decision complete", VariableType::Execution);
         node.add_output_pin(
             "probabilities",
             "Probabilities",
@@ -279,12 +278,12 @@ fn decision_node(kind: DecisionKind) -> Node {
 }
 
 fn single_request(
-    state: Value,
+    state: String,
     images: Vec<String>,
     question: SystemOneQuestion,
 ) -> Result<SystemOneRequest> {
     let request = SystemOneRequest {
-        state,
+        state: Value::String(state),
         images,
         questions: BTreeMap::from([(QUESTION_ID.to_owned(), question)]),
     };
@@ -351,9 +350,21 @@ async fn run_decision(context: &mut ExecutionContext, kind: DecisionKind) -> Res
         context.deactivate_exec_pin("done").await?;
         None
     };
-    let state: Value = context.evaluate_pin("state").await?;
+    let state: String = context.evaluate_pin("state").await?;
     let instructions: String = context.evaluate_pin("instructions").await?;
-    let images: Vec<String> = context.evaluate_pin("images").await?;
+    let images: Vec<NodeImage> = context.evaluate_pin("images").await?;
+    let mut image_urls = Vec::with_capacity(images.len());
+    for image in images {
+        let image_ref = image.get_image(context).await?;
+        let image = image_ref.lock().await;
+        image_urls.push(
+            flow_like_types::utils::data_url::image_to_data_url(
+                &image,
+                flow_like_types::image::ImageFormat::Png,
+            )
+            .await?,
+        );
+    }
     let question = match kind {
         DecisionKind::Noul => noul_question(
             instructions,
@@ -378,7 +389,7 @@ async fn run_decision(context: &mut ExecutionContext, kind: DecisionKind) -> Res
             }
         }
     };
-    let request = single_request(state, images, question)?;
+    let request = single_request(state, image_urls, question)?;
     let response = invoke(context, &request).await?;
     match single_answer(&request, response)? {
         SystemOneAnswer::Noul { noul } => {
@@ -451,6 +462,22 @@ macro_rules! decision_node_logic {
                     run_decision(context, DecisionKind::$kind).await
                 })
             }
+
+            async fn on_update(&self, node: &mut Node, _board: &Board) {
+                if matches!(DecisionKind::$kind, DecisionKind::Noul) {
+                    return;
+                }
+                // Catalog upgrades preserve placed pin indices, so move Done explicitly.
+                let mut outputs: Vec<_> = node
+                    .pins
+                    .values_mut()
+                    .filter(|pin| pin.pin_type == PinType::Output)
+                    .collect();
+                outputs.sort_by_key(|pin| (pin.name != "done", pin.index));
+                for (index, pin) in outputs.into_iter().enumerate() {
+                    pin.index = index as u16 + 1;
+                }
+            }
         }
     };
 }
@@ -461,6 +488,7 @@ decision_node_logic!(SystemOneScore, Score);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::flow::board::cleanup::sync_node_schema::sync_node_with_catalog;
     use flow_like_types::json as serde_json;
 
     #[test]
@@ -478,7 +506,7 @@ mod tests {
 
     #[test]
     fn systemone_direct_requests_preserve_state_descriptions_and_level_order() {
-        let state = json!({"ticket":"Duplicate charge","amount":49});
+        let state = r#"{"ticket":"Duplicate charge","amount":49}"#.to_owned();
         let request = single_request(
             state.clone(),
             vec![],
@@ -486,13 +514,13 @@ mod tests {
         )
         .unwrap();
         let value = json!(request);
-        assert_eq!(value["state"], state);
+        assert_eq!(value["state"], json!(state));
         assert_eq!(
             value["questions"][QUESTION_ID]["criteria"],
             json!({"true":"Duplicate charge"})
         );
         let request = single_request(
-            json!("text"),
+            "text".into(),
             vec![],
             noul_question("Urgent?".into(), "".into(), " ".into()),
         )
@@ -517,15 +545,7 @@ mod tests {
         );
         assert!(
             single_request(
-                json!(true),
-                vec![],
-                noul_question("Ready?".into(), "".into(), "".into())
-            )
-            .is_err()
-        );
-        assert!(
-            single_request(
-                json!("text"),
+                "text".into(),
                 vec![],
                 SystemOneQuestion::Choice {
                     instructions: json!("Route?"),
@@ -536,7 +556,7 @@ mod tests {
         );
         assert!(
             single_request(
-                json!("text"),
+                "text".into(),
                 vec![],
                 SystemOneQuestion::Score {
                     instructions: json!("Rate?"),
@@ -550,7 +570,7 @@ mod tests {
     #[test]
     fn systemone_direct_answers_reject_missing_mismatched_and_invalid_decisions() {
         let request = single_request(
-            json!("text"),
+            "text".into(),
             vec![],
             SystemOneQuestion::Choice {
                 instructions: json!("Route?"),
@@ -586,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn systemone_direct_nodes_have_typed_pins_and_only_profile_model_references() {
+    fn systemone_nodes_accept_model_bits_and_typed_decision_inputs() {
         let nodes = [
             InvokeSystemOne::new().get_node(),
             SystemOneNoul::new().get_node(),
@@ -594,9 +614,14 @@ mod tests {
             SystemOneScore::new().get_node(),
         ];
         for node in &nodes {
-            assert_eq!(node.version, Some(1));
+            assert_eq!(node.version, Some(2));
             let model = node.pins.values().find(|pin| pin.name == "model").unwrap();
-            assert_eq!(model.data_type, VariableType::String);
+            assert_eq!(model.data_type, VariableType::Struct);
+            assert_eq!(
+                model.schema,
+                flow_like::flow::pin::Pin::schema_string_for::<Bit>()
+            );
+            assert_eq!(model.options.as_ref().unwrap().enforce_schema, Some(true));
         }
         let mut branches: Vec<_> = nodes[1]
             .pins
@@ -610,9 +635,28 @@ mod tests {
         branches.sort();
         assert_eq!(branches, ["false", "true"]);
         for node in &nodes[1..] {
+            assert_eq!(node.version, Some(2));
+            let state = node.pins.values().find(|pin| pin.name == "state").unwrap();
+            assert_eq!(state.data_type, VariableType::String);
+            assert_eq!(state.value_type, ValueType::Normal);
             let images = node.pins.values().find(|pin| pin.name == "images").unwrap();
-            assert_eq!(images.data_type, VariableType::String);
+            assert_eq!(images.data_type, VariableType::Struct);
             assert_eq!(images.value_type, ValueType::Array);
+            assert_eq!(
+                images.schema,
+                flow_like::flow::pin::Pin::schema_string_for::<NodeImage>()
+            );
+            assert_eq!(images.options.as_ref().unwrap().enforce_schema, Some(true));
+        }
+        for node in [&nodes[0], &nodes[2], &nodes[3]] {
+            let first_output = node
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == flow_like::flow::pin::PinType::Output)
+                .min_by_key(|pin| pin.index)
+                .unwrap();
+            assert_eq!(first_output.name, "done");
+            assert_eq!(first_output.data_type, VariableType::Execution);
         }
         for (node, pin_name, kind, value_type) in [
             (
@@ -649,6 +693,67 @@ mod tests {
             let pin = node.pins.values().find(|pin| pin.name == pin_name).unwrap();
             assert_eq!(pin.data_type, kind);
             assert_eq!(pin.value_type, value_type);
+        }
+    }
+
+    #[tokio::test]
+    async fn systemone_upgrades_move_done_first_and_preserve_output_connections() {
+        let board = Board::new_detached(None, "systemone-test".into());
+        let nodes: Vec<Box<dyn NodeLogic>> = vec![
+            Box::new(SystemOneChoice::new()),
+            Box::new(SystemOneScore::new()),
+        ];
+        for logic in nodes {
+            let catalog = logic.get_node();
+            let mut placed = catalog.clone();
+            placed.version = Some(1);
+            let done_index = if placed.name == "ai_systemone_choice" {
+                2
+            } else {
+                3
+            };
+            for pin in placed.pins.values_mut() {
+                match pin.name.as_str() {
+                    "state" => pin.data_type = VariableType::Generic,
+                    "model" | "images" => {
+                        pin.data_type = VariableType::String;
+                        pin.schema = None;
+                        pin.options = None;
+                    }
+                    _ => {}
+                }
+                if pin.pin_type != PinType::Output {
+                    continue;
+                }
+                if pin.name == "done" {
+                    pin.index = done_index;
+                    pin.connected_to.insert("next-node-exec".into());
+                } else if pin.index <= done_index {
+                    pin.index -= 1;
+                }
+            }
+            let before = placed.pins.clone();
+
+            sync_node_with_catalog(&mut placed, &catalog);
+            logic.on_update(&mut placed, &board).await;
+
+            for name in ["model", "state", "images"] {
+                let expected = catalog.get_pin_by_name(name).unwrap();
+                let upgraded = placed.get_pin_by_name(name).unwrap();
+                assert_eq!(upgraded.data_type, expected.data_type);
+                assert_eq!(upgraded.schema, expected.schema);
+            }
+            for pin in placed
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Output)
+            {
+                let expected = catalog.get_pin_by_name(&pin.name).unwrap();
+                assert_eq!(pin.index, expected.index);
+                assert_eq!(pin.connected_to, before[&pin.id].connected_to);
+                assert_eq!(pin.depends_on, before[&pin.id].depends_on);
+            }
+            assert_eq!(placed.version, Some(2));
         }
     }
 }

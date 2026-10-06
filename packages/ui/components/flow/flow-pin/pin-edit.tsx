@@ -14,7 +14,7 @@ import type { IBoard } from "../../../lib/schema/flow/board";
 import type { IPin } from "../../../lib/schema/flow/pin";
 import useFlowControlState from "../../../state/flow-control-state";
 import type { FlowSelectorDataRef } from "../flow-selector-data";
-import { isSystemOneModelPin, resolvePinEditorKind } from "./pin-editor-kind";
+import { resolvePinEditorKind } from "./pin-editor-kind";
 import { BitVariable } from "./variable-types/bit-select";
 import { BooleanVariable } from "./variable-types/boolean-variable";
 import { VariableDescription } from "./variable-types/default-text";
@@ -201,7 +201,6 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 		case "bit":
 			return (
 				<BitVariable
-					bitType={isSystemOneModelPin(pin, nodeName) ? "SystemOne" : undefined}
 					pin={pin}
 					value={cachedDefaultValue}
 					setValue={updateDefaultValue}

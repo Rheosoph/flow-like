@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Loader2, RefreshCw } from "lucide-react";
+import { ArrowUpCircle, Loader2, RefreshCw } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { reloadMicroWidgetInstance } from "../a2ui/micro-widget-reload";
 import type { MicroWidgetInstanceComponent } from "../a2ui/types";
@@ -23,7 +23,7 @@ export function MicroWidgetReloadNotice({
 	componentId: string;
 	micro: MicroWidgetInstanceComponent;
 }) {
-	const { t } = useTranslation("flow");
+	const { t } = useTranslation(["flow", "store"]);
 	const { updateFor, reload, reloadAll, isReloadingAll } =
 		useMicroWidgetReload();
 	const [reloading, setReloading] = useState(false);
@@ -114,9 +114,9 @@ export function MicroWidgetReloadNotice({
 						{isReloadingAll ? (
 							<Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
 						) : (
-							<RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+							<ArrowUpCircle className="mr-1.5 h-3.5 w-3.5" />
 						)}
-						{t("updateAllWidgets", "Update all")}
+						{t("store:appPackageWidgetUpdateAll", "Update all widgets")}
 					</Button>
 				)}
 			</div>

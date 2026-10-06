@@ -62,7 +62,7 @@ describe("bit select", () => {
 	});
 });
 
-test("SystemOne model pins exclude chat Bits", async () => {
+test("Load Bit can select decision models and stores only their reference", async () => {
 	const decision = {
 		...model("decisions", "Decision model", "Local"),
 		type: "SystemOne",
@@ -84,21 +84,23 @@ test("SystemOne model pins exclude chat Bits", async () => {
 	let selected: unknown;
 	const { container } = await dom.render(
 		<BitVariable
-			pin={{ friendly_name: "Model", data_type: IVariableType.String } as IPin}
+			pin={{ friendly_name: "Bit", data_type: IVariableType.String } as IPin}
 			value={undefined}
 			setValue={(value) => {
 				selected = value;
 			}}
 			selectorDataRef={{ current: data }}
-			bitType="SystemOne"
 		/>,
 	);
 	await click(byRole("combobox", undefined, container));
 	expect(allByRole("option").map((option) => option.textContent)).toEqual([
+		"Chat model",
 		"Decision model",
 	]);
 	await click(byRole("option", "Decision model"));
-	expect(parseUint8ArrayToJson(selected as number[])).toBe("decisions");
+	expect(parseUint8ArrayToJson(selected as number[])).toBe(
+		"hub.test:decisions",
+	);
 	expect(
 		JSON.stringify(parseUint8ArrayToJson(selected as number[])),
 	).not.toContain("private-key");

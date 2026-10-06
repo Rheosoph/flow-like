@@ -30,8 +30,10 @@ Once assigned, select the model from compatible nodes in
 [Studio](/studio/overview/) or from FlowPilot's model picker.
 
 The **Decisions** category contains SystemOne models for classification,
-scoring, and yes/no assessments. Select these in **SystemOne Choice**,
-**SystemOne Score**, or **SystemOne Noul** in Studio. **Invoke SystemOne** asks
+scoring, and yes/no assessments. Connect **Find Decision Model** or **Load Bit**
+to **SystemOne Choice**, **SystemOne Score**, or **SystemOne Noul** in Studio.
+**Find Decision Model** selects an available model from the active Profile.
+**Invoke SystemOne** asks
 several named questions together. These models return typed answers and
 probabilities and do not appear in chat model pickers. Device deployments also
 require the model in the project's manifest dependencies; selecting a profile

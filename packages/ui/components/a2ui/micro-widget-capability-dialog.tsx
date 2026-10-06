@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	ArrowUpCircleIcon,
 	Loader2Icon,
 	RefreshCwIcon,
 	ServerCrashIcon,
@@ -151,7 +152,7 @@ export function MicroWidgetReloadAction({
 	onReloadAll?: () => void;
 	isReloadingAll?: boolean;
 }) {
-	const { t } = useTranslation("common");
+	const { t } = useTranslation(["common", "store"]);
 	return (
 		<div className="mt-1 flex flex-col items-start gap-2">
 			<p className="text-muted-foreground">
@@ -188,9 +189,9 @@ export function MicroWidgetReloadAction({
 						{isReloadingAll ? (
 							<Loader2Icon aria-hidden="true" className="animate-spin" />
 						) : (
-							<RefreshCwIcon aria-hidden="true" />
+							<ArrowUpCircleIcon aria-hidden="true" />
 						)}
-						{t("updateAllWidgets", "Update all")}
+						{t("store:appPackageWidgetUpdateAll", "Update all widgets")}
 					</Button>
 				)}
 			</div>

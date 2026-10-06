@@ -13,6 +13,7 @@ import type {
 import type { BuilderContextType, BuilderSnapshot } from "./BuilderContext";
 
 const window = new Window({ url: "https://builder.local" });
+Object.assign(window, { SyntaxError, TypeError });
 Object.assign(globalThis, {
 	window,
 	document: window.document,
@@ -144,6 +145,9 @@ mock.module("@flow-like/locales", () => ({
 	useTranslation: () => ({ t: translate }),
 }));
 mock.module("../../state/backend-state", () => ({ useBackend: () => backend }));
+mock.module("../a2ui/micro-widget-purpose-card", () => ({
+	WidgetSourceLevelBadge: () => null,
+}));
 const notice =
 	(kind: string) => (title: string, options?: Notice["options"]) => {
 		notices.push({ kind, title, options });
@@ -160,11 +164,34 @@ mock.module("sonner", () => ({
 
 const { BuilderProvider, useBuilder } = await import("./BuilderContext");
 const { useMicroWidgetReload } = await import("./use-micro-widget-reload");
+const { MicroWidgetReloadAction } = await import(
+	"../a2ui/micro-widget-capability-dialog"
+);
 
 function Reader({ index }: { index: number }) {
 	builder = useBuilder();
-	readers[index] = useMicroWidgetReload();
-	return null;
+	const reloader = useMicroWidgetReload();
+	readers[index] = reloader;
+	const placed = builder.getComponent("active-widget")?.component;
+	if (
+		index !== 0 ||
+		placed?.type !== "microWidgetInstance" ||
+		!reloader.updateFor(placed)
+	)
+		return null;
+	return (
+		<MicroWidgetReloadAction
+			onReload={() => void reloader.reload("active-widget")}
+			onReloadAll={reloader.reloadAll}
+			isReloadingAll={reloader.isReloadingAll}
+		/>
+	);
+}
+
+function updateAllButton() {
+	return Array.from(window.document.querySelectorAll("button")).find((button) =>
+		button.textContent?.includes("Update all widgets"),
+	);
 }
 
 async function settle() {
@@ -229,7 +256,12 @@ beforeEach(async () => {
 			</QueryClientProvider>,
 		);
 	});
-	await until(() => readers.length === 2 && client.isFetching() === 0);
+	await until(
+		() =>
+			readers.length === 2 &&
+			client.isFetching() === 0 &&
+			updateAllButton() !== undefined,
+	);
 });
 
 afterEach(async () => {
@@ -242,20 +274,23 @@ afterAll(async () => {
 	await window.happyDOM.abort();
 });
 
-test("all boards update while live unsaved edits survive and every reader shares pending state", async () => {
+test("the placeholder updates all boards, preserves live edits, and shares pending state", async () => {
 	let release = () => {};
 	remoteGate = new Promise<void>((resolve) => {
 		release = resolve;
 	});
-	let pending: Promise<void> | undefined;
+	expect(updateAllButton()).toBeDefined();
 	await act(async () => {
-		pending = readers[0].reloadAll?.();
+		updateAllButton()?.click();
 	});
 	await until(
 		() => remoteStarted && readers.every((reader) => reader.isReloadingAll),
 	);
+	expect(updateAllButton()?.disabled).toBe(true);
+	expect(updateAllButton()?.querySelector(".animate-spin")).not.toBeNull();
 	expect(listings).toBe(1);
 	await act(async () => {
+		updateAllButton()?.click();
 		await readers[1].reloadAll?.();
 	});
 	expect(listings).toBe(1);
@@ -271,9 +306,9 @@ test("all boards update while live unsaved edits survive and every reader shares
 	});
 	await act(async () => {
 		release();
-		await pending;
 	});
 	await until(() => readers.every((reader) => !reader.isReloadingAll));
+	expect(updateAllButton()).toBeUndefined();
 	expect(savedRemote.map((page) => [page.id, page.boardId])).toEqual([
 		["remote-a", "board-a"],
 		["remote-b", "board-b"],

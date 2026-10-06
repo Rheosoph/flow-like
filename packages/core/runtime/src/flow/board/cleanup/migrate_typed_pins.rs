@@ -19,23 +19,34 @@ struct Change {
     pin: Pin,
 }
 
-fn expected_contract(node: &str, pin: &str) -> Option<(u32, VariableType, PinType)> {
+fn expected_contract(node: &str, pin: &str) -> Option<(u32, VariableType, ValueType, PinType)> {
     match (node, pin) {
         ("browser_upload_multiple_files", "file_paths") => {
-            Some((1, VariableType::String, PinType::Input))
+            Some((1, VariableType::String, ValueType::Array, PinType::Input))
         }
         ("llm_observe_screen", "elements")
         | ("llm_plan_actions", "actions")
-        | ("llm_rank_candidates", "ranked") => Some((4, VariableType::Struct, PinType::Output)),
+        | ("llm_rank_candidates", "ranked") => {
+            Some((4, VariableType::Struct, ValueType::Array, PinType::Output))
+        }
         ("llm_resolve_element" | "llm_rank_candidates", "candidates") => {
-            Some((4, VariableType::Struct, PinType::Input))
+            Some((4, VariableType::Struct, ValueType::Array, PinType::Input))
+        }
+        ("ai_systemone_noul" | "ai_systemone_choice" | "ai_systemone_score", "state") => {
+            Some((2, VariableType::String, ValueType::Normal, PinType::Input))
         }
         _ => None,
     }
 }
 
 fn valid_literal(pin: &Pin, bytes: &[u8]) -> bool {
-    let Ok(Value::Array(values)) = flow_like_types::json::from_slice::<Value>(bytes) else {
+    let Ok(value) = flow_like_types::json::from_slice::<Value>(bytes) else {
+        return false;
+    };
+    if pin.value_type == ValueType::Normal {
+        return pin.data_type == VariableType::String && value.is_string();
+    }
+    let Value::Array(values) = value else {
         return false;
     };
     match pin.data_type {
@@ -58,13 +69,16 @@ fn valid_literal(pin: &Pin, bytes: &[u8]) -> bool {
 
 fn collect_changes(node: &Node, layer: Option<&str>, catalog: &Node, changes: &mut Vec<Change>) {
     for old in node.pins.values() {
-        let Some((version, data_type, direction)) = expected_contract(&node.name, &old.name) else {
+        let Some((version, data_type, value_type, direction)) =
+            expected_contract(&node.name, &old.name)
+        else {
             continue;
         };
         if catalog.version.is_none_or(|catalog| catalog < version)
             || node.version.is_some_and(|placed| placed >= version)
             || old.data_type != VariableType::Generic
             || !matches!(old.value_type, ValueType::Normal | ValueType::Array)
+            || (value_type == ValueType::Normal && old.value_type != ValueType::Normal)
             || old.pin_type != direction
         {
             continue;
@@ -73,13 +87,18 @@ fn collect_changes(node: &Node, layer: Option<&str>, catalog: &Node, changes: &m
             continue;
         };
         if target.data_type != data_type
-            || target.value_type != ValueType::Array
+            || target.value_type != value_type
             || target.pin_type != direction
         {
             continue;
         }
-        // Require a usable item contract even when this particular pin has no literal.
-        if !valid_literal(target, b"[]") {
+        // Require a usable contract even when this particular pin has no literal.
+        let empty_literal = if value_type == ValueType::Normal {
+            &b"\"\""[..]
+        } else {
+            &b"[]"[..]
+        };
+        if !valid_literal(target, empty_literal) {
             continue;
         }
         let mut pin = old.clone();
@@ -157,8 +176,8 @@ fn compatible(source: &(Pin, bool), target: &(Pin, bool), refs: &HashMap<String,
     schemas_are_compatible(source_schema.as_deref(), target_schema.as_deref())
 }
 
-/// Preserve known array values before normal schema synchronization clears changed pin types.
-pub(super) fn migrate_automation_collections(board: &mut Board, registry: &FlowNodeRegistryInner) {
+/// Preserve compatible values for known pin upgrades before schema synchronization clears them.
+pub(super) fn migrate_typed_pins(board: &mut Board, registry: &FlowNodeRegistryInner) {
     let mut catalogs = HashMap::new();
     let mut changes = Vec::new();
     for (node, layer) in
@@ -269,6 +288,137 @@ pub(super) fn migrate_automation_collections(board: &mut Board, registry: &FlowN
         layer.pins.values_mut().for_each(prune);
         for node in layer.nodes.values_mut() {
             node.pins.values_mut().for_each(prune);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::{
+        board::cleanup::sync_node_schema::sync_board_node_schemas,
+        execution::context::ExecutionContext, node::NodeLogic,
+    };
+    use flow_like_types::{Result, async_trait, json::json};
+    use std::sync::Arc;
+
+    struct Definition(Node);
+
+    #[async_trait]
+    impl NodeLogic for Definition {
+        fn get_node(&self) -> Node {
+            self.0.clone()
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn state_node(name: &str, version: u32, data_type: VariableType, value: Value) -> Node {
+        let mut node = Node::new(name, name, "", "AI/Decisions");
+        node.set_version(version);
+        node.add_input_pin("state", "State", "", data_type)
+            .set_default_value(Some(value));
+        node
+    }
+
+    fn registry(catalog: Node) -> FlowNodeRegistryInner {
+        let mut registry = FlowNodeRegistryInner::new(1);
+        registry.insert(catalog.clone(), Arc::new(Definition(catalog)));
+        registry
+    }
+
+    #[tokio::test]
+    async fn systemone_state_upgrade_preserves_existing_text_literals() {
+        for name in [
+            "ai_systemone_noul",
+            "ai_systemone_choice",
+            "ai_systemone_score",
+        ] {
+            for text in ["The delivery arrived damaged.", ""] {
+                let old = state_node(name, 1, VariableType::Generic, json!(text));
+                let node_id = old.id.clone();
+                let original = old.get_pin_by_name("state").unwrap().clone();
+                let catalog = state_node(name, 2, VariableType::String, json!("new default"));
+                let mut board = Board::new_detached(None, "typed-pin-test".into());
+                board.nodes.insert(node_id.clone(), old);
+
+                sync_board_node_schemas(&mut board, &registry(catalog)).await;
+
+                let updated = &board.nodes[&node_id];
+                let state = updated.get_pin_by_name("state").unwrap();
+                assert_eq!(updated.version, Some(2));
+                assert_eq!(state.id, original.id);
+                assert_eq!(state.data_type, VariableType::String);
+                assert_eq!(state.value_type, ValueType::Normal);
+                assert_eq!(state.default_value, original.default_value);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn systemone_state_upgrade_retains_only_string_connections() {
+        for (source_type, source_container, retain) in [
+            (VariableType::String, ValueType::Normal, true),
+            (VariableType::String, ValueType::Array, false),
+            (VariableType::Struct, ValueType::Normal, false),
+            (VariableType::Generic, ValueType::Normal, false),
+        ] {
+            let name = "ai_systemone_choice";
+            let mut old = state_node(name, 1, VariableType::Generic, json!("saved text"));
+            let node_id = old.id.clone();
+            let state_id = old.get_pin_by_name("state").unwrap().id.clone();
+            let mut source = Node::new("source", "Source", "", "");
+            let source_id = source.id.clone();
+            let source_pin = source.add_output_pin("value", "Value", "", source_type);
+            source_pin.value_type = source_container;
+            source_pin.connected_to.insert(state_id.clone());
+            let output_id = source_pin.id.clone();
+            old.pins
+                .get_mut(&state_id)
+                .unwrap()
+                .depends_on
+                .insert(output_id.clone());
+            let catalog = state_node(name, 2, VariableType::String, json!("new default"));
+            let mut board = Board::new_detached(None, "typed-pin-test".into());
+            board.nodes.insert(node_id.clone(), old);
+            board.nodes.insert(source_id.clone(), source);
+
+            sync_board_node_schemas(&mut board, &registry(catalog)).await;
+
+            let state = &board.nodes[&node_id].pins[&state_id];
+            let output = &board.nodes[&source_id].pins[&output_id];
+            assert_eq!(state.data_type, VariableType::String);
+            assert_eq!(state.depends_on.contains(&output_id), retain);
+            assert_eq!(output.connected_to.contains(&state_id), retain);
+        }
+    }
+
+    #[tokio::test]
+    async fn systemone_state_upgrade_resets_incompatible_literals() {
+        for literal in [
+            json!({"ticket": "damaged"}),
+            json!(["damaged"]),
+            json!(true),
+        ] {
+            let name = "ai_systemone_score";
+            let old = state_node(name, 1, VariableType::Generic, literal);
+            let node_id = old.id.clone();
+            let catalog = state_node(name, 2, VariableType::String, json!("new default"));
+            let expected = catalog
+                .get_pin_by_name("state")
+                .unwrap()
+                .default_value
+                .clone();
+            let mut board = Board::new_detached(None, "typed-pin-test".into());
+            board.nodes.insert(node_id.clone(), old);
+
+            sync_board_node_schemas(&mut board, &registry(catalog)).await;
+
+            let state = board.nodes[&node_id].get_pin_by_name("state").unwrap();
+            assert_eq!(state.data_type, VariableType::String);
+            assert_eq!(state.default_value, expected);
         }
     }
 }
