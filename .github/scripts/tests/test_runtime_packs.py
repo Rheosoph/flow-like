@@ -956,7 +956,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("python3 .github/scripts/runtime_toolchain.py build", build)
         self.assertIn("export RUNTIME_TOOLCHAIN_ROOT=/toolchain", build)
         self.assertIn("runtime_toolchain.py library-path", build)
-        self.assertIn("/etc/ld.so.conf.d/flow-runtime-gcc.conf", build)
+        loader_config = re.search(r"> /etc/ld\.so\.conf\.d/([^\s/]+\.conf)", build)
+        self.assertIsNotNone(loader_config)
+        self.assertLess(loader_config.group(1), "aarch64-linux-gnu.conf",
+                        "The pinned GCC runtime must precede Ubuntu's system runtime in the loader cache")
         self.assertIn("\n  ldconfig\n", build)
         self.assertIn("-DCMAKE_C_COMPILER=/toolchain/bin/gcc -DCMAKE_CXX_COMPILER=/toolchain/bin/g++", build)
         self.assertNotIn("ppa:", job_body("runtime-packs") + build)
