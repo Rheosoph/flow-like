@@ -25,13 +25,11 @@ export function BitVariable({
 	value,
 	setValue,
 	selectorDataRef,
-	bitType,
 }: Readonly<{
 	pin: IPin;
 	value: number[] | undefined | null;
 	setValue: (value: unknown) => void;
 	selectorDataRef?: FlowSelectorDataRef;
-	bitType?: string;
 }>) {
 	const [open, setOpen] = useState(false);
 	const [, refreshSnapshot] = useState(0);
@@ -40,9 +38,7 @@ export function BitVariable({
 	const parsedValue = parseUint8ArrayToJson(value);
 	const selectedValue =
 		typeof parsedValue === "string" ? parsedValue : undefined;
-	const bits = (selectorDataRef?.current.bitOptions ?? []).filter(
-		(bit) => !bitType || bit.type === bitType,
-	);
+	const bits = selectorDataRef?.current.bitOptions ?? [];
 	const selectedBit =
 		selectedValue === undefined
 			? undefined
@@ -95,8 +91,7 @@ export function BitVariable({
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
 						{bits.map((bit) => {
-							// SystemOne resolves the id through the profile so its configured hub wins.
-							const bitId = bitType === "SystemOne" ? bit.id : bitRef(bit);
+							const bitId = bitRef(bit);
 							return (
 								<SelectItem key={bitId} value={bitId}>
 									<span className="flex min-w-0 items-center gap-1.5">

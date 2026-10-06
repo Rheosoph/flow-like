@@ -32,9 +32,9 @@ thinking text stays inside its answer, because MLX doesn't split it out the
 way llama.cpp does. There is no CUDA runtime; NVIDIA GPUs on Linux use the
 Vulkan runtime.
 
-Decision models serve `/v1/systemone` through the device gateway. Choose a
-SystemOne Bit in **SystemOne Choice**, **SystemOne Score**, or **SystemOne Noul**
-to request a category, score, or yes/no probability. **Invoke SystemOne** asks
+Decision models serve `/v1/systemone` through the device gateway. Connect
+**Find Decision Model** or **Load Bit** to **SystemOne Choice**, **SystemOne Score**,
+or **SystemOne Noul** to request a category, score, or yes/no probability. **Invoke SystemOne** asks
 several named questions together. The gateway checks that the selected model
 is a decision model and returns its typed answers without streaming.
 

@@ -9,6 +9,25 @@ use flow_like_types::{Cacheable, Result, anyhow, async_trait, bail};
 use super::llm::{ModelFactory, ModelUsageContext, local::LocalModel};
 use crate::{bit::Bit, state::FlowLikeState};
 
+/// Providers this runtime can build without a device endpoint.
+pub(crate) fn supports_provider(provider_name: &str) -> bool {
+    matches!(
+        provider_name.trim().to_ascii_lowercase().as_str(),
+        "local"
+            | "hosted:openrouter"
+            | "hosted:typesafe"
+            | "hosted:cloudflare"
+            | "hosted:systemone_compatible"
+            | "hosted"
+            | "premium"
+            | "internal"
+            | "custom:systemone"
+            | "custom:typesafe"
+            | "custom:openrouter"
+            | "openrouter"
+    )
+}
+
 struct LocalSystemOneModel {
     client: SystemOneClient,
     // Keep the model process alive for the full lifetime of every retained client.
@@ -65,6 +84,10 @@ impl ModelFactory {
                 .await;
         }
 
+        if !supports_provider(&name) {
+            bail!("Provider {name} does not support native SystemOne inference");
+        }
+
         if name == "local" {
             let capabilities = FlowLikeState::completion_model_capabilities(&app_state).await;
             if !capabilities.local_server {
@@ -97,18 +120,6 @@ impl ModelFactory {
         }
 
         if is_hosted_provider_name(&name) {
-            if !matches!(
-                name.as_str(),
-                "hosted:openrouter"
-                    | "hosted:typesafe"
-                    | "hosted:cloudflare"
-                    | "hosted:systemone_compatible"
-                    | "hosted"
-                    | "premium"
-                    | "internal"
-            ) {
-                bail!("Provider {name} does not support native SystemOne inference");
-            }
             let authorizer = app_state.request_authorizer.clone();
             let token = app_state
                 .hosted_model_token
