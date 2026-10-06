@@ -1,3 +1,4 @@
+import type * as GeoJSON from "geojson";
 // A2UI runtime JSON definitions. Deprecated fields keep older Rust payloads readable.
 
 import type { WidgetContract } from "@flow-like/widget-sdk";

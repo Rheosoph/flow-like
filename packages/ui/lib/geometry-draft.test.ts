@@ -1,3 +1,4 @@
+import type * as GeoJSON from "geojson";
 import { describe, expect, test } from "bun:test";
 import { normalizeGeometryValue } from "./geometry";
 import {

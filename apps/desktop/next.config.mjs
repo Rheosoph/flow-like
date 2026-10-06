@@ -1,8 +1,14 @@
+import { prepareMapLibreAssets } from "../../packages/ui/scripts/prepare-maplibre.mjs";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
 	output: "export",
+	env: {
+		NEXT_PUBLIC_MAPLIBRE_WORKER_URL: prepareMapLibreAssets(
+			new URL("./public/", import.meta.url),
+		),
+	},
 	pageExtensions: ["js", "jsx", "md", "mdx", "ts", "tsx"],
 	images: {
 		unoptimized: true,

@@ -1,5 +1,7 @@
 "use client";
 
+import type * as GeoJSON from "geojson";
+
 import { useTranslation } from "@flow-like/locales";
 import { useEffect, useId, useMemo } from "react";
 import type { Geometry } from "../../lib/geometry";

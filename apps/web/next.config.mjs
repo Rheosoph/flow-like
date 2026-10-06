@@ -1,3 +1,4 @@
+import { prepareMapLibreAssets } from "../../packages/ui/scripts/prepare-maplibre.mjs";
 import {
 	PHASE_DEVELOPMENT_SERVER,
 	PHASE_PRODUCTION_BUILD,
@@ -9,6 +10,11 @@ const nextConfig = {
 	reactStrictMode: false,
 	poweredByHeader: false,
 	output: "export",
+	env: {
+		NEXT_PUBLIC_MAPLIBRE_WORKER_URL: prepareMapLibreAssets(
+			new URL("./public/", import.meta.url),
+		),
+	},
 	pageExtensions: ["js", "jsx", "md", "mdx", "ts", "tsx"],
 	reactCompiler: true,
 	images: {

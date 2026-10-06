@@ -308,6 +308,17 @@ describe("pack", () => {
 });
 
 describe("archiveNameCollisions", () => {
+	test("handles long interior and trailing dot and space runs", () => {
+		const padding = ". ".repeat(50_000);
+		expect(
+			archiveNameCollisions([`shared/a${padding}b.js`, "shared/ab.js"]),
+		).toEqual([]);
+		expect(
+			archiveNameCollisions([`shared/a.js${padding}`, "shared/A.js"]),
+		).toHaveLength(1);
+		expect(archiveNameCollisions([`shared/${padding}/x.js`])).toHaveLength(1);
+	});
+
 	test("flags names that alias on case-insensitive filesystems", () => {
 		expect(
 			archiveNameCollisions([

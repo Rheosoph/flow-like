@@ -19,9 +19,10 @@
 		"@bytecodealliance/jco": "^1.17.0",
 		"esbuild": "0.28.1",
 		"typescript": "^5.7.0",
-		"vitest": "3.2.6"
+		"vitest": "4.1.11"
 	},
 	"overrides": {
+		"source-map-js": "1.2.2",
 		"vite": "7.3.5",
 		"postcss": "8.5.26",
 		"rollup": "4.60.3",

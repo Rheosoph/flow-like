@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from "../route-path";
 import type { IChannelClientDescriptor, IChannelPush } from "../schema/channel";
 import { awsReplyPayloads } from "./aws-reply-chunks";
 import { sha256Hex, signAwsRequest } from "./aws-sigv4";
@@ -20,7 +21,7 @@ export type AwsMqttChannelDescriptor = Extract<
 
 function endpointOrigin(endpoint: string): string {
 	return /^https?:\/\//i.test(endpoint)
-		? endpoint.replace(/\/+$/, "")
+		? trimTrailingSlashes(endpoint)
 		: `https://${endpoint}`;
 }
 

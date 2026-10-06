@@ -2,6 +2,7 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import tailwind from "@tailwindcss/postcss";
 import postcss from "postcss";
+import { prepareMapLibreAssets } from "../prepare-maplibre.mjs";
 
 export const PACKAGE_DIR = resolve(import.meta.dir, "../..");
 
@@ -64,6 +65,7 @@ export async function buildHarness(
 	const started = performance.now();
 	await rm(dir, { recursive: true, force: true });
 	await mkdir(dir, { recursive: true });
+	const workerUrl = prepareMapLibreAssets(dir);
 
 	const [bundle, css] = await Promise.all([
 		Bun.build({
@@ -77,7 +79,11 @@ export async function buildHarness(
 				entry: "[name].[ext]",
 				asset: "assets/[name]-[hash].[ext]",
 			},
-			define: { "process.env.NODE_ENV": JSON.stringify(mode) },
+			define: {
+				"process.env.NODE_ENV": JSON.stringify(mode),
+				"process.env.NEXT_PUBLIC_MAPLIBRE_WORKER_URL":
+					JSON.stringify(workerUrl),
+			},
 			throw: false,
 		}),
 		compileTailwind(),

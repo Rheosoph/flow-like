@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeRoutePath, routePathsEqual } from "./route-path";
+import {
+	normalizeRoutePath,
+	routePathsEqual,
+	trimTrailingSlashes,
+} from "./route-path";
 
 describe("normalizeRoutePath", () => {
+	test("preserves long interior slash runs and only trims trailing separators", () => {
+		const slashes = "/".repeat(100_000);
+		expect(normalizeRoutePath(`/a${slashes}b${slashes}`)).toBe(`/a${slashes}b`);
+		expect(normalizeRoutePath(slashes)).toBe("/");
+		expect(trimTrailingSlashes(`https://example.com/${slashes}x\n`)).toBe(
+			`https://example.com/${slashes}x\n`,
+		);
+	});
+
 	test("adds the leading slash and drops the trailing one", () => {
 		for (const path of [
 			"/config",
