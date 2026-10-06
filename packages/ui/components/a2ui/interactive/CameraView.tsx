@@ -428,10 +428,15 @@ export function A2UICameraView({
 		}
 		try {
 			const current = sessionRef.current;
+			const width = {
+				ideal: Number.isFinite(maxWidth)
+					? Math.round(Math.min(4096, Math.max(160, maxWidth)))
+					: 1280,
+			};
 			await current?.start(
 				deviceId
-					? { deviceId: { exact: deviceId }, width: { ideal: 1280 } }
-					: { facingMode: { ideal: facingMode }, width: { ideal: 1280 } },
+					? { deviceId: { exact: deviceId }, width }
+					: { facingMode: { ideal: facingMode }, width },
 				audioEnabled,
 				audioBufferSeconds,
 			);
