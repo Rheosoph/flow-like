@@ -2,6 +2,53 @@ use crate::{entity::bit, error::ApiError};
 use flow_like::{bit::Bit, flow_like_model_provider::provider::ModelApiSurface};
 use sea_orm::{DatabaseConnection, EntityTrait};
 
+pub(super) async fn authorize_systemone(
+    db: &DatabaseConnection,
+    bit_id: &str,
+    model_id: &str,
+    provider: &super::relay::HostedProvider,
+    body: &serde_json::Value,
+) -> Result<(), ApiError> {
+    let bit = bit::Entity::find_by_id(bit_id)
+        .one(db)
+        .await?
+        .map(Bit::from);
+    validate_systemone_catalog(bit.as_ref(), model_id, provider)?;
+    super::systemone::validate_payload(body)?;
+    if body.get("model").and_then(serde_json::Value::as_str) != Some(model_id) {
+        return Err(ApiError::bad_request(
+            "System One request model must match the official Bit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_systemone_catalog(
+    bit: Option<&Bit>,
+    model_id: &str,
+    provider: &super::relay::HostedProvider,
+) -> Result<(), ApiError> {
+    let bit = bit
+        .filter(|bit| bit.bit_type == flow_like::bit::BitTypes::SystemOne)
+        .ok_or_else(|| ApiError::forbidden("System One requires an official SystemOne Bit"))?;
+    let approved = bit
+        .try_to_provider()
+        .ok_or_else(|| ApiError::forbidden("System One Bit has no provider"))?;
+    if super::relay::HostedProvider::from_provider_name(&approved.provider_name).as_ref()
+        != Some(provider)
+        || !super::relay::supports_surface(provider, ModelApiSurface::SystemOne)
+        || approved
+            .model_id
+            .as_deref()
+            .is_none_or(|id| id.trim().is_empty() || id != model_id)
+    {
+        return Err(ApiError::forbidden(
+            "The official Bit no longer authorizes this System One request",
+        ));
+    }
+    Ok(())
+}
+
 /// Server IAM credentials are available only to the administrator's Bit catalog.
 /// UserBit rows and caller-supplied Bit metadata never establish this authority.
 pub(super) async fn authorize_bedrock_iam(
@@ -232,6 +279,36 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn systemone_credentials_require_matching_official_decision_bit() {
+        use super::super::relay::HostedProvider;
+        let mut bit = catalog_bit();
+        bit.bit_type = BitTypes::SystemOne;
+        bit.parameters["provider"]["provider_name"] = json!("hosted:openrouter");
+        assert!(validate_systemone_catalog(Some(&bit), MODEL, &HostedProvider::OpenRouter).is_ok());
+        assert_forbidden(validate_systemone_catalog(
+            None,
+            MODEL,
+            &HostedProvider::OpenRouter,
+        ));
+        assert_forbidden(validate_systemone_catalog(
+            Some(&bit),
+            "other",
+            &HostedProvider::OpenRouter,
+        ));
+        assert_forbidden(validate_systemone_catalog(
+            Some(&bit),
+            MODEL,
+            &HostedProvider::TypeSafe,
+        ));
+        bit.bit_type = BitTypes::Llm;
+        assert_forbidden(validate_systemone_catalog(
+            Some(&bit),
+            MODEL,
+            &HostedProvider::OpenRouter,
+        ));
     }
 
     #[test]

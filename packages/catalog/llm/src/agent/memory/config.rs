@@ -64,7 +64,7 @@ impl NodeLogic for CreateMemoryConfigNode {
             "AI/Memory",
         );
         node.set_flowscript_name("ai.memory", "createConfig");
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

@@ -10,6 +10,7 @@ import {
 	embedText,
 	gatewayFetch,
 	gatewayStalled,
+	invokeSystemOne,
 	modelGatewayOf,
 	streamChat,
 } from "./gateway-client";
@@ -417,4 +418,44 @@ describe("the gateway stream", () => {
 		await Promise.resolve();
 		expect(holds).toEqual(["hold", "release"]);
 	});
+});
+
+test("SystemOne uses native nonstreaming requests and rejects chat fields", async () => {
+	const answer = {
+		model: "decisions",
+		answers: {
+			sentiment: {
+				type: "choice",
+				choice: "negative",
+				confidence: 0.99,
+				probabilities: { negative: 0.99, positive: 0.01 },
+			},
+		},
+	};
+	const { fetcher, seen } = fetcherOf(() => Response.json(answer));
+	const request = {
+		state: "Late delivery",
+		questions: {
+			sentiment: {
+				type: "choice",
+				instructions: "Sentiment?",
+				criteria: { negative: null, positive: null },
+			},
+		},
+	};
+	expect(
+		await invokeSystemOne(fetcher, { model: "decisions", request }),
+	).toEqual(answer);
+	expect(seen[0]?.path).toBe("/v1/systemone");
+	expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({
+		model: "decisions",
+		...request,
+	});
+	await expect(
+		invokeSystemOne(fetcher, {
+			model: "decisions",
+			request: { ...request, stream: true },
+		}),
+	).rejects.toThrow("SystemOne request");
+	expect(seen).toHaveLength(1);
 });

@@ -35,11 +35,6 @@
 	},
 	"required": ["languages", "vector_length", "pooling", "provider"],
 	"$defs": {
-		"ModelApiSurface": {
-			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions` shape. Newer OpenAI-family models are only reachable through the Responses API (`/responses`), which uses a different request and event schema. A Bit declares the surface so the client builds the matching Rig client and the Flow-Like proxy relays to the matching upstream endpoint.",
-			"type": "string",
-			"enum": ["ChatCompletions", "Responses"]
-		},
 		"Pooling": {
 			"type": "string",
 			"enum": ["CLS", "Mean", "None"]
@@ -57,6 +52,7 @@
 					"type": ["string", "null"]
 				},
 				"api_surface": {
+					"description": "API surface the upstream model speaks. `None` keeps the provider's\nhistorical chat default. SystemOne Bits always use the decision API.",
 					"anyOf": [
 						{
 							"$ref": "#/$defs/ModelApiSurface"
@@ -64,8 +60,7 @@
 						{
 							"type": "null"
 						}
-					],
-					"description": "API surface the upstream model speaks. `None` keeps the provider's historical default, which is `chat/completions` for every hosted Bit."
+					]
 				},
 				"params": {
 					"type": ["object", "null"],
@@ -73,6 +68,11 @@
 				}
 			},
 			"required": ["provider_name"]
+		},
+		"ModelApiSurface": {
+			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions`\nshape. Newer OpenAI-family models are only reachable through the Responses\nAPI (`/responses`), which uses a different request and event schema. A Bit\ndeclares the surface so the client builds the matching Rig client and the\nFlow-Like proxy relays to the matching upstream endpoint. SystemOne Bits\nselect the native decision surface through their Bit type.",
+			"type": "string",
+			"enum": ["ChatCompletions", "Responses", "SystemOne"]
 		},
 		"RemoteExecutionConfig": {
 			"description": "Configuration for remote execution via API proxy",
@@ -82,6 +82,10 @@
 					"description": "Legacy endpoint URL retained for reading old Bits. Hosted execution\nresolves endpoints from server secrets instead of using this URL.",
 					"type": ["string", "null"],
 					"default": null
+				},
+				"endpoint_secret_name": {
+					"description": "Optional server secret containing the base endpoint. Supported by\nInternal, AzureOpenAI, HuggingfaceEndpoint and OpenAICompatible.",
+					"type": ["string", "null"]
 				},
 				"secret_name": {
 					"description": "Optional API key secret override. Each provider has its own default.",
@@ -104,10 +108,6 @@
 					"description": "Deployed model ID for the upstream provider (e.g., Internal gateway model name)",
 					"type": ["string", "null"],
 					"default": null
-				},
-				"endpoint_secret_name": {
-					"description": "Optional server secret containing the base endpoint. Supported by\nInternal, AzureOpenAI, HuggingfaceEndpoint and OpenAICompatible.",
-					"type": ["string", "null"]
 				}
 			}
 		},

@@ -26,6 +26,18 @@ impl HostedConnection {
         surface: ModelApiSurface,
         body: &Value,
     ) -> Result<(), ApiError> {
+        if surface == ModelApiSurface::SystemOne {
+            hosted_bit_policy::authorize_systemone(
+                &state.db,
+                bit_id.ok_or_else(|| {
+                    ApiError::forbidden("System One requires an official catalog Bit")
+                })?,
+                model_id,
+                &self.provider,
+                body,
+            )
+            .await?;
+        }
         if matches!(self.auth, HostedAuth::BedrockIam) {
             let bit_id = bit_id.ok_or_else(|| {
                 ApiError::forbidden("Bedrock IAM requires an official catalog model")
@@ -47,11 +59,20 @@ impl HostedConnection {
     ) -> Result<RequestBuilder, ApiError> {
         self.authorize(state, bit_id, model_id, surface, body)
             .await?;
+        let wire_body = systemone_wire_body(&self.provider, model_id, body)?;
+        let client = if surface == ModelApiSurface::SystemOne {
+            Client::builder()
+                .redirect(flow_like_types::reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| ApiError::internal("Unable to build System One provider client"))?
+        } else {
+            Client::new()
+        };
         let mut request = match &self.auth {
-            HostedAuth::ApiKey(api_key) => Client::new()
+            HostedAuth::ApiKey(api_key) => client
                 .post(&self.url)
                 .bearer_auth(api_key)
-                .json(body)
+                .json(&wire_body)
                 .timeout(timeout),
             HostedAuth::BedrockIam => {
                 bedrock_auth::request_builder(state, &self.url, body, timeout).await?
@@ -64,6 +85,22 @@ impl HostedConnection {
         }
         Ok(request)
     }
+}
+
+fn systemone_wire_body(
+    provider: &HostedProvider,
+    model_id: &str,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    if *provider != HostedProvider::Cloudflare {
+        return Ok(body.clone());
+    }
+    let mut input = body.clone();
+    input
+        .as_object_mut()
+        .ok_or_else(|| ApiError::bad_request("Expected System One request object"))?
+        .remove("model");
+    Ok(serde_json::json!({"model":model_id,"input":input}))
 }
 
 async fn optional_secret(state: &AppState, name: &str) -> Result<Option<String>, ApiError> {
@@ -113,6 +150,11 @@ fn configured_connection(
     api_key: Option<String>,
     aws_region: Option<&str>,
 ) -> Result<HostedConnection, ApiError> {
+    if !super::relay::supports_surface(provider, surface) {
+        return Err(ApiError::bad_request(
+            "Hosted provider does not support this API surface",
+        ));
+    }
     let auth = match nonempty(api_key) {
         Some(api_key) => HostedAuth::ApiKey(api_key),
         None if *provider == HostedProvider::Bedrock => HostedAuth::BedrockIam,
@@ -138,6 +180,11 @@ fn configured_connection(
                 )));
             }
         };
+    if *provider == HostedProvider::Cloudflare
+        && !(endpoint.len() == 32 && endpoint.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(ApiError::internal("Cloudflare account ID is invalid"));
+    }
     let url = provider.endpoint_url(&endpoint, surface);
     if matches!(auth, HostedAuth::BedrockIam) {
         bedrock_auth::validate_target(&url)?;
@@ -152,6 +199,60 @@ fn configured_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloudflare_wrapper_preserves_questions_without_nested_model_or_chat_fields() {
+        let canonical = serde_json::json!({"model":"typesafe/jev","state":"text","questions":{"ok":{"type":"noul","instructions":"Ready?"}}});
+        let body =
+            systemone_wire_body(&HostedProvider::Cloudflare, "typesafe/jev", &canonical).unwrap();
+        assert_eq!(body["model"], "typesafe/jev");
+        assert_eq!(body["input"]["questions"], canonical["questions"]);
+        assert_eq!(body["input"]["state"], "text");
+        assert!(body["input"].get("model").is_none());
+        assert_eq!(
+            systemone_wire_body(&HostedProvider::OpenRouter, "typesafe/jev", &canonical).unwrap(),
+            canonical
+        );
+    }
+
+    #[test]
+    fn cloudflare_uses_only_a_valid_server_account_id_and_native_surface() {
+        let account = "a".repeat(32);
+        let connection = configured_connection(
+            &HostedProvider::Cloudflare,
+            ModelApiSurface::SystemOne,
+            Some(account.clone()),
+            Some("server-token".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            connection.url,
+            format!("https://api.cloudflare.com/client/v4/accounts/{account}/ai/run")
+        );
+        for endpoint in ["https://attacker.example", "", "abc"] {
+            assert!(
+                configured_connection(
+                    &HostedProvider::Cloudflare,
+                    ModelApiSurface::SystemOne,
+                    Some(endpoint.into()),
+                    Some("server-token".into()),
+                    None
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            configured_connection(
+                &HostedProvider::Cloudflare,
+                ModelApiSurface::ChatCompletions,
+                Some(account),
+                Some("server-token".into()),
+                None
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn bedrock_key_takes_precedence_over_iam() {

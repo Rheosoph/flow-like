@@ -36,7 +36,7 @@ impl NodeLogic for BuildAtlasCloudNode {
         );
         node.set_flowscript_name("ai.provider", "atlascloud");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()

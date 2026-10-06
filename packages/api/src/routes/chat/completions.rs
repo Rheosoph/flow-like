@@ -63,6 +63,9 @@ fn prepare_upstream_body(
                         .insert("include".to_string(), json!(true));
                 }
             }
+            HostedProvider::TypeSafe
+            | HostedProvider::SystemOneCompatible
+            | HostedProvider::Cloudflare => {}
             HostedProvider::OpenAI
             | HostedProvider::Anthropic
             | HostedProvider::Azure

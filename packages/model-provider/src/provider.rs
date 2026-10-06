@@ -13,7 +13,8 @@ use serde_json::Value;
 /// shape. Newer OpenAI-family models are only reachable through the Responses
 /// API (`/responses`), which uses a different request and event schema. A Bit
 /// declares the surface so the client builds the matching Rig client and the
-/// Flow-Like proxy relays to the matching upstream endpoint.
+/// Flow-Like proxy relays to the matching upstream endpoint. SystemOne Bits
+/// select the native decision surface through their Bit type.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ModelApiSurface {
     #[default]
@@ -25,6 +26,8 @@ pub enum ModelApiSurface {
     ChatCompletions,
     #[serde(alias = "responses")]
     Responses,
+    #[serde(alias = "systemone", alias = "system_one")]
+    SystemOne,
 }
 
 impl ModelApiSurface {
@@ -36,6 +39,7 @@ impl ModelApiSurface {
         match self {
             Self::ChatCompletions => "chat_completions",
             Self::Responses => "responses",
+            Self::SystemOne => "systemone",
         }
     }
 }
@@ -46,7 +50,7 @@ pub struct ModelProvider {
     pub model_id: Option<String>,
     pub version: Option<String>,
     /// API surface the upstream model speaks. `None` keeps the provider's
-    /// historical default, which is `chat/completions` for every hosted Bit.
+    /// historical chat default. SystemOne Bits always use the decision API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_surface: Option<ModelApiSurface>,
     pub params: Option<HashMap<String, Value>>,

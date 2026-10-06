@@ -35,6 +35,7 @@ impl NodeLogic for KgTraverseToolNode {
             "Registers a knowledge graph traversal tool on the agent so it can query the graph mid-conversation",
             "AI/Agents/Builder",
         );
+        node.set_version(1);
         node.set_flowscript_name("agent", "registerKgTraverseTool");
         node.set_receiver("agent_in");
         node.add_icon("/flow/icons/bot-invoke.svg");

@@ -122,7 +122,7 @@ impl NodeLogic for ChartDataAgent {
             "UI/Elements/Charts/Agent",
         );
         node.set_flowscript_name("ui", "chartDataAgent");
-        node.set_version(5);
+        node.set_version(6);
         node.add_icon("/flow/icons/a2ui.svg");
 
         node.set_scores(

@@ -462,6 +462,7 @@ export function HomeModels({ widget, editing }: HomeContentProps) {
 							bit_types: [
 								IBitTypes.Llm,
 								IBitTypes.Vlm,
+								IBitTypes.SystemOne,
 								IBitTypes.Embedding,
 								IBitTypes.ImageEmbedding,
 								IBitTypes.ObjectDetection,
@@ -478,6 +479,7 @@ export function HomeModels({ widget, editing }: HomeContentProps) {
 						[
 							"Llm",
 							"Vlm",
+							"SystemOne",
 							"Embedding",
 							"ImageEmbedding",
 							"ObjectDetection",

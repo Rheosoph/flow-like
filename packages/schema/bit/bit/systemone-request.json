@@ -1,0 +1,90 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "SystemOneRequest",
+	"type": "object",
+	"properties": {
+		"state": true,
+		"questions": {
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/SystemOneQuestion"
+			}
+		},
+		"images": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		}
+	},
+	"additionalProperties": false,
+	"required": ["state", "questions"],
+	"$defs": {
+		"SystemOneQuestion": {
+			"oneOf": [
+				{
+					"type": "object",
+					"properties": {
+						"instructions": true,
+						"criteria": {
+							"type": "object",
+							"additionalProperties": true
+						},
+						"type": {
+							"type": "string",
+							"const": "choice"
+						}
+					},
+					"additionalProperties": false,
+					"required": ["type", "instructions", "criteria"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"instructions": true,
+						"criteria": {
+							"type": "array",
+							"items": true
+						},
+						"type": {
+							"type": "string",
+							"const": "score"
+						}
+					},
+					"additionalProperties": false,
+					"required": ["type", "instructions", "criteria"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"instructions": true,
+						"criteria": {
+							"anyOf": [
+								{
+									"$ref": "#/$defs/NoulCriteria"
+								},
+								{
+									"type": "null"
+								}
+							]
+						},
+						"type": {
+							"type": "string",
+							"const": "noul"
+						}
+					},
+					"additionalProperties": false,
+					"required": ["type", "instructions"]
+				}
+			]
+		},
+		"NoulCriteria": {
+			"type": "object",
+			"properties": {
+				"true": true,
+				"false": true
+			},
+			"additionalProperties": false
+		}
+	}
+}

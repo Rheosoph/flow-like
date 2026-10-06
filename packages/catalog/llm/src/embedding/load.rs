@@ -34,7 +34,7 @@ impl NodeLogic for LoadModelNode {
         node.set_flowscript_name("ai.embedding", "loadModel");
 
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_long_running(true);
 
         node.add_input_pin(

@@ -122,6 +122,10 @@ SQL is useful for joins, aggregation, and filtering, but it does not replace sou
 
 Resize large scans before model-based extraction when the reduced image still preserves the required text. Keep the original file for audit, reprocessing, or a higher-resolution retry.
 
+For a barcode workflow that needs one matching result, set `max_results` to `1` and specify `expected_formats` when you know the label format. The reader stops after it finds a result that passes `validation`. Leave `max_results` unset to search for all codes within the configured attempt budget.
+
+Use `preprocess: "Fallback"` to build enhanced variants only when the original image yields no valid result. With no result limit, `Balanced` searches the original image and enhanced variants for multiple codes, trying quadrants only if those searches find no valid result. `Aggressive` and `Industrial` also search quadrants after success. By default, the reader retries 1D barcodes at 90°; `Industrial` tries all four cardinal orientations. Set `preprocessing.rotations` explicitly when the capture orientation is known.
+
 ## DOCX and presentation files
 
 The document catalog includes native operations for office files:

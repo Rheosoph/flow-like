@@ -11,9 +11,10 @@ use rayon::prelude::*;
 use rxing::{
     BarcodeFormat, BinaryBitmap, DecodeHints,
     Exceptions::NotFoundException,
-    Luma8LuminanceSource, MultiFormatReader, RXingResult,
+    Luma8LuminanceSource, MultiFormatReader, RXingResult, Reader,
     common::HybridBinarizer,
-    multi::{ByQuadrantReader, GenericMultipleBarcodeReader, MultipleBarcodeReader},
+    oned::{MultiFormatOneDReader, OneDReader},
+    qrcode::{QRCodeReader, cpp_port::QrReader},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -88,6 +89,14 @@ pub struct BarcodePoint {
     pub y: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct BarcodeBounds {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct Barcode {
     text: String,
@@ -97,6 +106,9 @@ pub struct Barcode {
     timestamp: u128,
     line_count: usize,
     points: Vec<BarcodePoint>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    bounds: Option<BarcodeBounds>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -119,6 +131,10 @@ pub struct ReadBarcodeOptions {
     #[serde(default)]
     #[schemars(schema_with = "bool_false_schema")]
     pub pure_barcode: bool,
+    /// Stop after this many validated results. Leave unset to search for every code.
+    #[serde(default)]
+    #[schemars(schema_with = "max_results_schema")]
+    pub max_results: Option<usize>,
     #[serde(default = "default_preprocess")]
     #[schemars(schema_with = "barcode_preprocess_schema")]
     pub preprocess: String,
@@ -226,6 +242,7 @@ impl Default for ReadBarcodeOptions {
             try_harder: default_try_harder(),
             also_inverted: default_also_inverted(),
             pure_barcode: false,
+            max_results: None,
             preprocess: default_preprocess(),
             validation: BarcodeValidationOptions::default(),
             preprocessing: BarcodePreprocessingOptions::default(),
@@ -274,8 +291,8 @@ fn effective_preprocessing_options(
             effective.adaptive_threshold = false;
             effective.morphology = false;
             effective.upscale_factor = 1;
-            effective.max_variants = effective.max_variants.min(1);
-            effective.max_decode_attempts = effective.max_decode_attempts.min(1);
+            effective.max_variants = effective.max_variants.min(4);
+            effective.max_decode_attempts = effective.max_decode_attempts.min(4);
         }
         PreprocessMode::Balanced => {
             effective.contrast_stretch = true;
@@ -392,6 +409,14 @@ fn bool_false_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "type": "boolean",
         "default": false
+    })
+}
+
+fn max_results_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["integer", "null"],
+        "minimum": 1,
+        "default": null
     })
 }
 
@@ -535,8 +560,170 @@ fn hash_luma(luma: &[u8]) -> u64 {
     hasher.finish()
 }
 
+impl BarcodeBounds {
+    fn offset(self, x: f32, y: f32) -> Self {
+        Self {
+            left: self.left + x,
+            right: self.right + x,
+            top: self.top + y,
+            bottom: self.bottom + y,
+        }
+    }
+
+    fn map(self, variant: &DecodeVariant) -> Self {
+        let a = variant.map_point(BarcodePoint {
+            x: self.left,
+            y: self.top,
+        });
+        let b = variant.map_point(BarcodePoint {
+            x: self.right,
+            y: self.bottom,
+        });
+        Self {
+            left: a.x.min(b.x),
+            right: a.x.max(b.x),
+            top: a.y.min(b.y),
+            bottom: a.y.max(b.y),
+        }
+    }
+
+    fn overlaps_same_symbol(&self, other: &Self) -> bool {
+        let overlap_width =
+            (self.right.min(other.right) - self.left.max(other.left) + 1.0).max(0.0);
+        let overlap_height =
+            (self.bottom.min(other.bottom) - self.top.max(other.top) + 1.0).max(0.0);
+        let area =
+            |bounds: &Self| (bounds.right - bounds.left + 1.0) * (bounds.bottom - bounds.top + 1.0);
+        overlap_width * overlap_height > 0.5 * area(self).max(area(other))
+    }
+}
+
+fn is_linear_barcode_format(format: BarcodeFormat) -> bool {
+    matches!(
+        format,
+        BarcodeFormat::CODABAR
+            | BarcodeFormat::CODE_39
+            | BarcodeFormat::CODE_93
+            | BarcodeFormat::CODE_128
+            | BarcodeFormat::EAN_8
+            | BarcodeFormat::EAN_13
+            | BarcodeFormat::ITF
+            | BarcodeFormat::RSS_14
+            | BarcodeFormat::RSS_EXPANDED
+            | BarcodeFormat::TELEPEN
+            | BarcodeFormat::UPC_A
+            | BarcodeFormat::UPC_E
+    )
+}
+
+fn result_bounds(
+    result: &RXingResult,
+    luma: &[u8],
+    width: u32,
+    height: u32,
+) -> Option<BarcodeBounds> {
+    let first = result.getPoints().first()?;
+    let mut bounds = BarcodeBounds {
+        left: first.x,
+        right: first.x,
+        top: first.y,
+        bottom: first.y,
+    };
+    for point in result.getPoints().iter().skip(1) {
+        bounds.left = bounds.left.min(point.x);
+        bounds.right = bounds.right.max(point.x);
+        bounds.top = bounds.top.min(point.y);
+        bounds.bottom = bounds.bottom.max(point.y);
+    }
+    if !is_linear_barcode_format(*result.getBarcodeFormat())
+        || width == 0
+        || height == 0
+        || luma.len() != width as usize * height as usize
+    {
+        return Some(bounds);
+    }
+
+    let horizontal = bounds.right - bounds.left >= bounds.bottom - bounds.top;
+    let (along_start, along_end, cross, along_limit, cross_limit) = if horizontal {
+        (
+            bounds.left,
+            bounds.right,
+            (bounds.top + bounds.bottom) / 2.0,
+            width,
+            height,
+        )
+    } else {
+        (
+            bounds.top,
+            bounds.bottom,
+            (bounds.left + bounds.right) / 2.0,
+            height,
+            width,
+        )
+    };
+    let start = (along_start.floor().max(0.0) as u32).min(along_limit - 1);
+    let end = (along_end.ceil().max(0.0) as u32).min(along_limit - 1);
+    let cross = (cross.round().max(0.0) as u32).min(cross_limit - 1);
+    let sample_count = (end - start + 1).min(256) as usize;
+    if sample_count < 2 {
+        return Some(bounds);
+    }
+    let line = |cross: u32| -> Vec<u8> {
+        (0..sample_count)
+            .map(|index| {
+                let along = start + ((end - start) as usize * index / (sample_count - 1)) as u32;
+                let (x, y) = if horizontal {
+                    (along, cross)
+                } else {
+                    (cross, along)
+                };
+                luma[(y * width + x) as usize]
+            })
+            .collect()
+    };
+    let reference = line(cross);
+    let threshold = |values: &[u8]| {
+        let min = *values.iter().min().unwrap();
+        let max = *values.iter().max().unwrap();
+        (min, max, (u16::from(min) + u16::from(max)) / 2)
+    };
+    let (_, _, reference_threshold) = threshold(&reference);
+    let matches_line = |cross| {
+        let values = line(cross);
+        let (min, max, line_threshold) = threshold(&values);
+        max.saturating_sub(min) >= 4
+            && values
+                .iter()
+                .zip(&reference)
+                .filter(|(pixel, reference)| {
+                    (u16::from(**pixel) <= line_threshold)
+                        != (u16::from(**reference) <= reference_threshold)
+                })
+                .count()
+                <= sample_count / 16
+    };
+    let mut first_line = cross;
+    let mut last_line = cross;
+    while first_line > 0 && matches_line(first_line - 1) {
+        first_line -= 1;
+    }
+    while last_line + 1 < cross_limit && matches_line(last_line + 1) {
+        last_line += 1;
+    }
+    if horizontal {
+        bounds.top = first_line as f32;
+        bounds.bottom = last_line as f32;
+    } else {
+        bounds.left = first_line as f32;
+        bounds.right = last_line as f32;
+    }
+    Some(bounds)
+}
+
 impl Barcode {
     fn from_result(value: RXingResult, variant: &DecodeVariant) -> Self {
+        let bounds = result_bounds(&value, &variant.luma, variant.width, variant.height)
+            .map(|bounds| bounds.map(variant));
         let points = value
             .getPoints()
             .iter()
@@ -551,6 +738,7 @@ impl Barcode {
             timestamp: value.getTimestamp(),
             line_count: value.line_count(),
             points,
+            bounds,
         }
     }
 }
@@ -695,7 +883,7 @@ fn effective_rotations(
         if preprocess_mode == PreprocessMode::Industrial {
             vec![0, 90, 180, 270]
         } else {
-            vec![0]
+            vec![0, 90]
         }
     } else {
         preprocessing.rotations.clone()
@@ -717,15 +905,17 @@ fn decode_multiple_in_luma(
     width: u32,
     height: u32,
     hints: &DecodeHints,
+    max_results: Option<usize>,
+    validation: &BarcodeValidationOptions,
 ) -> rxing::common::Result<Vec<RXingResult>> {
-    let mut scanner = GenericMultipleBarcodeReader::new(MultiFormatReader::default());
-    scanner.decode_multiple_with_hints(
-        &mut BinaryBitmap::new(HybridBinarizer::new(Luma8LuminanceSource::new(
-            luma.to_vec(),
-            width,
-            height,
-        ))),
+    decode_multiple_in_regions(
+        luma,
+        width,
+        height,
         hints,
+        &[(0, 0, width, height)],
+        max_results,
+        validation,
     )
 }
 
@@ -734,17 +924,243 @@ fn decode_multiple_in_luma_by_quadrant(
     width: u32,
     height: u32,
     hints: &DecodeHints,
+    max_results: Option<usize>,
+    validation: &BarcodeValidationOptions,
 ) -> rxing::common::Result<Vec<RXingResult>> {
-    let mut scanner =
-        GenericMultipleBarcodeReader::new(ByQuadrantReader::new(MultiFormatReader::default()));
-    scanner.decode_multiple_with_hints(
-        &mut BinaryBitmap::new(HybridBinarizer::new(Luma8LuminanceSource::new(
-            luma.to_vec(),
+    let half_width = width / 2;
+    let half_height = height / 2;
+    decode_multiple_in_regions(
+        luma,
+        width,
+        height,
+        hints,
+        &[
+            (0, 0, half_width, half_height),
+            (half_width, 0, width - half_width, half_height),
+            (0, half_height, half_width, height - half_height),
+            (
+                half_width,
+                half_height,
+                width - half_width,
+                height - half_height,
+            ),
+            (width / 4, height / 4, half_width, half_height),
+        ],
+        max_results,
+        validation,
+    )
+}
+
+fn decode_spaced_1d_rows(
+    scanner: &mut MultiFormatOneDReader,
+    bitmap: &BinaryBitmap<HybridBinarizer<Luma8LuminanceSource>>,
+    hints: &DecodeHints,
+) -> rxing::common::Result<RXingResult> {
+    let row_count = bitmap.get_height().min(32);
+    let mut row_hints = hints.clone();
+    scanner.reset();
+    for index in 0..row_count {
+        let y = (2 * index + 1) * bitmap.get_height() / (2 * row_count);
+        let Ok(mut row) = bitmap.get_black_row(y) else {
+            continue;
+        };
+        for reversed in [false, true] {
+            if reversed {
+                row.to_mut().reverse();
+                row_hints.NeedResultPointCallback = None;
+            }
+            if let Ok(mut result) = scanner.decode_row(y as u32, &row, &row_hints) {
+                if reversed {
+                    result.putMetadata(
+                        rxing::RXingResultMetadataType::ORIENTATION,
+                        rxing::RXingResultMetadataValue::Orientation(180),
+                    );
+                    for point in result.getPointsMut() {
+                        point.x = bitmap.get_width() as f32 - point.x - 1.0;
+                    }
+                }
+                return Ok(result);
+            }
+        }
+    }
+    Err(rxing::Exceptions::NOT_FOUND)
+}
+
+fn decode_multiple_in_regions(
+    luma: &[u8],
+    width: u32,
+    height: u32,
+    hints: &DecodeHints,
+    regions: &[(u32, u32, u32, u32)],
+    max_results: Option<usize>,
+    validation: &BarcodeValidationOptions,
+) -> rxing::common::Result<Vec<RXingResult>> {
+    if width == 0 || height == 0 || luma.len() != width as usize * height as usize {
+        return Err(rxing::Exceptions::NOT_FOUND);
+    }
+
+    let mut hints = hints.clone();
+    let also_inverted = hints.AlsoInverted.take().unwrap_or(false);
+    hints.AlsoInverted = Some(false);
+    let formats: Vec<_> = hints
+        .PossibleFormats
+        .as_ref()
+        .map(|formats| formats.iter().copied().collect())
+        .unwrap_or_else(readable_barcode_formats);
+    let linear_formats: Vec<_> = formats
+        .iter()
+        .copied()
+        .filter(|format| is_linear_barcode_format(*format))
+        .collect();
+    let is_qr = |format: BarcodeFormat| {
+        matches!(
+            format,
+            BarcodeFormat::QR_CODE
+                | BarcodeFormat::MICRO_QR_CODE
+                | BarcodeFormat::RECTANGULAR_MICRO_QR_CODE
+        )
+    };
+    let other_formats: Vec<_> = formats
+        .iter()
+        .copied()
+        .filter(|format| !is_linear_barcode_format(*format) && !is_qr(*format))
+        .collect();
+    let has_qr = formats.iter().copied().any(is_qr);
+    let has_standard_qr = formats.contains(&BarcodeFormat::QR_CODE);
+    let linear_hints = hints_for_formats(&hints, &linear_formats);
+    let mut linear_scanner = MultiFormatReader::default();
+    linear_scanner.set_hints(&linear_hints);
+    let mut spaced_linear_scanner = MultiFormatOneDReader::new(&linear_hints);
+    let mut other_scanner = MultiFormatReader::default();
+    other_scanner.set_hints(&hints_for_formats(&hints, &other_formats));
+    let mut pending: Vec<_> = regions.iter().rev().map(|region| (*region, 0)).collect();
+    let mut visited = HashSet::new();
+    let mut results: Vec<(RXingResult, Option<BarcodeBounds>)> = Vec::new();
+    let mut accepted_count = 0;
+
+    while let Some(((left, top, crop_width, crop_height), depth)) = pending.pop() {
+        if crop_width == 0 || crop_height == 0 || depth > 4 {
+            continue;
+        }
+        if !visited.insert((left, top, crop_width, crop_height)) {
+            continue;
+        }
+
+        let (crop, _, _, _, _) = crop_luma_to_roi(
+            luma,
             width,
             height,
-        ))),
-        hints,
-    )
+            Some(&BarcodeRoi {
+                x: left,
+                y: top,
+                width: crop_width,
+                height: crop_height,
+            }),
+        );
+        if crop.iter().all(|pixel| *pixel == crop[0]) {
+            continue;
+        }
+        let mut decode =
+            |pixels| {
+                let mut bitmap = BinaryBitmap::new(HybridBinarizer::new(
+                    Luma8LuminanceSource::new(pixels, crop_width, crop_height),
+                ));
+                if !linear_formats.is_empty() && hints.TryHarder != Some(true) {
+                    linear_scanner.reset();
+                    if let Ok(result) = linear_scanner.decode_with_state(&mut bitmap) {
+                        return Ok(result);
+                    }
+                }
+                // QrReader searches all enabled QR families in one pass.
+                if has_qr {
+                    if let Ok(result) = QrReader.decode_with_hints(&mut bitmap, &hints) {
+                        return Ok(result);
+                    }
+                    if has_standard_qr {
+                        if let Ok(result) = QRCodeReader.decode_with_hints(&mut bitmap, &hints) {
+                            return Ok(result);
+                        }
+                    }
+                }
+                if !other_formats.is_empty() {
+                    other_scanner.reset();
+                    if let Ok(result) = other_scanner.decode_with_state(&mut bitmap) {
+                        return Ok(result);
+                    }
+                }
+                if !linear_formats.is_empty() {
+                    // The fast 1D reader samples only central rows. Widen coverage after a miss.
+                    let decoded = if hints.TryHarder == Some(true) {
+                        linear_scanner.reset();
+                        linear_scanner.decode_with_state(&mut bitmap)
+                    } else {
+                        decode_spaced_1d_rows(&mut spaced_linear_scanner, &bitmap, &linear_hints)
+                    };
+                    if let Ok(result) = decoded {
+                        return Ok(result);
+                    }
+                }
+                Err(rxing::Exceptions::NOT_FOUND)
+            };
+        let decoded = decode(crop.clone());
+        // rxing's AlsoInverted flips only its 2D matrix. Invert pixels so 1D rows work too.
+        let decoded = if decoded.is_err() && also_inverted {
+            decode(invert_luma(&crop))
+        } else {
+            decoded
+        };
+        let Ok(mut result) = decoded else { continue };
+        let local_bounds = result_bounds(&result, &crop, crop_width, crop_height);
+        for point in result.getPointsMut() {
+            point.x += left as f32;
+            point.y += top as f32;
+        }
+        let bounds = local_bounds.map(|bounds| bounds.offset(left as f32, top as f32));
+        let duplicate = results.iter().any(|(existing, existing_bounds)| {
+            existing.getText() == result.getText()
+                && existing.getBarcodeFormat() == result.getBarcodeFormat()
+                && match (existing_bounds, bounds) {
+                    (Some(a), Some(b)) => a.overlaps_same_symbol(&b),
+                    _ => true,
+                }
+        });
+        if !duplicate {
+            if text_matches_validation(result.getText(), validation) {
+                accepted_count += 1;
+            }
+            results.push((result, bounds));
+            if max_results.is_some_and(|limit| accepted_count >= limit) {
+                break;
+            }
+        }
+
+        let Some(bounds) = local_bounds else { continue };
+        let x0 = (bounds.left.floor() as u32).min(crop_width);
+        let y0 = (bounds.top.floor() as u32).min(crop_height);
+        let x1 = (bounds.right.ceil() as u32)
+            .saturating_add(1)
+            .min(crop_width);
+        let y1 = (bounds.bottom.ceil() as u32)
+            .saturating_add(1)
+            .min(crop_height);
+        // Exclude the whole contiguous 1D symbol, rather than rediscovering each scan line.
+        for region in [
+            (left, top + y1, crop_width, crop_height - y1),
+            (left + x1, top, crop_width - x1, crop_height),
+            (left, top, crop_width, y0),
+            (left, top, x0, crop_height),
+        ] {
+            if region.2 >= 8 && region.3 >= 8 {
+                pending.push((region, depth + 1));
+            }
+        }
+    }
+
+    if results.is_empty() {
+        Err(rxing::Exceptions::NOT_FOUND)
+    } else {
+        Ok(results.into_iter().map(|(result, _)| result).collect())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -762,14 +1178,26 @@ fn decode_variant_attempt(
     variant: &DecodeVariant,
     hints: &DecodeHints,
     scanner_mode: ScannerMode,
+    max_results: Option<usize>,
+    validation: &BarcodeValidationOptions,
 ) -> DecodeAttemptResult {
     let decoded = match scanner_mode {
-        ScannerMode::Normal => {
-            decode_multiple_in_luma(&variant.luma, variant.width, variant.height, hints)
-        }
-        ScannerMode::Quadrant => {
-            decode_multiple_in_luma_by_quadrant(&variant.luma, variant.width, variant.height, hints)
-        }
+        ScannerMode::Normal => decode_multiple_in_luma(
+            &variant.luma,
+            variant.width,
+            variant.height,
+            hints,
+            max_results,
+            validation,
+        ),
+        ScannerMode::Quadrant => decode_multiple_in_luma_by_quadrant(
+            &variant.luma,
+            variant.width,
+            variant.height,
+            hints,
+            max_results,
+            validation,
+        ),
     };
 
     match decoded {
@@ -802,16 +1230,14 @@ fn decode_barcodes_in_luma(
     polarity: BarcodePolarity,
     rotations: &[DecodeRotation],
     preprocessing: &BarcodePreprocessingOptions,
+    max_results: Option<usize>,
+    validation: &BarcodeValidationOptions,
 ) -> flow_like_types::Result<Vec<Barcode>> {
-    let variants = build_decode_variants(
-        luma,
-        width,
-        height,
-        preprocess_mode,
-        polarity,
-        rotations,
-        preprocessing,
-    );
+    if max_results == Some(0) {
+        return Err(anyhow!(
+            "max_results must be greater than zero when provided"
+        ));
+    }
     let max_decode_attempts = preprocessing.max_decode_attempts.max(1);
     let scan_formats = if scan_formats.is_empty() {
         readable_barcode_formats()
@@ -819,66 +1245,104 @@ fn decode_barcodes_in_luma(
         scan_formats.to_vec()
     };
     let format_hints = hints_for_formats(hints, &scan_formats);
-
-    let scanner_modes: Vec<ScannerMode> = if preprocess_mode != PreprocessMode::None {
-        vec![ScannerMode::Normal, ScannerMode::Quadrant]
-    } else {
-        vec![ScannerMode::Normal]
-    };
-
-    let attempts: Vec<(&DecodeVariant, ScannerMode)> = variants
+    let implicit_rotations =
+        preprocessing.rotations.is_empty() && preprocess_mode != PreprocessMode::Industrial;
+    let linear_formats: Vec<_> = scan_formats
         .iter()
-        .flat_map(|variant| {
-            scanner_modes
-                .iter()
-                .copied()
-                .map(move |mode| (variant, mode))
-        })
+        .copied()
+        .filter(|format| is_linear_barcode_format(*format))
+        .collect();
+    let rotated_hints = implicit_rotations.then(|| hints_for_formats(hints, &linear_formats));
+    // 2D readers locate rotated symbols themselves. The automatic retry adds
+    // the scan direction needed by 1D readers without repeating every 2D search.
+    let rotations = if implicit_rotations && linear_formats.is_empty() {
+        &[DecodeRotation::Deg0]
+    } else {
+        rotations
+    };
+    let mut variants = build_decode_variants(
+        luma,
+        width,
+        height,
+        PreprocessMode::None,
+        polarity,
+        rotations,
+        preprocessing,
+    );
+
+    let raw_attempts: Vec<_> = variants
+        .iter()
+        .map(|variant| (variant, ScannerMode::Normal))
         .take(max_decode_attempts)
         .collect();
-
-    let decode_threads = preprocessing.decode_threads.max(1);
-    let attempt_results = if decode_threads == 1 || attempts.len() <= 1 {
-        attempts
-            .iter()
-            .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
-            .collect::<Vec<_>>()
-    } else {
-        #[cfg(feature = "execute")]
-        {
-            let thread_count = std::thread::available_parallelism()
-                .map(|threads| threads.get().min(decode_threads))
-                .unwrap_or(decode_threads);
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(thread_count)
-                .build()
-                .map_err(|e| anyhow!("Failed to build barcode decode thread pool: {}", e))?;
-
-            pool.install(|| {
-                attempts
-                    .par_iter()
-                    .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
-                    .collect::<Vec<_>>()
-            })
-        }
-
-        #[cfg(not(feature = "execute"))]
-        {
-            attempts
-                .iter()
-                .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
-                .collect::<Vec<_>>()
-        }
-    };
-
+    let raw_attempt_count = raw_attempts.len();
     let mut barcodes = Vec::new();
     let mut first_error = None;
-    for attempt_result in attempt_results {
-        if let Some(error) = attempt_result.error {
-            first_error.get_or_insert(error);
-        }
-        for barcode in attempt_result.barcodes {
-            push_unique_barcode(&mut barcodes, barcode);
+    run_decode_attempts(
+        &raw_attempts,
+        &format_hints,
+        rotated_hints.as_ref(),
+        preprocessing.decode_threads,
+        max_results,
+        validation,
+        &mut barcodes,
+        &mut first_error,
+    );
+
+    let limit_reached = max_results.is_some_and(|limit| barcodes.len() >= limit);
+    let fallback_succeeded = preprocess_mode == PreprocessMode::Fallback && !barcodes.is_empty();
+    if preprocess_mode != PreprocessMode::None
+        && !limit_reached
+        && !fallback_succeeded
+        && raw_attempt_count < max_decode_attempts
+    {
+        // A result limit or Fallback mode avoids constructing unused image variants.
+        let raw_variant_count = variants.len();
+        append_preprocessed_variants(&mut variants, preprocess_mode, preprocessing);
+        let attempts: Vec<_> = variants[raw_variant_count..]
+            .iter()
+            .map(|variant| (variant, ScannerMode::Normal))
+            .take(max_decode_attempts - raw_attempt_count)
+            .collect();
+        let normal_attempt_count = raw_attempt_count + attempts.len();
+        run_decode_attempts(
+            &attempts,
+            &format_hints,
+            rotated_hints.as_ref(),
+            preprocessing.decode_threads,
+            max_results,
+            validation,
+            &mut barcodes,
+            &mut first_error,
+        );
+
+        // Normal searches already recurse around every detected symbol. Quadrants
+        // recover images where no initial symbol could be located; thorough modes
+        // also search them after successful normal passes.
+        let search_quadrants = barcodes.is_empty()
+            || matches!(
+                preprocess_mode,
+                PreprocessMode::Aggressive | PreprocessMode::Industrial
+            );
+        if search_quadrants
+            && !max_results.is_some_and(|limit| barcodes.len() >= limit)
+            && normal_attempt_count < max_decode_attempts
+        {
+            let attempts: Vec<_> = variants
+                .iter()
+                .map(|variant| (variant, ScannerMode::Quadrant))
+                .take(max_decode_attempts - normal_attempt_count)
+                .collect();
+            run_decode_attempts(
+                &attempts,
+                &format_hints,
+                rotated_hints.as_ref(),
+                preprocessing.decode_threads,
+                max_results,
+                validation,
+                &mut barcodes,
+                &mut first_error,
+            );
         }
     }
 
@@ -889,6 +1353,60 @@ fn decode_barcodes_in_luma(
     }
 
     Ok(barcodes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_decode_attempts(
+    attempts: &[(&DecodeVariant, ScannerMode)],
+    hints: &DecodeHints,
+    rotated_hints: Option<&DecodeHints>,
+    decode_threads: usize,
+    max_results: Option<usize>,
+    validation: &BarcodeValidationOptions,
+    barcodes: &mut Vec<Barcode>,
+    first_error: &mut Option<String>,
+) {
+    let thread_count = std::thread::available_parallelism()
+        .map(|threads| threads.get().min(decode_threads.max(1)))
+        .unwrap_or(1)
+        .min(max_results.unwrap_or(usize::MAX));
+
+    for chunk in attempts.chunks(thread_count.max(1)) {
+        let decode = |(variant, mode): &(&DecodeVariant, ScannerMode)| {
+            let hints = if variant.rotation == DecodeRotation::Deg0 {
+                hints
+            } else {
+                rotated_hints.unwrap_or(hints)
+            };
+            decode_variant_attempt(variant, hints, *mode, max_results, validation)
+        };
+        // Rayon's shared pool bounds workers across concurrent node executions.
+        #[cfg(feature = "execute")]
+        let results: Vec<_> = if chunk.len() > 1 {
+            chunk.par_iter().map(decode).collect()
+        } else {
+            chunk.iter().map(decode).collect()
+        };
+        #[cfg(not(feature = "execute"))]
+        let results: Vec<_> = chunk.iter().map(decode).collect();
+
+        for result in results {
+            if let Some(error) = result.error {
+                first_error.get_or_insert(error);
+            }
+            for barcode in result.barcodes {
+                if barcode_matches_validation(&barcode, validation) {
+                    push_unique_barcode(barcodes, barcode);
+                }
+            }
+        }
+        if let Some(limit) = max_results
+            && barcodes.len() >= limit
+        {
+            barcodes.truncate(limit);
+            return;
+        }
+    }
 }
 
 fn append_processed_variants<F>(
@@ -926,8 +1444,12 @@ fn build_decode_variants(
 ) -> Vec<DecodeVariant> {
     let mut variants = Vec::new();
     let max_variants = preprocessing.max_variants.max(1);
-    let (source_luma, source_width, source_height, x_offset, y_offset) =
+    let (mut source_luma, source_width, source_height, x_offset, y_offset) =
         crop_luma_to_roi(&luma, width, height, preprocessing.roi.as_ref());
+
+    if polarity == BarcodePolarity::LightOnDark {
+        source_luma = invert_luma(&source_luma);
+    }
 
     for rotation in rotations {
         let (rotated_luma, rotated_width, rotated_height) =
@@ -954,9 +1476,23 @@ fn build_decode_variants(
         return variants;
     }
 
+    append_preprocessed_variants(&mut variants, preprocess_mode, preprocessing);
+    variants
+}
+
+fn append_preprocessed_variants(
+    variants: &mut Vec<DecodeVariant>,
+    preprocess_mode: PreprocessMode,
+    preprocessing: &BarcodePreprocessingOptions,
+) {
+    let Some(source) = variants.first() else {
+        return;
+    };
+    let (source_width, source_height) = (source.base_width, source.base_height);
+    let max_variants = preprocessing.max_variants.max(1);
     if preprocessing.contrast_stretch {
         let source_count = variants.len();
-        append_processed_variants(&mut variants, source_count, max_variants, |variant| {
+        append_processed_variants(variants, source_count, max_variants, |variant| {
             Some(variant.with_luma(
                 contrast_stretch_luma(&variant.luma),
                 variant.width,
@@ -968,7 +1504,7 @@ fn build_decode_variants(
 
     if preprocessing.local_contrast {
         let source_count = variants.len();
-        append_processed_variants(&mut variants, source_count, max_variants, |variant| {
+        append_processed_variants(variants, source_count, max_variants, |variant| {
             Some(variant.with_luma(
                 local_contrast_stretch_luma(
                     &variant.luma,
@@ -985,7 +1521,7 @@ fn build_decode_variants(
 
     let base_variant_count = variants.len();
     if preprocessing.denoise {
-        append_processed_variants(&mut variants, base_variant_count, max_variants, |variant| {
+        append_processed_variants(variants, base_variant_count, max_variants, |variant| {
             Some(variant.with_luma(
                 median_filter_3x3_luma(&variant.luma, variant.width, variant.height),
                 variant.width,
@@ -997,75 +1533,43 @@ fn build_decode_variants(
 
     let enhanced_variant_count = variants.len();
     if preprocessing.sharpen || preprocess_mode == PreprocessMode::Industrial {
-        append_processed_variants(
-            &mut variants,
-            enhanced_variant_count,
-            max_variants,
-            |variant| {
-                Some(variant.with_luma(
-                    sharpen_luma(&variant.luma, variant.width, variant.height),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ))
-            },
-        );
-    }
-
-    if polarity == BarcodePolarity::LightOnDark {
-        let polarity_source_count = variants.len();
-        append_processed_variants(
-            &mut variants,
-            polarity_source_count,
-            max_variants,
-            |variant| {
-                Some(variant.with_luma(
-                    invert_luma(&variant.luma),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ))
-            },
-        );
+        append_processed_variants(variants, enhanced_variant_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                sharpen_luma(&variant.luma, variant.width, variant.height),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     let threshold_source_count = variants.len();
     if preprocessing.otsu_threshold {
-        append_processed_variants(
-            &mut variants,
-            threshold_source_count,
-            max_variants,
-            |variant| {
-                Some(variant.with_luma(
-                    otsu_threshold_luma(&variant.luma),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ))
-            },
-        );
+        append_processed_variants(variants, threshold_source_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                otsu_threshold_luma(&variant.luma),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     if preprocessing.adaptive_threshold {
-        append_processed_variants(
-            &mut variants,
-            threshold_source_count,
-            max_variants,
-            |variant| {
-                Some(variant.with_luma(
-                    adaptive_threshold_luma(
-                        &variant.luma,
-                        variant.width,
-                        variant.height,
-                        preprocessing.adaptive_threshold_window,
-                        preprocessing.adaptive_threshold_bias,
-                    ),
+        append_processed_variants(variants, threshold_source_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                adaptive_threshold_luma(
+                    &variant.luma,
                     variant.width,
                     variant.height,
-                    variant.point_scale,
-                ))
-            },
-        );
+                    preprocessing.adaptive_threshold_window,
+                    preprocessing.adaptive_threshold_bias,
+                ),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     if preprocessing.morphology {
@@ -1109,7 +1613,7 @@ fn build_decode_variants(
         }
 
         for variant in generated {
-            push_decode_variant(&mut variants, variant, max_variants);
+            push_decode_variant(variants, variant, max_variants);
         }
     }
 
@@ -1127,28 +1631,17 @@ fn build_decode_variants(
         } else {
             variants.len()
         };
-        append_processed_variants(
-            &mut variants,
-            upscale_source_count,
-            max_variants,
-            |variant| {
-                let (upscaled, upscaled_width, upscaled_height) = upscale_luma_nearest(
-                    &variant.luma,
-                    variant.width,
-                    variant.height,
-                    upscale_factor,
-                );
-                Some(variant.with_luma(
-                    upscaled,
-                    upscaled_width,
-                    upscaled_height,
-                    variant.point_scale / upscale_factor as f32,
-                ))
-            },
-        );
+        append_processed_variants(variants, upscale_source_count, max_variants, |variant| {
+            let (upscaled, upscaled_width, upscaled_height) =
+                upscale_luma_nearest(&variant.luma, variant.width, variant.height, upscale_factor);
+            Some(variant.with_luma(
+                upscaled,
+                upscaled_width,
+                upscaled_height,
+                variant.point_scale / upscale_factor as f32,
+            ))
+        });
     }
-
-    variants
 }
 
 fn push_decode_variant(
@@ -1251,32 +1744,36 @@ fn invert_luma(luma: &[u8]) -> Vec<u8> {
 }
 
 fn barcode_matches_validation(barcode: &Barcode, validation: &BarcodeValidationOptions) -> bool {
+    text_matches_validation(&barcode.text, validation)
+}
+
+fn text_matches_validation(text: &str, validation: &BarcodeValidationOptions) -> bool {
     if let Some(min_text_length) = validation.min_text_length
-        && barcode.text.len() < min_text_length
+        && text.len() < min_text_length
     {
         return false;
     }
 
     if let Some(max_text_length) = validation.max_text_length
-        && barcode.text.len() > max_text_length
+        && text.len() > max_text_length
     {
         return false;
     }
 
     if let Some(prefix) = &validation.text_prefix
-        && !barcode.text.starts_with(prefix)
+        && !text.starts_with(prefix)
     {
         return false;
     }
 
     if let Some(suffix) = &validation.text_suffix
-        && !barcode.text.ends_with(suffix)
+        && !text.ends_with(suffix)
     {
         return false;
     }
 
     if let Some(contains) = &validation.text_contains
-        && !barcode.text.contains(contains)
+        && !text.contains(contains)
     {
         return false;
     }
@@ -1285,7 +1782,7 @@ fn barcode_matches_validation(barcode: &Barcode, validation: &BarcodeValidationO
         && !validation
             .allowed_texts
             .iter()
-            .any(|allowed| allowed == &barcode.text)
+            .any(|allowed| allowed == text)
     {
         return false;
     }
@@ -1602,6 +2099,10 @@ fn is_same_barcode(a: &Barcode, b: &Barcode) -> bool {
         return false;
     }
 
+    if let (Some(a), Some(b)) = (a.bounds, b.bounds) {
+        return a.overlaps_same_symbol(&b);
+    }
+
     let Some((ax, ay)) = centroid(&a.points) else {
         return true;
     };
@@ -1637,7 +2138,7 @@ impl NodeLogic for ReadBarcodesNode {
         );
         node.set_flowscript_name("image", "readBarcodes");
         node.set_receiver("image_in");
-        node.set_version(6);
+        node.set_version(7);
         node.add_icon("/flow/icons/barcode.svg");
 
         // inputs
@@ -1687,6 +2188,11 @@ impl NodeLogic for ReadBarcodesNode {
 
         // fetch inputs
         let options: ReadBarcodeOptions = context.evaluate_pin("options").await?;
+        if options.max_results == Some(0) {
+            return Err(anyhow!(
+                "max_results must be greater than zero when provided"
+            ));
+        }
         let preprocess_mode = parse_preprocess_mode(&options.preprocess)?;
         let preprocessing =
             effective_preprocessing_options(preprocess_mode, &options.preprocessing);
@@ -1696,12 +2202,6 @@ impl NodeLogic for ReadBarcodesNode {
 
         // prepare image
         let img = node_img.get_image(context).await?;
-        let (img_vec, w, h) = {
-            let img_guard = img.lock().await;
-            let gray = img_guard.to_luma8(); // decoding works best with grayscale images
-            let (w, h) = gray.dimensions();
-            (gray.into_raw(), w, h)
-        };
 
         // detect + decode (bar)codes
         let hints = DecodeHints {
@@ -1728,28 +2228,30 @@ impl NodeLogic for ReadBarcodesNode {
             scan_formats = readable_barcode_formats();
         }
 
-        let mut results = decode_barcodes_in_luma(
-            img_vec,
-            w,
-            h,
-            &hints,
-            &scan_formats,
-            preprocess_mode,
-            polarity,
-            &rotations,
-            &preprocessing,
-        )?;
-        let decoded_count = results.len();
-        results.retain(|barcode| barcode_matches_validation(barcode, &options.validation));
+        let results = tokio::task::spawn_blocking(move || {
+            let gray = img.blocking_lock().to_luma8();
+            let (w, h) = gray.dimensions();
+            decode_barcodes_in_luma(
+                gray.into_raw(),
+                w,
+                h,
+                &hints,
+                &scan_formats,
+                preprocess_mode,
+                polarity,
+                &rotations,
+                &preprocessing,
+                options.max_results,
+                &options.validation,
+            )
+        })
+        .await
+        .map_err(|error| anyhow!("Barcode decode task failed: {}", error))??;
         if results.is_empty() {
-            if decoded_count == 0 {
-                context.log_message("No Codes Detected / Decoded!", LogLevel::Warn);
-            } else {
-                context.log_message(
-                    "Codes were decoded, but none matched the configured validation constraints.",
-                    LogLevel::Warn,
-                );
-            }
+            context.log_message(
+                "No codes matched the configured formats and validation constraints.",
+                LogLevel::Warn,
+            );
         }
 
         // set outputs
@@ -1895,6 +2397,8 @@ mod tests {
             BarcodePolarity::Auto,
             &[DecodeRotation::Deg0],
             &preprocessing,
+            None,
+            &BarcodeValidationOptions::default(),
         )
         .unwrap();
 
@@ -1906,6 +2410,216 @@ mod tests {
             results.iter().any(|barcode| barcode.text == code_128_text),
             "expected Code 128 barcode in {results:?}",
         );
+    }
+
+    fn decode_test_image(image: &DynamicImage, options: &ReadBarcodeOptions) -> Vec<Barcode> {
+        let mode = parse_preprocess_mode(&options.preprocess).unwrap();
+        let preprocessing = effective_preprocessing_options(mode, &options.preprocessing);
+        let polarity = parse_polarity(&preprocessing.polarity).unwrap();
+        let rotations = effective_rotations(mode, &preprocessing).unwrap();
+        let hints = DecodeHints {
+            TryHarder: Some(options.try_harder),
+            AlsoInverted: Some(polarity == BarcodePolarity::Auto && options.also_inverted),
+            PureBarcode: Some(options.pure_barcode),
+            ..DecodeHints::default()
+        };
+        let formats: Vec<_> = options
+            .expected_formats
+            .iter()
+            .map(|format| parse_barcode_format(format).unwrap())
+            .collect();
+        decode_barcodes_in_luma(
+            image.to_luma8().into_raw(),
+            image.width(),
+            image.height(),
+            &hints,
+            &formats,
+            mode,
+            polarity,
+            &rotations,
+            &preprocessing,
+            options.max_results,
+            &options.validation,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn default_options_decode_vertical_and_inverted_code_128() {
+        let code = barcode_image("ORIENTATION-123", BarcodeFormat::CODE_128, 3, Some(96));
+        let mut canvas = GrayImage::from_pixel(900, 300, Luma([255]));
+        paste_luma(&mut canvas, &code, 60, 100);
+        let image = DynamicImage::ImageLuma8(canvas);
+        for mode in ["None", "Balanced"] {
+            let options = ReadBarcodeOptions {
+                preprocess: mode.into(),
+                ..Default::default()
+            };
+            for vertical in [false, true] {
+                let original = if vertical {
+                    image.rotate90()
+                } else {
+                    image.clone()
+                };
+                for inverted in [false, true] {
+                    let mut input = original.clone();
+                    if inverted {
+                        input.invert();
+                    }
+                    let results = decode_test_image(&input, &options);
+                    assert_eq!(
+                        results.len(),
+                        1,
+                        "{mode}, vertical={vertical}, inverted={inverted}: {results:?}"
+                    );
+                    assert_eq!(results[0].text, "ORIENTATION-123");
+                    assert!(results[0].points.iter().all(|point| point.x >= 0.0
+                        && point.x < input.width() as f32
+                        && point.y >= 0.0
+                        && point.y < input.height() as f32));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_light_on_dark_works_without_preprocessing() {
+        let mut image = barcode_image("LIGHT-123", BarcodeFormat::CODE_128, 3, Some(96));
+        image.invert();
+        let mut options = ReadBarcodeOptions {
+            preprocess: "None".into(),
+            also_inverted: false,
+            expected_formats: vec!["CODE_128".into()],
+            ..Default::default()
+        };
+        options.preprocessing.polarity = "LightOnDark".into();
+        let results = decode_test_image(&image, &options);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].text, "LIGHT-123");
+        options.preprocessing.polarity = "DarkOnLight".into();
+        assert!(decode_test_image(&image, &options).is_empty());
+    }
+
+    #[test]
+    fn keeps_distinct_identical_labels_and_merges_repeat_scan_lines() {
+        let code = barcode_image("SAME-123", BarcodeFormat::CODE_128, 3, Some(60));
+        let options = ReadBarcodeOptions {
+            expected_formats: vec!["CODE_128".into()],
+            ..Default::default()
+        };
+        for stacked in [false, true] {
+            let mut canvas = GrayImage::from_pixel(code.width() * 2 + 96, 200, Luma([255]));
+            paste_luma(&mut canvas, &code, 24, 40);
+            let (x, y) = if stacked {
+                (24, 104)
+            } else {
+                (code.width() + 32, 40)
+            };
+            paste_luma(&mut canvas, &code, x, y);
+            for vertical in [false, true] {
+                let input = DynamicImage::ImageLuma8(canvas.clone());
+                let input = if vertical { input.rotate90() } else { input };
+                let results = decode_test_image(&input, &options);
+                assert_eq!(
+                    results.len(),
+                    2,
+                    "stacked={stacked}, vertical={vertical}: {results:?}"
+                );
+                assert!(results.iter().all(|barcode| barcode.text == "SAME-123"));
+            }
+        }
+    }
+
+    #[test]
+    fn off_center_reversed_1d_keeps_source_coordinates() {
+        let code = barcode_image("EDGE-123", BarcodeFormat::CODE_128, 3, Some(40));
+        let options = ReadBarcodeOptions {
+            preprocess: "None".into(),
+            expected_formats: vec!["CODE_128".into()],
+            preprocessing: BarcodePreprocessingOptions {
+                rotations: vec![0],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for reversed in [false, true] {
+            let code = if reversed { code.fliph() } else { code.clone() };
+            let mut canvas = GrayImage::from_pixel(900, 800, Luma([255]));
+            paste_luma(&mut canvas, &code, 73, 22);
+            let results = decode_test_image(&DynamicImage::ImageLuma8(canvas), &options);
+            assert_eq!(results.len(), 1, "reversed={reversed}: {results:?}");
+            assert_eq!(results[0].text, "EDGE-123");
+            assert!(results[0].points.iter().all(|point| {
+                point.x >= 73.0
+                    && point.x < (73 + code.width()) as f32
+                    && point.y >= 22.0
+                    && point.y < 62.0
+            }));
+        }
+    }
+
+    #[test]
+    fn balanced_finds_mixed_formats_in_both_orientations() {
+        let qr = barcode_image("MIXED-QR", BarcodeFormat::QR_CODE, 5, None);
+        let horizontal = barcode_image("MIXED-H", BarcodeFormat::CODE_128, 3, Some(80));
+        let vertical = barcode_image("MIXED-V", BarcodeFormat::CODE_128, 3, Some(80)).rotate90();
+        let mut canvas = GrayImage::from_pixel(1200, 700, Luma([255]));
+        paste_luma(&mut canvas, &qr, 32, 32);
+        paste_luma(&mut canvas, &horizontal, 320, 330);
+        paste_luma(&mut canvas, &vertical, 1000, 120);
+        let results = decode_test_image(
+            &DynamicImage::ImageLuma8(canvas),
+            &ReadBarcodeOptions::default(),
+        );
+        let mut texts: Vec<_> = results
+            .iter()
+            .map(|barcode| barcode.text.as_str())
+            .collect();
+        texts.sort_unstable();
+        assert_eq!(texts, ["MIXED-H", "MIXED-QR", "MIXED-V"]);
+    }
+
+    #[test]
+    fn result_limit_waits_for_validated_codes_in_other_orientations() {
+        let ignored = barcode_image("IGNORE-123", BarcodeFormat::CODE_128, 3, Some(80));
+        let wanted = barcode_image("WANTED-456", BarcodeFormat::CODE_128, 3, Some(80)).rotate90();
+        let mut canvas = GrayImage::from_pixel(1000, 800, Luma([255]));
+        paste_luma(&mut canvas, &ignored, 32, 360);
+        paste_luma(&mut canvas, &wanted, 750, 120);
+        let image = DynamicImage::ImageLuma8(canvas);
+        for preprocess in ["Balanced", "Fallback", "None"] {
+            let options = ReadBarcodeOptions {
+                expected_formats: vec!["CODE_128".into()],
+                preprocess: preprocess.into(),
+                max_results: Some(1),
+                validation: BarcodeValidationOptions {
+                    text_prefix: Some("WANTED-".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let results = decode_test_image(&image, &options);
+            assert_eq!(results.len(), 1, "{preprocess}: {results:?}");
+            assert_eq!(results[0].text, "WANTED-456");
+        }
+    }
+
+    #[test]
+    fn result_limit_returns_only_the_requested_number_of_codes() {
+        let first = barcode_image("FIRST-123", BarcodeFormat::CODE_128, 3, Some(80));
+        let second = barcode_image("SECOND-456", BarcodeFormat::CODE_128, 3, Some(80));
+        let mut canvas = GrayImage::from_pixel(1100, 300, Luma([255]));
+        paste_luma(&mut canvas, &first, 24, 100);
+        paste_luma(&mut canvas, &second, 600, 100);
+        let image = DynamicImage::ImageLuma8(canvas);
+        let mut options = ReadBarcodeOptions {
+            expected_formats: vec!["CODE_128".into()],
+            max_results: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(decode_test_image(&image, &options).len(), 1);
+        options.max_results = None;
+        assert_eq!(decode_test_image(&image, &options).len(), 2);
     }
 
     #[test]
@@ -1928,6 +2642,10 @@ mod tests {
             ]))
         );
         assert_eq!(preprocess_schema.get("default"), Some(&json!("Balanced")));
+
+        let max_results_schema = &schema["properties"]["max_results"];
+        assert_eq!(max_results_schema["default"], json!(null));
+        assert_eq!(max_results_schema["minimum"], json!(1));
 
         let format_schema = schema
             .pointer("/properties/format")

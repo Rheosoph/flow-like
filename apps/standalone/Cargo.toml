@@ -10,6 +10,7 @@ frontend = ["runtime"]
 runtime = [
     "dep:axum",
     "dep:flow-like-runtime",
+    "dep:flow-like-model-protocol",
     "flow-like-runtime/local-ml",
     "dep:flow-like-catalog",
     "dep:flow-like-storage",
@@ -37,6 +38,7 @@ bots-discord = ["bots", "flow-like-bots/discord"]
 axum = { workspace = true, optional = true }
 anyhow = "1"
 flow-like-device-protocol.workspace = true
+flow-like-model-protocol = { workspace = true, optional = true }
 flow-like-offline-writes.workspace = true
 flow-like-device-crypto = { workspace = true, features = ["sqlite"] }
 flow-like-types-contracts = { workspace = true, default-features = false }

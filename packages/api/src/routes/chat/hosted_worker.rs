@@ -45,6 +45,8 @@ pub(crate) enum HostedWork {
         bit_id: Option<String>,
         body: serde_json::Value,
         responses_api: bool,
+        #[serde(default)]
+        systemone_api: bool,
         stream: bool,
         provider: HostedProvider,
         model_id: String,
@@ -589,12 +591,20 @@ async fn execute(
             bit_id,
             body,
             responses_api,
+            systemone_api,
             stream,
             provider,
             model_id,
             context,
         } => {
-            let surface = if *responses_api {
+            if *systemone_api && (*responses_api || *stream) {
+                return Err(ApiError::bad_request(
+                    "System One jobs cannot stream or use Responses",
+                ));
+            }
+            let surface = if *systemone_api {
+                ModelApiSurface::SystemOne
+            } else if *responses_api {
                 ModelApiSurface::Responses
             } else {
                 ModelApiSurface::ChatCompletions
@@ -634,6 +644,7 @@ async fn execute(
                     provider.label(),
                     &url,
                     Some(&job.operation_id),
+                    (*systemone_api).then_some(body),
                 )
                 .await?
             }
@@ -757,6 +768,29 @@ mod tests {
             serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
         assert!(
             matches!(restored, HostedWork::Chat { bit_id: Some(id), .. } if id == "official-bit")
+        );
+    }
+
+    #[test]
+    fn systemone_worker_jobs_preserve_the_native_surface() {
+        let value = serde_json::json!({"Chat": {
+            "bit_id":"official-decision", "body":{"model":"jev","state":"text","questions":{}},
+            "responses_api":false,"systemone_api":true,"stream":false,"provider":"Cloudflare",
+            "model_id":"typesafe/jev","context":{"user_id":"user"}
+        }});
+        let job: HostedWork = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(
+            job,
+            HostedWork::Chat {
+                systemone_api: true,
+                responses_api: false,
+                stream: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            serde_json::to_value(job).unwrap()["Chat"]["systemone_api"],
+            true
         );
     }
 

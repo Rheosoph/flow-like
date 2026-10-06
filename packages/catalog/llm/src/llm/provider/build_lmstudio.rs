@@ -35,7 +35,7 @@ impl NodeLogic for BuildLMStudioNode {
         );
         node.set_flowscript_name("ai.provider", "lmstudio");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()

@@ -183,7 +183,7 @@ impl NodeLogic for ComputerUseAgentNode {
             "Lets a vision model operate the desktop until a goal is reached: it looks at a screenshot (optionally with numbered accessibility marks), calls mouse and keyboard tools, waits for the screen to settle, checks the result and repeats. Works with any vision model that supports tool calling. Ends when the model reports done or asks the user, or when it is stuck or out of steps or time",
             "Automation/Computer/Agent",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "useAgent");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_scores(

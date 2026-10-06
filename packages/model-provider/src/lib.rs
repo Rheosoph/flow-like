@@ -7,6 +7,7 @@ pub mod response;
 pub mod response_chunk;
 pub mod rig_conversion;
 pub mod stablediffusion;
+pub mod systemone;
 #[cfg(feature = "local-ml")]
 pub use fastembed;
 pub use text_splitter;

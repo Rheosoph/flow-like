@@ -5,6 +5,7 @@ import { type IBit, IBitTypes, type IMetadata } from "../schema/bit/bit";
 import type { IEmbeddingModelParameters } from "../schema/bit/bit/embedding-model-parameters";
 import type { IImageEmbeddingModelParameters } from "../schema/bit/bit/image-embedding-model-parameters";
 import type { ILlmParameters } from "../schema/bit/bit/llm-parameters";
+import type { ISystemOneParameters } from "../schema/bit/bit/systemone-parameters";
 import type { IVlmParameters } from "../schema/bit/bit/vlm-parameters";
 import { BitPack } from "./bit-pack";
 
@@ -118,6 +119,7 @@ export class Bit implements IBit {
 		| IImageEmbeddingModelParameters
 		| IEmbeddingModelParameters
 		| ILlmParameters
+		| ISystemOneParameters
 		| IVlmParameters
 		| object = {};
 	repository?: Nullable<string>;

@@ -11,6 +11,7 @@ pub mod local_utils;
 pub mod media;
 #[cfg(feature = "local-stt")]
 pub mod stt;
+pub mod systemone;
 #[cfg(feature = "local-tts")]
 pub mod tts;
 

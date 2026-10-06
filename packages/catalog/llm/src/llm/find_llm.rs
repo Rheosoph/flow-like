@@ -32,7 +32,7 @@ impl NodeLogic for FindLLMNode {
         );
         node.set_flowscript_name("ai", "findModel");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(9)

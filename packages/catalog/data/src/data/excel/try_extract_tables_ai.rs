@@ -735,7 +735,7 @@ impl NodeLogic for ExtractExcelTablesAINode {
         );
         node.set_flowscript_name("excel", "extractTablesAi");
         node.add_icon("/flow/icons/file-spreadsheet.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 

@@ -459,3 +459,50 @@ export async function embedText(
 			: {}),
 	};
 }
+
+export async function invokeSystemOne(
+	fetcher: BrowserFetch,
+	input: {
+		model: string;
+		request: Record<string, unknown>;
+		signal?: AbortSignal;
+	},
+): Promise<Record<string, unknown>> {
+	const { state, questions, images, ...extra } = input.request;
+	if (
+		Object.keys(extra).length ||
+		(typeof state !== "string" && (!state || typeof state !== "object")) ||
+		!questions ||
+		typeof questions !== "object" ||
+		Array.isArray(questions) ||
+		!Object.keys(questions).length ||
+		(images !== undefined &&
+			(!Array.isArray(images) ||
+				!images.every((image) => typeof image === "string")))
+	)
+		throw new Error(
+			"Use a SystemOne request with state, named questions, and optional image data URLs.",
+		);
+	const response = await post(
+		fetcher,
+		"/v1/systemone",
+		{
+			model: input.model,
+			state,
+			questions,
+			...(images === undefined ? {} : { images }),
+		},
+		input.signal,
+	);
+	const result: unknown = await response.json();
+	if (
+		!result ||
+		typeof result !== "object" ||
+		!("answers" in result) ||
+		!result.answers ||
+		typeof result.answers !== "object" ||
+		Array.isArray(result.answers)
+	)
+		throw new Error("The model gateway returned an invalid SystemOne answer.");
+	return result as Record<string, unknown>;
+}

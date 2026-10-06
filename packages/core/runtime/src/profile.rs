@@ -249,6 +249,9 @@ impl Profile {
 
     /// Check if a bit is a local model (requires local hosting capabilities)
     fn is_local_model(bit: &Bit) -> bool {
+        if let Some(parameters) = bit.try_to_systemone() {
+            return Self::is_self_hosted_provider_name(&parameters.provider.provider_name);
+        }
         if bit.try_to_provider().is_some_and(|provider| {
             flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
                 &provider.provider_name,
@@ -674,6 +677,30 @@ impl Profile {
         ))
     }
 
+    /// Resolve a model selected from this profile without accepting a new catalog source.
+    pub async fn resolve_model_reference(
+        &self,
+        reference: &str,
+        http_client: Arc<HTTPClient>,
+    ) -> Result<Bit> {
+        let (hub, id) = split_profile_bit_reference(reference)
+            .map_or((None, reference), |(hub, id)| (Some(hub), id));
+        if let Some(bit) = self.custom_bit(id) {
+            if hub.is_some_and(|hub| hub != bit.hub) {
+                return Err(anyhow!("Model reference changes its configured hub"));
+            }
+            return Ok(bit);
+        }
+        let selected = self.bits.iter().find(|selected| {
+            let (selected_hub, selected_id) = split_profile_bit_reference(selected)
+                .map_or((None, selected.as_str()), |(hub, id)| (Some(hub), id));
+            selected_id == id && hub.is_none_or(|hub| selected_hub == Some(hub))
+        });
+        let selected =
+            selected.ok_or_else(|| anyhow!("Add this model to the profile before using it"))?;
+        self.get_profile_bit(selected, http_client).await
+    }
+
     async fn get_profile_bit(&self, bit_ref: &str, http_client: Arc<HTTPClient>) -> Result<Bit> {
         if bit_ref.trim().is_empty() {
             return Err(anyhow!("Invalid bit format: {}", bit_ref));
@@ -784,6 +811,38 @@ mod tests {
             bits: models.iter().map(|bit| bit.id.clone()).collect(),
             custom_bits: models.into_iter().map(ProfileCustomBit).collect(),
             ..Profile::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn systemone_model_references_keep_profile_credentials_and_pinned_hubs() {
+        let mut bit = completion_bit("decision", "custom:systemone");
+        bit.bit_type = BitTypes::SystemOne;
+        bit.hub = "https://api.flow-like.com".into();
+        bit.parameters["provider"]["params"] =
+            flow_like_types::json::json!({"api_key":"profile-key"});
+        let profile = profile_with_models(vec![bit.clone()]);
+        let http = Arc::new(HTTPClient::new_without_refetch());
+        for reference in ["decision", "https://api.flow-like.com:decision"] {
+            let resolved = profile
+                .resolve_model_reference(reference, http.clone())
+                .await
+                .unwrap();
+            assert_eq!(
+                resolved.parameters["provider"]["params"]["api_key"],
+                "profile-key"
+            );
+        }
+        for reference in [
+            "https://unselected.invalid:decision",
+            "https://unselected.invalid:unknown",
+        ] {
+            assert!(
+                profile
+                    .resolve_model_reference(reference, http.clone())
+                    .await
+                    .is_err()
+            );
         }
     }
 

@@ -21,6 +21,7 @@ import type { HeadlineLead, ModelsHeadline } from "./models-view";
 export function kindLabel(t: DevicesT, kind: ModelKind): string {
 	const labels = {
 		chat: t("devices:models.table.kind.chat", "Chat"),
+		systemone: t("devices:models.table.kind.systemone", "Decisions"),
 		vision: t("devices:models.table.kind.vision", "Vision"),
 		embedding: t("devices:models.table.kind.embedding", "Embedding"),
 	} satisfies Record<ModelKind, string>;

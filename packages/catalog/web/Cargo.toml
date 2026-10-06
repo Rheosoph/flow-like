@@ -95,3 +95,6 @@ windows = { version = "0.61", optional = true, features = [
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true
+
+[dev-dependencies]
+http = "1.4.0"

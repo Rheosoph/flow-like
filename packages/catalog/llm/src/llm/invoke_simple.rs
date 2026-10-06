@@ -51,7 +51,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
         );
         node.set_flowscript_name("ai", "invokeSimple");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(5);
+        node.set_version(6);
 
         // Generic cloud/local model invocation: balanced defaults with light perf bias.
         node.set_scores(
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn exposes_structured_response_and_stream_control() {
         let node = InvokeLLMSimpleNode::new().get_node();
-        assert_eq!(node.version, Some(5));
+        assert_eq!(node.version, Some(6));
         assert!(node.get_pin_by_name("stream").is_some());
         assert!(node.get_pin_by_name("response").is_some());
         assert!(node.get_pin_by_name("chunk").is_some());

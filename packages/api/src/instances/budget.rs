@@ -119,6 +119,8 @@ async fn hosted_model_tier(
 ) -> Result<Option<String>, ApiError> {
     let paths: &[&str] = if bit_type == BitType::Embedding.to_value() {
         &[EMBEDDINGS_PATH]
+    } else if bit_type == BitType::SystemOne.to_value() {
+        &[super::SYSTEMONE_PATH]
     } else {
         &[CHAT_PATH, RESPONSES_PATH]
     };

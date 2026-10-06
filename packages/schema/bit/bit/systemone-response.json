@@ -1,0 +1,118 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "SystemOneResponse",
+	"type": "object",
+	"properties": {
+		"model": {
+			"type": "string"
+		},
+		"answers": {
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/SystemOneAnswer"
+			}
+		},
+		"usage": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/SystemOneUsage"
+				},
+				{
+					"type": "null"
+				}
+			]
+		}
+	},
+	"required": ["model", "answers"],
+	"additionalProperties": true,
+	"$defs": {
+		"SystemOneAnswer": {
+			"oneOf": [
+				{
+					"type": "object",
+					"properties": {
+						"choice": {
+							"type": "string"
+						},
+						"probabilities": {
+							"type": "object",
+							"additionalProperties": {
+								"type": "number",
+								"format": "double"
+							}
+						},
+						"confidence": {
+							"type": "number",
+							"format": "double"
+						},
+						"type": {
+							"type": "string",
+							"const": "choice"
+						}
+					},
+					"required": ["type", "choice", "probabilities", "confidence"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"score": {
+							"type": "number",
+							"format": "double"
+						},
+						"legend": {
+							"type": "object",
+							"additionalProperties": true
+						},
+						"probabilities": {
+							"type": "object",
+							"additionalProperties": {
+								"type": "number",
+								"format": "double"
+							}
+						},
+						"confidence": {
+							"type": "number",
+							"format": "double"
+						},
+						"type": {
+							"type": "string",
+							"const": "score"
+						}
+					},
+					"required": ["type", "score", "legend", "probabilities", "confidence"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"noul": {
+							"type": "number",
+							"format": "double"
+						},
+						"type": {
+							"type": "string",
+							"const": "noul"
+						}
+					},
+					"required": ["type", "noul"]
+				}
+			]
+		},
+		"SystemOneUsage": {
+			"type": "object",
+			"properties": {
+				"input_tokens": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				},
+				"output_tokens": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				}
+			},
+			"required": ["input_tokens", "output_tokens"],
+			"additionalProperties": true
+		}
+	}
+}

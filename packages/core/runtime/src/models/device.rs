@@ -28,6 +28,8 @@ pub enum DeviceModelKind {
     Chat,
     Vision,
     Embedding,
+    #[serde(rename = "systemone")]
+    SystemOne,
 }
 
 /// The hosted model a `device` Bit names.
@@ -76,12 +78,18 @@ impl DeviceModelTarget {
                 bit.id
             );
         }
-        if api_surface
-            .or(params.api_surface)
-            .is_some_and(|surface| surface.is_responses())
-        {
+        let surface = api_surface.or(params.api_surface);
+        if surface.is_some_and(|surface| surface.is_responses()) {
             bail!(
-                "Device Bit {} declares the Responses API, but device models serve chat_completions",
+                "Device Bit {} declares the Responses API, which device models do not serve",
+                bit.id
+            );
+        }
+        if surface.is_some_and(|surface| {
+            (surface == ModelApiSurface::SystemOne) != (bit.bit_type == BitTypes::SystemOne)
+        }) {
+            bail!(
+                "Device Bit {} declares an API surface that does not match its model kind",
                 bit.id
             );
         }
@@ -99,13 +107,20 @@ fn resolve_kind(bit: &Bit, declared: Option<DeviceModelKind>) -> Result<DeviceMo
         BitTypes::Llm => DeviceModelKind::Chat,
         BitTypes::Vlm => DeviceModelKind::Vision,
         BitTypes::Embedding => DeviceModelKind::Embedding,
+        BitTypes::SystemOne => DeviceModelKind::SystemOne,
         other => bail!(
-            "Device Bit {} is a {other:?} Bit; device models are LLM, VLM or Embedding Bits",
+            "Device Bit {} is a {other:?} Bit; device models are LLM, VLM, Embedding or System One Bits",
             bit.id
         ),
     };
     let kind = declared.unwrap_or(implied);
-    if (kind == DeviceModelKind::Embedding) != (implied == DeviceModelKind::Embedding) {
+    if kind != implied
+        && !matches!(
+            (kind, implied),
+            (DeviceModelKind::Chat, DeviceModelKind::Vision)
+                | (DeviceModelKind::Vision, DeviceModelKind::Chat)
+        )
+    {
         bail!(
             "Device Bit {} is a {:?} Bit but names a {kind:?} model",
             bit.id,
@@ -129,7 +144,7 @@ fn display_name(bit: &Bit) -> String {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModelEndpoint {
     /// API base such as `http://127.0.0.1:41234/v1`; requests go to `{base_url}/chat/completions`
-    /// and `{base_url}/embeddings`.
+    /// and `{base_url}/embeddings` or `{base_url}/systemone`.
     pub base_url: String,
     pub bearer: String,
     /// Model name sent with each request.
@@ -611,6 +626,36 @@ mod tests {
         );
         assert!(bit.device_model_target().is_none());
         assert!(!bit.is_device_model());
+    }
+
+    #[test]
+    fn systemone_device_bits_keep_the_native_kind() {
+        let mut bit = device_llm_bit("decision", "dev-1");
+        bit.bit_type = BitTypes::SystemOne;
+        let target = bit.device_model_target().unwrap().unwrap();
+        assert_eq!(target.kind, DeviceModelKind::SystemOne);
+        assert_eq!(json::to_value(target.kind).unwrap(), "systemone");
+        for kind in ["chat", "vision", "embedding"] {
+            let wrong = with_params(
+                bit.clone(),
+                json::json!({
+                    "device_id": "dev-1", "model": "laya", "kind": kind
+                }),
+            );
+            assert!(wrong.device_model_target().unwrap().is_err());
+        }
+        let wrong = with_params(
+            device_llm_bit("chat", "dev-1"),
+            json::json!({
+                "device_id": "dev-1", "model": "laya", "kind": "systemone"
+            }),
+        );
+        assert!(wrong.device_model_target().unwrap().is_err());
+        let mut native = bit.clone();
+        native.parameters["provider"]["api_surface"] = json::json!("systemone");
+        assert!(native.device_model_target().unwrap().is_ok());
+        native.parameters["provider"]["api_surface"] = json::json!("chat_completions");
+        assert!(native.device_model_target().unwrap().is_err());
     }
 
     #[test]

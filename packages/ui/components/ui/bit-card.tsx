@@ -10,6 +10,7 @@ import {
 	FileIcon,
 	FileSearch,
 	ImageIcon,
+	ListChecksIcon,
 	LockIcon,
 	MessagesSquareIcon,
 	MicIcon,
@@ -557,6 +558,8 @@ export function BitTypeIcon({
 		(className ? ` ${className}` : "");
 
 	switch (type) {
+		case IBitTypes.SystemOne:
+			return <ListChecksIcon className={combinedClass} />;
 		case IBitTypes.Llm:
 			return <MessagesSquareIcon className={combinedClass} />;
 		case IBitTypes.Vlm:
@@ -582,6 +585,7 @@ export function BitTypeIcon({
 }
 
 export function bitTypeToText(bitType: IBitTypes): string {
+	if (bitType === IBitTypes.SystemOne) return "SystemOne";
 	return bitType.replace(/([A-Z])/g, (match, letter, index) =>
 		index === 0 ? letter : ` ${letter}`,
 	);

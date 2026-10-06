@@ -194,6 +194,7 @@ const RULES: &[Rule] = &[
     // Observed max 140.9 s.
     rule(M::POST, "/api/v1/chat/completions", Ai),
     rule(M::POST, "/api/v1/responses", Ai),
+    rule(M::POST, "/api/v1/systemone", Ai),
     // Observed max 630.7 s.
     rule(M::POST, "/api/v1/ai/copilot/chat", Ai),
     // Observed max 231.2 s.
@@ -604,6 +605,7 @@ mod tests {
         ("POST", "/api/v1/chat/completions", Ai, Some(140.885)),
         ("GET", "/api/v1/chat/usage", Read, None),
         ("POST", "/api/v1/responses", Ai, None),
+        ("POST", "/api/v1/systemone", Ai, None),
         ("POST", "/api/v1/ai/copilot/chat", Ai, Some(630.692)),
         ("POST", "/api/v1/ai/global-chat", Ai, Some(231.185)),
         ("PUT", "/api/v1/ai/global-chat/feedback", Write, None),

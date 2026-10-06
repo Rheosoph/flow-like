@@ -99,6 +99,7 @@ Use preference-based selection when the board can tolerate a compatible alternat
 | Structured extraction | Required tool call and JSON Schema adherence |
 | Image understanding | Multimodal or vision input |
 | RAG indexing | Embedding model with stable vector dimension |
+| Classification, scoring, or yes/no assessments | SystemOne decision model |
 | Speech | Matching speech-to-text or text-to-speech model type |
 | Image or video generation | Corresponding generation model and options |
 
@@ -123,6 +124,41 @@ Hardware requirements depend on model architecture, quantization, context size, 
 RAG requires an embedding model for documents and queries. Use [Load Embedding Model](/nodes/ai/embedding/load-model/), [Embed Document](/nodes/ai/embedding/embed-document/), and [Embed Query](/nodes/ai/embedding/embed-query/).
 
 Index and query with the same embedding model and configuration. Changing the model normally requires rebuilding the vector index.
+
+## Decision models
+
+Choose a **SystemOne** Bit from the catalog's **Decisions** category, then use a node under **AI / Decisions**. Each node accepts a model from your profile, text or structured state, and instructions:
+
+- **SystemOne Noul** returns a yes/no probability and branches through **True** when it meets the threshold, or **False** otherwise. The threshold defaults to `0.5`.
+- **SystemOne Choice** accepts a map of option names to descriptions. It returns the selected name, probabilities, and confidence.
+- **SystemOne Score** accepts two to ten level descriptions in order. It returns a weighted level index, probabilities, confidence, and a legend of level descriptions.
+
+Use **Invoke SystemOne** to ask several named questions together or supply structured criteria. Its request contains `state` and `questions`:
+
+```json
+{
+  "state": "I was charged twice for my order.",
+  "questions": {
+    "team": {
+      "type": "choice",
+      "instructions": "Which team should handle this message?",
+      "criteria": {"billing": null, "shipping": null, "technical": null}
+    },
+    "refund": {
+      "type": "noul",
+      "instructions": "Does the customer need money returned?"
+    }
+  }
+}
+```
+
+`choice` returns the selected option and each option's probability. `score` uses an ordered array of two to ten level descriptions and returns a weighted level index. `noul` returns the probability that a yes/no answer is true. Results arrive together without streaming. Assess these probabilities against examples from your own workflow before choosing an automatic-action threshold.
+
+Local Bits require a native decision-model GGUF supported by the bundled llama.cpp release. Flow-Like starts its server and uses `/v1/systemone`. An ordinary chat GGUF cannot serve this endpoint. Image input requires a supported decision model, its projector, and image data URLs.
+
+Hosted Bits support OpenRouter, Cloudflare Workers AI, TypeSafe, and operator-configured SystemOne services through the Flow-Like API. Hosted calls use the same account authorization, usage tracking, and billing controls as hosted chat. Administrators configure service credentials on the server; Bits identify the provider and model. For an independently managed endpoint, a custom SystemOne Bit uses its own endpoint and credential.
+
+For a device deployment, the SystemOne Bit must be listed in the project's `bits` manifest field so export includes its pinned metadata and local model assets. Adding a model to a profile or selecting it on a node does not update this list. The current project settings have no dependency editor, so deployment requires a prepared project manifest. Hosted Bits also need their metadata packaged and hosted-model access approved for the service.
 
 ## Model configuration
 

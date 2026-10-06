@@ -29,6 +29,7 @@
 			"enum": [
 				"Llm",
 				"Vlm",
+				"SystemOne",
 				"Tts",
 				"Stt",
 				"Embedding",

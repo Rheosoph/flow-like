@@ -92,9 +92,9 @@ const PAGE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
 const BOOTSTRAP_REVALIDATE_MIN_MS = 3_000;
 
 /**
- * How long an online cold start holds a restored bootstrap back while the server
- * confirms it. Long enough for a slow round trip; short enough that a request
- * which never settles cannot keep a cached Page off screen.
+ * How long an online cold start defers cached Page execution while the server
+ * confirms it. Cacheable pages can render during this check. A request that
+ * never settles must not leave their workflows waiting indefinitely.
  */
 export const RESTORED_BOOTSTRAP_GRACE_MS = 5_000;
 
@@ -359,6 +359,11 @@ export function UsePageContent({
 		[routePath, eventId, preferEventId],
 	);
 	const supportsPageBootstrap = Boolean(backend.pageState.getPageBootstrap);
+	const bootstrapScope = [
+		auth.user?.profile?.sub ?? "anonymous",
+		getApiOrigin(backend.profile),
+		backend.profile?.id ?? "",
+	];
 	const bootstrapEnabled = Boolean(
 		appId &&
 			(hasAccessToken || !backendNeedsSignIn) &&
@@ -370,22 +375,17 @@ export function UsePageContent({
 		backend.pageState,
 		[appId ?? "", bootstrapTarget.route, bootstrapTarget.eventId] as const,
 		bootstrapEnabled,
-		[auth.user?.profile?.sub ?? "anonymous"],
+		bootstrapScope,
 		0,
 	);
-	// Persisted query data is useful only after this mount has validated it against the endpoint.
-	// `Cache-Control: no-cache` lets the browser turn an unchanged body into a cheap ETag round trip.
-	//
-	// A contract already validated on this mount survives a later REFETCH failure.
-	// TanStack flips `isError` on a failed refetch while retaining `data`, and both
-	// hosts run `networkMode: "always"`, so an offline revalidation genuinely runs
-	// and fails — dropping to `undefined` there would take `pageExecutionRevision`
-	// with it and swap a live, working Page for the "could not load its execution
-	// authorization" card. Only a mount that never validated anything may be empty.
-	//
-	// Retained per target, so navigating to another route or Event never falls
-	// back to the previous target's contract while its own fetch is in flight.
-	const bootstrapTargetKey = `${appId ?? ""}|${bootstrapTarget.route ?? ""}|${bootstrapTarget.eventId ?? ""}`;
+	// Keep accepted data within the same account, hub, profile and route. A failed
+	// background refresh may retain that copy, but another target cannot inherit it.
+	const bootstrapTargetKey = JSON.stringify([
+		...bootstrapScope,
+		appId,
+		bootstrapTarget.route,
+		bootstrapTarget.eventId,
+	]);
 	const lastValidatedBootstrapRef = useRef<{
 		key: string;
 		data: IPageBootstrap;
@@ -393,12 +393,10 @@ export function UsePageContent({
 	const [restoredBootstrapGraceKey, setRestoredBootstrapGraceKey] = useState<
 		string | null
 	>(null);
-	// A cold start resolves the first fetch from the persisted cache, which flips
-	// `isFetchedAfterMount` a round trip before the server answers. Mounting that
-	// copy and then the server's answer remounts the Page and runs `onLoad` twice,
-	// so an online first validation waits for the network; `isFetching` covers the
-	// moment the confirmation is recorded but its data not yet applied. Offline,
-	// or once the grace period is spent, the restored copy is the best answer.
+	// Restoring the cache flips `isFetchedAfterMount` before the network answers.
+	// Defer execution during this first check so a changed revision cannot run
+	// onLoad for both the cached page and its replacement. Offline, or once the
+	// grace period is spent, the stored copy is the best available answer.
 	// A query keeps a failed refetch's `error` status until a fetch succeeds, and a
 	// new observer inherits it, so only a failure this mount fetched ends the wait.
 	const bootstrapErrorSeen = bootstrap.isError && bootstrap.isFetchedAfterMount;
@@ -412,7 +410,9 @@ export function UsePageContent({
 			restoredBootstrapGraceKey !== bootstrapTargetKey,
 	);
 	const bootstrapAccepted =
-		bootstrap.isFetchedAfterMount &&
+		(bootstrap.isFetchedAfterMount ||
+			(Boolean(bootstrap.data) &&
+				(!isOnline || restoredBootstrapGraceKey === bootstrapTargetKey))) &&
 		!bootstrap.isError &&
 		!awaitingNetworkBootstrap;
 	if (bootstrapAccepted && bootstrap.data) {
@@ -427,18 +427,32 @@ export function UsePageContent({
 		isTransientReadFailure(bootstrap.error);
 	// A failure that never reached a verdict falls back to whatever copy of this
 	// target the query holds rather than turning a cached Page into an error.
-	const validatedBootstrap = bootstrapAccepted
+	const confirmedBootstrap = bootstrapAccepted
 		? bootstrap.data
 		: lastValidatedBootstrapRef.current?.key === bootstrapTargetKey
 			? lastValidatedBootstrapRef.current.data
 			: bootstrapFailureTransient
 				? bootstrap.data
 				: undefined;
+	// Restore the layout and saved surface without waiting for the hub. Pages
+	// that opt out of caching keep the existing validation wait before mounting.
+	const cachedBootstrap =
+		awaitingNetworkBootstrap &&
+		(!bootstrap.isError || isTransientReadFailure(bootstrap.error)) &&
+		bootstrap.data?.page &&
+		!bootstrap.data.page.noCache &&
+		bootstrap.data.executionRevision
+			? bootstrap.data
+			: undefined;
+	const renderedBootstrap = confirmedBootstrap ?? cachedBootstrap;
 	const bootstrapFailed = Boolean(
-		bootstrap.isError && !(bootstrapFailureTransient && validatedBootstrap),
+		bootstrap.isError &&
+			!cachedBootstrap &&
+			!(bootstrapFailureTransient && renderedBootstrap),
 	);
 	const bootstrapPending = Boolean(
 		bootstrapEnabled &&
+			!renderedBootstrap &&
 			((!bootstrap.isFetchedAfterMount && !bootstrap.isError) ||
 				awaitingNetworkBootstrap),
 	);
@@ -496,7 +510,7 @@ export function UsePageContent({
 		appId &&
 			(!bootstrapEnabled ||
 				bootstrap.isError ||
-				(validatedBootstrap && !validatedBootstrap.page)),
+				(renderedBootstrap && !renderedBootstrap.page)),
 	);
 	const events = useInvoke(
 		backend.eventState.getEvents,
@@ -582,17 +596,17 @@ export function UsePageContent({
 				appInLocalProfile: appIsInAnyLocalProfile,
 				localProfileCheckPending,
 				remoteAppCheckPending: authenticatedRemoteCheckPending,
-				remoteAppLoaded: Boolean(remoteApp.data || validatedBootstrap),
+				remoteAppLoaded: Boolean(remoteApp.data || renderedBootstrap),
 				// A timeout, a socket that never answered or a lapsed token proves nothing
 				// about access; ejecting on it trades the retry card for a store the user
 				// cannot reach.
 				remoteAppFailed:
-					!validatedBootstrap &&
+					!renderedBootstrap &&
 					remoteApp.isError &&
 					!isTransientReadFailure(remoteApp.error),
-				eventsLoaded: Boolean(confirmedEventCatalog || validatedBootstrap),
+				eventsLoaded: Boolean(confirmedEventCatalog || renderedBootstrap),
 				eventsFailed:
-					!validatedBootstrap &&
+					!renderedBootstrap &&
 					events.isError &&
 					!isTransientReadFailure(events.error),
 				eventsFetching: bootstrapPending || events.isFetching,
@@ -609,7 +623,7 @@ export function UsePageContent({
 			remoteApp.data,
 			remoteApp.isError,
 			remoteApp.error,
-			validatedBootstrap,
+			renderedBootstrap,
 			bootstrapPending,
 			confirmedEventCatalog,
 			events.isError,
@@ -654,7 +668,7 @@ export function UsePageContent({
 	}, [eventConfig]);
 
 	const catalogEvents = useMemo(() => {
-		const selected = validatedBootstrap?.event;
+		const selected = renderedBootstrap?.event;
 		// A persisted catalog may be shown after bootstrap itself failed, which preserves native and
 		// offline fallback behavior. Once bootstrap succeeds, its freshly validated selected Event
 		// wins over any older copy in that catalog.
@@ -664,7 +678,7 @@ export function UsePageContent({
 			selected,
 			...confirmedEventCatalog.filter((event) => event.id !== selected.id),
 		];
-	}, [confirmedEventCatalog, validatedBootstrap]);
+	}, [confirmedEventCatalog, renderedBootstrap]);
 
 	const sortedEvents = useMemo(() => {
 		if (!catalogEvents) return [];
@@ -977,22 +991,22 @@ export function UsePageContent({
 			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}:${pageBoardVersion?.join(".") ?? "latest"}`
 			: "";
 	const bootstrapPageData = useMemo(() => {
-		if (!validatedBootstrap?.page || !pageEventId || !pageId) return null;
-		if (validatedBootstrap.event?.id !== pageEventId) return null;
-		if (validatedBootstrap.page.id !== pageId) return null;
-		return validatedBootstrap.page;
-	}, [validatedBootstrap, pageEventId, pageId]);
+		if (!renderedBootstrap?.page || !pageEventId || !pageId) return null;
+		if (renderedBootstrap.event?.id !== pageEventId) return null;
+		if (renderedBootstrap.page.id !== pageId) return null;
+		return renderedBootstrap.page;
+	}, [renderedBootstrap, pageEventId, pageId]);
 	// A backend that supports governed Page bootstrap must never downgrade to
 	// separately fetched Event/Page data when that bootstrap fails.
 	const resolvedPageData = supportsPageBootstrap ? bootstrapPageData : pageData;
 	const pageContentRevision = bootstrapPageData
-		? (validatedBootstrap?.revision ?? undefined)
+		? (renderedBootstrap?.revision ?? undefined)
 		: undefined;
 	const pageExecutionRevision = bootstrapPageData
-		? (validatedBootstrap?.executionRevision ?? undefined)
+		? (renderedBootstrap?.executionRevision ?? undefined)
 		: undefined;
 	const pageElementDemand = bootstrapPageData
-		? (validatedBootstrap?.elementDemand ?? undefined)
+		? (renderedBootstrap?.elementDemand ?? undefined)
 		: undefined;
 	const pageExecutionAuthorityUnavailable = Boolean(
 		pageEvent &&
@@ -1505,7 +1519,7 @@ export function UsePageContent({
 				return (
 					<div className="flex flex-col grow h-full w-full max-h-full overflow-hidden">
 						<PageInterface
-							key={`${pageKey}:${pageContentRevision ?? resolvedPageData.updatedAt}:${pageExecutionRevision ?? "unresolved"}`}
+							key={`${JSON.stringify(bootstrapScope)}:${pageKey}:${pageContentRevision ?? resolvedPageData.updatedAt}:${pageExecutionRevision ?? "unresolved"}`}
 							appId={appId}
 							event={pageEvent}
 							config={parseUint8ArrayToJson(pageEvent.config) ?? {}}
@@ -1514,6 +1528,7 @@ export function UsePageContent({
 							pageRevision={pageContentRevision}
 							pageExecutionRevision={pageExecutionRevision}
 							pageElementDemand={pageElementDemand}
+							executionPending={awaitingNetworkBootstrap}
 							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
 							active={active}
 							onNavigationMessage={
@@ -1656,6 +1671,8 @@ export function UsePageContent({
 		events.isError,
 		bootstrap.isError,
 		bootstrapPending,
+		awaitingNetworkBootstrap,
+		bootstrapTargetKey,
 		catalogEvents,
 		notFound,
 		accessGateBlocking,
@@ -1679,7 +1696,7 @@ export function UsePageContent({
 			 * in document order — keeps winning ties.
 			 */}
 			<ScopedCustomCss
-				css={validatedBootstrap?.appCustomCss}
+				css={renderedBootstrap?.appCustomCss}
 				scopeSelector={`[data-app-id="${escapeCssAttributeValue(appId)}"]`}
 				options={{ scopeRoot: true }}
 			/>

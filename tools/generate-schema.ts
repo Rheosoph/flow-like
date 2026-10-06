@@ -8,6 +8,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join, parse, relative } from "node:path";
+import { generateSystemOneTypes } from "./systemone-schema";
 
 console.log("Running cargo command: cargo run --bin schema-gen");
 execSync("cargo run --bin schema-gen", { stdio: "inherit" });
@@ -78,6 +79,14 @@ schemaFiles.forEach((schemaFile) => {
 	);
 
 	mkdirSync(parse(outputFilePath).dir, { recursive: true });
+
+	const systemOneTypes = generateSystemOneTypes(
+		JSON.parse(readFileSync(schemaFile, "utf-8")),
+	);
+	if (systemOneTypes !== undefined) {
+		writeFileSync(outputFilePath, systemOneTypes);
+		return;
+	}
 
 	const quicktypeCommand = `bunx quicktype@23.0.0 --just-types -o ${outputFilePath} -s schema ${schemaFile}`;
 

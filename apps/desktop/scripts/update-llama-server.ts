@@ -6,7 +6,7 @@
  * Usage:
  *   bun run scripts/update-llama-server.ts                  # uses pinned build
  *   bun run scripts/update-llama-server.ts --latest         # follows the newest stable release
- *   bun run scripts/update-llama-server.ts --tag b10809     # fetches a specific build
+ *   bun run scripts/update-llama-server.ts --tag b11429     # fetches a specific build
  *   bun run scripts/update-llama-server.ts --platform mac-arm  # single platform
  *
  * Every archive must match its size and sha256 in ARCHIVE_PINS. A build without
@@ -28,7 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PINNED_TAG = "b10809"; // stable v0.4.0
+const PINNED_TAG = "b11429"; // stable v0.6.0
 const GITHUB_API = "https://api.github.com";
 const OWNER = "ggml-org";
 const REPO = "llama.cpp";
@@ -42,31 +42,31 @@ interface ArchivePin {
 }
 
 /**
- * Upstream archives by asset name: GitHub's digests for b10809, the macOS and
- * Linux ones re-hashed after download on 2026-10-05. .github/scripts/runtime_packs.py
+ * Upstream archives by asset name: GitHub's digests for b11429, verified against
+ * downloaded archives. .github/scripts/runtime_packs.py
  * pins the same macOS and Linux archives for device runtime packs; its tests
  * fail when the two disagree.
  */
 const ARCHIVE_PINS: Readonly<Partial<Record<string, ArchivePin>>> = {
-	"llama-b10809-bin-macos-arm64.tar.gz": {
-		size: 11123196,
-		sha256: "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2",
+	"llama-b11429-bin-macos-arm64.tar.gz": {
+		size: 11971406,
+		sha256: "740288ec6887be94280a5dfa25b5e23a78285cab104519e6c7e218904ee82459",
 	},
-	"llama-b10809-bin-macos-x64.tar.gz": {
-		size: 11175330,
-		sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+	"llama-b11429-bin-macos-x64.tar.gz": {
+		size: 11487431,
+		sha256: "29ac3ea02be6bd143e824973f2cc5fa74bc4094393a9eaab0ff6814f19dd8522",
 	},
-	"llama-b10809-bin-win-vulkan-x64.zip": {
-		size: 35221385,
-		sha256: "97e50b3ef0cdd2cb4d5afd446a9006b3496bee6c0d0ba7083d32f36075771870",
+	"llama-b11429-bin-win-vulkan-x64.zip": {
+		size: 33337769,
+		sha256: "1bfe78ad9168b79fa02bf67f6af9f5e17a966d824d77238517f7bef12ac73b36",
 	},
-	"llama-b10809-bin-win-cpu-arm64.zip": {
-		size: 11974499,
-		sha256: "c1058fe5764a687275c8d20d6bbc1454e787cdbb8ebb8c37a2f959f2b144dc77",
+	"llama-b11429-bin-win-cpu-arm64.zip": {
+		size: 12229035,
+		sha256: "ee0f631a9e58b146ff50714099d9cb498906af3143a773b580093a9214a8d1e5",
 	},
-	"llama-b10809-bin-ubuntu-vulkan-x64.tar.gz": {
-		size: 33799345,
-		sha256: "07f029cef440c82c3cff5310641eb6347e5cbcd865a5d88990215058aa049e93",
+	"llama-b11429-bin-ubuntu-vulkan-x64.tar.gz": {
+		size: 31636673,
+		sha256: "632c4e98feba2b94407a2130e3133e0c3aefb0ea1ab41337e926d8bfafdd0b74",
 	},
 };
 
@@ -424,7 +424,7 @@ function extractFiles(
 
 /**
  * Strips the version from a Mach-O library file name:
- * libllama.0.4.0.dylib → libllama, libggml-base.dylib → libggml-base.
+ * libllama.0.6.0.dylib → libllama, libggml-base.dylib → libggml-base.
  */
 function machOStem(fileName: string): string {
 	return path.basename(fileName).replace(/(\.\d+)*\.dylib$/, "");

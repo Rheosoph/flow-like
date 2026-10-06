@@ -351,3 +351,41 @@ describe("the playground", () => {
 		expect(queryByRole("textbox", "Message", sheet())).toBeNull();
 	});
 });
+
+test("device decision models use the native questions playground", async () => {
+	const sample = gpuBoxModels();
+	sample.models = sample.models
+		.slice(0, 1)
+		.map((model) => ({ ...model, kind: "systemone" as const }));
+	const answers = {
+		model: sample.models[0]?.id,
+		answers: {
+			sentiment: {
+				type: "choice",
+				choice: "negative",
+				confidence: 0.95,
+				probabilities: { negative: 0.95, neutral: 0.04, positive: 0.01 },
+			},
+		},
+	};
+	const gateway = fakeGateway(() => ({
+		type: "application/json",
+		chunks: [JSON.stringify(answers)],
+	}));
+	const { view } = await mount(gateway, sample);
+	expect(sheet().querySelector('[data-playground="systemone"]')).not.toBeNull();
+	expect(queryByRole("textbox", "Message", sheet())).toBeNull();
+	await click(byRole("button", "Answer questions", sheet()));
+	await until(
+		view,
+		() => !!sheet().querySelector('[aria-label="SystemOne answers"]'),
+		"the typed decision",
+	);
+	expect(text(sheet())).toContain('"negative"');
+	expect(gateway.requests[0]?.path).toBe("/v1/systemone");
+	const body = JSON.parse(gateway.requests[0]?.body ?? "{}");
+	expect(body.model).toBe(sample.models[0]?.id);
+	expect(body.questions.sentiment.type).toBe("choice");
+	expect(body.stream).toBeUndefined();
+	expect(body.messages).toBeUndefined();
+});

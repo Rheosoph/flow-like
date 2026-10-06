@@ -41,7 +41,7 @@ impl NodeLogic for AddModelHeadersNode {
         );
         node.set_flowscript_name("ai", "addHeaders");
         node.add_icon("/flow/icons/settings.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()

@@ -5,9 +5,9 @@ import {
 	Card,
 	CardContent,
 	CardHeader,
+	type GenerationAssetDraft,
 	type HuggingFaceGgufSelectionOptions,
 	type HuggingFaceModelImport,
-	type GenerationAssetDraft,
 	type IBit,
 	IBitTypes,
 	type IEmbeddingModelParameters,
@@ -24,24 +24,33 @@ import {
 	Input,
 	Progress,
 	Separator,
-	applyHuggingFaceMlxImportToBit,
 	applyGenerationModelPreset,
+	applyHuggingFaceMlxImportToBit,
 	buildGenerationModelRootBit,
-	createGenerationAssetDrafts,
-	defaultGenerationPreset,
-	isGenerationModelBit,
-	validateGenerationAssets,
 	buildMlxModelRootBit,
+	createGenerationAssetDrafts,
 	createHuggingFaceGgufAdminDraft,
 	createHuggingFaceMlxAssetBits,
+	defaultGenerationPreset,
 	inferMlxAssetBitType,
+	isGenerationModelBit,
 	nowSystemTime,
 	prepareMlxAssetBit,
 	useBackend,
 	useInvoke,
+	validateGenerationAssets,
 	validateMlxModelAssets,
 } from "@flow-like/flow-like-ui";
+import { validateBitPricing } from "@flow-like/flow-like-ui/components/bits/bit-editor-model";
 import { validateHostedEmbeddingParameters } from "@flow-like/flow-like-ui/components/bits/bit-editor-model";
+import { HostedPricing } from "@flow-like/flow-like-ui/components/bits/hosted-model-pricing";
+import { SystemOneConfiguration } from "@flow-like/flow-like-ui/components/bits/systemone-configuration";
+import {
+	createSystemOneParameters,
+	isHostedSystemOne,
+	updateSystemOneBit,
+	validateSystemOneBit,
+} from "@flow-like/flow-like-ui/lib/bit/systemone-model";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
@@ -265,7 +274,8 @@ export default function Page() {
 		return {
 			...DEFAULT_BIT,
 			id: createId(),
-			parameters: {},
+			parameters:
+				type === IBitTypes.SystemOne ? createSystemOneParameters() : {},
 			type: type,
 		};
 	}
@@ -739,6 +749,14 @@ export default function Page() {
 			setDefaultDependencies(type);
 			return;
 		}
+		if (type === IBitTypes.SystemOne) {
+			setBit((old) => ({
+				...old,
+				type,
+				dependencies: [],
+				parameters: createSystemOneParameters(),
+			}));
+		}
 		if (isGenerationModelBit(bit)) {
 			setBit(getDefaultBit(type));
 		}
@@ -860,7 +878,9 @@ export default function Page() {
 			<div className="flex-1 min-h-0 overflow-y-auto p-4">
 				<h1>{`Add a new Bit`}</h1>
 				<p className="max-w-screen-md">
-					{`This page is for adding new bits, which are the building blocks of extra models available to the user. You can add bits here by providing the necessary information.`}
+					{
+						"This page is for adding new bits, which are the building blocks of extra models available to the user. You can add bits here by providing the necessary information."
+					}
 				</p>
 				<fieldset
 					disabled={loading}
@@ -871,6 +891,13 @@ export default function Page() {
 						onClick={() => setType(IBitTypes.Llm)}
 					>
 						LLM
+					</button>
+					<button
+						type="button"
+						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.SystemOne ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
+						onClick={() => setType(IBitTypes.SystemOne)}
+					>
+						SystemOne
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Vlm ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
@@ -951,6 +978,7 @@ export default function Page() {
 				{bit.type !== IBitTypes.Tts &&
 				!isLocalSttBit &&
 				!isMlxModel &&
+				!isHostedSystemOne(bit) &&
 				!generationKind ? (
 					<>
 						<div className="max-w-screen-lg flex flex-row items-center gap-2 w-full">
@@ -967,12 +995,34 @@ export default function Page() {
 										download_link: e.target.value.trim(),
 									}))
 								}
-								placeholder={`File URL (ONNX/GGUF/Safetensors)`}
+								placeholder={
+									bit.type === IBitTypes.SystemOne
+										? "SystemOne GGUF file URL"
+										: "File URL (ONNX/GGUF/Safetensors)"
+								}
 							/>
 						</div>
 						<br />
 					</>
 				) : null}
+				{isHostedSystemOne(bit) && (
+					<HostedPricing
+						parameters={bit.parameters ?? {}}
+						onChange={(parameters) =>
+							setBit((current) => ({ ...current, parameters }))
+						}
+					/>
+				)}
+				{bit.type === IBitTypes.SystemOne && (
+					<SystemOneConfiguration
+						parameters={bit.parameters ?? {}}
+						onChange={(parameters) => {
+							if (isHostedSystemOne({ ...bit, parameters }))
+								setProjection(undefined);
+							setBit((current) => updateSystemOneBit(current, parameters));
+						}}
+					/>
+				)}
 				{bit.type === IBitTypes.Llm ||
 				bit.type === IBitTypes.Vlm ||
 				(bit.type === IBitTypes.Stt && !isLocalSttBit) ? (
@@ -1002,7 +1052,31 @@ export default function Page() {
 						<Separator className="my-4" />
 					</>
 				) : null}
-				{bit.type === IBitTypes.Vlm && projection && !isMlxModel ? (
+				{bit.type === IBitTypes.SystemOne && !isHostedSystemOne(bit) && (
+					<div className="space-y-2">
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() =>
+								setProjection((current) =>
+									current ? undefined : getDefaultBit(IBitTypes.Projection),
+								)
+							}
+						>
+							{projection
+								? "Remove image projector"
+								: "Add optional image projector"}
+						</Button>
+						<p className="text-xs text-muted-foreground">
+							Add the matching projector when this SystemOne model accepts
+							images.
+						</p>
+					</div>
+				)}
+				{(bit.type === IBitTypes.Vlm ||
+					(bit.type === IBitTypes.SystemOne && !isHostedSystemOne(bit))) &&
+				projection &&
+				!isMlxModel ? (
 					<>
 						<DependencyConfiguration
 							defaultBit={getDefaultBit(IBitTypes.Projection)}
@@ -1106,7 +1180,7 @@ export default function Page() {
 					<MetaConfiguration
 						bit={bit}
 						setBit={setBit}
-						hideFileFields={!!generationKind}
+						hideFileFields={!!generationKind || isHostedSystemOne(bit)}
 					/>
 				</fieldset>
 				{(progress > 0 || loading) && (
@@ -1130,6 +1204,12 @@ export default function Page() {
 						}
 						setLoading(true);
 						try {
+							if (bit.type === IBitTypes.SystemOne) {
+								const error =
+									validateSystemOneBit(bit, projection) ??
+									validateBitPricing(bit.parameters?.pricing);
+								if (error) throw new Error(error);
+							}
 							if (bit.type === IBitTypes.Embedding) {
 								const error = validateHostedEmbeddingParameters(bit.parameters);
 								if (error) throw new Error(error);
@@ -1284,7 +1364,13 @@ export default function Page() {
 								);
 							}
 
-							if (bit.type === IBitTypes.Vlm && !isMlxModel) {
+							if (
+								(bit.type === IBitTypes.Vlm ||
+									(bit.type === IBitTypes.SystemOne &&
+										!isHostedSystemOne(bit) &&
+										projection)) &&
+								!isMlxModel
+							) {
 								if (!projection) {
 									throw new Error("Projection is required for VLM");
 								}
@@ -1401,6 +1487,7 @@ export default function Page() {
 							}
 
 							if (
+								bit.type === IBitTypes.SystemOne ||
 								bit.type === IBitTypes.Vlm ||
 								bit.type === IBitTypes.Llm ||
 								(bit.type === IBitTypes.Stt && !isLocalSttBit)

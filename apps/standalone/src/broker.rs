@@ -1041,6 +1041,7 @@ pub(crate) fn allowed_model_request(base: &str, method: &str, url: &str) -> bool
         && [
             "/instances/chat/completions",
             "/instances/responses",
+            "/instances/systemone",
             "/instances/embeddings/embed",
         ]
         .iter()
@@ -2781,6 +2782,21 @@ mod tests {
         assert!(allowed_model_request(
             base,
             "POST",
+            "https://api.example/api/v1/instances/systemone"
+        ));
+        assert!(!allowed_model_request(
+            base,
+            "GET",
+            "https://api.example/api/v1/instances/systemone"
+        ));
+        assert!(!allowed_model_request(
+            base,
+            "POST",
+            "https://api.example/api/v1/instances/systemone?redirect=1"
+        ));
+        assert!(allowed_model_request(
+            base,
+            "POST",
             "https://api.example/api/v1/instances/responses"
         ));
         for url in [
@@ -2811,6 +2827,15 @@ mod tests {
             url,
         };
         let chat = "http://127.0.0.1:4100/v1/chat/completions";
+        assert!(
+            gateway_authorization(
+                base,
+                &tokens,
+                "api",
+                &request("POST", "http://127.0.0.1:4100/v1/systemone"),
+            )
+            .is_ok()
+        );
         let granted = gateway_authorization(base, &tokens, "api", &request("POST", chat))
             .expect("a gateway token");
         let token = tokens.issue("api").expect("the same token");

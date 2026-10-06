@@ -180,7 +180,7 @@ impl NodeLogic for PiiMaskAiNode {
         );
         node.set_flowscript_name("ai.processing", "maskPii");
         node.add_icon("/flow/icons/shield-ai.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()

@@ -37,7 +37,12 @@ import {
  * itself (fingerprint small files, then one `install` command).
  */
 
-const HUB_TYPES = [IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.Embedding];
+const HUB_TYPES = [
+	IBitTypes.Llm,
+	IBitTypes.Vlm,
+	IBitTypes.SystemOne,
+	IBitTypes.Embedding,
+];
 
 async function hubModels(bits: IBitState) {
 	const all = await searchAllBits.call(bits, { bit_types: HUB_TYPES });

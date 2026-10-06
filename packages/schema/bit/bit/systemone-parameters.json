@@ -1,0 +1,54 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "SystemOneParameters",
+	"description": "A model that answers typed questions about a state through the SystemOne API.",
+	"type": "object",
+	"properties": {
+		"context_length": {
+			"type": "integer",
+			"format": "uint32",
+			"minimum": 0
+		},
+		"provider": {
+			"$ref": "#/$defs/ModelProvider"
+		}
+	},
+	"required": ["context_length", "provider"],
+	"$defs": {
+		"ModelProvider": {
+			"type": "object",
+			"properties": {
+				"provider_name": {
+					"type": "string"
+				},
+				"model_id": {
+					"type": ["string", "null"]
+				},
+				"version": {
+					"type": ["string", "null"]
+				},
+				"api_surface": {
+					"description": "API surface the upstream model speaks. `None` keeps the provider's\nhistorical chat default. SystemOne Bits always use the decision API.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelApiSurface"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"params": {
+					"type": ["object", "null"],
+					"additionalProperties": true
+				}
+			},
+			"required": ["provider_name"]
+		},
+		"ModelApiSurface": {
+			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions`\nshape. Newer OpenAI-family models are only reachable through the Responses\nAPI (`/responses`), which uses a different request and event schema. A Bit\ndeclares the surface so the client builds the matching Rig client and the\nFlow-Like proxy relays to the matching upstream endpoint. SystemOne Bits\nselect the native decision surface through their Bit type.",
+			"type": "string",
+			"enum": ["ChatCompletions", "Responses", "SystemOne"]
+		}
+	}
+}

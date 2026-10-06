@@ -5,7 +5,7 @@ sidebar:
   order: 50
 ---
 
-Open **Settings → AI Models** to browse language, vision, and embedding
+Open **Settings → AI Models** to browse language, vision, embedding, and decision
 models. With [Developer Mode](/start/developer-mode/) enabled, **Explore Models**
 in the sidebar opens the same catalog:
 
@@ -28,3 +28,11 @@ account. The exact models shown depend on the current catalog and Profile.
 
 Once assigned, select the model from compatible nodes in
 [Studio](/studio/overview/) or from FlowPilot's model picker.
+
+The **Decisions** category contains SystemOne models for classification,
+scoring, and yes/no assessments. Select these in **SystemOne Choice**,
+**SystemOne Score**, or **SystemOne Noul** in Studio. **Invoke SystemOne** asks
+several named questions together. These models return typed answers and
+probabilities and do not appear in chat model pickers. Device deployments also
+require the model in the project's manifest dependencies; selecting a profile
+model alone does not package it. See [Decision models](/topics/genai/models/#decision-models).

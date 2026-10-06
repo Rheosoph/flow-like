@@ -33,7 +33,7 @@ impl NodeLogic for AddDataFusionNode {
         );
         node.set_flowscript_name("agent", "addDatafusion");
         node.set_receiver("agent");
-        node.set_version(2);
+        node.set_version(3);
         node.add_icon("/flow/icons/database.svg");
 
         node.set_scores(

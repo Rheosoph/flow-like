@@ -29,6 +29,7 @@ import {
 	type EmbedMeasure,
 	embedText,
 	gatewayFetch,
+	invokeSystemOne,
 	modelGatewayOf,
 	streamChat,
 } from "./gateway-client";
@@ -56,7 +57,8 @@ export function playgroundModels(models: readonly HostedModel[]) {
 }
 
 const chatsNow = (model: HostedModel) =>
-	model.state === "loaded" && model.kind !== "embedding";
+	model.state === "loaded" &&
+	(model.kind === "chat" || model.kind === "vision");
 
 /** The model to start with: the asked one, else a loaded chat model, else the first. */
 function firstModel(models: readonly HostedModel[], asked?: string) {
@@ -379,6 +381,95 @@ function ChatPanel({ fetcher, model, device }: Readonly<PanelProps>) {
 	);
 }
 
+function SystemOnePanel({ fetcher, model, device }: Readonly<PanelProps>) {
+	const id = useId();
+	const running = useRunning();
+	const [request, setRequest] = useState(
+		JSON.stringify(
+			{
+				state: "The order arrived two days late.",
+				questions: {
+					sentiment: {
+						type: "choice",
+						instructions: "What is the customer's sentiment?",
+						criteria: { positive: null, neutral: null, negative: null },
+					},
+				},
+			},
+			null,
+			2,
+		),
+	);
+	const [result, setResult] = useState<Record<string, unknown>>();
+	const [failure, setFailure] = useState<unknown>();
+	const [pending, setPending] = useState(false);
+	const run = async () => {
+		if (running.current) return;
+		const abort = new AbortController();
+		running.current = abort;
+		setPending(true);
+		setFailure(undefined);
+		setResult(undefined);
+		try {
+			setResult(
+				await invokeSystemOne(fetcher, {
+					model: model.id,
+					request: JSON.parse(request),
+					signal: abort.signal,
+				}),
+			);
+		} catch (error) {
+			if (!abort.signal.aborted) setFailure(error);
+		} finally {
+			running.current = undefined;
+			setPending(false);
+		}
+	};
+	return (
+		<div data-playground="systemone" className="flex min-w-0 flex-col gap-3">
+			<Field id={`${id}-request`} label="State and questions (JSON)">
+				<DvTextarea
+					rows={12}
+					value={request}
+					onChange={(event) => setRequest(event.target.value)}
+					className="font-mono text-xs"
+				/>
+			</Field>
+			<p className="text-xs text-muted-foreground">
+				Use choice, score, or noul questions. Each question needs instructions.
+				Choice and score questions also need criteria.
+			</p>
+			{failure ? (
+				<Failure
+					error={failure}
+					device={device}
+					onDismiss={() => setFailure(undefined)}
+				/>
+			) : null}
+			{result && (
+				<pre
+					aria-label="SystemOne answers"
+					className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border p-3 text-xs"
+				>
+					{JSON.stringify(result, null, 2)}
+				</pre>
+			)}
+			<div className="flex justify-end">
+				<DvButton
+					size="sm"
+					variant="primary"
+					icon={Send}
+					busy={pending}
+					disabled={!request.trim()}
+					onClick={() => void run()}
+				>
+					Answer questions
+				</DvButton>
+			</div>
+		</div>
+	);
+}
+
 function EmbedPanel({ fetcher, model, device }: Readonly<PanelProps>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
@@ -524,7 +615,12 @@ function PlaygroundBody({
 				)}
 			/>
 		);
-	const Panel = model.kind === "embedding" ? EmbedPanel : ChatPanel;
+	const Panel =
+		model.kind === "systemone"
+			? SystemOnePanel
+			: model.kind === "embedding"
+				? EmbedPanel
+				: ChatPanel;
 	return (
 		<>
 			<ModelPicker models={usable} value={model.id} onChange={setPicked} />

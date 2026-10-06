@@ -27,12 +27,27 @@ export type PinEditorKind =
 	| "element"
 	| "plain";
 
+export function isSystemOneModelPin(pin: IPin, nodeName?: string): boolean {
+	return (
+		[
+			"ai_systemone_invoke",
+			"ai_systemone_noul",
+			"ai_systemone_choice",
+			"ai_systemone_score",
+		].includes(nodeName ?? "") &&
+		pin.name === "model" &&
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	);
+}
+
 export function resolvePinEditorKind(
 	pin: IPin,
 	nodeName?: string,
 ): PinEditorKind {
 	if (pin.pin_type === IPinType.Output || pin.depends_on.length > 0)
 		return "label";
+	if (isSystemOneModelPin(pin, nodeName)) return "bit";
 	const plainString =
 		pin.data_type === IVariableType.String &&
 		pin.value_type === IValueType.Normal;

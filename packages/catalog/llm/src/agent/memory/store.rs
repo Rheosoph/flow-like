@@ -40,7 +40,7 @@ impl NodeLogic for StoreMemoryNode {
         );
         node.set_flowscript_name("ai.memory", "store");
         node.set_receiver("memory_config");
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 

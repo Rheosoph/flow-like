@@ -43,7 +43,7 @@ impl NodeLogic for InvokeAgentNode {
         );
         node.set_flowscript_name("agent", "invoke");
         node.set_receiver("agent");
-        node.set_version(4);
+        node.set_version(5);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

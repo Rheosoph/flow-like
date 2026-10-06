@@ -12,6 +12,7 @@ import {
 	useState,
 } from "react";
 import { useAuth } from "react-oidc-context";
+import { getApiOrigin } from "../../lib/api-url";
 import {
 	type PageSurfaceIdentity,
 	pageSurfaceCacheKey,
@@ -180,7 +181,11 @@ function RouteDialogRenderer({
 	const executionService = useExecutionServiceOptional();
 	const frontendStateStore = getFrontendStateStore(appId);
 	const auth = useAuth();
-	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
+	const currentUserKey = JSON.stringify([
+		getApiOrigin(backend.profile),
+		backend.profile?.id ?? "",
+		auth?.user?.profile?.sub ?? "anonymous",
+	]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
 	const [revealedLoadEventKey, setRevealedLoadEventKey] = useState<

@@ -34,7 +34,7 @@ impl NodeLogic for SetAgentSystemPromptNode {
         );
         node.set_flowscript_name("agent", "setSystemPrompt");
         node.set_receiver("agent_in");
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

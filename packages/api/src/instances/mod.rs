@@ -44,6 +44,7 @@ const MAX_BUDGET_MICROS: i64 = 1_000_000_000_000;
 pub(crate) const INSTANCE_PROOF_INVALID: &str = "INSTANCE_PROOF_INVALID";
 const CHAT_PATH: &str = "/instances/chat/completions";
 const RESPONSES_PATH: &str = "/instances/responses";
+const SYSTEMONE_PATH: &str = "/instances/systemone";
 const EMBEDDINGS_PATH: &str = "/instances/embeddings/embed";
 
 /// Spend on one spending approval, in total and by the instances that caused it.
@@ -150,7 +151,8 @@ fn validate_usage(
         || usage.app_id != grant.app_id
         || !grant.model_ids.contains(&usage.model_id)
         || usage.request_method != "POST"
-        || ![CHAT_PATH, RESPONSES_PATH, EMBEDDINGS_PATH].contains(&usage.request_path.as_str())
+        || ![CHAT_PATH, RESPONSES_PATH, SYSTEMONE_PATH, EMBEDDINGS_PATH]
+            .contains(&usage.request_path.as_str())
     {
         return Err(ApiError::forbidden(
             "Request exceeds the current instance resource grant",

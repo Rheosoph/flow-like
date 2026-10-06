@@ -184,7 +184,7 @@ fn base_node() -> Node {
 }
 
 fn add_agent_pin(node: &mut Node) {
-    node.set_version(2);
+    node.set_version(3);
     node.add_input_pin(
         "agent_in",
         "Agent",

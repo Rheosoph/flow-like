@@ -97,7 +97,7 @@ fn definition(kind: ExternalProvider, name: &str, method: &str) -> Node {
     );
     node.set_flowscript_name("ai.provider", method);
     node.add_icon("/flow/icons/find_model.svg");
-    node.set_version(1);
+    node.set_version(2);
     node.set_long_running(true);
     node.add_input_pin(
         "exec_in",

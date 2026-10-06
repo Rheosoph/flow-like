@@ -1,6 +1,6 @@
 ---
 title: Host models on a device
-description: Run chat, vision, and embedding models on your own device, serve them to its services and to your desktop runs, and keep model files and requests under your control.
+description: Run chat, vision, embedding, and decision models on your own device and serve them to its services and your desktop workflows.
 ---
 
 A device can host AI models and serve them to two kinds of callers: the
@@ -21,6 +21,7 @@ deployed keep running either way.
 | --- | --- | --- | --- |
 | Chat | GGUF | llama.cpp | The processor, or a GPU through a GPU runtime |
 | Vision | GGUF plus its projector file | llama.cpp | The processor, or a GPU through a GPU runtime |
+| Decisions (SystemOne) | Native decision-model GGUF, with a projector for image input | llama.cpp | The processor, or a GPU through a GPU runtime |
 | Embedding | GGUF | llama.cpp | The processor, or a GPU through a GPU runtime |
 | Embedding | ONNX with its tokenizer files | ONNX Runtime, built into the agent | The processor |
 | Chat or vision | MLX folder: config, tokenizer files, and safetensors weights; a vision model also its processor config | MLX | The GPU of an Apple silicon Mac, through Metal |
@@ -30,6 +31,17 @@ at a time, so **Parallel requests** doesn't apply to it. A reasoning model's
 thinking text stays inside its answer, because MLX doesn't split it out the
 way llama.cpp does. There is no CUDA runtime; NVIDIA GPUs on Linux use the
 Vulkan runtime.
+
+Decision models serve `/v1/systemone` through the device gateway. Choose a
+SystemOne Bit in **SystemOne Choice**, **SystemOne Score**, or **SystemOne Noul**
+to request a category, score, or yes/no probability. **Invoke SystemOne** asks
+several named questions together. The gateway checks that the selected model
+is a decision model and returns its typed answers without streaming.
+
+A deployed service resolves only model Bits packaged for its project. Include
+the SystemOne Bit in the project's manifest dependencies before preparing the
+deployment. Adding it to a profile or selecting it on a node does not package
+it. See the current [deployment prerequisite](/topics/genai/models/#decision-models).
 
 ## Open the Models tab
 

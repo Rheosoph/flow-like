@@ -53,4 +53,5 @@ export enum IRemoteEmbeddingProvider {
 export enum IModelApiSurface {
 	ChatCompletions = "ChatCompletions",
 	Responses = "Responses",
+	SystemOne = "SystemOne",
 }
