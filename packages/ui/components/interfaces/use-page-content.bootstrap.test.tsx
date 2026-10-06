@@ -45,6 +45,7 @@ const { QueryClient, QueryClientProvider } = await import(
 );
 const { ApiResponseError } = await import("../../lib/api-error");
 const { createSmartQueryPersister } = await import("../../lib/query-persister");
+const { getApiOrigin } = await import("../../lib/api-url");
 const { MobileHeaderProvider } = await import("../ui/mobile-header");
 
 interface Mount {
@@ -53,14 +54,17 @@ interface Mount {
 }
 
 const mounts: Mount[] = [];
+const executions: Mount[] = [];
 function CountingPageInterface({
 	page,
 	pageRevision,
 	pageExecutionRevision,
+	executionPending = false,
 }: Readonly<{
 	page: { id: string };
 	pageRevision?: string;
 	pageExecutionRevision?: string;
+	executionPending?: boolean;
 }>) {
 	useEffect(() => {
 		mounts.push({
@@ -68,7 +72,20 @@ function CountingPageInterface({
 			executionRevision: pageExecutionRevision,
 		});
 	}, []);
-	return <div data-page-revision={pageRevision} data-page-id={page.id} />;
+	useEffect(() => {
+		if (!executionPending)
+			executions.push({
+				revision: pageRevision,
+				executionRevision: pageExecutionRevision,
+			});
+	}, [executionPending]);
+	return (
+		<div
+			data-page-revision={pageRevision}
+			data-page-id={page.id}
+			data-execution-pending={executionPending}
+		/>
+	);
 }
 
 let headerSwitchEvent: ((eventId: string) => void) | undefined;
@@ -213,6 +230,7 @@ let catalog: () => Promise<IEvent[]> = () => accessChecks();
 const bootstrapCalls: unknown[][] = [];
 let metadataReads = 0;
 const backend = {
+	profile: undefined as { hub?: string; id?: string } | undefined,
 	capabilities: () => ({
 		needsSignIn: true,
 		canHostLlamaCPP: false,
@@ -283,7 +301,15 @@ const { RESTORED_BOOTSTRAP_GRACE_MS, UsePageContent } = await import(
 );
 const { resetQueryParamRequests } = await import("../../lib/set-query-params");
 
-const BOOTSTRAP_QUERY_KEY = ["getPageBootstrap", "app-1", "/", null, "user-1"];
+const BOOTSTRAP_QUERY_KEY = [
+	"getPageBootstrap",
+	"app-1",
+	"/",
+	null,
+	"user-1",
+	getApiOrigin(),
+	"",
+];
 const AUTHORIZATION_ERROR = "could not load its execution authorization";
 const EVENTS_ERROR = "events could not be loaded";
 const realSetTimeout = globalThis.setTimeout;
@@ -369,6 +395,7 @@ async function reopen() {
 	await act(async () => root?.unmount());
 	host?.remove();
 	mounts.length = 0;
+	executions.length = 0;
 	await render(queryClient, contentProps);
 }
 
@@ -453,6 +480,7 @@ afterEach(async () => {
 	host?.remove();
 	host = undefined;
 	mounts.length = 0;
+	executions.length = 0;
 	bootstrapCalls.length = 0;
 	metadataReads = 0;
 	online = true;
@@ -463,6 +491,8 @@ afterEach(async () => {
 	catalog = () => accessChecks();
 	auth.isLoading = false;
 	auth.user.access_token = "token";
+	auth.user.profile.sub = "user-1";
+	backend.profile = undefined;
 	router.push.mockClear();
 	router.replace.mockClear();
 	globalThis.setTimeout = realSetTimeout;
@@ -481,37 +511,89 @@ afterAll(() => {
 });
 
 describe("page bootstrap validation", () => {
-	test("an online cold start mounts the server's bootstrap once, never the restored copy", async () => {
+	test("an online cold start renders cached content immediately and executes only the fresh revision", async () => {
 		const response = deferred<IPageBootstrap>();
 		network = () => response.promise;
 		await render(await persistedSession(bootstrapAt("A")));
 
 		await waitFor(() => bootstrapCalls.length === 1, "the network request");
 		await settle();
-		expect(mounts).toEqual([]);
+		expect(onScreen()).toBe("A");
+		expect(executions).toEqual([]);
 
 		response.resolve(bootstrapAt("B"));
-		await waitFor(() => mounts.length > 0, "the page to mount");
+		await waitFor(() => onScreen() === "B", "the refreshed page");
 		await settle();
 
 		expect(mounts).toEqual([
+			{ revision: "A", executionRevision: "execution-A" },
+			{ revision: "B", executionRevision: "execution-B" },
+		]);
+		expect(executions).toEqual([
 			{ revision: "B", executionRevision: "execution-B" },
 		]);
 		expect(onScreen()).toBe("B");
 	});
 
 	test("a server confirming the restored copy mounts it once", async () => {
-		network = async () => bootstrapAt("A");
+		const response = deferred<IPageBootstrap>();
+		network = () => response.promise;
 		await render(await persistedSession(bootstrapAt("A")));
 
 		await waitFor(() => mounts.length > 0, "the page to mount");
+		const cachedElement = host?.querySelector("[data-page-id]");
+		expect(executions).toEqual([]);
+		response.resolve(bootstrapAt("A"));
+		await waitFor(() => executions.length === 1, "execution to be enabled");
 		await settle();
 
 		expect(bootstrapCalls).toHaveLength(1);
 		expect(mounts).toEqual([
 			{ revision: "A", executionRevision: "execution-A" },
 		]);
+		expect(executions).toEqual(mounts);
+		expect(host?.querySelector("[data-page-id]")).toBe(cachedElement);
 	});
+
+	for (const reason of ["noCache", "missing execution revision"] as const) {
+		test(`a cached page with ${reason} waits for the server`, async () => {
+			let cached = bootstrapAt("A");
+			if (reason === "noCache" && cached.page) cached.page.noCache = true;
+			else cached = { ...cached, executionRevision: undefined };
+			const response = deferred<IPageBootstrap>();
+			network = () => response.promise;
+			await render(await persistedSession(cached));
+			await waitFor(() => bootstrapCalls.length === 1, "the network request");
+			await settle();
+			expect(mounts).toEqual([]);
+
+			response.resolve(bootstrapAt("B"));
+			await waitFor(() => onScreen() === "B", "the fresh page");
+			expect(executions).toEqual([
+				{ revision: "B", executionRevision: "execution-B" },
+			]);
+		});
+	}
+
+	for (const scope of ["account", "hub", "profile"] as const) {
+		test(`switching ${scope} cannot show the previous scope's cached page`, async () => {
+			await render(await persistedSession());
+			await waitFor(() => onScreen() === "B", "the initial page");
+			const response = deferred<IPageBootstrap>();
+			network = () => response.promise;
+			if (scope === "account") auth.user.profile.sub = "user-2";
+			else if (scope === "hub") backend.profile = { hub: "other.example.test" };
+			else backend.profile = { id: "profile-2" };
+			await rerender();
+			await settle();
+			expect(onScreen()).toBeUndefined();
+			expect(mounts).toHaveLength(1);
+
+			response.resolve(bootstrapAt("C"));
+			await waitFor(() => onScreen() === "C", "the new scope's page");
+			expect(mounts).toHaveLength(2);
+		});
+	}
 
 	test("an offline cold start renders the restored copy and keeps it when the refetch fails", async () => {
 		online = false;
@@ -548,7 +630,7 @@ describe("page bootstrap validation", () => {
 		expect(storeRedirects()).toEqual([]);
 	});
 
-	test("a request that never settles releases the restored copy after the grace period", async () => {
+	test("a request that never settles defers execution, while the cached page stays visible", async () => {
 		const graceTimers: (() => void)[] = [];
 		globalThis.setTimeout = ((
 			callback: () => void,
@@ -566,17 +648,19 @@ describe("page bootstrap validation", () => {
 
 		await waitFor(() => bootstrapCalls.length === 1, "the network request");
 		await settle();
-		expect(mounts).toEqual([]);
+		expect(onScreen()).toBe("A");
+		expect(executions).toEqual([]);
 		expect(graceTimers.length).toBeGreaterThan(0);
 
 		await act(async () => {
 			for (const expire of graceTimers) expire();
 		});
-		await waitFor(() => mounts.length > 0, "the page to mount");
+		await waitFor(() => executions.length > 0, "execution to be enabled");
 
 		expect(mounts).toEqual([
 			{ revision: "A", executionRevision: "execution-A" },
 		]);
+		expect(executions).toEqual(mounts);
 		expect(onScreen()).toBe("A");
 	});
 
@@ -629,7 +713,7 @@ describe("page bootstrap validation", () => {
 		await settle();
 	}
 
-	test("a page reopened over a failed refetch waits for the server, not the kept copy", async () => {
+	test("a reopened page renders its kept copy while checking the server", async () => {
 		await pageOverFailedRefetch();
 		const response = deferred<IPageBootstrap>();
 		network = () => response.promise;
@@ -641,13 +725,18 @@ describe("page bootstrap validation", () => {
 			"the network request",
 		);
 		await settle();
-		expect(mounts).toEqual([]);
+		expect(onScreen()).toBe("B");
+		expect(executions).toEqual([]);
 
 		response.resolve(bootstrapAt("C"));
-		await waitFor(() => mounts.length > 0, "the page to mount");
+		await waitFor(() => onScreen() === "C", "the refreshed page");
 		await settle();
 
 		expect(mounts).toEqual([
+			{ revision: "B", executionRevision: "execution-B" },
+			{ revision: "C", executionRevision: "execution-C" },
+		]);
+		expect(executions).toEqual([
 			{ revision: "C", executionRevision: "execution-C" },
 		]);
 		expect(onScreen()).toBe("C");
@@ -688,6 +777,31 @@ describe("page bootstrap validation", () => {
 		expect(storeRedirects()).toEqual([]);
 	});
 
+	test("reopening a refused page does not show its retained copy during revalidation", async () => {
+		await render(await persistedSession());
+		await waitFor(() => onScreen() === "B", "the initial page");
+		network = async () => {
+			throw denied();
+		};
+		await act(async () => {
+			window.dispatchEvent(new window.Event("focus"));
+		});
+		await waitFor(() => text().includes(AUTHORIZATION_ERROR), "the refusal");
+
+		const response = deferred<IPageBootstrap>();
+		network = () => response.promise;
+		await reopen();
+		await settle();
+		expect(onScreen()).toBeUndefined();
+		expect(executions).toEqual([]);
+
+		response.resolve(bootstrapAt("C"));
+		await waitFor(() => onScreen() === "C", "the newly authorized page");
+		expect(mounts).toEqual([
+			{ revision: "C", executionRevision: "execution-C" },
+		]);
+	});
+
 	test("a first load the server refuses still sends the user to the store", async () => {
 		network = async () => {
 			throw denied();
@@ -715,7 +829,8 @@ describe("page bootstrap validation", () => {
 		await waitFor(() => storeRedirects().length > 0, "the store redirect");
 
 		expect(storeRedirects()).toEqual([["/store?id=app-1"]]);
-		expect(mounts).toEqual([]);
+		expect(onScreen()).toBeUndefined();
+		expect(executions).toEqual([]);
 	});
 
 	test("a first load that cannot reach the server retries on its own", async () => {

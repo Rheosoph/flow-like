@@ -469,7 +469,7 @@ impl DesktopAuthorizer {
                     && url.query().is_none()
                     && matches!(
                         path,
-                        "/chat/completions" | "/responses" | "/embeddings/embed"
+                        "/chat/completions" | "/responses" | "/systemone" | "/embeddings/embed"
                     )
             }
             ResourceAudience::ProjectApi => {
@@ -790,6 +790,7 @@ mod tests {
                 "/api/v1/chat/completions",
             ),
             (ResourceAudience::HostedModels, "POST", "/api/v1/responses"),
+            (ResourceAudience::HostedModels, "POST", "/api/v1/systemone"),
             (
                 ResourceAudience::HostedModels,
                 "POST",

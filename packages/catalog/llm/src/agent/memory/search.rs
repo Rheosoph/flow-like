@@ -36,7 +36,7 @@ impl NodeLogic for SearchMemoryNode {
         );
         node.set_flowscript_name("ai.memory", "search");
         node.set_receiver("memory_config");
-        node.set_version(2);
+        node.set_version(3);
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
 

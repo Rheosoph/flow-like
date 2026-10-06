@@ -400,15 +400,18 @@ fn slow_ttft(_: &Inputs, model: &ModelInputs) -> Option<Recommendation> {
         .filter(|ttft| *ttft >= SLOW_TTFT_MS)?;
     let usage = &model.usage;
     let misses = percent(usage.cached_tokens, usage.prompt_tokens) < CACHE_SHARE_PERCENT;
-    (model.model.kind != ModelKind::Embedding && usage.prompt_tokens > 0 && misses).then(|| {
-        found(
-            RecommendationCode::SlowTtft,
-            RecommendationTier::Later,
-            Some(&model.model.id),
-            [number("ttft_p95_ms", u64::from(ttft))],
-            None,
-        )
-    })
+    (matches!(model.model.kind, ModelKind::Chat | ModelKind::Vision)
+        && usage.prompt_tokens > 0
+        && misses)
+        .then(|| {
+            found(
+                RecommendationCode::SlowTtft,
+                RecommendationTier::Later,
+                Some(&model.model.id),
+                [number("ttft_p95_ms", u64::from(ttft))],
+                None,
+            )
+        })
 }
 
 /// A thread count other than the physical cores; the device default is one per core.
@@ -604,7 +607,7 @@ mod gather {
 
     fn wants_context(model: &HostedModel) -> bool {
         model.engine == ModelEngine::Llamacpp
-            && model.kind != ModelKind::Embedding
+            && matches!(model.kind, ModelKind::Chat | ModelKind::Vision)
             && matches!(model.state, HostedModelState::Loaded { .. })
     }
 
@@ -1082,6 +1085,11 @@ mod tests {
         cached.usage.prompt_tokens = 100_000;
         cached.usage.cached_tokens = 60_000;
         assert!(codes(&inputs(vec![cached])).is_empty());
+        let mut decision = model("laya", loaded(GIB, 6 * GIB));
+        decision.model.kind = ModelKind::SystemOne;
+        decision.usage.ttft_p95_ms = Some(4_000);
+        decision.usage.prompt_tokens = 100_000;
+        assert!(codes(&inputs(vec![decision])).is_empty());
     }
 
     #[test]

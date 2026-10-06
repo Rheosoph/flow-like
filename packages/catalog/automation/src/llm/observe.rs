@@ -131,7 +131,7 @@ impl NodeLogic for LLMObserveScreenNode {
         );
         node.set_flowscript_name("automation.llm", "observeScreen");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(5);
+        node.set_version(6);
 
         node.set_scores(
             NodeScores::new()
@@ -314,7 +314,7 @@ impl NodeLogic for LLMDescribeElementNode {
         );
         node.set_flowscript_name("automation.llm", "describeElement");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()

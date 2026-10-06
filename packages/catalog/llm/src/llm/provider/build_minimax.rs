@@ -61,7 +61,7 @@ impl NodeLogic for BuildMiniMaxNode {
         );
         node.set_flowscript_name("ai.provider", "minimax");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()
@@ -220,7 +220,7 @@ mod tests {
         let endpoint = node.get_pin_by_name("endpoint").expect("endpoint pin");
         let model = node.get_pin_by_name("model_id").expect("model pin");
 
-        assert_eq!(node.version, Some(2));
+        assert_eq!(node.version, Some(3));
         assert_eq!(
             region
                 .options

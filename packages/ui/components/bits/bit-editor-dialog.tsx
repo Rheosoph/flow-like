@@ -813,7 +813,11 @@ function BitEditorSession({
 														}
 													>
 														{(scope === "custom"
-															? [IBitTypes.Llm, IBitTypes.Vlm]
+															? [
+																	IBitTypes.Llm,
+																	IBitTypes.Vlm,
+																	IBitTypes.SystemOne,
+																]
 															: Object.values(IBitTypes)
 														).map((type) => (
 															<option key={type} value={type}>

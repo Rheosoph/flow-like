@@ -31,7 +31,7 @@ impl NodeLogic for SwitchOnBitNode {
         node.set_flowscript_name("ai", "switchOnBit");
 
         node.add_icon("/flow/icons/bit.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.add_input_pin(
             "exec_in",
@@ -54,6 +54,12 @@ impl NodeLogic for SwitchOnBitNode {
             "vlm",
             "VLM",
             "Execution if Bit is VLM",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "systemone",
+            "Decisions",
+            "Execution if the Bit is a SystemOne decision model",
             VariableType::Execution,
         );
         node.add_output_pin(
@@ -188,6 +194,7 @@ impl NodeLogic for SwitchOnBitNode {
 
         context.deactivate_exec_pin("llm").await?;
         context.deactivate_exec_pin("vlm").await?;
+        context.deactivate_exec_pin("systemone").await?;
         context.deactivate_exec_pin("tts").await?;
         context.deactivate_exec_pin("stt").await?;
         context.deactivate_exec_pin("embedding").await?;
@@ -214,6 +221,7 @@ impl NodeLogic for SwitchOnBitNode {
         let output_pin = match bit.bit_type {
             BitTypes::Llm => "llm",
             BitTypes::Vlm => "vlm",
+            BitTypes::SystemOne => "systemone",
             BitTypes::Tts => "tts",
             BitTypes::Stt => "stt",
             BitTypes::Embedding => "embedding",

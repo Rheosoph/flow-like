@@ -38,6 +38,7 @@ const PORT_RETRIES: usize = 3;
 const PORT_PICKS: usize = 16;
 const STDERR_TAIL_LINES: usize = 12;
 const OUTPUT_SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
+const CACHE_REUSE_TOKENS: &str = "256";
 
 pub struct LocalModel {
     bit: Bit,
@@ -238,6 +239,12 @@ enum Retry {
     OnAnotherPort,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LlamaServerMode {
+    Chat,
+    SystemOne,
+}
+
 /// Everything a llama-server start needs besides its port and chat template.
 struct ServerLaunch<'a> {
     runtime: &'a LlamaServerRuntime,
@@ -245,6 +252,7 @@ struct ServerLaunch<'a> {
     context_length: u32,
     gpu_mode: bool,
     projection_path: Option<&'a str>,
+    mode: LlamaServerMode,
 }
 
 impl ServerLaunch<'_> {
@@ -261,6 +269,7 @@ impl ServerLaunch<'_> {
             self.gpu_mode,
             self.projection_path,
             template_override,
+            self.mode,
         );
 
         tracing::debug!(
@@ -331,7 +340,8 @@ impl ServerLaunch<'_> {
     ) -> Result<(LlamaServerProcess, u16)> {
         let _one_at_a_time = LOCAL_ENGINE_LOADS.lock().await;
         let (server, port) = self.start(template_override).await?;
-        let should_probe_tool_template = self.projection_path.is_none()
+        let should_probe_tool_template = self.mode == LlamaServerMode::Chat
+            && self.projection_path.is_none()
             && template_override.chat_template.is_none()
             && template_override.chat_template_file.is_none();
 
@@ -509,6 +519,7 @@ impl LocalModel {
         gpu_mode: bool,
         projection_path: Option<&str>,
         template_override: &LlamaServerTemplateOverride,
+        mode: LlamaServerMode,
     ) -> Vec<String> {
         let mut args = vec![
             "--model".to_string(),
@@ -522,14 +533,14 @@ impl LocalModel {
             "--parallel".to_string(),
             "1".to_string(),
             "--no-webui".to_string(),
-            "--jinja".to_string(),
+            // Auto probes support on CPU as well as GPU and falls back when unavailable.
+            "--flash-attn".to_string(),
+            "auto".to_string(),
         ];
 
         if gpu_mode {
             args.extend([
                 "--n-gpu-layers".to_string(),
-                "auto".to_string(),
-                "--flash-attn".to_string(),
                 "auto".to_string(),
                 "--fit".to_string(),
                 "on".to_string(),
@@ -540,14 +551,29 @@ impl LocalModel {
                 "none".to_string(),
                 "--n-gpu-layers".to_string(),
                 "0".to_string(),
-                "--flash-attn".to_string(),
-                "off".to_string(),
             ]);
         }
 
         if let Some(projection_path) = projection_path {
             args.push("--mmproj".to_string());
             args.push(projection_path.to_string());
+        }
+
+        if mode == LlamaServerMode::SystemOne {
+            // Laya and Clef need the whole prompt in one physical batch.
+            args.extend([
+                "--batch-size".to_string(),
+                context_length.to_string(),
+                "--ubatch-size".to_string(),
+                context_length.to_string(),
+            ]);
+            return args;
+        }
+
+        args.push("--jinja".to_string());
+        if projection_path.is_none() {
+            // Reuse unchanged prompt chunks after an edit. Multimodal contexts cannot shift KV.
+            args.extend(["--cache-reuse".to_string(), CACHE_REUSE_TOKENS.to_string()]);
         }
 
         if let Some(chat_template_file) = template_override.chat_template_file.as_ref() {
@@ -611,7 +637,16 @@ impl LocalModel {
         let provider = bit
             .try_to_served_provider()
             .ok_or_else(|| flow_like_types::anyhow!("Failed to get provider from bit"))?;
-        let template_override = resolve_template_override(&provider);
+        let mode = if bit.bit_type == BitTypes::SystemOne {
+            LlamaServerMode::SystemOne
+        } else {
+            LlamaServerMode::Chat
+        };
+        let template_override = if mode == LlamaServerMode::Chat {
+            resolve_template_override(&provider)
+        } else {
+            LlamaServerTemplateOverride::default()
+        };
 
         let launch = ServerLaunch {
             runtime,
@@ -622,6 +657,7 @@ impl LocalModel {
             ),
             gpu_mode: execution_settings.gpu_mode,
             projection_path: projection_path.as_deref(),
+            mode,
         };
 
         tracing::debug!(?execution_settings, "Execution settings");
@@ -696,6 +732,7 @@ mod tests {
             context_length: 8192,
             gpu_mode: false,
             projection_path: None,
+            mode: LlamaServerMode::Chat,
         }
     }
 
@@ -1023,6 +1060,34 @@ mod tests {
         assert!(!STARTING_PORTS.lock().contains(&port));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn systemone_starts_once_without_probing_chat_tool_support() {
+        let dir = tempfile::tempdir().unwrap();
+        let port_file = dir.path().join("port");
+        let starts_file = dir.path().join("starts");
+        let runtime = fake_server(
+            dir.path(),
+            &format!(
+                "echo started >> '{}'\nwhile [ $# -gt 0 ]; do [ \"$1\" = --port ] && echo \"$2\" > '{}'; shift; done\nexec sleep 60",
+                starts_file.display(),
+                port_file.display()
+            ),
+        );
+        // This server answers health but has no chat-template metadata.
+        serve_health_on_recorded_port(port_file);
+        let launch = ServerLaunch {
+            mode: LlamaServerMode::SystemOne,
+            ..launch_with(&runtime)
+        };
+        let (mut server, _) = launch
+            .start_with_tool_support(&LlamaServerTemplateOverride::default())
+            .await
+            .unwrap();
+        assert!(server.exit_status().is_none());
+        assert_eq!(std::fs::read_to_string(starts_file).unwrap(), "started\n");
+    }
+
     #[test]
     fn server_args_use_automatic_gpu_offload() {
         let args = LocalModel::server_args(
@@ -1032,6 +1097,7 @@ mod tests {
             true,
             None,
             &LlamaServerTemplateOverride::default(),
+            LlamaServerMode::Chat,
         );
 
         assert_eq!(arg_value(&args, "--n-gpu-layers"), Some("auto"));
@@ -1040,6 +1106,7 @@ mod tests {
         assert_eq!(arg_value(&args, "--parallel"), Some("1"));
         assert_eq!(arg_value(&args, "--host"), Some("127.0.0.1"));
         assert_eq!(arg_value(&args, "--ctx-size"), Some("8192"));
+        assert_eq!(arg_value(&args, "--cache-reuse"), Some("256"));
         assert!(!args.iter().any(|arg| arg == "-ngl" || arg == "45"));
     }
 
@@ -1064,6 +1131,7 @@ mod tests {
             true,
             None,
             &LlamaServerTemplateOverride::default(),
+            LlamaServerMode::Chat,
         );
 
         assert_eq!(arg_value(&args, "--ctx-size"), Some("16384"));
@@ -1078,10 +1146,56 @@ mod tests {
             false,
             None,
             &LlamaServerTemplateOverride::default(),
+            LlamaServerMode::Chat,
         );
 
         assert_eq!(arg_value(&args, "--device"), Some("none"));
         assert_eq!(arg_value(&args, "--n-gpu-layers"), Some("0"));
-        assert_eq!(arg_value(&args, "--flash-attn"), Some("off"));
+        assert_eq!(arg_value(&args, "--flash-attn"), Some("auto"));
+    }
+
+    #[test]
+    fn vision_keeps_its_projector_without_unsupported_kv_shifting() {
+        let args = LocalModel::server_args(
+            Path::new("/models/model.gguf"),
+            8192,
+            9650,
+            true,
+            Some("/models/mmproj.gguf"),
+            &LlamaServerTemplateOverride::default(),
+            LlamaServerMode::Chat,
+        );
+        assert_eq!(arg_value(&args, "--mmproj"), Some("/models/mmproj.gguf"));
+        assert!(args.iter().any(|arg| arg == "--jinja"));
+        assert!(!args.iter().any(|arg| arg == "--cache-reuse"));
+    }
+
+    #[test]
+    fn systemone_fits_the_whole_prompt_and_preserves_its_native_template() {
+        let args = LocalModel::server_args(
+            Path::new("/models/decision.gguf"),
+            4096,
+            9650,
+            true,
+            Some("/models/mmproj.gguf"),
+            &LlamaServerTemplateOverride {
+                chat_template: Some("chatml".into()),
+                chat_template_file: Some("/templates/chat.jinja".into()),
+            },
+            LlamaServerMode::SystemOne,
+        );
+        for flag in ["--ctx-size", "--batch-size", "--ubatch-size"] {
+            assert_eq!(arg_value(&args, flag), Some("4096"));
+        }
+        assert_eq!(arg_value(&args, "--mmproj"), Some("/models/mmproj.gguf"));
+        assert_eq!(arg_value(&args, "--parallel"), Some("1"));
+        for flag in [
+            "--jinja",
+            "--chat-template",
+            "--chat-template-file",
+            "--cache-reuse",
+        ] {
+            assert!(!args.iter().any(|arg| arg == flag), "{flag}");
+        }
     }
 }

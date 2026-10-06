@@ -30,4 +30,5 @@ export interface IModelProvider {
 export enum IModelApiSurface {
 	ChatCompletions = "ChatCompletions",
 	Responses = "Responses",
+	SystemOne = "SystemOne",
 }

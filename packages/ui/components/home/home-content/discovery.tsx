@@ -55,6 +55,7 @@ const updatedDate = new Intl.DateTimeFormat("en", {
 const modelTypes = [
 	IBitTypes.Llm,
 	IBitTypes.Vlm,
+	IBitTypes.SystemOne,
 	IBitTypes.Embedding,
 	IBitTypes.ImageEmbedding,
 	IBitTypes.ObjectDetection,

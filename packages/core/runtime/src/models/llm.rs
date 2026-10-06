@@ -67,7 +67,9 @@ impl ExecutionSettings {
 /// keys proceed in parallel, so a cold start or an unlock prompt never stalls unrelated models.
 pub struct ModelFactory {
     models: FactoryCache<dyn ModelLogic>,
-    execution_settings: RwLock<ExecutionSettings>,
+    pub(super) systemone_models:
+        FactoryCache<dyn flow_like_model_provider::systemone::SystemOneModelLogic>,
+    pub(super) execution_settings: RwLock<ExecutionSettings>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -244,6 +246,7 @@ impl ModelFactory {
     pub fn new() -> Self {
         Self {
             models: FactoryCache::default(),
+            systemone_models: FactoryCache::default(),
             execution_settings: RwLock::new(ExecutionSettings::new()),
         }
     }
@@ -450,6 +453,15 @@ impl ModelFactory {
         access_token: Option<String>,
         usage_context: Option<ModelUsageContext>,
     ) -> Result<Arc<dyn ModelLogic>> {
+        if bit.bit_type == crate::bit::BitTypes::SystemOne
+            || bit
+                .try_to_provider()
+                .is_some_and(|provider| provider.api_surface == Some(ModelApiSurface::SystemOne))
+        {
+            return Err(flow_like_types::anyhow!(
+                "SystemOne Bits answer typed questions. Use the Invoke SystemOne node instead of chat."
+            ));
+        }
         let environment = app_state.execution_environment;
         let model = self
             .build_inner(bit, app_state, access_token, usage_context)
@@ -695,6 +707,7 @@ impl ModelFactory {
     /// turn never loses its server; its idle time starts when the last holder lets go.
     pub fn gc(&self) {
         self.models.gc(Instant::now(), MODEL_IDLE_TTL);
+        self.systemone_models.gc(Instant::now(), MODEL_IDLE_TTL);
     }
 }
 

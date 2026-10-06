@@ -278,6 +278,7 @@ fn user_source_artifact_identity(
     let artifact_kind = match bit_type {
         BitTypes::Llm => b"llm".as_slice(),
         BitTypes::Vlm => b"vlm".as_slice(),
+        BitTypes::SystemOne => b"systemone".as_slice(),
         BitTypes::Projection => b"projection".as_slice(),
         _ => return None,
     };
@@ -653,6 +654,7 @@ impl Metadata {
 pub enum BitTypes {
     Llm,
     Vlm,
+    SystemOne,
     Tts,
     Stt,
     Embedding,
@@ -923,6 +925,13 @@ pub struct VLMParameters {
     pub context_length: u32,
     pub provider: ModelProvider,
     pub model_classification: BitModelClassification,
+}
+
+/// A model that answers typed questions about a state through the SystemOne API.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct SystemOneParameters {
+    pub context_length: u32,
+    pub provider: ModelProvider,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
@@ -1387,10 +1396,12 @@ impl Bit {
     /// source-derived hash while being edited. Both are safe to replace. A
     /// caller-supplied content hash is retained and continues to be verified.
     pub fn normalize_user_local_artifact_identity(&mut self) {
-        if !matches!(self.bit_type, BitTypes::Llm | BitTypes::Vlm)
-            || self
-                .try_to_provider()
-                .is_none_or(|provider| !provider.provider_name.eq_ignore_ascii_case("local"))
+        if !matches!(
+            self.bit_type,
+            BitTypes::Llm | BitTypes::Vlm | BitTypes::SystemOne
+        ) || self
+            .try_to_provider()
+            .is_none_or(|provider| !provider.provider_name.eq_ignore_ascii_case("local"))
         {
             return;
         }
@@ -1609,6 +1620,12 @@ impl Bit {
         None
     }
 
+    pub fn try_to_systemone(&self) -> Option<SystemOneParameters> {
+        (self.bit_type == BitTypes::SystemOne)
+            .then(|| flow_like_types::json::from_value(self.parameters.clone()).ok())
+            .flatten()
+    }
+
     pub fn try_to_stt_provider(&self) -> Option<ModelProvider> {
         if self.bit_type == BitTypes::Stt {
             let parameters =
@@ -1676,6 +1693,10 @@ impl Bit {
     }
 
     pub fn try_to_provider(&self) -> Option<ModelProvider> {
+        if let Some(parameters) = self.try_to_systemone() {
+            return Some(parameters.provider);
+        }
+
         if let Some(parameters) = self.try_to_llm() {
             return Some(parameters.provider);
         }
@@ -1733,6 +1754,10 @@ impl Bit {
     }
 
     pub fn try_to_context_length(&self) -> Option<u32> {
+        if let Some(parameters) = self.try_to_systemone() {
+            return Some(parameters.context_length);
+        }
+
         if let Some(parameters) = self.try_to_llm() {
             return Some(parameters.context_length);
         }
@@ -1928,6 +1953,42 @@ mod tests {
     use flow_like_storage::files::store::local_store::LocalObjectStore;
     use flow_like_types::Value;
     use flow_like_types::tokio;
+
+    #[test]
+    fn systemone_bit_has_its_own_parameters_and_local_artifact_identity() {
+        let mut bit = Bit {
+            id: "decision-model".into(),
+            bit_type: BitTypes::SystemOne,
+            parameters: flow_like_types::json::json!({
+                "context_length": 512,
+                "provider": {"provider_name": "Local"}
+            }),
+            download_link: Some("https://huggingface.co/ggml-org/Laya-GGUF/resolve/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/model.gguf".into()),
+            file_name: Some("model.gguf".into()),
+            size: Some(449_000_000),
+            ..Bit::default()
+        };
+        assert!(bit.try_to_systemone().is_some());
+        assert!(bit.try_to_llm().is_none());
+        assert!(bit.try_to_vlm().is_none());
+        assert_eq!(bit.try_to_context_length(), Some(512));
+        assert_eq!(
+            bit.try_to_served_provider().unwrap().model_id.as_deref(),
+            Some("decision-model")
+        );
+        bit.normalize_user_local_artifact_identity();
+        let old_key = bit.runtime_model_cache_key();
+        let old = bit.clone();
+        bit.download_link = bit
+            .download_link
+            .map(|url| url.replace(&"a".repeat(40), &"b".repeat(40)));
+        bit.normalize_edited_user_local_artifact_identity(Some(&old));
+        assert_ne!(old_key, bit.runtime_model_cache_key());
+        assert_eq!(
+            flow_like_types::json::to_value(&bit).unwrap()["type"],
+            "SystemOne"
+        );
+    }
 
     fn local_vlm_bit(projection: Value) -> Bit {
         let mut params = std::collections::HashMap::new();

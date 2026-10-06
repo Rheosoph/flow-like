@@ -788,6 +788,70 @@ async fn embeddings_routes_and_pinned_off_models() {
 }
 
 #[tokio::test]
+async fn systemone_route_keeps_native_shape_permissions_and_usage() {
+    let fixture = fixture_with(FakeBehaviour::default(), HostConfig::default()).await;
+    fixture.install("laya", ModelKind::SystemOne, Residency::default());
+    fixture.install("chat", ModelKind::Chat, Residency::default());
+    let body = json!({"model":"laya","state":{"message":"Refund the charge"},"questions":{
+        "refund":{"type":"noul","instructions":"Is a refund requested?"}
+    }});
+    let call = |body: &Value| fixture.http.post(fixture.url("/systemone")).json(body);
+    assert_eq!(status(call(&body)).await, StatusCode::UNAUTHORIZED);
+    let answer = json_of(fixture.as_owner(call(&body))).await;
+    assert_eq!(answer["answers"]["refund"]["noul"], 0.9);
+    assert_eq!(answer["received"], body);
+    let tokens = fixture.host.gateway().tokens();
+    let token = tokens
+        .issue_for("placement", "chat")
+        .expect("a scoped token");
+    assert_eq!(
+        status(call(&body).bearer_auth(token.as_str())).await,
+        StatusCode::NOT_FOUND
+    );
+    tokens
+        .issue_for("placement", "laya")
+        .expect("authorize the decision model");
+    assert_eq!(
+        status(call(&body).bearer_auth(token.as_str())).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(fixture.owner_chat("laya", "hi", json!(null))).await,
+        StatusCode::BAD_REQUEST
+    );
+    let mut wrong = body.clone();
+    wrong["model"] = json!("chat");
+    assert_eq!(
+        status(fixture.as_owner(call(&wrong))).await,
+        StatusCode::BAD_REQUEST
+    );
+    wrong = body.clone();
+    wrong["stream"] = json!(true);
+    assert_eq!(
+        status(fixture.as_owner(call(&wrong))).await,
+        StatusCode::BAD_REQUEST
+    );
+    wrong = body.clone();
+    wrong["images"] = json!(["https://example.com/image.png"]);
+    assert_eq!(
+        status(fixture.as_owner(call(&wrong))).await,
+        StatusCode::BAD_REQUEST
+    );
+    let lease = fixture
+        .host
+        .supervisor()
+        .acquire("laya")
+        .await
+        .expect("a decision lease");
+    let props = json_of(fixture.http.get(format!("{}/props", lease.base_url()))).await;
+    let args: Vec<String> = serde_json::from_value(props["args"].clone()).unwrap();
+    assert!(!args.iter().any(|arg| arg == "--chat-template"));
+    let stats = fixture.stats("laya", 2).await;
+    assert_eq!(total(&stats.series.prompt_tokens), 382);
+    assert_eq!(total(&stats.series.completion_tokens), 0);
+}
+
+#[tokio::test]
 async fn a_template_without_tools_restarts_with_chatml() {
     let fixture = fixture_with(FakeBehaviour::default(), HostConfig::default()).await;
     fixture.install("plain", ModelKind::Chat, Residency::default());

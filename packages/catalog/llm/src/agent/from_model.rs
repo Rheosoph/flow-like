@@ -35,7 +35,7 @@ impl NodeLogic for AgentFromModelNode {
             "AI/Agents/Builder",
         );
         node.set_flowscript_name("agent", "fromModel");
-        node.set_version(5);
+        node.set_version(6);
         node.add_icon("/flow/icons/bot-invoke.svg");
 
         node.set_scores(

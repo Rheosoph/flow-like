@@ -34,6 +34,7 @@ import {
 	resolveHuggingFaceGgufSelection,
 	validateHuggingFacePinnedGgufDownloadUrl,
 } from "../../../lib/bit/huggingface-model-import";
+import { validateSystemOneParameters } from "../../../lib/bit/systemone-model";
 import type { IBit, IMetadata } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
@@ -107,6 +108,74 @@ const endpointField = (
 });
 
 const PROVIDERS: IProviderDef[] = [
+	{
+		key: "systemone",
+		providerName: "custom:systemone",
+		label: "SystemOne endpoint",
+		description: "Typed decisions through your SystemOne-compatible endpoint",
+		primary: true,
+		textOnly: true,
+		fields: [
+			{
+				...endpointField("https://your-server.example", false),
+				required: true,
+			},
+			modelIdField("SystemOne model ID"),
+			{ ...apiKeyField("Optional API key"), required: false },
+		],
+		validate: (values) =>
+			validateSystemOneParameters(
+				{
+					context_length: 4096,
+					provider: {
+						provider_name: "custom:systemone",
+						model_id: values.model_id,
+						params: values,
+					},
+				},
+				"custom",
+			),
+	},
+	...[
+		{
+			key: "systemone-typesafe",
+			providerName: "custom:typesafe",
+			label: "TypeSafe (SystemOne)",
+			endpoint: "https://api.typesafe.ai/v1",
+		},
+		{
+			key: "systemone-openrouter",
+			providerName: "custom:openrouter",
+			label: "OpenRouter (SystemOne)",
+			endpoint: "https://openrouter.ai/api/v1",
+		},
+	].map(
+		(provider): IProviderDef => ({
+			key: provider.key,
+			providerName: provider.providerName,
+			label: provider.label,
+			description: "Typed choice, score, and yes/no decisions",
+			primary: false,
+			textOnly: true,
+			fields: [
+				modelIdField("SystemOne model ID"),
+				apiKeyField("API key"),
+				endpointField(provider.endpoint),
+			],
+			validate: (values) =>
+				validateSystemOneParameters(
+					{
+						context_length: 4096,
+						provider: {
+							provider_name: provider.providerName,
+							model_id: values.model_id,
+							params: values,
+						},
+					},
+					"custom",
+				),
+		}),
+	),
 	...EXTERNAL_PROVIDERS,
 	{
 		key: "openai",
@@ -584,7 +653,12 @@ function providerDefForBit(bit: IBit): IProviderDef | null {
 		}
 	}
 	return (
-		PROVIDERS.find((p) => p.providerName === providerName && !p.isAzure) ?? null
+		PROVIDERS.find(
+			(p) =>
+				p.providerName === providerName &&
+				!p.isAzure &&
+				(bit.type === IBitTypes.SystemOne) === p.key.startsWith("systemone"),
+		) ?? null
 	);
 }
 
@@ -648,6 +722,7 @@ function AddCustomModelWizard({
 	const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
 	const [contextLength, setContextLength] = useState(DEFAULT_CONTEXT_LENGTH);
 	const [isVision, setIsVision] = useState(false);
+	const [isDecision, setIsDecision] = useState(false);
 	const [displayName, setDisplayName] = useState("");
 	const [description, setDescription] = useState("");
 	const [icon, setIcon] = useState("");
@@ -673,6 +748,11 @@ function AddCustomModelWizard({
 	const [saving, setSaving] = useState(false);
 	const hfInspectionSequence = useRef(0);
 
+	const isSystemOneModel =
+		source === "provider"
+			? providerKey?.startsWith("systemone") === true
+			: localFormat === "gguf" && isDecision;
+
 	const providerDef = useMemo(
 		() => availableProviders.find((p) => p.key === providerKey) ?? null,
 		[availableProviders, providerKey],
@@ -691,6 +771,7 @@ function AddCustomModelWizard({
 			setFieldValues({});
 			setContextLength(DEFAULT_CONTEXT_LENGTH);
 			setIsVision(false);
+			setIsDecision(false);
 			setDisplayName("");
 			setDescription("");
 			setIcon("");
@@ -717,7 +798,15 @@ function AddCustomModelWizard({
 		const isLocal =
 			localProviderName === LOCAL_PROVIDER_NAME ||
 			localProviderName === MLX_PROVIDER_NAME;
-		const def = isLocal ? null : providerDefForBit(existingBit);
+		const def = isLocal
+			? null
+			: existingBit.type === IBitTypes.SystemOne
+				? PROVIDERS.find(
+						(candidate) =>
+							candidate.key.startsWith("systemone") &&
+							candidate.providerName === localProviderName,
+					)
+				: providerDefForBit(existingBit);
 		const providerParams = (params?.provider?.params ?? {}) as Record<
 			string,
 			unknown
@@ -739,6 +828,7 @@ function AddCustomModelWizard({
 		setFieldValues(values);
 		setContextLength(String(params?.context_length ?? DEFAULT_CONTEXT_LENGTH));
 		setIsVision(existingBit.type === IBitTypes.Vlm);
+		setIsDecision(existingBit.type === IBitTypes.SystemOne);
 		setDisplayName(existingBit.meta?.en?.name ?? "");
 		setDescription(existingBit.meta?.en?.description ?? "");
 		setIcon(existingBit.meta?.en?.icon ?? "");
@@ -1341,8 +1431,9 @@ function AddCustomModelWizard({
 
 			let bit: IBit = {
 				id: existingBit?.id ?? createId(),
-				type:
-					isVision && !(source === "provider" && providerDef?.textOnly)
+				type: isSystemOneModel
+					? IBitTypes.SystemOne
+					: isVision && !(source === "provider" && providerDef?.textOnly)
 						? IBitTypes.Vlm
 						: IBitTypes.Llm,
 				meta: { ...(existingBit?.meta ?? {}), en: meta },
@@ -1358,7 +1449,9 @@ function AddCustomModelWizard({
 						version,
 						params,
 					},
-					model_classification: { ...classification },
+					...(isSystemOneModel
+						? {}
+						: { model_classification: { ...classification } }),
 					...(mlxManifest ? { huggingface: mlxManifest } : {}),
 				},
 				download_link: isHf && !isMlx ? hfDownload.trim() : null,
@@ -1378,6 +1471,10 @@ function AddCustomModelWizard({
 				updated: now,
 			};
 
+			if (bit.type === IBitTypes.SystemOne) {
+				const error = validateSystemOneParameters(bit.parameters, "custom");
+				if (error) throw new Error(error);
+			}
 			if (importedMlx) {
 				const mapped = applyHuggingFaceMlxImportToUserBit(bit, importedMlx);
 				const mappedParameters = mapped.parameters as ILlmParameters;
@@ -1476,6 +1573,7 @@ function AddCustomModelWizard({
 		isVision,
 		contextLength,
 		classification,
+		isSystemOneModel,
 		hfDownload,
 		hfFileName,
 		hfSize,
@@ -1684,6 +1782,28 @@ function AddCustomModelWizard({
 							/>
 						)}
 
+						{source === "huggingface" && localFormat === "gguf" && (
+							<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+								<div>
+									<Label htmlFor="custom-model-decisions">
+										SystemOne decision model
+									</Label>
+									<p className="mt-1 text-xs text-muted-foreground">
+										Enable for GGUF models trained to answer SystemOne
+										questions.
+									</p>
+								</div>
+								<Switch
+									id="custom-model-decisions"
+									checked={isDecision}
+									onCheckedChange={(enabled) => {
+										setIsDecision(enabled);
+										if (enabled && contextLength === DEFAULT_CONTEXT_LENGTH)
+											setContextLength("4096");
+									}}
+								/>
+							</div>
+						)}
 						<ModelSettingsSection
 							textOnly={source === "provider" && providerDef?.textOnly}
 							contextLength={contextLength}
@@ -1704,12 +1824,14 @@ function AddCustomModelWizard({
 							parsedTags={parsedTags}
 						/>
 
-						<CharacteristicsSection
-							classification={classification}
-							onChange={(key, value) =>
-								setClassification((prev) => ({ ...prev, [key]: value }))
-							}
-						/>
+						{!isSystemOneModel && (
+							<CharacteristicsSection
+								classification={classification}
+								onChange={(key, value) =>
+									setClassification((prev) => ({ ...prev, [key]: value }))
+								}
+							/>
+						)}
 					</div>
 				)}
 

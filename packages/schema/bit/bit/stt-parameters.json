@@ -58,11 +58,6 @@
 		}
 	},
 	"$defs": {
-		"ModelApiSurface": {
-			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions` shape. Newer OpenAI-family models are only reachable through the Responses API (`/responses`), which uses a different request and event schema. A Bit declares the surface so the client builds the matching Rig client and the Flow-Like proxy relays to the matching upstream endpoint.",
-			"type": "string",
-			"enum": ["ChatCompletions", "Responses"]
-		},
 		"SttModelType": {
 			"type": "string",
 			"enum": [
@@ -102,8 +97,15 @@
 					"type": ["string", "null"]
 				},
 				"api_surface": {
-					"anyOf": [{ "$ref": "#/$defs/ModelApiSurface" }, { "type": "null" }],
-					"description": "API surface the upstream model speaks. `None` keeps the provider's historical default, which is `chat/completions` for every hosted Bit."
+					"description": "API surface the upstream model speaks. `None` keeps the provider's\nhistorical chat default. SystemOne Bits always use the decision API.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelApiSurface"
+						},
+						{
+							"type": "null"
+						}
+					]
 				},
 				"params": {
 					"type": ["object", "null"],
@@ -111,6 +113,11 @@
 				}
 			},
 			"required": ["provider_name"]
+		},
+		"ModelApiSurface": {
+			"description": "Which HTTP API surface a model speaks.\n\nProviders historically expose the OpenAI-compatible `chat/completions`\nshape. Newer OpenAI-family models are only reachable through the Responses\nAPI (`/responses`), which uses a different request and event schema. A Bit\ndeclares the surface so the client builds the matching Rig client and the\nFlow-Like proxy relays to the matching upstream endpoint. SystemOne Bits\nselect the native decision surface through their Bit type.",
+			"type": "string",
+			"enum": ["ChatCompletions", "Responses", "SystemOne"]
 		},
 		"SttRuntimePreference": {
 			"type": "string",

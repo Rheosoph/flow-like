@@ -31,6 +31,7 @@ use axum::{
     serve::{Listener, ListenerExt},
 };
 use flow_like_device_protocol::{ModelConsumer, ModelKind, validate_management_id};
+use flow_like_model_protocol::systemone::SystemOneRequest;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -319,6 +320,7 @@ fn routes(shared: Arc<Shared>) -> Router {
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(embeddings))
+        .route("/v1/systemone", post(systemone))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&shared),
             authenticated,
@@ -592,10 +594,16 @@ impl Usage {
 
     fn absorb(&mut self, usage: &Value) {
         let number = |value: &Value| value.as_u64().unwrap_or(0);
-        if let Some(prompt) = usage.get("prompt_tokens") {
+        if let Some(prompt) = usage
+            .get("prompt_tokens")
+            .or_else(|| usage.get("input_tokens"))
+        {
             self.prompt_tokens = number(prompt);
         }
-        if let Some(completion) = usage.get("completion_tokens") {
+        if let Some(completion) = usage
+            .get("completion_tokens")
+            .or_else(|| usage.get("output_tokens"))
+        {
             self.completion_tokens = number(completion);
         }
         if let Some(cached) = usage.pointer("/prompt_tokens_details/cached_tokens") {
@@ -768,7 +776,12 @@ async fn prepare(
     let body = read_body(shared, headers, body).await?;
     let (mut request, model_id) = request_body(&body.bytes)?;
     check_route(shared, &consumer, &model_id, kinds)?;
-    let linked = images::linked(&mut request)?;
+    let linked = if kinds == [ModelKind::SystemOne] {
+        validate_systemone(&request)?;
+        Vec::new()
+    } else {
+        images::linked(&mut request)?
+    };
     let queued = Instant::now();
     let admitted = shared.admit(&consumer).await;
     let mut usage = Usage::new(
@@ -917,6 +930,35 @@ async fn embeddings(
 ) -> Response {
     match prepare(&shared, consumer, &headers, body, &[ModelKind::Embedding]).await {
         Ok(admitted) => forward_whole(shared, admitted, "/v1/embeddings").await,
+        Err(response) => response,
+    }
+}
+
+fn validate_systemone(
+    request: &serde_json::Map<String, Value>,
+) -> std::result::Result<(), Response> {
+    let mut native = request.clone();
+    native.remove("model");
+    let validated = serde_json::from_value::<SystemOneRequest>(Value::Object(native))
+        .map_err(anyhow::Error::from)
+        .and_then(|request| request.validate());
+    validated.map_err(|failure| {
+        error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            &format!("Invalid System One request: {failure}"),
+        )
+    })
+}
+
+async fn systemone(
+    State(shared): State<Arc<Shared>>,
+    Extension(consumer): Extension<ModelConsumer>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    match prepare(&shared, consumer, &headers, body, &[ModelKind::SystemOne]).await {
+        Ok(admitted) => forward_whole(shared, admitted, "/v1/systemone").await,
         Err(response) => response,
     }
 }
@@ -1177,6 +1219,29 @@ mod tests {
 
     fn usage() -> Usage {
         Usage::new(ModelConsumer::Owner, "m".into(), 0, 0)
+    }
+
+    #[test]
+    fn systemone_requests_are_native_and_images_stay_inline() {
+        let valid = json!({"model":"laya","state":"Refund the charge","questions":{
+            "refund":{"type":"noul","instructions":"Is a refund requested?"}
+        }});
+        assert!(validate_systemone(valid.as_object().unwrap()).is_ok());
+        for (field, value) in [
+            ("stream", json!(true)),
+            ("messages", json!([])),
+            ("images", json!(["https://example.com/image.png"])),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(validate_systemone(invalid.as_object().unwrap()).is_err());
+        }
+        let mut captured = usage();
+        captured.absorb(&json!({"input_tokens":191,"output_tokens":0}));
+        assert_eq!(
+            (captured.prompt_tokens, captured.completion_tokens),
+            (191, 0)
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@ impl NodeLogic for BuildOpenRouterNode {
         );
         node.set_flowscript_name("ai.provider", "openrouter");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()

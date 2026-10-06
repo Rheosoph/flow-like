@@ -102,7 +102,7 @@ impl NodeLogic for LLMExtractHistoryNode {
         );
         node.set_flowscript_name("ai", "extractFromHistory");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()

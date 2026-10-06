@@ -13,6 +13,7 @@ pub(crate) mod hosted_worker;
 mod relay;
 pub(crate) use relay::current_instance_model_tier;
 pub mod responses;
+pub mod systemone;
 pub mod usage;
 
 pub fn routes() -> Router<AppState> {

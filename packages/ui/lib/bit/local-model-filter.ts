@@ -89,7 +89,11 @@ export function isHostableLlmModel(
 	// embedding or speech model declares the same `Local` provider but runs
 	// somewhere else entirely, and a browser can still use it when the model
 	// names a remote implementation the hub serves.
-	return !LLM_BIT_TYPES.has(bit.type) && hasRemoteImplementation(bit);
+	return (
+		!LLM_BIT_TYPES.has(bit.type) &&
+		bit.type !== IBitTypes.SystemOne &&
+		hasRemoteImplementation(bit)
+	);
 }
 
 /** Return the normalized access tier declared by a hosted LLM/VLM bit. */

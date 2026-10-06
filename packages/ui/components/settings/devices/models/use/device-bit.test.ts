@@ -23,7 +23,7 @@ const NOW = Date.UTC(2026, 9, 5, 12);
 const qwen = { id: "qwen3-8b-q4", kind: "chat" as const };
 
 function bitFor(
-	model: { id: string; kind: "chat" | "vision" | "embedding" },
+	model: { id: string; kind: "chat" | "vision" | "embedding" | "systemone" },
 	extra: { vectorLength?: number } = {},
 ) {
 	return deviceModelBit({
@@ -239,4 +239,19 @@ describe("saving", () => {
 		expect((error as DeviceBitError).cause).toBe(refusal);
 		expect(calls).toEqual([`upsert ${bit.id}`]);
 	});
+});
+
+test("device decisions keep their native Bit type and omit chat parameters", () => {
+	const bit = bitFor({ id: "decision-model", kind: "systemone" });
+	expect(bit.type).toBe(IBitTypes.SystemOne);
+	expect(bit.parameters).toEqual({
+		context_length: 16384,
+		provider: {
+			provider_name: "device",
+			model_id: "decision-model",
+			version: null,
+			params: { device_id: DEVICE, model: "decision-model", kind: "systemone" },
+		},
+	});
+	expect(defaultContext({ kind: "systemone", settings: {} })).toBe(4096);
 });

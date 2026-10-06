@@ -257,6 +257,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 							bit_types: [
 								IBitTypes.Llm,
 								IBitTypes.Vlm,
+								IBitTypes.SystemOne,
 								IBitTypes.Tts,
 								IBitTypes.Stt,
 								IBitTypes.Embedding,
@@ -387,8 +388,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			items.push({
 				id: "action-remove-shortcut",
 				type: "action",
-				label: `Remove from Shortcuts`,
-				description: `Remove this page from your quick access shortcuts`,
+				label: "Remove from Shortcuts",
+				description: "Remove this page from your quick access shortcuts",
 				icon: BookmarkMinus,
 				group: "shortcuts",
 				keywords: ["shortcut", "remove", "bookmark", "unpin"],

@@ -118,7 +118,7 @@ impl NodeLogic for LLMSuggestNextStepNode {
         );
         node.set_flowscript_name("automation.llm", "suggestNextStep");
         node.add_icon("/flow/icons/bot-plan.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()

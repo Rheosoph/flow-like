@@ -15,6 +15,7 @@ import {
 	ImageIcon,
 	LayoutList,
 	Lightbulb,
+	ListChecks,
 	type LucideIcon,
 	MessageSquare,
 	Mic,
@@ -91,8 +92,15 @@ type SortOption =
 	| "coding";
 type ViewMode = "grid" | "list";
 type InputModality = "text" | "image" | "speech";
-type OutputModality = "text" | "embedding" | "speech" | "image" | "video";
+type OutputModality =
+	| "text"
+	| "embedding"
+	| "speech"
+	| "image"
+	| "video"
+	| "decision";
 const ALL_OUTPUT_MODALITIES: OutputModality[] = [
+	"decision",
 	"text",
 	"embedding",
 	"speech",
@@ -105,6 +113,8 @@ function getBitModality(type: IBitTypes): {
 	output: OutputModality;
 } {
 	switch (type) {
+		case IBitTypes.SystemOne:
+			return { input: "text", output: "decision" };
 		case IBitTypes.Llm:
 			return { input: "text", output: "text" };
 		case IBitTypes.Vlm:
@@ -237,6 +247,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			[
 				IBitTypes.Llm,
 				IBitTypes.Vlm,
+				IBitTypes.SystemOne,
 				IBitTypes.Tts,
 				IBitTypes.Stt,
 				IBitTypes.Embedding,
@@ -409,7 +420,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		// In web mode, filter LLM/VLM to only show hosted models
 		if (webMode) {
 			models = models.filter((bit) => {
-				if (LLM_LIKE_TYPES.has(bit.type)) {
+				if (LLM_LIKE_TYPES.has(bit.type) || bit.type === IBitTypes.SystemOne) {
 					return isHostedModel(bit);
 				}
 				return true;
@@ -541,6 +552,13 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				icon: MessageSquare,
 				color: "var(--m-chat)",
 				match: (b) => LLM_LIKE_TYPES.has(b.type),
+			},
+			{
+				id: "rail-decisions",
+				label: "Decisions",
+				icon: ListChecks,
+				color: "var(--m-embed)",
+				match: (b) => b.type === IBitTypes.SystemOne,
 			},
 			{
 				id: "rail-stt",
@@ -1116,6 +1134,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 					<div className="flex flex-wrap items-center gap-1.5">
 						<FilterGroupLabel>{t("produces", "Produces")}</FilterGroupLabel>
+						<ModalityChip
+							active={outputModalities.has("decision")}
+							onClick={() => toggleOutputModality("decision")}
+							icon={ListChecks}
+							label="Decisions"
+						/>
 						<ModalityChip
 							active={outputModalities.has("text")}
 							onClick={() => toggleOutputModality("text")}

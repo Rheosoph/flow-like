@@ -169,6 +169,7 @@ async fn serve(config: FakeConfig) -> Result<()> {
         .route("/slots", get(slots))
         .route("/v1/chat/completions", post(chat))
         .route("/v1/embeddings", post(embeddings))
+        .route("/v1/systemone", post(systemone))
         .with_state(engine);
     #[cfg(unix)]
     if let Some(socket) = std::env::var_os(super::endpoint::SOCKET_ENV) {
@@ -225,6 +226,24 @@ async fn slots(axum::extract::State(engine): Shared, headers: HeaderMap) -> Resp
 fn usage() -> Value {
     json!({"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10,
            "prompt_tokens_details": {"cached_tokens": 2}})
+}
+
+async fn systemone(
+    axum::extract::State(engine): Shared,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> Response {
+    if !authorized(&engine, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Json(json!({
+        "model":engine.alias,
+        "answers":{"refund":{"type":"noul","noul":0.9}},
+        "usage":{"input_tokens":191,"output_tokens":0},
+        "received":request,
+        "seen_headers":seen_headers(&headers),
+    }))
+    .into_response()
 }
 
 fn chunk(alias: &str, choices: Value, usage: Option<Value>) -> Bytes {

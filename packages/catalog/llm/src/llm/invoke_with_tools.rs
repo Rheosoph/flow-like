@@ -103,7 +103,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
         );
         node.set_flowscript_name("ai", "invokeWithTools");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()

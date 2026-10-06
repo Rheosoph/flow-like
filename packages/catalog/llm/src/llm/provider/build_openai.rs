@@ -38,7 +38,7 @@ impl NodeLogic for BuildOpenAiNode {
         );
         node.set_flowscript_name("ai.provider", "openai");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(5);
+        node.set_version(6);
 
         node.set_scores(
             NodeScores::new()

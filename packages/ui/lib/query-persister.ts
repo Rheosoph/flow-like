@@ -27,6 +27,11 @@ const POLICY_BUSTER = "fl-qp-v1";
 
 const DEFAULT_MAX_ENTRY_BYTES = 128 * 1024;
 
+// Bootstrap includes the Page layout needed to open a workspace from cache.
+const PAGE_BOOTSTRAP_MAX_ENTRY_BYTES = 2 * 1024 * 1024;
+
+const QUERY_STORAGE_PREFIX = "fl-q";
+
 const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -97,7 +102,7 @@ export interface BoundedQueryStorage {
  */
 export function createBoundedStorage(
 	backend: QueryStorageBackend,
-	maxEntryBytes: number = DEFAULT_MAX_ENTRY_BYTES,
+	maxEntryBytes: number | ((key: string) => number) = DEFAULT_MAX_ENTRY_BYTES,
 ): BoundedQueryStorage {
 	return {
 		getItem: async (key) => {
@@ -109,7 +114,11 @@ export function createBoundedStorage(
 		},
 		setItem: async (key, value) => {
 			try {
-				if (value.length > maxEntryBytes) {
+				const limit =
+					typeof maxEntryBytes === "number"
+						? maxEntryBytes
+						: maxEntryBytes(key);
+				if (value.length > limit) {
 					await backend.del(key);
 					return;
 				}
@@ -133,6 +142,23 @@ export function createBoundedStorage(
 			}
 		},
 	};
+}
+
+function maxPersistedQueryEntryBytes(storageKey: string): number {
+	const prefix = `${QUERY_STORAGE_PREFIX}-`;
+	if (storageKey.startsWith(prefix)) {
+		try {
+			// The default query hash is the JSON query key. Custom hashes retain
+			// the ordinary cap when their query type cannot be identified.
+			const queryKey: unknown = JSON.parse(storageKey.slice(prefix.length));
+			if (Array.isArray(queryKey) && queryKey[0] === "getPageBootstrap") {
+				return PAGE_BOOTSTRAP_MAX_ENTRY_BYTES;
+			}
+		} catch {
+			/* use the ordinary cap */
+		}
+	}
+	return DEFAULT_MAX_ENTRY_BYTES;
 }
 
 /** idb-keyval backend on a dedicated database, opened lazily (SSR-safe). */
@@ -238,14 +264,14 @@ export function createSmartQueryPersister(
 ) {
 	const storage = createBoundedStorage(
 		options.backend ?? createIdbBackend(),
-		options.maxEntryBytes,
+		options.maxEntryBytes ?? maxPersistedQueryEntryBytes,
 	);
 	const persister = experimental_createQueryPersister({
 		storage,
 		deserialize: deserializePersistedQuery,
 		maxAge: options.maxAge ?? DEFAULT_MAX_AGE_MS,
 		buster: POLICY_BUSTER,
-		prefix: "fl-q",
+		prefix: QUERY_STORAGE_PREFIX,
 		refetchOnRestore: false,
 		filters: {
 			predicate: (query) => shouldPersistQuery(query),

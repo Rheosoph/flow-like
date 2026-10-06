@@ -267,7 +267,7 @@ impl NodeLogic for BuildStableDiffusionImageNode {
         );
         node.set_flowscript_name("ai.provider", "stablediffusion_image");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(1);
+        node.set_version(2);
         node.set_scores(option_node_scores());
         node.add_input_pin(
             "exec_in",

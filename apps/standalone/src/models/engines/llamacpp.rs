@@ -110,16 +110,27 @@ pub fn effective(
             .ctx_per_slot
             .unwrap_or_else(|| default_ctx(kind, header))
             .clamp(MODEL_MIN_CTX_PER_SLOT, MODEL_MAX_CTX_PER_SLOT),
+        // Decision prompts occupy a complete physical batch; start with one slot.
         parallel: settings
             .parallel
-            .unwrap_or(if backend == ModelBackend::Cpu { 2 } else { 4 }),
+            .unwrap_or(if kind == ModelKind::SystemOne {
+                1
+            } else if backend == ModelBackend::Cpu {
+                2
+            } else {
+                4
+            }),
         kv_cache_type: settings.kv_cache_type.unwrap_or(KvCacheType::F16),
         threads: settings.threads.unwrap_or(facts.cpu.physical_cores),
         gpu_layers: settings.gpu_layers,
         flash_attn: settings.flash_attn,
     };
     let fits = |chosen: &Effective| estimate(weights, header, chosen).total() <= budget;
-    if settings.kv_cache_type.is_none() && settings.flash_attn != Some(false) && !fits(&chosen) {
+    if kind != ModelKind::SystemOne
+        && settings.kv_cache_type.is_none()
+        && settings.flash_attn != Some(false)
+        && !fits(&chosen)
+    {
         chosen.kv_cache_type = KvCacheType::Q8;
     }
     while settings.parallel.is_none() && chosen.parallel > 1 && !fits(&chosen) {
@@ -219,12 +230,28 @@ fn server_args(inputs: &LlamaInputs) -> Result<Vec<String>> {
     ])
 }
 
-/// Embedding models embed whole inputs in one batch; chat models get jinja templates,
-/// separate reasoning, prompt-cache reuse and their projector.
+/// Embedding and decision models evaluate whole prompts in one batch. Chat models get
+/// jinja templates, separate reasoning, prompt-cache reuse and their projector.
 fn kind_args(inputs: &LlamaInputs) -> Vec<String> {
     let spec = inputs.spec;
     let mut args: Vec<String> = Vec::new();
     match spec.kind {
+        ModelKind::SystemOne => {
+            // Laya and Clef need the complete prompt in one physical batch.
+            let batch = inputs.effective.ctx_per_slot.to_string();
+            args.extend([
+                "--batch-size".into(),
+                batch.clone(),
+                "--ubatch-size".into(),
+                batch,
+            ]);
+            if let Some(projector) = &spec.projector {
+                args.extend([
+                    "--mmproj".into(),
+                    inputs.files.path(projector).to_string_lossy().into_owned(),
+                ]);
+            }
+        }
         ModelKind::Embedding => {
             let batch = inputs.effective.ctx_per_slot.to_string();
             args.extend(["--embedding".into(), "--batch-size".into(), batch.clone()]);
@@ -235,7 +262,10 @@ fn kind_args(inputs: &LlamaInputs) -> Vec<String> {
         }
         ModelKind::Chat | ModelKind::Vision => {
             args.extend(["--jinja", "--reasoning-format", "deepseek"].map(String::from));
-            args.extend(["--cache-reuse", CACHE_REUSE_TOKENS].map(String::from));
+            // llama.cpp disables KV shifting when a multimodal projector is loaded.
+            if spec.projector.is_none() {
+                args.extend(["--cache-reuse", CACHE_REUSE_TOKENS].map(String::from));
+            }
             if let Some(projector) = &spec.projector {
                 let path = inputs.files.path(projector);
                 args.extend(["--mmproj".into(), path.to_string_lossy().into_owned()]);
@@ -609,6 +639,60 @@ mod tests {
         assert!(has(args, "--embedding"));
         assert!(!has(args, "--reasoning-format") && !has(args, "--jinja"));
         assert!(!embedding.probe_tool_template);
+        Ok(())
+    }
+
+    #[test]
+    fn systemone_uses_a_full_prompt_batch_without_chat_overrides() -> Result<()> {
+        let decision = planned(ModelKind::SystemOne, &ModelSettings::default())?;
+        let args = &decision.launch.args;
+        assert_eq!(value(args, "--parallel"), Some("1"));
+        assert_eq!(value(args, "--ctx-size"), value(args, "--batch-size"));
+        assert_eq!(value(args, "--ctx-size"), value(args, "--ubatch-size"));
+        for flag in [
+            "--jinja",
+            "--reasoning-format",
+            "--cache-reuse",
+            "--chat-template",
+            "--embedding",
+        ] {
+            assert!(!has(args, flag), "{flag}");
+        }
+        assert!(!decision.probe_tool_template);
+        Ok(())
+    }
+
+    #[test]
+    fn vision_does_not_request_unsupported_kv_shifting() -> Result<()> {
+        let mut model = spec(ModelKind::Vision);
+        model.projector = Some("mmproj.gguf".into());
+        let files = files();
+        let header = gguf::GgufFacts::default();
+        let effective = effective(
+            &ModelSettings::default(),
+            model.kind,
+            &header,
+            files.sizes,
+            ModelBackend::Metal,
+            &facts(),
+            64 * GIB,
+        );
+        let vision = plan(LlamaInputs {
+            model_id: "vision",
+            spec: &model,
+            effective,
+            header: &header,
+            files: &files,
+            runtime: &runtime(),
+            key_file: Path::new("/state/models/run/qwen/key"),
+            chatml: false,
+        })?;
+        assert_eq!(
+            value(&vision.launch.args, "--mmproj"),
+            Some("/state/models/run/qwen/mmproj.gguf")
+        );
+        assert!(!has(&vision.launch.args, "--cache-reuse"));
+        assert!(!vision.probe_tool_template);
         Ok(())
     }
 

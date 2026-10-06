@@ -114,7 +114,7 @@ impl NodeLogic for AiKeywordExtractionNode {
         );
         node.set_flowscript_name("ai.processing", "extractKeywords");
         node.add_icon("/flow/icons/sparkles.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()

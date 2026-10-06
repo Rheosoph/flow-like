@@ -140,7 +140,7 @@ impl NodeLogic for LLMResolveElementNode {
         );
         node.set_flowscript_name("automation.llm", "resolveElement");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(5);
+        node.set_version(6);
 
         node.set_scores(
             NodeScores::new()

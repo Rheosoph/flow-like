@@ -12,6 +12,7 @@ import {
 	ExternalLinkIcon,
 	FileSearch,
 	ImageIcon,
+	ListChecksIcon,
 	LockIcon,
 	MicIcon,
 	MoreVerticalIcon,
@@ -917,6 +918,8 @@ export function ModelTypeIcon({
 	const { t } = useTranslation("common");
 	const cn = `h-4 w-4 ${className}`;
 	switch (type) {
+		case IBitTypes.SystemOne:
+			return <ListChecksIcon className={cn} />;
 		case IBitTypes.Llm:
 			return <BrainIcon className={cn} />;
 		case IBitTypes.Vlm:
@@ -948,6 +951,7 @@ export function ModalityIcons({
 	switch (type) {
 		case IBitTypes.ImageGeneration:
 		case IBitTypes.VideoGeneration:
+		case IBitTypes.SystemOne:
 			return <ModalityFlow type={type} compact />;
 		case IBitTypes.Llm:
 			return (
@@ -1011,6 +1015,8 @@ export function ModalityIcons({
 
 export function getModelModality(bit: IBit): string {
 	switch (bit.type) {
+		case IBitTypes.SystemOne:
+			return "Text → Decisions";
 		case IBitTypes.Llm:
 			return i18next.t("textText", "Text → Text");
 		case IBitTypes.Vlm:

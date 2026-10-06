@@ -645,7 +645,12 @@ interface Where {
 /** Decoding reads the active weights once per token; chat and vision only. */
 function speedOf(facts: ModelFacts, where: Where, system: SystemFacts) {
 	const read = (facts.weightBytes ?? 0) * (facts.activeShare ?? 1);
-	if (facts.kind === "embedding" || where.verdict === "too_large" || read <= 0)
+	if (
+		facts.kind === "embedding" ||
+		facts.kind === "systemone" ||
+		where.verdict === "too_large" ||
+		read <= 0
+	)
 		return {};
 	const cpuSeconds = read / (cpuBandwidth(system) * DECODE_EFFICIENCY);
 	const gpuSeconds = where.gpu

@@ -215,6 +215,74 @@ describe("createSmartQueryPersister end to end", () => {
 		expect(backend.map.size).toBe(0);
 	});
 
+	it("restores a Page bootstrap larger than the ordinary query cap", async () => {
+		const backend = memoryBackend();
+		const persister = createSmartQueryPersister({ backend });
+		const queryKey = ["getPageBootstrap", "app-1", "/", null, "user-1"];
+		const data = { page: { content: "x".repeat(256 * 1024) } };
+		const query = fakeQuery(queryKey, data);
+		await persister.persistQuery(query as never);
+		expect(backend.map.size).toBe(1);
+
+		let fetched = false;
+		const restored = await persister.persisterFn(
+			async () => {
+				fetched = true;
+				return { page: { content: "server" } };
+			},
+			ctx,
+			fakeQuery(queryKey) as never,
+		);
+		expect(fetched).toBe(false);
+		expect(restored).toEqual(data);
+		expect(isUnconfirmedRestore(restored)).toBe(true);
+	});
+
+	it("removes a previous bootstrap when it grows beyond 2 MiB", async () => {
+		const backend = memoryBackend();
+		const persister = createSmartQueryPersister({ backend });
+		const queryKey = ["getPageBootstrap", "app-1", "/", null, "user-1"];
+		const query = fakeQuery(queryKey, { page: { content: "cached" } });
+		await persister.persistQuery(query as never);
+		expect(backend.map.size).toBe(1);
+
+		query.state.data = { page: { content: "x".repeat(2 * 1024 * 1024) } };
+		await persister.persistQuery(query as never);
+		expect(backend.map.size).toBe(0);
+
+		const fresh = { page: { content: "fresh" } };
+		expect(
+			await persister.persisterFn(
+				async () => fresh,
+				ctx,
+				fakeQuery(queryKey) as never,
+			),
+		).toEqual(fresh);
+	});
+
+	it("keeps the ordinary 128 KiB cap for other query types", async () => {
+		const backend = memoryBackend();
+		const persister = createSmartQueryPersister({ backend });
+		const query = fakeQuery(["getApp", "app-1"], {
+			content: "x".repeat(256 * 1024),
+		});
+		await persister.persistQuery(query as never);
+		expect(backend.map.size).toBe(0);
+	});
+
+	it("applies an explicit size cap to bootstrap queries too", async () => {
+		const backend = memoryBackend();
+		const persister = createSmartQueryPersister({
+			backend,
+			maxEntryBytes: 128 * 1024,
+		});
+		const query = fakeQuery(["getPageBootstrap", "app-1"], {
+			page: { content: "x".repeat(256 * 1024) },
+		});
+		await persister.persistQuery(query as never);
+		expect(backend.map.size).toBe(0);
+	});
+
 	it("garbage-collects expired entries", async () => {
 		const backend = memoryBackend();
 		const persister = createSmartQueryPersister({ backend, maxAge: 50 });

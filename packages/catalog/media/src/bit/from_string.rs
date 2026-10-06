@@ -29,7 +29,7 @@ impl NodeLogic for BitFromStringNode {
         );
         node.set_flowscript_name("ai", "loadBit");
         node.add_icon("/flow/icons/bit.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.add_input_pin(
             "exec_in",

@@ -70,6 +70,7 @@ export enum IBitTypes {
 	Tokenizer = "Tokenizer",
 	TokenizerConfig = "TokenizerConfig",
 	Stt = "Stt",
+	SystemOne = "SystemOne",
 	Tts = "Tts",
 	Vlm = "Vlm",
 	VideoGeneration = "VideoGeneration",

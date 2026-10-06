@@ -26,6 +26,7 @@ impl NodeLogic for EmbedQueryNode {
             "Embeds a query string using a loaded model",
             "AI/Embedding",
         );
+        node.set_version(1);
         node.set_flowscript_name("ai.embedding", "embedQuery");
 
         node.set_long_running(true);

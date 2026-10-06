@@ -613,7 +613,7 @@ impl NodeLogic for ExtractDocumentAiNode {
         );
         node.set_flowscript_name("ai.processing", "extractDocumentAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -944,7 +944,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
         );
         node.set_flowscript_name("ai.processing", "extractDocumentsAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -1411,7 +1411,7 @@ impl NodeLogic for SummarizeDocumentNode {
         );
         node.set_flowscript_name("ai.processing", "summarizeDocument");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -1778,7 +1778,7 @@ impl NodeLogic for ExtractContentSectionsNode {
         );
         node.set_flowscript_name("ai.processing", "extractContentSections");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.set_scores(
             NodeScores::new()

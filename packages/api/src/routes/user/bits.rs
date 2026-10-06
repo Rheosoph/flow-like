@@ -461,23 +461,84 @@ fn validate_user_bit(bit: &Bit) -> Result<BitType, ApiError> {
     let bit_type = match bit.bit_type {
         BitTypes::Llm => BitType::Llm,
         BitTypes::Vlm => BitType::Vlm,
+        BitTypes::SystemOne => BitType::SystemOne,
         _ => {
             return Err(ApiError::bad_request(
-                "Only LLM and VLM custom bits are supported right now",
+                "Custom bits must be language, vision, or SystemOne decision models",
             ));
         }
     };
 
     let provider = bit.try_to_provider().ok_or_else(|| {
-        ApiError::bad_request(
-            "Bit parameters must contain valid LLM/VLM parameters (context_length, provider, model_classification)",
-        )
+        ApiError::bad_request("Bit parameters must contain valid model parameters for their type")
     })?;
 
     let name = provider.provider_name.trim();
     let is_custom = name.to_ascii_lowercase().starts_with("custom:");
     let is_local = name == LOCAL_PROVIDER;
     let is_mlx = name.eq_ignore_ascii_case(MLX_PROVIDER_NAME);
+
+    if bit.bit_type == BitTypes::SystemOne {
+        if !is_local
+            && !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "custom:systemone" | "custom:typesafe" | "custom:openrouter"
+            )
+        {
+            return Err(ApiError::bad_request(
+                "SystemOne custom bits require Local, custom:systemone, custom:typesafe, or custom:openrouter",
+            ));
+        }
+        if bit.try_to_context_length() == Some(0) {
+            return Err(ApiError::bad_request(
+                "SystemOne context length must be positive",
+            ));
+        }
+        if !is_local {
+            let param = |key: &str| {
+                provider
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get(key))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            };
+            if provider
+                .model_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .or_else(|| param("model_id"))
+                .is_none()
+            {
+                return Err(ApiError::bad_request(
+                    "SystemOne providers require a model ID",
+                ));
+            }
+            let endpoint = param("endpoint");
+            if name.eq_ignore_ascii_case("custom:systemone") && endpoint.is_none() {
+                return Err(ApiError::bad_request(
+                    "Custom SystemOne providers require an endpoint",
+                ));
+            }
+            if let Some(endpoint) = endpoint {
+                let valid = reqwest::Url::parse(endpoint).is_ok_and(|url| {
+                    matches!(url.scheme(), "http" | "https")
+                        && url.host_str().is_some()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                        && url.query().is_none()
+                        && url.fragment().is_none()
+                });
+                if !valid {
+                    return Err(ApiError::bad_request(
+                        "SystemOne endpoints must be HTTP or HTTPS URLs without credentials, query, or fragment",
+                    ));
+                }
+            }
+        }
+    }
 
     if !is_custom && !is_local && !is_mlx {
         return Err(ApiError::bad_request(
@@ -542,15 +603,20 @@ fn validate_user_bit(bit: &Bit) -> Result<BitType, ApiError> {
 
     // llama.cpp only sees images when it is started with `--mmproj`, so a local
     // vision model without a projector would advertise vision it cannot do.
-    if is_local && bit.bit_type == BitTypes::Vlm {
+    let has_decision_projector = bit.bit_type == BitTypes::SystemOne
+        && provider
+            .params
+            .as_ref()
+            .is_some_and(|params| params.contains_key("projection"));
+    if is_local && (bit.bit_type == BitTypes::Vlm || has_decision_projector) {
         let projection = bit.projection_bit().ok_or_else(|| {
             ApiError::bad_request(
-                "Local vision models require a projector: set provider.params.projection with a download_link, file_name, and positive size for the mmproj file",
+                "Local model projectors require provider.params.projection with a download_link, file_name, and positive size for the mmproj file",
             )
         })?;
         if projection.size.is_none_or(|size| size == 0) {
             return Err(ApiError::bad_request(
-                "Local vision model projector size must be positive",
+                "Local model projector size must be positive",
             ));
         }
         let projection_url = projection
@@ -563,7 +629,7 @@ fn validate_user_bit(bit: &Bit) -> Result<BitType, ApiError> {
     Ok(bit_type)
 }
 
-/// A `device` bit names a model hosted on a Flow-Like device: an LLM, VLM or embedding bit whose
+/// A `device` bit names a language, vision, embedding, or decision model hosted on a Flow-Like device. Its
 /// provider params hold the device and the model. It carries no file, link or credential;
 /// whoever runs it unlocks the device on their own computer.
 fn validate_device_model_bit(bit: &Bit, target: &DeviceModelTarget) -> Result<BitType, ApiError> {
@@ -593,9 +659,10 @@ fn device_model_bit_type(bit: &Bit) -> Result<BitType, ApiError> {
     match bit.bit_type {
         BitTypes::Llm => Ok(BitType::Llm),
         BitTypes::Vlm => Ok(BitType::Vlm),
+        BitTypes::SystemOne => Ok(BitType::SystemOne),
         BitTypes::Embedding => Ok(BitType::Embedding),
         _ => Err(ApiError::bad_request(format!(
-            "Device model bit {} must be an LLM, VLM or embedding bit",
+            "Device model bit {} must be a language, vision, embedding, or SystemOne bit",
             bit.id
         ))),
     }
@@ -825,6 +892,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn systemone_user_bits_accept_native_providers_and_reject_chat_or_mlx() {
+        for provider in ["custom:systemone", "custom:typesafe", "custom:openrouter"] {
+            let mut bit = user_model(BitTypes::SystemOne, provider);
+            if provider == "custom:systemone" {
+                bit.parameters["provider"]["params"]["endpoint"] =
+                    flow_like_types::json::json!("http://localhost:8080/v1");
+            }
+            bit.parameters
+                .as_object_mut()
+                .unwrap()
+                .remove("model_classification");
+            assert_eq!(validate_user_bit(&bit).unwrap(), BitType::SystemOne);
+        }
+        for provider in [
+            "custom:openai",
+            "custom:anthropic",
+            "MLX",
+            "hosted:openrouter",
+        ] {
+            assert!(validate_user_bit(&user_model(BitTypes::SystemOne, provider)).is_err());
+        }
+        let mut bit = user_model(BitTypes::SystemOne, LOCAL_PROVIDER);
+        bit.download_link = Some(pinned_gguf_url("laya.gguf"));
+        bit.file_name = Some("laya.gguf".into());
+        bit.size = Some(449_000_000);
+        assert_eq!(validate_user_bit(&bit).unwrap(), BitType::SystemOne);
+        bit.parameters["context_length"] = flow_like_types::json::json!(0);
+        assert!(validate_user_bit(&bit).is_err());
+    }
+
+    #[test]
+    fn systemone_custom_bits_require_a_model_and_valid_native_endpoint() {
+        let mut bit = user_model(BitTypes::SystemOne, "custom:systemone");
+        assert!(validate_user_bit(&bit).is_err());
+        for endpoint in [
+            "file:///tmp/server",
+            "https://user:password@example.com/v1",
+            "https://example.com/v1?key=value",
+        ] {
+            bit.parameters["provider"]["params"]["endpoint"] =
+                flow_like_types::json::json!(endpoint);
+            assert!(validate_user_bit(&bit).is_err());
+        }
+        bit.parameters["provider"]["params"]["endpoint"] =
+            flow_like_types::json::json!("http://localhost:8080/v1");
+        assert!(validate_user_bit(&bit).is_ok());
+        bit.parameters["provider"]["model_id"] = flow_like_types::json::json!(" ");
+        assert!(validate_user_bit(&bit).is_err());
+    }
+
+    #[test]
+    fn systemone_optional_projectors_require_complete_pinned_artifacts() {
+        let mut bit = user_model(BitTypes::SystemOne, LOCAL_PROVIDER);
+        bit.download_link = Some(pinned_gguf_url("decision.gguf"));
+        bit.file_name = Some("decision.gguf".into());
+        bit.size = Some(1_000);
+        assert!(validate_user_bit(&bit).is_ok());
+        bit.parameters["provider"]["params"]["projection"] = flow_like_types::json::json!({
+            "download_link": pinned_gguf_url("mmproj.gguf"),
+            "file_name": "mmproj.gguf"
+        });
+        assert!(validate_user_bit(&bit).is_err());
+        bit.parameters["provider"]["params"]["projection"]["size"] =
+            flow_like_types::json::json!(500);
+        assert!(validate_user_bit(&bit).is_ok());
+        bit.parameters["provider"]["params"]["projection"]["download_link"] =
+            flow_like_types::json::json!("https://example.com/mmproj.gguf");
+        assert!(validate_user_bit(&bit).is_err());
+    }
+
     fn add_huggingface_manifest(bit: &mut Bit, include_processor: bool) {
         bit.parameters
             .as_object_mut()
@@ -1012,11 +1150,12 @@ mod tests {
     }
 
     #[test]
-    fn device_bits_are_accepted_for_llm_vlm_and_embedding() {
+    fn device_bits_are_accepted_for_language_vision_embedding_and_systemone() {
         for (bit_type, kind, expected) in [
             (BitTypes::Llm, "chat", BitType::Llm),
             (BitTypes::Vlm, "vision", BitType::Vlm),
             (BitTypes::Embedding, "embedding", BitType::Embedding),
+            (BitTypes::SystemOne, "systemone", BitType::SystemOne),
         ] {
             let bit = device_bit(bit_type, device_params(kind));
             let (bit_type, device) = validated_bit(&bit).unwrap();
@@ -1091,7 +1230,7 @@ mod tests {
     fn other_embedding_providers_stay_refused() {
         let mut bit = device_bit(BitTypes::Embedding, device_params("embedding"));
         bit.parameters["provider"]["provider_name"] = Value::String(LOCAL_PROVIDER.into());
-        assert!(rejection(&bit).contains("Only LLM and VLM"));
+        assert!(rejection(&bit).contains("Custom bits must be language, vision, or SystemOne"));
     }
 
     #[test]
