@@ -232,11 +232,18 @@ class StandalonePublisherTests(unittest.TestCase):
             release.preflight(base, 1, keys)
 
     def test_preflight_refuses_a_release_whose_agent_version_was_not_bumped(self):
-        with self.cdn({STABLE_URL: self.signed(5)}):
-            with self.assertRaisesRegex(ValueError, "already published as agent version 1.2.3; bump the agent version: the update button compares versions"):
-                release.preflight(BASE, 6, self.keys, "1.2.3")
-            release.preflight(BASE, 6, self.keys, "1.2.4")
-            release.preflight(BASE, 6, self.keys)
+        with self.cdn({STABLE_URL: self.signed(3)}):
+            for sequence in [4, 5]:
+                with self.subTest(sequence=sequence):
+                    with self.assertRaises(ValueError) as error:
+                        release.preflight(BASE, sequence, self.keys, "1.2.3")
+                    message = str(error.exception)
+                    self.assertIn(f"Requested sequence {sequence} uses agent version 1.2.3", message)
+                    self.assertIn("already published in sequence 3", message)
+                    self.assertIn("bump the agent version in apps/standalone/Cargo.toml and update Cargo.lock", message)
+                    self.assertIn("Changing the sequence alone does not change the agent version", message)
+                    release.preflight(BASE, sequence, self.keys, "1.2.4")
+            release.preflight(BASE, 4, self.keys)
         with self.cdn({}):
             release.preflight(BASE, 1, self.keys, "1.2.3")
 

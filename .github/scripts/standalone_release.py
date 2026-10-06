@@ -249,8 +249,10 @@ def preflight(base_url, sequence, public_keys, release_version=None):
         if sequence <= published["sequence"]:
             raise ValueError(f"Release sequence {sequence} must be greater than the published sequence {published['sequence']}")
         if release_version is not None and release_version == published.get("release_version"):
-            raise ValueError(f"Release {published['sequence']} is already published as agent version {release_version}; "
-                             "bump the agent version: the update button compares versions")
+            raise ValueError(f"Requested sequence {sequence} uses agent version {release_version}, "
+                             f"which is already published in sequence {published['sequence']}; "
+                             "bump the agent version in apps/standalone/Cargo.toml and update Cargo.lock. "
+                             "Changing the sequence alone does not change the agent version; the update button compares versions")
     # Immutable objects of a failed run keep their bytes; a rebuild under the same sequence cannot replace them.
     for name in [f"flow-like-standalone-{target}" for target in TARGETS] + ["release.jws"]:
         if published_object(f"{base_url}/releases/{sequence}/{name}", "HEAD") is not None:

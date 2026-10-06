@@ -3,6 +3,7 @@ import cloudflare from "@astrojs/cloudflare";
 import react from "@astrojs/react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "astro/config";
+import { prepareMapLibreAssets } from "../../packages/ui/scripts/prepare-maplibre.mjs";
 
 import mdx from "@astrojs/mdx";
 
@@ -63,6 +64,9 @@ export default defineConfig({
 				: "node_modules/.vite-development",
 		define: {
 			"process.env": {},
+			"process.env.NEXT_PUBLIC_MAPLIBRE_WORKER_URL": JSON.stringify(
+				prepareMapLibreAssets(new URL("./public/", import.meta.url)),
+			),
 		},
 		resolve: {
 			dedupe: ["react", "react-dom"],
@@ -77,6 +81,7 @@ export default defineConfig({
 		},
 		ssr: {
 			noExternal: [
+				"maplibre-gl",
 				"katex",
 				"rehype-katex",
 				"@flow-like/flow-like-ui",

@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from "../route-path";
 import type { IChannelClientDescriptor, IChannelPush } from "../schema/channel";
 import {
 	type ChannelPushOptions,
@@ -27,12 +28,12 @@ const sessions = new Map<string, FirebaseSession>();
 const exchanges = new Map<string, Promise<FirebaseSession>>();
 
 function normalizePath(path: string): string {
-	const trimmed = path.replace(/\/+$/, "");
+	const trimmed = trimTrailingSlashes(path);
 	return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
 function databaseOrigin(url: string): string {
-	return url.replace(/\/+$/, "");
+	return trimTrailingSlashes(url);
 }
 
 async function exchangeCustomToken(

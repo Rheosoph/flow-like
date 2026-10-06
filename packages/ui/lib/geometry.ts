@@ -1,3 +1,4 @@
+import type * as GeoJSON from "geojson";
 import { IValueType } from "./schema/flow/pin";
 
 /** Frozen wire markers shared with flow_like_types_contracts::geometry. */

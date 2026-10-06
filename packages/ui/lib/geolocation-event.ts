@@ -1,3 +1,4 @@
+import type * as GeoJSON from "geojson";
 import { geometryMarker, normalizeGeometryValue } from "./geometry";
 
 export interface GeolocationEventConfig {

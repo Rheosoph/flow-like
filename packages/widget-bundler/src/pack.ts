@@ -106,10 +106,14 @@ export function readPackageInfo(projectDir: string): PackageInfo {
 function foldedArchivePath(path: string): string | null {
 	const segments: string[] = [];
 	for (const segment of path.split("/")) {
-		const folded = segment
-			.toUpperCase()
-			.toLowerCase()
-			.replace(/[. ]+$/, "");
+		const normalized = segment.toUpperCase().toLowerCase();
+		let end = normalized.length;
+		while (
+			end > 0 &&
+			(normalized[end - 1] === "." || normalized[end - 1] === " ")
+		)
+			end--;
+		const folded = normalized.slice(0, end);
 		if (folded.length === 0) return null;
 		segments.push(folded);
 	}

@@ -31,7 +31,8 @@ if [[ "$RUNTIME_PACK" == llamacpp-linux-arm64-cpu ]]; then
   LD_LIBRARY_PATH="$(python3 .github/scripts/runtime_toolchain.py library-path)"
   export LD_LIBRARY_PATH
   # The packing smoke checks both ordinary host lookup and the pack's fallback copies.
-  printf '%s\n' "$LD_LIBRARY_PATH" | tr ':' '\n' > /etc/ld.so.conf.d/flow-runtime-gcc.conf
+  # Load this before Ubuntu's aarch64-linux-gnu.conf so the pinned C++ runtime wins.
+  printf '%s\n' "$LD_LIBRARY_PATH" | tr ':' '\n' > /etc/ld.so.conf.d/00-flow-runtime-gcc.conf
   ldconfig
   LLAMACPP_COMMIT="$(python3 .github/scripts/runtime_packs.py pin | sed -n 's/^commit=//p')"
   LLAMACPP_NUMBER="$(python3 .github/scripts/runtime_packs.py pin | sed -n 's/^number=//p')"
