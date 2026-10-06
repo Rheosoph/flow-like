@@ -54,6 +54,32 @@ const part = (root: ParentNode | null, name: string) =>
 	text(root?.querySelector(`[data-request-${name}]`) ?? null);
 
 describe("Service › Endpoint · Requests", () => {
+	test("requests omit Authorization when the service does not require a token", async () => {
+		const { container } = await openShop({
+			tab: "endpoint",
+			events: [SHOP.orders],
+			mount: { backend: store() },
+			arrange: (fake) =>
+				patchConfig(fake, SHOP.device, SHOP.service, (config) => {
+					const hosting = config.hosting as {
+						authentication?: string;
+						auth_secret?: string;
+					};
+					hosting.authentication = "none";
+					hosting.auth_secret = undefined;
+				}),
+		});
+		await until(() => request(container, SHOP.orders) !== null);
+		expect(part(request(container, SHOP.orders), "curl")).toBe(
+			'curl -X GET "http://127.0.0.1:8480/orders"',
+		);
+		expect(text(block(container))).toContain(
+			"Anyone who can reach this service can call these requests without a token.",
+		);
+		expect(text(block(container))).not.toContain("Authorization");
+		expect(text(block(container))).not.toContain("Every request needs");
+	});
+
 	test("each Endpoint the service answers: its route, full address, a curl line, and who may call it", async () => {
 		const { container } = await openShop({
 			tab: "endpoint",

@@ -392,6 +392,37 @@ describe("useDeployRun", () => {
 		expect(fake.workspace.activity.runs()).toHaveLength(1);
 	});
 
+	test("a token-free service starts without generating, saving or showing an access token", async () => {
+		const plan = visitorPlan([EDGE], {
+			endpoint: {
+				host: "127.0.0.1",
+				port: 8080,
+				token: "none",
+				tokenValue: "",
+			},
+		});
+		const { fake, sink, state } = await mountRun(plan);
+		serveArtifacts(fake.agent(EDGE));
+		run.setDeployRunExtras(plan.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		await start(sink);
+		await until(
+			() => state().status === "finished",
+			"the token-free service to start",
+		);
+		expect(state().rows.map((row) => row.state)).toEqual(["done"]);
+		expect(types(fake, EDGE)).toEqual(["artifact", "apply", "start"]);
+		const config = (
+			sent(fake, EDGE, "apply")[0]?.[2] as { config: Record<string, unknown> }
+		).config;
+		expect(config.hosting).toMatchObject({ authentication: "none" });
+		expect(config.hosting).not.toHaveProperty("auth_secret");
+		expect(Object.values(sink.details ?? {})).toHaveLength(1);
+		for (const detail of Object.values(sink.details ?? {}))
+			expect(detail.token).toBeUndefined();
+	});
+
 	test("a new offline service: the device checks the copy, the service is created with no secret in it, then its token is saved and it starts", async () => {
 		const plan = planOf(CRM_PLAN_APP, {
 			deviceIds: [STUDIO],
@@ -615,6 +646,38 @@ describe("useDeployRun", () => {
 			code: "hub_refused",
 		});
 		expect(types(fake, EDGE)).toEqual([]);
+	});
+
+	test("a lost upload reply retains client transport diagnostics and the resumable transfer", async () => {
+		const plan = visitorPlan([EDGE]);
+		const { fake, sink, state } = await mountRun(plan);
+		serveArtifacts(fake.agent(EDGE));
+		run.setDeployRunExtras(plan.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		fake.agent(EDGE).loseReplyNext("artifact");
+
+		await start(sink);
+		await until(() => state().status === "finished", "the lost upload reply");
+		expect(state().rows[0]?.error).toMatchObject({
+			phase: "upload",
+			code: "upload_unconfirmed",
+		});
+		const detail = state().rows[0]?.error?.detail ?? "";
+		expect(detail).toContain("Client transport diagnostics:");
+		expect(detail).toContain("Transport: websocket");
+		expect(detail).toContain("Transport phase: wait_reply");
+		expect(detail).toContain("Transport cause: connection_closed");
+		expect(types(fake, EDGE)).toEqual(["artifact"]);
+		expect(grants(fake, EDGE)).toHaveLength(1);
+		const pending = pendingArtifactTransfers(
+			EDGE,
+			"app_visitor_checkin",
+			fake.scope,
+		);
+		expect(pending.map((transfer) => transfer.confirmed)).toEqual([false]);
+		for (const transfer of pending)
+			forgetArtifactTransfer(EDGE, transfer.transfer_id, fake.scope);
 	});
 
 	test("an apply whose reply was lost is looked up and sent again under the same command id", async () => {
@@ -1244,7 +1307,7 @@ describe("a deploy with a bot, an Endpoint or a form (R2 §6.2, §8.4)", () => {
 	} as const;
 
 	/** What the wizard plans: the draft with the token saved in Events as its default. */
-	function shopPlan(eventId: string) {
+	function shopPlan(eventId: string, change: Partial<DeployDraft> = {}) {
 		deployments += 1;
 		const app = APPS.app_shop_assistant;
 		const draft = makePlan({
@@ -1260,7 +1323,10 @@ describe("a deploy with a bot, an Endpoint or a form (R2 §6.2, §8.4)", () => {
 			platform: "desktop" as const,
 			now: NOW0,
 		};
-		return resolvePlan(withSavedBotTokens(draft, facts), facts);
+		return resolvePlan(
+			withSavedBotTokens({ ...draft, ...change }, facts),
+			facts,
+		);
 	}
 
 	const sessionText = () =>
@@ -1393,6 +1459,24 @@ describe("a deploy with a bot, an Endpoint or a form (R2 §6.2, §8.4)", () => {
 		});
 		expect(types(fake, STUDIO)).toEqual([]);
 		expect(grants(fake, STUDIO)).toEqual([]);
+	});
+
+	test("a form's explicit Studio opt-in sends a listener and scoped access token", async () => {
+		const plan = shopPlan(FORM, { hostOnDemand: true });
+		const { fake, sink, state } = await mountRun(plan);
+		serveArtifacts(fake.agent(EDGE));
+		await start(sink);
+		await until(() => state().status === "finished", "the hosted form");
+		expect(state().rows[0]?.error).toBeUndefined();
+		const detail = Object.values(sink.details ?? {})[0];
+		expect(detail?.token?.length).toBeGreaterThanOrEqual(32);
+		expect(sent(fake, EDGE, "set_secret")).toHaveLength(1);
+		const applied = sent(fake, EDGE, "apply")[0];
+		expect(JSON.stringify(applied)).toContain('"auth_secret":"service-access"');
+		expect(JSON.stringify(applied)).not.toContain(
+			detail?.token ?? "missing-token",
+		);
+		expect(sessionText()).not.toContain(detail?.token ?? "missing-token");
 	});
 
 	test("a run that prepares by itself names the new types: none for a Page, generic_form for a form", async () => {

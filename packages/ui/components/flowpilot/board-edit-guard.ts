@@ -1418,6 +1418,18 @@ function boardEditAbortError(message: string) {
 export class BoardEditCoordinator {
 	private readonly locks = new Map<string, BoardEditLock>();
 
+	/** Reserve an idle target synchronously, or report contention without joining its queue. */
+	tryAcquire(
+		key: string,
+		options: BoardEditAcquireOptions = {},
+	): Promise<() => void> | undefined {
+		const lock = this.locks.get(key);
+		if (lock?.owner || lock?.waiters.length) return undefined;
+		// acquire grants ownership before returning its promise. Another caller cannot pass
+		// this check between the idle observation and the reservation.
+		return this.acquire(key, options);
+	}
+
 	acquire(
 		key: string,
 		options: BoardEditAcquireOptions = {},

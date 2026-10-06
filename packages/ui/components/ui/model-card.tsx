@@ -41,6 +41,7 @@ import {
 	openUpgradeDialogIfEnabled,
 } from "../../state/upgrade-dialog-state";
 import type { ISettingsProfile } from "../../types";
+import { DeviceBitBadge } from "../settings/devices/models/use/device-model-badge";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { Badge } from "./badge";
 import { Button } from "./button";
@@ -492,6 +493,7 @@ function ModelCardGridVariant({
 								aria-label={t("privateToYou", "Private to you")}
 							/>
 						)}
+						<DeviceBitBadge bit={bit} />
 					</div>
 				</div>
 				{onEdit && (
@@ -679,6 +681,7 @@ function ModelCardListVariant({
 
 			{/* Badges */}
 			<div className="flex max-w-full flex-wrap items-center gap-1.5">
+				<DeviceBitBadge bit={bit} />
 				<ModelStatusBadge
 					isInstalled={isInstalled}
 					isHosted={isHosted}

@@ -15,7 +15,7 @@ import {
 	normaliseColumns,
 	topologicalOrder,
 } from "./rank";
-import { planDataRoutes } from "./route";
+import { planWireRoutes } from "./route";
 import {
 	type AutoLayoutInput,
 	type LGraph,
@@ -168,7 +168,7 @@ export function computeFlowLayoutDetailed(
 		return {
 			...result,
 			routing: {
-				routes: planDataRoutes(normalized.input, result.positions),
+				routes: planWireRoutes(normalized.input, result.positions),
 				chains: normalized.chains,
 			},
 		};

@@ -1,4 +1,4 @@
-use super::{BODY_LIMIT, HostState, ReplicaContext, actions, channels};
+use super::{BODY_LIMIT, HostState, ReplicaContext, actions, assets, channels};
 use crate::config::PlacementConfig;
 use anyhow::{Context, Result, ensure};
 use axum::{body::to_bytes, extract::Request, http::StatusCode};
@@ -45,6 +45,10 @@ enum Header {
         capability: String,
         fingerprint: String,
     },
+    ResolveAsset {
+        asset_id: String,
+        fingerprint: String,
+    },
 }
 impl Drop for Header {
     fn drop(&mut self) {
@@ -52,6 +56,7 @@ impl Drop for Header {
         match self {
             Self::Channel { token, .. } => token.zeroize(),
             Self::ResolvePageAction { capability, .. } => capability.zeroize(),
+            Self::ResolveAsset { .. } => (),
         }
     }
 }
@@ -281,6 +286,43 @@ impl Route {
         .await
         .context("Page action authority timed out")?
     }
+
+    pub async fn resolve_asset(
+        &self,
+        owner: &str,
+        id: &str,
+        fingerprint: blake3::Hash,
+    ) -> Result<assets::Location> {
+        let _permit = self
+            .outbound
+            .try_acquire()
+            .context("Replica forwarding capacity reached")?;
+        tokio::time::timeout(TIMEOUT, async {
+            let mut socket = self.connect(owner).await?;
+            send_header(
+                &mut socket,
+                &Header::ResolveAsset {
+                    asset_id: id.into(),
+                    fingerprint: fingerprint.to_hex().to_string(),
+                },
+            )
+            .await?;
+            ensure!(
+                socket.read_u16().await? == StatusCode::OK.as_u16(),
+                "Asset capability was refused"
+            );
+            let length = socket.read_u16().await? as usize;
+            ensure!(
+                length > 0 && length <= HEADER_LIMIT,
+                "Invalid asset reference"
+            );
+            let mut bytes = vec![0; length];
+            socket.read_exact(&mut bytes).await?;
+            Ok(serde_json::from_slice(&bytes)?)
+        })
+        .await
+        .context("Asset authority timed out")?
+    }
 }
 
 async fn send_header(socket: &mut UnixStream, header: &Header) -> Result<()> {
@@ -301,6 +343,26 @@ async fn receive(mut socket: UnixStream, host: &HostState) -> Result<()> {
     let mut bytes = zeroize::Zeroizing::new(vec![0; length]);
     socket.read_exact(&mut bytes).await?;
     let header: Header = serde_json::from_slice(&bytes)?;
+    if let Header::ResolveAsset {
+        asset_id,
+        fingerprint,
+    } = &header
+    {
+        match assets::resolve_peer(host, asset_id, fingerprint) {
+            Some(location) => {
+                let bytes = serde_json::to_vec(&location)?;
+                ensure!(
+                    bytes.len() <= HEADER_LIMIT,
+                    "Asset reference exceeds the limit"
+                );
+                socket.write_u16(StatusCode::OK.as_u16()).await?;
+                socket.write_u16(bytes.len() as u16).await?;
+                socket.write_all(&bytes).await?;
+            }
+            None => socket.write_u16(StatusCode::NOT_FOUND.as_u16()).await?,
+        }
+        return Ok(());
+    }
     if let Header::ResolvePageAction {
         scope,
         action_id,

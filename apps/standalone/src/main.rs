@@ -147,6 +147,12 @@ REST, MCP and daemon placements currently support one replica."#)]
         #[arg(long)]
         value_file: PathBuf,
     },
+    /// Serves one model for the agent's model host; the agent passes its configuration on stdin.
+    #[command(hide = true)]
+    ModelWorker {
+        #[arg(long, value_enum)]
+        engine: WorkerEngine,
+    },
     #[command(hide = true)]
     RunPlacement {
         placement: String,
@@ -163,6 +169,65 @@ REST, MCP and daemon placements currently support one replica."#)]
         #[arg(long)]
         placement_lock_fd: i32,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum WorkerEngine {
+    Onnx,
+    Mlx,
+}
+
+async fn run_model_worker(engine: WorkerEngine) -> Result<()> {
+    match engine {
+        #[cfg(feature = "runtime")]
+        WorkerEngine::Onnx => flow_like_standalone::models::engines::onnx::run_worker().await,
+        #[cfg(not(feature = "runtime"))]
+        WorkerEngine::Onnx => Err(anyhow::anyhow!(
+            "The ONNX model worker needs a binary built with the runtime feature"
+        )),
+        #[cfg(all(feature = "runtime", target_os = "macos", target_arch = "aarch64"))]
+        WorkerEngine::Mlx => flow_like_standalone::models::engines::mlx::run_worker().await,
+        #[cfg(not(all(feature = "runtime", target_os = "macos", target_arch = "aarch64")))]
+        WorkerEngine::Mlx => Err(anyhow::anyhow!(
+            "The MLX model worker needs an Apple-silicon Mac and a binary built with the runtime feature"
+        )),
+    }
+}
+
+/// Placements reach the host through `ModelHost::current`, so it starts before them. A host
+/// that cannot start leaves the agent running without models and shows as a stopped task.
+#[cfg(feature = "runtime")]
+async fn start_model_host(
+    state_dir: &Path,
+) -> Option<std::sync::Arc<flow_like_standalone::models::host::ModelHost>> {
+    use flow_like_standalone::models::host::{HostConfig, HostParts, ModelHost};
+    let diagnostics = diagnostics::global();
+    diagnostics.track(diagnostics::MODEL_HOST);
+    let started = async {
+        let config = HostConfig::from_state(state_dir)?;
+        let parts = HostParts::production(state_dir)?;
+        ModelHost::start(state_dir, config, parts).await
+    }
+    .await;
+    started
+        .inspect_err(|error| {
+            tracing::error!("The model host did not start; models stay unavailable: {error:#}");
+            diagnostics.stopped(
+                diagnostics::MODEL_HOST,
+                Some(diagnostics::TaskFailure::classify(error)),
+            );
+        })
+        .ok()
+}
+
+/// Engines stop and journaled downloads resume at the next start.
+#[cfg(feature = "runtime")]
+async fn stop_model_host(
+    host: Option<std::sync::Arc<flow_like_standalone::models::host::ModelHost>>,
+) {
+    if let Some(host) = host {
+        host.shutdown().await;
+    }
 }
 
 #[tokio::main]
@@ -198,6 +263,9 @@ async fn main() -> Result<()> {
             *placement_lock_fd,
         )
         .await;
+    }
+    if let Commands::ModelWorker { engine } = &cli.command {
+        return run_model_worker(*engine).await;
     }
     if matches!(cli.command, Commands::ReleaseInfo) {
         println!(
@@ -659,12 +727,14 @@ async fn main() -> Result<()> {
                     },
                 ));
             }
-            let result = supervisor::run_with_session_and_ready(
+            #[cfg(feature = "runtime")]
+            let mut model_host = None;
+            let result = supervisor::run_with_session_and_start(
                 &state_dir,
                 &std::env::current_exe()?,
                 cancel.clone(),
                 session.clone(),
-                || {
+                || async {
                     release::update::confirm_ready(
                         &state_dir,
                         session
@@ -673,7 +743,14 @@ async fn main() -> Result<()> {
                             .unwrap_or("unenrolled"),
                         &boot_id,
                         &run_id,
-                    )
+                    )?;
+                    // GPU probes must not delay the update watchdog's readiness signal.
+                    // Placements still wait until their model host is available.
+                    #[cfg(feature = "runtime")]
+                    {
+                        model_host = start_model_host(&state_dir).await;
+                    }
+                    Ok(())
                 },
             )
             .await;
@@ -684,13 +761,18 @@ async fn main() -> Result<()> {
                     tracing::error!("Background task monitor ended abnormally: {error}");
                 }
             }
+            #[cfg(feature = "runtime")]
+            stop_model_host(model_host).await;
             signal.abort();
             result?;
             // Failed host requests exit non-zero so the service manager restarts the workloads.
             flow_like_standalone::host::dispatch_reboot(&state_dir, &boot_id).await?;
             flow_like_standalone::host::dispatch_update(&state_dir, &boot_id).await?;
         }
-        Commands::RunPlacement { .. } | Commands::ReleaseInfo | Commands::UpdateGuard { .. } => {
+        Commands::RunPlacement { .. }
+        | Commands::ModelWorker { .. }
+        | Commands::ReleaseInfo
+        | Commands::UpdateGuard { .. } => {
             unreachable!()
         }
     }
@@ -733,6 +815,7 @@ async fn run_child(
         (!sandboxed).then(|| tokio::spawn(supervisor::watch_parent(parent_pid, cancel.clone())));
     #[cfg(feature = "runtime")]
     let result = {
+        flow_like_standalone::models::router::install_placement_router(broker.clone());
         let _ = flow_like_standalone::usage::snapshot();
         let mut usage_reporter = None;
         let usage_stop = tokio_util::sync::CancellationToken::new();

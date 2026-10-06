@@ -5,37 +5,41 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use zip::write::SimpleFileOptions;
 
-/// Read all files from a ZIP archive into memory.
+/// Read document parts without trusting the archive's declared sizes for allocation.
 pub fn read_zip(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
-    let cursor = Cursor::new(data);
-    let mut archive = zip::ZipArchive::new(cursor)?;
-    let mut files: HashMap<String, Vec<u8>> = HashMap::with_capacity(archive.len());
-
+    let mut archive = zip::ZipArchive::new(Cursor::new(data))?;
+    let mut files = HashMap::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let name = file.name().to_string();
-        let mut buf = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut buf)?;
-        files.insert(name, buf);
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        files.insert(name, bytes);
     }
-
     Ok(files)
+}
+
+/// Append once before the final closing tag. Repeated tags in malformed XML
+/// cannot multiply the inserted content.
+pub fn append_before_closing(xml: &mut String, closing: &str, content: &str) -> Result<()> {
+    if let Some(position) = xml.rfind(closing) {
+        xml.try_reserve(content.len())?;
+        xml.insert_str(position, content);
+    }
+    Ok(())
 }
 
 /// Write a map of files back into a ZIP archive.
 pub fn write_zip(files: &HashMap<String, Vec<u8>>) -> Result<Vec<u8>> {
-    let buf = Vec::new();
-    let cursor = Cursor::new(buf);
-    let mut zip_writer = zip::ZipWriter::new(cursor);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, data) in files {
-        zip_writer.start_file(name, options)?;
-        zip_writer.write_all(data)?;
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .large_file(data.len() as u64 > u32::MAX as u64);
+        writer.start_file(name, options)?;
+        writer.write_all(data)?;
     }
-
-    let cursor = zip_writer.finish()?;
-    Ok(cursor.into_inner())
+    Ok(writer.finish()?.into_inner())
 }
 
 /// Replace all occurrences of a placeholder in text within OpenXML body content.
@@ -917,3 +921,70 @@ fn normalize_path(path: &str) -> String {
 }
 
 type Result<T> = flow_like_types::Result<T>;
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    fn archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            writer
+                .start_file(
+                    *name,
+                    SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated),
+                )
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn accepts_normal_document_parts() {
+        let data = archive(&[("word/document.xml", b"<document>Hello</document>")]);
+        assert_eq!(
+            read_zip(&data).unwrap()["word/document.xml"],
+            b"<document>Hello</document>"
+        );
+    }
+
+    #[test]
+    fn large_high_ratio_parts_and_large_collections_remain_supported() {
+        let payload = vec![b'x'; 33 * 1024 * 1024];
+        let files = HashMap::from([("word/document.xml".to_string(), payload)]);
+        let data = write_zip(&files).unwrap();
+        assert_eq!(read_zip(&data).unwrap(), files);
+        let files: HashMap<_, _> = (0..4097)
+            .map(|i| (format!("part-{i}"), Vec::new()))
+            .collect();
+        assert_eq!(read_zip(&write_zip(&files).unwrap()).unwrap(), files);
+    }
+
+    #[test]
+    fn preserves_archive_keys_and_duplicate_last_entry_wins_behavior() {
+        assert_eq!(
+            read_zip(&archive(&[("../escape", b"x")])).unwrap()["../escape"],
+            b"x"
+        );
+        let long_name = "a".repeat(1025);
+        assert!(read_zip(&archive(&[(&long_name, b"x")])).is_ok());
+        let mut data = archive(&[("first", b"a"), ("other", b"b")]);
+        for i in 0..data.len().saturating_sub(4) {
+            if &data[i..i + 5] == b"other" {
+                data[i..i + 5].copy_from_slice(b"first");
+            }
+        }
+        assert_eq!(read_zip(&data).unwrap()["first"], b"b");
+        let files = HashMap::from([("../escape".to_string(), b"kept".to_vec())]);
+        assert_eq!(read_zip(&write_zip(&files).unwrap()).unwrap(), files);
+    }
+
+    #[test]
+    fn repeated_closing_tags_cannot_amplify_merge_insertions() {
+        let mut xml = "<root></root></root>".to_string();
+        append_before_closing(&mut xml, "</root>", "<part/>").unwrap();
+        assert_eq!(xml.matches("<part/>").count(), 1);
+    }
+}

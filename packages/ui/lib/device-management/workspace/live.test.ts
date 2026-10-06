@@ -1,12 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import type { ArtifactTransferStatus } from "../artifacts";
 import { waitForDeploymentRollout } from "../deployment";
 import type { InventoryWriter } from "../inventory";
+import type { ModelAssetStatus } from "../models";
 import {
 	ConnectError,
 	type ConnectProgress,
 	ManagementRequestNotSentError,
 	ManagementUnconfirmedError,
 } from "../transport";
+import type { DeviceServiceStream } from "../tunnel";
+import type {
+	DeviceTunnelDataClient,
+	TunnelModelAssetPush,
+} from "../tunnel-data";
 import type {
 	BrowserController,
 	DeviceReceipt,
@@ -37,6 +44,13 @@ interface Sent {
 }
 
 class FakeConn implements LiveConnection {
+	openService?: LiveConnection["openService"];
+	openModelGateway?: LiveConnection["openModelGateway"];
+	requestData?: LiveConnection["requestData"];
+	uploadArtifact?: LiveConnection["uploadArtifact"];
+	pushModelAsset?: LiveConnection["pushModelAsset"];
+	detachDataTunnel?: LiveConnection["detachDataTunnel"];
+	adoptDataTunnel?: LiveConnection["adoptDataTunnel"];
 	readonly transport = "websocket" as const;
 	readonly fallbackReason = "no_turn_servers" as const;
 	readonly bootId = "boot-1";
@@ -91,6 +105,21 @@ function completed(result: Record<string, unknown> = {}): ManagementResponse {
 	return { operation_id: "op", state: "completed", result };
 }
 
+function serviceStream() {
+	let resolve!: () => void;
+	let resets = 0;
+	const stream = {
+		closed: new Promise<void>((done) => {
+			resolve = done;
+		}),
+		reset() {
+			resets++;
+			resolve();
+		},
+	} as unknown as DeviceServiceStream;
+	return { stream, resets: () => resets, finish: () => resolve() };
+}
+
 function inspectPage(): ManagementResponse {
 	return completed({
 		device_id: DEVICE,
@@ -105,6 +134,7 @@ const defaultHandler: Handler = (command) =>
 	command.type === "inspect_page" ? inspectPage() : completed({ ok: true });
 
 class Env {
+	configureConnection?: (connection: FakeConn) => void;
 	nowMs = 1_700_000_000_000;
 	sent: Sent[] = [];
 	conns: FakeConn[] = [];
@@ -205,6 +235,7 @@ class Env {
 			this,
 		);
 		this.conns.push(conn);
+		this.configureConnection?.(conn);
 		return conn;
 	};
 }
@@ -256,6 +287,49 @@ function setup(configure: (env: Env) => void = () => {}) {
 const types = (env: Env) => env.sent.map((row) => row.command.type);
 
 describe("connecting", () => {
+	test("a grant change during the handshake closes the attempted connection", async () => {
+		const { env, manager } = setup((env) => {
+			env.configureConnection = () => {
+				env.grantId = "replacement-grant";
+			};
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		expect(env.conns).toHaveLength(1);
+		expect(env.conns[0].closed).toBe(true);
+		expect(env.inspected).toEqual([]);
+		manager.dispose();
+	});
+	test("a failed reconnect preserves safe connection diagnostics through the live-call wrapper", async () => {
+		const { env, manager } = setup((env) => {
+			env.outcomes.push(
+				new ConnectError(
+					"securing",
+					"handshake_failed",
+					"private native failure",
+					{
+						transport: "websocket",
+						fallbackReason: "ice_timeout",
+						url: "wss://private.example/ws/devices",
+					},
+				),
+			);
+		});
+		const error = await manager
+			.call(DEVICE)({ type: "artifact" })
+			.catch((error) => error);
+		expect(error).toBeInstanceOf(LiveCallError);
+		expect(error.diagnostic).toEqual({
+			transport: "websocket",
+			phase: "securing",
+			cause: "handshake_failed",
+			fallbackReason: "ice_timeout",
+		});
+		expect(JSON.stringify(error.diagnostic)).not.toContain("private");
+		expect(env.sent).toHaveLength(0);
+		manager.dispose();
+	});
+
 	test("demand connects, reports steps, reads services and feeds the saved inventory", async () => {
 		const { env, manager } = setup();
 		const states: string[] = [];
@@ -342,6 +416,254 @@ describe("connecting", () => {
 });
 
 describe("renewal", () => {
+	test("keeps service demand and adopts its tunnel across management renewal", async () => {
+		const { stream, resets, finish } = serviceStream();
+		const owner = { close: () => stream.reset() } as DeviceTunnelDataClient;
+		const adopted: DeviceTunnelDataClient[] = [];
+		const { env, manager } = setup((env) => {
+			env.outcomes = [120, 300];
+			env.configureConnection = (conn) => {
+				let held: DeviceTunnelDataClient | undefined =
+					conn.serial === 1 ? owner : undefined;
+				conn.openService = async () => stream;
+				conn.detachDataTunnel = () => {
+					const previous = held;
+					held = undefined;
+					return previous;
+				};
+				conn.adoptDataTunnel = (next) => {
+					held = next;
+					adopted.push(next);
+				};
+				const close = conn.close.bind(conn);
+				conn.close = () => {
+					held?.close();
+					close();
+				};
+			};
+		});
+		expect(
+			await manager.openService(DEVICE, "placement", "hosting", {
+				mode: "http",
+			}),
+		).toBe(stream);
+		await env.advance(75_000);
+		expect(env.conns).toHaveLength(2);
+		expect(adopted).toEqual([owner]);
+		expect(resets()).toBe(0);
+		finish();
+		await flush();
+		await env.advance(LIVE_TIMING.lingerMs);
+		expect(env.conns[1].closed).toBe(true);
+		manager.dispose();
+	});
+
+	for (const stop of ["close", "lock"] as const)
+		test(`service streams reset on explicit ${stop}`, async () => {
+			const { stream, resets } = serviceStream();
+			const { env, manager } = setup((env) => {
+				env.configureConnection = (conn) => {
+					conn.openService = async () => stream;
+					const close = conn.close.bind(conn);
+					conn.close = () => {
+						stream.reset();
+						close();
+					};
+				};
+			});
+			await manager.openService(DEVICE, "placement");
+			if (stop === "close") manager.close(DEVICE);
+			else env.setController(undefined);
+			await stream.closed;
+			await flush();
+			expect(resets()).toBeGreaterThan(0);
+			expect(env.conns).toHaveLength(1);
+			expect(env.conns[0].closed).toBe(true);
+			manager.dispose();
+		});
+
+	test("service completion releases demand after a late open is cancelled by close", async () => {
+		const { stream, resets } = serviceStream();
+		let opened!: (stream: DeviceServiceStream) => void;
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.openService = () =>
+					new Promise((done) => {
+						opened = done;
+					});
+			};
+		});
+		const pending = manager.openService(DEVICE, "placement");
+		await flush();
+		manager.close(DEVICE);
+		opened(stream);
+		await expect(pending).rejects.toThrow("session was closed");
+		expect(resets()).toBe(1);
+		await env.advance(LIVE_TIMING.lingerMs * 2);
+		expect(env.conns).toHaveLength(1);
+		manager.dispose();
+	});
+
+	test("a model gateway stream holds the session until it closes; an agent without model_host is never asked", async () => {
+		const { stream, finish } = serviceStream();
+		let opens = 0;
+		let features: Record<string, number> = { task_health: 1 };
+		const { env, manager } = setup((env) => {
+			env.handler = (command, conn) =>
+				command.type === "inspect_page"
+					? completed({ ...inspectPage().result, features })
+					: defaultHandler(command, conn);
+			env.configureConnection = (conn) => {
+				if (conn.serial > 1) return;
+				conn.openModelGateway = async () => {
+					opens++;
+					return stream;
+				};
+			};
+		});
+		const release = manager.acquire(DEVICE, "view");
+		await env.advance(0);
+		const refused = await manager
+			.openModelGateway(DEVICE)
+			.catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(LiveCallError);
+		expect(opens).toBe(0);
+		features = { task_health: 1, model_host: 1 };
+		await manager.refreshInspection(DEVICE);
+		expect(await manager.openModelGateway(DEVICE)).toBe(stream);
+		expect(opens).toBe(1);
+		release();
+		await env.advance(LIVE_TIMING.lingerMs * 2);
+		expect(env.conns[0].closed).toBe(false);
+		finish();
+		await flush();
+		await env.advance(LIVE_TIMING.lingerMs);
+		expect(env.conns[0].closed).toBe(true);
+		const older = await manager
+			.openModelGateway(DEVICE)
+			.catch((error: unknown) => error);
+		expect(older).toBeInstanceOf(Error);
+		expect((older as Error).message).toBe(
+			"Update Studio to send requests to models on devices.",
+		);
+		manager.dispose();
+	});
+
+	test("a model asset push goes over the session and holds it until the device answered", async () => {
+		const pushes: TunnelModelAssetPush[] = [];
+		let answer: (status: ModelAssetStatus) => void = () => {};
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				if (conn.serial > 1) return;
+				conn.pushModelAsset = (input) => {
+					pushes.push(input);
+					return new Promise((resolve) => {
+						answer = resolve;
+					});
+				};
+			};
+		});
+		const input = { jobId: "12345678-1234-4234-8234-123456789abc", offset: 0 };
+		const pushing = manager.pushModelAsset(DEVICE, input);
+		await env.advance(LIVE_TIMING.lingerMs * 2);
+		expect(pushes).toEqual([input]);
+		expect(env.conns[0].closed).toBe(false);
+		const present: ModelAssetStatus = {
+			digest: { algorithm: "sha256", hex: "a".repeat(64) },
+			state: "present",
+		};
+		answer(present);
+		expect(await pushing).toEqual(present);
+		await env.advance(LIVE_TIMING.lingerMs);
+		expect(env.conns[0].closed).toBe(true);
+		const older = await manager
+			.pushModelAsset(DEVICE, input)
+			.catch((error: unknown) => error);
+		expect((older as Error).message).toBe(
+			"This device connection does not support streamed uploads.",
+		);
+		env.setController(undefined);
+		const locked = await manager
+			.pushModelAsset(DEVICE, input)
+			.catch((error: unknown) => error);
+		expect(locked).toBeInstanceOf(LiveCallError);
+		expect(pushes).toHaveLength(1);
+		manager.dispose();
+	});
+
+	test("service opening does not proceed after cancellation while connecting", async () => {
+		const controller = new AbortController();
+		let opens = 0;
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.openService = async () => {
+					opens++;
+					return serviceStream().stream;
+				};
+			};
+		});
+		const pending = manager.openService(DEVICE, "placement", "hosting", {
+			signal: controller.signal,
+		});
+		controller.abort();
+		await expect(pending).rejects.toThrow();
+		expect(opens).toBe(0);
+		await env.advance(LIVE_TIMING.lingerMs);
+		expect(env.conns.every((conn) => conn.closed)).toBe(true);
+		manager.dispose();
+	});
+
+	test("hands the bulk session to the replacement connection while an upload runs", async () => {
+		let ended = false;
+		let complete: (value: ArtifactTransferStatus) => void = () => {};
+		const transfer = new Promise<ArtifactTransferStatus>((resolve) => {
+			complete = resolve;
+		});
+		const owner = {
+			close() {
+				ended = true;
+			},
+		} as DeviceTunnelDataClient;
+		const { env, manager } = setup((env) => {
+			env.outcomes = [120, 300];
+			env.configureConnection = (conn) => {
+				let held: DeviceTunnelDataClient | undefined =
+					conn.serial === 1 ? owner : undefined;
+				conn.uploadArtifact = () => transfer;
+				conn.detachDataTunnel = () => {
+					const previous = held;
+					held = undefined;
+					return previous;
+				};
+				conn.adoptDataTunnel = (next) => {
+					held = next;
+				};
+				const close = conn.close.bind(conn);
+				conn.close = () => {
+					held?.close();
+					close();
+				};
+			};
+		});
+		const uploading = manager.uploadArtifact(DEVICE, {
+			projectId: "project",
+			transferId: "transfer",
+			fileIndex: 0,
+			offset: 0,
+			file: new Blob(["data"]),
+		});
+		await env.advance(0);
+		await manager.call(DEVICE)({ type: "stop", placement_id: "service" });
+		expect(types(env)).toContain("stop");
+		await env.advance(75_000);
+		expect(env.conns).toHaveLength(2);
+		expect(env.conns[0].closed).toBe(true);
+		expect(ended).toBe(false);
+		complete({ transfer_id: "transfer" } as ArtifactTransferStatus);
+		await uploading;
+		manager.close(DEVICE);
+		expect(ended).toBe(true);
+	});
 	test("renews 45 s before expiry, break-then-make, and holds requests meanwhile", async () => {
 		const { env, manager } = setup((env) => {
 			env.outcomes = [120, 300];
@@ -462,6 +784,126 @@ describe("reconnecting", () => {
 });
 
 describe("request queue", () => {
+	test("exclusive sections wait for active data reads while ordinary controls can proceed", async () => {
+		let release: () => void = () => {};
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.requestData = async (command) => {
+					if (command.type === "inspect_page") return inspectPage();
+					await blocked;
+					return completed();
+				};
+			};
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		const read = manager.call(DEVICE)({ type: "logs" });
+		await flush();
+		let entered = false;
+		const exclusive = manager.exclusive(DEVICE, async () => {
+			entered = true;
+		});
+		await manager.call(DEVICE)({ type: "metrics" });
+		expect(entered).toBe(false);
+		release();
+		await read;
+		await exclusive;
+		expect(entered).toBe(true);
+		manager.dispose();
+	});
+	test("bulk reads leave the control lane available and cap concurrent data requests", async () => {
+		let release: () => void = () => {};
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let running = 0;
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.requestData = async (command) => {
+					if (command.type === "inspect_page") return inspectPage();
+					running++;
+					await blocked;
+					return completed({ lines: [] });
+				};
+			};
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		const reads = Array.from({ length: 9 }, (_, index) =>
+			manager.call(DEVICE)({ type: "logs", placement_id: `service-${index}` }),
+		);
+		await flush();
+		expect(running).toBe(8);
+		await manager.call(DEVICE)({ type: "stop", placement_id: "service" });
+		expect(types(env)).toContain("stop");
+		expect(running).toBe(8);
+		release();
+		await Promise.all(reads);
+		expect(running).toBe(9);
+		manager.dispose();
+	});
+	test("model statistics take the data stream; other models commands the management connection", async () => {
+		const bulk: Record<string, unknown>[] = [];
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.requestData = async (command) => {
+					if (command.type === "inspect_page") return inspectPage();
+					bulk.push(command);
+					return completed();
+				};
+			};
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		const stats = {
+			type: "models",
+			request: { kind: "stats", from: 3_600, to: 7_200, step: "hour" },
+		};
+		const overview = { type: "models", request: { kind: "overview" } };
+		await manager.call(DEVICE, { lane: "poll" })(stats);
+		await manager.call(DEVICE, { lane: "poll" })(overview);
+		expect(bulk).toEqual([stats]);
+		expect(env.sent.map((row) => row.command)).toEqual([overview]);
+		manager.dispose();
+	});
+	test("a models read is retried once after a lost reply; a models write never is", async () => {
+		const { env, manager } = setup();
+		manager.acquire(DEVICE, "view");
+		await env.advance(0);
+		const lost = new Set<string>();
+		const kindOf = (command: Record<string, unknown>) =>
+			String((command.request as { kind?: unknown } | undefined)?.kind);
+		env.handler = (command, conn, operationId) => {
+			const kind = kindOf(command);
+			if (command.type !== "models" || lost.has(kind))
+				return defaultHandler(command, conn);
+			lost.add(kind);
+			conn.close();
+			throw new ManagementUnconfirmedError(operationId ?? kind);
+		};
+		const read = await manager.call(DEVICE)({
+			type: "models",
+			request: { kind: "jobs", after: null, limit: 16 },
+		});
+		expect(read.state).toBe("completed");
+		const write = await manager
+			.call(DEVICE)({
+				type: "models",
+				request: { kind: "unload", model_id: "qwen" },
+			})
+			.catch((error: unknown) => error);
+		expect(write).toBeInstanceOf(ManagementUnconfirmedError);
+		const sent = env.sent.filter((row) => row.command.type === "models");
+		expect(sent.map((row) => kindOf(row.command))).toEqual([
+			"jobs",
+			"jobs",
+			"unload",
+		]);
+		manager.dispose();
+	});
 	test("a Stop click passes a 90 MiB upload within one 8 KiB chunk", async () => {
 		const chunks = (90 * 1024 * 1024) / (8 * 1024);
 		const { env, manager } = setup();
@@ -600,6 +1042,58 @@ describe("request queue", () => {
 });
 
 describe("delivery guarantees", () => {
+	test("an upload waiting for its session cannot start after an explicit close", async () => {
+		let uploads = 0;
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.uploadArtifact = async () => {
+					uploads++;
+					return {} as ArtifactTransferStatus;
+				};
+			};
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		const uploading = manager
+			.uploadArtifact(DEVICE, {
+				projectId: "project",
+				transferId: "transfer",
+				fileIndex: 0,
+				offset: 0,
+				file: new Blob(),
+			})
+			.catch((error) => error);
+		manager.close(DEVICE);
+		expect(await uploading).toBeInstanceOf(LiveCallError);
+		expect(uploads).toBe(0);
+		manager.dispose();
+	});
+	test("explicit close does not reconnect to retry an active data read", async () => {
+		let rejectRead: (error: Error) => void = () => {};
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.requestData = async (command) => {
+					if (command.type === "inspect_page") return inspectPage();
+					return new Promise((_, reject) => {
+						rejectRead = reject;
+					});
+				};
+			};
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		const read = manager
+			.call(DEVICE)({ type: "logs" })
+			.catch((error) => error);
+		await flush();
+		manager.close(DEVICE);
+		rejectRead(new ManagementUnconfirmedError("read"));
+		expect(await read).toBeInstanceOf(LiveCallError);
+		await env.advance(60_000);
+		expect(env.conns).toHaveLength(1);
+		expect(manager.state(DEVICE).kind).toBe("idle");
+		manager.dispose();
+	});
 	test("a request that was not sent is retried once on the next session", async () => {
 		const { env, manager } = setup();
 		manager.acquire(DEVICE, "view");
@@ -739,6 +1233,32 @@ describe("delivery guarantees", () => {
 });
 
 describe("inspection cache and demand", () => {
+	test("a reply completing in the lock turn cannot repopulate the cleared inspection", async () => {
+		let waiting = false;
+		let reply: (value: ManagementResponse) => void = () => {};
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.requestData = async () =>
+					waiting
+						? new Promise((resolve) => {
+								reply = resolve;
+							})
+						: inspectPage();
+			};
+		});
+		manager.acquire(DEVICE, "view");
+		await env.advance(0);
+		expect(env.inspected).toHaveLength(1);
+		waiting = true;
+		const refreshing = manager.refreshInspection(DEVICE);
+		await flush();
+		reply(inspectPage());
+		env.setController(undefined);
+		await refreshing;
+		expect(manager.inspection(DEVICE)).toBeUndefined();
+		expect(env.inspected).toHaveLength(1);
+		manager.dispose();
+	});
 	test("re-reads after a state-changing user command and every 20 s under view demand", async () => {
 		const { env, manager } = setup();
 		manager.acquire(DEVICE, "view");

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	CAPABILITIES,
+	KNOWN_CAPABILITIES,
+	PERMISSION_PRESETS,
+	orderCapabilities,
+} from "./model/permissions";
+import {
 	ACCESS_FILE_MAX_BYTES,
 	ACCESS_RULES_LIFETIME_S,
 	type AccessChange,
@@ -10,6 +16,7 @@ import {
 	accessRequestFileName,
 	accessRequestFileText,
 	accessRulesOf,
+	agentSupportOf,
 	capabilityDiff,
 	changeEntries,
 	connectionFileText,
@@ -21,11 +28,13 @@ import {
 	mergeRecipientGrants,
 	needsTrustConfirmation,
 	nextAccessRules,
+	offeredPreset,
 	parseAccessRequestFile,
 	parseConnectionFile,
 	parseHostIsolation,
 	permissionBlock,
 	policyDigest,
+	presetCapabilities,
 	renewalOptions,
 	requestFileDevice,
 	requestKeysState,
@@ -394,26 +403,158 @@ describe("connection files", () => {
 });
 
 describe("permissions", () => {
+	const certificates = (value: boolean | undefined) => ({
+		certificates: value,
+		features: {},
+	});
+
 	test("device-wide permissions need whole-device access; certificates need agent support unless already held", () => {
-		expect(permissionBlock("reboot", "project", true)).toBe("device_only");
-		expect(permissionBlock("update_agent", "placement", true)).toBe(
+		expect(permissionBlock("reboot", "project", certificates(true))).toBe(
 			"device_only",
-		);
-		expect(permissionBlock("reboot", "device", undefined)).toBeNull();
-		expect(permissionBlock("manage_certificates", "device", true)).toBeNull();
-		expect(permissionBlock("manage_certificates", "device", false)).toBe(
-			"certificates_unsupported",
-		);
-		expect(permissionBlock("manage_certificates", "device", undefined)).toBe(
-			"certificates_unknown",
 		);
 		expect(
-			permissionBlock("manage_certificates", "device", false, true),
+			permissionBlock("update_agent", "placement", certificates(true)),
+		).toBe("device_only");
+		expect(
+			permissionBlock("reboot", "device", certificates(undefined)),
 		).toBeNull();
-		expect(permissionBlock("manage_certificates", "project", true, true)).toBe(
-			"device_only",
+		expect(
+			permissionBlock("manage_certificates", "device", certificates(true)),
+		).toBeNull();
+		expect(
+			permissionBlock("manage_certificates", "device", certificates(false)),
+		).toBe("certificates_unsupported");
+		expect(
+			permissionBlock("manage_certificates", "device", certificates(undefined)),
+		).toBe("certificates_unknown");
+		expect(
+			permissionBlock(
+				"manage_certificates",
+				"device",
+				certificates(false),
+				true,
+			),
+		).toBeNull();
+		expect(
+			permissionBlock(
+				"manage_certificates",
+				"project",
+				certificates(true),
+				true,
+			),
+		).toBe("device_only");
+		expect(
+			permissionBlock("deploy", "project", certificates(false)),
+		).toBeNull();
+	});
+
+	test("model permissions need an agent that hosts models, unless already held, and the whole device", () => {
+		const hosts = {
+			certificates: true,
+			features: { model_host: 1 as const },
+			supportedCapabilities: KNOWN_CAPABILITIES,
+		};
+		const older = { certificates: true, features: { model_store: 1 as const } };
+		const unread = { certificates: undefined, features: undefined };
+		expect(permissionBlock("model_use", "device", hosts)).toBeNull();
+		expect(permissionBlock("model_manage", "device", hosts)).toBeNull();
+		expect(permissionBlock("model_use", "device", older)).toBe(
+			"models_unsupported",
 		);
-		expect(permissionBlock("deploy", "project", false)).toBeNull();
+		expect(permissionBlock("model_manage", "device", unread)).toBe(
+			"models_unknown",
+		);
+		expect(permissionBlock("model_use", "device", older, true)).toBeNull();
+		expect(permissionBlock("model_use", "project", hosts)).toBe("device_only");
+		expect(permissionBlock("status", "device", unread)).toBeNull();
+	});
+
+	test("Device admin is every permission the agents accept; other presets don't change", () => {
+		const hosts = { model_host: 1 as const };
+		expect(
+			presetCapabilities("device_admin", hosts, KNOWN_CAPABILITIES),
+		).toEqual(KNOWN_CAPABILITIES);
+		expect(
+			presetCapabilities("device_admin", hosts, KNOWN_CAPABILITIES),
+		).toContain("model_manage");
+		expect(presetCapabilities("device_admin", {})).toEqual(CAPABILITIES);
+		expect(presetCapabilities("device_admin", undefined)).toEqual(CAPABILITIES);
+		expect(presetCapabilities("model_user", hosts)).toEqual(["model_use"]);
+		expect(presetCapabilities("viewer", hosts)).toEqual(
+			PERMISSION_PRESETS.viewer,
+		);
+	});
+
+	test("the offered preset matches exactly what the agents' Device admin or Model user would give", () => {
+		const hosts = { model_host: 1 as const };
+		expect(offeredPreset(KNOWN_CAPABILITIES, hosts, KNOWN_CAPABILITIES)).toBe(
+			"device_admin",
+		);
+		expect(offeredPreset(CAPABILITIES, hosts, KNOWN_CAPABILITIES)).toBe(
+			"custom",
+		);
+		expect(offeredPreset(CAPABILITIES, {})).toBe("device_admin");
+		expect(offeredPreset(["model_use"], hosts, KNOWN_CAPABILITIES)).toBe(
+			"model_user",
+		);
+		expect(offeredPreset(["model_use"], undefined)).toBe("custom");
+		expect(offeredPreset(["metrics", "logs", "status"], hosts)).toBe("viewer");
+		expect(offeredPreset([], hosts)).toBe("custom");
+	});
+
+	test("a grant to several devices gets only what every agent accepts", () => {
+		const hosts = {
+			certificateSupport: true,
+			features: { model_host: 1 as const, model_store: 1 as const },
+		};
+		const older = {
+			certificateSupport: true,
+			features: { model_store: 1 as const },
+		};
+		expect(agentSupportOf([hosts, older])).toEqual({
+			certificates: true,
+			features: { model_store: 1 },
+			supportedCapabilities: CAPABILITIES,
+		});
+		expect(agentSupportOf([hosts]).features).toEqual(hosts.features);
+		expect(agentSupportOf([hosts, {}])).toEqual({
+			certificates: undefined,
+			features: undefined,
+			supportedCapabilities: CAPABILITIES,
+		});
+		expect(
+			agentSupportOf([hosts, { certificateSupport: false, features: {} }]),
+		).toEqual({
+			certificates: false,
+			features: {},
+			supportedCapabilities: CAPABILITIES,
+		});
+		expect(agentSupportOf([]).features).toBeUndefined();
+	});
+
+	test("hub support intersects across targets and preserves already held permissions", () => {
+		const host = {
+			features: { model_host: 1 as const },
+			supportedCapabilities: KNOWN_CAPABILITIES,
+		};
+		const supported = agentSupportOf([host]);
+		expect(permissionBlock("model_use", "device", supported)).toBeNull();
+		const mixed = agentSupportOf([
+			host,
+			{ ...host, supportedCapabilities: undefined },
+		]);
+		expect(mixed.supportedCapabilities).toEqual(CAPABILITIES);
+		expect(permissionBlock("model_use", "device", mixed)).toBe(
+			"hub_models_unsupported",
+		);
+		expect(permissionBlock("model_use", "device", mixed, true)).toBeNull();
+		expect(
+			presetCapabilities(
+				"device_admin",
+				mixed.features,
+				mixed.supportedCapabilities,
+			),
+		).toEqual(CAPABILITIES);
 	});
 
 	test("a narrower scope drops device-wide permissions and keeps the display order", () => {
@@ -779,6 +920,64 @@ describe("saving a new version", () => {
 				}),
 			),
 		).toBe("too_many");
+	});
+
+	test("a permission a newer client gave is never dropped: renewing or keeping its grant is refused, removing it is not", () => {
+		const newer = grant({
+			grant_id: "mira",
+			user_id: "mira",
+			capabilities: ["status", "unsupported" as never],
+		});
+		const jonas = grant({ grant_id: "jonas", user_id: "jonas" });
+		const draft = {
+			deviceId: DEVICE,
+			view: view(5),
+			policy: policy(5, [newer, jonas]),
+			now: NOW,
+		};
+		const renewed = { ...newer, expires_at: NOW + 2 * DAY };
+		expect(
+			codeOf(() => nextAccessRules({ ...draft, upserts: [renewed] })),
+		).toBe("unknown_permissions");
+		const unseen = {
+			...newer,
+			capabilities: orderCapabilities(newer.capabilities),
+		};
+		expect(codeOf(() => nextAccessRules({ ...draft, upserts: [unseen] }))).toBe(
+			"unknown_permissions",
+		);
+		expect(
+			codeOf(() =>
+				nextAccessRules({
+					...draft,
+					upserts: [{ ...jonas, capabilities: ["status", "logs"] }],
+				}),
+			),
+		).toBe("unknown_permissions");
+		expect(
+			nextAccessRules({ ...draft, removeIds: ["mira"] }).grants.map(
+				(row) => row.grant_id,
+			),
+		).toEqual(["jonas"]);
+		const ended = { ...newer, expires_at: NOW - 10 };
+		const lapsed = { ...draft, policy: policy(5, [ended, jonas]) };
+		expect(
+			codeOf(() =>
+				nextAccessRules({
+					...lapsed,
+					upserts: [
+						{
+							...ended,
+							capabilities: ["status"],
+							expires_at: NOW + DAY,
+						},
+					],
+				}),
+			),
+		).toBe("unknown_permissions");
+		expect(nextAccessRules(lapsed).grants.map((row) => row.grant_id)).toEqual([
+			"jonas",
+		]);
 	});
 
 	test("the change log names what a save did per person and skips what stayed the same", () => {

@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import {
 	IBitTypes,
 	IRole,
+	deviceOfModelBit,
 	isFreeLlmModel,
 	isHostedLlmModel,
 	selectProfileLlmModels,
@@ -144,6 +145,7 @@ import {
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
+import { DeviceModelBadge } from "../settings/devices/models/use/device-model-badge";
 import {
 	FlowPilotEmptyState,
 	type IEmptyStateSuggestion,
@@ -447,15 +449,24 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
-	const { canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders } =
-		backend.capabilities();
+	const {
+		canHostLlamaCPP,
+		canHostMLX,
+		canUseNativeAgentProviders,
+		deviceModels,
+	} = backend.capabilities();
 	const bitsModels = useMemo(
 		() =>
 			selectProfileLlmModels(
 				llmBits.data,
 				customBits.data,
 				settingsProfile.data?.hub_profile.bits,
-				{ canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders },
+				{
+					canHostLlamaCPP,
+					canHostMLX,
+					canUseNativeAgentProviders,
+					deviceModels,
+				},
 			),
 		[
 			llmBits.data,
@@ -464,6 +475,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			canHostLlamaCPP,
 			canHostMLX,
 			canUseNativeAgentProviders,
+			deviceModels,
 		],
 	);
 
@@ -1309,6 +1321,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						id: bit.id,
 						label: bit.meta?.en?.name ?? bit.id,
 						isFree: isFreeLlmModel(bit),
+						deviceId: deviceOfModelBit(bit),
 					})),
 		[isAgent, copilotSDK.models, bitsModels],
 	);
@@ -1555,6 +1568,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
 								>
 									<span className="flex-1 truncate">{option.label}</span>
+									{option.deviceId ? (
+										<DeviceModelBadge deviceId={option.deviceId} />
+									) : null}
 									{active && <CheckIcon className="size-3.5 shrink-0" />}
 								</button>
 							);

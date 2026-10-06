@@ -73,6 +73,13 @@ impl ToProto<flow_like_types::proto::EventInput> for EventInput {
             default_value: self.default_value.clone(),
             index: self.index as u32,
             optional: self.optional,
+            sensitive: self.sensitive,
+            valid_values: self.valid_values.clone().unwrap_or_default(),
+            range_min: self.range.map(|(min, _)| min),
+            range_max: self.range.map(|(_, max)| max),
+            step: self.step,
+            default_omitted: self.default_omitted,
+            inputs_format: self.inputs_format,
         }
     }
 }
@@ -90,6 +97,12 @@ impl FromProto<flow_like_types::proto::EventInput> for EventInput {
             default_value: proto.default_value,
             optional: proto.optional,
             index: proto.index as u16,
+            sensitive: proto.sensitive,
+            valid_values: (!proto.valid_values.is_empty()).then_some(proto.valid_values),
+            range: proto.range_min.zip(proto.range_max),
+            step: proto.step,
+            default_omitted: proto.default_omitted,
+            inputs_format: proto.inputs_format,
         }
     }
 }
@@ -281,5 +294,91 @@ impl FromProto<flow_like_types::proto::Canary> for CanaryEvent {
                 .map(|t| SystemTime::try_from(t).unwrap_or(SystemTime::UNIX_EPOCH))
                 .unwrap_or(SystemTime::UNIX_EPOCH),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::event::EVENT_INPUTS_FORMAT;
+    use flow_like_types::Message;
+
+    fn input() -> EventInput {
+        EventInput {
+            id: "pin-ratio".into(),
+            name: "ratio".into(),
+            friendly_name: "Ratio".into(),
+            description: "How much of it".into(),
+            data_type: "Float".into(),
+            value_type: "Normal".into(),
+            schema: None,
+            default_value: Some(b"1.5".to_vec()),
+            optional: true,
+            index: 2,
+            sensitive: false,
+            valid_values: Some(vec!["0.5".into(), "1.5".into()]),
+            range: Some((0.0, 2.0)),
+            step: Some(0.5),
+            default_omitted: false,
+            inputs_format: EVENT_INPUTS_FORMAT,
+        }
+    }
+
+    fn through_the_wire(input: &EventInput) -> EventInput {
+        let bytes = input.to_proto().encode_to_vec();
+        let proto = flow_like_types::proto::EventInput::decode(bytes.as_slice())
+            .expect("decode a stored event input");
+        EventInput::from_proto(proto)
+    }
+
+    #[test]
+    fn event_input_round_trips_through_proto() {
+        let options = input();
+        assert_eq!(through_the_wire(&options), options);
+
+        let secret = EventInput {
+            default_value: None,
+            sensitive: true,
+            default_omitted: true,
+            valid_values: None,
+            range: None,
+            step: None,
+            ..input()
+        };
+        assert_eq!(through_the_wire(&secret), secret);
+    }
+
+    #[test]
+    fn event_input_proto_reads_empty_lists_and_half_ranges_as_absent() {
+        let empty = EventInput {
+            valid_values: Some(Vec::new()),
+            ..input()
+        };
+        assert_eq!(through_the_wire(&empty).valid_values, None);
+
+        let mut half = input().to_proto();
+        half.range_max = None;
+        assert_eq!(EventInput::from_proto(half).range, None);
+    }
+
+    #[test]
+    fn event_input_proto_stored_before_the_format_reads_as_format_zero() {
+        let stored = flow_like_types::proto::EventInput {
+            id: "pin-title".into(),
+            name: "title".into(),
+            friendly_name: "Title".into(),
+            description: "16248035215404677707".into(),
+            data_type: "String".into(),
+            value_type: "Normal".into(),
+            index: 1,
+            ..Default::default()
+        };
+        let input = EventInput::from_proto(stored);
+        assert_eq!(input.inputs_format, 0);
+        assert!(!input.sensitive && !input.default_omitted);
+        assert_eq!(
+            (input.valid_values, input.range, input.step),
+            (None, None, None)
+        );
     }
 }

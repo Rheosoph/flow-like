@@ -34,52 +34,22 @@ use axum::{
 
 pub use server::ServerRegistry;
 
-/// Check that the caller has at least the given `WasmPackagePermission` on a
-/// package. A grant is read from the in-memory permission cache (120 s TTL);
-/// a caller without one is looked up in the DB every time, because access can
-/// be granted on another API process. Returns the resolved
-/// `WasmPackagePermission` on success.
-///
-/// Usage:
-/// ```ignore
-/// let perm = ensure_wasm_permission!(state, &user_id, &package_id, WasmPackagePermission::Maintainer);
-/// ```
+/// Resolve package authority from the database on each request. Grants can be
+/// revoked on another API replica, so a process-local cache cannot authorize.
 #[macro_export]
 macro_rules! ensure_wasm_permission {
     ($state:expr, $user_id:expr, $package_id:expr, $required:expr) => {{
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-        use $crate::entity::wasm_package_user;
         use $crate::permission::wasm_package_permission::WasmPackagePermission;
-
-        let perm = if let Some(cached) = $state.check_wasm_permission($user_id, $package_id) {
-            cached
-        } else {
-            let record = wasm_package_user::Entity::find()
-                .filter(wasm_package_user::Column::PackageId.eq($package_id))
-                .filter(wasm_package_user::Column::UserId.eq($user_id))
-                .one(&$state.db)
-                .await
-                .map_err(|e| $crate::error::ApiError::internal(format!("DB error: {}", e)))?;
-
-            let resolved = record
-                .map(|u| WasmPackagePermission::from_bits_truncate(u.permission))
-                .unwrap_or(WasmPackagePermission::empty());
-
-            $state.put_wasm_permission($user_id, $package_id, resolved);
-            resolved
-        };
-
+        let perm = $crate::check_wasm_access!($state, $user_id, $package_id)
+            .unwrap_or(WasmPackagePermission::empty());
         if !perm.has_permission($required) {
-            $state.invalidate_wasm_permission($user_id, $package_id);
             return Err($crate::error::ApiError::FORBIDDEN);
         }
         perm
     }};
 }
 
-/// Check whether the caller has *any* permission record on a package (i.e. is
-/// a package user at all). Returns `Option<WasmPackagePermission>`.
-/// Does **not** fail on missing permission — the caller decides what to do.
+/// Return the caller's current package grant, if any.
 #[macro_export]
 macro_rules! check_wasm_access {
     ($state:expr, $user_id:expr, $package_id:expr) => {{
@@ -87,36 +57,20 @@ macro_rules! check_wasm_access {
         use $crate::entity::wasm_package_user;
         use $crate::permission::wasm_package_permission::WasmPackagePermission;
 
-        if let Some(cached) = $state.check_wasm_permission($user_id, $package_id) {
-            if cached.is_empty() {
-                None
-            } else {
-                Some(cached)
-            }
-        } else {
-            let record = wasm_package_user::Entity::find()
-                .filter(wasm_package_user::Column::PackageId.eq($package_id))
-                .filter(wasm_package_user::Column::UserId.eq($user_id))
-                .one(&$state.db)
-                .await
-                .map_err(|e| $crate::error::ApiError::internal(format!("DB error: {}", e)))?;
-
-            let resolved = record
-                .map(|u| WasmPackagePermission::from_bits_truncate(u.permission))
-                .unwrap_or(WasmPackagePermission::empty());
-
-            $state.put_wasm_permission($user_id, $package_id, resolved);
-            if resolved.is_empty() {
-                None
-            } else {
-                Some(resolved)
-            }
-        }
+        let record = wasm_package_user::Entity::find()
+            .filter(wasm_package_user::Column::PackageId.eq($package_id))
+            .filter(wasm_package_user::Column::UserId.eq($user_id))
+            .one(&$state.db)
+            .await
+            .map_err(|e| $crate::error::ApiError::internal(format!("DB error: {}", e)))?;
+        record
+            .map(|u| WasmPackagePermission::from_bits_truncate(u.permission))
+            .filter(|permission| !permission.is_empty())
     }};
 }
 
 /// Whether the viewer manages the package (maintainer or owner) and therefore
-/// sees its unapproved versions. Resolved through the permission cache.
+/// sees its unapproved versions. Uses the current database grant.
 pub(crate) async fn viewer_can_manage(
     state: &AppState,
     viewer_sub: Option<&str>,

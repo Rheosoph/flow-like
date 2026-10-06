@@ -1,8 +1,8 @@
 //! Resolves [`DispatchPayloadRef`] into a concrete [`DispatchPayload`].
 //!
 //! Queue-based runtimes (SQS → Lambda, EventBridge → ECS) may receive
-//! either an inline payload or a presigned URL pointing to the full payload
-//! in object storage. This module transparently handles both cases.
+//! either an inline payload or a signed reference to the full payload in object
+//! storage. Remote references bind the URL and content hash to the worker JWT.
 
 use flow_like_types::dispatch::{DispatchPayload, DispatchPayloadRef};
 use std::sync::OnceLock;
@@ -30,7 +30,7 @@ pub fn max_remote_payload_bytes() -> u64 {
 /// Resolve a [`DispatchPayloadRef`] into a [`DispatchPayload`].
 ///
 /// - `Inline` → returned as-is.
-/// - `Remote` → fetches the JSON from the presigned URL and deserialises it.
+/// - `Remote` → validates the reference, fetches bounded JSON, and checks its hash.
 pub async fn resolve_payload(
     payload_ref: DispatchPayloadRef,
 ) -> Result<DispatchPayload, ResolveError> {
@@ -41,7 +41,25 @@ pub async fn resolve_payload(
             // query string, so it must never appear in logs.
             tracing::info!("Fetching remote dispatch payload");
 
-            let body = fetch_bounded(&remote_url, max_remote_payload_bytes()).await?;
+            let (url, proof) = flow_like_types::dispatch::split_claim_check_url(&remote_url)
+                .ok_or_else(|| {
+                    ResolveError::Deserialize("Unsigned claim-check reference".into())
+                })?;
+            let claims = crate::jwt::verify_claim_check(proof)
+                .await
+                .map_err(|_| ResolveError::Fetch("Invalid claim-check signature".to_string()))?;
+            let binding = claims.claim_check;
+            if !binding.matches_url(url) {
+                return Err(ResolveError::Deserialize(
+                    "Invalid claim-check URL binding".into(),
+                ));
+            }
+            let body = fetch_bounded(url, max_remote_payload_bytes()).await?;
+            if !binding.matches_body(&body) {
+                return Err(ResolveError::Deserialize(
+                    "Claim-check content hash mismatch".to_string(),
+                ));
+            }
             serde_json::from_slice(&body).map_err(|e| ResolveError::Deserialize(e.to_string()))
         }
     }

@@ -9,6 +9,10 @@
  *   bun run scripts/update-llama-server.ts --tag b10809     # fetches a specific build
  *   bun run scripts/update-llama-server.ts --platform mac-arm  # single platform
  *
+ * Every archive must match its size and sha256 in ARCHIVE_PINS. A build without
+ * pins is refused before anything is downloaded, so --latest and --tag need new
+ * pins first.
+ *
  * Environment:
  *   GITHUB_TOKEN  — optional, avoids rate limits
  *
@@ -19,6 +23,7 @@
  */
 
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +35,40 @@ const REPO = "llama.cpp";
 const NIGHTLY_TAG_ASSET = "nightly-tag.txt";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const BINARIES_DIR = path.resolve(SCRIPT_DIR, "../src-tauri/binaries");
+
+interface ArchivePin {
+	readonly size: number;
+	readonly sha256: string;
+}
+
+/**
+ * Upstream archives by asset name: GitHub's digests for b10809, the macOS and
+ * Linux ones re-hashed after download on 2026-10-05. .github/scripts/runtime_packs.py
+ * pins the same macOS and Linux archives for device runtime packs; its tests
+ * fail when the two disagree.
+ */
+const ARCHIVE_PINS: Readonly<Partial<Record<string, ArchivePin>>> = {
+	"llama-b10809-bin-macos-arm64.tar.gz": {
+		size: 11123196,
+		sha256: "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2",
+	},
+	"llama-b10809-bin-macos-x64.tar.gz": {
+		size: 11175330,
+		sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+	},
+	"llama-b10809-bin-win-vulkan-x64.zip": {
+		size: 35221385,
+		sha256: "97e50b3ef0cdd2cb4d5afd446a9006b3496bee6c0d0ba7083d32f36075771870",
+	},
+	"llama-b10809-bin-win-cpu-arm64.zip": {
+		size: 11974499,
+		sha256: "c1058fe5764a687275c8d20d6bbc1454e787cdbb8ebb8c37a2f959f2b144dc77",
+	},
+	"llama-b10809-bin-ubuntu-vulkan-x64.tar.gz": {
+		size: 33799345,
+		sha256: "07f029cef440c82c3cff5310641eb6347e5cbcd865a5d88990215058aa049e93",
+	},
+};
 
 // Tauri externalBin requires a target-triple suffix on macOS/Linux executables and
 // macOS dylibs. Windows DLLs listed as resources don't need a suffix.
@@ -279,15 +318,54 @@ async function resolveTag(requested: string | "latest"): Promise<string> {
 	return tag;
 }
 
-async function downloadArchive(url: string, dest: string): Promise<void> {
+function unpinnedError(tag: string, assetNames: readonly string[]): Error {
+	return new Error(
+		[
+			`llama.cpp ${tag} has no size and sha256 pin for ${assetNames.join(", ")}; nothing was downloaded or changed.`,
+			"Add each archive to ARCHIVE_PINS in apps/desktop/scripts/update-llama-server.ts, checking GitHub's asset digest against `shasum -a 256` of your own download,",
+			"and move LLAMACPP_BUILD, LLAMACPP_COMMIT and UPSTREAM_ARCHIVES in .github/scripts/runtime_packs.py to the same build: its tests require both pin sets to agree.",
+		].join(" "),
+	);
+}
+
+function pinnedArchive(tag: string, assetName: string): ArchivePin {
+	const pin = ARCHIVE_PINS[assetName];
+	if (!pin) throw unpinnedError(tag, [assetName]);
+	return pin;
+}
+
+/** Reads at most the pinned size and returns the archive only if its bytes are the pinned ones. */
+async function downloadVerified(url: string, pin: ArchivePin): Promise<Buffer> {
 	console.log(`  Downloading ${url}`);
 	const resp = await fetch(url, {
 		headers: getHeaders(),
 		redirect: "follow",
 	});
-	if (!resp.ok) throw new Error(`Download failed: ${resp.status} ${url}`);
-	const buffer = await resp.arrayBuffer();
-	fs.writeFileSync(dest, Buffer.from(buffer));
+	if (!resp.ok || !resp.body)
+		throw new Error(`Download failed: ${resp.status} ${url}`);
+	const reader = resp.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let received = 0;
+	let chunk = await reader.read();
+	while (!chunk.done) {
+		received += chunk.value.byteLength;
+		if (received > pin.size) {
+			await reader.cancel();
+			throw new Error(
+				`${url} is larger than its pinned ${pin.size} bytes; refusing it`,
+			);
+		}
+		chunks.push(chunk.value);
+		chunk = await reader.read();
+	}
+	const archive = Buffer.concat(chunks);
+	const sha256 = createHash("sha256").update(archive).digest("hex");
+	if (archive.byteLength !== pin.size || sha256 !== pin.sha256) {
+		throw new Error(
+			`${url} is ${archive.byteLength} bytes with sha256 ${sha256}, not the pinned ${pin.size} bytes with sha256 ${pin.sha256}; refusing it`,
+		);
+	}
+	return archive;
 }
 
 function extractFiles(
@@ -452,8 +530,12 @@ async function updatePlatform(
 		fileMap.set(fm.src, fm.dst.replace("{TRIPLE}", config.tauriTriple));
 	}
 
+	const archive = await downloadVerified(
+		downloadUrl,
+		pinnedArchive(tag, assetName),
+	);
 	cleanOwnedArtifacts(outDir);
-	await downloadArchive(downloadUrl, archivePath);
+	fs.writeFileSync(archivePath, archive);
 	extractFiles(archivePath, config.archiveType, fileMap, outDir);
 
 	// Set executable bits
@@ -509,13 +591,18 @@ async function main() {
 		process.exit(1);
 	}
 
+	const unpinned = Object.values(platforms)
+		.map((config) => config.assetName.replace("{TAG}", tag))
+		.filter((assetName) => !ARCHIVE_PINS[assetName]);
+	if (unpinned.length > 0) throw unpinnedError(tag, unpinned);
+
 	for (const [key, config] of Object.entries(platforms)) {
 		await updatePlatform(key, config, tag);
 	}
 
 	console.log(`\nDone! Updated to ${tag}.`);
 	console.log(
-		"Remember to update PINNED_TAG in this script if you used --latest or --tag.",
+		"Remember to update PINNED_TAG in this script and the pins in .github/scripts/runtime_packs.py if you used --latest or --tag.",
 	);
 }
 

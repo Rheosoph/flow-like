@@ -207,12 +207,16 @@ export function PresenceChip({
 	);
 }
 
-/** Superset of the key session states plus the live connection on top of an unlocked session. */
+/**
+ * Superset of the key session states plus the live connection on top of an
+ * unlocked session; `models`: only the desktop app holds the keys, for model access.
+ */
 export type KeyChipState =
 	| "live"
 	| "reconnecting"
 	| "unlocking"
 	| "unlocked"
+	| "models"
 	| "held_elsewhere"
 	| "blocked"
 	| "locked"
@@ -224,6 +228,7 @@ const KEY_LOOK: Record<KeyChipState, ChipLook> = {
 	reconnecting: { tone: "info", icon: LoaderCircle, spin: true },
 	unlocking: { tone: "info", icon: LoaderCircle, spin: true },
 	unlocked: { tone: "info", icon: LockOpen },
+	models: { tone: "info", icon: LockOpen },
 	held_elsewhere: { tone: "locked", icon: AppWindow },
 	blocked: { tone: "critical", icon: Fingerprint },
 	locked: { tone: "locked", icon: Lock },
@@ -275,6 +280,13 @@ export function KeyChip({
 			title: t(
 				"common.key.unlockedTitle",
 				"Keys are open on this computer. Encrypted status is readable; there is no live connection.",
+			),
+		},
+		models: {
+			text: t("common.key.models", "Unlocked for models"),
+			title: t(
+				"common.key.modelsTitle",
+				"The desktop app holds this device's keys for your flows' model calls; this window holds none of them. Lock closes them in the app too.",
 			),
 		},
 		held_elsewhere: {

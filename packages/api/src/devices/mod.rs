@@ -186,13 +186,10 @@ pub(crate) async fn human_owner(state: &AppState, user: &AppUser) -> Result<Stri
 }
 
 fn require_device_pat_permission(bits: i64) -> Result<(), ApiError> {
-    // Until PATs have a dedicated Devices scope, restricted project or account
-    // scopes must not gain device enrollment, inventory or revocation access.
-    if !PatPermission::from_bits(bits)
-        .is_some_and(|permissions| permissions.contains(PatPermission::All))
-    {
+    // Device enrollment and revocation delegate account authority.
+    if PatPermission::from_bits(bits) != Some(PatPermission::Admin) {
         return Err(ApiError::forbidden(
-            "Device registry access requires an unrestricted personal access token",
+            "Device registry access requires an unrestricted personal access token with Admin access",
         ));
     }
     Ok(())
@@ -616,27 +613,17 @@ mod tests {
 
     #[test]
     fn device_registry_requires_current_unrestricted_pat_permissions() {
-        for permissions in [
-            PatPermission::empty(),
-            PatPermission::Projects,
-            PatPermission::Teams,
-            PatPermission::Billing,
-            PatPermission::all() & !PatPermission::All,
-        ] {
+        for permissions in [0, 1, 2, 3, 5, 8, 16, 32, 63] {
             assert_eq!(
-                require_device_pat_permission(permissions.bits())
+                require_device_pat_permission(permissions)
                     .unwrap_err()
                     .status(),
                 axum::http::StatusCode::FORBIDDEN
             );
         }
-        assert!(require_device_pat_permission(PatPermission::All.bits()).is_ok());
-        assert!(
-            require_device_pat_permission((PatPermission::All | PatPermission::Projects).bits())
-                .is_ok()
-        );
+        assert!(require_device_pat_permission(PatPermission::Admin.bits()).is_ok());
         assert!(require_device_pat_permission(-1).is_err());
-        assert!(require_device_pat_permission(PatPermission::All.bits() | (1 << 62)).is_err());
+        assert!(require_device_pat_permission(PatPermission::Admin.bits() | (1 << 62)).is_err());
     }
 
     #[test]

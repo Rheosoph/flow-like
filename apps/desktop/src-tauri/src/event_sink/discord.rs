@@ -1018,6 +1018,34 @@ impl DiscordSink {
         Ok(())
     }
 
+    /// Updates the bot's row in place: replacing it would delete, through `ON DELETE CASCADE`,
+    /// the stored handlers of every other event on the same bot.
+    fn upsert_bot(conn: &rusqlite::Connection, config: &DiscordSink, now: i64) -> Result<()> {
+        let intents_json = config
+            .intents
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+
+        conn.execute(
+            "INSERT INTO discord_bots (token, bot_name, bot_description, intents, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(token) DO UPDATE SET
+                 bot_name = excluded.bot_name,
+                 bot_description = excluded.bot_description,
+                 intents = excluded.intents",
+            params![
+                config.token,
+                config.bot_name,
+                config.bot_description,
+                intents_json,
+                now
+            ],
+        )?;
+
+        Ok(())
+    }
+
     fn add_bot_and_handler(
         db: &DbConnection,
         registration: &EventRegistration,
@@ -1028,12 +1056,6 @@ impl DiscordSink {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
-
-        let intents_json = config
-            .intents
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
 
         let channel_whitelist_json = config
             .channel_whitelist
@@ -1047,17 +1069,7 @@ impl DiscordSink {
             .map(serde_json::to_string)
             .transpose()?;
 
-        conn.execute(
-            "INSERT OR REPLACE INTO discord_bots (token, bot_name, bot_description, intents, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                config.token,
-                config.bot_name,
-                config.bot_description,
-                intents_json,
-                now
-            ],
-        )?;
+        Self::upsert_bot(&conn, config, now)?;
 
         conn.execute(
             "INSERT OR REPLACE INTO discord_handlers
@@ -1508,20 +1520,43 @@ mod tests {
         assert!(!starts(every(), direct));
     }
 
-    /// A device ignores a message without text or image; the desktop app considers every one.
+    /// A device ignores system messages and messages without text or image; the desktop app
+    /// considers every one.
     #[test]
     fn messages_without_text_are_considered() {
         let no_text = || json!({"content": ""});
-        assert!(starts(json!({"respond_to_mentions": false}), no_text()));
-        assert!(!starts(json!({"command_prefix": "!"}), no_text()));
+        let member_joined = json!({"type": 7, "content": ""});
+        let image = json!({"id": "77", "filename": "cat.png", "size": 1000,
+            "url": "https://cdn.discordapp.com/attachments/300/77/cat.png",
+            "proxy_url": "https://media.discordapp.net/attachments/300/77/cat.png",
+            "content_type": "image/png"});
+        let image_only = json!({"content": "", "attachments": [image]});
+        let every = || json!({"respond_to_mentions": false});
+        let bang = || json!({"command_prefix": "!"});
+        for message in [no_text(), member_joined, image_only] {
+            assert!(starts(every(), message.clone()), "{message}");
+            assert!(!starts(bang(), message.clone()), "{message}");
+        }
         let mention = with(no_text(), json!({"mentions": [bot_user()]}));
-        assert!(starts(json!({"command_prefix": "!"}), mention));
+        assert!(starts(bang(), mention));
     }
 
-    /// Stores the handler of `event_id` as registering the event does, with a bot of its own.
+    /// The sink's tables in a database that enforces foreign keys, as the app's does.
+    fn database() -> DbConnection {
+        let connection = rusqlite::Connection::open_in_memory().expect("a database");
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON")
+            .expect("foreign keys");
+        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
+        DiscordSink::init_tables(&db).expect("the tables");
+        db
+    }
+
+    /// Stores the handler of `event_id` as registering the event does, with a bot of its own
+    /// unless `settings` name a token.
     fn store(db: &DbConnection, event_id: &str, settings: Value) -> DiscordSink {
-        let token = json!({"token": format!("token-of-{event_id}")});
-        let config = sink(with(settings, token));
+        let own = json!({"token": format!("token-of-{event_id}")});
+        let config = sink(with(own, settings));
         let registration =
             DiscordSink::create_event_registration(event_id.to_string(), config.clone());
         DiscordSink::add_bot_and_handler(db, &registration, &config).expect("a stored handler");
@@ -1529,16 +1564,8 @@ mod tests {
     }
 
     /// What a restart does: `start` builds a handler from every row of the sink's tables.
-    #[tokio::test]
-    async fn a_restart_restores_the_prefix_as_it_was_saved() {
-        let connection = rusqlite::Connection::open_in_memory().expect("a database");
-        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
-        DiscordSink::init_tables(&db).expect("the tables");
-        let none = store(&db, "evt_none", json!({}));
-        let prefix_only = json!({"command_prefix": "!", "respond_to_mentions": false});
-        let bang = store(&db, "evt_bang", prefix_only);
-
-        let stored = DiscordSink::load_handlers_from_db(&db)
+    async fn restore(db: &DbConnection) -> Vec<BotSpec> {
+        let stored = DiscordSink::load_handlers_from_db(db)
             .await
             .expect("the stored handlers");
         let mut restored: Vec<BotSpec> = stored
@@ -1546,8 +1573,40 @@ mod tests {
             .map(|(registration, config)| config.spec(&registration.event_id))
             .collect();
         restored.sort_by(|a, b| a.event_id.cmp(&b.event_id));
+        restored
+    }
 
+    #[tokio::test]
+    async fn a_restart_restores_the_prefix_as_it_was_saved() {
+        let db = database();
+        let none = store(&db, "evt_none", json!({}));
+        let prefix_only = json!({"command_prefix": "!", "respond_to_mentions": false});
+        let bang = store(&db, "evt_bang", prefix_only);
+
+        let restored = restore(&db).await;
         assert_eq!(restored, [bang.spec("evt_bang"), none.spec("evt_none")]);
         assert_eq!(restored[1].command_prefix, "");
+    }
+
+    /// Events on one bot share its row: storing one updates the row and keeps the stored
+    /// handlers of the others.
+    #[tokio::test]
+    async fn a_restart_restores_every_event_of_a_shared_bot() {
+        let db = database();
+        let shared = |settings: Value| with(json!({"token": "a-shared-token"}), settings);
+        let mentions = store(&db, "evt_mentions", shared(json!({"bot_name": "Old"})));
+        let bang = json!({"command_prefix": "!", "bot_name": "Helper"});
+        let bang = store(&db, "evt_bang", shared(bang));
+        let both = [bang.spec("evt_bang"), mentions.spec("evt_mentions")];
+        assert_eq!(restore(&db).await, both);
+
+        let stored = DiscordSink::load_handlers_from_db(&db)
+            .await
+            .expect("the stored handlers");
+        let names = stored.iter().map(|(_, config)| config.bot_name.as_deref());
+        assert!(names.eq([Some("Helper"); 2]), "an updated bot row");
+
+        DiscordSink::remove_handler(&db, "evt_bang").expect("a removed handler");
+        assert_eq!(restore(&db).await, [mentions.spec("evt_mentions")]);
     }
 }

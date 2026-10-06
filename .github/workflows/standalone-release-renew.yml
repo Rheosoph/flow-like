@@ -13,7 +13,7 @@ on:
         default: '365'
         type: string
       only_if_days_left:
-        description: Renew only when at most this many days are left (empty renews always)
+        description: Renew only when the release or a runtime pack list has at most this many days left (empty renews always)
         required: false
         type: string
   # Unattended re-signing is off, and 365-day releases do not need it. Before uncommenting the two
@@ -50,10 +50,10 @@ jobs:
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_standalone_release*.py'
       - uses: ./.github/actions/setup-rust
       # Build scripts and proc macros run here, before any key material exists on the runner.
-      - name: Build the release signer
-        run: CARGO_TARGET_DIR="$RUNNER_TEMP/release-signer" cargo build --locked --package flow-like-device-protocol --example sign-release
+      - name: Build the release and runtime manifest signers
+        run: CARGO_TARGET_DIR="$RUNNER_TEMP/release-signer" cargo build --locked --package flow-like-device-protocol --example sign-release --example sign-runtime-manifest
       - id: manifest
-        name: Copy the published release and set its new dates
+        name: Copy the published release and runtime pack lists and set their new dates
         env:
           RELEASE_BASE: ${{ vars.STANDALONE_RELEASE_PUBLIC_BASE_URL }}
           RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
@@ -62,12 +62,12 @@ jobs:
           RELEASE_ONLY_IF_DAYS_LEFT: ${{ github.event_name == 'schedule' && '60' || inputs.only_if_days_left }}
         run: |
           mkdir release-renewal
-          arguments=(--base-url "$RELEASE_BASE" --public-keys "$RELEASE_PUBLIC_KEYS" --validity-days "$RELEASE_VALIDITY_DAYS" --output release-renewal/release.json)
+          arguments=(--base-url "$RELEASE_BASE" --public-keys "$RELEASE_PUBLIC_KEYS" --validity-days "$RELEASE_VALIDITY_DAYS" --output release-renewal/release.json --runtime-output release-renewal/runtimes)
           if [ -n "$RELEASE_SEQUENCE" ]; then arguments+=(--sequence "$RELEASE_SEQUENCE"); fi
           if [ -n "$RELEASE_ONLY_IF_DAYS_LEFT" ]; then arguments+=(--only-if-days-left "$RELEASE_ONLY_IF_DAYS_LEFT"); fi
           python3 .github/scripts/standalone_release.py renew-manifest "${arguments[@]}"
           if [ -f release-renewal/release.json ]; then echo "renewed=true" >> "$GITHUB_OUTPUT"; fi
-      - name: Sign the renewed manifest using the configured private release key
+      - name: Sign the renewed manifests using the configured private release key
         if: steps.manifest.outputs.renewed == 'true'
         env:
           STANDALONE_RELEASE_SIGNING_KEY: ${{ secrets.STANDALONE_RELEASE_SIGNING_KEY }}
@@ -85,6 +85,10 @@ jobs:
           unset STANDALONE_RELEASE_SIGNING_KEY
           trap 'rm -f "$RUNNER_TEMP/standalone-signing-key"' EXIT
           "$RUNNER_TEMP/release-signer/debug/examples/sign-release" "$RUNNER_TEMP/standalone-signing-key" release-renewal/release.json release-renewal/release.jws
+          shopt -s nullglob
+          for manifest in release-renewal/runtimes/*.json; do
+            "$RUNNER_TEMP/release-signer/debug/examples/sign-runtime-manifest" "$RUNNER_TEMP/standalone-signing-key" "$manifest" "${manifest%.json}.jws"
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: steps.manifest.outputs.renewed == 'true'
         with:
@@ -130,7 +134,7 @@ jobs:
           role-to-assume: ${{ vars.STANDALONE_RELEASE_ROLE_ARN }}
           aws-region: ${{ vars.STANDALONE_RELEASE_REGION }}
           role-session-name: standalone-release-renew-${{ github.run_id }}
-      - name: Replace the stable signed manifest only if nothing but its dates changed
+      - name: Replace the stable signed manifests only if nothing but their dates changed
         env:
           RELEASE_BASE: ${{ vars.STANDALONE_RELEASE_PUBLIC_BASE_URL }}
           RELEASE_BUCKET: ${{ vars.STANDALONE_RELEASE_BUCKET }}

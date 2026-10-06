@@ -1,12 +1,18 @@
 import type { Metadata, Viewport } from "next";
 import "@flow-like/flow-like-ui/global.css";
-import { Inter } from "next/font/google";
+import { Inter, Source_Serif_4 } from "next/font/google";
 import Script from "next/script";
 import { ClientProviders } from "../components/client-providers";
 
 const inter = Inter({ subsets: ["latin"], preload: true });
+const reading = Source_Serif_4({
+	axes: ["opsz"],
+	variable: "--font-reading",
+	preload: false,
+});
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://app.flow-like.com";
+const metadataBase = new URL(siteUrl);
 
 export const metadata: Metadata = {
 	title: {
@@ -28,7 +34,7 @@ export const metadata: Metadata = {
 	},
 	authors: [{ name: "Rheosoph GmbH" }],
 	creator: "Rheosoph GmbH",
-	metadataBase: new URL(siteUrl),
+	metadataBase,
 	openGraph: {
 		type: "website",
 		locale: "en_US",
@@ -91,7 +97,12 @@ export default function RootLayout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<html lang="en" suppressHydrationWarning suppressContentEditableWarning>
+		<html
+			lang="en"
+			className={reading.variable}
+			suppressHydrationWarning
+			suppressContentEditableWarning
+		>
 			<body className={inter.className}>
 				{process.env.NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG === "1" && (
 					<Script src="/runtime-config.js" strategy="beforeInteractive" />

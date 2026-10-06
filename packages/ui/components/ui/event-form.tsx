@@ -109,6 +109,7 @@ interface EventFormProps {
 	onNavigateDeployment?: (href: string) => void;
 	onBusyChange?: (busy: boolean) => void;
 	onSavedChange?: (event: IEvent | null) => void;
+	onDeployedChange?: (deployed: boolean) => void;
 	onCancel: () => void;
 	isSubmitting?: boolean;
 	tokenStore?: IOAuthTokenStoreWithPending;
@@ -204,6 +205,7 @@ export function EventForm({
 	onNavigateDeployment,
 	onBusyChange,
 	onSavedChange,
+	onDeployedChange,
 	onCancel,
 	isSubmitting = false,
 	tokenStore,
@@ -328,7 +330,7 @@ export function EventForm({
 		triggerLabels[type] ?? formatEventTypeLabel(type);
 	const typeLabel = formData.event_type
 		? triggerLabel(formData.event_type)
-		: t("event", "Event");
+		: t("eventCreation.event", "Event");
 	const destinationEnvironment: DestinationEnvironment = {
 		deviceCreation: !!onCreateDevice,
 		canExecuteLocally,
@@ -397,6 +399,9 @@ export function EventForm({
 	useEffect(() => {
 		onBusyChange?.(busy);
 	}, [busy, onBusyChange]);
+	useEffect(() => {
+		onDeployedChange?.(deployed);
+	}, [deployed, onDeployedChange]);
 	useEffect(() => {
 		if (deploymentBusy || deploymentSaved) return;
 		const mode =

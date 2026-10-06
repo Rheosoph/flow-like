@@ -1,9 +1,9 @@
 use flow_like::{
     app::App,
     flow::{
-        board::VersionType,
+        board::{Board, VersionType},
         event::{
-            Event, ReleaseNotes, RestoreIssueSeverity, RestoreOptions, RestorePlan,
+            Event, EventInput, ReleaseNotes, RestoreIssueSeverity, RestoreOptions, RestorePlan,
             filter_event_secrets,
         },
         execution::{LogMeta, run_index::RunQuery},
@@ -12,6 +12,7 @@ use flow_like::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
@@ -383,6 +384,85 @@ pub async fn list_event_runs(
     })
 }
 
+/// Inputs of stored events built by an older `EventInput::from_pin`, rebuilt once per process
+/// by (app, event, version) and never written back, so a read creates no version and nothing
+/// to sync. `None`: the event's board or node does not resolve here, the stored inputs are
+/// served.
+type RebuiltInputs = HashMap<(String, String, (u32, u32, u32)), Option<Vec<EventInput>>>;
+static REBUILT_INPUTS: LazyLock<Mutex<RebuiltInputs>> = LazyLock::new(Mutex::default);
+
+/// Boards opened by one read, `None` when one does not load.
+type ReadBoards = HashMap<(String, Option<(u32, u32, u32)>), Option<Arc<Board>>>;
+
+async fn rebuild_inputs(
+    app: &App,
+    boards: &mut ReadBoards,
+    event: &Event,
+) -> Option<Vec<EventInput>> {
+    if event.board_id.is_empty() {
+        return None;
+    }
+    let key = (event.board_id.clone(), event.board_version);
+    if !boards.contains_key(&key) {
+        // Unregistered: a background read must not pin the board open for the session.
+        let board = match app
+            .open_board(event.board_id.clone(), Some(false), event.board_version)
+            .await
+        {
+            Ok(board) => Some(board.snapshot()),
+            Err(error) => {
+                tracing::warn!(
+                    event_id = %event.id,
+                    board_id = %event.board_id,
+                    board_version = ?event.board_version,
+                    %error,
+                    "Outdated event inputs cannot be rebuilt; serving the stored ones"
+                );
+                None
+            }
+        };
+        boards.insert(key.clone(), board);
+    }
+    let inputs = event.inputs_from_board(boards.get(&key)?.as_ref()?);
+    if inputs.is_none() {
+        tracing::debug!(
+            event_id = %event.id,
+            node_id = %event.node_id,
+            "Event node is not on its board; serving the stored inputs"
+        );
+    }
+    inputs
+}
+
+/// `event` with its inputs rebuilt in memory when they were stored by an older rule: resolved
+/// help and schema, pin options, sensitive defaults withheld.
+async fn with_current_inputs(app: &App, boards: &mut ReadBoards, mut event: Event) -> Event {
+    if !event.inputs_outdated() {
+        return event;
+    }
+    let key = (app.id.clone(), event.id.clone(), event.event_version);
+    let cached = REBUILT_INPUTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+        .cloned();
+    let inputs = match cached {
+        Some(inputs) => inputs,
+        None => {
+            let inputs = rebuild_inputs(app, boards, &event).await;
+            REBUILT_INPUTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(key, inputs.clone());
+            inputs
+        }
+    };
+    if let Some(inputs) = inputs {
+        event.inputs = inputs;
+    }
+    event
+}
+
 #[tauri::command(async)]
 pub async fn get_event(
     handler: AppHandle,
@@ -394,7 +474,7 @@ pub async fn get_event(
 
     if let Ok(app) = App::load(app_id.clone(), flow_like_state).await {
         let event = app.get_event(&event_id, version).await?;
-        return Ok(event);
+        return Ok(with_current_inputs(&app, &mut ReadBoards::new(), event).await);
     }
 
     Err(TauriFunctionError::new("Event not found"))
@@ -426,11 +506,12 @@ pub async fn get_events(
     if let Ok(app) = App::load(app_id.clone(), flow_like_state).await {
         let events = &app.events;
         let mut loaded_events = Vec::with_capacity(events.len());
+        let mut boards = ReadBoards::new();
 
         for event in events {
             if let Ok(loaded_event) = Event::load(event, &app, None).await {
                 if loaded_event.event_type != "ontology_action" {
-                    loaded_events.push(loaded_event);
+                    loaded_events.push(with_current_inputs(&app, &mut boards, loaded_event).await);
                 }
             } else {
                 tracing::warn!("Failed to load event: {} in app {}", event, app_id.clone());

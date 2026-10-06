@@ -1,4 +1,5 @@
 import { isChannelHandle, replyToChannel } from "../../lib/channel";
+import { isScopedHttpChannel } from "../../lib/channel/http";
 import type { IChannelHandle } from "../../lib/schema/channel";
 import {
 	MICRO_WIDGET_QUERY_TIMEOUT_MS,
@@ -72,13 +73,18 @@ export function handleWidgetQueryMessage(message: unknown): boolean {
 	const request = parseWidgetQueryMessage(message);
 	if (!request) return false;
 
+	const channel = request.channel;
+	const deployed = channel && isScopedHttpChannel(channel.transport);
+	const requestKey =
+		deployed && channel.transport.type === "http"
+			? `${channel.transport.push_url}:${request.requestId}`
+			: request.requestId;
 	if (
-		!microWidgetHasInstance(request.instanceId) ||
-		inFlight.has(request.requestId)
+		(!deployed && !microWidgetHasInstance(request.instanceId)) ||
+		inFlight.has(requestKey)
 	) {
 		return true;
 	}
-	const channel = request.channel;
 	if (!channel) {
 		console.warn(
 			"[a2ui] widgetQuery cannot be answered: the message carries no channel",
@@ -86,11 +92,16 @@ export function handleWidgetQueryMessage(message: unknown): boolean {
 		);
 		return true;
 	}
-	inFlight.add(request.requestId);
+	inFlight.add(requestKey);
 
 	void (async () => {
 		let response: WidgetQueryResponse;
 		try {
+			// Package widgets are unavailable in deployed sessions. Never query Studio's global bridges.
+			if (deployed)
+				throw new Error(
+					"Package widget queries are not available in deployed app sessions.",
+				);
 			const value = await microWidgetQuery(
 				request.instanceId,
 				request.query,
@@ -109,7 +120,7 @@ export function handleWidgetQueryMessage(message: unknown): boolean {
 		} catch (error) {
 			console.warn("[a2ui] failed to deliver widgetQuery response", error);
 		} finally {
-			inFlight.delete(request.requestId);
+			inFlight.delete(requestKey);
 		}
 	})();
 

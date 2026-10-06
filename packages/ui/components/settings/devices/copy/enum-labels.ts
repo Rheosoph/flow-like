@@ -311,10 +311,27 @@ function serviceCapabilities(
 	t: DevicesT,
 ): Rows<
 	"capability",
-	"deploy" | "start" | "stop" | "restart" | "remove" | "scale"
+	| "deploy"
+	| "start"
+	| "stop"
+	| "restart"
+	| "remove"
+	| "scale"
+	| "service_connect"
 > {
 	const runsCode = t("devices:enum.capability.noteRunsCode", "Runs code.");
 	return {
+		service_connect: row(
+			t("devices:enum.capability.serviceConnect", "Connect to services"),
+			t(
+				"devices:enum.capability.serviceConnectExplain",
+				"Open encrypted connections to configured service listeners in scope.",
+			),
+			t(
+				"devices:enum.capability.serviceConnectNote",
+				"Can call service APIs. The service still checks its own credentials.",
+			),
+		),
 		deploy: row(
 			t("devices:enum.capability.deploy", "Deploy & configure"),
 			t(
@@ -389,6 +406,31 @@ function deviceCapabilities(
 			t(
 				"devices:enum.capability.manageCertificatesNote",
 				"Can assign private keys to services.",
+			),
+		),
+	};
+}
+
+function modelCapabilities(
+	t: DevicesT,
+): Rows<"capability", "model_use" | "model_manage"> {
+	return {
+		model_use: row(
+			t("devices:enum.capability.modelUse", "Use models"),
+			t(
+				"devices:enum.capability.modelUseExplain",
+				"Call the models this device hosts from apps and the playground. Whole device only.",
+			),
+		),
+		model_manage: row(
+			t("devices:enum.capability.modelManage", "Manage models"),
+			t(
+				"devices:enum.capability.modelManageExplain",
+				"Install, configure, load and remove models and model runtimes. Whole device only.",
+			),
+			t(
+				"devices:enum.capability.modelManageNote",
+				"Uses disk, memory and GPU; can unload models others use.",
 			),
 		),
 	};
@@ -949,6 +991,7 @@ const BUILDERS: { [F in EnumFamily]: Builder<F> } = {
 		...observeCapabilities(t),
 		...serviceCapabilities(t),
 		...deviceCapabilities(t),
+		...modelCapabilities(t),
 	}),
 	preset: (t) => ({
 		viewer: row(
@@ -976,7 +1019,14 @@ const BUILDERS: { [F in EnumFamily]: Builder<F> } = {
 			t("devices:enum.preset.deviceAdmin", "Device admin"),
 			t(
 				"devices:enum.preset.deviceAdminExplain",
-				"All 12 permissions. Whole device only.",
+				"Every permission. Whole device only.",
+			),
+		),
+		model_user: row(
+			t("devices:enum.preset.modelUser", "Model user"),
+			t(
+				"devices:enum.preset.modelUserExplain",
+				"Use models on this device. Whole device only.",
 			),
 		),
 		custom: row(t("devices:enum.preset.custom", "Custom")),

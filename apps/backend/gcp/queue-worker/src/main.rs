@@ -28,8 +28,8 @@ use file_tracking::{FileTrackingContext, FileTrackingError};
 use flow_like_compiler::{CompilerConfig, CompilerError, compile};
 use flow_like_db::DbDialect;
 use flow_like_executor::{
-    ExecutionRequest, ExecutorConfig, ExecutorError, MAX_REMOTE_PAYLOAD_BYTES, ResolveError,
-    fetch_bounded, report_queue_failure, resolve_payload_from_str,
+    ExecutionRequest, ExecutorConfig, ExecutorError, ResolveError, report_queue_failure,
+    resolve_payload_from_str,
 };
 use flow_like_gcp_data::firestore::FirestoreClient;
 use flow_like_gcp_data::metadata::ensure_no_forbidden_credential_env;
@@ -835,18 +835,15 @@ async fn resolve_compilation_job(json: &str) -> Result<CompilationJob, ProcessOu
     let job_ref = serde_json::from_str::<CompilationJobRef>(json)
         .map_err(|_| ProcessOutcome::Permanent("invalid_compilation_payload"))?;
 
-    let remote_url = match job_ref {
-        CompilationJobRef::Inline(job) => return Ok(job),
-        CompilationJobRef::Remote { remote_url } => remote_url,
-    };
-
-    tracing::info!("fetching staged compilation job");
-    let body = fetch_bounded(&remote_url, MAX_REMOTE_PAYLOAD_BYTES)
+    flow_like_compiler::resolve::resolve_job(job_ref)
         .await
-        .map_err(|_| ProcessOutcome::Retryable("compilation_payload_fetch_failed"))?;
-
-    serde_json::from_slice::<CompilationJob>(&body)
-        .map_err(|_| ProcessOutcome::Permanent("invalid_compilation_payload"))
+        .map_err(|error| match error {
+            flow_like_compiler::CompilerError::Download(_)
+            | flow_like_compiler::CompilerError::Config(_) => {
+                ProcessOutcome::Retryable("compilation_payload_fetch_failed")
+            }
+            _ => ProcessOutcome::Permanent("invalid_compilation_payload"),
+        })
 }
 
 /// Versioned wrapper around the dispatch payload.

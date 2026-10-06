@@ -507,6 +507,48 @@
 				"optional": {
 					"type": "boolean",
 					"default": false
+				},
+				"sensitive": {
+					"description": "The pin is marked sensitive: its default is never copied here.",
+					"type": "boolean",
+					"default": false
+				},
+				"valid_values": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "string"
+					}
+				},
+				"range": {
+					"type": ["array", "null"],
+					"prefixItems": [
+						{
+							"type": "number",
+							"format": "double"
+						},
+						{
+							"type": "number",
+							"format": "double"
+						}
+					],
+					"minItems": 2,
+					"maxItems": 2
+				},
+				"step": {
+					"type": ["number", "null"],
+					"format": "double"
+				},
+				"default_omitted": {
+					"description": "A sensitive pin's default exists but is withheld; an optional input left out still runs\nwith it.",
+					"type": "boolean",
+					"default": false
+				},
+				"inputs_format": {
+					"description": "The [`EVENT_INPUTS_FORMAT`] this input was built with; 0 for inputs stored before it.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 0
 				}
 			},
 			"required": [

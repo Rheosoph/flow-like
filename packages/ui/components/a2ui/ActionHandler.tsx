@@ -30,6 +30,7 @@ import {
 	mayDispatchRawPageBoardAction,
 	pageTriggerFromAction,
 } from "../../lib/schema/flow/page-trigger";
+import { runtimeDomEventName } from "../../lib/service-runtime/session-scope";
 import {
 	type ITemporaryUploadExecutionTarget,
 	useBackend,
@@ -498,7 +499,7 @@ export function ActionProvider({
 						componentId: string;
 					};
 					window.dispatchEvent(
-						new CustomEvent("a2ui:clearFileInput", {
+						new CustomEvent(runtimeDomEventName("a2ui:clearFileInput", appId), {
 							detail: { surfaceId: targetSurfaceId, componentId },
 						}),
 					);
@@ -509,7 +510,7 @@ export function ActionProvider({
 					onA2UIMessage?.(message);
 			}
 		},
-		[onA2UIMessage, frontendState],
+		[onA2UIMessage, frontendState, appId],
 	);
 
 	// Memoized so a surface update (which re-renders this provider) does not

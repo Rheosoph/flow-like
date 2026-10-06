@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import {
 	IBitTypes,
+	deviceOfModelBit,
 	isFreeLlmModel,
 	selectProfileLlmModels,
 	useBackend,
@@ -37,6 +38,8 @@ export interface AgentModelOption {
 	isFree?: boolean;
 	supportedReasoningEfforts?: AgentReasoningEffortOption[];
 	defaultReasoningEffort?: string;
+	/** The device a device Bit's model runs on. */
+	deviceId?: string;
 }
 
 export interface AgentProviderOption {
@@ -88,15 +91,24 @@ export function useAgentSelection() {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
-	const { canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders } =
-		backend.capabilities();
+	const {
+		canHostLlamaCPP,
+		canHostMLX,
+		canUseNativeAgentProviders,
+		deviceModels,
+	} = backend.capabilities();
 	const bitsModels = useMemo(
 		() =>
 			selectProfileLlmModels(
 				llmBits.data,
 				customBits.data,
 				settingsProfile.data?.hub_profile.bits,
-				{ canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders },
+				{
+					canHostLlamaCPP,
+					canHostMLX,
+					canUseNativeAgentProviders,
+					deviceModels,
+				},
 			),
 		[
 			llmBits.data,
@@ -105,6 +117,7 @@ export function useAgentSelection() {
 			canHostLlamaCPP,
 			canHostMLX,
 			canUseNativeAgentProviders,
+			deviceModels,
 		],
 	);
 
@@ -157,6 +170,7 @@ export function useAgentSelection() {
 			id: bit.id,
 			name: bit.meta?.en?.name ?? bit.id,
 			isFree: isFreeLlmModel(bit),
+			deviceId: deviceOfModelBit(bit),
 		}));
 	}, [isAgent, copilotSDK.models, bitsModels]);
 

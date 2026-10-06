@@ -4,6 +4,8 @@
 //! (AWS EventBridge, Kubernetes CronJobs) when event sinks are modified.
 
 use crate::entity::event_sink;
+use crate::error::ApiError;
+use crate::routes::app::events::db::get_event_from_db_opt;
 use crate::state::AppState;
 use flow_like_types::anyhow;
 use sea_orm::{
@@ -296,17 +298,36 @@ pub async fn delete_sink(
     Ok(())
 }
 
-/// Toggle a sink's active state and update external scheduler
+/// Refuses a change to the hub trigger of an event that runs on its deployed devices only.
+pub async fn ensure_event_may_use_hub_trigger(
+    db: &DatabaseConnection,
+    sink: &event_sink::Model,
+) -> Result<(), ApiError> {
+    match get_event_from_db_opt(db, &sink.event_id, &sink.app_id).await? {
+        Some(event) => crate::routes::app::events::ensure_hub_trigger_allowed(&event),
+        None => Ok(()),
+    }
+}
+
+/// Toggle a sink's active state and update external scheduler.
+///
+/// Turning a sink on checks the event after the sink row was read. An upsert writes the
+/// event row before its sink, so a conversion to device-only racing this call is seen here.
 pub async fn toggle_sink_active(
     db: &DatabaseConnection,
     state: &AppState,
     event_id: &str,
-) -> flow_like_types::Result<event_sink::Model> {
+) -> Result<event_sink::Model, ApiError> {
     let sink = event_sink::Entity::find()
         .filter(event_sink::Column::EventId.eq(event_id))
         .one(db)
-        .await?
-        .ok_or_else(|| anyhow!("Sink not found for event: {}", event_id))?;
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get sink: {}", e)))?
+        .ok_or_else(|| ApiError::not_found("Sink not found for this event"))?;
+
+    if !sink.active {
+        ensure_event_may_use_hub_trigger(db, &sink).await?;
+    }
 
     let new_active = !sink.active;
     let sink_type = sink.sink_type.clone();
@@ -315,14 +336,21 @@ pub async fn toggle_sink_active(
     active_model.active = Set(new_active);
     active_model.updated_at = Set(chrono::Utc::now().fixed_offset());
 
-    let updated = active_model.update(db).await?;
+    let updated = active_model
+        .update(db)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to toggle sink: {}", e)))?;
 
     // Update external scheduler for cron sinks
     if sink_type == sink_types::CRON {
         if new_active {
-            enable_external_schedule(state, event_id).await?;
+            enable_external_schedule(state, event_id)
+                .await
+                .map_err(ApiError::internal_error)?;
         } else {
-            disable_external_schedule(state, event_id).await?;
+            disable_external_schedule(state, event_id)
+                .await
+                .map_err(ApiError::internal_error)?;
         }
     }
 

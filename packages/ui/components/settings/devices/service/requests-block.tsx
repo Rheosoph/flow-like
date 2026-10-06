@@ -25,12 +25,13 @@ import {
 
 const BODY_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
-/** A `curl` line for the route, with a placeholder where the access token goes. */
-export function curlLine(method: string, url: string, token: string): string {
+/** A `curl` line for the route, with a token placeholder when one is required. */
+export function curlLine(method: string, url: string, token?: string): string {
+	const auth = token ? ` -H "Authorization: Bearer ${token}"` : "";
 	const body = BODY_METHODS.has(method)
 		? ` -H "Content-Type: application/json" -d '{}'`
 		: "";
-	return `curl -X ${method} -H "Authorization: Bearer ${token}"${body} "${url}"`;
+	return `curl -X ${method}${auth}${body} "${url}"`;
 }
 
 /** An `http` or `api` event without a Page: a device answers its route. */
@@ -138,12 +139,15 @@ function AddressLine({
 function CurlLine({
 	route,
 	address,
-}: Readonly<{ route: EventRoute; address: string }>) {
+	requiresToken,
+}: Readonly<{ route: EventRoute; address: string; requiresToken: boolean }>) {
 	const { t } = useTranslation("devices");
 	const command = curlLine(
 		route.method,
 		address,
-		t("serviceEndpoint.requests.tokenPlaceholder", "<access token>"),
+		requiresToken
+			? t("serviceEndpoint.requests.tokenPlaceholder", "<access token>")
+			: undefined,
 	);
 	return (
 		<div className="flex min-w-0 items-start gap-2">
@@ -168,6 +172,7 @@ function RequestItem({
 	live,
 	where,
 	serviceId,
+	requiresToken,
 }: Readonly<{
 	row: DeployedRoute;
 	name: string;
@@ -175,6 +180,7 @@ function RequestItem({
 	live: EventRoute | undefined;
 	where: RequestOrigin;
 	serviceId: string;
+	requiresToken: boolean;
 }>) {
 	const { t } = useTranslation("devices");
 	const { route } = row;
@@ -195,7 +201,11 @@ function RequestItem({
 						address={addressOf(where, route.path)}
 						copyable={!!where.origin}
 					/>
-					<CurlLine route={route} address={addressOf(where, route.path)} />
+					<CurlLine
+						route={route}
+						address={addressOf(where, route.path)}
+						requiresToken={requiresToken}
+					/>
 				</>
 			) : (
 				<p className="text-ink-2">
@@ -293,6 +303,7 @@ export function RequestsBlock({
 	);
 	const app = useAppEndpoints(configuration);
 	const online = configuration.config.source === "online";
+	const requiresToken = configuration.config.hosting?.authentication !== "none";
 	const list: RequestList = listOf(deployed, app, online);
 	if (!list) return null;
 	const nameOf = (eventId: string) =>
@@ -305,10 +316,17 @@ export function RequestsBlock({
 			title={t("serviceEndpoint.requests.title", "Requests")}
 			{...("routes" in list ? { count: list.routes.length } : {})}
 			stamp={<ConfigStamp read={read} />}
-			foot={t(
-				"serviceEndpoint.requests.token",
-				"Every request needs this service's access token. The token set in Events is not used on a device.",
-			)}
+			foot={
+				requiresToken
+					? t(
+							"serviceEndpoint.requests.token",
+							"Every request needs this service's access token. The token set in Events is not used on a device.",
+						)
+					: t(
+							"serviceEndpoint.requests.noToken",
+							"Anyone who can reach this service can call these requests without a token. The token set in Events is not used on a device.",
+						)
+			}
 		>
 			{"routes" in list ? (
 				<ul className="flex min-w-0 flex-col">
@@ -320,6 +338,7 @@ export function RequestsBlock({
 							live={app.rows.get(row.eventId)?.eligibility.route}
 							where={where}
 							serviceId={serviceId}
+							requiresToken={requiresToken}
 						/>
 					))}
 				</ul>

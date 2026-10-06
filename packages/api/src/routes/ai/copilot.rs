@@ -769,6 +769,7 @@ pub(crate) async fn run_copilot(
             },
             false,
             FlowLikeState::completion_model_capabilities(&flow_like_state).await,
+            None,
             flow_like_state.http_client.clone(),
         )
         .await?;

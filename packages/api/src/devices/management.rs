@@ -296,6 +296,28 @@ struct PolicyView {
     digest: Option<String>,
     applied_version: u64,
     applied_digest: Option<String>,
+    supported_capabilities: Vec<ManagementCapability>,
+}
+
+fn supported_policy_capabilities() -> Vec<ManagementCapability> {
+    use ManagementCapability::*;
+    vec![
+        Status,
+        Logs,
+        Metrics,
+        ServiceConnect,
+        Deploy,
+        Start,
+        Stop,
+        Restart,
+        Remove,
+        Scale,
+        UpdateAgent,
+        Reboot,
+        ManageCertificates,
+        ModelUse,
+        ModelManage,
+    ]
 }
 
 async fn policy_view(state: &AppState, id: &str) -> Result<PolicyView, ApiError> {
@@ -308,6 +330,7 @@ async fn policy_view(state: &AppState, id: &str) -> Result<PolicyView, ApiError>
         ))
         .await?;
     Ok(PolicyView {
+        supported_capabilities: supported_policy_capabilities(),
         version: head
             .as_ref()
             .map(|r| r.try_get::<i64>("", "version"))
@@ -703,6 +726,21 @@ mod tests {
     use super::*;
     use crate::db::DbDialect;
     use sea_orm::{ConnectOptions, Database};
+
+    #[test]
+    fn policy_capability_signal_names_only_verified_permissions() {
+        let capabilities = supported_policy_capabilities();
+        assert_eq!(capabilities.len(), MAX_GRANT_CAPABILITIES);
+        assert!(capabilities.contains(&ManagementCapability::ModelUse));
+        assert!(capabilities.contains(&ManagementCapability::ModelManage));
+        assert!(!capabilities.contains(&ManagementCapability::Unsupported));
+        let wire = serde_json::to_value(capabilities).unwrap();
+        assert!(
+            wire.as_array()
+                .unwrap()
+                .contains(&serde_json::json!("model_use"))
+        );
+    }
 
     fn grant(
         id: &str,

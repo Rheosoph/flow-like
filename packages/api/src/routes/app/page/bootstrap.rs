@@ -15,6 +15,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::{
+        events::current_inputs::event_with_current_inputs,
         events::db::{
             filter_event_list_execution, filter_event_secrets, get_event_with_fallback_opt,
             get_events_for_app, get_events_with_fallback, is_listed_event_type,
@@ -357,6 +358,7 @@ pub async fn bootstrap(
         (event, false)
     };
 
+    let event = event_with_current_inputs(&state, &app_id, event).await;
     let canonical_route = canonical_event_route(&event);
     // Resolve the served variant before any artifact is derived from the Event value: the page,
     // its execution map and the response projection all describe the same target.

@@ -979,6 +979,19 @@ impl DeviceSession {
         )?)
     }
 
+    pub(crate) fn tunnel_noise_responder(
+        &self,
+        peer: &[u8; 32],
+        session_id: &str,
+    ) -> Result<crate::crypto::noise::Handshake> {
+        Ok(crate::crypto::noise::Handshake::tunnel_responder(
+            &self.keys.management,
+            *peer,
+            &self.manifest.device_id,
+            session_id,
+        )?)
+    }
+
     pub(crate) async fn signaling(&self) -> Result<DeviceSignalingResponse> {
         let endpoint = endpoint_url(
             &self.manifest.api_base_url,

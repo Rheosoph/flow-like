@@ -113,8 +113,9 @@
 	--fl-chat-wide: 46rem;
 	/* The question is a margin note, not a card — the rule carries it. */
 	--fl-chat-ask-background: transparent;
-	--fl-chat-prose-font: "Source Serif 4", "Iowan Old Style", Charter,
-		"Bitstream Charter", Georgia, ui-serif, serif;
+	/* --font-reading is the host's next/font Source Serif 4 (opsz axis), set on <html>. */
+	--fl-chat-prose-font: var(--font-reading, "Source Serif 4"),
+		"Iowan Old Style", Charter, "Bitstream Charter", Georgia, ui-serif, serif;
 	--fl-chat-prose-size: 1.0625rem;
 	--fl-chat-prose-leading: 1.72;
 	--fl-chat-ask-foreground: var(--muted-foreground);
@@ -260,9 +261,6 @@
 	--sidebar-accent-foreground: oklch(0.9593 0.0103 81.7951);
 	--sidebar-border: oklch(0.2791 0.0413 258.7859);
 	--sidebar-ring: oklch(0.8399 0.1599 87.829);
-	--font-sans: Open Sans, sans-serif;
-	--font-serif: Georgia, serif;
-	--font-mono: Menlo, monospace;
 	--radius: 0.375rem;
 	--shadow-x: 0px;
 	--shadow-y: 2px;

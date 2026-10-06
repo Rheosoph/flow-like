@@ -67,6 +67,13 @@ export interface IHelperState {
 		options?: {
 			offline?: boolean;
 			appId?: string;
+			/**
+			 * With `appId`, a run on this device stages each file in the temporary
+			 * store and the result carries a FlowPath; its `url` is then empty.
+			 * Uploads for a run elsewhere ignore it: the server returns a FlowPath
+			 * for every app-scoped upload.
+			 */
+			eventId?: string;
 			executionTarget?: ITemporaryUploadExecutionTarget;
 			onProgress?: BulkUploadProgressCallback;
 			signal?: AbortSignal;

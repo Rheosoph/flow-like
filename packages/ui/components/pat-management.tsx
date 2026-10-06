@@ -78,7 +78,7 @@ function TokenRow({
 				? t("readWrite", "Read & Write")
 				: permission === 4
 					? t("admin", "Admin")
-					: t("unknown", "Unknown");
+					: t("legacyTokenPermission", "Legacy permission (replace token)");
 	const [copied, setCopied] = useState(false);
 	const expired = isExpired(pat.valid_until);
 
@@ -185,7 +185,7 @@ function TokenRevealDialog({
 				? t("readWrite", "Read & Write")
 				: permission === 4
 					? t("admin", "Admin")
-					: t("unknown", "Unknown");
+					: t("legacyTokenPermission", "Legacy permission (replace token)");
 	const [copied, setCopied] = useState(false);
 
 	const copyToken = useCallback(() => {
@@ -266,17 +266,26 @@ function CreateTokenDialog({
 		{
 			value: 1,
 			label: t("readOnly", "Read Only"),
-			description: t("viewAccessOnly", "View access only"),
+			description: t(
+				"patReadOnlyDescription",
+				"Read data without changing it or running workflows",
+			),
 		},
 		{
 			value: 2,
 			label: t("readWrite", "Read & Write"),
-			description: t("viewAndModifyAccess", "View and modify access"),
+			description: t(
+				"patReadWriteDescription",
+				"Edit data and run workflows; no credential or access management",
+			),
 		},
 		{
 			value: 4,
 			label: t("admin", "Admin"),
-			description: t("fullAdministrativeAccess", "Full administrative access"),
+			description: t(
+				"patAdminDescription",
+				"Manage credentials and access within your account permissions",
+			),
 		},
 	];
 	const backend = useBackend();

@@ -1,4 +1,8 @@
 import { createStore, del, get, keys, set } from "idb-keyval";
+import {
+	isRuntimeNamespace,
+	runtimeMemory,
+} from "./service-runtime/session-scope";
 
 /**
  * IndexedDB storage manager for Flow-Like application state
@@ -111,6 +115,11 @@ export const routeStorage = {
 // Page-scoped state (local to current page/route)
 export const pageLocalState = {
 	async get<T>(appId: string, pageId: string, key: string): Promise<T | null> {
+		if (isRuntimeNamespace(appId))
+			return (
+				(runtimeMemory(appId)?.get(`page:${pageId}:${key}`) as T | undefined) ??
+				null
+			);
 		const data = await get<T>(`${appId}:${pageId}:${key}`, pageStateStore);
 		return data ?? null;
 	},
@@ -121,10 +130,18 @@ export const pageLocalState = {
 		key: string,
 		value: T,
 	): Promise<void> {
+		if (isRuntimeNamespace(appId)) {
+			runtimeMemory(appId)?.set(`page:${pageId}:${key}`, value);
+			return;
+		}
 		await set(`${appId}:${pageId}:${key}`, value, pageStateStore);
 	},
 
 	async delete(appId: string, pageId: string, key: string): Promise<void> {
+		if (isRuntimeNamespace(appId)) {
+			runtimeMemory(appId)?.delete(`page:${pageId}:${key}`);
+			return;
+		}
 		await del(`${appId}:${pageId}:${key}`, pageStateStore);
 	},
 
@@ -132,6 +149,16 @@ export const pageLocalState = {
 		appId: string,
 		pageId: string,
 	): Promise<Record<string, unknown>> {
+		if (isRuntimeNamespace(appId)) {
+			const result: Record<string, unknown> = {};
+			const prefix = `page:${pageId}:`;
+			for (const [key, value] of runtimeMemory(appId) ?? []) {
+				const short = key.slice(prefix.length);
+				if (key.startsWith(prefix) && isSafeRecordKey(short))
+					result[short] = value;
+			}
+			return result;
+		}
 		const allKeys = await keys(pageStateStore);
 		const prefix = `${appId}:${pageId}:`;
 		const result: Record<string, unknown> = {};
@@ -149,6 +176,12 @@ export const pageLocalState = {
 	},
 
 	async clearPage(appId: string, pageId: string): Promise<void> {
+		if (isRuntimeNamespace(appId)) {
+			const memory = runtimeMemory(appId);
+			for (const key of memory?.keys() ?? [])
+				if (key.startsWith(`page:${pageId}:`)) memory?.delete(key);
+			return;
+		}
 		const allKeys = await keys(pageStateStore);
 		const prefix = `${appId}:${pageId}:`;
 

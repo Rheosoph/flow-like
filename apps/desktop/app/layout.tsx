@@ -95,7 +95,12 @@ const roboto = Roboto({
 });
 const robotoMono = Roboto_Mono({ subsets: ["latin"], preload: true });
 const sourceCodePro = Source_Code_Pro({ subsets: ["latin"], preload: true });
-const sourceSerif4 = Source_Serif_4({ subsets: ["latin"], preload: true });
+const sourceSerif4 = Source_Serif_4({
+	subsets: ["latin"],
+	axes: ["opsz"],
+	variable: "--font-reading",
+	preload: true,
+});
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], preload: true });
 const spaceMono = Space_Mono({
 	subsets: ["latin"],
@@ -119,7 +124,7 @@ export default function RootLayout({
 			data-desktop-app="true"
 			suppressHydrationWarning
 			suppressContentEditableWarning
-			className="min-h-screen"
+			className={`min-h-screen ${sourceSerif4.variable}`}
 		>
 			<body className={inter.className} data-desktop-app="true">
 				<Providers>{children}</Providers>

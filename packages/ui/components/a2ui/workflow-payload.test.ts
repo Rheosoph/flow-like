@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appRouteUrl, parseAppRouteTarget } from "../../lib/app-route-url";
 import {
+	openRuntimeNamespace,
+	setRuntimeNavigation,
+} from "../../lib/service-runtime/session-scope";
+import {
 	buildFrontendContextPayload,
+	buildWorkflowFrontendContext,
 	compactWorkflowPayload,
 } from "./workflow-payload";
 
@@ -149,6 +154,38 @@ describe("buildFrontendContextPayload", () => {
 			_page_id: "/use",
 			_global_state: {},
 			_page_state: {},
+		});
+	});
+
+	test("deployed chat and widget context cannot inherit the Studio route or query", async () => {
+		stubLocation(
+			"/settings/devices",
+			"?device=private-device&sessionId=host-chat&token=host-only",
+		);
+		const appId = `device-runtime:${crypto.randomUUID()}`;
+		const retire = openRuntimeNamespace(appId);
+		try {
+			expect(await buildWorkflowFrontendContext(appId, "chat")).toMatchObject({
+				_route: "/",
+				_query_params: {},
+			});
+			setRuntimeNavigation(appId, {
+				route: "/assistant",
+				queryParams: { topic: "public", sessionId: "deployed-chat" },
+			});
+			const context = await buildWorkflowFrontendContext(appId, "chat");
+			expect(context).toMatchObject({
+				_route: "/assistant",
+				_query_params: { topic: "public", sessionId: "deployed-chat" },
+				_query_params_format: "app",
+			});
+			expect(JSON.stringify(context)).not.toContain("host-only");
+		} finally {
+			retire();
+		}
+		expect(await buildWorkflowFrontendContext(appId, "chat")).toMatchObject({
+			_route: "/",
+			_query_params: {},
 		});
 	});
 });

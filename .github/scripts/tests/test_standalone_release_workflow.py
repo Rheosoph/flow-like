@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -127,6 +128,29 @@ class StandaloneReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual([operation for operation, _ in calls], ["cargo", "describe"])
         self.assertFalse(artifacts.exists())
 
+    def test_macos_build_uses_a_static_onnx_archive_for_both_release_architectures(self):
+        setup = step("binaries", "name: Configure macOS ONNX Runtime")
+        self.assertIn("if: runner.os == 'macOS'", setup)
+        job = job_body("binaries")
+        self.assertLess(job.index(setup), job.index("name: Restore compiled release dependencies"))
+        with tempfile.TemporaryDirectory() as folder:
+            environment_file = Path(folder) / "environment"
+            result = run_script(script(setup), REPOSITORY, {
+                "GITHUB_WORKSPACE": str(REPOSITORY), "GITHUB_ENV": str(environment_file),
+            })
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            environment = dict(line.split("=", 1) for line in environment_file.read_text().splitlines())
+        self.assertEqual(environment["MACOSX_DEPLOYMENT_TARGET"], "14.0")
+        archive = Path(environment["ORT_LIB_LOCATION"]) / "libonnxruntime.a"
+        with archive.open("rb") as binary:
+            magic, count = struct.unpack(">II", binary.read(8))
+            self.assertEqual(magic, 0xCAFEBABE, "ONNX Runtime must contain both macOS architectures")
+            architectures = [struct.unpack(">IIIII", binary.read(20)) for _ in range(count)]
+            self.assertEqual({cpu for cpu, *_ in architectures}, {0x01000007, 0x0100000C})
+            for _, _, offset, _, _ in architectures:
+                binary.seek(offset)
+                self.assertEqual(binary.read(8), b"!<arch>\n", "The release needs a static ONNX archive")
+
     def test_cache_covers_the_actual_target_directory_and_native_environment(self):
         job = job_body("binaries")
         target = re.search(r"^      CARGO_TARGET_DIR: (.+)$", job, re.MULTILINE).group(1)
@@ -137,7 +161,7 @@ class StandaloneReleaseWorkflowTests(unittest.TestCase):
         cache_key = re.search(r"^          shared-key: (.+)$", job, re.MULTILINE).group(1)
         self.assertIn("${{ matrix.target }}", cache_key)
         environment = re.search(r"^          env-vars: '(.+)'$", job, re.MULTILINE).group(1).split()
-        self.assertTrue({"CARGO", "CC", "CXX", "CMAKE", "RUST", "ImageOS", "ImageVersion", "SDKROOT"} <= set(environment))
+        self.assertTrue({"CARGO", "CC", "CXX", "CMAKE", "RUST", "ORT", "ImageOS", "ImageVersion", "SDKROOT"} <= set(environment))
 
 
 class StandaloneReleaseValidityTests(unittest.TestCase):
@@ -202,20 +226,23 @@ class StandaloneReleaseValidityTests(unittest.TestCase):
         self.assertEqual(sign.count("secrets."), 1)
         self.assertLess(sign.index("cargo build --locked --package flow-like-device-protocol --example sign-release"),
                         sign.index("secrets.STANDALONE_RELEASE_SIGNING_KEY"))
+        self.assertLess(sign.index("--example sign-runtime-manifest"), sign.index("secrets.STANDALONE_RELEASE_SIGNING_KEY"))
         self.assertNotIn("id-token", sign)
         self.assertNotIn("STANDALONE_RELEASE_SIGNING_KEY", job_body("publish", RENEWAL))
         for job in ["sign", "publish"]:
             self.assertIn("\n    environment: standalone-release\n", job_body(job, RENEWAL))
+        runtime_signing = script(step("runtime-manifest", "name: Sign the runtime manifests using the configured private release key"))
         self.assertEqual(
-            script(step("sign", "name: Sign the renewed manifest using the configured private release key", RENEWAL)),
-            script(step("signed-bundle", "name: Sign the release manifest using the configured private release key")).replace("release-bundle/", "release-renewal/"),
+            script(step("sign", "name: Sign the renewed manifests using the configured private release key", RENEWAL)),
+            script(step("signed-bundle", "name: Sign the release manifest using the configured private release key")).replace("release-bundle/", "release-renewal/")
+            + "shopt -s nullglob\nfor manifest in " + runtime_signing.split("\nfor manifest in ", 1)[1].replace("runtime-bundle/", "release-renewal/runtimes/"),
         )
         identity = "name: Require exactly one publisher identity"
         self.assertEqual(step("publish", identity, RENEWAL), step("publish", identity))
         credentials = "name: Obtain short-lived AWS publisher credentials"
         self.assertEqual(step("publish", credentials, RENEWAL), step("publish", credentials).replace("standalone-release-${{", "standalone-release-renew-${{"))
         publish = step("publish", "name: Verify anonymous images, publish binaries, then conditionally advance the signed manifest")
-        renew = step("publish", "name: Replace the stable signed manifest only if nothing but its dates changed", RENEWAL)
+        renew = step("publish", "name: Replace the stable signed manifests only if nothing but their dates changed", RENEWAL)
         self.assertIn("release.renew_publish(Path('release-renewal')", renew)
         self.assertEqual(
             renew.split("\n", 1)[1].replace("needs.prepare.outputs.base", "vars.STANDALONE_RELEASE_PUBLIC_BASE_URL"),
@@ -251,7 +278,8 @@ class StandaloneReleaseValidityTests(unittest.TestCase):
 
     def test_renewal_names_the_release_and_signs_only_what_was_written(self):
         expected = [".github/scripts/standalone_release.py", "renew-manifest", "--base-url", BASE, "--public-keys", KEYS,
-                    "--validity-days", "365", "--output", "release-renewal/release.json"]
+                    "--validity-days", "365", "--output", "release-renewal/release.json",
+                    "--runtime-output", "release-renewal/runtimes"]
         result, command, outputs = self.renew_manifest({"RELEASE_SEQUENCE": "3", "RELEASE_ONLY_IF_DAYS_LEFT": ""})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((command, outputs), (expected + ["--sequence", "3"], "renewed=true\n"))
@@ -263,6 +291,46 @@ class StandaloneReleaseValidityTests(unittest.TestCase):
         sign = job_body("sign", RENEWAL)
         self.assertEqual(sign.count("        if: steps.manifest.outputs.renewed == 'true'\n"), 2)
         self.assertIn("\n    if: needs.sign.outputs.renewed == 'true'\n", job_body("publish", RENEWAL))
+
+    def sign_renewal(self, runtime_targets):
+        directory = self.directory()
+        signers = directory / "release-signer/debug/examples"
+        signers.mkdir(parents=True)
+        for name in ["sign-release", "sign-runtime-manifest"]:
+            (signers / name).write_text(f"#!{sys.executable}\n" + textwrap.dedent('''\
+                import json
+                import os
+                from pathlib import Path
+                import sys
+
+                key, manifest, output = sys.argv[1:]
+                assert Path(key).read_text() == "test signing key"
+                with open(os.environ["COMMAND_LOG"], "a") as log:
+                    log.write(json.dumps([Path(sys.argv[0]).name, manifest, output]) + "\\n")
+                Path(output).write_text("signed " + Path(manifest).read_text())
+                '''))
+            (signers / name).chmod(0o755)
+        renewal = directory / "release-renewal"
+        renewal.mkdir()
+        (renewal / "release.json").write_text("release")
+        for target in runtime_targets:
+            (renewal / "runtimes").mkdir(exist_ok=True)
+            (renewal / "runtimes" / f"{target}.json").write_text(target)
+        log = directory / "signed.jsonl"
+        log.touch()
+        result = run_script(script(step("sign", "name: Sign the renewed manifests using the configured private release key", RENEWAL)), directory, {
+            "RUNNER_TEMP": str(directory), "STANDALONE_RELEASE_SIGNING_KEY": "test signing key", "COMMAND_LOG": str(log),
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((directory / "standalone-signing-key").exists())
+        return [json.loads(line) for line in log.read_text().splitlines()]
+
+    def test_renewal_signs_the_release_and_every_runtime_pack_list_it_copied(self):
+        release_call = ["sign-release", "release-renewal/release.json", "release-renewal/release.jws"]
+        self.assertEqual(self.sign_renewal([]), [release_call])
+        self.assertEqual(self.sign_renewal(["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"]), [release_call] + [
+            ["sign-runtime-manifest", f"release-renewal/runtimes/{target}.json", f"release-renewal/runtimes/{target}.jws"]
+            for target in ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]])
 
 
 if __name__ == "__main__":

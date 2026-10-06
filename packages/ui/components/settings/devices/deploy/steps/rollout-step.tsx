@@ -76,6 +76,7 @@ import {
 import { useActivityTray } from "../../shell/activity-tray";
 import { useDeviceWorkspace, useOverlay } from "../../workspace";
 import { RUN_REFUSALS } from "../deploy-copy";
+import { ModelFilesBlock } from "../model-files-block";
 import type { DeployStepProps } from "../step-props";
 import { secretCount } from "../update-path";
 import {
@@ -1862,6 +1863,11 @@ function RolloutBody({
 			{slot ? createPortal(headline, slot) : headline}
 			<StepHeader lede={lede} />
 			{only ? <SingleBlock {...board} row={only} /> : <RunBoard {...board} />}
+			<ModelFilesBlock
+				deploymentId={draft.deploymentId}
+				state={state}
+				details={details}
+			/>
 			{result && !only ? (
 				<AfterNotes c={c} state={state} result={result} />
 			) : null}

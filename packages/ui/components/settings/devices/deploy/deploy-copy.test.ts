@@ -169,7 +169,7 @@ describe("issue sentences (R3)", () => {
 		for (const sentence of sentences)
 			expect(sentence).toStartWith("Confirm on edge-berlin-01 that");
 		expect(owed("endpoint_shared_token")).toBe(
-			"Confirm on edge-berlin-01 that an Endpoint with its own token shares the service's access token, or deploy it as its own service.",
+			"Confirm on edge-berlin-01 that the Endpoint uses the service's access settings. Its token from Events is not used.",
 		);
 	});
 

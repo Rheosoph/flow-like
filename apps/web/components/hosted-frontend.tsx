@@ -3,7 +3,7 @@
 import { ChatInterface } from "@flow-like/flow-like-ui/components/interfaces/chat-default";
 import { ChatFeedbackEnabledContext } from "@flow-like/flow-like-ui/components/interfaces/chat-default/message";
 import { Container } from "@flow-like/flow-like-ui/components/interfaces/container";
-import { GenericEventFormInterface } from "@flow-like/flow-like-ui/components/interfaces/generic-event-form";
+import { FormWorkbenchInterface } from "@flow-like/flow-like-ui/components/interfaces/form-workbench";
 import type {
 	ISidebarActions,
 	IToolBarActions,
@@ -376,7 +376,7 @@ function HostedRuntime({
 												<ChatInterface {...props} />
 											</ChatFeedbackEnabledContext.Provider>
 										) : data.kind === "f" ? (
-											<GenericEventFormInterface {...props} />
+											<FormWorkbenchInterface {...props} host="hosted" />
 										) : bootstrap.page ? (
 											<PageInterface
 												{...props}

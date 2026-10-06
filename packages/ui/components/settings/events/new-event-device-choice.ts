@@ -1,6 +1,18 @@
+import type { DeployResult } from "../../../lib/device-management/model/deploy-plan";
 import type { DeployRunState } from "../../../lib/device-management/model/deploy-run";
 import type { DeployDevice } from "../devices/deploy/deploy-facts";
 import type { DeployStepId } from "../devices/deploy/step-props";
+
+/**
+ * What the dialog footer offers once a rollout has a result. "Done" means the event is deployed,
+ * so it appears only when every device took it; after a partial or failed rollout the rollout
+ * block's Retry stays the primary action and Close keeps the event for later.
+ */
+export function resultFooterAction(
+	result: Pick<DeployResult, "outcome"> | null,
+): "done" | null {
+	return result?.outcome === "all" ? "done" : null;
+}
 
 export function deploymentIsBusy(run: DeployRunState | null): boolean {
 	return (

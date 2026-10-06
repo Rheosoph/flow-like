@@ -58,6 +58,121 @@ Compose generates the shared public key, uses Redis fanout and pins
 
 ## Health, presence and outages
 
+### Encrypted device data and service connections
+
+Device service tunnels use the authenticated `/ws/devices` endpoint for discovery
+and relay fallback. Clients try an ordered WebRTC data channel first. A separate
+Noise session encrypts tunnel payloads between Studio and the device agent; the
+signaling server can see routing identities and traffic size, but cannot read
+service requests, deployment files or device data.
+
+Studio uses these streams for initial device inspection, log and message reads,
+retained metrics, encrypted telemetry and archive reads. Deployment manifests and
+files travel as binary streams. Upload creation, checkpoints, commit and service
+activation remain management operations. Uploads retain their transfer identity,
+verified file hashes and device-reported offsets, so an interrupted upload can
+resume after reconnecting without restarting completed files.
+Upgrade device agents before rolling out updated Studio. Studio checks the agent's
+authenticated streaming capability before opening a data tunnel and requires it
+for these transfers.
+
+Open a deployment's **Endpoint** tab and use **Connect through Studio** to send
+HTTP requests and read streaming responses in web or Desktop Studio. Select a
+configured listener, enter a request path and supply any application credentials
+in the request headers. The request tool does not follow redirects, use browser
+cookies or upgrade to WebSocket. Request bodies are limited to 10 MiB; HTTP headers
+are limited to 64 KiB, with a 32 KiB limit on the page's custom-header input.
+Responses stream without a total body-size limit. The page retains a bounded text
+excerpt and continues consuming the stream. Opening a connection has a 30-second
+deadline, request/header progress a 60-second idle deadline, and each pending
+response-body read a five-minute deadline. Use **Stop request** to end a stream.
+
+Select the `hosting` listener and choose **Open deployed app** to use the deployed
+Pages, Chat, forms and quick actions in either Web or Desktop Studio. The app uses
+the device's published event versions and streams execution results into Studio's
+existing interfaces. Page actions, workflow prompts, attachments and permitted
+media downloads use the same encrypted service tunnel. The service's access token
+is requested when required and stays in memory for that open session.
+Protected assets are limited to 32 MiB each and 128 MiB across an open session,
+with at most 64 cached assets. Downloads address the app's upload area or an
+expiring reference issued by the running deployment. Attachments are limited to
+about 3.5 MiB each, and the encoded request including chat history must fit within
+10 MiB. Package micro-widgets that require Studio registry access are unavailable
+in this view.
+
+Each open app has its own query cache, navigation state and history identity.
+Closing it, locking device keys or losing the live device session cancels its
+requests, revokes media URLs and clears that session's conversations and Page
+data. Reopening starts a new session; interrupted runs are not automatically
+replayed. Studio's other app histories remain separate.
+
+The rich interface requires hosting to be configured on the deployment. For a
+deployment containing only forms or quick actions, open **Limits** in the deploy
+wizard and enable **Open these forms and quick actions as a deployed app**. Review
+the listener and access settings before deploying. Leaving this option off keeps
+the existing **Run now** workflow. An additional named TCP listener does not
+create this interface.
+Scheduled events, bots and background services continue running on the device;
+their logs and status travel over the data tunnel, and their existing management
+controls remain available in Studio.
+
+Desktop Studio also offers **Open local port** for a database client, browser or
+another local application. Choose a port, or use `0` to allocate an available one.
+The listener binds only to `127.0.0.1`. Other processes on that computer can reach
+it, so application authentication still applies. Each accepted connection opens a
+separate encrypted device stream. Leaving the service page, locking device keys,
+closing the desktop window or losing the live session closes the local forwarding
+operation. A native 30-second lease also expires if the page stops renewing it.
+A dropped application connection is not replayed.
+
+Service connections and listener discovery require `service_connect` within the
+deployment's placement, project or device scope. Editing listeners requires
+`deploy`; connecting does not grant access to deployment settings. The device
+resolves a placement and service ID to a configured listener in its current,
+ready deployment revision. Clients cannot choose a destination address.
+
+The `hosting` service is included when native hosting is configured. Under
+**Additional service listeners**, deployment editors can name up to sixteen
+existing loopback listeners, using unique IDs and `tcp`, `http` or `https` as the
+protocol. This can expose a local database or another deployed API. Saving the
+configuration does not start that listener. The reserved `hosting` ID cannot be
+reused. A scoped `service_connect` grant permits the configured services in that
+scope, rather than an arbitrary port on the device.
+
+Noise encryption ends at the device agent. Plain HTTP or TCP continues to its
+configured local listener. For HTTP requests to HTTPS services, the agent opens
+TLS upstream and verifies the certificate name, validity and exact SHA-256 leaf
+fingerprint. Native hosting uses the currently bound device certificate. An
+additional HTTPS listener requires a configured TLS server name and certificate
+fingerprint; update its fingerprint when that certificate changes. Desktop port
+forwarding carries raw TCP bytes, so a client's own TLS and certificate checks
+continue through the tunnel unchanged.
+
+Each tunnel supports up to sixteen concurrent byte streams with a 256 KiB receive
+window per stream. The receiver returns credit as it consumes bytes. Desktop
+allows eight local listeners, sixteen connections per listener and sixty-four
+local connections in total; the tunnel's stream limit may be reached first.
+
+Internal data streams use the existing permissions for each operation. Uploads
+require `deploy` access to the project and belong to the controller that began the
+transfer. Reading device data keeps the same scope and capability checks as a
+management read; it does not require `service_connect`.
+
+Tunnel frames use separate relay queues and bandwidth budgets from management
+frames. The default relay allowance is 8 MiB/s of encoded traffic per account and
+device, with a 32 MiB/s device output allowance. Pending tunnel queues share a
+128 MiB limit per signaling process. These are resource limits, not measured
+throughput guarantees.
+
+Clients renew signaling credentials on the existing socket and rotate Noise keys
+without reopening service connections. The device checks current access during
+renewal and periodically while streams remain open. Expired or revoked access,
+queue overflow, missing frames and heartbeat failure close affected streams.
+Redis pub/sub provides no replay: callers must open a new connection after a
+transport failure, and must decide whether an application operation can be retried.
+
+### Readiness and collaboration presence
+
 | Endpoint | Meaning |
 | --- | --- |
 | `/health` | Returns 200 while the process serves, regardless of Redis connectivity |

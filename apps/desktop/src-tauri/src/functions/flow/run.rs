@@ -14,7 +14,7 @@ use flow_like::flow::execution::run_index::{RunQuery, read_run_payload};
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
 };
-use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
+use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, RunStatus, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::state::{FlowLikeState, FlowNodeRegistryInner, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
@@ -448,6 +448,43 @@ fn touch_run_last_update(app_handle: &AppHandle, events: &[InterComEvent]) {
     }
 }
 
+/// The `status` an executor's terminal `completed` event carries for a finished run.
+fn terminal_status(status: Option<&RunStatus>, cancelled: bool) -> &'static str {
+    match status {
+        Some(RunStatus::Success) => "completed",
+        Some(RunStatus::Stopped) => "cancelled",
+        Some(RunStatus::Failed) => "failed",
+        Some(RunStatus::Running) | None if cancelled => "cancelled",
+        Some(RunStatus::Running) | None => "failed",
+    }
+}
+
+const COMPLETED_EVENT: &str = "completed";
+
+/// Ends a desktop event run's stream the way an executor ends one, so callers read the
+/// outcome from `completed.status` on every transport.
+fn completed_event(
+    run_id: &str,
+    status: Option<&RunStatus>,
+    cancelled: bool,
+    log_level: Option<u8>,
+) -> InterComEvent {
+    InterComEvent::with_type(
+        COMPLETED_EVENT,
+        json::json!({
+            "run_id": run_id,
+            "status": terminal_status(status, cancelled),
+            "log_level": log_level,
+        }),
+    )
+}
+
+/// A run's `completed` goes to its caller's channel only: every window's toast provider
+/// listens for it and would finish the progress toasts of other runs still going.
+fn broadcasts_to_every_window(event_type: &str) -> bool {
+    event_type != COMPLETED_EVENT
+}
+
 fn credential_content_prefix(credentials: &SharedCredentials) -> Option<&str> {
     match credentials {
         SharedCredentials::Aws(aws) => aws.content_path_prefix.as_deref(),
@@ -835,9 +872,9 @@ async fn execute_prepared(
                         );
                     }
 
-                    let first_event = event.first();
-
-                    if let Some(first_event) = first_event {
+                    if let Some(first_event) = event.first()
+                        && broadcasts_to_every_window(&first_event.event_type)
+                    {
                         crate::utils::emit_event_batch_throttled(
                             &app_handle,
                             UiEmitTarget::All,
@@ -1026,14 +1063,28 @@ async fn execute_prepared(
     if let Some(deadline) = e2e_deadline {
         deadline.abort();
     }
-    crate::e2e_runtime::record_outcome(&*run_arc.lock().await);
+    let status = {
+        let run = run_arc.lock().await;
+        crate::e2e_runtime::record_outcome(&run);
+        run.status.clone()
+    };
+
+    if event_id.is_some() {
+        let _ = buffered_sender
+            .send(completed_event(
+                &run_id,
+                Some(&status),
+                cancellation_token.is_cancelled(),
+                meta.as_ref().map(|meta| meta.log_level),
+            ))
+            .await;
+    }
 
     if let Err(err) = buffered_sender.flush().await {
         println!("Error flushing buffered sender: {}", err);
     }
 
     if let Some(meta) = &meta {
-        let status = run_arc.lock().await.status.clone();
         crate::run_reports::enqueue(
             &app_handle_for_report,
             crate::run_reports::FinishedRun {
@@ -1544,6 +1595,68 @@ mod tests {
         assert!(summary.contains("ms state="));
         assert!(summary.contains(" app_load="));
         assert!(summary.contains(" identity="));
+    }
+
+    #[test]
+    fn terminal_status_reads_the_final_run_status_first() {
+        for cancelled in [false, true] {
+            assert_eq!(
+                terminal_status(Some(&RunStatus::Success), cancelled),
+                "completed"
+            );
+            assert_eq!(
+                terminal_status(Some(&RunStatus::Stopped), cancelled),
+                "cancelled"
+            );
+            assert_eq!(
+                terminal_status(Some(&RunStatus::Failed), cancelled),
+                "failed"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_status_of_an_unfinished_run_follows_the_cancellation() {
+        assert_eq!(
+            terminal_status(Some(&RunStatus::Running), true),
+            "cancelled"
+        );
+        assert_eq!(terminal_status(None, true), "cancelled");
+        assert_eq!(terminal_status(Some(&RunStatus::Running), false), "failed");
+        assert_eq!(terminal_status(None, false), "failed");
+    }
+
+    /// packages/api/src/execution/sse_proxy.rs `parse_completed_payload` and the form's
+    /// outcome read `status` and `log_level` from this payload.
+    #[test]
+    fn terminal_status_completed_event_matches_the_executor_shape() {
+        let event = completed_event("run-1", Some(&RunStatus::Stopped), true, Some(4));
+        assert_eq!(event.event_type, "completed");
+        assert_eq!(
+            event.payload,
+            json::json!({ "run_id": "run-1", "status": "cancelled", "log_level": 4 })
+        );
+
+        let unknown = completed_event("run-2", None, false, None);
+        assert_eq!(
+            unknown.payload,
+            json::json!({ "run_id": "run-2", "status": "failed", "log_level": null })
+        );
+    }
+
+    #[test]
+    fn terminal_status_completed_event_stays_on_the_run_channel() {
+        let event = completed_event("run-1", Some(&RunStatus::Failed), false, None);
+        assert!(!broadcasts_to_every_window(&event.event_type));
+        for event_type in [
+            "run_initiated",
+            "progress",
+            "toast",
+            "error",
+            "flow_notification",
+        ] {
+            assert!(broadcasts_to_every_window(event_type), "{event_type}");
+        }
     }
 
     #[test]

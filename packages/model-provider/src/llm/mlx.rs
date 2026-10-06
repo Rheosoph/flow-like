@@ -72,6 +72,13 @@ impl MlxModel {
     pub fn port(&self) -> u16 {
         self.port
     }
+
+    /// A completion client that holds `keepalive` for as long as it or a clone of it lives.
+    pub fn provider_with_keepalive(&self, keepalive: Arc<dyn Send + Sync>) -> ModelConstructor {
+        ModelConstructor {
+            inner: Box::new(self.client.clone().with_keepalive(keepalive)),
+        }
+    }
 }
 
 impl Cacheable for MlxModel {
@@ -160,6 +167,28 @@ mod tests {
             .await
             .unwrap();
         let client = model.provider().await.unwrap().into_client();
+
+        drop(model);
+        assert!(!dropped.load(Ordering::Acquire));
+
+        drop(client);
+        assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn a_client_holds_the_keepalive_it_was_handed() {
+        let provider = ModelProvider {
+            api_surface: None,
+            provider_name: "MLX".to_string(),
+            model_id: Some("test-model".to_string()),
+            version: None,
+            params: None,
+        };
+        let dropped = Arc::new(AtomicBool::new(false));
+        let model = MlxModel::new(&provider, 1, "test-token").await.unwrap();
+        let client = model
+            .provider_with_keepalive(Arc::new(DropProbe(dropped.clone())))
+            .into_client();
 
         drop(model);
         assert!(!dropped.load(Ordering::Acquire));

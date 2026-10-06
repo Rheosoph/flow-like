@@ -158,6 +158,103 @@ fn huggingface_pinned_download_url(
     Ok(url.to_string())
 }
 
+const MAX_BIT_SOURCE_LEN: usize = 2048;
+
+/// The digest of a Bit file's bytes, known before any byte is fetched.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct BitContentDigest {
+    pub algorithm: BitDigestAlgorithm,
+    pub hex: String,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BitDigestAlgorithm {
+    Blake3,
+    Sha256,
+}
+
+fn is_hex_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The repository and commit a Bit's provider names, when they pin a Hugging Face file.
+fn huggingface_origin(bit: &Bit) -> Option<(&str, String)> {
+    let provider = bit.parameters.get("provider")?;
+    let repo = provider.get("model_id")?.as_str()?;
+    let revision = provider.get("version")?.as_str()?;
+    validate_huggingface_repo_id(repo).ok()?;
+    validate_huggingface_revision(revision).ok()?;
+    Some((repo, revision.to_ascii_lowercase()))
+}
+
+fn huggingface_source(repo: &str, revision: &str, file_name: &str) -> Option<String> {
+    if file_name.chars().any(char::is_control) {
+        return None;
+    }
+    safe_mlx_asset_path(file_name).ok()?;
+    huggingface_pinned_download_url(repo, revision, file_name)
+        .ok()
+        .filter(|source| source.len() <= MAX_BIT_SOURCE_LEN)
+}
+
+/// HTTPS without credentials, fragment or a query other than `download=true`, so signed links
+/// never travel to a device.
+fn is_public_https(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str().is_some_and(|host| !host.is_empty())
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.fragment().is_none()
+        && url.query().is_none_or(|query| query == "download=true")
+}
+
+/// A link a device may fetch: public HTTPS in canonical form.
+fn public_source(link: &str) -> Option<String> {
+    let url = Url::parse(link).ok()?;
+    (is_public_https(&url) && url.as_str() == link && link.len() <= MAX_BIT_SOURCE_LEN)
+        .then(|| link.to_owned())
+}
+
+/// The Git LFS sha256 a pack root's Hugging Face manifest records for one of its files.
+fn lfs_digest(root: &Bit, file_name: &str) -> Option<BitContentDigest> {
+    let oid = root
+        .parameters
+        .pointer("/huggingface/files")?
+        .as_array()?
+        .iter()
+        .find(|file| file.get("path").and_then(Value::as_str) == Some(file_name))?
+        .get("lfs_oid")?
+        .as_str()
+        .filter(|oid| is_hex_digest(oid))?;
+    Some(BitContentDigest {
+        algorithm: BitDigestAlgorithm::Sha256,
+        hex: oid.to_ascii_lowercase(),
+    })
+}
+
+/// Where a device fetches a Bit's file, in the order it tries them (plan §3.1): the Bit's own
+/// public link, the file at the Hugging Face commit the Bit names, then at the commit its pack
+/// `root` names. A Bit without a file has none. `packages/ui/lib/bit/bit-sources.ts` mirrors it
+/// against `fixtures/bit-sources.json`.
+pub fn bit_sources(bit: &Bit, root: &Bit) -> Vec<String> {
+    let Some(file_name) = bit.file_name.as_deref().filter(|name| !name.is_empty()) else {
+        return Vec::new();
+    };
+    let own = bit.download_link.as_deref().and_then(public_source);
+    let derived = [bit, root].into_iter().filter_map(|origin| {
+        let (repo, revision) = huggingface_origin(origin)?;
+        huggingface_source(repo, &revision, file_name)
+    });
+    let mut sources = Vec::new();
+    for source in own.into_iter().chain(derived) {
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    sources
+}
+
 fn update_source_identity_field(hasher: &mut blake3::Hasher, value: &[u8]) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value);
@@ -1262,6 +1359,20 @@ impl Bit {
         )
     }
 
+    /// The digest of the Bit file's bytes known before any byte is fetched: the hub's blake3 of
+    /// a mirrored file (its `hash`), else the Git LFS sha256 the pack `root`'s Hugging Face
+    /// manifest records for it. `None` leaves the digest to the deployer, which hashes the file.
+    pub fn content_digest(&self, root: &Bit) -> Option<BitContentDigest> {
+        let file_name = self.file_name.as_deref().filter(|name| !name.is_empty())?;
+        if is_hex_digest(&self.hash) && self.hash != self.id {
+            return Some(BitContentDigest {
+                algorithm: BitDigestAlgorithm::Blake3,
+                hex: self.hash.to_ascii_lowercase(),
+            });
+        }
+        lfs_digest(root, file_name)
+    }
+
     /// Source-derived identities deliberately are not content checksums. Verify
     /// that an identity matches this Bit's current source fields before using
     /// the trust-on-first-use download contract.
@@ -1602,6 +1713,25 @@ impl Bit {
         None
     }
 
+    pub(crate) fn model_provider(&self) -> Option<ModelProvider> {
+        self.try_to_provider()
+            .or_else(|| self.try_to_embedding_provider())
+    }
+
+    /// Whether a device's model host serves this Bit through the `device` provider.
+    pub fn is_device_model(&self) -> bool {
+        self.model_provider().is_some_and(|provider| {
+            crate::models::device::is_device_provider(&provider.provider_name)
+        })
+    }
+
+    /// The device and hosted model a `device` Bit names; `None` for every other provider.
+    pub fn device_model_target(
+        &self,
+    ) -> Option<flow_like_types::Result<crate::models::device::DeviceModelTarget>> {
+        crate::models::device::DeviceModelTarget::from_bit(self)
+    }
+
     pub fn try_to_context_length(&self) -> Option<u32> {
         if let Some(parameters) = self.try_to_llm() {
             return Some(parameters.context_length);
@@ -1775,8 +1905,6 @@ impl Bit {
     )> {
         let model_factory = context.app_state.model_factory.clone();
         let model = model_factory
-            .lock()
-            .await
             .build(
                 self,
                 context.app_state.clone(),
@@ -2537,5 +2665,31 @@ mod tests {
     #[test]
     fn mlx_capability_is_false_off_supported_apple_devices() {
         assert!(!can_host_mlx());
+    }
+
+    #[test]
+    fn sources_and_digests_match_the_shared_fixture() {
+        let fixture: Value =
+            flow_like_types::json::from_str(include_str!("../fixtures/bit-sources.json")).unwrap();
+        let cases = fixture["cases"].as_array().unwrap();
+        assert!(cases.len() >= 10);
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let bit: Bit = flow_like_types::json::from_value(case["bit"].clone()).unwrap();
+            let root: Bit = case
+                .get("root")
+                .map(|root| flow_like_types::json::from_value(root.clone()).unwrap())
+                .unwrap_or_else(|| bit.clone());
+            assert_eq!(
+                flow_like_types::json::to_value(bit_sources(&bit, &root)).unwrap(),
+                case["sources"],
+                "{name}"
+            );
+            assert_eq!(
+                flow_like_types::json::to_value(bit.content_digest(&root)).unwrap(),
+                case["digest"],
+                "{name}"
+            );
+        }
     }
 }

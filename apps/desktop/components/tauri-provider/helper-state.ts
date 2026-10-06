@@ -15,14 +15,22 @@ import type {
 	ITemporaryPresignedUpload,
 	ITemporaryUploadResult,
 } from "@flow-like/flow-like-ui/lib";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { createId } from "@paralleldrive/cuid2";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { appCacheDir } from "@tauri-apps/api/path";
+import { appCacheDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
-import { mkdir, writeFile } from "@tauri-apps/plugin-fs";
+import { mkdir, remove, writeFile } from "@tauri-apps/plugin-fs";
 import { get, post } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+
+/** Same as `FORM_UPLOADS_DIR` in src-tauri/src/functions/tmp.rs. */
+const FORM_UPLOADS_DIR = "form-uploads";
+
+interface IStagedFormFile {
+	flowPath: ITemporaryFlowPath;
+}
 
 interface ITemporaryFileResponse {
 	key: string;
@@ -170,12 +178,14 @@ export class HelperState implements IHelperState {
 		options?: {
 			offline?: boolean;
 			appId?: string;
+			eventId?: string;
 			executionTarget?: ITemporaryUploadExecutionTarget;
 			onProgress?: BulkUploadProgressCallback;
 			signal?: AbortSignal;
 		},
 	): Promise<ITemporaryUploadResult[]> {
 		const appId = options?.appId;
+		const eventId = options?.eventId;
 		const local = await this.useLocalTemporaryFile(
 			options?.offline ?? false,
 			appId,
@@ -184,7 +194,11 @@ export class HelperState implements IHelperState {
 		const scope = this.temporaryUploadScope(local, appId);
 
 		if (local) {
-			return uploadTemporaryFilesLocally(files, writeLocalTemporaryFile, {
+			const upload =
+				appId && eventId
+					? (file: File) => stageFormFile(file, appId, eventId)
+					: writeLocalTemporaryFile;
+			return uploadTemporaryFilesLocally(files, upload, {
 				onProgress: options?.onProgress,
 				signal: options?.signal,
 			});
@@ -260,4 +274,47 @@ async function writeLocalTemporaryFile(
 	return {
 		url: `${assetUrl}${separator}filename=${encodeURIComponent(file.name)}`,
 	};
+}
+
+/**
+ * Writes the file into the app cache and has the backend move it into the
+ * temporary store, where a run on this device reads it through the FlowPath.
+ */
+async function stageFormFile(
+	file: File,
+	appId: string,
+	eventId: string,
+): Promise<ITemporaryUploadedFile> {
+	const directory = await join(await appCacheDir(), FORM_UPLOADS_DIR);
+	await mkdir(directory, { recursive: true }).catch(() => undefined);
+	const extension = /\.([A-Za-z0-9]{1,16})$/.exec(file.name)?.[1];
+	const source = await join(
+		directory,
+		extension ? `${createId()}.${extension}` : createId(),
+	);
+
+	try {
+		await writeFile(source, file.stream());
+		const staged = await invoke<IStagedFormFile>("stage_form_file", {
+			appId,
+			eventId,
+			source,
+			fileName: file.name,
+		});
+		return {
+			url: "",
+			contentType: file.type || undefined,
+			flowPath: staged.flowPath,
+		};
+	} catch (error) {
+		await remove(source).catch(() => undefined);
+		throw error instanceof Error
+			? error
+			: new Error(
+					getErrorMessage(
+						error,
+						`${file.name} could not be staged for the run`,
+					),
+				);
+	}
 }

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import type { DeployDraft } from "../../../../../lib/device-management/model/deploy-plan";
 import {
 	byRole,
 	click,
@@ -212,6 +213,27 @@ describe("Endpoint (APP §3.9)", () => {
 		expect(kit.savedText()).not.toContain(token);
 	});
 
+	test("No token clears the token field and explains access before continuing", async () => {
+		const view = await endpoint(VISITOR, { device: EDGE });
+		await clickByText("Set my own", view.container);
+		expect(kit.footBlocking(view.container)).toContain(
+			"32 printable characters",
+		);
+		await clickByText("No token", view.container);
+		expect(
+			byRole("button", "No token", view.container).getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(view.container.querySelector("#deploy-token")).toBeNull();
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(text(view.container)).toContain(
+			"Anyone who can reach the service can use its endpoints, Pages, chats and actions without a token.",
+		);
+		expect(summary()).toContain("no token required");
+		expect(kit.savedText()).toContain('"token":"none","tokenValue":""');
+		await clickByText("Generate", view.container);
+		expect(summary()).not.toContain("no token required");
+	});
+
 	test("hosting values the plan doesn't carry are shown, not edited", async () => {
 		const view = await endpoint(VISITOR, { device: EDGE });
 		expect(text(view.container)).toContain(
@@ -286,6 +308,8 @@ describe("Endpoint · Endpoints, forms and bots (R2 §6.4)", () => {
 		expect(text(view.container)).toContain(
 			"One access token calls everything support-portal serves: whoever has it to open a Page or a chat can also call Support API. Deploy an Endpoint as its own service to give it a token of its own.",
 		);
+		await clickByText("No token", view.container);
+		expect(text(view.container)).not.toContain("One access token calls");
 	});
 
 	test("only forms and quick actions: Limits, run from Devices, no service page", async () => {
@@ -307,6 +331,43 @@ describe("Endpoint · Endpoints, forms and bots (R2 §6.4)", () => {
 		);
 	});
 
+	test("forms can opt into a deployed app with device access settings", async () => {
+		const fake = await shopDraft(["evt_shop_return"]);
+		const view = await endpoint(SHOP, { device: EDGE }, { fake });
+		const optIn = () =>
+			byRole(
+				"checkbox",
+				"Open these forms and quick actions as a deployed app",
+				view.container,
+			);
+		expect(optIn().getAttribute("aria-checked")).toBe("false");
+		await click(optIn());
+		expect(byRole("heading", /Endpoint/, view.container).textContent).toBe(
+			"Step 5 of 8: Endpoint & limits",
+		);
+		expect(text(view.container)).toContain("Web endpoint for Return request");
+		expect(
+			byRole("button", "Generate", view.container).getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(text(view.container)).toContain(
+			"Return request is available through the service page and Studio.",
+		);
+		expect(kit.savedText()).toContain('"hostOnDemand":true');
+		await click(optIn());
+		expect(byRole("heading", /Limits/, view.container).textContent).toBe(
+			"Step 5 of 8: Limits",
+		);
+		expect(text(view.container)).not.toContain(
+			"Web endpoint for Return request",
+		);
+	});
+
+	test("bot-only deployments do not offer a deployed app listener", async () => {
+		const fake = await shopDraft(["evt_shop_telegram"]);
+		const view = await endpoint(SHOP, { device: EDGE }, { fake });
+		expect(view.container.querySelector("#deploy-host-on-demand")).toBeNull();
+	});
+
 	test("a form beside a Page keeps the Page's instances", async () => {
 		const view = await endpoint(
 			"app_field_notes",
@@ -316,6 +377,48 @@ describe("Endpoint · Endpoints, forms and bots (R2 §6.4)", () => {
 		expect(
 			byRole("button", "More", view.container).hasAttribute("disabled"),
 		).toBe(false);
+		expect(view.container.querySelector("#deploy-host-on-demand")).toBeNull();
+	});
+
+	test("an existing form listener leaves opt-in available for a new target", async () => {
+		const appId = "app_field_notes";
+		const fake = await createFakeWorkspace();
+		kit.seedDraft(fake, {
+			appId,
+			scope: { kind: "app", appId },
+			route: { deviceIds: [], mode: "new" },
+			reached: 4,
+			change: (draft): DeployDraft => ({
+				...draft,
+				scope: "events",
+				events: ["evt_notes_form"],
+				targets: [
+					{
+						deviceId: STUDIO,
+						choices: { main: { kind: "update", serviceId: "field-notes" } },
+						serveBoth: [],
+						over: {},
+					},
+					{ deviceId: EDGE, choices: {}, serveBoth: [], over: {} },
+				],
+			}),
+		});
+		const view = await endpoint(
+			appId,
+			{ device: [STUDIO, EDGE] },
+			{ fake, platform: "desktop" },
+		);
+		expect(byRole("heading", /Endpoint/, view.container).textContent).toBe(
+			"Step 5 of 8: Endpoint & limits",
+		);
+		const optIn = byRole(
+			"checkbox",
+			"Open these forms and quick actions as a deployed app",
+			view.container,
+		);
+		expect(optIn.getAttribute("aria-checked")).toBe("false");
+		await click(optIn);
+		expect(kit.savedText()).toContain('"hostOnDemand":true');
 	});
 });
 

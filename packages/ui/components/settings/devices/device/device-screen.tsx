@@ -16,6 +16,8 @@ import type { DeviceTab } from "../../../../lib/device-management/model/types";
 import { liveErrorCode } from "../../../../lib/device-management/workspace/errors";
 import { TabsContent } from "../../../ui/tabs";
 import { errorCopy } from "../copy/error-copy";
+import { DeviceModelsTab, useModelsAttention } from "../models";
+import { sendFromThisComputer } from "../models/send-from-this-computer";
 import { pinSeconds } from "../overlays/unlock-sheet";
 import { useAreaTime } from "../primitives/area-context";
 import { Banner } from "../primitives/banner";
@@ -76,6 +78,7 @@ function WholeDeviceLabel({ label }: Readonly<{ label: string }>) {
 
 function useDeviceTabs(page: DevicePage): UnderlineTab<DeviceTab>[] {
 	const { t } = useTranslation("devices");
+	const models = useModelsAttention(page.deviceId);
 	return useMemo(() => {
 		const labels: Record<DeviceTab, { label: string; short?: string }> = {
 			overview: { label: t("device.tabs.overview", "Overview") },
@@ -85,6 +88,7 @@ function useDeviceTabs(page: DevicePage): UnderlineTab<DeviceTab>[] {
 				short: t("device.tabs.activityShort", "Activity"),
 			},
 			metrics: { label: t("device.tabs.metrics", "Metrics") },
+			models: { label: t("device.tabs.models", "Models") },
 			certificates: {
 				label: t("device.tabs.certificates", "Certificates"),
 				short: t("device.tabs.certificatesShort", "Certs"),
@@ -103,7 +107,8 @@ function useDeviceTabs(page: DevicePage): UnderlineTab<DeviceTab>[] {
 				id === "overview"
 					? items
 					: items.filter((item) => tabOfAttention(item.key) === id);
-			const count = tabCount(mine);
+			// The device files model recommendations itself; its "now" ones badge the tab.
+			const count = id === "models" ? models : tabCount(mine);
 			const { label, short } = labels[id];
 			const whole = !!page.app && !scoped;
 			return {
@@ -128,7 +133,7 @@ function useDeviceTabs(page: DevicePage): UnderlineTab<DeviceTab>[] {
 					: {}),
 			};
 		});
-	}, [t, page.tabs, page.attention, page.appAttention, page.app]);
+	}, [t, page.tabs, page.attention, page.appAttention, page.app, models]);
 }
 
 /** A fingerprint exactly as the device prints it: case and every character matter when it is compared. */
@@ -406,8 +411,8 @@ function HiddenTabsNote({ page }: Readonly<{ page: DevicePage }>) {
 						"Only cloud approvals are shown: you have no access to this device itself.",
 					)
 				: t(
-						"device.tabs.revoked",
-						"Services, activity, metrics, certificates and device settings aren't shown: revoked devices aren't read.",
+						"device.tabs.modelsRevoked",
+						"Services, activity, metrics, models, certificates and device settings aren't shown: revoked devices aren't read.",
 					)}
 		</p>
 	);
@@ -443,6 +448,12 @@ function DevicePageView({
 		services: () => <DeviceServicesTab page={page} app={app} />,
 		activity: () => <DeviceActivityTab {...tabProps} />,
 		metrics: () => <DeviceMetricsTab {...tabProps} />,
+		models: () => (
+			<DeviceModelsTab
+				{...tabProps}
+				sendFromThisComputer={sendFromThisComputer(deviceId)}
+			/>
+		),
 		certificates: () => <DeviceCertificatesTab {...tabProps} />,
 		access: () => <DeviceAccessTab {...tabProps} />,
 		keys: () => <DeviceKeysTab {...tabProps} />,
@@ -489,7 +500,7 @@ function DevicePageView({
 	);
 }
 
-/** N2 Device (SPEC §5.2): header, verdict and the eight tabs of one device. */
+/** N2 Device (SPEC §5.2): header, verdict and the nine tabs of one device. */
 export function DeviceScreen({
 	route,
 	scope,

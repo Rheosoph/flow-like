@@ -87,6 +87,7 @@ import {
 	indexDevices,
 	listDevices,
 	pickableDevices,
+	resultFooterAction,
 	stepTab,
 	unavailableSelectedDevice,
 } from "./new-event-device-choice";
@@ -1225,14 +1226,16 @@ function DeploymentPanel({
 							data-new-event-footer="saved"
 						>
 							{result ? (
-								<Button
-									type="button"
-									className="h-11"
-									disabled={busy}
-									onClick={() => onComplete?.(saved)}
-								>
-									{t("newEvent.done", "Done")}
-								</Button>
+								resultFooterAction(result) === "done" && (
+									<Button
+										type="button"
+										className="h-11"
+										disabled={busy}
+										onClick={() => onComplete?.(saved)}
+									>
+										{t("newEvent.done", "Done")}
+									</Button>
+								)
 							) : running ? (
 								<Button type="button" className="h-11" disabled>
 									<LoaderCircle aria-hidden className="size-4 animate-spin" />

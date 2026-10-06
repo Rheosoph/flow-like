@@ -944,7 +944,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let usage_context = store.data().host_state.model_usage_context.clone();
                     #[cfg(feature = "model")]
                     {
-                        let mut factory = app_state.embedding_factory.lock().await;
+                        let factory = &app_state.embedding_factory;
                         let model_result = factory
                             .build_text_routed(&bit, app_state.clone(), access_token, usage_context)
                             .await;
@@ -1288,7 +1288,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
 
                     // Build model and invoke
                     let model = {
-                        let mut factory = app_state.model_factory.lock().await;
+                        let factory = &app_state.model_factory;
                         match factory
                             .build(
                                 &bit,
@@ -1521,7 +1521,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     }
 
                     let model = {
-                        let mut factory = app_state.model_factory.lock().await;
+                        let factory = &app_state.model_factory;
                         match factory
                             .build(
                                 &bit,

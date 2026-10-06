@@ -5,20 +5,25 @@ import { Box, TriangleAlert } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import {
-	CAPABILITIES,
+	KNOWN_CAPABILITIES,
 	PERMISSION_PRESETS,
-	PERMISSION_PRESET_IDS,
 	type PermissionPreset,
-	presetOf,
+	agentAccepts,
+	hubAccepts,
+	presetsFor,
 	runsCode,
 } from "../../../../lib/device-management/model/permissions";
 import type { DeviceViewModel } from "../../../../lib/device-management/model/types";
 import {
 	ACCESS_DURATIONS_S,
+	type AgentSupport,
 	DEFAULT_ACCESS_S,
 	type PermissionBlock,
+	agentSupportOf,
 	grantExpiry,
+	offeredPreset,
 	permissionBlock,
+	presetCapabilities,
 	rulesExpiryAfterSave,
 	scopedCapabilities,
 } from "../../../../lib/device-management/sharing";
@@ -97,10 +102,10 @@ export function draftScope(draft: PermissionDraft): InventoryScope | undefined {
 		: undefined;
 }
 
-/** The permissions the grant will carry: what was ticked, minus what the scope or the agent can't hold. */
+/** The permissions the grant will carry: what was ticked, minus what the scope or the agents can't hold. */
 export function draftCapabilities(
 	draft: PermissionDraft,
-	certificateSupport: boolean | undefined,
+	support: AgentSupport,
 	previous?: ManagementGrant,
 ): Capability[] {
 	return scopedCapabilities(draft.capabilities, draft.scopeKind).filter(
@@ -108,7 +113,7 @@ export function draftCapabilities(
 			!permissionBlock(
 				capability,
 				draft.scopeKind,
-				certificateSupport,
+				support,
 				previous?.capabilities.includes(capability),
 			),
 	);
@@ -122,13 +127,13 @@ export type DraftProblem =
 
 export function draftProblems(
 	draft: PermissionDraft,
-	certificateSupport: boolean | undefined,
+	support: AgentSupport,
 	previous?: ManagementGrant,
 ): DraftProblem[] {
 	const checks: [DraftProblem, boolean][] = [
 		[
 			"no_permissions",
-			draftCapabilities(draft, certificateSupport, previous).length === 0,
+			draftCapabilities(draft, support, previous).length === 0,
 		],
 		["choose_app", scopeIncomplete(draft, "project", draft.projectId)],
 		["choose_service", scopeIncomplete(draft, "placement", draft.placementId)],
@@ -182,16 +187,8 @@ export function problemText(t: DevicesT, problem: DraftProblem): string {
 	}
 }
 
-/** Whether every target device's agent can share Manage certificates; `undefined` while one was not read live. */
-export function certificateSupportOf(
-	devices: readonly DeviceAccess[],
-): boolean | undefined {
-	if (devices.some((device) => device.certificateSupport === false))
-		return false;
-	return devices.every((device) => device.certificateSupport === true)
-		? true
-		: undefined;
-}
+/** `agentSupportOf` under the name add-people-sheet.tsx imports. */
+export const certificateSupportOf = agentSupportOf;
 
 export function durationLabel(t: DevicesT, seconds: number): string {
 	if (seconds < 86_400)
@@ -307,9 +304,61 @@ function useKnownServices(deviceId: string | undefined): KnownService[] {
 	return useMemo(() => knownServicesOf(services), [services]);
 }
 
+type AgentBlock = Exclude<PermissionBlock, "device_only">;
+
+/** Whether this device's agent is the reason for `block`. */
+const CAUSES: Record<
+	AgentBlock,
+	(device: DeviceAccess, capability: Capability) => boolean
+> = {
+	certificates_unsupported: (device) => device.certificateSupport === false,
+	certificates_unknown: (device) => device.certificateSupport === undefined,
+	models_unsupported: (device, capability) =>
+		device.features !== undefined && !agentAccepts(capability, device.features),
+	models_unknown: (device) => device.features === undefined,
+	hub_models_unsupported: (device, capability) =>
+		!hubAccepts(capability, device.supportedCapabilities),
+};
+
+const AGENT_BLOCK_COPY: Record<
+	AgentBlock,
+	(t: DevicesT, device: string) => string
+> = {
+	certificates_unsupported: (t, device) =>
+		t(
+			"devices:access.picker.block.certificatesUnsupported",
+			"{{device}}'s agent can't share this. Update the agent first.",
+			{ device },
+		),
+	certificates_unknown: (t, device) =>
+		t(
+			"devices:access.picker.block.certificatesUnknown",
+			"{{device}} hasn't been read live, so its agent's support for this is unknown. Connect to it once.",
+			{ device },
+		),
+	models_unsupported: (t, device) =>
+		t(
+			"devices:models.use.access.blockUnsupported",
+			"{{device}}'s agent doesn't host models. Update the agent first.",
+			{ device },
+		),
+	hub_models_unsupported: (t) =>
+		t(
+			"devices:models.use.access.blockHubUnsupported",
+			"This hub cannot save model permissions yet. Update the hub first.",
+		),
+	models_unknown: (t, device) =>
+		t(
+			"devices:models.use.access.blockUnknown",
+			"{{device}} hasn't been read live, so whether its agent hosts models is unknown. Connect to it once.",
+			{ device },
+		),
+};
+
 function blockReason(
 	t: DevicesT,
 	block: PermissionBlock,
+	capability: Capability,
 	devices: readonly DeviceAccess[],
 ): string {
 	if (block === "device_only")
@@ -317,33 +366,41 @@ function blockReason(
 			"devices:access.picker.block.deviceOnly",
 			"Only with whole-device access.",
 		);
-	const failing = devices.find((device) =>
-		block === "certificates_unsupported"
-			? device.certificateSupport === false
-			: device.certificateSupport === undefined,
-	);
-	const device = failing?.name ?? devices[0]?.name ?? "";
-	return block === "certificates_unsupported"
-		? t(
-				"devices:access.picker.block.certificatesUnsupported",
-				"{{device}}'s agent can't share this. Update the agent first.",
-				{ device },
-			)
-		: t(
-				"devices:access.picker.block.certificatesUnknown",
-				"{{device}} hasn't been read live, so its agent's support for this is unknown. Connect to it once.",
-				{ device },
-			);
+	let failing = devices[0];
+	for (const device of devices)
+		if (CAUSES[block](device, capability)) {
+			failing = device;
+			break;
+		}
+	return AGENT_BLOCK_COPY[block](t, failing?.name ?? "");
 }
 
 const HOST_OPERATIONS: readonly Capability[] = ["reboot", "update_agent"];
 const SEG_ROW = "flex flex-wrap items-center gap-x-3 gap-y-1.5";
+
+/** Every permission the agents accept, plus those ticked or already held (shown blocked when the agents don't), in display order. */
+function shownCapabilities(
+	draft: PermissionDraft,
+	support: AgentSupport,
+	previous: ManagementGrant | undefined,
+): Capability[] {
+	const kept = new Set([
+		...draft.capabilities,
+		...(previous?.capabilities ?? []),
+	]);
+	const shown = (capability: Capability) =>
+		kept.has(capability) ||
+		(agentAccepts(capability, support.features) &&
+			hubAccepts(capability, support.supportedCapabilities));
+	return KNOWN_CAPABILITIES.filter(shown);
+}
 
 function PermissionCheck({
 	id,
 	capability,
 	draft,
 	devices,
+	support,
 	previous,
 	onToggle,
 }: Readonly<{
@@ -351,6 +408,7 @@ function PermissionCheck({
 	capability: Capability;
 	draft: PermissionDraft;
 	devices: readonly DeviceAccess[];
+	support: AgentSupport;
 	previous?: ManagementGrant;
 	onToggle(capability: Capability, checked: boolean): void;
 }>) {
@@ -359,7 +417,7 @@ function PermissionCheck({
 	const block = permissionBlock(
 		capability,
 		draft.scopeKind,
-		certificateSupportOf(devices),
+		support,
 		previous?.capabilities.includes(capability),
 	);
 	const ticked = draft.capabilities.includes(capability);
@@ -412,7 +470,7 @@ function PermissionCheck({
 						kind={block === "device_only" ? "policy" : "unsupported"}
 						className="mt-0.5"
 					>
-						{blockReason(t, block, devices)}
+						{blockReason(t, block, capability, devices)}
 					</GateInline>
 				) : null}
 			</CheckField>
@@ -594,12 +652,15 @@ export function PermissionPicker({
 	const { t } = useTranslation("devices");
 	const patch = (change: Partial<PermissionDraft>) =>
 		onChange({ ...draft, ...change });
-	const support = certificateSupportOf(devices);
+	const support = agentSupportOf(devices);
+	const { features, supportedCapabilities } = support;
 	const effective = draftCapabilities(draft, support, previous);
-	const preset = presetOf(effective).preset;
+	const preset = offeredPreset(effective, features, supportedCapabilities);
 	const problems = draftProblems(draft, support, previous);
 	const several = devices.length > 1;
 	const narrow = draft.scopeKind !== "device";
+	const offered = presetsFor("device", features, supportedCapabilities);
+	const fitting = presetsFor(draft.scopeKind, features, supportedCapabilities);
 	const scopeOptions = [
 		{ value: "device" as const, label: enumLabel(t, "scopeKind", "device") },
 		{ value: "project" as const, label: enumLabel(t, "scopeKind", "project") },
@@ -610,10 +671,10 @@ export function PermissionPicker({
 		},
 	];
 	const presetOptions = [
-		...PERMISSION_PRESET_IDS.map((value) => ({
+		...offered.map((value) => ({
 			value: value as PermissionPreset | "custom",
 			label: enumLabel(t, "preset", value),
-			disabled: value === "device_admin" && narrow,
+			disabled: !fitting.includes(value),
 		})),
 		{ value: "custom" as const, label: enumLabel(t, "preset", "custom") },
 	];
@@ -664,27 +725,41 @@ export function PermissionPicker({
 						value={preset}
 						onChange={(next) => {
 							if (next !== "custom")
-								patch({ capabilities: [...PERMISSION_PRESETS[next]] });
+								patch({
+									capabilities: [
+										...presetCapabilities(
+											next,
+											features,
+											supportedCapabilities,
+										),
+									],
+								});
 						}}
 						wrap
 					/>
 					{narrow ? (
 						<GateInline kind="policy">
-							{t(
-								"access.picker.adminNeedsDevice",
-								"Device admin needs whole-device access.",
-							)}
+							{offered.includes("model_user")
+								? t(
+										"devices:models.use.access.presetsNeedDevice",
+										"Device admin and Model user need whole-device access.",
+									)
+								: t(
+										"access.picker.adminNeedsDevice",
+										"Device admin needs whole-device access.",
+									)}
 						</GateInline>
 					) : null}
 				</div>
 				<div className="grid gap-x-2.5 gap-y-1.5 @min-[560px]/picker:grid-cols-2">
-					{CAPABILITIES.map((capability) => (
+					{shownCapabilities(draft, support, previous).map((capability) => (
 						<PermissionCheck
 							key={capability}
 							id={`${id}-cap-${capability}`}
 							capability={capability}
 							draft={draft}
 							devices={devices}
+							support={support}
 							previous={previous}
 							onToggle={toggle}
 						/>

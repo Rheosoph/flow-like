@@ -207,6 +207,25 @@ cluster and `scripts/build-images.sh` builds the images into it. Read the
 [Kubernetes installation guide](https://docs.flow-like.com/self-hosting/kubernetes/installation/)
 for prerequisites such as gVisor and Cilium.
 
+### Deployment architecture
+
+<details>
+<summary>AWS deployment example (target design)</summary>
+
+These diagrams show the intended topology for the AWS dev configuration. Application workloads
+are disabled in the depicted configuration.
+
+<p align="center">
+  <a href="./assets/aws-dev-application.png">
+    <img src="assets/aws-dev-application.png" alt="AWS dev target architecture connecting the browser through CloudFront to the API, Flow executors, signaling, compilation, storage, and model services." width="100%" />
+  </a>
+</p>
+
+See the [supporting application workflows](./assets/aws-dev-workflows.png) for file tracking,
+media processing, scheduled work, application audits, and deployment.
+
+</details>
+
 ## Runtime requirements stay with the Flow
 
 Before a run starts, Flow-Like's pre-run analysis walks the complete Flow and reports the runtime

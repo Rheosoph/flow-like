@@ -8,7 +8,7 @@ use flow_like_catalog_core::FlowPath;
 use flow_like_types::{async_trait, json::json};
 
 #[cfg(feature = "execute")]
-use crate::document::openxml::{read_zip, write_zip};
+use crate::document::openxml::{append_before_closing, read_zip, write_zip};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -102,13 +102,13 @@ impl NodeLogic for DocxMergeNode {
 
                 if let Some(base_body) = base_files.get("word/document.xml").cloned() {
                     let mut base_xml = String::from_utf8_lossy(&base_body).to_string();
-                    if let Some(pos) = base_xml.rfind(body_close) {
+                    if base_xml.contains(body_close) {
                         let mut insert = String::new();
                         if page_break {
                             insert.push_str(page_break_xml);
                         }
-                        insert.push_str(&content);
-                        base_xml.insert_str(pos, &insert);
+                        insert.push_str(content);
+                        append_before_closing(&mut base_xml, body_close, &insert)?;
                         base_files.insert("word/document.xml".to_string(), base_xml.into_bytes());
                     }
                 }
@@ -129,19 +129,19 @@ impl NodeLogic for DocxMergeNode {
 }
 
 #[cfg(feature = "execute")]
-fn extract_body_content(xml: &str) -> String {
+fn extract_body_content(xml: &str) -> &str {
     let body_start = xml.find("<w:body>");
     let body_end = xml.rfind("</w:body>");
     match (body_start, body_end) {
-        (Some(start), Some(end)) => {
+        (Some(start), Some(end)) if start + "<w:body>".len() <= end => {
             let content_start = start + "<w:body>".len();
             let content = &xml[content_start..end];
             let sect_start = content.rfind("<w:sectPr");
             match sect_start {
-                Some(pos) => content[..pos].to_string(),
-                None => content.to_string(),
+                Some(pos) => &content[..pos],
+                None => content,
             }
         }
-        _ => String::new(),
+        _ => "",
     }
 }

@@ -33,6 +33,7 @@ mod chat;
 mod cli_auth;
 mod cli_resolution;
 mod client_pool;
+mod delegated_completion;
 mod external_chat;
 mod external_continuation;
 mod external_invocation;

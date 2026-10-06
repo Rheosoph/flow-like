@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import {
 	Activity,
+	Boxes,
 	type LucideIcon,
 	Play,
 	RotateCw,
@@ -40,6 +41,7 @@ import type {
 } from "../../../../lib/device-management/workspace/types";
 import { humanFileSize } from "../../../../lib/utils";
 import { Sheet, SheetContent, SheetTitle } from "../../../ui/sheet";
+import { isModelsWriteKind, trayTitle } from "../models/action-copy";
 import {
 	type AreaTime,
 	type DevicesT,
@@ -151,6 +153,20 @@ function commandOf(item: ActivityItem): TrayCommand | undefined {
 	return isCommand(command) ? command : undefined;
 }
 
+/** A `models` command: the tab's own items name it, the live manager's "no reply" item only its handle. */
+const isModelsItem = (item: ActivityItem) =>
+	item.label.params?.command === "models" ||
+	(item.resume?.type === "operation" && item.resume.command === "models");
+
+function modelsTitle(t: DevicesT, item: ActivityItem) {
+	const request = item.label.params?.request;
+	if (request === "push")
+		return t("devices:models.send.tray", "Send a model file");
+	return isModelsWriteKind(request)
+		? trayTitle(t, request)
+		: t("devices:models.actions.tray.any", "Model change");
+}
+
 function commandTitle(t: DevicesT, command: TrayCommand | undefined) {
 	if (!command) return t("devices:chrome.tray.kind.command", "Command");
 	const titles = {
@@ -176,7 +192,9 @@ export function activityTitle(t: DevicesT, item: ActivityItem): string {
 		),
 		agent_update: t("devices:chrome.tray.kind.agentUpdate", "Agent update"),
 		reboot: t("devices:chrome.tray.kind.reboot", "Reboot"),
-		command: commandTitle(t, commandOf(item)),
+		command: isModelsItem(item)
+			? modelsTitle(t, item)
+			: commandTitle(t, commandOf(item)),
 		secret_write: t("devices:chrome.tray.kind.secretWrite", "Secret"),
 		history_readers: t(
 			"devices:chrome.tray.kind.historyReaders",
@@ -409,10 +427,11 @@ function TrayEntry(props: Readonly<TrayEntryProps>) {
 	const time = useAreaTime();
 	const { item, onOpen, onAction } = props;
 	const command = item.kind === "command" ? commandOf(item) : undefined;
+	const models = item.kind === "command" && isModelsItem(item);
 	return (
 		<TrayItem
 			kind={item.kind}
-			icon={command ? COMMAND_ICON[command] : undefined}
+			icon={command ? COMMAND_ICON[command] : models ? Boxes : undefined}
 			state={item.state}
 			title={activityTitle(t, item)}
 			sub={activityTarget(item, props.deviceName)}
@@ -664,7 +683,9 @@ function serviceRoute(item: ActivityItem, serviceId: string) {
 }
 
 function deviceRoute(item: ActivityItem) {
-	const tab = DEVICE_TAB[item.kind] ?? "overview";
+	const tab: DeviceTab = isModelsItem(item)
+		? "models"
+		: (DEVICE_TAB[item.kind] ?? "overview");
 	const { deviceId } = item.target;
 	const route: DevicesRoute = { screen: "device", deviceId, tab };
 	return route;

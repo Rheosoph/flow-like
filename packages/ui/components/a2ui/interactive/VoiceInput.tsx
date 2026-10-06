@@ -11,6 +11,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { runtimeDomEventName } from "../../../lib/service-runtime/session-scope";
 import { cn } from "../../../lib/utils";
 import {
 	type ITemporaryFlowPath,
@@ -544,6 +545,7 @@ export function A2UIVoiceInput({
 	);
 
 	useEffect(() => {
+		const eventName = runtimeDomEventName("a2ui:clearFileInput", appId);
 		const handleClear = (event: Event) => {
 			const { detail } = event as CustomEvent<{
 				surfaceId: string;
@@ -556,11 +558,11 @@ export function A2UIVoiceInput({
 				clearRecording(false);
 			}
 		};
-		window.addEventListener("a2ui:clearFileInput", handleClear);
+		window.addEventListener(eventName, handleClear);
 		return () => {
-			window.removeEventListener("a2ui:clearFileInput", handleClear);
+			window.removeEventListener(eventName, handleClear);
 		};
-	}, [surfaceId, componentId, clearRecording]);
+	}, [appId, surfaceId, componentId, clearRecording]);
 
 	const captureSupported =
 		effectiveMode === "stt" ? speech.isSupported : recorder.isSupported;

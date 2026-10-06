@@ -1,0 +1,352 @@
+{
+	"about": "bit_sources() and Bit::content_digest() in packages/core/runtime/src/bit.rs and their mirror in packages/ui/lib/bit/bit-sources.ts must answer every case alike. `root` defaults to `bit`.",
+	"cases": [
+		{
+			"name": "hub GGUF root: its CDN link, then the file at the Hugging Face commit; the hub hash is the blake3",
+			"bit": {
+				"id": "qwen3-8b",
+				"type": "Llm",
+				"hash": "9A129038D9A00AED0CF6A7EA059CA50A813449061AB87848CF1A13EAFDF33B2C",
+				"file_name": "Qwen3-8B-Q4_K_M.gguf",
+				"size": 4920734016,
+				"download_link": "https://cdn.flow-like.com/bits/qwen3-8b-q4",
+				"parameters": {
+					"context_length": 32768,
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "Qwen/Qwen3-8B-GGUF",
+						"version": "03E404FD168941CFED98F46654680130DD85968B"
+					}
+				}
+			},
+			"sources": [
+				"https://cdn.flow-like.com/bits/qwen3-8b-q4",
+				"https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/03e404fd168941cfed98f46654680130dd85968b/Qwen3-8B-Q4_K_M.gguf?download=true"
+			],
+			"digest": {
+				"algorithm": "blake3",
+				"hex": "9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+			}
+		},
+		{
+			"name": "projector dependency: it names no commit, so the file at the root's commit follows its CDN link",
+			"bit": {
+				"id": "qwen3-vl-mmproj",
+				"type": "Projection",
+				"hash": "0f12166cd5d87ffdea9fac1f51ec96cb283f95e1e6b6dc35e14e15f2bad2ff69",
+				"file_name": "mmproj-F16.gguf",
+				"size": 1340000000,
+				"download_link": "https://cdn.flow-like.com/bits/qwen3-vl-mmproj"
+			},
+			"root": {
+				"id": "qwen3-vl",
+				"type": "Vlm",
+				"hash": "9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c",
+				"file_name": "Qwen3-VL-8B-Q4_K_M.gguf",
+				"dependencies": ["qwen3-vl-mmproj"],
+				"parameters": {
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "Qwen/Qwen3-VL-8B-GGUF",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					}
+				}
+			},
+			"sources": [
+				"https://cdn.flow-like.com/bits/qwen3-vl-mmproj",
+				"https://huggingface.co/Qwen/Qwen3-VL-8B-GGUF/resolve/03e404fd168941cfed98f46654680130dd85968b/mmproj-F16.gguf?download=true"
+			],
+			"digest": {
+				"algorithm": "blake3",
+				"hex": "0f12166cd5d87ffdea9fac1f51ec96cb283f95e1e6b6dc35e14e15f2bad2ff69"
+			}
+		},
+		{
+			"name": "user GGUF Bit: its pinned Hugging Face link is also the derived source and is listed once; a source identity is no digest",
+			"bit": {
+				"id": "my-model",
+				"type": "Llm",
+				"hash": "user-source-a820c8890c49d11c46b9f734ad66e068a229312d04015995a95616873325acee",
+				"file_name": "my-model-Q8_0.gguf",
+				"size": 8100000000,
+				"download_link": "https://huggingface.co/owner/my-model-GGUF/resolve/03e404fd168941cfed98f46654680130dd85968b/my-model-Q8_0.gguf?download=true",
+				"parameters": {
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "owner/my-model-GGUF",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					}
+				}
+			},
+			"sources": [
+				"https://huggingface.co/owner/my-model-GGUF/resolve/03e404fd168941cfed98f46654680130dd85968b/my-model-Q8_0.gguf?download=true"
+			],
+			"digest": null
+		},
+		{
+			"name": "a signed link is left out, and a hash equal to the id is no content hash",
+			"bit": {
+				"id": "a820c8890c49d11c46b9f734ad66e068a229312d04015995a95616873325acee",
+				"type": "File",
+				"hash": "a820c8890c49d11c46b9f734ad66e068a229312d04015995a95616873325acee",
+				"file_name": "weights.bin",
+				"size": 7,
+				"download_link": "https://cdn.example.com/weights.bin?X-Amz-Signature=secret"
+			},
+			"sources": [],
+			"digest": null
+		},
+		{
+			"name": "a link with credentials is left out",
+			"bit": {
+				"id": "credentialed",
+				"type": "File",
+				"hash": "credentialed",
+				"file_name": "weights.bin",
+				"download_link": "https://user:secret@cdn.example.com/weights.bin"
+			},
+			"sources": [],
+			"digest": null
+		},
+		{
+			"name": "a link with a fragment is left out",
+			"bit": {
+				"id": "fragment",
+				"type": "File",
+				"hash": "fragment",
+				"file_name": "weights.bin",
+				"download_link": "https://cdn.example.com/weights.bin#part-2"
+			},
+			"sources": [],
+			"digest": null
+		},
+		{
+			"name": "a plain HTTP link is left out",
+			"bit": {
+				"id": "plain",
+				"type": "File",
+				"hash": "plain",
+				"file_name": "weights.bin",
+				"download_link": "http://cdn.example.com/weights.bin"
+			},
+			"sources": [],
+			"digest": null
+		},
+		{
+			"name": "a link that is not in canonical form is left out",
+			"bit": {
+				"id": "uncanonical",
+				"type": "File",
+				"hash": "uncanonical",
+				"file_name": "weights.bin",
+				"download_link": "https://CDN.example.com/weights.bin"
+			},
+			"sources": [],
+			"digest": null
+		},
+		{
+			"name": "a branch name is no pinned commit, so no Hugging Face source is derived",
+			"bit": {
+				"id": "branch",
+				"type": "Llm",
+				"hash": "5f97e3774c51edd1d63706c2ec3826c564a067794770cdab0f8c4797971cacf9",
+				"file_name": "model.gguf",
+				"download_link": "https://cdn.flow-like.com/bits/branch",
+				"parameters": {
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "Qwen/Qwen3-8B-GGUF",
+						"version": "main"
+					}
+				}
+			},
+			"sources": ["https://cdn.flow-like.com/bits/branch"],
+			"digest": {
+				"algorithm": "blake3",
+				"hex": "5f97e3774c51edd1d63706c2ec3826c564a067794770cdab0f8c4797971cacf9"
+			}
+		},
+		{
+			"name": "a hosted model id is no Hugging Face repository",
+			"bit": {
+				"id": "hosted",
+				"type": "Llm",
+				"hash": "hosted",
+				"file_name": "model.gguf",
+				"parameters": {
+					"provider": {
+						"provider_name": "openai",
+						"model_id": "gpt-4o",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					}
+				}
+			},
+			"sources": [],
+			"digest": null
+		},
+		{
+			"name": "a file name that climbs out of the repository derives no Hugging Face source",
+			"bit": {
+				"id": "escape",
+				"type": "Llm",
+				"hash": "escape",
+				"file_name": "../escape.gguf",
+				"download_link": "https://cdn.flow-like.com/bits/escape",
+				"parameters": {
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "owner/model",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					}
+				}
+			},
+			"sources": ["https://cdn.flow-like.com/bits/escape"],
+			"digest": null
+		},
+		{
+			"name": "a file name with a colon derives no Hugging Face source",
+			"bit": {
+				"id": "colon",
+				"type": "Llm",
+				"hash": "colon",
+				"file_name": "model:latest.gguf",
+				"parameters": {
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "owner/model",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					}
+				}
+			},
+			"sources": [],
+			"digest": null
+		},
+		{
+			"name": "spaces, #, braces, % and non-ASCII letters in a file name are percent-encoded like the url crate does",
+			"bit": {
+				"id": "encoded",
+				"type": "Llm",
+				"hash": "encoded",
+				"file_name": "sub dir/modèle #1 {q} 100%.gguf",
+				"parameters": {
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "owner/model",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					}
+				}
+			},
+			"sources": [
+				"https://huggingface.co/owner/model/resolve/03e404fd168941cfed98f46654680130dd85968b/sub%20dir/mod%C3%A8le%20%231%20%7Bq%7D%20100%25.gguf?download=true"
+			],
+			"digest": null
+		},
+		{
+			"name": "inline MLX asset: its pinned link is its only source and the manifest's Git LFS sha256 its digest",
+			"bit": {
+				"id": "mlx-inline-weights",
+				"type": "File",
+				"hash": "mlx-inline-weights",
+				"file_name": "model.safetensors",
+				"size": 4000,
+				"download_link": "https://huggingface.co/mlx-community/Qwen3-8B-4bit/resolve/03e404fd168941cfed98f46654680130dd85968b/model.safetensors?download=true"
+			},
+			"root": {
+				"id": "my-mlx",
+				"type": "Llm",
+				"hash": "my-mlx",
+				"parameters": {
+					"provider": {
+						"provider_name": "MLX",
+						"model_id": "mlx-community/Qwen3-8B-4bit",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					},
+					"huggingface": {
+						"schema": 1,
+						"repo_id": "mlx-community/Qwen3-8B-4bit",
+						"revision": "03e404fd168941cfed98f46654680130dd85968b",
+						"format": "mlx",
+						"files": [
+							{
+								"path": "model.safetensors",
+								"size": 4000,
+								"lfs_oid": "54F843A33581BF0D9AE8BD35563B3E93D6439E0FE198199B1B52107AE628E3B2"
+							},
+							{ "path": "config.json", "size": 100 }
+						]
+					}
+				}
+			},
+			"sources": [
+				"https://huggingface.co/mlx-community/Qwen3-8B-4bit/resolve/03e404fd168941cfed98f46654680130dd85968b/model.safetensors?download=true"
+			],
+			"digest": {
+				"algorithm": "sha256",
+				"hex": "54f843a33581bf0d9ae8bd35563b3e93d6439e0fe198199b1b52107ae628e3b2"
+			}
+		},
+		{
+			"name": "inline MLX asset without a Git LFS object has no digest up front",
+			"bit": {
+				"id": "mlx-inline-config",
+				"type": "Config",
+				"hash": "mlx-inline-config",
+				"file_name": "config.json",
+				"size": 100,
+				"download_link": "https://huggingface.co/mlx-community/Qwen3-8B-4bit/resolve/03e404fd168941cfed98f46654680130dd85968b/config.json?download=true"
+			},
+			"root": {
+				"id": "my-mlx",
+				"type": "Llm",
+				"hash": "my-mlx",
+				"parameters": {
+					"provider": {
+						"provider_name": "MLX",
+						"model_id": "mlx-community/Qwen3-8B-4bit",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					},
+					"huggingface": {
+						"schema": 1,
+						"repo_id": "mlx-community/Qwen3-8B-4bit",
+						"revision": "03e404fd168941cfed98f46654680130dd85968b",
+						"format": "mlx",
+						"files": [
+							{
+								"path": "model.safetensors",
+								"size": 4000,
+								"lfs_oid": "54f843a33581bf0d9ae8bd35563b3e93d6439e0fe198199b1b52107ae628e3b2"
+							},
+							{
+								"path": "config.json",
+								"size": 100,
+								"oid": "5f97e3774c51edd1d63706c2ec3826c564a06779"
+							}
+						]
+					}
+				}
+			},
+			"sources": [
+				"https://huggingface.co/mlx-community/Qwen3-8B-4bit/resolve/03e404fd168941cfed98f46654680130dd85968b/config.json?download=true"
+			],
+			"digest": null
+		},
+		{
+			"name": "a Bit without a file has nothing to fetch",
+			"bit": {
+				"id": "remote",
+				"type": "Llm",
+				"hash": "5f97e3774c51edd1d63706c2ec3826c564a067794770cdab0f8c4797971cacf9",
+				"download_link": "https://cdn.flow-like.com/bits/remote",
+				"parameters": {
+					"provider": {
+						"provider_name": "Local",
+						"model_id": "owner/model",
+						"version": "03e404fd168941cfed98f46654680130dd85968b"
+					}
+				}
+			},
+			"sources": [],
+			"digest": null
+		}
+	]
+}

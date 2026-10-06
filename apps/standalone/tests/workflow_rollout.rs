@@ -770,13 +770,15 @@ impl Fixture {
             artifact_pins: vec![],
             package_pins: vec![],
             bit_pins: vec![],
+            tunnel_services: vec![],
             tls_certificate_id: None,
             hosting: Some(HostingConfig {
                 host: "127.0.0.1".parse()?,
                 port: self.port,
                 max_in_flight: 4,
                 request_timeout_secs: 5,
-                auth_secret: "service-token".into(),
+                authentication: Default::default(),
+                auth_secret: Some("service-token".into()),
                 ui_origins: Vec::new(),
             }),
             max_replicas: 2,
@@ -1810,7 +1812,7 @@ async fn workflow_rollout_preserves_secrets_and_mutable_data_across_recovery() -
 
     let mut candidate = fixture.project(3, "/candidate").await?;
     let candidate_token = "candidate-service-token-for-rollback-test";
-    candidate.hosting.as_mut().unwrap().auth_secret = "candidate-service".into();
+    candidate.hosting.as_mut().unwrap().auth_secret = Some("candidate-service".into());
     candidate
         .secret_overrides
         .insert("credential".into(), "candidate-credential".into());

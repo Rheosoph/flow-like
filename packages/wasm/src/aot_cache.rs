@@ -3,7 +3,7 @@
 //! Each cached `.cwasm` artifact is keyed by:
 //! - blake3 hash of the original `.wasm` bytes  (content identity)
 //! - OS + architecture                          (platform identity)
-//! - wasmtime major version                     (compiler identity)
+//! - exact Wasmtime release and engine revision (compiler identity)
 //!
 //! The system always compiles from `.wasm` source itself, so no external
 //! integrity verification is needed — a cache miss simply recompiles.
@@ -15,7 +15,10 @@ use wasmtime::Module;
 #[cfg(feature = "component-model")]
 use wasmtime::component::Component;
 
-pub use flow_like_wasm_schema::runtime::{WASMTIME_MAJOR_VERSION, WASMTIME_VERSION};
+pub use flow_like_wasm_schema::runtime::{
+    artifact_platform_key, artifact_target, portable_target, WASMTIME_MAJOR_VERSION,
+    WASMTIME_VERSION, WASM_ARTIFACT_VERSION,
+};
 
 /// Build the executable platform key for the current host.
 ///
@@ -24,18 +27,13 @@ pub use flow_like_wasm_schema::runtime::{WASMTIME_MAJOR_VERSION, WASMTIME_VERSIO
 /// native code.
 #[cfg(target_os = "ios")]
 pub fn host_platform_key() -> String {
-    format!("ios-pulley64-wt{}", WASMTIME_MAJOR_VERSION)
+    artifact_platform_key("ios", "pulley64")
 }
 
 /// Build the executable platform key for the current host.
 #[cfg(not(target_os = "ios"))]
 pub fn host_platform_key() -> String {
-    format!(
-        "{}-{}-wt{}",
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-        WASMTIME_MAJOR_VERSION,
-    )
+    artifact_platform_key(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn cache_key(wasm_hash: &str) -> String {

@@ -1030,6 +1030,92 @@ describe("Copy & upload (APP §3.11)", () => {
 });
 
 describe("Review (APP §3.12)", () => {
+	test("changing a service to No token reviews the access change and token removal", async () => {
+		const fake = await createFakeWorkspace();
+		const current = await fake.workspace.live.call(STUDIO)({
+			type: "placement_configuration",
+			placement_id: "field-notes",
+		});
+		fake.agent(STUDIO).handle("placement_configuration", () => ({
+			state: "completed",
+			result: {
+				...current.result,
+				config: {
+					...(current.result.config as Record<string, unknown>),
+					online_metadata_sha256: SHA,
+				},
+			},
+		}));
+		const initial = draftOf(
+			APPS.app_field_notes,
+			{ deviceIds: [STUDIO], serviceId: "field-notes" },
+			{ version: "keep" },
+			{ updateEvents: ["evt_notes_http"] },
+		);
+		initial.endpoint = { ...initial.endpoint, token: "none" };
+		await mountStage(
+			{ app: APPS.app_field_notes, initial, start: "review" },
+			{ fake },
+		);
+		await until(
+			() => text(block("dp-diff")).includes("Service access"),
+			"the access change",
+		);
+		const diff = text(block("dp-diff"));
+		expect(diff).toContain("token required");
+		expect(diff).toContain("no token required");
+		expect(diff).toContain("current token");
+		expect(diff).not.toContain("new token");
+		expect(text(block("dp-conseq"))).toContain("without a token");
+	});
+
+	test("Keep current preserves a service without a token in Review", async () => {
+		const fake = await createFakeWorkspace();
+		const current = await fake.workspace.live.call(STUDIO)({
+			type: "placement_configuration",
+			placement_id: "field-notes",
+		});
+		const config = current.result.config as Record<string, unknown>;
+		const { auth_secret: _secret, ...hosting } = config.hosting as Record<
+			string,
+			unknown
+		>;
+		fake.agent(STUDIO).handle("placement_configuration", () => ({
+			state: "completed",
+			result: {
+				...current.result,
+				config: {
+					...config,
+					online_metadata_sha256: SHA,
+					hosting: { ...hosting, authentication: "none" },
+				},
+			},
+		}));
+		await mountStage(
+			{
+				app: APPS.app_field_notes,
+				initial: draftOf(
+					APPS.app_field_notes,
+					{ deviceIds: [STUDIO], serviceId: "field-notes" },
+					{ version: "keep" },
+					{ updateEvents: ["evt_notes_http"] },
+				),
+				start: "review",
+			},
+			{ fake },
+		);
+		await until(
+			() => text(block("dp-conseq")).includes("without a token"),
+			"the service's current access settings",
+		);
+		expect(text(block("dp-conseq"))).toContain(
+			"Anyone who can reach field-notes on studio-mac-mini can use its endpoints, Pages, chats and actions without a token.",
+		);
+		expect(text(block("dp-conseq"))).not.toContain(
+			"Clients need the access token",
+		);
+	});
+
 	test("review-multi: the plan per device, how it's applied, consequences, size, ids and one primary", async () => {
 		const bundle = await bundleOf(
 			"app_visitor_checkin",
@@ -1499,6 +1585,25 @@ describe("Review (APP §3.12)", () => {
 					],
 				},
 			);
+
+		test("No token Review names public service access and never promises a generated token", async () => {
+			const initial = shopDraft(["evt_shop_orders", "evt_shop_return"]);
+			initial.endpoint = { ...initial.endpoint, token: "none" };
+			await mountStage({ app: SHOP, initial, start: "review" });
+			const before = text(block("dp-conseq"));
+			expect(text(block("dp-summary"))).toContain("no token required");
+			expect(before).toContain(
+				"Anyone who can reach shop-assistant on edge-berlin-01 can use its endpoints, Pages, chats and actions without a token.",
+			);
+			expect(before).toContain(
+				"Anyone who can reach shop-assistant can also run it from the service page without a token.",
+			);
+			expect(before).toContain(
+				"The token set in Events is not used on a device.",
+			);
+			expect(before).not.toContain("Clients need the access token");
+			expect(before).not.toContain("Callers need");
+		});
 
 		test.each(["Private", "Offline"] as const)(
 			"a device-created endpoint does not claim its %s source keeps answering",

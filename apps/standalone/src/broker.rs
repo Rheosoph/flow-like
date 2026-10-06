@@ -1094,14 +1094,18 @@ impl RequestAuthorizer for WorkloadBroker {
     }
 
     fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
-        Some(match audience {
-            ResourceAudience::HostedModels => format!("{}/instances", self.base()),
-            ResourceAudience::ProjectApi => format!("{}/instances/project", self.base()),
-        })
+        match audience {
+            ResourceAudience::HostedModels => Some(format!("{}/instances", self.base())),
+            ResourceAudience::ProjectApi => Some(format!("{}/instances/project", self.base())),
+            ResourceAudience::DeviceModels => device_models_base_url(),
+        }
     }
 
     fn authorize<'a>(&'a self, request: AuthorizationRequest<'a>) -> AuthorizationFuture<'a> {
         Box::pin(async move {
+            if request.audience == ResourceAudience::DeviceModels {
+                return authorize_device_models(&self.config.id, &request);
+            }
             let allowed = match request.audience {
                 ResourceAudience::HostedModels => {
                     self.validation.is_none()
@@ -1117,6 +1121,7 @@ impl RequestAuthorizer for WorkloadBroker {
                         && (self.validation.is_none() || request.method == "GET")
                         && allowed_project_request(self.base(), request.method, request.url)
                 }
+                ResourceAudience::DeviceModels => false,
             };
             if !allowed {
                 return Err(AuthorizationError::InvalidRequest);
@@ -1126,6 +1131,68 @@ impl RequestAuthorizer for WorkloadBroker {
                 .map_err(|error| authorization_error(&error))
         })
     }
+}
+
+/// Per-boot gateway tokens outlive any request; they end with the agent or a revocation.
+#[cfg(feature = "runtime")]
+const DEVICE_MODELS_TOKEN_LIFETIME: Duration = Duration::from_secs(30 * 86_400);
+
+/// The device's model gateway, while the model host runs.
+pub fn device_models_base_url() -> Option<String> {
+    #[cfg(feature = "runtime")]
+    {
+        crate::models::host::ModelHost::current().map(|host| host.gateway().base_url())
+    }
+    #[cfg(not(feature = "runtime"))]
+    None
+}
+
+/// The placement's own bearer token for a request under the device's model gateway.
+pub fn authorize_device_models(
+    placement_id: &str,
+    request: &AuthorizationRequest,
+) -> std::result::Result<RequestAuthorization, AuthorizationError> {
+    #[cfg(feature = "runtime")]
+    {
+        let host =
+            crate::models::host::ModelHost::current().ok_or(AuthorizationError::Unavailable)?;
+        gateway_authorization(
+            &host.gateway().base_url(),
+            host.gateway().tokens(),
+            placement_id,
+            request,
+        )
+    }
+    #[cfg(not(feature = "runtime"))]
+    {
+        let _ = (placement_id, request);
+        Err(AuthorizationError::Unavailable)
+    }
+}
+
+/// Only GET and POST under `base`, answered with the placement's per-boot token.
+#[cfg(feature = "runtime")]
+fn gateway_authorization(
+    base: &str,
+    tokens: &crate::models::gateway::PlacementTokens,
+    placement_id: &str,
+    request: &AuthorizationRequest,
+) -> std::result::Result<RequestAuthorization, AuthorizationError> {
+    let inside = request
+        .url
+        .strip_prefix(base)
+        .is_some_and(|path| path.starts_with('/') && !path.contains(".."));
+    if !inside || !matches!(request.method, "GET" | "POST") {
+        return Err(AuthorizationError::InvalidRequest);
+    }
+    let token = tokens
+        .issue(placement_id)
+        .map_err(|_| AuthorizationError::InvalidRequest)?;
+    RequestAuthorization::new(
+        format!("Bearer {}", token.as_str()),
+        None,
+        std::time::SystemTime::now() + DEVICE_MODELS_TOKEN_LIFETIME,
+    )
 }
 
 pub async fn drain_retirements(
@@ -1438,6 +1505,7 @@ mod tests {
             ResourceAudience::ProjectApi => ("GET", "/instances/project/app"),
             ResourceAudience::HostedModels if embedding => ("POST", "/instances/embeddings/embed"),
             ResourceAudience::HostedModels => ("POST", "/instances/responses"),
+            ResourceAudience::DeviceModels => ("POST", "/v1/chat/completions"),
         };
         broker
             .authorize(AuthorizationRequest {
@@ -2730,5 +2798,39 @@ mod tests {
             "GET",
             "https://api.example/api/v1/instances/responses"
         ));
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn device_model_tokens_cover_the_gateway_only() {
+        let tokens = crate::models::gateway::PlacementTokens::default();
+        let base = "http://127.0.0.1:4100/v1";
+        let request = |method, url| AuthorizationRequest {
+            audience: ResourceAudience::DeviceModels,
+            method,
+            url,
+        };
+        let chat = "http://127.0.0.1:4100/v1/chat/completions";
+        let granted = gateway_authorization(base, &tokens, "api", &request("POST", chat))
+            .expect("a gateway token");
+        let token = tokens.issue("api").expect("the same token");
+        assert_eq!(
+            granted.authorization(),
+            format!("Bearer {}", token.as_str())
+        );
+        assert!(granted.dpop().is_none());
+        for (method, url) in [
+            ("POST", "http://127.0.0.1:4100/v2/chat"),
+            ("DELETE", "http://127.0.0.1:4100/v1/models"),
+            ("GET", "http://127.0.0.1:4100/v1/../admin"),
+            ("GET", "http://127.0.0.1:41000/v1/models"),
+        ] {
+            let refused = gateway_authorization(base, &tokens, "api", &request(method, url));
+            assert_eq!(
+                refused.unwrap_err(),
+                AuthorizationError::InvalidRequest,
+                "{url}"
+            );
+        }
     }
 }

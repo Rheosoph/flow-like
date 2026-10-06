@@ -136,8 +136,6 @@ impl AssistantMemory {
     ) -> Result<Self> {
         let embedding = state
             .embedding_factory
-            .lock()
-            .await
             .build_text_routed(embedding_bit, state.clone(), access_token, usage_context)
             .await?;
         let store = Self::open_store(&state, owner, profile_id).await?;

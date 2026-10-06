@@ -35,6 +35,7 @@ use crate::{
             paths,
         },
         events::{
+            current_inputs::event_with_current_inputs,
             db::db_model_to_event,
             invoke_event::{
                 InvokeEventQuery, InvokeEventRequest, hosted_subject, invoke_hosted_event,
@@ -347,6 +348,7 @@ async fn bootstrap(
         caller.as_ref().unwrap_or(&AppUser::Unauthorized),
         session,
     )?;
+    let event = event_with_current_inputs(&state, &app_id, event).await;
     let pin = variant::pin_from_request(&headers, query.variant);
     let target = variant::resolve_page_target(
         &event,

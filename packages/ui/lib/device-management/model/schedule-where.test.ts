@@ -277,7 +277,7 @@ describe("a schedule that is released, returning or on the hub", () => {
 			},
 			input,
 		);
-		const deviceOnly = { fact: "device_only" };
+		const deviceOnly = { fact: "device_only" } as const;
 		expect(whereOf(wheres, "evt_unlisted", true)).toEqual(deviceOnly);
 		expect(whereOf(wheres, "evt_back", true)).toEqual(deviceOnly);
 		expect(whereOf(wheres, "evt_rel", true)).toEqual(deviceOnly);

@@ -179,8 +179,9 @@ async function mount(
 	options: {
 		mode?: IExecutionMode;
 		canExecuteLocally?: boolean;
-		offline?: boolean;
+		offline?: boolean | "error";
 		oauth?: boolean;
+		host?: (form: ReactElement) => ReactElement;
 		getBoard?: IBackendState["boardState"]["getBoard"];
 		routes?: () => Promise<IRouteMapping[]>;
 		props?: Partial<ComponentProps<typeof EventForm>>;
@@ -1022,6 +1023,18 @@ describe("Saved device event", () => {
 		expect(saved.every((event) => event === null)).toBe(true);
 		await view.unmount();
 		expect(saved.at(-1)).toBeNull();
+	});
+});
+
+describe("Deployed report", () => {
+	test("passes the deployed state to the host, false while nothing is deployed", async () => {
+		const reports: boolean[] = [];
+		await mountDeviceForm({
+			event: withDeviceEventSource(savedEvent()),
+			onDeployedChange: (deployed) => reports.push(deployed),
+		});
+		expect(reports.length).toBeGreaterThan(0);
+		expect(reports.every((deployed) => !deployed)).toBe(true);
 	});
 });
 

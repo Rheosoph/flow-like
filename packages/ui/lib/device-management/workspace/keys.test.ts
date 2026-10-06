@@ -5,6 +5,7 @@ import type { IProfile } from "../../../types";
 import { ApiResponseError } from "../../api-error";
 import { base64url } from "../crypto";
 import { identityFingerprint } from "../fingerprint";
+import type { NativeKeyWatcher } from "../native-client";
 import {
 	type LocalDeviceVault,
 	accountStorageKey,
@@ -26,11 +27,13 @@ import {
 	type KeySessionPorts,
 	OwnerPasswordRequiredError,
 	createKeySessionManager,
+	holdForModelUse,
 	readAskPasswordForAccessChanges,
 	writeAskPasswordForAccessChanges,
 } from "./keys";
 import type {
 	ActivityItem,
+	LiveState,
 	LocalSummary,
 	UnlockStep,
 	WorkspaceDeps,
@@ -282,6 +285,8 @@ function harness(
 	const replaced: LocalDeviceVault[] = [];
 	const backups: { password: string; leaseVault?: LocalDeviceVault }[] = [];
 	let backupError: unknown;
+	const native: string[] = [];
+	let nativeWatcher: NativeKeyWatcher | undefined;
 	const io: Partial<KeySessionIo> = {
 		async readDeviceVault(_scope, deviceId) {
 			return stored.get(deviceId);
@@ -321,6 +326,22 @@ function harness(
 				pageHide = undefined;
 			};
 		},
+		native: {
+			unlocked(unlockScope, unlocked, password, keep) {
+				native.push(
+					`unlock ${unlocked.deviceId} ${unlockScope.account} ${password} keep=${keep}`,
+				);
+			},
+			locked: (deviceId, mode) => native.push(`${mode} ${deviceId}`),
+			kept: (deviceId, keep) => native.push(`keep ${deviceId} ${keep}`),
+			lockAll: () => native.push("lock all"),
+			watch(watcher) {
+				nativeWatcher = watcher;
+				return () => {
+					nativeWatcher = undefined;
+				};
+			},
+		},
 	};
 
 	let identityCheck: "match" | "mismatch" | "unpinned" = "match";
@@ -345,6 +366,8 @@ function harness(
 		acquired: [] as string[],
 		released: 0,
 		closed: [] as string[],
+		/** What the live manager reports; only the kind matters to the key session. */
+		kind: "idle" as LiveState["kind"],
 	};
 	const activity: ActivityItem[] = [];
 	const fleetRefreshed: string[] = [];
@@ -371,7 +394,7 @@ function harness(
 				throw new Error("not used");
 			},
 			exclusive: () => Promise.reject(new Error("not used")),
-			state: () => ({ kind: "idle" }),
+			state: () => ({ kind: live.kind }) as LiveState,
 			close(deviceId) {
 				live.closed.push(deviceId);
 			},
@@ -427,6 +450,7 @@ function harness(
 	return {
 		keys,
 		ports,
+		native,
 		calls,
 		opened,
 		passwords,
@@ -440,6 +464,10 @@ function harness(
 		stored,
 		get pageHide() {
 			return pageHide;
+		},
+		/** What the desktop app reports: the devices it holds keys for, the tray's Lock all. */
+		get nativeWatcher() {
+			return nativeWatcher;
 		},
 		advance(ms: number) {
 			clock += ms;
@@ -621,6 +649,55 @@ test("the idle lock waits 30 minutes of no use, counts active operations and hon
 	h.advance(IDLE_LOCK_MS);
 	expect(h.keys.snapshot("dev").state).toBe("locked");
 	expect(h.pendingTimers).toBe(0);
+});
+
+test("a model call through the tunnel is use until it ends, however long it streams", async () => {
+	const h = harness();
+	expect(holdForModelUse(h.keys, "dev")).toBeInstanceOf(Function);
+	await h.keys.unlock("dev", PASSWORD);
+	h.advance(10 * 60_000);
+	const end = holdForModelUse(h.keys, "dev");
+	expect(h.keys.snapshot("dev").lastUsedAt).toBe(1_000_000 + 10 * 60_000);
+	h.advance(3 * IDLE_LOCK_MS);
+	expect(h.keys.snapshot("dev").state).toBe("unlocked");
+	const second = h.keys.beginModelUse("dev");
+	end();
+	end();
+	h.advance(IDLE_LOCK_MS + 60_000);
+	expect(h.keys.snapshot("dev").state).toBe("unlocked");
+	second();
+	const endedAt = h.keys.snapshot("dev").lastUsedAt as number;
+	expect(h.keys.snapshot("dev").idleLocksAt).toBe(endedAt + IDLE_LOCK_MS);
+	h.advance(IDLE_LOCK_MS);
+	expect(h.keys.snapshot("dev").state).toBe("locked");
+
+	// A call that outlives a lock ends without touching the next session.
+	await h.keys.unlock("dev", PASSWORD);
+	const stale = h.keys.beginModelUse("dev");
+	h.keys.lock("dev");
+	await h.keys.unlock("dev", PASSWORD);
+	stale();
+	h.advance(IDLE_LOCK_MS);
+	expect(h.keys.snapshot("dev").state).toBe("locked");
+	expect(h.keys.beginModelUse("dev")).toBeInstanceOf(Function);
+	expect(h.pendingTimers).toBe(0);
+});
+
+test("Connect live after Disconnect takes the live demand again; a running session keeps the one it has", async () => {
+	const h = harness();
+	h.live.kind = "live";
+	await h.keys.unlock("dev", PASSWORD, { connectLive: true });
+	expect(h.live.acquired).toEqual(["dev:view"]);
+	await h.keys.unlock("dev", "", { connectLive: true });
+	expect(h.live.acquired).toEqual(["dev:view"]);
+	expect(h.live.released).toBe(0);
+	// "Disconnect" closed the session; the key session still held its demand.
+	h.live.kind = "idle";
+	await h.keys.unlock("dev", "", { connectLive: true });
+	expect(h.live.released).toBe(1);
+	expect(h.live.acquired).toEqual(["dev:view", "dev:view"]);
+	h.keys.lock("dev");
+	expect(h.live.released).toBe(2);
 });
 
 test("held elsewhere shows in pre-flight, Use here steals, and the losing window locks itself", async () => {
@@ -1218,6 +1295,129 @@ test("the 'ask for my password again' choice is stored per account on this compu
 		if (original) Object.defineProperty(globalThis, "localStorage", original);
 		else Reflect.deleteProperty(globalThis, "localStorage");
 	}
+});
+
+test("the desktop app is told about every unlock and keep choice; Lock locks it there too, kept or not", async () => {
+	const h = harness([vault("a"), vault("b")]);
+	await expect(h.keys.unlock("a", "wrong")).rejects.toThrow();
+	await h.keys.unlock("a", PASSWORD, { keepUnlocked: true });
+	await h.keys.unlock("b", PASSWORD);
+	h.keys.setKeepUnlocked("b", true);
+	h.keys.setKeepUnlocked("b", false);
+	h.keys.lock("a");
+	h.advance(IDLE_LOCK_MS);
+	h.keys.setKeepUnlocked("b", true);
+	expect(h.native).toEqual([
+		`unlock a owner ${PASSWORD} keep=true`,
+		`unlock b owner ${PASSWORD} keep=false`,
+		"keep b true",
+		"keep b false",
+		"lock a",
+		"release b",
+	]);
+});
+
+test("Lock all locks every key the desktop app holds, also those a run's prompt unlocked", async () => {
+	const h = harness([vault("a"), vault("b")]);
+	await h.keys.unlock("a", PASSWORD, { keepUnlocked: true });
+	h.nativeWatcher?.held([
+		{
+			deviceId: "b",
+			apiOrigin: scope.apiOrigin,
+			account: scope.account,
+			kept: true,
+			area: false,
+		},
+	]);
+	h.native.length = 0;
+	h.keys.lockAll();
+	expect(h.native).toEqual(["lock all"]);
+	expect(h.keys.list().map((row) => [row.deviceId, row.state])).toEqual([
+		["a", "locked"],
+		["b", "locked"],
+	]);
+	expect(h.keys.snapshot("b").heldForModels).toBeUndefined();
+});
+
+test("page hide lets the desktop app decide what stays; dispose locks it there, kept or not", async () => {
+	const h = harness([vault("a"), vault("b")]);
+	await h.keys.unlock("a", PASSWORD, { keepUnlocked: true });
+	await h.keys.unlock("b", PASSWORD);
+	h.native.length = 0;
+	h.pageHide?.();
+	expect([...h.native].sort()).toEqual(["release a", "release b"]);
+
+	await h.keys.unlock("a", PASSWORD, { keepUnlocked: true });
+	h.native.length = 0;
+	h.keys.dispose();
+	expect(h.native).toEqual(["lock a"]);
+	expect(h.nativeWatcher).toBeUndefined();
+});
+
+test("a lock on its own while unlocking tells the desktop app nothing it never got", async () => {
+	const h = harness();
+	let fetching!: () => void;
+	const fetched = new Promise<void>((resolve) => {
+		fetching = resolve;
+	});
+	let answer!: () => void;
+	h.setIdentityFetch((deviceId) => {
+		fetching();
+		return new Promise((resolve) => {
+			answer = () => resolve(receipt(deviceId));
+		});
+	});
+	const unlocking = h.keys.unlock("dev", PASSWORD).catch((error) => error);
+	await fetched;
+	h.pageHide?.();
+	answer();
+	expect(((await unlocking) as DOMException).name).toBe("AbortError");
+	expect(h.native).toEqual([]);
+});
+
+test("devices the desktop app holds keys for show as held for models until locked", async () => {
+	const h = harness([vault("a"), vault("b")]);
+	const held = (deviceId: string, patch: Partial<typeof scope> = {}) => ({
+		deviceId,
+		apiOrigin: patch.apiOrigin ?? `${scope.apiOrigin}/`,
+		account: patch.account ?? scope.account,
+		kept: true,
+		area: false,
+	});
+	h.nativeWatcher?.held([
+		held("a"),
+		held("c"),
+		held("b", { account: "colleague" }),
+		held("b", { apiOrigin: "https://other.test" }),
+	]);
+	expect(h.keys.snapshot("a").heldForModels).toBe(true);
+	expect(h.keys.snapshot("b").heldForModels).toBeUndefined();
+	expect(h.keys.snapshot("c")).toMatchObject({
+		state: "none",
+		heldForModels: true,
+	});
+	expect(h.keys.list().map((row) => row.deviceId)).toEqual(["a", "b", "c"]);
+
+	await h.keys.unlock("a", PASSWORD);
+	expect(h.keys.snapshot("a").heldForModels).toBeUndefined();
+	h.keys.lock("a");
+	h.keys.lock("c");
+	h.keys.lock("b");
+	expect(h.native).toEqual([
+		`unlock a owner ${PASSWORD} keep=false`,
+		"lock a",
+		"lock c",
+	]);
+	expect(h.keys.list().some((row) => row.heldForModels)).toBe(false);
+});
+
+test("the tray's Lock all devices locks this window's sessions without asking the desktop app again", async () => {
+	const h = harness([vault("a")]);
+	await h.keys.unlock("a", PASSWORD, { keepUnlocked: true });
+	h.native.length = 0;
+	h.nativeWatcher?.lockedAll();
+	expect(h.keys.snapshot("a").state).toBe("locked");
+	expect(h.native).toEqual([]);
 });
 
 test("page hide and dispose lock every session", async () => {

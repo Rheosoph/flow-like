@@ -9,7 +9,7 @@ use flow_like::{
         response::Response,
     },
     flow_like_types::intercom::{BufferedInterComHandler, InterComEvent},
-    models::llm::ModelUsageContext,
+    models::{device::Interaction, llm::ModelUsageContext},
 };
 use tauri::{AppHandle, ipc::Channel};
 
@@ -61,9 +61,17 @@ pub async fn find_best_model(
         let state = TauriFlowLikeState::construct(&app_handle).await?;
         let capabilities =
             flow_like::state::FlowLikeState::completion_model_capabilities(&state).await;
+        let devices = state.device_model_probe(Interaction::Forbidden);
         current_profile
             .hub_profile
-            .resolve_completion_model(None, &preferences, multimodal, capabilities, http_client)
+            .resolve_completion_model(
+                None,
+                &preferences,
+                multimodal,
+                capabilities,
+                devices.as_ref(),
+                http_client,
+            )
             .await?
     };
 
@@ -84,17 +92,24 @@ pub async fn chat_completion(
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let capabilities =
         flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await;
+    let devices = flow_like_state.device_model_probe(Interaction::Allowed { run_label: None });
 
     let best_model = current_profile
         .hub_profile
-        .resolve_completion_model(None, &preferences, false, capabilities, http_client)
+        .resolve_completion_model(
+            None,
+            &preferences,
+            false,
+            capabilities,
+            devices.as_ref(),
+            http_client,
+        )
         .await?;
 
     let model = {
         let usage_context =
             resolve_model_usage_context(app_id.as_deref(), flow_like_state.clone()).await?;
         let model_factory = flow_like_state.model_factory.clone();
-        let mut model_factory = model_factory.lock().await;
 
         match model_factory
             .build(&best_model, flow_like_state, token, usage_context)
@@ -135,17 +150,24 @@ pub async fn stream_chat_completion(
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let capabilities =
         flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await;
+    let devices = flow_like_state.device_model_probe(Interaction::Allowed { run_label: None });
 
     let best_model = current_profile
         .hub_profile
-        .resolve_completion_model(None, &preferences, false, capabilities, http_client)
+        .resolve_completion_model(
+            None,
+            &preferences,
+            false,
+            capabilities,
+            devices.as_ref(),
+            http_client,
+        )
         .await?;
 
     let model = {
         let usage_context =
             resolve_model_usage_context(app_id.as_deref(), flow_like_state.clone()).await?;
         let model_factory = flow_like_state.model_factory.clone();
-        let mut model_factory = model_factory.lock().await;
 
         match model_factory
             .build(&best_model, flow_like_state, token, usage_context)

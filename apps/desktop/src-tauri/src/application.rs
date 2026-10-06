@@ -7,6 +7,9 @@
 // host build.
 mod deeplink;
 #[cfg(desktop)]
+mod device_models;
+mod device_tunnels;
+#[cfg(desktop)]
 mod diffusion_runtime;
 #[cfg(debug_assertions)]
 mod e2e_isolation;
@@ -48,14 +51,25 @@ fn execution_set_auth(
     session_id: String,
     sequence: u64,
 ) -> Result<(), String> {
-    execution_credentials::update_session(
+    let before = execution_credentials::webview_account(webview.label());
+    let updated = execution_credentials::update_session(
         webview.label(),
         hub,
         subject,
         token,
         session_id,
         sequence,
-    )
+    );
+    // A sign-out or account switch: device keys of an account no window is signed in to lock.
+    #[cfg(desktop)]
+    if let Some((hub, subject)) = before
+        && execution_credentials::session_token(&hub, &subject).is_none()
+    {
+        tauri::async_runtime::spawn(device_models::drop_signed_out());
+    }
+    #[cfg(not(desktop))]
+    let _ = before;
+    updated
 }
 
 // Stub for tray_update_state on non-desktop platforms
@@ -551,6 +565,10 @@ pub fn run() {
     let (http_client, refetch_rx) = HTTPClient::new();
     let mut state = FlowLikeState::new(config, http_client);
     state.lance_session = FlowLikeState::retained_lance_session(None);
+    #[cfg(desktop)]
+    {
+        state.device_model_connector = Some(device_models::connector());
+    }
     let state_ref = Arc::new(state);
     let registry_state = Arc::new(Mutex::new(None));
 
@@ -610,11 +628,15 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 execution_credentials::revoke_webview(webview.label());
+                device_tunnels::close_webview(webview.label());
             }
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 execution_credentials::revoke_window(window.label());
+                if window.label() == "main" {
+                    device_tunnels::close_all();
+                }
             }
         });
 
@@ -649,6 +671,8 @@ pub fn run() {
             functions::native::setup(app.handle());
             #[cfg(desktop)]
             diffusion_runtime::configure(app)?;
+            #[cfg(desktop)]
+            device_models::attach(app.handle());
             #[cfg(debug_assertions)]
             if let Some(url) = flowpilot_e2e_cli_url()
                 && let Some(main) = app.get_webview_window("main")
@@ -709,6 +733,7 @@ pub fn run() {
 
             run_reports::spawn_drain(app.app_handle().clone());
             offline_writes::spawn(app.app_handle().clone());
+            functions::tmp::spawn_request_files_sweep(app.app_handle().clone());
 
             // Start the WasmEngine epoch ticker inside the async runtime
             if let Some(wasm_state) = app.try_state::<state::TauriWasmEngineState>() {
@@ -914,7 +939,7 @@ pub fn run() {
                     tracing::warn!("Failed to initialize WASM registry at startup: {:?}", e);
                 }
 
-                let model_factory = {
+                let (model_factory, embedding_factory) = {
                     println!("Starting GC");
                     let flow_like_state = match TauriFlowLikeState::construct(&handle).await {
                         Ok(s) => s,
@@ -924,7 +949,10 @@ pub fn run() {
                         }
                     };
 
-                    flow_like_state.model_factory.clone()
+                    (
+                        flow_like_state.model_factory.clone(),
+                        flow_like_state.embedding_factory.clone(),
+                    )
                 };
                 println!("GC Started");
 
@@ -932,13 +960,8 @@ pub fn run() {
 
                 loop {
                     interval.tick().await;
-
-                    {
-                        let state = model_factory.try_lock();
-                        if let Ok(mut state) = state {
-                            state.gc();
-                        }
-                    }
+                    model_factory.gc();
+                    embedding_factory.gc();
                 }
             });
 
@@ -1055,6 +1078,36 @@ pub fn run() {
             Some(idb_sql_dir),
         ))
         .invoke_handler(tauri::generate_handler![
+            #[cfg(desktop)]
+            device_tunnels::device_tunnel_listen,
+            #[cfg(desktop)]
+            device_tunnels::device_tunnel_touch,
+            #[cfg(desktop)]
+            device_tunnels::device_tunnel_close,
+            #[cfg(desktop)]
+            device_tunnels::device_keys_unlock,
+            #[cfg(desktop)]
+            device_tunnels::device_keys_lock,
+            #[cfg(desktop)]
+            device_tunnels::device_keys_keep,
+            #[cfg(desktop)]
+            device_tunnels::device_keys_lock_all,
+            #[cfg(desktop)]
+            device_tunnels::device_upload_artifact,
+            #[cfg(desktop)]
+            device_tunnels::device_push_model_asset,
+            #[cfg(desktop)]
+            device_tunnels::device_transfer_cancel,
+            #[cfg(desktop)]
+            device_models::device_models_available,
+            #[cfg(desktop)]
+            device_models::device_models_prompts,
+            #[cfg(desktop)]
+            device_models::device_models_held,
+            #[cfg(desktop)]
+            device_models::device_models_unlock,
+            #[cfg(desktop)]
+            device_models::device_models_decline,
             e2e_runtime::attest_intake_e2e_runtime,
             e2e_runtime::read_intake_e2e_outcomes,
             e2e_runtime::intake_e2e_runtime_status,
@@ -1142,6 +1195,7 @@ pub fn run() {
             functions::app::sharing::export_app_to_file,
             functions::app::device_export::prepare_device_project_export,
             functions::app::device_export::read_device_project_export_chunk,
+            functions::app::device_export::read_bit_store_chunk,
             functions::app::device_export::release_device_project_export,
             functions::app::sharing::import_app_from_file,
             functions::app::sharing::get_app_export_preflight,
@@ -1204,6 +1258,7 @@ pub fn run() {
             functions::app::saved_queries::query_saved_delete,
             functions::app::saved_queries::query_execute_sql,
             functions::tmp::post_process_local_file,
+            functions::tmp::stage_form_file,
             functions::bit::get_bit,
             functions::bit::is_bit_installed,
             functions::bit::get_bit_size,
@@ -1468,6 +1523,11 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            if matches!(_event, tauri::RunEvent::Exit) {
+                device_tunnels::close_all();
+                #[cfg(desktop)]
+                device_models::lock_all();
+            }
             #[cfg(desktop)]
             window_layout::on_event(_app, &_event);
         });

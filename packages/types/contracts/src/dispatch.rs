@@ -183,7 +183,7 @@ pub fn compilation_job_payload_hash(job: &CompilationJob) -> Result<String, serd
 ///
 /// When the serialised `CompilationJob` exceeds ECS container-override env
 /// var size limits (~8 KB) the API stages the full payload to object storage
-/// and sends only the URL through SQS.
+/// and sends a signed reference through SQS.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CompilationJobRef {
@@ -420,8 +420,97 @@ pub enum DispatchPayloadRef {
     /// Payload stored at a remote URL (presigned S3/GCS/Azure GET URL).
     Remote {
         /// Presigned GET URL from which the full `DispatchPayload` JSON can
-        /// be downloaded. The executor fetches this URL, deserialises the
-        /// body, and then proceeds as if it received an inline payload.
+        /// be downloaded. New producers attach a signed proof in the URL fragment;
+        /// HTTP clients omit that fragment when contacting object storage.
         remote_url: String,
     },
+}
+
+const CLAIM_CHECK_FRAGMENT: &str = "#flow-like-claim-check-v1=";
+
+/// Attach an HTTP-invisible proof without changing the existing remote-reference shape.
+pub fn signed_claim_check_url(remote_url: &str, proof: &str) -> String {
+    format!("{remote_url}{CLAIM_CHECK_FRAGMENT}{proof}")
+}
+
+/// Unknown fragments belong to the original URL and remain unchanged.
+pub fn split_claim_check_url(remote_url: &str) -> Option<(&str, &str)> {
+    remote_url.rsplit_once(CLAIM_CHECK_FRAGMENT)
+}
+
+/// The outer proof authorizes fetching one object; the inner job JWT authorizes its work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClaimCheckClaims {
+    pub iss: String,
+    pub aud: String,
+    #[serde(rename = "typ")]
+    pub token_type: String,
+    pub purpose: String,
+    pub exp: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nbf: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iat: Option<i64>,
+    pub claim_check: ClaimCheckBinding,
+}
+
+/// URL and byte digest covered by a worker JWT for an object-store claim check.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClaimCheckBinding {
+    pub remote_url_hash: String,
+    pub content_hash: String,
+}
+
+impl ClaimCheckBinding {
+    pub fn matches_url(&self, url: &str) -> bool {
+        self.remote_url_hash == blake3::hash(url.as_bytes()).to_hex().as_str()
+            && self.content_hash.len() == 64
+            && self.content_hash.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    pub fn matches_body(&self, body: &[u8]) -> bool {
+        blake3::hash(body).to_hex().as_str() == self.content_hash
+    }
+}
+
+#[cfg(test)]
+mod claim_check_tests {
+    use super::*;
+
+    #[test]
+    fn original_remote_constructors_and_wire_shape_remain_supported() {
+        let remote_url = "https://storage.example/job#existing-fragment".to_string();
+        let execution = DispatchPayloadRef::Remote {
+            remote_url: remote_url.clone(),
+        };
+        let compilation = CompilationJobRef::Remote {
+            remote_url: remote_url.clone(),
+        };
+        let expected = serde_json::json!({"remote_url":remote_url});
+        assert_eq!(serde_json::to_value(&execution).unwrap(), expected);
+        assert_eq!(serde_json::to_value(&compilation).unwrap(), expected);
+        assert!(serde_json::from_value::<DispatchPayloadRef>(expected.clone()).is_ok());
+        assert!(serde_json::from_value::<CompilationJobRef>(expected).is_ok());
+        assert!(split_claim_check_url(&remote_url).is_none());
+        let signed = signed_claim_check_url(&remote_url, "proof");
+        assert_eq!(
+            split_claim_check_url(&signed),
+            Some((remote_url.as_str(), "proof"))
+        );
+    }
+
+    #[test]
+    fn binding_covers_exact_destination_and_downloaded_bytes() {
+        let binding = ClaimCheckBinding {
+            remote_url_hash: blake3::hash(b"https://storage.example/bucket/object?signature=one")
+                .to_hex()
+                .to_string(),
+            content_hash: blake3::hash(b"original").to_hex().to_string(),
+        };
+        assert!(binding.matches_url("https://storage.example/bucket/object?signature=one"));
+        assert!(!binding.matches_url("https://storage.example/bucket/other?signature=one"));
+        assert!(!binding.matches_url("http://169.254.169.254/metadata"));
+        assert!(binding.matches_body(b"original"));
+        assert!(!binding.matches_body(b"replacement"));
+    }
 }

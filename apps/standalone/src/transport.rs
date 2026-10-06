@@ -1,4 +1,5 @@
 mod rtc;
+mod tunnel;
 mod websocket;
 mod wire;
 
@@ -10,7 +11,10 @@ use anyhow::{Context, Result, ensure};
 use flow_like_device_protocol::DeviceSignalingResponse;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::watch;
@@ -130,16 +134,40 @@ struct Slot {
     grant_id: String,
     serial: u64,
     cancel: CancellationToken,
+    /// False while a WebRTC offer waits for its data channel.
+    opened: Arc<AtomicBool>,
 }
 
 impl SessionRegistry {
     /// Reserve after the controller certificate is verified, so the grant is authentic.
-    /// A grant at its limit replaces its own oldest session, never another grant's.
+    /// A grant at its limit replaces its own sessions only, never another grant's: first an
+    /// offer still waiting for its data channel, which a controller that fell back to the
+    /// relay abandoned, then its oldest session.
     fn reserve(
         self: &Arc<Self>,
         id: &str,
         grant_id: &str,
         parent: &CancellationToken,
+    ) -> Result<SessionPermit> {
+        self.reserve_slot(id, grant_id, parent, true)
+    }
+
+    /// For a WebRTC offer; the permit counts as opened once [`SessionPermit::on_open`] runs.
+    fn reserve_pending(
+        self: &Arc<Self>,
+        id: &str,
+        grant_id: &str,
+        parent: &CancellationToken,
+    ) -> Result<SessionPermit> {
+        self.reserve_slot(id, grant_id, parent, false)
+    }
+
+    fn reserve_slot(
+        self: &Arc<Self>,
+        id: &str,
+        grant_id: &str,
+        parent: &CancellationToken,
+        opened: bool,
     ) -> Result<SessionPermit> {
         wire::identifier(id)?;
         wire::identifier(grant_id)?;
@@ -171,7 +199,7 @@ impl SessionRegistry {
                 .sessions
                 .iter()
                 .filter(|(_, slot)| slot.grant_id == grant_id)
-                .min_by_key(|(_, slot)| slot.serial)
+                .min_by_key(|(_, slot)| (slot.opened.load(Ordering::Acquire), slot.serial))
                 .map(|(id, _)| id.clone())
                 .with_context(|| {
                     format!(
@@ -183,19 +211,22 @@ impl SessionRegistry {
                 tracing::info!(
                     grant_id,
                     session_id = %oldest,
-                    "Replaced the oldest management session of this grant"
+                    opened = slot.opened.load(Ordering::Acquire),
+                    "Replaced a management session of this grant"
                 );
             }
         }
         slots.serial += 1;
         let serial = slots.serial;
         let cancel = parent.child_token();
+        let opened = Arc::new(AtomicBool::new(opened));
         slots.sessions.insert(
             id.to_owned(),
             Slot {
                 grant_id: grant_id.to_owned(),
                 serial,
                 cancel: cancel.clone(),
+                opened: opened.clone(),
             },
         );
         Ok(SessionPermit {
@@ -203,6 +234,7 @@ impl SessionRegistry {
             id: id.to_owned(),
             serial,
             cancel,
+            opened,
         })
     }
 }
@@ -212,6 +244,15 @@ struct SessionPermit {
     id: String,
     serial: u64,
     cancel: CancellationToken,
+    opened: Arc<AtomicBool>,
+}
+
+impl SessionPermit {
+    /// Marks the session opened: from then on it is replaced in turn like any other.
+    fn on_open(&self) -> impl FnOnce() + Send + 'static {
+        let opened = self.opened.clone();
+        move || opened.store(true, Ordering::Release)
+    }
 }
 impl Drop for SessionPermit {
     fn drop(&mut self) {
@@ -402,6 +443,29 @@ mod tests {
         assert!(registry.reserve("d-1", "grant-d", &parent).is_err());
         assert!(registry.reserve("a-2", "grant-a", &parent).is_err());
         assert!(registry.reserve("../session", "grant-a", &parent).is_err());
+    }
+
+    #[test]
+    fn a_grant_at_its_limit_replaces_an_offer_still_waiting_for_its_channel_first() {
+        let registry = Arc::new(SessionRegistry::default());
+        let parent = CancellationToken::new();
+        let established = registry.reserve("a-1", "grant-a", &parent).unwrap();
+        let abandoned = registry.reserve_pending("a-2", "grant-a", &parent).unwrap();
+        let relayed = registry.reserve("a-3", "grant-a", &parent).unwrap();
+        assert!(abandoned.cancel.is_cancelled());
+        assert!(!established.cancel.is_cancelled());
+        assert_eq!(held(&registry), ["a-1", "a-3"]);
+
+        drop(relayed);
+        let direct = registry.reserve_pending("a-4", "grant-a", &parent).unwrap();
+        direct.on_open()();
+        let _next = registry.reserve("a-5", "grant-a", &parent).unwrap();
+        assert!(
+            established.cancel.is_cancelled(),
+            "both opened: the oldest goes"
+        );
+        assert!(!direct.cancel.is_cancelled());
+        assert_eq!(held(&registry), ["a-4", "a-5"]);
     }
 
     #[test]

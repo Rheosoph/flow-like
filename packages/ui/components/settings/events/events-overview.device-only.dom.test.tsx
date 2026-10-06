@@ -196,7 +196,7 @@ describe("a device-only event in the Events list", () => {
 			toast
 				.getHistory()
 				.slice(before)
-				.map((entry) => entry.title),
+				.flatMap((entry) => ("title" in entry ? [entry.title] : [])),
 		).toEqual([
 			"Devices that already run it keep running until you update or stop their service.",
 		]);

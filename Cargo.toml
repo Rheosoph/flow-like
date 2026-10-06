@@ -127,10 +127,12 @@ members = [
     "packages/core/runtime",
     "packages/core/editor",
     "packages/browser",
+    "packages/device-client",
 ]
 
 [workspace.dependencies]
 flow-like-browser = { path = "packages/browser", default-features = false }
+flow-like-device-client = { path = "packages/device-client" }
 flow-like-editor = { path = "packages/core/editor", default-features = false }
 flow-like-runtime = { path = "packages/core/runtime", default-features = false }
 flow-like-catalog-media-document = { path = "packages/catalog/media-document", default-features = false }
@@ -223,7 +225,7 @@ tracing-subscriber = "0.3.22"
 dotenv = "0.15.0"
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 hyper = {version = "1.5.2", features = ["full", "client"]}
-hyper-util = {version = "0.1.10", features = ["full"]}
+hyper-util = {version = "0.1.21", features = ["full"]}
 tracing = "0.1.41"
 tower-http = {version="0.6.6", features = ["full"]}
 async-stripe = {version="0.41.0", features = ["runtime-tokio-hyper"]}
@@ -302,7 +304,7 @@ sourcemap = "9.3"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "48.0.1", default-features = false, features = [
+wasmtime = { version = "=48.0.3", default-features = false, features = [
     "anyhow",
     "async",
     "component-model",
@@ -317,8 +319,8 @@ wasmtime = { version = "48.0.1", default-features = false, features = [
     "threads",
     "wit-parser",
 ] }
-wasmtime-wasi = "48.0.1"
-wasmtime-wasi-http = "48.0.1"
+wasmtime-wasi = "=48.0.3"
+wasmtime-wasi-http = "=48.0.3"
 
 [patch.crates-io]
 # Stabilize htmlize's generated entity matcher across clean release builds.

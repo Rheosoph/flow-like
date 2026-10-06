@@ -19,6 +19,8 @@ use utoipa::ToSchema;
 
 #[path = "users_accept.rs"]
 mod acceptance;
+#[path = "users_transfer.rs"]
+mod transfer;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateUserRequest {
@@ -454,72 +456,38 @@ pub async fn update_user_permission(
         .as_ref()
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
 
-    let caller_perm = crate::check_wasm_access!(state, &caller_id, &package_id)
-        .ok_or_else(|| ApiError::forbidden("You are not a member of this package"))?;
-
-    let target_entry = wasm_package_user::Entity::find()
-        .filter(wasm_package_user::Column::PackageId.eq(&package_id))
-        .filter(wasm_package_user::Column::UserId.eq(&target_user_id))
-        .one(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
-        .ok_or_else(|| ApiError::not_found("Target user not found on this package"))?;
-
-    let target_current_perm = WasmPackagePermission::from_bits_truncate(target_entry.permission);
     let new_perm = WasmPackagePermission::from_bits_truncate(request.permission);
-
-    // Transferring ownership: swap roles
     if new_perm.contains(WasmPackagePermission::Owner) {
-        if !caller_perm.contains(WasmPackagePermission::Owner) {
-            return Err(ApiError::forbidden(
-                "Only the current Owner can transfer ownership",
-            ));
-        }
-
-        // Swap: target becomes Owner, caller becomes target's old role
-        let caller_entry = wasm_package_user::Entity::find()
-            .filter(wasm_package_user::Column::PackageId.eq(&package_id))
-            .filter(wasm_package_user::Column::UserId.eq(&caller_id))
-            .one(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
-            .ok_or_else(|| ApiError::internal("Caller entry not found".to_string()))?;
-
-        let caller_new_perm = if target_current_perm.contains(WasmPackagePermission::Buyer) {
-            WasmPackagePermission::Maintainer
-        } else {
-            target_current_perm
-        };
-
-        let mut caller_active: wasm_package_user::ActiveModel = caller_entry.into();
-        caller_active.permission = Set(caller_new_perm.bits());
-        caller_active
-            .update(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
-
-        let mut target_active: wasm_package_user::ActiveModel = target_entry.into();
-        target_active.permission = Set(WasmPackagePermission::Owner.bits());
-        let updated = target_active
-            .update(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
-
+        let updated = state
+            .transaction(|txn| {
+                let package_id = package_id.clone();
+                let caller_id = caller_id.clone();
+                let target_user_id = target_user_id.clone();
+                Box::pin(async move {
+                    transfer::transfer_in_transaction(txn, &package_id, &caller_id, &target_user_id)
+                        .await
+                })
+            })
+            .await?;
         let user_record = user::Entity::find_by_id(&target_user_id)
             .one(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
-
-        // Ownership transfer swaps both roles; drop both cached entries so the
-        // 120 s TTL can't keep answering with the pre-swap permissions.
+            .await?;
         state.invalidate_wasm_permission(&caller_id, &package_id);
         state.invalidate_wasm_permission(&target_user_id, &package_id);
-
         return Ok(Json(
             build_user_response(&state, updated, user_record).await,
         ));
     }
 
+    let caller_perm = crate::check_wasm_access!(state, &caller_id, &package_id)
+        .ok_or_else(|| ApiError::forbidden("You are not a member of this package"))?;
+    let target_entry = wasm_package_user::Entity::find()
+        .filter(wasm_package_user::Column::PackageId.eq(&package_id))
+        .filter(wasm_package_user::Column::UserId.eq(&target_user_id))
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Target user not found on this package"))?;
+    let target_current_perm = WasmPackagePermission::from_bits_truncate(target_entry.permission);
     if !caller_perm.can_manage_level(target_current_perm) {
         return Err(ApiError::forbidden(
             "You cannot manage a user at this permission level",
@@ -532,12 +500,24 @@ pub async fn update_user_permission(
         ));
     }
 
-    let mut active: wasm_package_user::ActiveModel = target_entry.into();
-    active.permission = Set(request.permission);
-    let updated = active
-        .update(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+    let result = wasm_package_user::Entity::update_many()
+        .col_expr(
+            wasm_package_user::Column::Permission,
+            sea_orm::sea_query::Expr::value(request.permission),
+        )
+        .filter(wasm_package_user::Column::Id.eq(&target_entry.id))
+        .filter(wasm_package_user::Column::Permission.eq(target_entry.permission))
+        .exec(&state.db)
+        .await?;
+    if result.rows_affected != 1 {
+        return Err(ApiError::conflict(
+            "Package permission changed; retry the request",
+        ));
+    }
+    let updated = wasm_package_user::Model {
+        permission: request.permission,
+        ..target_entry
+    };
 
     // A demotion must take effect immediately, not after the cache TTL.
     state.invalidate_wasm_permission(&target_user_id, &package_id);
@@ -611,10 +591,18 @@ pub async fn remove_user(
         ));
     }
 
-    wasm_package_user::Entity::delete_by_id(&target_entry.id)
+    let deleted = wasm_package_user::Entity::delete_many()
+        .filter(wasm_package_user::Column::Id.eq(&target_entry.id))
+        .filter(wasm_package_user::Column::Permission.eq(target_entry.permission))
         .exec(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+
+    if deleted.rows_affected != 1 {
+        return Err(ApiError::conflict(
+            "Package permission changed; retry the request",
+        ));
+    }
 
     // Revoke the cached grant so a removed user can't keep acting for up to the
     // cache TTL.

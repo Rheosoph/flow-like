@@ -67,6 +67,7 @@ import {
 	useSecretWrite,
 	useServiceConfig,
 } from "./use-service-config";
+import { ServiceTunnels } from "./tunnels-block";
 
 /* BG20: with a wildcard address the device can't tell which name people use; the owner types it and it stays on this computer. */
 
@@ -796,7 +797,21 @@ function Rows({
 				</KvRow>
 			) : null}
 			<KvRow label={t("serviceConfig.token.name", "Access token")}>
-				<TokenRow editor={editor} writer={writer} onOpen={onOpenToken} />
+				{hosting.authentication === "none" ? (
+					<div className="flex min-w-0 flex-col gap-1.5">
+						<span data-token-state="none">
+							{t("serviceConfig.endpoint.tokenNone", "Not required")}
+						</span>
+						<p className="text-xs text-muted-foreground">
+							{t(
+								"serviceConfig.endpoint.tokenNoneHint",
+								"Anyone who can reach this service can use it without a token.",
+							)}
+						</p>
+					</div>
+				) : (
+					<TokenRow editor={editor} writer={writer} onOpen={onOpenToken} />
+				)}
 			</KvRow>
 			<KvRow label={t("serviceConfig.endpoint.exposed", "Exposed")}>
 				{t(
@@ -994,25 +1009,27 @@ function Hosted({
 			stamp={<ConfigStamp read={read} />}
 		>
 			{body}
-			<NewTokenSheet
-				open={sheet === "token"}
-				onOpenChange={(open) => setSheet(open ? "token" : null)}
-				serviceId={serviceId}
-				deviceLabel={read.deviceLabel}
-				reference={facts.hosting.authSecret}
-				revision={configuration.config_revision}
-				writer={writer}
-				onSent={() =>
-					setNote({
-						tone: "info",
-						text: t(
-							"serviceConfig.endpoint.tokenSent",
-							"New token sent at {{time}}. The old one works until the device saves it.",
-							{ time: time.clock(time.nowS) },
-						),
-					})
-				}
-			/>
+			{facts.hosting.authentication === "token" && facts.hosting.authSecret ? (
+				<NewTokenSheet
+					open={sheet === "token"}
+					onOpenChange={(open) => setSheet(open ? "token" : null)}
+					serviceId={serviceId}
+					deviceLabel={read.deviceLabel}
+					reference={facts.hosting.authSecret}
+					revision={configuration.config_revision}
+					writer={writer}
+					onSent={() =>
+						setNote({
+							tone: "info",
+							text: t(
+								"serviceConfig.endpoint.tokenSent",
+								"New token sent at {{time}}. The old one works until the device saves it.",
+								{ time: time.clock(time.nowS) },
+							),
+						})
+					}
+				/>
+			) : null}
 			<EditSettingsSheet
 				editor={editor}
 				open={sheet === "settings"}
@@ -1039,23 +1056,31 @@ export function ServiceEndpointTab({
 	const { t } = useTranslation("devices");
 	const read = useServiceConfig(deviceId, serviceId);
 	const editor = useSettingsEditor(deviceId, serviceId, read);
-	if (!read.configuration || !editor)
-		return (
-			<Block
-				id="svc-endpoint"
-				icon={Globe}
-				title={t("serviceConfig.endpoint.title", "Endpoint")}
-			>
-				<ConfigUnavailable read={read} serviceId={serviceId} />
-			</Block>
-		);
 	return (
-		<Hosted
-			deviceId={deviceId}
-			serviceId={serviceId}
-			read={read}
-			editor={editor}
-			configuration={read.configuration}
-		/>
+		<div className="flex min-w-0 flex-col gap-4">
+			{!read.configuration || !editor ? (
+				<Block
+					id="svc-endpoint"
+					icon={Globe}
+					title={t("serviceConfig.endpoint.title", "Endpoint")}
+				>
+					<ConfigUnavailable read={read} serviceId={serviceId} />
+				</Block>
+			) : (
+				<Hosted
+					deviceId={deviceId}
+					serviceId={serviceId}
+					read={read}
+					editor={editor}
+					configuration={read.configuration}
+				/>
+			)}
+			<ServiceTunnels
+				key={`${deviceId}/${serviceId}`}
+				deviceId={deviceId}
+				serviceId={serviceId}
+				editor={editor ?? undefined}
+			/>
+		</div>
 	);
 }

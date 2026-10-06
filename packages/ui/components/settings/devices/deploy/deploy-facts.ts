@@ -317,6 +317,11 @@ export function planDevice(
 				events: service.events?.map((event) => event.event_id) ?? null,
 				desired: service.desired,
 				maxInstances: service.instances.max,
+				...(extras.configurations?.find(
+					(configuration) => configuration.placement_id === service.serviceId,
+				)?.config.hosting
+					? { hosted: true }
+					: {}),
 			})) ?? null,
 		...(extras.check ? { refusals: extras.check.refusals } : {}),
 		...(ports.length ? { portsInUse: ports } : {}),

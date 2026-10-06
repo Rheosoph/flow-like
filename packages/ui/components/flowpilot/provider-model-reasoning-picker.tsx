@@ -17,6 +17,7 @@ import { useState } from "react";
 
 import type { AgentBackendDiagnostic } from "../../lib/flowpilot/agent-backend-diagnostics";
 import { cn } from "../../lib/utils";
+import { DeviceModelBadge } from "../settings/devices/models/use/device-model-badge";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import type {
 	AIProvider,
@@ -38,6 +39,8 @@ export interface ProviderModelPickerModel {
 	isFree?: boolean;
 	supportedReasoningEfforts?: CopilotReasoningEffort[];
 	defaultReasoningEffort?: string;
+	/** The device a device Bit's model runs on: the list marks it with the device's state. */
+	deviceId?: string;
 }
 
 export interface ProviderModelReasoningPickerProps {
@@ -339,6 +342,9 @@ export function ProviderModelReasoningPicker({
 									)}
 								>
 									<span className="flex-1 truncate">{model.label}</span>
+									{model.deviceId ? (
+										<DeviceModelBadge deviceId={model.deviceId} />
+									) : null}
 									{active && <CheckIcon className="size-3.5 shrink-0" />}
 								</button>
 							);

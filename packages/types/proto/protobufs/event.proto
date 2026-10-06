@@ -104,4 +104,16 @@ message EventInput {
   optional bytes default_value = 8;
   uint32 index = 9;
   bool optional = 10;
+  // The pin is sensitive: default_value is never set.
+  bool sensitive = 11;
+  // Empty when the pin has no valid values.
+  repeated string valid_values = 12;
+  // A range exists only when both ends are set.
+  optional double range_min = 13;
+  optional double range_max = 14;
+  optional double step = 15;
+  // A sensitive pin's default exists but is withheld.
+  bool default_omitted = 16;
+  // Version of the rule that built this input; 0 for inputs stored before it.
+  uint32 inputs_format = 17;
 }

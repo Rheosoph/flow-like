@@ -1,11 +1,11 @@
 //! Kernel-enforced placement boundaries. The default process profile is for a
 //! dedicated, trusted account; requesting the Linux sandbox never falls back.
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const OPERATOR_ENV_TEMPLATE: &str = "# Operator-owned agent configuration. Restart the agent after changes.\n# Use required when project owners must not access the agent or sibling projects.\nFLOW_LIKE_DEVICE_ISOLATION_POLICY=compatible\n# Strict Linux placements also need delegated CPU/memory/PID budgets and ext4 project quotas.\n# FLOW_LIKE_DEVICE_CGROUP_ROOT=/sys/fs/cgroup/flow-like-workloads\n# Artifact admission includes committed revisions and in-flight uploads, plus metadata.\n# FILES counts files and directories; each in-flight file reserves 34 entries until commit.\n# Default per-project FILES admits about 1900 files per upload with no retained revisions.\n# Limits do not remove revisions; lowering them blocks new uploads until usage fits.\nFLOW_LIKE_DEVICE_ARTIFACT_BYTES=68719476736\nFLOW_LIKE_DEVICE_ARTIFACT_FILES=262144\nFLOW_LIKE_DEVICE_ARTIFACT_REVISIONS=1024\nFLOW_LIKE_PROJECT_ARTIFACT_BYTES=17179869184\nFLOW_LIKE_PROJECT_ARTIFACT_FILES=65536\nFLOW_LIKE_PROJECT_ARTIFACT_REVISIONS=128\n";
+pub const OPERATOR_ENV_TEMPLATE: &str = "# Operator-owned agent configuration. Restart the agent after changes.\n# Use required when project owners must not access the agent or sibling projects.\nFLOW_LIKE_DEVICE_ISOLATION_POLICY=compatible\n# Strict Linux placements also need delegated CPU/memory/PID budgets and ext4 project quotas.\n# FLOW_LIKE_DEVICE_CGROUP_ROOT=/sys/fs/cgroup/flow-like-workloads\n# Artifact admission includes committed revisions and in-flight uploads, plus metadata.\n# FILES counts files and directories; each in-flight file reserves 34 entries until commit.\n# Default per-project FILES admits about 1900 files per upload with no retained revisions.\n# Limits do not remove revisions; lowering them blocks new uploads until usage fits.\nFLOW_LIKE_DEVICE_ARTIFACT_BYTES=68719476736\nFLOW_LIKE_DEVICE_ARTIFACT_FILES=262144\nFLOW_LIKE_DEVICE_ARTIFACT_REVISIONS=1024\nFLOW_LIKE_PROJECT_ARTIFACT_BYTES=17179869184\nFLOW_LIKE_PROJECT_ARTIFACT_FILES=65536\nFLOW_LIKE_PROJECT_ARTIFACT_REVISIONS=128\n# Optional model storage limit, including staged and reserved files (bytes).\n# FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=68719476736\n";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -143,9 +143,14 @@ pub(crate) fn artifact_budgets(state_dir: &Path) -> Result<ArtifactBudgets> {
     Ok(host_configuration(state_dir)?.artifact_budgets)
 }
 
+pub(crate) fn models_max_bytes(state_dir: &Path) -> Result<Option<u64>> {
+    Ok(host_configuration(state_dir)?.models_max_bytes)
+}
+
 struct HostConfiguration {
     required: bool,
     artifact_budgets: ArtifactBudgets,
+    models_max_bytes: Option<u64>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     cgroup_root: Option<PathBuf>,
 }
@@ -155,6 +160,7 @@ fn host_configuration(state_dir: &Path) -> Result<HostConfiguration> {
     let mut policy = None;
     let mut cgroup = None;
     let mut artifact_budgets = ArtifactBudgets::default();
+    let mut models_max_bytes = None;
     let mut seen_artifact_keys = std::collections::HashSet::new();
     match std::fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
@@ -176,6 +182,13 @@ fn host_configuration(state_dir: &Path) -> Result<HostConfiguration> {
                     "FLOW_LIKE_DEVICE_CGROUP_ROOT" => {
                         ensure!(cgroup.is_none(), "Repeated agent cgroup root");
                         cgroup = Some(PathBuf::from(value));
+                    }
+                    "FLOW_LIKE_DEVICE_MODELS_MAX_BYTES" | "models_max_bytes" => {
+                        ensure!(models_max_bytes.is_none(), "Repeated model storage limit");
+                        let bytes = value.parse::<u64>().ok().filter(|bytes| *bytes > 0);
+                        models_max_bytes = Some(bytes.context(
+                            "FLOW_LIKE_DEVICE_MODELS_MAX_BYTES must be a positive integer",
+                        )?);
                     }
                     key if key.starts_with("FLOW_LIKE_DEVICE_ARTIFACT_")
                         || key.starts_with("FLOW_LIKE_PROJECT_ARTIFACT_") =>
@@ -220,6 +233,7 @@ fn host_configuration(state_dir: &Path) -> Result<HostConfiguration> {
         // An ambient compatible setting must never weaken the durable policy.
         required: required || environment_required,
         artifact_budgets,
+        models_max_bytes,
         cgroup_root: std::env::var_os("FLOW_LIKE_DEVICE_CGROUP_ROOT")
             .map(PathBuf::from)
             .or(cgroup),
@@ -239,6 +253,8 @@ pub(crate) fn enforce_host_policy(
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::engine_command;
 
 pub struct IsolationLease {
     #[cfg(target_os = "linux")]

@@ -207,8 +207,6 @@ pub async fn get_current_profile(app_handle: AppHandle) -> Result<UserProfile, T
 
     state
         .model_factory
-        .lock()
-        .await
         .set_execution_settings(profile.execution_settings.clone());
 
     if let Some(icon) = profile.hub_profile.icon.clone()

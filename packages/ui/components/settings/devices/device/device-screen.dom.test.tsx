@@ -176,10 +176,11 @@ describe("verdict", () => {
 });
 
 describe("tabs", () => {
-	test("eight sections with the open items of each as a badge", async () => {
+	test("nine sections with the open items of each as a badge", async () => {
 		const view = await openDevice(IDS.edge);
 		const tabs = allByRole("tab", undefined, view.container);
-		expect(tabs).toHaveLength(8);
+		expect(tabs).toHaveLength(9);
+		expect(tabNames(view.container).indexOf("Models")).toBe(4);
 		const badge = (name: RegExp) =>
 			byRole("tab", name, view.container).querySelector("[data-tab-count]")
 				?.textContent ?? "";
@@ -207,11 +208,24 @@ describe("tabs", () => {
 		).toBeTruthy();
 	});
 
+	test("Models replaces the URL with tab=models; an agent from before model hosting is asked nothing", async () => {
+		const view = await openDevice(IDS.edge);
+		await click(byRole("tab", /^Models/, view.container));
+		await view.settle();
+		expect(lastNavigation(view)?.[0]).toBe("replace");
+		expect(lastNavigation(view)?.[1]).toContain("tab=models");
+		expect(text(view.container)).toContain(
+			"The agent on edge-berlin-01 can't host models yet.",
+		);
+		expect(kit.commandTypes(view)).not.toContain("models");
+	});
+
 	test("the tabs of the other lanes render in their panels", async () => {
 		const view = await openDevice(IDS.edge);
 		for (const name of [
 			/^Activity/,
 			/^Metrics/,
+			/^Models/,
 			/^Certificates/,
 			/^Access/,
 			/^Keys/,
@@ -230,7 +244,7 @@ describe("tabs", () => {
 		expect(tabNames(view.container)).toEqual(["Overview", "Access", "Keys"]);
 		const page = text(view.container);
 		expect(page).toContain(
-			"Services, activity, metrics, certificates and device settings aren't shown: revoked devices aren't read.",
+			"Services, activity, metrics, models, certificates and device settings aren't shown: revoked devices aren't read.",
 		);
 		expect(
 			byRole("tab", /^Overview/, view.container).getAttribute("aria-selected"),
@@ -438,6 +452,9 @@ describe("in an app's settings", () => {
 			"Services, and the items and services on Overview, show only this app. The rest, including tabs marked with the device glyph, covers the whole device.",
 		);
 		expect(text(byRole("tab", /^Certificates/, view.container))).toContain(
+			", whole device",
+		);
+		expect(text(byRole("tab", /^Models/, view.container))).toContain(
 			", whole device",
 		);
 		expect(text(byRole("tab", /^Services/, view.container))).not.toContain(

@@ -175,30 +175,59 @@ fn merge_query_and_body(
     }
 }
 
-fn sanitize_request_file_name(filename: Option<&str>, fallback_index: usize) -> String {
+const REQUEST_FILE_NAME_MAX_CHARS: usize = 120;
+const REQUEST_FILE_EXTENSION_MAX_CHARS: usize = 16;
+
+/// An ASCII-only file name for a request file. The extension is sanitised apart from the
+/// stem, so "請求書.pdf" keeps it as "file-1.pdf" and a long name is cut before it.
+pub(crate) fn sanitize_request_file_name(filename: Option<&str>, fallback_index: usize) -> String {
     let raw = filename
         .and_then(|name| name.rsplit(['/', '\\']).next())
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("file");
 
-    let mut sanitized = String::with_capacity(raw.len().min(120));
-    for ch in raw.chars().take(120) {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
-            sanitized.push(ch);
-        } else {
-            sanitized.push('_');
-        }
-    }
-
-    let sanitized = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
-    if sanitized.is_empty() {
+    let (stem, extension) = match raw.rsplit_once('.') {
+        Some((stem, extension)) if is_request_file_extension(extension) => (stem, Some(extension)),
+        _ => (raw, None),
+    };
+    let stem_chars = extension.map_or(REQUEST_FILE_NAME_MAX_CHARS, |extension| {
+        REQUEST_FILE_NAME_MAX_CHARS - 1 - extension.len()
+    });
+    let stem = sanitize_file_name_part(stem, stem_chars);
+    let stem = if stem.is_empty() {
         format!("file-{fallback_index}")
     } else {
-        sanitized.to_string()
+        stem
+    };
+    match extension {
+        Some(extension) => format!("{stem}.{extension}"),
+        None => stem,
     }
 }
 
-fn sanitize_store_path_segment(value: &str, fallback: &str) -> String {
+fn is_request_file_extension(extension: &str) -> bool {
+    (1..=REQUEST_FILE_EXTENSION_MAX_CHARS).contains(&extension.len())
+        && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn sanitize_file_name_part(value: &str, max_chars: usize) -> String {
+    let sanitized: String = value
+        .chars()
+        .take(max_chars)
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    sanitized
+        .trim_matches(|ch| ch == '.' || ch == '_')
+        .to_string()
+}
+
+pub(crate) fn sanitize_store_path_segment(value: &str, fallback: &str) -> String {
     let mut sanitized = String::with_capacity(value.len().min(80));
     for ch in value.chars().take(80) {
         if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
@@ -216,7 +245,7 @@ fn sanitize_store_path_segment(value: &str, fallback: &str) -> String {
     }
 }
 
-fn flow_path_value(path: &str) -> flow_like_types::Value {
+pub(crate) fn flow_path_value(path: &str) -> flow_like_types::Value {
     serde_json::json!({
         "path": path,
         "store_ref": REQUEST_FILES_STORE_REF,
@@ -741,6 +770,54 @@ mod tests {
             "Bearer test-http-auth-token"
         ));
         assert!(http_auth_token_matches(&raw, "Bearer test-http-auth-token"));
+    }
+
+    #[test]
+    fn request_file_name_keeps_the_extension_of_a_non_ascii_stem() {
+        for (name, sanitized) in [
+            ("請求書.pdf", "file-1.pdf"),
+            ("Счёт.PDF", "file-1.PDF"),
+            ("  .pdf", "file-1.pdf"),
+            ("報告 2026.xlsx", "2026.xlsx"),
+            ("Rechnung März.pdf", "Rechnung_M_rz.pdf"),
+            ("請求書.tar.gz", "tar.gz"),
+        ] {
+            assert_eq!(
+                sanitize_request_file_name(Some(name), 1),
+                sanitized,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn request_file_name_without_an_extension_is_sanitised_whole() {
+        for (name, sanitized) in [
+            ("Invoice 03.pdf", "Invoice_03.pdf"),
+            ("../../etc/passwd", "passwd"),
+            ("C:\\docs\\notes.txt", "notes.txt"),
+            ("report.", "report"),
+            ("my file.tar gz", "my_file.tar_gz"),
+            ("請求書", "file-3"),
+            ("..", "file-3"),
+            ("   ", "file"),
+        ] {
+            assert_eq!(
+                sanitize_request_file_name(Some(name), 3),
+                sanitized,
+                "{name}"
+            );
+        }
+        assert_eq!(sanitize_request_file_name(None, 3), "file");
+    }
+
+    #[test]
+    fn request_file_name_cuts_a_long_stem_before_the_extension() {
+        let name = sanitize_request_file_name(Some(&format!("{}.pdf", "a".repeat(300))), 1);
+        assert_eq!(name, format!("{}.pdf", "a".repeat(116)));
+
+        let unusual = format!("notes.{}", "x".repeat(REQUEST_FILE_EXTENSION_MAX_CHARS + 1));
+        assert_eq!(sanitize_request_file_name(Some(&unusual), 1), unusual);
     }
 }
 

@@ -394,7 +394,7 @@ describe("Event start picker", () => {
 		await keyDown(rows[0] as HTMLElement, "ArrowDown");
 		expect(document.activeElement).toBe(rows[1]);
 		await keyDown(rows[1] as HTMLElement, "End");
-		expect(document.activeElement).toBe(rows.at(-1));
+		expect(document.activeElement).toBe(rows.at(-1) as HTMLElement);
 		await keyDown(rows.at(-1) as HTMLElement, "Home");
 		expect(document.activeElement).toBe(rows[0]);
 		expect(view.selections).toEqual([]);

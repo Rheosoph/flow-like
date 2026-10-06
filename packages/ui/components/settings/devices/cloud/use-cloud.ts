@@ -43,6 +43,7 @@ import {
 	byState,
 	mergeApprovals,
 } from "./cloud-model";
+import { type ModelAccess, modelAccess } from "./model-access";
 
 /* Devices and apps by name. */
 
@@ -94,7 +95,7 @@ export interface AppRole {
 }
 
 type RoleReader = Pick<IBackendState["roleState"], "getOwnRole">;
-const noRole = async () => undefined;
+const noRole = async (_appId: string): Promise<IOwnRole | undefined> => undefined;
 
 /** The viewer's role on an app, as the approval gates need it (Admin or Owner with Execute boards). */
 export function useAppRole(appId: string | null | undefined): AppRole {
@@ -207,10 +208,12 @@ export function useModelNames(ids: readonly string[]): (id: string) => string {
 export interface AppModel {
 	id: string;
 	name: string;
+	access: ModelAccess;
 }
 
 export interface AppModelsRead {
 	models: AppModel[];
+	localModels: AppModel[];
 	loading: boolean;
 	/** False when the app or its model list can't be read here. */
 	known: boolean;
@@ -246,11 +249,18 @@ export function useAppModels(appId: string | null | undefined): AppModelsRead {
 	return useMemo(() => {
 		const models = bits.flatMap((bit) =>
 			bit && MODEL_TYPES.has(bit.type)
-				? [{ id: bit.id, name: bitName(bit, language) }]
+				? [
+						{
+							id: bit.id,
+							name: bitName(bit, language),
+							access: modelAccess(bit),
+						},
+					]
 				: [],
 		);
 		return {
-			models,
+			models: models.filter((model) => model.access !== "local"),
+			localModels: models.filter((model) => model.access === "local"),
 			loading: !!appId && (app.isLoading || loading),
 			known: !!appId && !!reader && !!app.data && !app.error,
 		};

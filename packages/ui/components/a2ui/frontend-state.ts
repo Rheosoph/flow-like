@@ -1,4 +1,9 @@
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
+import {
+	isRuntimeNamespace,
+	onRuntimeNamespaceClose,
+	runtimeNamespaceActive,
+} from "../../lib/service-runtime/session-scope";
 
 type StateRecord = Record<string, unknown>;
 
@@ -15,6 +20,7 @@ export interface FrontendStateStore {
 	setPageState(pageId: string, key: string, value: unknown): void;
 	clearPageState(pageId: string): void;
 	handleMessage(message: unknown): boolean;
+	dispose(): void;
 }
 
 export interface FrontendStatePersistence {
@@ -63,9 +69,15 @@ export function createFrontendStateStore(
 	const clearedPages = new Set<string>();
 	let globalLoad: Promise<void> | undefined;
 	let pendingWrites = Promise.resolve();
-	const persistentAppId = isSafeKey(appId) ? appId : undefined;
+	const runtime = isRuntimeNamespace(appId);
+	let disposed = false;
+	let releaseRuntime: (() => void) | undefined;
+	const persistentAppId = isSafeKey(appId) && !runtime ? appId : undefined;
+	const available = () =>
+		!disposed && (!runtime || runtimeNamespaceActive(appId));
 
 	function publish(next: FrontendStateSnapshot) {
+		if (!available()) return;
 		snapshot = Object.freeze(next);
 		for (const listener of listeners) listener();
 	}
@@ -114,6 +126,7 @@ export function createFrontendStateStore(
 			return () => listeners.delete(listener);
 		},
 		async ensureLoaded(pageId) {
+			if (!available()) return;
 			globalLoad ??= loadGlobal().catch(() => {
 				globalLoad = undefined;
 				console.error("Failed to load global state");
@@ -133,6 +146,7 @@ export function createFrontendStateStore(
 			await Promise.all([globalLoad, pageLoad]);
 		},
 		setGlobalState(key, value) {
+			if (!available()) return;
 			if (!isSafeKey(key)) return;
 			persist((id) => storage.global.set(id, key, value));
 			publish({
@@ -141,6 +155,7 @@ export function createFrontendStateStore(
 			});
 		},
 		setPageState(pageId, key, value) {
+			if (!available()) return;
 			if (!isSafeKey(pageId) || !isSafeKey(key)) return;
 			persist((id) => storage.page.set(id, pageId, key, value));
 			replacePage(
@@ -149,12 +164,14 @@ export function createFrontendStateStore(
 			);
 		},
 		clearPageState(pageId) {
+			if (!available()) return;
 			if (!isSafeKey(pageId)) return;
 			clearedPages.add(pageId);
 			persist((id) => storage.page.clearPage(id, pageId));
 			replacePage(pageId, EMPTY_FRONTEND_STATE_RECORD);
 		},
 		handleMessage(message) {
+			if (!available()) return false;
 			if (!message || typeof message !== "object" || Array.isArray(message)) {
 				return false;
 			}
@@ -185,11 +202,29 @@ export function createFrontendStateStore(
 					return false;
 			}
 		},
+		dispose() {
+			disposed = true;
+			releaseRuntime?.();
+			snapshot = Object.freeze({
+				globalState: EMPTY_FRONTEND_STATE_RECORD,
+				pageStates: immutableRecord<StateRecord>(),
+			});
+			listeners.clear();
+			pageLoads.clear();
+			clearedPages.clear();
+		},
 	};
+	if (runtime)
+		releaseRuntime = onRuntimeNamespaceClose(appId, () => store.dispose());
 	return store;
 }
 
 const stores = new Map<string | undefined, FrontendStateStore>();
+
+export function releaseFrontendStateStore(appId: string): void {
+	stores.get(appId)?.dispose();
+	stores.delete(appId);
+}
 
 export function getFrontendStateStore(
 	appId: string | undefined,

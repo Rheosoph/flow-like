@@ -177,6 +177,12 @@ export interface BrowserController {
 		deviceKey: Uint8Array,
 		now: number,
 	): NoiseHandshake;
+	/** Requires a crypto bundle with the separate service-tunnel handshake domain. */
+	beginTunnelNoise?(
+		grantId: string,
+		deviceKey: Uint8Array,
+		now: number,
+	): NoiseHandshake;
 	createTelemetry(audience: unknown): BrowserMlsEndpoint;
 	openTelemetry(
 		audience: unknown,
@@ -345,6 +351,7 @@ export interface DeviceCrypto {
 	): ManagementPolicy;
 }
 export type Capability =
+	| "service_connect"
 	| "status"
 	| "logs"
 	| "metrics"
@@ -356,7 +363,10 @@ export type Capability =
 	| "scale"
 	| "update_agent"
 	| "manage_certificates"
-	| "reboot";
+	| "reboot"
+	/** Needs an agent with `model_host`; older agents reject the whole policy. */
+	| "model_use"
+	| "model_manage";
 
 export interface TelemetryRoster {
 	version: 1;
@@ -430,6 +440,8 @@ export interface ManagementPolicy {
 	expires_at: number;
 }
 export interface PolicyView {
+	/** Permissions the hub verifies; absent on hubs predating model permissions. */
+	supported_capabilities?: string[];
 	policy_jws: string | null;
 	version: number;
 	digest: string | null;

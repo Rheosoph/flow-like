@@ -260,9 +260,10 @@ export class BitState implements IBitState {
 	}
 
 	private async syncCustomBitsFromApi(profile: IProfile): Promise<IBit[]> {
+		// Device Bits come only on request: apps from before device models can't skip them.
 		const remote = await this.backend.apiState.get<IBit[]>(
 			profile,
-			"user/bits?include_secrets=true",
+			"user/bits?include_secrets=true&device_models=true",
 		);
 		for (const bit of asArray(remote)) {
 			// `Bit` is `serde(default)`: an id-less entry would be stored as a blank model.

@@ -1,5 +1,5 @@
 use super::{
-    HANDSHAKE_TIMEOUT, IO_TIMEOUT, NoiseConnection,
+    HANDSHAKE_TIMEOUT, IO_TIMEOUT, NoiseConnection, tunnel,
     wire::{self, Channel, NoiseEnvelope, SignalEnvelope},
 };
 use crate::enrollment::unix_time;
@@ -55,14 +55,33 @@ impl PeerConnectionEventHandler for Handler {
     }
 }
 
+pub(super) enum PeerSession {
+    Management(NoiseConnection),
+    Tunnel(tunnel::Connection),
+}
+
+impl From<NoiseConnection> for PeerSession {
+    fn from(value: NoiseConnection) -> Self {
+        Self::Management(value)
+    }
+}
+
+/// `opened` runs once the controller's data channel arrived, so the session's slot counts as
+/// established.
 pub(super) async fn serve(
     offer: SignalEnvelope,
-    mut noise: NoiseConnection,
+    session: impl Into<PeerSession>,
     controller: &str,
     admission: Arc<DeviceSignalingResponse>,
     outbound: mpsc::Sender<String>,
     cancel: CancellationToken,
+    opened: impl FnOnce() + Send,
 ) -> Result<()> {
+    let session = session.into();
+    let protocol = match &session {
+        PeerSession::Management(_) => wire::PROTOCOL,
+        PeerSession::Tunnel(_) => wire::TUNNEL_PROTOCOL,
+    };
     let SignalEnvelope::Offer {
         session_id, sdp, ..
     } = offer;
@@ -91,8 +110,8 @@ pub(super) async fn serve(
             .with_dedicated_reactor_thread(true)
             .with_reactor_pool_size(1)
             .with_udp_addrs(vec!["0.0.0.0:0".to_owned(), "[::]:0".to_owned()])
-            .with_sctp_receive_buffer_size(64 * 1024)
-            .with_data_channel_send_buffer_limit(64 * 1024)
+            .with_sctp_receive_buffer_size(if protocol == wire::TUNNEL_PROTOCOL { 1024 * 1024 } else { 64 * 1024 })
+            .with_data_channel_send_buffer_limit(if protocol == wire::TUNNEL_PROTOCOL { 1024 * 1024 } else { 64 * 1024 })
             .build()) => result??,
     };
     let result: Result<()> = async {
@@ -115,7 +134,12 @@ pub(super) async fn serve(
             _ = closed.cancelled() => return Ok(()),
             result = tokio::time::timeout(HANDSHAKE_TIMEOUT, channels.recv()) => result?.context("WebRTC data channel missing")?,
         };
-        validate_channel(&channel).await?;
+        validate_channel(&channel, protocol).await?;
+        opened();
+        let mut noise = match session {
+            PeerSession::Management(noise) => noise,
+            PeerSession::Tunnel(connection) => return serve_tunnel_channel(connection, channel, closed.clone()).await,
+        };
         loop {
             let event = tokio::select! {
                 _ = closed.cancelled() => break,
@@ -146,9 +170,9 @@ pub(super) async fn serve(
     result
 }
 
-async fn validate_channel(channel: &Arc<dyn DataChannel>) -> Result<()> {
+async fn validate_channel(channel: &Arc<dyn DataChannel>, protocol: &str) -> Result<()> {
     ensure!(
-        channel.label().await? == wire::PROTOCOL && channel.protocol().await? == wire::PROTOCOL,
+        channel.label().await? == protocol && channel.protocol().await? == protocol,
         "Unexpected management data channel"
     );
     ensure!(
@@ -159,6 +183,50 @@ async fn validate_channel(channel: &Arc<dyn DataChannel>) -> Result<()> {
         "Management requires a reliable ordered data channel"
     );
     Ok(())
+}
+
+async fn serve_tunnel_channel(
+    connection: tunnel::Connection,
+    channel: Arc<dyn DataChannel>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let (input, incoming) = mpsc::channel(32);
+    let (output, mut outgoing) = mpsc::channel::<Vec<u8>>(32);
+    let read = async {
+        loop {
+            match channel.poll().await.context("Tunnel data channel closed")? {
+                DataChannelEvent::OnMessage(message) => {
+                    ensure!(
+                        !message.is_string
+                            && message.data.len() <= flow_like_device_protocol::TUNNEL_MAX_ENVELOPE,
+                        "Tunnel data channel requires bounded binary frames"
+                    );
+                    input.send(message.data.to_vec()).await?;
+                }
+                DataChannelEvent::OnError
+                | DataChannelEvent::OnClosing
+                | DataChannelEvent::OnClose => anyhow::bail!("Tunnel data channel closed"),
+                _ => {}
+            }
+        }
+        #[allow(unreachable_code)]
+        Ok::<_, anyhow::Error>(())
+    };
+    let write = async {
+        while let Some(bytes) = outgoing.recv().await {
+            tokio::time::timeout(
+                IO_TIMEOUT,
+                channel.send(bytes::BytesMut::from(bytes.as_slice())),
+            )
+            .await??;
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    tokio::select! {
+        _ = cancel.cancelled() => Ok(()),
+        result = connection.serve(incoming, output, cancel.clone()) => result,
+        result = async { tokio::try_join!(read, write)?; Ok::<_, anyhow::Error>(()) } => result,
+    }
 }
 
 fn ice_servers(admission: &DeviceSignalingResponse, now: i64) -> Result<Vec<RTCIceServer>> {
@@ -251,11 +319,34 @@ mod tests {
     #[tokio::test]
     async fn authenticated_noise_commands_survive_signaling_output_loss_on_real_rtc() -> Result<()>
     {
+        rtc_session(false).await
+    }
+
+    #[tokio::test]
+    async fn binary_tunnel_noise_and_frames_survive_signaling_loss_on_real_rtc() -> Result<()> {
+        rtc_session(true).await
+    }
+
+    async fn rtc_session(is_tunnel: bool) -> Result<()> {
         use flow_like_device_protocol::{ManagementCommand, ManagementRequest};
         use webrtc::data_channel::RTCDataChannelInit;
         let fixture = super::super::tests::fixture()?;
         let _directory = fixture.directory;
-        let mut initiator = fixture.initiator;
+        let mut initiator = if is_tunnel {
+            crate::crypto::noise::Handshake::tunnel_initiator(
+                &[7; 32],
+                x25519_dalek::x25519([42; 32], x25519_dalek::X25519_BASEPOINT_BYTES),
+                "device",
+                "session",
+            )?
+        } else {
+            fixture.initiator
+        };
+        let protocol = if is_tunnel {
+            wire::TUNNEL_PROTOCOL
+        } else {
+            wire::PROTOCOL
+        };
         let (gathered_sender, mut gathered) = watch::channel(false);
         let (channels, _unused) = mpsc::channel(1);
         let cancel = CancellationToken::new();
@@ -275,9 +366,9 @@ mod tests {
             .await?;
         let channel = controller
             .create_data_channel(
-                wire::PROTOCOL,
+                protocol,
                 Some(RTCDataChannelInit {
-                    protocol: wire::PROTOCOL.into(),
+                    protocol: protocol.into(),
                     ..Default::default()
                 }),
             )
@@ -299,6 +390,16 @@ mod tests {
             "owner",
             &fixture.certificate,
         )?;
+        let peer_session = if is_tunnel {
+            PeerSession::Tunnel(tunnel::Connection::new(
+                &fixture.management,
+                "session",
+                "owner",
+                &fixture.certificate,
+            )?)
+        } else {
+            PeerSession::Management(noise)
+        };
         let now = unix_time()?;
         let admission = Arc::new(DeviceSignalingResponse {
             token: "redacted".into(),
@@ -320,12 +421,14 @@ mod tests {
                     sdp: offer.sdp,
                     grant_id: "owner".into(),
                     certificate_jws: certificate,
+                    protocol: is_tunnel.then(|| wire::TUNNEL_PROTOCOL.into()),
                 },
-                noise,
+                peer_session,
                 "controller",
                 admission,
                 output,
                 task_cancel,
+                || {},
             )
             .await
         });
@@ -350,6 +453,85 @@ mod tests {
             ) {
                 break;
             }
+        }
+        if is_tunnel {
+            use flow_like_device_protocol::{
+                TunnelEnvelope, TunnelEnvelopeBody, TunnelFrame, TunnelFrameBody, TunnelHello,
+            };
+            async fn send(channel: &Arc<dyn DataChannel>, body: TunnelEnvelopeBody) -> Result<()> {
+                let bytes = TunnelEnvelope {
+                    session_id: "session".into(),
+                    body,
+                }
+                .encode()?;
+                channel
+                    .send(bytes::BytesMut::from(bytes.as_slice()))
+                    .await?;
+                Ok(())
+            }
+            async fn receive(channel: &Arc<dyn DataChannel>) -> Result<TunnelEnvelopeBody> {
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(10), channel.poll())
+                        .await?
+                        .context("Tunnel channel closed")?
+                    {
+                        DataChannelEvent::OnMessage(message) => {
+                            ensure!(!message.is_string, "Tunnel frame must be binary");
+                            return Ok(TunnelEnvelope::decode(&message.data)?.body);
+                        }
+                        DataChannelEvent::OnError | DataChannelEvent::OnClose => {
+                            anyhow::bail!("Tunnel channel failed")
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            send(
+                &channel,
+                TunnelEnvelopeBody::Hello(TunnelHello {
+                    grant_id: "owner".into(),
+                    certificate_jws: fixture.certificate,
+                    data: wire::encode(&initiator.write()?),
+                }),
+            )
+            .await?;
+            let TunnelEnvelopeBody::Handshake(reply) = receive(&channel).await? else {
+                anyhow::bail!("No tunnel handshake")
+            };
+            initiator.read(&reply)?;
+            send(&channel, TunnelEnvelopeBody::Handshake(initiator.write()?)).await?;
+            let mut session = initiator.finish()?;
+            let TunnelEnvelopeBody::Message(ready) = receive(&channel).await? else {
+                anyhow::bail!("No tunnel ready")
+            };
+            let ready = TunnelFrame::decode(&session.decrypt(&ready)?)?;
+            assert_eq!(ready.sequence, 0);
+            assert!(matches!(ready.body, TunnelFrameBody::Renewed(_)));
+            drop(received);
+            let frame = TunnelFrame {
+                sequence: 0,
+                stream_id: 0,
+                body: TunnelFrameBody::Ping([1; 8]),
+            }
+            .encode()?;
+            send(
+                &channel,
+                TunnelEnvelopeBody::Message(session.encrypt(&frame)?),
+            )
+            .await?;
+            let TunnelEnvelopeBody::Message(reply) = receive(&channel).await? else {
+                anyhow::bail!("No tunnel pong")
+            };
+            let reply = TunnelFrame::decode(&session.decrypt(&reply)?)?;
+            assert_eq!(reply.sequence, 1);
+            assert!(matches!(
+                reply.body,
+                TunnelFrameBody::Pong([1, 1, 1, 1, 1, 1, 1, 1])
+            ));
+            cancel.cancel();
+            controller.close().await?;
+            tokio::time::timeout(Duration::from_secs(15), serving).await???;
+            return Ok(());
         }
         let hello = NoiseEnvelope::Hello {
             session_id: "session".into(),
@@ -378,6 +560,7 @@ mod tests {
         let ready: serde_json::Value =
             serde_json::from_slice(&session.decrypt(&wire::decode(&data)?)?)?;
         assert_eq!(ready["ready"], true);
+        assert_eq!(ready["data_tunnel"], 1);
         // The signaling output can disappear after establishment without changing Noise state.
         drop(received);
         let request = ManagementRequest {

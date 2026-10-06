@@ -2,6 +2,7 @@ use sea_orm::sea_query::ExprTrait;
 use std::collections::HashMap;
 
 use crate::{
+    devices::management::admitted_device,
     entity::{sea_orm_active_enums::BitType, user_bit},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -12,8 +13,11 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    http::StatusCode,
 };
 use flow_like::bit::{Bit, BitTypes, MLX_PROVIDER_NAME, Metadata};
+use flow_like::models::device::DeviceModelTarget;
+use flow_like_device_protocol::validate_management_id;
 use flow_like_types::Value;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -161,6 +165,15 @@ pub struct ListUserBitsQuery {
     /// Owner-only, used by the desktop app for local execution.
     #[serde(default)]
     pub include_secrets: bool,
+    /// Include models hosted on your devices; apps that can't use them leave this off.
+    #[serde(default)]
+    pub device_models: bool,
+}
+
+/// Bits of the `device` provider reach only clients that ask for them: an app from before device
+/// models treats one as a remote model, so Find Model could pick it and fail instead of falling back.
+pub(crate) fn served_to_client(bit: &Bit, device_models: bool) -> bool {
+    device_models || !bit.is_device_model()
 }
 
 #[utoipa::path(
@@ -168,7 +181,8 @@ pub struct ListUserBitsQuery {
     path = "/user/bits",
     tag = "user",
     params(
-        ("include_secrets" = Option<bool>, Query, description = "Include decrypted provider secrets (for local execution on your own devices)")
+        ("include_secrets" = Option<bool>, Query, description = "Include decrypted provider secrets (for local execution on your own devices)"),
+        ("device_models" = Option<bool>, Query, description = "Include models hosted on your devices; apps that can't use them leave this off")
     ),
     responses(
         (status = 200, description = "Your private custom model bits", body = Vec<Bit>),
@@ -192,6 +206,7 @@ pub async fn list_user_bits(
     let bits = models
         .into_iter()
         .map(|model| user_bit_to_core(model, &state, query.include_secrets))
+        .filter(|bit| served_to_client(bit, query.device_models))
         .collect();
 
     Ok(Json(bits))
@@ -206,7 +221,8 @@ pub async fn list_user_bits(
     responses(
         (status = 200, description = "Custom bit created or updated", body = Bit),
         (status = 400, description = "Invalid bit configuration"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "A device model bit names a device you neither own nor hold a grant on")
     ),
     security(("bearer_auth" = []))
 )]
@@ -224,7 +240,7 @@ pub async fn upsert_user_bit(
     let mut bit = body.bit;
     bit.id = bit_id.clone();
 
-    let bit_type = validate_user_bit(&bit)?;
+    let bit_type = checked_user_bit(&state, &sub, &bit, body.secrets.as_ref()).await?;
 
     let (public_parameters, mut extracted_secrets) = split_secret_params(bit.parameters.clone());
     if let Some(secrets) = body.secrets {
@@ -405,6 +421,37 @@ fn validate_bit_id(bit_id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// The bit type, and the device a `device` bit names: those go through
+/// [`validate_device_model_bit`], every other bit through [`validate_user_bit`].
+fn validated_bit(bit: &Bit) -> Result<(BitType, Option<DeviceModelTarget>), ApiError> {
+    let Some(target) = bit.device_model_target() else {
+        return validate_user_bit(bit).map(|bit_type| (bit_type, None));
+    };
+    let target = target.map_err(|error| ApiError::bad_request(error.to_string()))?;
+    validate_device_model_bit(bit, &target).map(|bit_type| (bit_type, Some(target)))
+}
+
+/// A device model bit also needs an account that may use its device, and carries no secrets.
+async fn checked_user_bit(
+    state: &AppState,
+    sub: &str,
+    bit: &Bit,
+    secrets: Option<&HashMap<String, Value>>,
+) -> Result<BitType, ApiError> {
+    let (bit_type, device) = validated_bit(bit)?;
+    let Some(target) = device else {
+        return Ok(bit_type);
+    };
+    if secrets.is_some_and(|secrets| !secrets.is_empty()) {
+        return Err(ApiError::bad_request(format!(
+            "Device model bit {} carries no credentials; its device authorizes each call",
+            bit.id
+        )));
+    }
+    ensure_device_access(state, sub, &bit.id, &target.device_id).await?;
+    Ok(bit_type)
+}
+
 /// A user bit must be a well-formed LLM/VLM bit with a provider the local
 /// model factory can instantiate from per-bit params. Standard provider names
 /// ("openai", "azure", …) are rejected because they would resolve against the
@@ -514,6 +561,82 @@ fn validate_user_bit(bit: &Bit) -> Result<BitType, ApiError> {
     }
 
     Ok(bit_type)
+}
+
+/// A `device` bit names a model hosted on a Flow-Like device: an LLM, VLM or embedding bit whose
+/// provider params hold the device and the model. It carries no file, link or credential;
+/// whoever runs it unlocks the device on their own computer.
+fn validate_device_model_bit(bit: &Bit, target: &DeviceModelTarget) -> Result<BitType, ApiError> {
+    if validate_management_id(&target.device_id).is_err() {
+        return Err(ApiError::bad_request(format!(
+            "Device model bit {} names an invalid device id",
+            bit.id
+        )));
+    }
+    let bit_type = device_model_bit_type(bit)?;
+    if carries_files(bit) {
+        return Err(ApiError::bad_request(format!(
+            "Device model bit {} is served by its device and carries no download_link, file_name, size or dependencies",
+            bit.id
+        )));
+    }
+    if let Some(key) = secret_param_key(bit) {
+        return Err(ApiError::bad_request(format!(
+            "Device model bit {} carries no credentials; remove provider.params.{key}",
+            bit.id
+        )));
+    }
+    Ok(bit_type)
+}
+
+fn device_model_bit_type(bit: &Bit) -> Result<BitType, ApiError> {
+    match bit.bit_type {
+        BitTypes::Llm => Ok(BitType::Llm),
+        BitTypes::Vlm => Ok(BitType::Vlm),
+        BitTypes::Embedding => Ok(BitType::Embedding),
+        _ => Err(ApiError::bad_request(format!(
+            "Device model bit {} must be an LLM, VLM or embedding bit",
+            bit.id
+        ))),
+    }
+}
+
+fn carries_files(bit: &Bit) -> bool {
+    bit.download_link.is_some()
+        || bit.file_name.is_some()
+        || bit.size.is_some_and(|size| size != 0)
+        || !bit.dependencies.is_empty()
+}
+
+fn secret_param_key(bit: &Bit) -> Option<&str> {
+    let params = bit.parameters.get("provider")?.get("params")?.as_object()?;
+    SECRET_PARAM_KEYS
+        .into_iter()
+        .find(|key| params.contains_key(*key))
+}
+
+/// The rule for opening a tunnel to the device: the account owns it or holds a current grant in
+/// its latest access rules.
+async fn ensure_device_access(
+    state: &AppState,
+    sub: &str,
+    bit_id: &str,
+    device_id: &str,
+) -> Result<(), ApiError> {
+    admitted_device(state, sub, device_id)
+        .await
+        .map(|_| ())
+        .map_err(|error| device_access_error(error, bit_id, device_id))
+}
+
+/// A device the account may not use and one that does not exist answer alike.
+fn device_access_error(error: ApiError, bit_id: &str, device_id: &str) -> ApiError {
+    match error.status() {
+        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => ApiError::forbidden(format!(
+            "Device model bit {bit_id} names device {device_id}, which you neither own nor hold a grant on"
+        )),
+        _ => error,
+    }
 }
 
 fn validate_meta(bit: &Bit) -> Result<Value, ApiError> {
@@ -843,5 +966,151 @@ mod tests {
         assert_eq!(first.size, second.size);
         assert_ne!(first.hash, second.hash);
         assert_ne!(first.dependency_tree_hash, second.dependency_tree_hash);
+    }
+
+    const DEVICE_ID: &str = "4f1c2a9e-0d3b-4c55-9a7e-2b8f6d1e0c3a";
+
+    fn device_bit(bit_type: BitTypes, params: Value) -> Bit {
+        let provider = flow_like_types::json::json!({
+            "provider_name": "device",
+            "model_id": "qwen3-8b",
+            "version": null,
+            "params": params,
+        });
+        let parameters = if bit_type == BitTypes::Embedding {
+            flow_like_types::json::json!({
+                "languages": [],
+                "vector_length": 768,
+                "input_length": 512,
+                "prefix": {"query": "", "paragraph": ""},
+                "pooling": "Mean",
+                "provider": provider,
+            })
+        } else {
+            flow_like_types::json::json!({
+                "context_length": 8192,
+                "provider": provider,
+                "model_classification": model_classification(),
+            })
+        };
+        Bit {
+            id: "device-bit".into(),
+            bit_type,
+            parameters,
+            ..Bit::default()
+        }
+    }
+
+    fn device_params(kind: &str) -> Value {
+        flow_like_types::json::json!({"device_id": DEVICE_ID, "model": "qwen3-8b", "kind": kind})
+    }
+
+    fn rejection(bit: &Bit) -> String {
+        let error = validated_bit(bit).expect_err("the bit must be refused");
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        error.public_message().unwrap_or_default().to_owned()
+    }
+
+    #[test]
+    fn device_bits_are_accepted_for_llm_vlm_and_embedding() {
+        for (bit_type, kind, expected) in [
+            (BitTypes::Llm, "chat", BitType::Llm),
+            (BitTypes::Vlm, "vision", BitType::Vlm),
+            (BitTypes::Embedding, "embedding", BitType::Embedding),
+        ] {
+            let bit = device_bit(bit_type, device_params(kind));
+            let (bit_type, device) = validated_bit(&bit).unwrap();
+            assert_eq!(bit_type, expected);
+            assert_eq!(device.unwrap().device_id, DEVICE_ID);
+        }
+        let without_kind = device_bit(
+            BitTypes::Embedding,
+            flow_like_types::json::json!({"device_id": DEVICE_ID, "model": "embed"}),
+        );
+        assert_eq!(validated_bit(&without_kind).unwrap().0, BitType::Embedding);
+
+        let mut local = user_model(BitTypes::Llm, MLX_PROVIDER_NAME);
+        add_huggingface_manifest(&mut local, false);
+        assert!(matches!(validated_bit(&local), Ok((BitType::Llm, None))));
+    }
+
+    #[test]
+    fn device_bits_name_a_device_and_a_model_and_nothing_else() {
+        let unnamed = device_bit(
+            BitTypes::Llm,
+            flow_like_types::json::json!({"device_id": DEVICE_ID}),
+        );
+        assert!(rejection(&unnamed).contains("device-bit"));
+
+        let mismatched = device_bit(BitTypes::Llm, device_params("embedding"));
+        assert!(rejection(&mismatched).contains("device-bit"));
+
+        let invalid_device = device_bit(
+            BitTypes::Llm,
+            flow_like_types::json::json!({"device_id": "../other", "model": "qwen3-8b"}),
+        );
+        assert!(rejection(&invalid_device).contains("invalid device id"));
+
+        let mut with_file = device_bit(BitTypes::Llm, device_params("chat"));
+        with_file.download_link = Some(pinned_gguf_url("model.gguf"));
+        assert!(rejection(&with_file).contains("served by its device"));
+
+        let with_secret = device_bit(
+            BitTypes::Llm,
+            flow_like_types::json::json!({
+                "device_id": DEVICE_ID,
+                "model": "qwen3-8b",
+                "api_key": "sk-test",
+            }),
+        );
+        assert!(rejection(&with_secret).contains("provider.params.api_key"));
+    }
+
+    #[test]
+    fn device_bits_reach_only_clients_that_ask_for_them() {
+        let asked = |uri: &str| {
+            let uri = uri.parse().expect("a valid request URI");
+            Query::<ListUserBitsQuery>::try_from_uri(&uri)
+                .expect("a valid query")
+                .0
+                .device_models
+        };
+        assert!(!asked("/user/bits?include_secrets=true"));
+        assert!(asked("/user/bits?include_secrets=true&device_models=true"));
+
+        let device = device_bit(BitTypes::Llm, device_params("chat"));
+        assert!(served_to_client(&device, true));
+        assert!(!served_to_client(&device, false));
+
+        let mut local = user_model(BitTypes::Llm, MLX_PROVIDER_NAME);
+        add_huggingface_manifest(&mut local, false);
+        assert!(served_to_client(&local, false));
+    }
+
+    #[test]
+    fn other_embedding_providers_stay_refused() {
+        let mut bit = device_bit(BitTypes::Embedding, device_params("embedding"));
+        bit.parameters["provider"]["provider_name"] = Value::String(LOCAL_PROVIDER.into());
+        assert!(rejection(&bit).contains("Only LLM and VLM"));
+    }
+
+    #[test]
+    fn devices_the_account_may_not_use_answer_like_missing_ones() {
+        for status in [ApiError::FORBIDDEN, ApiError::NOT_FOUND] {
+            let error = device_access_error(status, "device-bit", DEVICE_ID);
+            assert_eq!(error.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                error.public_message(),
+                Some(
+                    "Device model bit device-bit names device 4f1c2a9e-0d3b-4c55-9a7e-2b8f6d1e0c3a, which you neither own nor hold a grant on"
+                )
+            );
+        }
+        let unavailable = device_access_error(
+            ApiError::service_unavailable("Standalone device enrollment is not enabled"),
+            "device-bit",
+            DEVICE_ID,
+        );
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

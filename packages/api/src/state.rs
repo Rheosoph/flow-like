@@ -287,14 +287,12 @@ const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const JWKS_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const JWKS_MAX_KEYS: usize = 64;
 
-/// Cached auth result for JWT/PAT/API key
+/// Cached JWT or API-key authentication. Revocable PATs always use the database.
 #[derive(Clone, Debug)]
 pub enum CachedAuth {
     /// OpenID user with sub and the token's own expiration. Cache hits must
     /// never extend an access token beyond this timestamp.
     OpenID { sub: String, exp: i64 },
-    /// PAT user with sub
-    PAT { sub: String },
     /// API key with key_id, app_id, and the creator user that owns tier/billing.
     ApiKey {
         key_id: String,
@@ -309,6 +307,7 @@ pub enum CachedAuth {
         technical_user_id: Option<String>,
         app_chain: Option<Vec<String>>,
         correlation: Option<crate::correlation::CorrelationContext>,
+        exp: i64,
     },
     /// App-connection JWT: one app calling another app it is connected to.
     /// `exp` is re-checked on cache hits so short-lived tokens cannot outlive
@@ -1217,7 +1216,7 @@ impl State {
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(120))
                 .build(),
-            // Auth cache: max 10k entries, 60s TTL for security
+            // Auth cache: max 10k entries. JWT expiry is checked on every hit.
             // Entries are keyed by token hash to avoid storing raw tokens
             auth_cache: moka::sync::Cache::builder()
                 .max_capacity(10_000)

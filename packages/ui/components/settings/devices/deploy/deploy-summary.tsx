@@ -266,6 +266,9 @@ function endpointValue(c: ValueContext): ReactNode {
 	return (
 		<>
 			{address} · {instances} · {isolationText(c)}
+			{!c.limitsOnly && plan.draft.endpoint.token === "none"
+				? ` · ${t("devices:deploy.summary.noToken", "no token required")}`
+				: null}
 		</>
 	);
 }

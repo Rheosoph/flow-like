@@ -48,6 +48,7 @@ const PENDING_HANDSHAKES_PER_SOURCE: usize = 16;
 const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
 
 mod actions;
+mod assets;
 mod channels;
 #[cfg(unix)]
 mod forward;
@@ -340,10 +341,17 @@ pub(crate) fn check_route_claims(claims: &[RouteClaim]) -> Result<()> {
     Ok(())
 }
 
-fn secret_path(config: &PlacementConfig, hosting: &HostingConfig) -> Result<PathBuf> {
-    let path = crate::config::private_secret_path(config, &hosting.auth_secret)?;
+fn secret_path(config: &PlacementConfig, hosting: &HostingConfig) -> Result<Option<PathBuf>> {
+    let Some(secret) = hosting.auth_secret.as_deref() else {
+        ensure!(
+            hosting.authentication == crate::config::ServiceAuthentication::None,
+            "Token authentication requires a service authentication secret"
+        );
+        return Ok(None);
+    };
+    let path = crate::config::private_secret_path(config, secret)?;
     read_token(&path)?;
-    Ok(path)
+    Ok(Some(path))
 }
 pub(crate) fn validate_access_token(config: &PlacementConfig) -> Result<()> {
     let hosting = config
@@ -362,7 +370,19 @@ fn read_token(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>> {
     );
     Ok(token)
 }
-fn authenticated(headers: &HeaderMap, path: &Path) -> Result<Option<blake3::Hash>> {
+fn service_fingerprint(secret: Option<&Path>) -> Result<blake3::Hash> {
+    match secret {
+        Some(path) => Ok(blake3::hash(&read_token(path)?)),
+        // Public services still scope Page actions and reply channels to their own
+        // capability registries. Their service fingerprint must agree across replicas.
+        None => Ok(blake3::hash(b"flow-like-service-authentication-none-v1")),
+    }
+}
+
+fn authenticated(headers: &HeaderMap, path: Option<&Path>) -> Result<Option<blake3::Hash>> {
+    let Some(path) = path else {
+        return service_fingerprint(None).map(Some);
+    };
     if headers.get_all("authorization").iter().count() != 1 {
         return Ok(None);
     }
@@ -409,12 +429,13 @@ struct HostState {
     project_id: String,
     visibility: AppVisibility,
     execution_sub: Option<String>,
-    secret: PathBuf,
+    secret: Option<PathBuf>,
     timeout: Duration,
     capacity: Arc<Semaphore>,
     cancel: CancellationToken,
     channels: channels::Channels,
     actions: Arc<actions::Registry>,
+    assets: Arc<assets::Registry>,
     #[cfg(unix)]
     reply_route: Option<Arc<forward::Route>>,
     inventory: Value,
@@ -591,8 +612,9 @@ impl PreparedHost {
                 routes.insert(route, Hosted { invocation, door });
             }
         }
+        // On-demand routes are attached by with_on_demand before serving.
         ensure!(
-            !routes.is_empty() || !pages.is_empty(),
+            !routes.is_empty() || !pages.is_empty() || cfg!(feature = "on-demand"),
             "Hosting requires an HTTP, chat or Page event"
         );
         let listener = match inherited_listener {
@@ -624,6 +646,11 @@ impl PreparedHost {
             )
             .collect::<Vec<_>>();
         inventory.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        let assets = Arc::new(assets::Registry::new(
+            &config.project_id,
+            state.config.read().await.stores.clone(),
+            incarnation.clone(),
+        ));
         Ok(Self {
             listener,
             #[cfg(unix)]
@@ -644,6 +671,7 @@ impl PreparedHost {
                 cancel,
                 channels: channels::Channels::new(incarnation.clone()),
                 actions: Arc::new(actions::Registry::new(incarnation)),
+                assets,
                 #[cfg(unix)]
                 reply_route,
                 inventory: serde_json::json!({"project_id":config.project_id,"events":inventory}),
@@ -712,6 +740,10 @@ impl PreparedHost {
     }
 
     pub(crate) async fn serve_with_ready(self, ready: Option<oneshot::Sender<()>>) -> Result<()> {
+        ensure!(
+            !self.state.events.is_empty() || !self.state.pages.is_empty(),
+            "Hosting requires at least one deployed event"
+        );
         let cancel = self.state.cancel.clone();
         #[cfg(unix)]
         let mut replies = tokio::task::JoinSet::new();
@@ -754,7 +786,9 @@ async fn no_store(request: Request, next: axum::middleware::Next) -> Response {
 
 async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Response {
     #[cfg(feature = "frontend")]
-    if let Some(response) = frontend::asset(&request, &host.ui_policy) {
+    if !assets::route(request.uri().path())
+        && let Some(response) = frontend::asset(&request, &host.ui_policy)
+    {
         return response;
     }
     if let Some(id) = request
@@ -765,7 +799,7 @@ async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Respo
     {
         return channels::push(&host, request, &id).await;
     }
-    let service_fingerprint = match authenticated(request.headers(), &host.secret) {
+    let service_fingerprint = match authenticated(request.headers(), host.secret.as_deref()) {
         Ok(Some(fingerprint)) => fingerprint,
         Ok(None) => {
             return (StatusCode::UNAUTHORIZED, "Service authorization required").into_response();
@@ -779,8 +813,13 @@ async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Respo
         }
     };
     let path = request.uri().path().to_owned();
+    if assets::route(&path) {
+        return assets::read(&host, request, service_fingerprint).await;
+    }
     if path == "/services" && request.method() == axum::http::Method::GET {
-        return axum::Json(host.inventory.clone()).into_response();
+        let mut inventory = host.inventory.clone();
+        host.assets.rewrite(&mut inventory, service_fingerprint);
+        return axum::Json(inventory).into_response();
     }
     let page_route = path
         .strip_prefix("/pages/")
@@ -790,7 +829,9 @@ async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Respo
         && page_route.is_some_and(|(_, suffix)| suffix == "bootstrap")
     {
         if let Some(page) = page {
-            return axum::Json(page.bootstrap.clone()).into_response();
+            let mut bootstrap = page.bootstrap.clone();
+            host.assets.rewrite(&mut bootstrap, service_fingerprint);
+            return axum::Json(bootstrap).into_response();
         }
     }
     let page = page.filter(|_| {
@@ -1260,7 +1301,7 @@ async fn invoke_inner(
     let run_id = uuid::Uuid::new_v4().to_string();
     let registration = host.channels.register(
         run_id.clone(),
-        &host.secret,
+        host.secret.as_deref(),
         host.timeout,
         cancel.clone(),
         service_fingerprint,
@@ -1289,7 +1330,9 @@ async fn invoke_inner(
         })
         .unwrap_or_default();
     let output = channels::wrap(callback, registration.grant.clone());
+    let assets = host.assets.clone();
     let callback: InterComCallback = Some(Arc::new(move |mut event: InterComEvent| {
+        assets.rewrite(&mut event.payload, service_fingerprint);
         let unavailable = sealer.as_ref().and_then(|sealer| {
             sealer
                 .seal_payload(&event.event_type, &mut event.payload)
@@ -1919,6 +1962,87 @@ mod tests {
 
     #[cfg(feature = "on-demand")]
     #[tokio::test]
+    async fn an_explicit_listener_can_serve_only_a_quick_action() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, state, events, calls, _) = fixture(directory.path()).await;
+        let (action, context) = quick_action(directory.path(), &state, events[0].template.clone());
+        let cancel = CancellationToken::new();
+        let mut host = PreparedHost::bind(
+            &config,
+            vec![],
+            state,
+            Profile::default(),
+            AppVisibility::Offline,
+            cancel.clone(),
+        )
+        .await
+        .unwrap();
+        host.with_on_demand(std::slice::from_ref(&action), context.counters())
+            .unwrap();
+        let served = Served::start(host, calls, cancel);
+        let inventory = served.inventory().await;
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].0, "evt_action");
+        assert_eq!(inventory[0].1["event_type"], "quick_action");
+        let response = served
+            .client
+            .post(served.url("/run/evt_action"))
+            .bearer_auth(SERVICE_TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response.text().await.unwrap();
+        assert!(response.contains("event: done"), "{response}");
+        assert_eq!(served.calls.load(Ordering::SeqCst), 1);
+        served.stop().await;
+    }
+
+    #[tokio::test]
+    async fn assets_require_service_auth_and_stream_only_project_uploads() {
+        let directory = tempfile::tempdir().unwrap();
+        let uploads = directory.path().join("apps/project/upload/media");
+        std::fs::create_dir_all(&uploads).unwrap();
+        std::fs::write(uploads.join("image.png"), b"0123456789").unwrap();
+        let served = endpoints(directory.path()).await;
+        let path = "/ui/assets?store=upload&path=media%2Fimage.png";
+        let missing = served.client.get(served.url(path)).send().await.unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let response = served
+            .client
+            .get(served.url(path))
+            .bearer_auth(SERVICE_TOKEN)
+            .header("range", "bytes=2-5")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()["content-type"], "image/png");
+        assert_eq!(response.headers()["content-range"], "bytes 2-5/10");
+        assert_eq!(response.bytes().await.unwrap(), &b"2345"[..]);
+        let response = served
+            .client
+            .head(served.url(path))
+            .bearer_auth(SERVICE_TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-length"], "10");
+        assert!(response.bytes().await.unwrap().is_empty());
+        let denied = served
+            .client
+            .get(served.url("/ui/assets?store=storage&path=private.db"))
+            .bearer_auth(SERVICE_TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+        served.stop().await;
+    }
+
+    #[cfg(feature = "on-demand")]
+    #[tokio::test]
     async fn the_run_route_refuses_callers_without_the_token_and_fields_the_form_lacks() {
         let directory = tempfile::tempdir().unwrap();
         let served = service_page(directory.path()).await;
@@ -2104,13 +2228,15 @@ mod tests {
             package_pins: Vec::new(),
             bit_pins: Vec::new(),
             max_replicas: 1,
+            tunnel_services: vec![],
             tls_certificate_id: None,
             hosting: Some(HostingConfig {
                 host: "127.0.0.1".parse().unwrap(),
                 port,
                 max_in_flight: 1,
                 request_timeout_secs: 1,
-                auth_secret: "listener".into(),
+                authentication: Default::default(),
+                auth_secret: Some("listener".into()),
                 ui_origins: Vec::new(),
             }),
             variables: Default::default(),
@@ -2153,6 +2279,97 @@ mod tests {
             calls,
             entered,
         )
+    }
+
+    #[tokio::test]
+    async fn public_services_serve_without_a_secret_and_keep_reply_capabilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, state, events, calls, _) = fixture(directory.path()).await;
+        let hosting = config.hosting.as_mut().unwrap();
+        hosting.authentication = crate::config::ServiceAuthentication::None;
+        hosting.auth_secret = None;
+        std::fs::remove_dir_all(directory.path().join(".secrets")).unwrap();
+        validate_access_token(&config).unwrap();
+        let stop = CancellationToken::new();
+        let host = PreparedHost::bind(
+            &config,
+            events,
+            state,
+            Profile::default(),
+            AppVisibility::Offline,
+            stop.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(host.state.secret.is_none());
+        let fingerprint = service_fingerprint(None).unwrap();
+        let registration = host
+            .state
+            .channels
+            .register(
+                "public-run".into(),
+                None,
+                Duration::from_secs(60),
+                CancellationToken::new(),
+                fingerprint,
+            )
+            .unwrap();
+        let mut handle =
+            serde_json::json!({"channel_id":"public-run","transport":{"type":"in_process"}});
+        registration.grant.rewrite(&mut handle);
+        let reply_token = handle["transport"]["token"].as_str().unwrap();
+        assert!(channels::authorize(&host.state, "public-run", "").is_err());
+        assert!(channels::authorize(&host.state, "public-run", reply_token).is_ok());
+        let address = host.listener.local_addr().unwrap();
+        drop(registration);
+        let server = tokio::spawn(host.serve());
+        let client = reqwest::Client::new();
+        let base = format!("http://{address}");
+        let inventory: Value = client
+            .get(format!("{base}/services"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(inventory["project_id"], "project");
+        let response = client
+            .post(format!("{base}/echo"))
+            .json(&serde_json::json!({"message":"public"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["payload"]["message"],
+            "public"
+        );
+        let bootstrap: Value = client
+            .get(format!("{base}/pages/page_event/bootstrap"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let rendered = client.post(format!("{base}/pages/page_event/invoke"))
+            .json(&serde_json::json!({"manifest_revision":bootstrap["execution_revision"],"trigger":{"kind":"special","special_event":"load"}}))
+            .send().await.unwrap().error_for_status().unwrap().text().await.unwrap();
+        assert!(rendered.contains("event: done"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(!directory.path().join(".secrets").exists());
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -2561,7 +2778,7 @@ mod tests {
             .channels
             .register(
                 "run".into(),
-                &host.state.secret,
+                host.state.secret.as_deref(),
                 Duration::from_secs(60),
                 CancellationToken::new(),
                 blake3::hash(&[b't'; 32]),
@@ -2599,7 +2816,7 @@ mod tests {
             channel.wait(&ticket, None).await.unwrap(),
             ChannelOutcome::Responded(serde_json::json!({"answer":42}))
         );
-        std::fs::write(&host.state.secret, [b'r'; 32]).unwrap();
+        std::fs::write(host.state.secret.as_ref().unwrap(), [b'r'; 32]).unwrap();
         assert_eq!(
             channels::push(&host.state, request(token, "run"), "run")
                 .await
@@ -2674,12 +2891,43 @@ mod tests {
         let listener = owner.reply_listener.take().unwrap();
         let socket_path = listener.route.path_for_test();
         let server = tokio::spawn(listener.serve(owner_state.clone()));
+        let upload = directory.path().join("apps/project/upload/logo.png");
+        std::fs::create_dir_all(upload.parent().unwrap()).unwrap();
+        std::fs::write(&upload, b"replica asset").unwrap();
+        let mut media =
+            serde_json::json!({"src":url::Url::from_file_path(&upload).unwrap().to_string()});
+        owner_state
+            .assets
+            .rewrite(&mut media, blake3::hash(&[b't'; 32]));
+        let asset_url = media["src"].as_str().unwrap();
+        assert_eq!(asset_url.split('/').count(), 5);
+        let asset_request = || {
+            Request::builder()
+                .uri(asset_url)
+                .header("authorization", format!("Bearer {SERVICE_TOKEN}"))
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        let workflow_permit = other.state.capacity.clone().try_acquire_owned().unwrap();
+        let response = dispatch(State(other.state.clone()), asset_request()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), 32).await.unwrap(),
+            &b"replica asset"[..]
+        );
+        drop(workflow_permit);
+        assert_eq!(
+            dispatch(State(previous_revision.state.clone()), asset_request())
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         let run = uuid::Uuid::new_v4().to_string();
         let registration = owner_state
             .channels
             .register(
                 run.clone(),
-                &owner_state.secret,
+                owner_state.secret.as_deref(),
                 Duration::from_secs(60),
                 CancellationToken::new(),
                 blake3::hash(&[b't'; 32]),
@@ -2885,7 +3133,18 @@ mod tests {
             .await
             .is_err()
         );
-        std::fs::write(&owner_state.secret, [b'r'; 32]).unwrap();
+        std::fs::write(owner_state.secret.as_ref().unwrap(), [b'r'; 32]).unwrap();
+        let rotated_asset = Request::builder()
+            .uri(asset_url)
+            .header("authorization", format!("Bearer {}", "r".repeat(32)))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert_eq!(
+            dispatch(State(other.state.clone()), rotated_asset)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         assert!(
             actions::resolve(&other.state, &scope, action_id, capability, fingerprint)
                 .await
@@ -2933,7 +3192,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let secret = host.state.secret.clone();
+        let secret = host.state.secret.clone().unwrap();
         let address = host.listener.local_addr().unwrap();
         let server = tokio::spawn(host.serve());
         let client = reqwest::Client::new();

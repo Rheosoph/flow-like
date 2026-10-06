@@ -477,6 +477,10 @@ mod tests {
         assert!(!in_group(only(), json!({"text": "just chatting"})));
         assert!(!in_group(only(), mention("hey @helper_bot look", 4, 11)));
         assert!(!in_group(only(), reply_to_the_bot()));
+        let both = json!({"text": "/ask @helper_bot", "entities": [
+            {"type": "bot_command", "offset": 0, "length": 4},
+            {"type": "mention", "offset": 5, "length": 11}]});
+        assert!(in_group(only(), both));
     }
 
     #[test]
@@ -504,6 +508,39 @@ mod tests {
         assert!(!in_group(slash(), command("/x@helper_bot_fan now")));
         assert!(in_group(slash(), command("/x@helper_bot")));
         assert!(in_group(slash(), command("/x@HELPER_BOT now")));
+        let only = |prefix: &str| json!({"command_prefix": prefix, "respond_to_mentions": false});
+        assert!(in_group(only("!"), json!({"text": "!weather@berlin now"})));
+        assert!(in_group(only("@ai"), json!({"text": "@ai summarize this"})));
+    }
+
+    /// A command addressed to this bot names it like a mention does, whatever the prefix.
+    #[test]
+    fn a_command_for_this_bot_addresses_it() {
+        let bang = json!({"command_prefix": "!"});
+        assert!(in_group(bang.clone(), command("/ask@helper_bot now")));
+        assert!(in_group(bang.clone(), command("/ask@HELPER_BOT")));
+        assert!(!in_group(bang.clone(), command("/ask@otherbot now")));
+        assert!(!in_group(bang, command("/ask now")));
+        let quiet = json!({"command_prefix": "!", "respond_to_mentions": false});
+        assert!(!in_group(quiet, command("/ask@helper_bot now")));
+    }
+
+    /// Telegram names a forum topic's creation as the message every other message in the
+    /// topic replies to.
+    #[test]
+    fn a_topic_the_bot_opened_is_no_reply_to_it() {
+        let opened = json!({"message_id": 4, "date": 1_789_999_980, "chat": group(),
+            "from": {"id": BOT_ID, "is_bot": true, "first_name": "Helper"},
+            "is_topic_message": true, "message_thread_id": 4,
+            "forum_topic_created": {"name": "Support", "icon_color": 7_322_096}});
+        let in_topic = |mut fields: Value| {
+            fields["is_topic_message"] = json!(true);
+            fields["message_thread_id"] = json!(4);
+            fields
+        };
+        let thanks = json!({"text": "thanks", "reply_to_message": opened});
+        assert!(!in_group(slash(), in_topic(thanks)));
+        assert!(in_group(slash(), in_topic(reply_to_the_bot())));
     }
 
     #[test]

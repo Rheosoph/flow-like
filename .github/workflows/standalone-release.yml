@@ -186,6 +186,13 @@ jobs:
       - name: Install macOS native dependencies
         if: runner.os == 'macOS'
         run: brew install cmake pkg-config protobuf
+      - name: Configure macOS ONNX Runtime
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # ort does not publish Intel macOS binaries; the vendored static archive supports both architectures.
+          echo "ORT_LIB_LOCATION=${GITHUB_WORKSPACE}/apps/desktop/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
         with:
           targets: ${{ matrix.target }}
@@ -197,7 +204,7 @@ jobs:
           cache-workspace-crates: true
           cache-bin: false
           cache-on-failure: true
-          env-vars: 'CARGO CC CFLAGS CXX CMAKE RUST ImageOS ImageVersion MACOSX_DEPLOYMENT_TARGET SDKROOT'
+          env-vars: 'CARGO CC CFLAGS CXX CMAKE RUST ORT ImageOS ImageVersion MACOSX_DEPLOYMENT_TARGET SDKROOT'
       - name: Download shared embedded frontend
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -310,7 +317,7 @@ jobs:
 
 
   publish:
-    needs: [prepare, signed-bundle]
+    needs: [prepare, signed-bundle, runtime-publish]
     runs-on: ubuntu-24.04
     environment: standalone-release
     permissions:
@@ -374,3 +381,204 @@ jobs:
         env:
           RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
         run: python3 .github/scripts/standalone_release.py summary --artifacts release-bundle --public-keys "$RELEASE_PUBLIC_KEYS" >> "$GITHUB_STEP_SUMMARY"
+
+  # Runtime packs (llama.cpp, MLX) that agents install on demand. Every pack is started on its
+  # own platform before packing; a failed pack keeps the whole set unsigned.
+  runtime-packs:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pack: llamacpp-macos-arm64-metal
+            runner: macos-15
+          - pack: llamacpp-macos-x64-cpu
+            runner: macos-15-intel
+          - pack: llamacpp-linux-x64-cpu
+            runner: ubuntu-22.04
+          - pack: llamacpp-linux-x64-vulkan
+            runner: ubuntu-22.04
+          - pack: llamacpp-linux-arm64-cpu
+            runner: ubuntu-22.04-arm
+          - pack: mlx-macos-arm64-metal
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.epoch }}
+      RUNTIME_PACK: ${{ matrix.pack }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: linux-inputs
+        name: Read the pinned Linux image, Ubuntu snapshot and compiler cache key
+        if: runner.os == 'Linux'
+        run: python3 .github/scripts/runtime_toolchain.py pins >> "$GITHUB_OUTPUT"
+      - name: Restore the pinned native arm64 C and C++ compiler
+        if: matrix.pack == 'llamacpp-linux-arm64-cpu'
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: ${{ runner.temp }}/runtime-toolchain
+          key: runtime-gcc-arm64-${{ steps.linux-inputs.outputs.key }}
+      - name: Build and check Linux packs in the frozen Ubuntu 22.04 environment
+        if: runner.os == 'Linux'
+        env:
+          RUNTIME_IMAGE: ${{ steps.linux-inputs.outputs.image }}
+          UBUNTU_SNAPSHOT: ${{ steps.linux-inputs.outputs.snapshot }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/runtime-toolchain"
+          docker run --rm --volume "$PWD:/work:ro" --volume "$RUNNER_TEMP:/scratch" \
+            --volume "$RUNNER_TEMP/runtime-toolchain:/toolchain" \
+            --volume /etc/ssl/certs/ca-certificates.crt:/bootstrap-ca.crt:ro \
+            --env RUNTIME_PACK --env SOURCE_DATE_EPOCH --env UBUNTU_SNAPSHOT \
+            "$RUNTIME_IMAGE" bash /work/.github/scripts/build_linux_runtime.sh
+      - id: pin
+        name: Read the pinned llama.cpp build
+        run: python3 .github/scripts/runtime_packs.py pin >> "$GITHUB_OUTPUT"
+      - name: Download the pinned upstream llama.cpp archive and check its digest
+        if: startsWith(matrix.pack, 'llamacpp-') && runner.os == 'macOS'
+        run: |
+          source="$(python3 .github/scripts/runtime_packs.py fetch --pack "$RUNTIME_PACK" --output "$RUNNER_TEMP/upstream")"
+          echo "LLAMACPP_SOURCE=$source" >> "$GITHUB_ENV"
+      - name: Pack llama.cpp after bundling, closure, glibc floor and start checks
+        if: startsWith(matrix.pack, 'llamacpp-') && runner.os == 'macOS'
+        run: python3 .github/scripts/runtime_packs.py llamacpp --pack "$RUNTIME_PACK" --source "$LLAMACPP_SOURCE" --epoch "$SOURCE_DATE_EPOCH" --output "$RUNNER_TEMP/runtime-packs"
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        if: matrix.pack == 'mlx-macos-arm64-metal'
+        with:
+          bun-version: 1.3.8
+      - name: Build the MLX helper and pack it with its resources and Swift back-deployment libraries
+        if: matrix.pack == 'mlx-macos-arm64-metal'
+        run: |
+          bun ./apps/desktop/scripts/prepare-mlx.ts --configuration Release
+          python3 .github/scripts/runtime_packs.py mlx \
+            --executable apps/desktop/src-tauri/binaries/mac/arm/flow-like-mlx-service-aarch64-apple-darwin \
+            --resources apps/desktop/src-tauri/binaries/mac/arm/mlx-resources \
+            --toolchain "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" \
+            --notices apps/desktop/src-tauri/assets/THIRD-PARTY-NOTICES.txt \
+            --build "g$(git rev-parse --short=12 HEAD:apps/desktop/src-tauri/apple/FlowLikeMLX)" \
+            --epoch "$SOURCE_DATE_EPOCH" --output "$RUNNER_TEMP/runtime-packs"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runtime-pack-${{ matrix.pack }}
+          path: ${{ runner.temp }}/runtime-packs/
+          retention-days: 7
+          if-no-files-found: error
+
+  runtime-manifest:
+    needs: [prepare, runtime-packs]
+    runs-on: ubuntu-24.04
+    environment: standalone-release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_runtime*.py'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: runtime-pack-*
+          path: runtime-bundle
+          merge-multiple: true
+      - name: Bind every pack's archive and file digests into one unsigned manifest per target
+        env:
+          ARTIFACT_BASE: ${{ needs.prepare.outputs.base }}
+          RELEASE_SEQUENCE: ${{ needs.prepare.outputs.sequence }}
+          RELEASE_VALIDITY_DAYS: ${{ needs.prepare.outputs.validity_days }}
+        run: python3 .github/scripts/runtime_packs.py manifest --packs runtime-bundle --base-url "$ARTIFACT_BASE/releases/$RELEASE_SEQUENCE/runtimes" --sequence "$RELEASE_SEQUENCE" --validity-days "$RELEASE_VALIDITY_DAYS" --output runtime-bundle
+      - uses: ./.github/actions/setup-rust
+      # Build scripts and proc macros run here, before any key material exists on the runner.
+      - name: Build the runtime manifest signer
+        run: CARGO_TARGET_DIR="$RUNNER_TEMP/release-signer" cargo build --locked --package flow-like-device-protocol --example sign-runtime-manifest
+      - name: Sign the runtime manifests using the configured private release key
+        env:
+          STANDALONE_RELEASE_SIGNING_KEY: ${{ secrets.STANDALONE_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$STANDALONE_RELEASE_SIGNING_KEY" ]; then
+            echo "::error::Configure STANDALONE_RELEASE_SIGNING_KEY as a secret of the standalone-release environment"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os
+          path = os.path.join(os.environ['RUNNER_TEMP'], 'standalone-signing-key')
+          with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as key:
+              key.write(os.environ['STANDALONE_RELEASE_SIGNING_KEY'])
+          PY
+          unset STANDALONE_RELEASE_SIGNING_KEY
+          trap 'rm -f "$RUNNER_TEMP/standalone-signing-key"' EXIT
+          for manifest in runtime-bundle/*.json; do
+            "$RUNNER_TEMP/release-signer/debug/examples/sign-runtime-manifest" "$RUNNER_TEMP/standalone-signing-key" "$manifest" "${manifest%.json}.jws"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runtime-signed-${{ needs.prepare.outputs.sequence }}
+          path: runtime-bundle/
+          retention-days: 30
+          if-no-files-found: error
+
+  # Publish the matching runtimes before agents adopt this release's rollback floor.
+  runtime-publish:
+    needs: [prepare, runtime-manifest]
+    runs-on: ubuntu-24.04
+    environment: standalone-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: runtime-signed-${{ needs.prepare.outputs.sequence }}
+          path: runtime-bundle
+      - name: Require exactly one publisher identity
+        env:
+          RELEASE_ROLE: ${{ vars.STANDALONE_RELEASE_ROLE_ARN }}
+          RELEASE_ACCESS_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_ACCESS_KEY_ID != '' }}
+          RELEASE_SECRET_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_SECRET_ACCESS_KEY != '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          access = os.environ['RELEASE_ACCESS_KEY_PRESENT'] == 'true'
+          secret = os.environ['RELEASE_SECRET_KEY_PRESENT'] == 'true'
+          if access != secret or bool(os.environ['RELEASE_ROLE']) == (access and secret):
+              raise SystemExit('Configure one publisher identity: STANDALONE_RELEASE_ROLE_ARN or both dedicated S3 access-key secrets of the standalone-release environment')
+          PY
+      - name: Obtain short-lived AWS publisher credentials
+        if: vars.STANDALONE_RELEASE_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ vars.STANDALONE_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.STANDALONE_RELEASE_REGION }}
+          role-session-name: standalone-runtime-packs-${{ github.run_id }}
+      - name: Publish runtime packs, then conditionally advance each target's signed runtime manifest
+        env:
+          RELEASE_BASE: ${{ needs.prepare.outputs.base }}
+          RELEASE_BUCKET: ${{ vars.STANDALONE_RELEASE_BUCKET }}
+          RELEASE_PREFIX: ${{ vars.STANDALONE_RELEASE_PREFIX }}
+          RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
+          RELEASE_ENDPOINT: ${{ secrets.STANDALONE_RELEASE_S3_ENDPOINT }}
+          AWS_REGION: ${{ vars.STANDALONE_RELEASE_REGION }}
+          RELEASE_S3_ACCESS_KEY_ID: ${{ secrets.STANDALONE_RELEASE_ACCESS_KEY_ID }}
+          RELEASE_S3_SECRET_ACCESS_KEY: ${{ secrets.STANDALONE_RELEASE_SECRET_ACCESS_KEY }}
+          RELEASE_S3_SESSION_TOKEN: ${{ secrets.STANDALONE_RELEASE_SESSION_TOKEN }}
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          python3 - <<'PY'
+          import importlib.util, json, os
+          from pathlib import Path
+          if os.environ.get('RELEASE_S3_ACCESS_KEY_ID'):
+              os.environ['AWS_ACCESS_KEY_ID'] = os.environ.pop('RELEASE_S3_ACCESS_KEY_ID')
+              os.environ['AWS_SECRET_ACCESS_KEY'] = os.environ.pop('RELEASE_S3_SECRET_ACCESS_KEY')
+              if os.environ.get('RELEASE_S3_SESSION_TOKEN'):
+                  os.environ['AWS_SESSION_TOKEN'] = os.environ.pop('RELEASE_S3_SESSION_TOKEN')
+          spec = importlib.util.spec_from_file_location('runtime', '.github/scripts/runtime_packs.py')
+          runtime = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runtime)
+          print(json.dumps(runtime.publish(Path('runtime-bundle'), os.environ['RELEASE_BASE'], os.environ['RELEASE_BUCKET'], os.environ['RELEASE_PREFIX'], os.environ['RELEASE_PUBLIC_KEYS'], os.environ.get('RELEASE_ENDPOINT') or None)))
+          PY
+      - name: State the published runtime packs and when their signed lists end
+        env:
+          RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
+        run: python3 .github/scripts/runtime_packs.py summary --artifacts runtime-bundle --public-keys "$RELEASE_PUBLIC_KEYS" >> "$GITHUB_STEP_SUMMARY"

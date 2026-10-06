@@ -34,7 +34,7 @@ cleanup() {
     if [[ -d $cgroup_root ]]; then
         printf '1' > "$cgroup_root/cgroup.kill" || true
         for _ in {1..20}; do
-            for group in "$cgroup_root"/p*; do
+            for group in "$cgroup_root"/p* "$cgroup_root"/engine-*; do
                 [[ -d $group ]] && rmdir -- "$group" 2>/dev/null || true
             done
             rmdir -- "$cgroup_root" 2>/dev/null && break
@@ -70,3 +70,6 @@ export FLOW_LIKE_DEVICE_CGROUP_ROOT="$cgroup_root"
 export FLOW_LIKE_ISOLATION_TEST_ROOT="$fixture_root/mount"
 timeout --kill-after=5s 150s "$test_binary" \
     --exact isolation::linux::tests::linux_boundary_acceptance --ignored --nocapture
+
+timeout --kill-after=5s 60s "$test_binary" \
+    --exact isolation::linux::tests::linux_engine_boundary_acceptance --ignored --nocapture

@@ -126,7 +126,17 @@ targets:
       # Xcode archives cannot reliably connect to a user-level sccache daemon.
       # Empty environment overrides keep Cargo from loading wrappers configured
       # in ~/.cargo/config.toml while leaving normal developer builds unchanged.
-      - script: RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER= bun tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+      - script: |
+          # Finish Git maintenance before SwiftPM copies cached repositories.
+          git_config_count=${GIT_CONFIG_COUNT:-0}
+          for git_config_key in gc.autoDetach maintenance.autoDetach; do
+            export "GIT_CONFIG_KEY_${git_config_count}=${git_config_key}"
+            export "GIT_CONFIG_VALUE_${git_config_count}=false"
+            git_config_count=$((git_config_count + 1))
+          done
+          export GIT_CONFIG_COUNT=$git_config_count
+
+          RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER= bun tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:

@@ -75,6 +75,21 @@ export const CONTROLLER_BUDGET: FrameBudgetLimits = {
 	bytesPerSecond: MIB,
 };
 
+// Tunnel bytes have their own allowance; bulk transfers cannot spend the
+// capacity reserved for device control and signaling.
+export const TUNNEL_PARTICIPANT_BUDGET: FrameBudgetLimits = {
+	frames: 2048,
+	framesPerSecond: 1024,
+	bytes: 8 * MIB,
+	bytesPerSecond: 8 * MIB,
+};
+export const TUNNEL_AGGREGATE_BUDGET: FrameBudgetLimits = {
+	frames: 8192,
+	framesPerSecond: 4096,
+	bytes: 32 * MIB,
+	bytesPerSecond: 32 * MIB,
+};
+
 class TokenBucket {
 	private tokens: number;
 	private updatedAt: number;
@@ -213,6 +228,21 @@ export function managementFrameBudgets(
 	];
 }
 
+export function tunnelFrameBudgets(
+	admission: BudgetedAdmission,
+	target: string,
+	targetAccount: string | null,
+): [string, FrameBudgetLimits][] {
+	return managementFrameBudgets(admission, target, targetAccount).map(
+		([key, limits]) => [
+			`tunnel:${key}`,
+			limits === DEVICE_AGGREGATE_BUDGET
+				? TUNNEL_AGGREGATE_BUDGET
+				: TUNNEL_PARTICIPANT_BUDGET,
+		],
+	);
+}
+
 /** The one account behind a set of sockets, or null when there is none or several. */
 export function soleAccount(
 	subjects: Iterable<string | undefined>,
@@ -289,6 +319,34 @@ export const CONTROLLER_OUTBOX_LIMITS: OutboxLimits = {
 	pendingBytesPerTarget: 256 * 1024,
 };
 
+// Six MiB accommodates sixteen 256 KiB stream windows after relay encoding.
+// These queues are independent of the much smaller management outboxes.
+export const TUNNEL_DEVICE_OUTBOX_LIMITS: OutboxLimits = {
+	pendingBytes: 12 * MIB,
+	pendingBytesPerTarget: 6 * MIB,
+};
+export const TUNNEL_CONTROLLER_OUTBOX_LIMITS: OutboxLimits = {
+	pendingBytes: 6 * MIB,
+	pendingBytesPerTarget: 6 * MIB,
+};
+
+/** Shared across tunnel sockets so their individual windows cannot exhaust a replica. */
+export class PendingByteBudget {
+	private pending = 0;
+	constructor(private readonly limit: number) {}
+	reserve(bytes: number): boolean {
+		if (bytes < 0 || this.pending + bytes > this.limit) return false;
+		this.pending += bytes;
+		return true;
+	}
+	release(bytes: number) {
+		this.pending -= bytes;
+	}
+	get pendingBytes(): number {
+		return this.pending;
+	}
+}
+
 /**
  * Holds a socket's over-budget frames instead of closing it. Each target drains
  * in order on its own, so one throttled participant never delays another.
@@ -307,6 +365,7 @@ export class ManagementOutbox {
 		private readonly sleep: (ms: number) => Promise<unknown> = (ms) =>
 			Bun.sleep(ms),
 		private readonly now: () => number = () => Date.now(),
+		private readonly sharedBudget?: PendingByteBudget,
 	) {}
 
 	/** False when the frame would exceed a pending bound; the caller chooses the penalty. */
@@ -317,6 +376,8 @@ export class ManagementOutbox {
 			this.pending + frame.bytes > this.limits.pendingBytes ||
 			(queue?.bytes ?? 0) + frame.bytes > this.limits.pendingBytesPerTarget
 		)
+			return false;
+		if (this.sharedBudget && !this.sharedBudget.reserve(frame.bytes))
 			return false;
 		this.pending += frame.bytes;
 		if (queue) {
@@ -331,13 +392,31 @@ export class ManagementOutbox {
 	}
 
 	close() {
+		if (this.closed) return;
 		this.closed = true;
+		let released = 0;
+		for (const queue of this.queues.values()) {
+			const waiting = queue.frames.reduce(
+				(bytes, frame) => bytes + frame.bytes,
+				0,
+			);
+			queue.frames.length = 0;
+			queue.bytes -= waiting;
+			released += waiting;
+		}
 		this.queues.clear();
-		this.pending = 0;
+		// In-flight delivery still retains its frame until its promise settles.
+		this.sharedBudget?.release(released);
+		this.pending -= released;
 	}
 
 	get pendingBytes(): number {
 		return this.pending;
+	}
+
+	private delay(queue: { frames: OutboxFrame[] }): number {
+		const frame = queue.frames[0];
+		return frame ? this.admit(frame, this.now()) : 0;
 	}
 
 	private async drain(
@@ -345,21 +424,22 @@ export class ManagementOutbox {
 		queue: { frames: OutboxFrame[]; bytes: number },
 	) {
 		while (!this.closed) {
-			const frame = queue.frames[0];
-			if (!frame) break;
-			const delay = this.admit(frame, this.now());
+			// Do not retain a payload in this async frame while a budget timer sleeps.
+			const delay = this.delay(queue);
 			if (delay > 0) {
 				await this.sleep(delay);
 				continue;
 			}
-			queue.frames.shift();
+			const frame = queue.frames.shift();
+			if (!frame) break;
 			try {
 				await frame.deliver();
 			} catch {
 				// Delivery owns its own failure handling, including closing the socket.
 			} finally {
 				queue.bytes -= frame.bytes;
-				if (!this.closed) this.pending -= frame.bytes;
+				this.pending -= frame.bytes;
+				this.sharedBudget?.release(frame.bytes);
 			}
 		}
 		if (this.queues.get(target) === queue) this.queues.delete(target);

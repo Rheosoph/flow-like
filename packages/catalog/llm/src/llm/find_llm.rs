@@ -6,6 +6,7 @@ use flow_like::{
         pin::PinOptions,
         variable::VariableType,
     },
+    models::device::Interaction,
     state::FlowLikeState,
 };
 use flow_like_types::{async_trait, json::json};
@@ -81,9 +82,19 @@ impl NodeLogic for FindLLMNode {
 
         let http_client = context.app_state.http_client.clone();
         let capabilities = FlowLikeState::completion_model_capabilities(&context.app_state).await;
+        let devices = context.app_state.device_model_probe(Interaction::Allowed {
+            run_label: Some(context.run_id().to_string()),
+        });
         let bit = context
             .profile
-            .resolve_completion_model(None, &preference, false, capabilities, http_client)
+            .resolve_completion_model(
+                None,
+                &preference,
+                false,
+                capabilities,
+                devices.as_ref(),
+                http_client,
+            )
             .await?;
 
         for meta in bit.meta.values() {

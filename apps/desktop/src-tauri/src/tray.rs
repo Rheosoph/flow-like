@@ -24,6 +24,7 @@ const MENU_OPEN_NOTIFICATIONS: &str = "tray_open_notifications";
 const MENU_ACCOUNT: &str = "tray_account";
 const MENU_OPEN_LOGS: &str = "tray_open_logs";
 const MENU_REPORT_ISSUE: &str = "tray_report_issue";
+const MENU_LOCK_DEVICES: &str = "tray_lock_devices";
 const MENU_QUIT: &str = "tray_quit";
 
 const RUN_MENU_PREFIX: &str = "tray_run:";
@@ -74,6 +75,8 @@ pub struct TrayData {
     pub update_state: TrayUpdateState,
     pub background_failures: Vec<TrayFailure>,
     pub signed_in: bool,
+    /// Devices whose keys the app holds for model access, local ports or transfers.
+    pub unlocked_devices: usize,
 }
 
 impl Default for TrayData {
@@ -88,6 +91,7 @@ impl Default for TrayData {
             update_state: TrayUpdateState::default(),
             background_failures: Vec::new(),
             signed_in: false,
+            unlocked_devices: 0,
         }
     }
 }
@@ -113,6 +117,7 @@ struct TrayMenuSignature {
     has_failures: bool,
     sync_degraded: bool,
     update_available: bool,
+    devices_unlocked: bool,
 }
 
 struct TrayMenuHandles {
@@ -120,6 +125,7 @@ struct TrayMenuHandles {
     run_items: Vec<(String, MenuItem<Wry>, String)>,
     failures_item: Option<(MenuItem<Wry>, String)>,
     sync_item: Option<(MenuItem<Wry>, String)>,
+    lock_devices_item: Option<(MenuItem<Wry>, String)>,
     notifications_item: (MenuItem<Wry>, String),
     account_item: (MenuItem<Wry>, String),
 }
@@ -339,6 +345,17 @@ pub async fn tray_update_state(
     Ok(())
 }
 
+/// The device keys the app holds changed; the menu offers "Lock All Devices" while there are any.
+pub fn show_device_keys(app_handle: &AppHandle, unlocked: usize) {
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = update_tray_data(&app_handle, move |data| {
+            data.unlocked_devices = unlocked;
+        })
+        .await;
+    });
+}
+
 async fn update_tray_data<F>(app_handle: &AppHandle, updater: F) -> tauri::Result<()>
 where
     F: FnOnce(&mut TrayData),
@@ -392,6 +409,7 @@ fn menu_signature(data: &TrayData, recording: bool) -> TrayMenuSignature {
         has_failures: !data.background_failures.is_empty(),
         sync_degraded: sync_degraded(data),
         update_available: data.update_state.available,
+        devices_unlocked: data.unlocked_devices > 0,
     }
 }
 
@@ -472,8 +490,20 @@ fn sync_label(data: &TrayData) -> String {
     }
 }
 
+fn lock_devices_label(data: &TrayData) -> String {
+    format!("Lock All Devices ({} unlocked)", data.unlocked_devices)
+}
+
 fn update_dynamic_labels(handles: &mut TrayMenuHandles, data: &TrayData) {
     let now_ms = current_time_ms();
+
+    if let Some((item, last_label)) = handles.lock_devices_item.as_mut() {
+        let label = lock_devices_label(data);
+        if &label != last_label {
+            let _ = item.set_text(&label);
+            *last_label = label;
+        }
+    }
 
     for (run_id, item, last_label) in handles.run_items.iter_mut() {
         if let Some(run) = data.active_runs.iter().find(|r| &r.run_id == run_id) {
@@ -585,6 +615,15 @@ fn build_tray_menu(
         None
     };
 
+    let lock_devices_item = if signature.devices_unlocked {
+        let label = lock_devices_label(data);
+        let item = MenuItem::with_id(app_handle, MENU_LOCK_DEVICES, &label, true, None::<&str>)?;
+        items.push(Box::new(item.clone()));
+        Some((item, label))
+    } else {
+        None
+    };
+
     let update_label = if data.update_state.available {
         "Update Available — Install…"
     } else {
@@ -670,6 +709,7 @@ fn build_tray_menu(
             run_items,
             failures_item,
             sync_item,
+            lock_devices_item,
             notifications_item: (notifications_item, notifications_text),
             account_item: (account_item, account_text),
         },
@@ -702,6 +742,12 @@ fn handle_menu_event(app_handle: &AppHandle, id: &str) {
                         let _ = state.remove_and_cancel_run(&run_id);
                     }
                 }
+            });
+        }
+        MENU_LOCK_DEVICES => {
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::device_tunnels::lock_all_devices(&app).await;
             });
         }
         MENU_OPEN_NOTIFICATIONS => {

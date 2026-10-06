@@ -41,6 +41,8 @@ pub mod capacity;
 pub mod channel;
 pub mod compute_attempts;
 pub mod compute_cost;
+pub(crate) mod http_bounds;
+pub(crate) mod upload_lifecycle;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
@@ -138,6 +140,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
 /// policy is not acceptable. Keeping CORS inside every nested route layer
 /// prevents an inner wildcard response from bypassing a stricter outer layer.
 pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router {
+    upload_lifecycle::spawn_cleanup(&state);
     state.dispatcher.set_quota_state(&state);
     // Executors hold no meta-store credential and obtain their board only as
     // the presigned compiled artifact the dispatcher hands them, so the

@@ -767,6 +767,7 @@ export function ExecutionServiceProvider({
 							skipConsentCheck,
 							pageTrigger,
 							beforeDispatch,
+							pageTrigger ? (prerunResult ?? undefined) : undefined,
 						);
 			};
 
@@ -827,6 +828,7 @@ export function ExecutionServiceProvider({
 					skipConsentCheck,
 					pageTrigger,
 					beforeDispatch,
+					pageTrigger ? (prerunResult ?? undefined) : undefined,
 				);
 			}
 

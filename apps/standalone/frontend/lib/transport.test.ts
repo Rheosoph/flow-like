@@ -8,7 +8,11 @@ import {
 	type PageBootstrap,
 	createServiceBackend,
 } from "./backend";
-import { consumeServiceStream, createServiceRequest } from "./transport";
+import {
+	ServiceRequestError,
+	consumeServiceStream,
+	createServiceRequest,
+} from "./transport";
 
 function stream(text: string, size = 1) {
 	const bytes = new TextEncoder().encode(text);
@@ -22,6 +26,45 @@ function stream(text: string, size = 1) {
 }
 
 describe("standalone service transport", () => {
+	test("public services send no bearer and retain service path restrictions", async () => {
+		const sent: RequestInit[] = [];
+		const request = createServiceRequest(null, (async (_, init) => {
+			sent.push(init ?? {});
+			return new Response("{}");
+		}) as typeof fetch);
+		await request("/services", { headers: { Authorization: "Bearer stale" } });
+		await request("/pages/page/invoke", { method: "POST", body: "{}" });
+		for (const init of sent) {
+			expect(new Headers(init.headers).has("Authorization")).toBe(false);
+			expect(init.credentials).toBe("omit");
+			expect(init.redirect).toBe("error");
+		}
+		expect(new Headers(sent[1].headers).get("Content-Type")).toBe(
+			"application/json",
+		);
+		await expect(request("https://other.example/services")).rejects.toThrow(
+			"Unsupported",
+		);
+		expect(() => createServiceRequest("")).toThrow(
+			"Enter the service access token.",
+		);
+	});
+	test("an unauthenticated probe identifies a service that requires a token", async () => {
+		const request = createServiceRequest(
+			null,
+			(async () =>
+				new Response(null, { status: 401 })) as unknown as typeof fetch,
+		);
+		try {
+			await request("/services");
+			throw new Error(
+				"The protected service accepted an unauthenticated request.",
+			);
+		} catch (error) {
+			expect(error).toBeInstanceOf(ServiceRequestError);
+			expect((error as ServiceRequestError).status).toBe(401);
+		}
+	});
 	test("scopes the in-memory bearer to local service paths and refuses redirects", async () => {
 		const sent: Array<{ path: string; init: RequestInit }> = [];
 		const request = createServiceRequest("t".repeat(32), (async (
@@ -63,7 +106,15 @@ describe("standalone service transport", () => {
 	});
 	test("forms and quick actions run at /run/{id}: the fields as the body, refused fields named", async () => {
 		const event = (id: string, event_type: string, more = {}) =>
-			({ id, event_type, name: id, node_id: "", ...more }) as unknown as IEvent;
+			({
+				id,
+				event_type,
+				name: id,
+				node_id: "",
+				board_id: "board",
+				event_version: [1, 0, 0],
+				...more,
+			}) as unknown as IEvent;
 		const inventory: Inventory = {
 			project_id: "project",
 			events: [
@@ -311,6 +362,9 @@ describe("standalone service transport", () => {
 			id: "chat",
 			event_type: "simple_chat",
 			name: "Chat",
+			node_id: "",
+			board_id: "board",
+			event_version: [1, 0, 0],
 		} as unknown as IEvent;
 		const sent: string[] = [];
 		const request = createServiceRequest("t".repeat(32), (async (path) => {

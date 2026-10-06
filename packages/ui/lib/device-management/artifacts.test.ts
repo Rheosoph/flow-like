@@ -21,6 +21,9 @@ import {
 	uploadProjectArtifact,
 	validateProjectArtifactPath,
 } from "./artifacts";
+import { ConnectError, ManagementUnconfirmedError } from "./transport";
+import type { TunnelArtifactUpload } from "./tunnel";
+import { LiveCallError } from "./workspace/errors";
 const hex = (v: Uint8Array) =>
 	Array.from(v, (b) => b.toString(16).padStart(2, "0")).join("");
 async function prepared() {
@@ -75,33 +78,7 @@ function server(artifact: PreparedProjectArtifact) {
 		expect(request.transfer_id).toBe(transfer);
 		expect(request.project_id).toBe("project");
 		const index = (request.file_index ?? null) as number | null;
-		if (request.kind === "chunk") {
-			const bytes = new Uint8Array(
-				Buffer.from(request.data as string, "base64url"),
-			);
-			expect(bytes.length).toBeLessThanOrEqual(ARTIFACT_CHUNK_BYTES);
-			expect(
-				new TextEncoder().encode(
-					JSON.stringify({
-						operation_id: crypto.randomUUID(),
-						device_id: "device",
-						issued_at: 1,
-						expires_at: 60,
-						command,
-					}),
-				).length,
-			).toBeLessThan(16_384);
-			const old = buffers.get(index) ?? new Uint8Array();
-			expect(request.offset).toBe(old.length);
-			const value = new Uint8Array(old.length + bytes.length);
-			value.set(old);
-			value.set(bytes, old.length);
-			buffers.set(index, value);
-			if (index === null && value.length === artifact.manifest.length) {
-				expect(hex(sha256(value))).toBe(artifact.descriptor.manifest_sha256);
-				ready = true;
-			}
-		}
+		expect(request.kind).not.toBe("chunk");
 		if (request.kind === "commit") {
 			for (let i = 0; i < artifact.files.length; i++)
 				expect(status(i).complete).toBe(true);
@@ -109,7 +86,33 @@ function server(artifact: PreparedProjectArtifact) {
 		}
 		return { state: "completed", result: status(index) };
 	};
-	return { request, calls, buffers };
+	const uploads: { fileIndex: number | null; offset: number }[] = [];
+	const upload = async (input: TunnelArtifactUpload, length?: number) => {
+		expect(input.transferId).toBe(transfer);
+		expect(input.projectId).toBe("project");
+		const index = input.fileIndex;
+		const old = buffers.get(index) ?? new Uint8Array();
+		expect(input.offset).toBe(old.length);
+		uploads.push({ fileIndex: index, offset: input.offset });
+		const bytes = new Uint8Array(
+			await input.file
+				.slice(
+					input.offset,
+					length === undefined ? input.file.size : input.offset + length,
+				)
+				.arrayBuffer(),
+		);
+		const value = new Uint8Array(old.length + bytes.length);
+		value.set(old);
+		value.set(bytes, old.length);
+		buffers.set(index, value);
+		if (index === null && value.length === artifact.manifest.length) {
+			expect(hex(sha256(value))).toBe(artifact.descriptor.manifest_sha256);
+			ready = true;
+		}
+		return status(index);
+	};
+	return { request, upload, uploads, calls, buffers };
 }
 test("hashes a deterministic project manifest and excludes cross-project/private/path aliases", async () => {
 	const first = await prepared();
@@ -140,11 +143,12 @@ test("hashes a deterministic project manifest and excludes cross-project/private
 		]),
 	).rejects.toThrow("colliding");
 });
-test("streams bounded chunks and confirms all files before committing", async () => {
+test("streams manifest and files separately from management before committing", async () => {
 	const artifact = await prepared();
 	const fake = server(artifact);
 	const progress: number[] = [];
 	const result = await uploadProjectArtifact({
+		upload: fake.upload,
 		prepared: artifact,
 		request: fake.request,
 		onProgress: (value) => progress.push(value.uploadedBytes),
@@ -155,40 +159,39 @@ test("streams bounded chunks and confirms all files before committing", async ()
 	expect(progress.at(-1)).toBe(artifact.descriptor.total_bytes);
 	expect(fake.buffers.get(1)?.length).toBe(20_000);
 });
-test("a lost accepted chunk keeps a resumable identity and never retries automatically", async () => {
+test("a lost stream keeps its checkpoint and resumes only when requested", async () => {
 	const artifact = await prepared();
 	const fake = server(artifact);
-	let failed = false;
 	let transfer = "";
-	const request: ArtifactManagementCall = async (command, id) => {
-		const response = await fake.request(command, id);
-		const value = command.request as Record<string, unknown>;
-		if (!failed && value.kind === "chunk" && value.file_index === 1) {
-			failed = true;
-			throw new Error("connection lost with private diagnostic");
-		}
-		return response;
-	};
 	try {
-		await uploadProjectArtifact({ prepared: artifact, request });
+		await uploadProjectArtifact({
+			prepared: artifact,
+			request: fake.request,
+			upload: async (input) => {
+				if (input.fileIndex !== 1) return fake.upload(input);
+				await fake.upload(input, ARTIFACT_CHUNK_BYTES);
+				throw new Error("connection lost with private diagnostic");
+			},
+		});
 		throw new Error("expected interruption");
 	} catch (error) {
 		expect(error).toBeInstanceOf(ArtifactUploadError);
 		transfer = (error as ArtifactUploadError).transferId ?? "";
 		expect((error as Error).message).not.toContain("private diagnostic");
 	}
-	const accepted = fake.buffers.get(1)?.length;
-	expect(accepted).toBe(ARTIFACT_CHUNK_BYTES);
+	expect(fake.buffers.get(1)?.length).toBe(ARTIFACT_CHUNK_BYTES);
 	const result = await uploadProjectArtifact({
 		prepared: artifact,
 		request: fake.request,
+		upload: fake.upload,
 		transferId: transfer,
 	});
 	expect(result.state).toBe("committed");
-	const chunks = fake.calls.filter(
-		(call) => call.kind === "chunk" && call.file_index === 1,
-	);
-	expect(chunks.map((call) => call.offset)).toEqual([0, 8192, 16384]);
+	expect(
+		fake.uploads
+			.filter((value) => value.fileIndex === 1)
+			.map((value) => value.offset),
+	).toEqual([0, 8192]);
 	expect(fake.calls.filter((call) => call.kind === "begin")).toHaveLength(1);
 });
 test("rejects a substituted status before sending project contents", async () => {
@@ -199,9 +202,125 @@ test("rejects a substituted status before sending project contents", async () =>
 		return { state: "completed", result: { transfer_id: "other" } };
 	};
 	await expect(
-		uploadProjectArtifact({ prepared: artifact, request }),
+		uploadProjectArtifact({
+			upload: async () => {
+				throw new Error("unexpected upload");
+			},
+			prepared: artifact,
+			request,
+		}),
 	).rejects.toBeInstanceOf(ArtifactUploadError);
 	expect(count).toBe(1);
+});
+
+test("a stream must confirm the exact file and its hash before commit", async () => {
+	const artifact = await prepared();
+	for (const changed of [
+		{ transfer_id: "other" },
+		{ file_index: 99 },
+		{ complete: false },
+		{ offset: 0 },
+	]) {
+		const fake = server(artifact);
+		await expect(
+			uploadProjectArtifact({
+				prepared: artifact,
+				request: fake.request,
+				upload: async (input) => ({
+					...(await fake.upload(input)),
+					...changed,
+				}),
+			}),
+		).rejects.toBeInstanceOf(ArtifactUploadError);
+		expect(fake.uploads).toHaveLength(1);
+		expect(fake.calls.some((call) => call.kind === "commit")).toBe(false);
+	}
+});
+
+test("a lost final stream reply resumes without sending a verified file again", async () => {
+	const artifact = await prepared();
+	const fake = server(artifact);
+	const error = await uploadProjectArtifact({
+		prepared: artifact,
+		request: fake.request,
+		upload: async (input) => {
+			const result = await fake.upload(input);
+			if (input.fileIndex === 1) throw new Error("lost final reply");
+			return result;
+		},
+	}).catch((error) => error as ArtifactUploadError);
+	expect(error).toBeInstanceOf(ArtifactUploadError);
+	if (!(error instanceof ArtifactUploadError))
+		throw new Error("Expected an interrupted upload");
+	const result = await uploadProjectArtifact({
+		prepared: artifact,
+		request: fake.request,
+		upload: fake.upload,
+		transferId: error.transferId,
+	});
+	expect(result.state).toBe("committed");
+	expect(fake.uploads.filter((value) => value.fileIndex === 1)).toHaveLength(1);
+	expect(fake.uploads.filter((value) => value.fileIndex === 2)).toHaveLength(1);
+	expect(fake.buffers.get(2)?.length).toBe(0);
+});
+
+test("upload failures retain safe request and reconnect diagnostics with a resumable transfer", async () => {
+	const diagnostic = {
+		transport: "websocket",
+		phase: "wait_reply",
+		cause: "timeout",
+		fallbackReason: "ice_timeout",
+	} as const;
+	const reconnect = new ConnectError(
+		"securing",
+		"handshake_failed",
+		"private handshake error",
+		{
+			transport: "websocket",
+			fallbackReason: "ice_timeout",
+			url: "wss://private.example/ws/devices",
+		},
+	);
+	const failures = [
+		[new ManagementUnconfirmedError("op", diagnostic), diagnostic],
+		[reconnect, reconnect.diagnostic],
+		[
+			new LiveCallError(
+				"handshake_failed",
+				reconnect.message,
+				{ step: "securing", code: "handshake_failed" },
+				reconnect.diagnostic,
+			),
+			reconnect.diagnostic,
+		],
+		[new Error("private local read failure"), undefined],
+	] as const;
+	for (const [failure, expected] of failures) {
+		const artifact = await prepared();
+		const fake = server(artifact);
+		const error = await uploadProjectArtifact({
+			prepared: artifact,
+			request: fake.request,
+			upload: async (input) => {
+				await fake.upload(input);
+				throw failure;
+			},
+		}).catch((error) => error);
+		expect(error).toBeInstanceOf(ArtifactUploadError);
+		expect(error.diagnostic).toEqual(expected);
+		expect(error.rejection).toBeUndefined();
+		expect(JSON.stringify(error)).not.toContain("private");
+		expect(error.message).not.toContain("private");
+		expect(fake.uploads).toHaveLength(1);
+		const resumed = await uploadProjectArtifact({
+			upload: fake.upload,
+			prepared: artifact,
+			request: fake.request,
+			transferId: error.transferId,
+		});
+		expect(resumed.state).toBe("committed");
+		expect(fake.calls.filter((call) => call.kind === "begin")).toHaveLength(1);
+	}
 });
 
 test("selected Bit and WASM assets are pinned exactly and unrelated assets stay out", async () => {
@@ -409,15 +528,16 @@ function rejection(code: string, error = `${code} cause`) {
 	};
 }
 
-test("busy artifact requests back off and retry while the device lock is held", async () => {
+test("busy artifact metadata requests back off while the device lock is held", async () => {
 	const artifact = await prepared();
 	const fake = server(artifact);
 	let busy = 2;
 	const result = await uploadProjectArtifact({
+		upload: fake.upload,
 		prepared: artifact,
 		request: async (command, id) => {
 			const request = command.request as Record<string, unknown>;
-			if (request.kind === "chunk" && busy > 0) {
+			if (request.kind === "begin" && busy > 0) {
 				busy--;
 				return rejection("busy");
 			}
@@ -431,6 +551,9 @@ test("busy artifact requests back off and retry while the device lock is held", 
 test("definitive artifact rejections carry their reason and whether a transfer exists", async () => {
 	const artifact = await prepared();
 	const begin = (await uploadProjectArtifact({
+		upload: async () => {
+			throw new Error("unexpected upload");
+		},
 		prepared: artifact,
 		request: async () => rejection("limit", "Artifact staging quota exceeded"),
 	}).catch((error: unknown) => error)) as ArtifactUploadError;
@@ -440,6 +563,7 @@ test("definitive artifact rejections carry their reason and whether a transfer e
 	expect(begin.message).toContain("Abort unfinished uploads");
 	const fake = server(artifact);
 	const binding = (await uploadProjectArtifact({
+		upload: fake.upload,
 		prepared: artifact,
 		request: async (command, id) =>
 			(command.request as Record<string, unknown>).kind === "commit"
@@ -463,6 +587,9 @@ test("definitive artifact rejections carry their reason and whether a transfer e
 test("retryable artifact rejections keep the transfer resumable and show the device's reason", async () => {
 	const artifact = await prepared();
 	const failed = (await uploadProjectArtifact({
+		upload: async () => {
+			throw new Error("unexpected upload");
+		},
 		prepared: artifact,
 		request: async () => rejection("failed", "Artifact staging disk is full"),
 	}).catch((error: unknown) => error)) as ArtifactUploadError;
@@ -472,6 +599,9 @@ test("retryable artifact rejections keep the transfer resumable and show the dev
 	expect(failed.message).toContain("Artifact staging disk is full");
 	expect(failed.message).toContain("Resume this transfer");
 	const legacy = (await uploadProjectArtifact({
+		upload: async () => {
+			throw new Error("unexpected upload");
+		},
 		prepared: artifact,
 		request: async () => ({
 			state: "rejected",
@@ -503,6 +633,7 @@ test("resuming a transfer whose begin never reached the device begins it under t
 			? rejection("failed", "Unknown artifact transfer")
 			: fake.request(command, id);
 	const confirmed = (await uploadProjectArtifact({
+		upload: fake.upload,
 		prepared: artifact,
 		request,
 		transferId,
@@ -511,6 +642,7 @@ test("resuming a transfer whose begin never reached the device begins it under t
 	expect(confirmed.transferId).toBe(transferId);
 	expect(fake.calls).toHaveLength(0);
 	const result = await uploadProjectArtifact({
+		upload: fake.upload,
 		prepared: artifact,
 		request,
 		transferId,
@@ -526,6 +658,9 @@ test("an unacknowledged transfer the device refuses to begin again is no longer 
 	const transferId = crypto.randomUUID();
 	const kinds: unknown[] = [];
 	const journaled = (await uploadProjectArtifact({
+		upload: async () => {
+			throw new Error("unexpected upload");
+		},
 		prepared: artifact,
 		request: async (command) => {
 			const { kind } = command.request as Record<string, unknown>;
@@ -545,6 +680,9 @@ test("an unacknowledged transfer the device refuses to begin again is no longer 
 	expect(journaled.message).toContain("already belongs to a different request");
 	kinds.length = 0;
 	const denied = (await uploadProjectArtifact({
+		upload: async () => {
+			throw new Error("unexpected upload");
+		},
 		prepared: artifact,
 		request: async (command) => {
 			kinds.push((command.request as Record<string, unknown>).kind);

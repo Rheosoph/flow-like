@@ -84,19 +84,20 @@ export function PatSelectorDialog({
 		);
 	const permissionLevels = [
 		{
-			value: 1,
-			label: t("readOnly", "Read Only"),
-			description: t("viewAccessOnly", "View access only"),
-		},
-		{
 			value: 2,
 			label: t("readWrite", "Read & Write"),
-			description: t("viewAndModifyAccess", "View and modify access"),
+			description: t(
+				"patReadWriteDescription",
+				"Edit data and run workflows; no credential or access management",
+			),
 		},
 		{
 			value: 4,
 			label: t("admin", "Admin"),
-			description: t("fullAdministrativeAccess", "Full administrative access"),
+			description: t(
+				"patAdminDescription",
+				"Manage credentials and access within your account permissions",
+			),
 		},
 	];
 	const backend = useBackend();
@@ -137,6 +138,21 @@ export function PatSelectorDialog({
 			typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
 
 		if (storedPat) {
+			const token = pats.data?.find((pat) =>
+				storedPat.startsWith(`pat_${pat.id}.`),
+			);
+			// The server validates stored credentials. Missing list metadata can
+			// result from a stale list or a token shared by another app member.
+			if (token && token.permission !== 2 && token.permission !== 4) {
+				toast.error(
+					t(
+						"writeTokenRequired",
+						"Create a Read & Write or Admin token for this operation.",
+					),
+				);
+				setMode("create");
+				return;
+			}
 			// Use the stored PAT
 			onPatSelected(storedPat);
 			onOpenChange(false);

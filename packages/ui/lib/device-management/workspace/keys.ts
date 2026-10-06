@@ -10,6 +10,11 @@ import type {
 	HubDeviceSupport,
 	Relationship,
 } from "../model/types";
+import {
+	type NativeHeldKeys,
+	type NativeKeyMirror,
+	nativeKeys,
+} from "../native-client";
 import { saveAccountRecovery } from "../recovery";
 import {
 	type DeviceAccountScope,
@@ -148,6 +153,8 @@ export interface KeySessionIo {
 	setTimer(run: () => void, ms: number): unknown;
 	clearTimer(handle: unknown): void;
 	onPageHide(listener: () => void): () => void;
+	/** The desktop app holds the same keys for model calls, local ports and transfers; a no-op on the web. */
+	native: NativeKeyMirror;
 }
 
 const DEFAULT_IO: KeySessionIo = {
@@ -166,18 +173,43 @@ const DEFAULT_IO: KeySessionIo = {
 		window.addEventListener("pagehide", listener);
 		return () => window.removeEventListener("pagehide", listener);
 	},
+	native: nativeKeys,
 };
 
 export type KeySessionRuntime = KeySessionManager & {
 	/** Views, user calls and active operations count as use for the idle lock. */
 	touch(deviceId: string): void;
+	/**
+	 * A model call through the device's tunnel is use from start to end: the
+	 * idle lock waits while one runs, so a long generation is never cut off.
+	 * Returns the end; a locked device counts nothing.
+	 */
+	beginModelUse(deviceId: string): () => void;
 	/** "Ask for my password again for access changes" (IA §6.4.1); off by default. */
 	askPasswordForAccessChanges(): boolean;
 	/** Turning it on drops every invitation key this window holds, at once. */
 	setAskPasswordForAccessChanges(ask: boolean): void;
-	/** Lock all and stop listening for page hide. */
+	/**
+	 * Locks every session, in the desktop app too even when kept for model
+	 * access (sign-out, another account, hub or profile), and stops listening.
+	 */
 	dispose(): void;
 };
+
+const countsModelUse = (keys: KeySessionManager): keys is KeySessionRuntime =>
+	"beginModelUse" in keys;
+
+/**
+ * `beginModelUse` for code that holds the workspace's `KeySessionManager`
+ * (the model playground, desktop model calls): call the result when the call
+ * ends, including its streamed answer.
+ */
+export function holdForModelUse(
+	keys: KeySessionManager,
+	deviceId: string,
+): () => void {
+	return countsModelUse(keys) ? keys.beginModelUse(deviceId) : () => undefined;
+}
 
 interface Session {
 	deviceId: string;
@@ -193,6 +225,10 @@ interface Session {
 	unlockedAt?: number;
 	lastUsedAt?: number;
 	keepUnlocked: boolean;
+	/** Model calls through the tunnel running now. */
+	modelUses: number;
+	/** The desktop app was told about this unlock, so the area holds keys there. */
+	nativeHeld: boolean;
 	timer?: unknown;
 	lockedSummary?: KeySessionSnapshot["lockedSummary"];
 	lastError?: KeySessionSnapshot["lastError"];
@@ -222,6 +258,17 @@ type Progress = (
 	state: UnlockStep["state"],
 	detail?: StepDetailCode,
 ) => void;
+
+/**
+ * `lock`: the user locked it, and the desktop app drops its keys too.
+ * `idle`, `hide` and `lost` (another window took over) let go on their own:
+ * the desktop keeps keys kept for model access or used by a run.
+ * `remote`: the desktop app already locked every device (its tray).
+ */
+type LockReason = "lock" | "idle" | "hide" | "lost" | "remote";
+
+const sameOrigin = (a: string, b: string) =>
+	a.replace(/\/+$/u, "") === b.replace(/\/+$/u, "");
 
 interface UnlockRun {
 	value: Session;
@@ -329,6 +376,8 @@ export function createKeySessionManager(
 	let cachedFor: LocalSummary | undefined;
 	/** A choice this browser could not store still holds for this window. */
 	let unsavedAsk: boolean | undefined;
+	/** Devices of this account whose keys the desktop app holds. */
+	let appHeld = new Set<string>();
 
 	function emit() {
 		cache = new Map();
@@ -349,6 +398,8 @@ export function createKeySessionManager(
 				state: "locked",
 				signerHeld: false,
 				keepUnlocked: false,
+				modelUses: 0,
+				nativeHeld: false,
 				generation: 0,
 				leases: Promise.resolve(),
 			};
@@ -378,6 +429,13 @@ export function createKeySessionManager(
 		return state;
 	}
 
+	/** The desktop app holds the device's keys while this window holds none. */
+	function heldOnlyByApp(deviceId: string, state: KeyState) {
+		return (
+			appHeld.has(deviceId) && state !== "unlocked" && state !== "unlocking"
+		);
+	}
+
 	function idleLocksAt(value: Session, state: KeyState) {
 		if (state !== "unlocked" || value.keepUnlocked) return undefined;
 		return value.lastUsedAt === undefined
@@ -394,6 +452,7 @@ export function createKeySessionManager(
 			value?.vault?.requiresFreshEndpoint ?? local?.requiresFreshEndpoint;
 		const locksAt = value && idleLocksAt(value, state);
 		const canSign = holdsSigner(deviceId);
+		const heldForModels = heldOnlyByApp(deviceId, state);
 		return {
 			deviceId,
 			state,
@@ -407,6 +466,7 @@ export function createKeySessionManager(
 			restoredNeedsFreshEndpoint: restored === true,
 			lockedSummary: value?.lockedSummary,
 			lastError: value?.lastError,
+			...(heldForModels ? { heldForModels } : {}),
 		};
 	}
 
@@ -437,6 +497,7 @@ export function createKeySessionManager(
 			for (const value of sessions.values())
 				if (value.controller || value.state !== "locked")
 					ids.add(value.deviceId);
+			for (const deviceId of appHeld) ids.add(deviceId);
 			cachedList = [...ids].map(snapshot);
 		}
 		return cachedList;
@@ -451,6 +512,11 @@ export function createKeySessionManager(
 						item.target.deviceId === deviceId && item.state === "active",
 				) ?? false
 		);
+	}
+
+	/** A model call or a tracked operation is running on the device's keys. */
+	function inUse(value: Session) {
+		return value.modelUses > 0 || activeOperation(value.deviceId);
 	}
 
 	function schedule(value: Session) {
@@ -469,7 +535,7 @@ export function createKeySessionManager(
 		if (value.generation !== generation || value.state !== "unlocked") return;
 		value.timer = undefined;
 		if (value.keepUnlocked) return;
-		if (activeOperation(value.deviceId)) {
+		if (inUse(value)) {
 			touch(value.deviceId);
 			return;
 		}
@@ -487,7 +553,16 @@ export function createKeySessionManager(
 		emit();
 	}
 
-	function lockSession(value: Session, reason: "lock" | "idle" | "lost") {
+	/** The desktop app learns of a lock; Lock all tells it once for every device. */
+	function tellNative(value: Session, reason: LockReason) {
+		if (reason === "lock") {
+			appHeld.delete(value.deviceId);
+			io.native.locked(value.deviceId, "lock");
+		} else if (value.nativeHeld && reason !== "remote")
+			io.native.locked(value.deviceId, "release");
+	}
+
+	function lockSession(value: Session, reason: LockReason, native = true) {
 		const hadKeys = Boolean(value.controller) || value.state === "unlocking";
 		const summary = value.controller
 			? ports.lockedSummary?.(value.deviceId)
@@ -498,6 +573,8 @@ export function createKeySessionManager(
 		value.liveDemand?.();
 		value.liveDemand = undefined;
 		if (hadKeys) ports.live.close(value.deviceId);
+		if (native) tellNative(value, reason);
+		value.nativeHeld = false;
 		closeController(value.controller);
 		value.controller = undefined;
 		value.signerHeld = false;
@@ -506,6 +583,7 @@ export function createKeySessionManager(
 		value.unlocking = undefined;
 		value.unlockedAt = undefined;
 		value.lastUsedAt = undefined;
+		value.modelUses = 0;
 		if (reason !== "lost") value.release?.();
 		value.release = undefined;
 		value.lockToken = undefined;
@@ -859,8 +937,21 @@ export function createKeySessionManager(
 		if (value.generation !== run.generation) return;
 		if (!options.connectLive)
 			return readEncryptedStatus(value.deviceId, progress);
-		value.liveDemand ??= ports.live.acquire(value.deviceId, "view");
+		demandLive(value);
 		void ports.fleet.refresh(value.deviceId).catch(() => undefined);
+	}
+
+	/**
+	 * Keeps a live session open for this key session. A session closed by hand
+	 * ("Disconnect") leaves the old demand held but idle, so it is taken again,
+	 * which makes the live manager connect.
+	 */
+	function demandLive(value: Session) {
+		if (value.liveDemand && ports.live.state(value.deviceId).kind === "idle") {
+			value.liveDemand();
+			value.liveDemand = undefined;
+		}
+		value.liveDemand ??= ports.live.acquire(value.deviceId, "view");
 	}
 
 	async function runUnlock(
@@ -887,6 +978,8 @@ export function createKeySessionManager(
 			failUnlock(run, error);
 			throw error;
 		}
+		io.native.unlocked(deps.scope, opened.vault, password, value.keepUnlocked);
+		value.nativeHeld = true;
 		await afterUnlock(run, password, opened.crypto);
 	}
 
@@ -1139,8 +1232,7 @@ export function createKeySessionManager(
 				touch(deviceId);
 				if (options.keepUnlocked !== undefined)
 					manager.setKeepUnlocked(deviceId, options.keepUnlocked);
-				if (options.connectLive)
-					value.liveDemand ??= ports.live.acquire(deviceId, "view");
+				if (options.connectLive) demandLive(value);
 				return Promise.resolve();
 			}
 			if (value.unlocking) return value.unlocking;
@@ -1186,15 +1278,21 @@ export function createKeySessionManager(
 		lock(deviceId) {
 			const value = sessions.get(deviceId);
 			if (value) lockSession(value, "lock");
+			else if (appHeld.delete(deviceId)) {
+				io.native.locked(deviceId, "lock");
+				emit();
+			}
 		},
 		lockAll() {
-			for (const value of sessions.values())
-				if (value.controller || value.release || value.unlocking)
-					lockSession(value, "lock");
+			appHeld = new Set();
+			lockSessions("lock", false);
+			io.native.lockAll();
+			emit();
 		},
 		setKeepUnlocked(deviceId, keep) {
 			const value = session(deviceId);
 			value.keepUnlocked = keep;
+			if (value.state === "unlocked") io.native.kept(deviceId, keep);
 			if (!keep && value.state === "unlocked") value.lastUsedAt = now();
 			schedule(value);
 			emit();
@@ -1219,6 +1317,20 @@ export function createKeySessionManager(
 				: undefined;
 		},
 		touch,
+		beginModelUse(deviceId) {
+			const value = unlocked(deviceId);
+			if (!value) return () => undefined;
+			const generation = value.generation;
+			value.modelUses++;
+			touch(deviceId);
+			let ended = false;
+			return () => {
+				if (ended || value.generation !== generation) return;
+				ended = true;
+				value.modelUses--;
+				touch(deviceId);
+			};
+		},
 		askPasswordForAccessChanges: askPassword,
 		setAskPasswordForAccessChanges(ask) {
 			unsavedAsk = io.writeAskPassword(deps.scope, ask) ? undefined : ask;
@@ -1227,9 +1339,37 @@ export function createKeySessionManager(
 		},
 		dispose() {
 			stopPageHide();
-			manager.lockAll();
+			stopWatch();
+			lockSessions("lock");
 		},
 	};
-	const stopPageHide = io.onPageHide(() => manager.lockAll());
+	function lockSessions(reason: LockReason, native = true) {
+		for (const value of sessions.values())
+			if (value.controller || value.release || value.unlocking)
+				lockSession(value, reason, native);
+	}
+	function heldByApp(held: readonly NativeHeldKeys[]) {
+		const next = new Set(
+			held
+				.filter(
+					(row) =>
+						row.account === deps.scope.account &&
+						sameOrigin(row.apiOrigin, deps.scope.apiOrigin),
+				)
+				.map((row) => row.deviceId),
+		);
+		if (
+			next.size === appHeld.size &&
+			[...next].every((deviceId) => appHeld.has(deviceId))
+		)
+			return;
+		appHeld = next;
+		emit();
+	}
+	const stopPageHide = io.onPageHide(() => lockSessions("hide"));
+	const stopWatch = io.native.watch({
+		held: heldByApp,
+		lockedAll: () => lockSessions("remote"),
+	});
 	return manager;
 }

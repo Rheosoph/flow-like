@@ -10,6 +10,7 @@ import {
 import {
 	type DeviceTransportAdmission,
 	createDeviceAuthenticator,
+	validateDeviceRenewal,
 } from "./device-auth";
 import {
 	DEVICE_SIGNALING_PROTOCOL,
@@ -30,10 +31,14 @@ import {
 	DiscardCounter,
 	FrameBudgets,
 	ManagementOutbox,
+	PendingByteBudget,
 	SenderShares,
+	TUNNEL_CONTROLLER_OUTBOX_LIMITS,
+	TUNNEL_DEVICE_OUTBOX_LIMITS,
 	connectionSlotsFor,
 	managementFrameBudgets,
 	soleAccount,
+	tunnelFrameBudgets,
 } from "./limits";
 import {
 	type SignalRedisClient,
@@ -157,6 +162,7 @@ function onSubMessage(raw: string, ch: string) {
 				JSON.stringify(relayed.frame),
 				`participant:${relayed.frame.from}`,
 				null,
+				relayed.frame.channel === "tunnel",
 			);
 		return;
 	}
@@ -328,6 +334,10 @@ function inc(topic: string, delta: 1 | -1) {
 type WSData = {
 	management: DeviceTransportAdmission | null;
 	outbox: ManagementOutbox | null;
+	tunnelOutbox: ManagementOutbox | null;
+	tunnelDelivery: ManagementOutbox | null;
+	origin: string | null;
+	renewing: boolean;
 	senderShares: SenderShares | null;
 	subscribed: Set<string>;
 	allowedTopic: string | null;
@@ -342,11 +352,13 @@ const managementSockets = new Set<Socket>();
 const managementInboxes = new Map<string, Set<Socket>>();
 const deviceSockets = new Map<string, Socket>();
 const frameBudgets = new FrameBudgets();
+const tunnelPending = new PendingByteBudget(128 * 1024 * 1024);
 const discardedFrames = new DiscardCounter();
 const MAX_MANAGEMENT_CONNECTIONS = 2_000;
 // Kept below the transport's close-on-backpressure limit so a congested device
 // socket is never closed; the frame that would overflow it is refused instead.
 const MANAGEMENT_SEND_BUFFER_BYTES = 512 * 1024;
+const TUNNEL_SEND_BUFFER_BYTES = 256 * 1024;
 
 function closeForPolicy(ws: { close(code?: number, reason?: string): void }) {
 	ws.close(1008, "Policy violation");
@@ -398,8 +410,33 @@ function deliverManagementFrame(
 	text: string,
 	contributor: string,
 	sender: Socket | null,
+	tunnel = false,
 ) {
 	for (const recipient of managementInboxes.get(topic) ?? []) {
+		if (
+			tunnel &&
+			recipient.data.tunnelDelivery?.enqueue({
+				target: "socket",
+				bytes: text.length,
+				deliver: async () => {
+					if (!managementSockets.has(recipient)) return;
+					// A failed send is detected by the peer's authenticated sequence or
+					// heartbeat. Never replay encrypted frames after reconnect.
+					if (recipient.send(text) === 0)
+						discardedFrames.add("tunnel-send-failed");
+					recipient.data.senderShares?.add(contributor, text.length);
+				},
+			})
+		)
+			continue;
+		if (tunnel) {
+			discardedFrames.add("tunnel-recipient-full");
+			if (recipient.data.management?.role === "controller")
+				recipient.close(1013, "Tunnel transport is congested");
+			else if (sender?.data.management?.role === "controller")
+				sender.close(1013, "Tunnel transport is congested");
+			continue;
+		}
 		if (
 			recipient.getBufferedAmount() + text.length <=
 			MANAGEMENT_SEND_BUFFER_BYTES
@@ -431,7 +468,10 @@ async function relayManagementFrame(
 	const admission = ws.data.management;
 	if (!admission) return;
 	try {
-		if (Date.now() >= admission.expiresAtMs) {
+		if (
+			!managementSockets.has(ws) ||
+			Date.now() >= (ws.data.management?.expiresAtMs ?? 0)
+		) {
 			closeForPolicy(ws);
 			return;
 		}
@@ -452,7 +492,11 @@ async function relayManagementFrame(
 				"Device signaling fanout",
 			);
 		}
-		if (Date.now() >= admission.expiresAtMs) {
+		// Reauthorization can replace the lease while Redis is publishing.
+		if (
+			!managementSockets.has(ws) ||
+			Date.now() >= (ws.data.management?.expiresAtMs ?? 0)
+		) {
 			closeForPolicy(ws);
 			return;
 		}
@@ -465,6 +509,7 @@ async function relayManagementFrame(
 			text,
 			`account:${admission.subject}`,
 			ws,
+			routed.frame.channel === "tunnel",
 		);
 	} catch {
 		ws.close(1013, "Signaling temporarily unavailable");
@@ -501,6 +546,32 @@ function openManagement(ws: Socket, admission: DeviceTransportAdmission) {
 			? DEVICE_OUTBOX_LIMITS
 			: CONTROLLER_OUTBOX_LIMITS,
 	);
+	ws.data.tunnelOutbox = new ManagementOutbox(
+		(frame, now) =>
+			frameBudgets.reserve(
+				tunnelFrameBudgets(
+					admission,
+					frame.target,
+					targetAccount(admission, frame.target),
+				),
+				frame.bytes,
+				now,
+			),
+		admission.role === "device"
+			? TUNNEL_DEVICE_OUTBOX_LIMITS
+			: TUNNEL_CONTROLLER_OUTBOX_LIMITS,
+		undefined,
+		undefined,
+		tunnelPending,
+	);
+	ws.data.tunnelDelivery = new ManagementOutbox(
+		(frame) =>
+			ws.getBufferedAmount() + frame.bytes <= TUNNEL_SEND_BUFFER_BYTES ? 0 : 10,
+		TUNNEL_CONTROLLER_OUTBOX_LIMITS,
+		undefined,
+		undefined,
+		tunnelPending,
+	);
 	if (admission.role === "device") {
 		ws.data.senderShares = new SenderShares();
 		const replaced = deviceSockets.get(inbox);
@@ -512,6 +583,8 @@ function openManagement(ws: Socket, admission: DeviceTransportAdmission) {
 function closeManagement(ws: Socket) {
 	managementSockets.delete(ws);
 	ws.data.outbox?.close();
+	ws.data.tunnelOutbox?.close();
+	ws.data.tunnelDelivery?.close();
 	for (const inbox of ws.data.subscribed) {
 		const members = managementInboxes.get(inbox);
 		members?.delete(ws);
@@ -605,6 +678,10 @@ const server = serve<WSData>({
 				data: {
 					management,
 					outbox: null,
+					tunnelOutbox: null,
+					tunnelDelivery: null,
+					origin: req.headers.get("origin"),
+					renewing: false,
 					senderShares: null,
 					subscribed: new Set<string>(),
 					allowedTopic: authorization.allowedTopic,
@@ -677,6 +754,7 @@ const server = serve<WSData>({
 				topics?: unknown;
 				topic?: unknown;
 				data?: unknown;
+				token?: unknown;
 			};
 			try {
 				msg = JSON.parse(
@@ -696,6 +774,55 @@ const server = serve<WSData>({
 			}
 			const management = ws.data.management;
 			if (management) {
+				if (msg.type === "reauthorize") {
+					if (
+						ws.data.renewing ||
+						Object.keys(msg).length !== 2 ||
+						typeof msg.token !== "string" ||
+						msg.token.length > 4096 ||
+						!ws.data.rateLimiter.consume(false)
+					) {
+						closeForPolicy(ws);
+						return;
+					}
+					ws.data.renewing = true;
+					try {
+						const next = await authorizeDeviceUpgrade(
+							ws.data.origin,
+							`${DEVICE_SIGNALING_PROTOCOL}, flowlike.jwt.${msg.token}`,
+						);
+						validateDeviceRenewal(management, next);
+						if (!managementSockets.has(ws)) return;
+						if (next.role === "controller") {
+							const tokenSlot = `device-signaling-token:${next.tokenId}`;
+							if (!connectionSlots.acquire([[tokenSlot, 1]]))
+								throw new Error("Renewal ticket already in use");
+							const oldSlot = `device-signaling-token:${management.tokenId}`;
+							connectionSlots.release([oldSlot]);
+							ws.data.slots = ws.data.slots.map((slot) =>
+								slot === oldSlot ? tokenSlot : slot,
+							);
+						}
+						ws.data.management = next;
+						ws.data.expiresAtMs = next.expiresAtMs;
+						if (ws.data.expiryTimer) clearTimeout(ws.data.expiryTimer);
+						ws.data.expiryTimer = setTimeout(
+							() => closeForPolicy(ws),
+							next.expiresAtMs - Date.now(),
+						);
+						ws.send(
+							JSON.stringify({
+								type: "reauthorized",
+								expires_at: next.expiresAtMs / 1000,
+							}),
+						);
+					} catch {
+						closeForPolicy(ws);
+					} finally {
+						ws.data.renewing = false;
+					}
+					return;
+				}
 				const outbox = ws.data.outbox;
 				if (!outbox || !fanoutIsReady()) {
 					ws.close(1013, "Signaling temporarily unavailable");
@@ -725,9 +852,11 @@ const server = serve<WSData>({
 					return;
 				}
 				const text = JSON.stringify(routed.frame);
+				const selectedOutbox =
+					routed.frame.channel === "tunnel" ? ws.data.tunnelOutbox : outbox;
 				// Over-budget frames wait in order instead of closing the socket.
 				if (
-					!outbox.enqueue({
+					!selectedOutbox?.enqueue({
 						target: routed.frame.to,
 						bytes: text.length,
 						deliver: () => relayManagementFrame(ws, routed, text),

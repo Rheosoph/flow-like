@@ -1,4 +1,4 @@
-use super::{BODY_LIMIT, HostState, read_token};
+use super::{BODY_LIMIT, HostState, service_fingerprint};
 use anyhow::{Result, ensure};
 use axum::{
     body::to_bytes,
@@ -58,13 +58,13 @@ impl Channels {
     pub fn register(
         &self,
         id: String,
-        secret: &Path,
+        secret: Option<&Path>,
         timeout: Duration,
         cancel: CancellationToken,
-        service_fingerprint: blake3::Hash,
+        fingerprint: blake3::Hash,
     ) -> Result<Registration<'_>> {
         ensure!(
-            blake3::hash(&read_token(secret)?) == service_fingerprint,
+            service_fingerprint(secret)? == fingerprint,
             "Service access was rotated before dispatch"
         );
         let mut random = [0_u8; 32];
@@ -76,7 +76,7 @@ impl Channels {
                 None => format!("/channels/{id}"),
             },
             token: zeroize::Zeroizing::new(URL_SAFE_NO_PAD.encode(random)),
-            service_fingerprint,
+            service_fingerprint: fingerprint,
             deadline: Instant::now() + timeout,
             expires_at: flow_like_types::channel::now_unix() + timeout.as_secs() as i64,
             cancel,
@@ -92,7 +92,7 @@ impl Channels {
     }
 }
 impl Grant {
-    fn validate(&self, token: &str, secret: &Path) -> Result<()> {
+    fn validate(&self, token: &str, secret: Option<&Path>) -> Result<()> {
         ensure!(
             Instant::now() < self.deadline && !self.cancel.is_cancelled(),
             "Run has ended"
@@ -102,7 +102,7 @@ impl Grant {
             "Invalid run reply token"
         );
         ensure!(
-            blake3::hash(&read_token(secret)?) == self.service_fingerprint,
+            service_fingerprint(secret)? == self.service_fingerprint,
             "Service access was rotated"
         );
         Ok(())
@@ -240,7 +240,7 @@ pub(super) fn authorize(
         .and_then(|registry| registry.get(id).cloned())
         .ok_or(StatusCode::NOT_FOUND)?;
     grant
-        .validate(token, &host.secret)
+        .validate(token, host.secret.as_deref())
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     Ok(grant)
 }
@@ -253,7 +253,7 @@ pub(super) async fn deliver(
 ) -> Result<InProcessPushResult> {
     let push: ChannelPush = serde_json::from_slice(body)?;
     ensure!(push.channel_id == grant.id, "Reply is for another run");
-    grant.validate(token, &host.secret)?;
+    grant.validate(token, host.secret.as_deref())?;
     // The registry can disappear while the request body is arriving.
     ensure!(
         host.channels

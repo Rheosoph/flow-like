@@ -695,6 +695,28 @@ impl BrowserController {
         })
     }
 
+    #[wasm_bindgen(js_name = beginTunnelNoise)]
+    pub fn begin_tunnel_noise(
+        &self,
+        grant_id: &str,
+        device_key: &[u8],
+        now: f64,
+    ) -> std::result::Result<BrowserNoiseHandshake, JsValue> {
+        let device_key: [u8; 32] = device_key
+            .try_into()
+            .map_err(|_| error("Invalid device Noise key size"))?;
+        let certified = self
+            .controller()
+            .and_then(|controller| controller.begin_tunnel_noise(grant_id, device_key, time(now)?))
+            .map_err(error)?;
+        Ok(BrowserNoiseHandshake {
+            inner: self.registry.register(certified.handshake).map_err(error)?,
+            expires_at: certified.certificate.expires_at,
+            session_id: certified.certificate.session_id,
+            certificate: certified.certificate_jws,
+        })
+    }
+
     #[wasm_bindgen(js_name = createTelemetry)]
     pub fn create_telemetry(
         &self,

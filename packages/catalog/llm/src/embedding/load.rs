@@ -102,8 +102,6 @@ impl NodeLogic for LoadModelNode {
         let model = match bit.bit_type {
             BitTypes::Embedding => {
                 let model = model_factory
-                    .lock()
-                    .await
                     .build_text_routed(
                         &bit,
                         app_state,
@@ -118,11 +116,7 @@ impl NodeLogic for LoadModelNode {
                 }
             }
             BitTypes::ImageEmbedding => {
-                let model = model_factory
-                    .lock()
-                    .await
-                    .build_image(&bit, app_state)
-                    .await?;
+                let model = model_factory.build_image(&bit, app_state).await?;
 
                 CachedEmbeddingModelObject {
                     text_model: None,

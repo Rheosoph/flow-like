@@ -204,6 +204,7 @@ const CAPABILITIES: Record<Capability, true> = {
 	status: true,
 	logs: true,
 	metrics: true,
+	service_connect: true,
 	deploy: true,
 	start: true,
 	stop: true,
@@ -213,6 +214,8 @@ const CAPABILITIES: Record<Capability, true> = {
 	update_agent: true,
 	manage_certificates: true,
 	reboot: true,
+	model_use: true,
+	model_manage: true,
 };
 const isCapability = (value: string): value is Capability =>
 	Object.hasOwn(CAPABILITIES, value);
@@ -326,6 +329,11 @@ const fleetCertificateSchema: z.ZodType<
 const policyViewSchema: z.ZodType<PolicyView, z.ZodTypeDef, unknown> = z.object(
 	{
 		policy_jws: z.string().nullable(),
+		supported_capabilities: z
+			.array(z.string())
+			.max(128)
+			.optional()
+			.catch(undefined),
 		version: count,
 		digest: z.string().nullable(),
 		applied_version: count,

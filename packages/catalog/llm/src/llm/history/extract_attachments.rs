@@ -16,6 +16,17 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::Cacheable;
 use flow_like_types::{async_trait, json::json};
 
+fn ensure_attachment_store(
+    cache: &mut ahash::AHashMap<String, Arc<dyn Cacheable>>,
+    cache_path: &str,
+) {
+    cache.entry(cache_path.to_owned()).or_insert_with(|| {
+        Arc::new(FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        )))
+    });
+}
+
 fn extract_media_urls(history: &History) -> Vec<String> {
     history
         .messages
@@ -178,13 +189,7 @@ impl NodeLogic for ExtractAttachments {
         let id = context.id.clone();
         let cache_path = format!("virtual_dir_{}", id);
 
-        if !context.has_cache(&cache_path).await {
-            let store = FlowLikeStore::Memory(Arc::new(
-                flow_like_storage::object_store::memory::InMemory::new(),
-            ));
-            let store: Arc<dyn Cacheable> = Arc::new(store);
-            context.set_cache(&cache_path, store).await;
-        }
+        ensure_attachment_store(&mut *context.cache.write().await, &cache_path);
 
         let mut paths = Vec::with_capacity(attachments.len());
         let virtual_path = FlowPath {
@@ -245,6 +250,31 @@ mod tests {
     use flow_like_model_provider::history::{
         ContentType, HistoryMessage, ImageUrl, MessageContent, Role,
     };
+
+    #[tokio::test]
+    async fn repeated_extraction_preserves_previously_returned_paths() {
+        let mut cache = ahash::AHashMap::new();
+        let cache_path = "virtual_dir_node";
+        ensure_attachment_store(&mut cache, cache_path);
+        let original = cache[cache_path].clone();
+        let store = original
+            .as_any()
+            .downcast_ref::<FlowLikeStore>()
+            .unwrap()
+            .as_generic();
+        let path = Path::from("previous.txt");
+        store
+            .put(&path, "previous attachment".into())
+            .await
+            .unwrap();
+
+        ensure_attachment_store(&mut cache, cache_path);
+        assert!(Arc::ptr_eq(&original, &cache[cache_path]));
+        assert_eq!(
+            store.get(&path).await.unwrap().bytes().await.unwrap(),
+            "previous attachment"
+        );
+    }
 
     #[test]
     fn extracts_all_rig_media_inputs() {

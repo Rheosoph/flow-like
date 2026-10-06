@@ -3,6 +3,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 
 pub(super) const PROTOCOL: &str = "flowlike.device-management.v1";
+pub(super) const TUNNEL_PROTOCOL: &str = "flowlike.device-tunnel.v1";
 pub(super) const MAX_PAYLOAD: usize = 32 * 1024;
 pub(super) const MAX_FRAME: usize = 48 * 1024;
 
@@ -15,6 +16,9 @@ pub(super) enum ServerFrame {
         expires_at: i64,
     },
     Pong,
+    Reauthorized {
+        expires_at: i64,
+    },
     Frame {
         to: String,
         channel: Channel,
@@ -29,6 +33,7 @@ pub(super) enum ServerFrame {
 pub(super) enum Channel {
     Signal,
     Noise,
+    Tunnel,
 }
 
 #[derive(Serialize)]
@@ -100,6 +105,8 @@ pub(super) enum SignalEnvelope {
         sdp: String,
         grant_id: String,
         certificate_jws: String,
+        #[serde(default)]
+        protocol: Option<String>,
     },
 }
 
@@ -112,9 +119,16 @@ impl SignalEnvelope {
             sdp,
             grant_id,
             certificate_jws,
+            protocol,
         } = &value;
         identifier(session_id)?;
         identifier(grant_id)?;
+        ensure!(
+            protocol
+                .as_deref()
+                .is_none_or(|value| value == PROTOCOL || value == TUNNEL_PROTOCOL),
+            "Unsupported device transport protocol"
+        );
         ensure!(
             !certificate_jws.is_empty() && certificate_jws.len() <= 8192,
             "Invalid controller certificate size"

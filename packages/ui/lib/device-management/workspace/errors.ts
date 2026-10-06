@@ -1,6 +1,7 @@
 import {
 	ConnectError,
 	type ConnectErrorCode,
+	type ManagementFailureDiagnostic,
 	ManagementRequestNotSentError,
 	ManagementUnconfirmedError,
 } from "../transport";
@@ -207,6 +208,37 @@ const TRANSPORT_MESSAGES: Record<string, Filed> = {
 		"reading_services",
 		"busy",
 	],
+	"Device signaling renewal did not extend admission.": [
+		"getting_pass",
+		"invalid_admission",
+	],
+	"Device signaling renewal differs.": ["reaching_device", "relay_unreachable"],
+	"Device tunnel transport stalled.": ["reading_services", "timeout"],
+	"Device tunnel transport closed.": ["reading_services", "session_closed"],
+	"Device data transport is unavailable.": [
+		"reading_services",
+		"session_closed",
+	],
+	"This operation requires the management connection.": [
+		"reading_services",
+		"session_closed",
+	],
+	"The device data request could not be sent.": [
+		"reading_services",
+		"not_sent",
+	],
+	"Update the device agent to connect to deployed services.": [
+		"reading_services",
+		"rejected_unsupported",
+	],
+	"Update the device agent to use encrypted streaming transfers.": [
+		"reading_services",
+		"rejected_unsupported",
+	],
+	"Update the device agent to send requests to its models.": [
+		"reading_services",
+		"rejected_unsupported",
+	],
 };
 
 const INSPECTION_REJECTED =
@@ -227,6 +259,7 @@ export class LiveCallError extends Error {
 		readonly code: DeviceErrorCode,
 		message: string,
 		readonly liveError?: LiveError,
+		readonly diagnostic?: ManagementFailureDiagnostic,
 	) {
 		super(message);
 		this.name = "LiveCallError";

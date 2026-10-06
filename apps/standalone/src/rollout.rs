@@ -150,7 +150,7 @@ fn secret_names(config: &PlacementConfig) -> BTreeSet<&str> {
             config
                 .hosting
                 .iter()
-                .map(|hosting| hosting.auth_secret.as_str()),
+                .filter_map(|hosting| hosting.auth_secret.as_deref()),
         )
         .collect()
 }
@@ -839,7 +839,7 @@ mod tests {
     #[test]
     fn replacements_cannot_overwrite_previous_secrets_or_change_after_activation() -> Result<()> {
         let (_directory, store, mut candidate) = fixture()?;
-        candidate.hosting.as_mut().unwrap().auth_secret = "new-auth".into();
+        candidate.hosting.as_mut().unwrap().auth_secret = Some("new-auth".into());
         store.stage_rollout("rollout", &candidate, 1, 2, 30, 100)?;
         assert!(store.rollout_secret_config("rollout", "old-auth").is_err());
         assert!(

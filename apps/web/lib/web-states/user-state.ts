@@ -15,6 +15,7 @@ import {
 	type MediaUploadResponse,
 	updateAccountWithAvatar,
 } from "@flow-like/flow-like-ui/lib/profile-media-upload";
+import { normalizePersonalAccessTokens } from "@flow-like/flow-like-ui/lib/personal-access-token";
 import { IAppVisibility } from "@flow-like/flow-like-ui/lib/schema/app/app";
 import { stableStringify } from "@flow-like/flow-like-ui/lib/stable-stringify";
 import type {
@@ -714,7 +715,9 @@ export class WebUserState implements IUserState {
 		}[]
 	> {
 		try {
-			return await apiGet("user/pat", this.backend.auth);
+			return normalizePersonalAccessTokens(
+				await apiGet("user/pat", this.backend.auth),
+			);
 		} catch {
 			return [];
 		}

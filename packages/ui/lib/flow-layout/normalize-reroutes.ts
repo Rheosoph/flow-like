@@ -8,7 +8,7 @@ export interface AutoRerouteChain {
 	/** Original nodes in wire order, retained for reuse and undo. */
 	nodes: INode[];
 }
-/** Treat generated, unbranched data reroutes as wire geometry during placement. */
+/** Treat generated, unbranched reroutes as wire geometry during placement. */
 export function normalizeAutoReroutes(input: AutoLayoutInput): {
 	input: AutoLayoutInput;
 	chains: AutoRerouteChain[];
@@ -69,8 +69,6 @@ export function normalizeAutoReroutes(input: AutoLayoutInput): {
 			(pin) => pin.name === "route_out" && pin.pin_type === "Output",
 		);
 		if (values.length !== 2 || !routeIn || !routeOut) continue;
-		if (routeIn.data_type === "Execution" || routeOut.data_type === "Execution")
-			continue;
 		if (routeIn.connected_to.length || routeOut.depends_on.length) continue;
 		if (
 			(incoming.get(routeIn.id)?.size ?? 0) !== 1 ||

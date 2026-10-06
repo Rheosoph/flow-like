@@ -231,6 +231,29 @@ describe("service page", () => {
 });
 
 describe("access token", () => {
+	test("a service without token authentication explains access and offers no token rotation", async () => {
+		const view = await open(STUDIO, "field-notes", {
+			arrange: (fake) =>
+				patchConfig(fake, STUDIO, "field-notes", (config) => {
+					const hosting = config.hosting as Config;
+					hosting.authentication = "none";
+					hosting.auth_secret = undefined;
+				}),
+		});
+		await ready(view);
+		expect(
+			text(view.container.querySelector("[data-token-state]") as HTMLElement),
+		).toBe("Not required");
+		expect(text(view.container)).toContain(
+			"Anyone who can reach this service can use it without a token.",
+		);
+		expect(
+			queryByRole("button", "Set a new token…", view.container),
+		).toBeNull();
+		expect(view.container.querySelector("#svc-token-value")).toBeNull();
+		expect(writes(view)).toEqual([]);
+	});
+
 	test("a new token is checked, sent once under the stored reference and tracked", async () => {
 		const view = await open(STUDIO, "field-notes");
 		await ready(view);
@@ -365,6 +388,8 @@ describe("older hub and older agent", () => {
 			byRole("textbox", "Address people use", view.container),
 		).toBeTruthy();
 		const known = new Set([
+			// Service tunnels are negotiated separately from inspection feature flags.
+			"service_listeners",
 			"inspect_page",
 			"placement_configuration",
 			"offline_queue",

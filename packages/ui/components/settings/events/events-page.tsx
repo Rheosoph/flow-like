@@ -770,6 +770,7 @@ export default function EventsPage({
 							onDeploymentComplete={shell.onDeploymentComplete}
 							onBusyChange={shell.onBusyChange}
 							onSavedChange={shell.onSavedChange}
+							onDeployedChange={shell.onDeployedChange}
 							onCancel={shell.onCancel}
 							isSubmitting={isCreating}
 							tokenStore={tokenStore}
@@ -1227,6 +1228,13 @@ function EventConfiguration({
 		onReload?.();
 		setShowPatDialog(false);
 		toast.success(`"${saved.name}" saved`);
+		if (isDeviceEventSource(saved) && event.active && !saved.active)
+			toast.info(
+				t(
+					"devicePauseKeepsRunning",
+					"Devices that already run it keep running until you update or stop their service.",
+				),
+			);
 	};
 
 	// Saving is the one action on this page with real consequences, and until now
@@ -1389,6 +1397,13 @@ function EventConfiguration({
 			}
 		}
 
+		// Inputs saved before the backend resolved them still hold board ref keys
+		const refs = board.data.refs ?? {};
+		const resolveRef = (text: unknown) =>
+			typeof text === "string" && Object.hasOwn(refs, text)
+				? refs[text]
+				: String(text ?? "");
+
 		// Find changed pins
 		for (const input of savedInputs) {
 			const pin = currentPinsMap.get(input.id) as any;
@@ -1433,7 +1448,10 @@ function EventConfiguration({
 					newValue: String(pinOptional),
 				});
 			}
-			const pinDefault = JSON.stringify(pin.default_value ?? null);
+			// A sensitive pin's default is never saved on the event
+			const pinDefault = JSON.stringify(
+				pin.options?.sensitive ? null : (pin.default_value ?? null),
+			);
 			const inputDefault = JSON.stringify(input.default_value ?? null);
 			if (pinDefault !== inputDefault) {
 				changed.push({
@@ -1443,6 +1461,19 @@ function EventConfiguration({
 					oldValue: inputDefault,
 					newValue: pinDefault,
 				});
+			}
+			for (const field of ["description", "schema"] as const) {
+				const saved = input[field] ?? "";
+				const current = resolveRef(pin[field]);
+				if (/^\d+$/.test(saved) && saved !== current) {
+					changed.push({
+						id: input.id,
+						name: input.name,
+						field,
+						oldValue: saved,
+						newValue: current,
+					});
+				}
 			}
 		}
 
@@ -1831,16 +1862,7 @@ function EventConfiguration({
 							size="sm"
 							disabled={!canWriteEvents}
 							title={canWriteEvents ? undefined : writeDeniedMessage}
-							onClick={() => {
-								if (deviceOnly && formData.active)
-									toast.info(
-										t(
-											"devicePauseKeepsRunning",
-											"Devices that already run it keep running until you update or stop their service.",
-										),
-									);
-								handleInputChange("active", !formData.active);
-							}}
+							onClick={() => handleInputChange("active", !formData.active)}
 							className="shrink-0 gap-2"
 						>
 							{formData.active ? (

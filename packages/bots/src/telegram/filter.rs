@@ -67,35 +67,43 @@ fn addressed(me: &Me, message: &Message) -> bool {
     mentions(me, message) || replies_to(me, message)
 }
 
+/// A mention of the bot, a text mention of it, or a command addressed to it (`/ask@thisbot`).
 fn mentions(me: &Me, message: &Message) -> bool {
     let entities = message
         .parse_entities()
         .or_else(|| message.parse_caption_entities())
         .unwrap_or_default();
+    let names_me = |name: &str| !name.is_empty() && name.eq_ignore_ascii_case(&me.username);
     entities.iter().any(|entity| match entity.kind() {
-        MessageEntityKind::Mention => entity
-            .text()
-            .strip_prefix('@')
-            .is_some_and(|name| name.eq_ignore_ascii_case(&me.username)),
+        MessageEntityKind::Mention => entity.text().strip_prefix('@').is_some_and(names_me),
         MessageEntityKind::TextMention { user } => user.id.0 == me.id,
+        MessageEntityKind::BotCommand => entity
+            .text()
+            .rsplit_once('@')
+            .is_some_and(|(_, name)| names_me(name)),
         _ => false,
     })
 }
 
+/// In a forum topic, a message that replies to nothing names the topic's creation as the
+/// message it replies to; that is no reply to the bot, even in a topic the bot opened.
 fn replies_to(me: &Me, message: &Message) -> bool {
     message
         .reply_to_message()
+        .filter(|replied| replied.forum_topic_created().is_none())
         .and_then(|replied| replied.from.as_ref())
         .is_some_and(|author| author.id.0 == me.id)
 }
 
-/// The leading command names another bot, as `/start@otherbot` does.
+/// The leading command names another bot, as `/start@otherbot` does. A word that is no
+/// command, such as `!ask@team` or `@ai`, names no bot.
 fn foreign_command(me: &Me, message: &Message) -> bool {
     let command = text_of(message)
         .split(char::is_whitespace)
         .next()
         .unwrap_or_default();
-    command.rsplit_once('@').is_some_and(|(_, addressee)| {
-        !addressee.is_empty() && !addressee.eq_ignore_ascii_case(&me.username)
-    })
+    command.starts_with('/')
+        && command.rsplit_once('@').is_some_and(|(_, addressee)| {
+            !addressee.is_empty() && !addressee.eq_ignore_ascii_case(&me.username)
+        })
 }

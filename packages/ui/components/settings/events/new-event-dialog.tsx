@@ -22,6 +22,8 @@ import {
 export interface NewEventShell {
 	onSavedChange(event: IEvent | null): void;
 	onBusyChange(busy: boolean): void;
+	/** Whether the saved event has been deployed to at least one device. */
+	onDeployedChange(deployed: boolean): void;
 	/** The event was created and, if it was meant to, deployed. */
 	onDeploymentComplete(): void;
 	onCancel(): void;
@@ -70,6 +72,10 @@ export function NewEventDialog({
 		onOpenChange(false);
 	}, [onOpenChange, t]);
 
+	const onDeployedChange = useCallback((deployed: boolean) => {
+		deployedRef.current = deployed;
+	}, []);
+
 	const shell: NewEventShell = {
 		onSavedChange: (event) => {
 			savedRef.current = event;
@@ -77,6 +83,7 @@ export function NewEventDialog({
 			if (!event) setBusy(false);
 		},
 		onBusyChange: setBusy,
+		onDeployedChange,
 		onDeploymentComplete: () => {
 			deployedRef.current = true;
 			onDeployed?.();
