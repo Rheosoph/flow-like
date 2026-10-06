@@ -1,5 +1,6 @@
 //! ONNX text embeddings in `flow-like-standalone model-worker --engine onnx`: the agent's own
-//! binary serves `/v1/embeddings` on loopback behind a bearer key. CPU only for now.
+//! binary serves `/v1/embeddings` through a private socket or loopback, behind a bearer key.
+//! CPU only for now.
 
 use super::{
     EnginePlan, MemoryEstimate, llamacpp::ModelFiles, parent_gone, parent_id, random_key,
@@ -339,16 +340,29 @@ pub async fn run_worker() -> Result<()> {
     let parent = parent_id();
     let config: WorkerConfig = read_worker_config()?;
     let worker = Arc::new(tokio::task::spawn_blocking(move || load(&config)).await??);
-    let listener = worker_listener().await?;
     let router = Router::new()
         .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
         .route("/v1/embeddings", post(embeddings))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(worker);
     tokio::select! {
-        result = axum::serve(listener, router) => result.context("Serve ONNX embeddings"),
+        result = serve(router) => result.context("Serve ONNX embeddings"),
         () = parent_gone(parent) => Ok(()),
     }
+}
+
+async fn serve(router: Router) -> Result<()> {
+    #[cfg(unix)]
+    if let Some(path) = std::env::var_os(super::endpoint::SOCKET_ENV) {
+        let listener =
+            tokio::net::UnixListener::bind(path).context("Bind the private engine socket")?;
+        return axum::serve(listener, router)
+            .await
+            .context("Serve the private engine socket");
+    }
+    axum::serve(worker_listener().await?, router)
+        .await
+        .context("Serve the loopback engine")
 }
 
 #[cfg(test)]

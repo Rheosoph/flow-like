@@ -251,7 +251,6 @@ struct Shared {
     limits: Mutex<HashMap<ModelConsumer, Arc<Limit>>>,
     /// Kibibytes of request bodies the gateway may still hold.
     bodies: Arc<Semaphore>,
-    client: reqwest::Client,
     /// Fetches the public images a chat request links, under the agent's address policy.
     fetcher: Fetcher,
 }
@@ -285,12 +284,6 @@ impl Gateway {
             bodies: Arc::new(Semaphore::new(config.max_body_bytes_in_flight / BODY_UNIT)),
             config,
             limits: Mutex::default(),
-            client: reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .tcp_nodelay(true)
-                .build()
-                .context("Build the gateway's engine client")?,
             fetcher,
         });
         serve(listener, routes(shared), connections, cancel);
@@ -824,8 +817,8 @@ async fn send(
     path: &str,
     request: &serde_json::Map<String, Value>,
 ) -> std::result::Result<reqwest::Response, Response> {
-    shared
-        .client
+    lease
+        .client()
         .post(format!("{}{path}", lease.base_url()))
         .bearer_auth(lease.key())
         .header(header::CONTENT_TYPE, "application/json")

@@ -1,11 +1,14 @@
 //! Engine processes: one child per loaded model, serving an OpenAI-compatible API on a
-//! loopback port behind a bearer key that changes with every start.
+//! private socket (sandboxed Linux) or loopback port behind a bearer key per start.
 //!
-//! An engine binds a port the kernel picks and holds it from then on, and announces it on an
+//! A TCP engine binds a port the kernel picks and holds it from then on, and announces it on an
 //! output only the agent reads. No port is picked first and handed over later, so no other
 //! process can bind it in between and pose as the engine.
 
+mod endpoint;
 pub mod gguf;
+
+use endpoint::EngineSocket;
 pub mod llamacpp;
 pub mod mlx;
 #[cfg(feature = "runtime")]
@@ -76,6 +79,7 @@ pub enum Announce {
 }
 
 /// How to start one engine.
+#[derive(Clone)]
 pub struct EngineLaunch {
     pub program: PathBuf,
     pub args: Vec<OsString>,
@@ -100,24 +104,43 @@ pub struct EnginePlan {
 
 pub trait EngineLauncher: Send + Sync {
     fn command(&self, launch: &EngineLaunch) -> Result<tokio::process::Command>;
+
+    fn prepare(
+        &self,
+        launch: &EngineLaunch,
+        _estimate: MemoryEstimate,
+        _model_id: &str,
+    ) -> Result<PreparedLaunch> {
+        Ok(PreparedLaunch {
+            command: self.command(launch)?,
+            socket: None,
+            isolation: None,
+        })
+    }
+}
+
+pub struct PreparedLaunch {
+    command: tokio::process::Command,
+    socket: Option<EngineSocket>,
+    isolation: Option<Box<dyn Send + Sync>>,
 }
 
 /// Starts engines as children of the agent; on Linux inside the engine sandbox whenever
 /// the host offers one, and always when the host requires isolation.
 pub struct ProcessLauncher {
     pub sandbox: bool,
+    pub state_dir: Option<PathBuf>,
 }
 
 impl EngineLauncher for ProcessLauncher {
     fn command(&self, launch: &EngineLaunch) -> Result<tokio::process::Command> {
-        let mut command = if self.sandbox {
-            sandboxed(launch)?
-        } else {
-            let mut command = tokio::process::Command::new(&launch.program);
-            command.args(&launch.args);
-            die_with_agent(&mut command);
-            command
-        };
+        anyhow::ensure!(
+            !self.sandbox,
+            "Sandboxed engines require a prepared isolation lease"
+        );
+        let mut command = tokio::process::Command::new(&launch.program);
+        command.args(&launch.args);
+        die_with_agent(&mut command);
         command.env_clear();
         for key in ENGINE_ENV {
             if let Some(value) = std::env::var_os(key) {
@@ -127,17 +150,66 @@ impl EngineLauncher for ProcessLauncher {
         command.envs(launch.env.iter().map(|(key, value)| (key, value)));
         Ok(command)
     }
+
+    fn prepare(
+        &self,
+        launch: &EngineLaunch,
+        estimate: MemoryEstimate,
+        model_id: &str,
+    ) -> Result<PreparedLaunch> {
+        if !self.sandbox {
+            return Ok(PreparedLaunch {
+                command: self.command(launch)?,
+                socket: None,
+                isolation: None,
+            });
+        }
+        self.sandboxed(launch, estimate, model_id)
+    }
 }
 
-/// Port 0 lets the sandboxed engine bind only ports the kernel picks.
-#[cfg(target_os = "linux")]
-fn sandboxed(launch: &EngineLaunch) -> Result<tokio::process::Command> {
-    crate::isolation::engine_command(&launch.program, &launch.args, &launch.read_only, 0)
-}
+/// A sandboxed engine serves only through its private filesystem socket.
+impl ProcessLauncher {
+    #[cfg(target_os = "linux")]
+    fn sandboxed(
+        &self,
+        launch: &EngineLaunch,
+        estimate: MemoryEstimate,
+        model_id: &str,
+    ) -> Result<PreparedLaunch> {
+        let state_dir = self
+            .state_dir
+            .as_deref()
+            .context("An engine sandbox needs the agent state directory")?;
+        let socket = EngineSocket::new_sandboxed()?;
+        let launch = socket.launch(launch)?;
+        let (mut command, isolation) = crate::isolation::engine_command(
+            &launch.program,
+            &launch.args,
+            &launch.read_only,
+            &socket.path(),
+            state_dir,
+            estimate.total(),
+            model_id,
+        )?;
+        command.env_clear();
+        for key in ENGINE_ENV {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        command.envs(launch.env.iter().map(|(key, value)| (key, value)));
+        Ok(PreparedLaunch {
+            command,
+            socket: Some(socket),
+            isolation: Some(Box::new(isolation)),
+        })
+    }
 
-#[cfg(not(target_os = "linux"))]
-fn sandboxed(_: &EngineLaunch) -> Result<tokio::process::Command> {
-    anyhow::bail!("The engine sandbox needs Linux")
+    #[cfg(not(target_os = "linux"))]
+    fn sandboxed(&self, _: &EngineLaunch, _: MemoryEstimate, _: &str) -> Result<PreparedLaunch> {
+        anyhow::bail!("The engine sandbox needs Linux")
+    }
 }
 
 fn die_with_agent(command: &mut tokio::process::Command) {
@@ -167,6 +239,9 @@ pub struct EngineProcess {
     /// The port the engine announced, once it has.
     port: watch::Receiver<Option<u16>>,
     output: Tail,
+    client: reqwest::Client,
+    socket: Option<EngineSocket>,
+    _isolation: Option<Box<dyn Send + Sync>>,
 }
 
 /// The last lines an engine wrote to stderr.
@@ -208,8 +283,14 @@ impl EngineProcess {
         launcher: &dyn EngineLauncher,
         launch: &EngineLaunch,
         label: &str,
+        estimate: MemoryEstimate,
     ) -> Result<Self> {
-        let mut command = launcher.command(launch)?;
+        let PreparedLaunch {
+            mut command,
+            socket,
+            isolation,
+        } = launcher.prepare(launch, estimate, label)?;
+        let client = endpoint::engine_client(socket.as_ref().map(EngineSocket::path))?;
         command
             .stdin(pipe_if(launch.stdin.is_some()))
             .stdout(pipe_if(launch.announce == Announce::Stdout))
@@ -228,7 +309,14 @@ impl EngineProcess {
             child,
             port,
             output,
+            client,
+            socket,
+            _isolation: isolation,
         })
+    }
+
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     pub fn id(&self) -> Option<u32> {
@@ -248,11 +336,10 @@ impl EngineProcess {
         self.child.try_wait().ok().flatten()
     }
 
-    /// Waits until the engine announced its port and `/health` there answers 200, the process
-    /// exits or `timeout` passes. Answers the base URL of the engine.
+    /// Waits until `/health` answers 200 on the private socket or announced TCP port,
+    /// the process exits, or `timeout` passes. Answers the base URL of the engine.
     pub async fn wait_ready(
         &mut self,
-        client: &reqwest::Client,
         key: &str,
         timeout: Duration,
     ) -> std::result::Result<String, StartFailure> {
@@ -262,8 +349,13 @@ impl EngineProcess {
                 return Err(StartFailure::Exited(status));
             }
             let announced = *self.port.borrow();
-            if let Some(base_url) = announced.map(|port| format!("http://127.0.0.1:{port}"))
-                && healthy(client, &base_url, key).await
+            let base_url = self
+                .socket
+                .as_ref()
+                .map(|_| "http://localhost".to_owned())
+                .or_else(|| announced.map(|port| format!("http://127.0.0.1:{port}")));
+            if let Some(base_url) = base_url
+                && healthy(&self.client, &base_url, key).await
             {
                 return Ok(base_url);
             }
@@ -483,10 +575,13 @@ mod tests {
             read_only: Vec::new(),
             announce: Announce::Stderr,
         };
-        let output = ProcessLauncher { sandbox: false }
-            .command(&launch)?
-            .output()
-            .await?;
+        let output = ProcessLauncher {
+            sandbox: false,
+            state_dir: None,
+        }
+        .command(&launch)?
+        .output()
+        .await?;
         let listed = String::from_utf8_lossy(&output.stdout);
         let names: Vec<&str> = listed
             .lines()

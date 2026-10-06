@@ -88,6 +88,29 @@ function prepare(metadata: unknown, extra = [tokenizerFile]) {
 }
 
 describe("Bit metadata v2", () => {
+	test("only the public download query is retained in device asset sources", async () => {
+		const metadata = v2();
+		metadata.assets[0].descriptor.sources = [
+			"https://cdn.flow-like.com/m?download=true",
+		];
+		expect(
+			(await prepare(metadata)).models?.assets[0].descriptor.sources,
+		).toEqual(metadata.assets[0].descriptor.sources);
+		for (const query of [
+			"?X-Amz-Credential=secret&X-Amz-Signature=token",
+			"?token=secret",
+			"?download=true&token=secret",
+			"?download=true&download=true",
+			"?download=%74rue",
+			"?",
+		]) {
+			metadata.assets[0].descriptor.sources = [
+				`https://cdn.flow-like.com/m${query}`,
+			];
+			await expect(prepare(metadata)).rejects.toThrow();
+		}
+	});
+
 	test("names model-store assets the artifact never carries", async () => {
 		const result = await prepare(v2());
 		const manifest = JSON.parse(new TextDecoder().decode(result.manifest));

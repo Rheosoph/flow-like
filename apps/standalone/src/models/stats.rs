@@ -288,35 +288,56 @@ impl Stats {
         to: i64,
         step: StatsStep,
     ) -> Result<ModelStats> {
+        self.query_shown(model_id, from, to, step, |_| Ok(true))
+    }
+
+    /// As [`Stats::query`], with totals only for the consumers `shown` accepts; the series
+    /// still count every request.
+    pub fn query_shown(
+        &self,
+        model_id: Option<&str>,
+        from: i64,
+        to: i64,
+        step: StatsStep,
+        mut shown: impl FnMut(&ModelConsumer) -> Result<bool>,
+    ) -> Result<ModelStats> {
         let seconds = step.seconds();
-        let db = lock!(self.db);
-        let rolled = rolled_until(&db, step)?.clamp(from, to);
         let mut buckets: BTreeMap<i64, Bucket> = BTreeMap::new();
         let mut consumers: HashMap<ModelConsumer, Bucket> = HashMap::new();
-        for rollup in db.rollups_between(seconds, from, rolled, model_id)? {
-            buckets
-                .entry(rollup.bucket)
-                .or_default()
-                .add_rollup(&rollup);
-            consumers
-                .entry(rollup.consumer.clone())
-                .or_default()
-                .add_rollup(&rollup);
+        {
+            let db = lock!(self.db);
+            let rolled = rolled_until(&db, step)?.clamp(from, to);
+            for rollup in db.rollups_between(seconds, from, rolled, model_id)? {
+                buckets
+                    .entry(rollup.bucket)
+                    .or_default()
+                    .add_rollup(&rollup);
+                consumers
+                    .entry(rollup.consumer.clone())
+                    .or_default()
+                    .add_rollup(&rollup);
+            }
+            for request in db.requests_between(rolled, to, model_id)? {
+                let bucket = floor_to(request.at, seconds);
+                buckets.entry(bucket).or_default().add_request(&request);
+                consumers
+                    .entry(request.consumer.clone())
+                    .or_default()
+                    .add_request(&request);
+            }
         }
-        for request in db.requests_between(rolled, to, model_id)? {
-            let bucket = floor_to(request.at, seconds);
-            buckets.entry(bucket).or_default().add_request(&request);
-            consumers
-                .entry(request.consumer.clone())
-                .or_default()
-                .add_request(&request);
+        let mut listed = HashMap::with_capacity(consumers.len());
+        for (consumer, totals) in consumers {
+            if shown(&consumer)? {
+                listed.insert(consumer, totals);
+            }
         }
         Ok(ModelStats {
             model_id: model_id.map(str::to_owned),
             from,
             step,
             series: series(&buckets, from, to, seconds),
-            consumers: consumer_totals(consumers),
+            consumers: consumer_totals(listed),
         })
     }
 

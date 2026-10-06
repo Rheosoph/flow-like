@@ -91,6 +91,7 @@ pub fn validate_model_asset_source(source: &str) -> Result<()> {
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
+        || url.query().is_some_and(|query| query != "download=true")
     {
         return Err(invalid);
     }
@@ -139,7 +140,11 @@ use std::collections::{BTreeMap, HashSet};
 pub const MODELS_REPLY_MAX_BYTES: usize = 16 * 1024;
 /// `Stats` is a bulk read and answers over a tunnel data stream.
 pub const MODELS_BULK_REPLY_MAX_BYTES: usize = 1024 * 1024;
-pub const MODEL_MAX_ASSETS: usize = 32;
+pub const MODEL_MAX_ASSETS: usize = 256;
+/// Digests projected into a hosted-model reply; `asset_count` names the full model size.
+pub const MODEL_MAX_LISTED_ASSETS: usize = 32;
+/// Leaves room for the request envelope within one encrypted management frame.
+pub const MODEL_RUNTIME_MANIFEST_MAX_BYTES: usize = 15 * 1024;
 pub const MODEL_DISPLAY_NAME_MAX_BYTES: usize = 128;
 pub const MODEL_MIN_CTX_PER_SLOT: u32 = 256;
 pub const MODEL_MAX_CTX_PER_SLOT: u32 = 1 << 20;
@@ -545,6 +550,8 @@ pub enum ModelsRequest {
     InstallRuntime {
         runtime: ModelRuntime,
         backend: ModelBackend,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        manifest_jws: Option<String>,
     },
     /// Answers the `RuntimeInfo`.
     RemoveRuntime {
@@ -569,6 +576,20 @@ impl ModelsRequest {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Self::InstallRuntime {
+            manifest_jws: Some(compact),
+            ..
+        } = self
+        {
+            if compact.is_empty()
+                || compact.len() > MODEL_RUNTIME_MANIFEST_MAX_BYTES
+                || !compact
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            {
+                return Err(ProtocolError::Invalid("runtime manifest size or encoding"));
+            }
+        }
         match self {
             Self::Overview {} | Self::Probe {} => Ok(()),
             Self::Models { after, limit }
@@ -599,7 +620,9 @@ impl ModelsRequest {
                 validate_management_id(model_id)
             }
             Self::Ensure { project_id, pins } => validate_ensure(project_id, pins),
-            Self::InstallRuntime { runtime, backend }
+            Self::InstallRuntime {
+                runtime, backend, ..
+            }
             | Self::RemoveRuntime { runtime, backend } => {
                 if *runtime == ModelRuntime::Mlx && *backend != ModelBackend::Metal {
                     return Err(ProtocolError::Invalid("MLX runs on Metal only"));
@@ -685,6 +708,9 @@ pub struct HostedModel {
     pub kind: ModelKind,
     pub engine: ModelEngine,
     pub assets: Vec<ModelAssetDigest>,
+    /// Total assets when `assets` is only the first `MODEL_MAX_LISTED_ASSETS` digests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_count: Option<u32>,
     pub settings: ModelSettings,
     pub residency: Residency,
     /// `Configure` and `Remove` name it as `expected_revision`.
@@ -699,6 +725,13 @@ impl HostedModel {
         validate_model_display_name(&self.display_name)?;
         validate_engine_kind(self.engine, self.kind)?;
         validate_digests(&self.assets)?;
+        if self.assets.len() > MODEL_MAX_LISTED_ASSETS
+            || self.asset_count.is_some_and(|count| {
+                count as usize > MODEL_MAX_ASSETS || (count as usize) < self.assets.len()
+            })
+        {
+            return Err(ProtocolError::Invalid("listed model assets"));
+        }
         self.settings.validate()?;
         self.residency.validate()?;
         if let HostedModelState::Loaded {
@@ -1053,6 +1086,9 @@ pub struct ModelsOverview {
     pub observed_at: i64,
     pub system: SystemFacts,
     pub runtimes: Vec<RuntimeInfo>,
+    /// The enrolled release source; a controller can forward its signed manifest offline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_manifest_url: Option<String>,
     pub summary: ModelsSummary,
     /// The most urgent ones; `Recommendations` lists all.
     pub recommendations: Vec<Recommendation>,
@@ -1064,6 +1100,9 @@ pub struct ModelsOverview {
 impl ModelsOverview {
     pub fn validate(&self) -> Result<()> {
         self.system.validate()?;
+        self.runtime_manifest_url
+            .as_deref()
+            .map_or(Ok(()), crate::validate_release_url)?;
         if self.runtimes.len() > MODEL_MAX_RUNTIMES
             || self.recommendations.len() > MODEL_OVERVIEW_MAX_RECOMMENDATIONS
             || self.models.len() > usize::from(MODELS_PAGE_MAX)
@@ -1283,6 +1322,10 @@ mod tests {
             "http://cdn.flow-like.com/bits/abc",
             "https://user:pass@cdn.flow-like.com/bits/abc",
             "https://cdn.flow-like.com/bits/abc#part",
+            "https://cdn.flow-like.com/bits/abc?X-Amz-Signature=secret",
+            "https://cdn.flow-like.com/bits/abc?download=true&token=secret",
+            "https://cdn.flow-like.com/bits/abc?download=%74rue",
+            "https://cdn.flow-like.com/bits/abc?",
             "file:///etc/passwd",
         ] {
             let mut bad = descriptor();
@@ -1293,6 +1336,9 @@ mod tests {
         let mut many = descriptor();
         many.sources = vec!["https://huggingface.co/a".into(); MODEL_ASSET_MAX_SOURCES + 1];
         assert!(many.validate().is_err());
+        let mut public_download = descriptor();
+        public_download.sources[0].push_str("?download=true");
+        assert!(public_download.validate().is_ok());
     }
 
     #[test]
@@ -1379,7 +1425,8 @@ mod tests {
             display_name: "n".repeat(MODEL_DISPLAY_NAME_MAX_BYTES),
             kind: ModelKind::Vision,
             engine: ModelEngine::Llamacpp,
-            assets: (0..MODEL_MAX_ASSETS).map(digest).collect(),
+            assets: (0..MODEL_MAX_LISTED_ASSETS).map(digest).collect(),
+            asset_count: Some(MODEL_MAX_ASSETS as u32),
             settings: settings_max(),
             residency: Residency::OnDemand {
                 idle_unload_after_seconds: MODEL_MAX_IDLE_UNLOAD_SECONDS,
@@ -1432,6 +1479,7 @@ mod tests {
     fn worst_overview() -> ModelsOverview {
         ModelsOverview {
             observed_at: i64::MAX,
+            runtime_manifest_url: Some(format!("https://cdn.test/{}", "m".repeat(1_007))),
             system: SystemFacts {
                 cpu: CpuFacts {
                     brand: "b".repeat(MODEL_TEXT_MAX_BYTES),
@@ -1595,6 +1643,33 @@ mod tests {
     }
 
     #[test]
+    fn forwarded_runtime_manifest_fits_the_management_envelope_and_is_bounded() {
+        let install = |compact: String| ModelsRequest::InstallRuntime {
+            runtime: ModelRuntime::Llamacpp,
+            backend: ModelBackend::Cpu,
+            manifest_jws: Some(compact),
+        };
+        let maximum = install("a".repeat(MODEL_RUNTIME_MANIFEST_MAX_BYTES));
+        assert!(maximum.validate().is_ok());
+        let request = crate::ManagementRequest {
+            operation_id: "o".repeat(128),
+            device_id: "d".repeat(128),
+            issued_at: i64::MAX - 1,
+            expires_at: i64::MAX,
+            command: crate::ManagementCommand::Models { request: maximum },
+        };
+        assert!(serde_json::to_vec(&request).unwrap().len() <= crate::TUNNEL_MAX_DATA);
+        for invalid in [
+            String::new(),
+            "a".repeat(MODEL_RUNTIME_MANIFEST_MAX_BYTES + 1),
+            "a.b.c\n".into(),
+            "a/b/c".into(),
+        ] {
+            assert!(install(invalid).validate().is_err());
+        }
+    }
+
+    #[test]
     fn model_specs_bind_engine_kind_projector_and_pooling() {
         let install = |model: ModelSpec| {
             ModelsRequest::Install {
@@ -1697,6 +1772,14 @@ mod tests {
             .map(|index| format!("m-{index}.gguf"))
             .collect::<Vec<_>>();
         let names = names.iter().map(String::as_str).collect::<Vec<_>>();
+        assert!(
+            install(spec(
+                ModelKind::Chat,
+                ModelEngine::Llamacpp,
+                &names[..MODEL_MAX_ASSETS]
+            ))
+            .is_ok()
+        );
         assert!(install(spec(ModelKind::Chat, ModelEngine::Llamacpp, &names)).is_err());
         let mut unnamed = spec(ModelKind::Chat, ModelEngine::Llamacpp, &["model.gguf"]);
         unnamed.display_name = " padded".into();
@@ -1758,6 +1841,7 @@ mod tests {
             kind: ModelKind::Chat,
             engine: ModelEngine::Llamacpp,
             assets: vec![digest(1)],
+            asset_count: None,
             settings: ModelSettings::default(),
             residency: Residency::AlwaysOn,
             revision: 2,
@@ -1920,6 +2004,7 @@ mod tests {
         recommendation.fix = Some(ModelsRequest::InstallRuntime {
             runtime: ModelRuntime::Llamacpp,
             backend: ModelBackend::Vulkan,
+            manifest_jws: None,
         });
         recommendation.validate().unwrap();
         recommendation.fix = Some(ModelsRequest::Remove {

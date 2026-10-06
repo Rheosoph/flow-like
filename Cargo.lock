@@ -9923,7 +9923,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snow",
- "sysinfo 0.37.2",
+ "sysinfo 0.38.4",
  "tar",
  "tempfile",
  "thiserror 2.0.18",

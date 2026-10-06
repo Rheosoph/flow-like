@@ -23,6 +23,10 @@ _spec = importlib.util.spec_from_file_location("standalone_release", Path(__file
 release = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release)
 
+_spec = importlib.util.spec_from_file_location("runtime_toolchain", Path(__file__).with_name("runtime_toolchain.py"))
+toolchain = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(toolchain)
+
 LLAMACPP_BUILD, LLAMACPP_BUILD_NUMBER = "b10809", 10809
 LLAMACPP_COMMIT = "5266f24da75dc449bd56cbed7addb9c8e4a6a73e"
 LLAMACPP_DOWNLOADS = "https://github.com/ggml-org/llama.cpp/releases/download"
@@ -38,6 +42,8 @@ LISTING, FALLBACK, NOTICES = "pack.json", "fallback", "THIRD-PARTY-NOTICES.txt"
 DEBIAN_DOCS = Path("/usr/share/doc")
 MAX_PACK_FILES, MAX_PACK_BYTES, MAX_UNPACKED_BYTES = 64, 2 * 1024**3, 4 * 1024**3
 MAX_COMPACT_JWS_BYTES, MAX_SAFE_INTEGER = 16384, 9007199254740991
+# The management envelope also carries ids, timestamps and the install command.
+MAX_FORWARDED_MANIFEST_BYTES = 15 * 1024
 GLIBC_FLOOR = (2, 35)
 GLIBC_LIBRARIES = frozenset({"libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1", "libresolv.so.2",
                              "libutil.so.1", "libmvec.so.1", "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1"})
@@ -74,10 +80,10 @@ LLAMACPP_PACKS = {
                                   "files": LINUX_LIBRARIES + X64_CPU_BACKENDS + ("libggml-vulkan.so",),
                                   "bundled": BUNDLED, "fallback": FALLBACK_LIBRARIES + ("libvulkan.so.1",)},
     # Upstream's arm64 build needs GLIBC_2.38, so CI compiles the pinned commit on ubuntu-22.04-arm
-    # with these compiler packages; the pack's notices record their exact versions.
+    # with the source-pinned GCC toolchain; its shared runtimes use the same glibc floor.
     "llamacpp-linux-arm64-cpu": {"target": "aarch64-unknown-linux-gnu", "backend": "cpu", "archive": None,
                                  "files": LINUX_LIBRARIES + ARM64_CPU_BACKENDS, "bundled": BUNDLED,
-                                 "fallback": FALLBACK_LIBRARIES, "toolchain": ("gcc-14", "g++-14")},
+                                 "fallback": FALLBACK_LIBRARIES, "toolchain": toolchain.GCC_VERSION},
 }
 # The helper finds SwiftPM bundles beside itself and Swift back-deployment libraries in ../lib.
 MLX_ENTRYPOINT = "bin/flow-like-mlx-service"
@@ -293,12 +299,11 @@ def debian_notice(package, names):
 
 
 def llamacpp_title(spec):
-    """The llama.cpp notice's title; a pack compiled on the runner also names the compiler packages."""
+    """The llama.cpp notice's title; a compiled pack also names its pinned compiler."""
     title = f"llama.cpp {LLAMACPP_BUILD} (MIT)"
     if spec["archive"] is not None:
         return title
-    compilers = ", ".join(f"{package} {debian_version(package)}" for package in spec["toolchain"])
-    return f"{title}, compiled from {LLAMACPP_COMMIT} with {compilers}"
+    return f"{title}, compiled from {LLAMACPP_COMMIT} with GCC {spec['toolchain']}"
 
 
 def bundle_host_libraries(stage, spec):
@@ -307,18 +312,21 @@ def bundle_host_libraries(stage, spec):
     for path in staged_files(stage):
         if elf(path):
             resolved.update(ldd_paths(tool("ldd", str(path))))
-    packages = {}
+    packages, source_notices = {}, []
     for directory, names in ((stage, spec.get("bundled", ())), (stage / FALLBACK, spec.get("fallback", ()))):
         for name in names:
             if name not in resolved:
                 raise ValueError(f"Install {name} on the build runner; the {spec['target']} pack bundles it")
             source = Path(resolved[name]).resolve()
+            if spec.get("toolchain") and name in toolchain.LIBRARIES:
+                source_notices.append(toolchain.library_notice(name, source))
+            else:
+                packages.setdefault(debian_package(source), []).append(name)
             write(directory / name, source.read_bytes())
-            packages.setdefault(debian_package(source), []).append(name)
     for path in staged_files(stage):
         if elf(path) and dynamic_section(tool("readelf", "-d", "--wide", str(path)))[1] != "$ORIGIN":
             tool("patchelf", "--set-rpath", "$ORIGIN", str(path))
-    return [debian_notice(package, names) for package, names in sorted(packages.items())]
+    return [debian_notice(package, names) for package, names in sorted(packages.items())] + source_notices
 
 
 def write_notices(stage, notices):
@@ -577,7 +585,7 @@ def whole(value):
 
 
 def manifest(packs, base_url, sequence, output, validity_days=release.DEFAULT_RELEASE_LIFETIME_DAYS, issued_at=None):
-    """One unsigned manifest per target: the whole signed list must fit one compact JWS."""
+    """One unsigned manifest per target, small enough to forward in an install command."""
     base_url = release.secure_prefix(base_url)
     if not whole(sequence) or not 0 < sequence <= MAX_SAFE_INTEGER:
         raise ValueError("Expected a positive runtime manifest sequence")
@@ -595,9 +603,10 @@ def manifest(packs, base_url, sequence, output, validity_days=release.DEFAULT_RE
     for target, entries in sorted(targets.items()):
         body = json.dumps({"version": 1, "sequence": sequence, **dates, "packs": entries}, separators=(",", ":"))
         sizes[target] = compact_size(body)
-        if sizes[target] > MAX_COMPACT_JWS_BYTES:
+        limit = min(MAX_COMPACT_JWS_BYTES, MAX_FORWARDED_MANIFEST_BYTES)
+        if sizes[target] > limit:
             raise ValueError(f"The {target} runtime manifest would sign to {sizes[target]} bytes, "
-                             f"above the {MAX_COMPACT_JWS_BYTES}-byte JWS limit; publish fewer packs or files per target")
+                             f"above the {limit}-byte JWS limit; publish fewer packs or files per target")
         (output / f"{target}.json").write_text(body)
     return sizes
 

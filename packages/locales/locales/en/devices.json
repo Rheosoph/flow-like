@@ -9240,7 +9240,6 @@
 		"unlockSeveral": "Unlock several…"
 	},
 	"models": {
-		"lockAll": "Lock all devices",
 		"actions": {
 			"add": "Add model…",
 			"cancelJob": {
@@ -9478,7 +9477,8 @@
 			"reason": {
 				"blocked": "This version can't be added to the device.",
 				"pick": "Choose a model first.",
-				"reference": "Enter a Hugging Face repository first."
+				"reference": "Enter a Hugging Face repository first.",
+				"requestTooLarge": "This model's file list exceeds the 16 KiB limit for adding it here. Choose a version with fewer files or include the model in an app deployment."
 			},
 			"review": {
 				"diskMemory": "Takes {{disk}} of the model disk, which has {{left}} left. Files another model already uses aren't downloaded again. Once loaded: {{memory}} ({{verdict}}).",

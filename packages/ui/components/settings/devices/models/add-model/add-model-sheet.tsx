@@ -41,6 +41,7 @@ import {
 	type OptionView,
 	deviceFactsOf,
 	hostedTwin,
+	inlineInstallFits,
 	optionViews,
 } from "./install-plan";
 import {
@@ -212,6 +213,7 @@ function stepReason(
 	t: DevicesT,
 	wizard: Wizard,
 	gate: Reason | undefined,
+	installFits: boolean,
 ): Reason | undefined {
 	if (wizard.step === "source") return sourceReason(t, wizard);
 	if (wizard.step === "version" && wizard.selected?.block)
@@ -222,7 +224,19 @@ function stepReason(
 				"This version can't be added to the device.",
 			),
 		};
-	return wizard.step === "review" ? gate : undefined;
+	if (wizard.step !== "review") return undefined;
+	return (
+		gate ??
+		(installFits
+			? undefined
+			: {
+					kind: "unsupported",
+					text: t(
+						"devices:models.install.reason.requestTooLarge",
+						"This model's file list exceeds the 16 KiB limit for adding it here. Choose a version with fewer files or include the model in an app deployment.",
+					),
+				})
+	);
 }
 
 function SettingsStep({
@@ -366,24 +380,29 @@ function primaryLabel(t: DevicesT, wizard: Wizard) {
 	});
 }
 
+function installInputOf(wizard: Wizard, device: DeviceModelFacts) {
+	const { selected, draft } = wizard;
+	if (!selected || !draft) return undefined;
+	return {
+		choice: selected.choice,
+		modelId: modelIdFor(
+			displayNameOf(selected.choice),
+			new Set(device.models.map((model) => model.id)),
+		),
+		settings: engineSettings(selected.option.engine, draft.settings),
+		residency: draft.residency,
+	};
+}
+
 function advanceOf(wizard: Wizard, device: DeviceModelFacts) {
 	return () => {
-		const { step, selected, draft } = wizard;
+		const { step, selected } = wizard;
 		if (step === "source") return void wizard.lookUp();
 		if (!selected) return;
 		if (step === "version") return wizard.toSettings(selected);
 		if (step === "settings") return wizard.setStep("review");
-		if (!draft) return;
-		const name = displayNameOf(selected.choice);
-		void wizard.installer.install({
-			choice: selected.choice,
-			modelId: modelIdFor(
-				name,
-				new Set(device.models.map((model) => model.id)),
-			),
-			settings: engineSettings(selected.option.engine, draft.settings),
-			residency: draft.residency,
-		});
+		const input = installInputOf(wizard, device);
+		if (input) void wizard.installer.install(input);
 	};
 }
 
@@ -449,7 +468,10 @@ function WizardSheet(props: Readonly<WizardProps>) {
 	const gate = gateFailure
 		? { kind: gateFailure.kind, text: String(gateFailure.reason) }
 		: undefined;
-	const reason = stepReason(t, wizard, gate);
+	const installInput = installInputOf(wizard, props.device);
+	const installFits =
+		!installInput || inlineInstallFits(installInput, props.target.deviceId);
+	const reason = stepReason(t, wizard, gate, installFits);
 	const index = STEPS.indexOf(wizard.step);
 	const phase = wizard.installer.phase;
 	const done = phase.kind === "done";

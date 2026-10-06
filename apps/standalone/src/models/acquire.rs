@@ -304,6 +304,16 @@ impl Job {
         control.generation
     }
 
+    /// The generation of the next owner, unless a fetch run, queued or fetching, owns the job.
+    fn take_over_idle(&self) -> Option<u64> {
+        let mut control = lock!(self.control);
+        if control.run.is_some() {
+            return None;
+        }
+        control.generation += 1;
+        Some(control.generation)
+    }
+
     fn owns(&self, generation: u64) -> bool {
         lock!(self.control).generation == generation
     }
@@ -733,9 +743,19 @@ impl Inner {
         job.set_state(&self.store, Some(generation), failure.state());
     }
 
-    /// Takes the job over and opens its push session.
-    async fn open_push(&self, job: &Arc<Job>) -> Result<ModelAssetState> {
-        let generation = job.take_over();
+    /// Takes the job over and opens its push session; a fetch run is stopped only when
+    /// `take_over_fetch` allows it.
+    async fn open_push(&self, job: &Arc<Job>, take_over_fetch: bool) -> Result<ModelAssetState> {
+        let generation = if take_over_fetch {
+            job.take_over()
+        } else {
+            job.take_over_idle().with_context(|| {
+                format!(
+                    "Push model asset {}: the device is downloading it; take the download over explicitly",
+                    job.asset().digest.store_key()
+                )
+            })?
+        };
         let _file = job.file.lock().await;
         self.open_session(job, generation).await
     }
@@ -1173,6 +1193,41 @@ impl AcquisitionManager {
         }
     }
 
+    /// Follows a download or later client push until verified bytes arrive. Failed downloads
+    /// remain pushable; an explicit cancellation or agent shutdown ends the wait.
+    pub async fn wait_for_present(&self, digest: &ModelAssetDigest) -> Result<()> {
+        let Some(job) = self.inner.job(digest) else {
+            ensure!(
+                self.state(digest)? == Some(ModelAssetState::Present),
+                "Model asset {} has no job",
+                digest.store_key()
+            );
+            return Ok(());
+        };
+        let mut states = job.state.subscribe();
+        loop {
+            let state = states.borrow_and_update().clone();
+            if state == ModelAssetState::Present {
+                return Ok(());
+            }
+            ensure!(
+                !matches!(
+                    state,
+                    ModelAssetState::Failed {
+                        reason: ModelAssetFailure::Cancelled,
+                        ..
+                    }
+                ),
+                "Model asset {} was cancelled",
+                digest.store_key()
+            );
+            tokio::select! {
+                () = self.inner.shutdown.cancelled() => bail!("Model acquisition stopped"),
+                changed = states.changed() => changed.context("Model asset job stopped")?,
+            }
+        }
+    }
+
     /// Stops the job and discards its staged bytes; a failed job is removed altogether.
     /// The work finishes even when the caller goes away.
     pub async fn cancel(&self, digest: &ModelAssetDigest) -> Result<ModelAssetState> {
@@ -1191,9 +1246,9 @@ impl AcquisitionManager {
     }
 
     /// Opens a push session and returns `AwaitingPush` with the offset to continue from,
-    /// or `Present` once a staged copy that already holds every byte verifies. A running
-    /// fetch is stopped only when `take_over_fetch` asks for it. The take-over finishes
-    /// even when the caller goes away.
+    /// or `Present` once a staged copy that already holds every byte verifies. A fetch run,
+    /// queued or fetching, is stopped only when `take_over_fetch` asks for it. The take-over
+    /// finishes even when the caller goes away.
     pub async fn begin_push(
         &self,
         digest: &ModelAssetDigest,
@@ -1209,16 +1264,16 @@ impl AcquisitionManager {
             ModelAssetState::Verifying => {
                 bail!("Push model asset {key}: the asset is being verified")
             }
-            ModelAssetState::Fetching { .. } if !take_over_fetch => {
+            ModelAssetState::Queued | ModelAssetState::Fetching { .. } if !take_over_fetch => {
                 bail!(
-                    "Push model asset {key}: the device is fetching it; take the fetch over explicitly"
+                    "Push model asset {key}: the device is downloading it; take the download over explicitly"
                 )
             }
             _ => {}
         }
         let inner = Arc::clone(&self.inner);
         self.inner
-            .detached(async move { inner.open_push(&job).await })
+            .detached(async move { inner.open_push(&job, take_over_fetch).await })
             .await
     }
 
@@ -1760,6 +1815,35 @@ mod tests {
         let pushed = manager.push_chunk(&wanted.digest, CUT as u64, rest).await?;
         assert_eq!(pushed, ModelAssetState::Present);
         assert_eq!(blob(&manager, &wanted.digest), *bytes);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn only_an_explicit_push_stops_a_queued_download() -> Result<()> {
+        let bytes = Arc::new(pattern(SIZE));
+        let stall = |bytes: &[u8]| truncated(bytes, CUT, true);
+        let routes = Router::new().route("/slow", first_then_ranged(Arc::clone(&bytes), stall));
+        let origin = Origin::start(routes).await;
+        let state = tempfile::tempdir()?;
+        let store = ModelStore::open(state.path(), ModelStoreConfig::default())?;
+        let one_slot = AcquisitionConfig {
+            concurrent_downloads: 1,
+            ..config()
+        };
+        let manager = AcquisitionManager::start(Arc::new(store), origin.fetcher(), one_slot)?;
+        let running = asset(&bytes, vec![origin.url("/slow")]);
+        manager.ensure(&running, None)?;
+        staged(&manager, &running.digest, CUT as u64).await?;
+        let waiting = asset(b"waiting", vec![origin.url("/slow")]);
+        manager.ensure(&waiting, None)?;
+        let queued = Some(ModelAssetState::Queued);
+        assert_eq!(manager.state(&waiting.digest)?, queued);
+        assert!(manager.begin_push(&waiting.digest, false).await.is_err());
+        assert_eq!(manager.state(&waiting.digest)?, queued);
+        assert_eq!(
+            manager.begin_push(&waiting.digest, true).await?,
+            awaiting(0)
+        );
         Ok(())
     }
 

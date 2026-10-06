@@ -1,9 +1,10 @@
 //! `ManagementCommand::Models`. Reads need Use models or Manage models (the owner always
 //! passes), writes need Manage models, and `Ensure` needs Deploy on its project because it is
 //! a step of that project's deploy. A deployer also reads `Jobs`, limited to the downloads
-//! its own deploys asked for, so a deploy can follow them before it applies. Writes are
-//! journaled under the request's operation ID like every other mutating command, so a retry
-//! answers the first result.
+//! its own deploys asked for, so a deploy can follow them before it applies. `Stats` breaks
+//! usage down only by the consumers a reader may see. Writes are journaled under the
+//! request's operation ID like every other mutating command, so a retry answers the first
+//! result.
 
 use super::*;
 #[cfg(feature = "runtime")]
@@ -37,6 +38,16 @@ fn require_read(authority: &Authority) -> Result<()> {
 
 /// Which jobs a read lists: all, or those the filter accepts by their operation IDs.
 type JobFilter<'a> = Option<&'a dyn Fn(&[String]) -> Result<bool>>;
+
+/// Whose usage a `Stats` read breaks down.
+type ConsumerFilter<'a> = &'a dyn Fn(&ModelConsumer) -> Result<bool>;
+
+/// What a reader sees of the jobs and of the usage per consumer.
+#[derive(Clone, Copy)]
+struct Visible<'a> {
+    jobs: JobFilter<'a>,
+    consumers: ConsumerFilter<'a>,
+}
 
 /// What a read may see: everything, or (`Jobs` of a deployer) only its deploys' downloads.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,6 +97,33 @@ pub(super) fn deploy_asked(
     Ok(projects
         .iter()
         .any(|project| authority.permits(ManagementCapability::Deploy, Some(project), None)))
+}
+
+/// The owner sees everyone's usage and Manage models every person's. Every reader sees their
+/// own, and that of each placement whose status they may read; a removed placement's usage
+/// stays the owner's to see.
+fn shows_usage_of(
+    store: &StateStore,
+    authority: &Authority,
+    consumer: &ModelConsumer,
+) -> Result<bool> {
+    if authority.grant.is_none() || *consumer == super::tunnel::consumer_of(authority) {
+        return Ok(true);
+    }
+    let ModelConsumer::Placement { placement_id } = consumer else {
+        return Ok(authority.permits(ManagementCapability::ModelManage, None, None));
+    };
+    let project = store.get_placement(placement_id)?.and_then(|record| {
+        let project = record.config.get("project_id")?.as_str()?;
+        Some(project.to_owned())
+    });
+    Ok(project.is_some_and(|project| {
+        authority.permits(
+            ManagementCapability::Status,
+            Some(&project),
+            Some(placement_id),
+        )
+    }))
 }
 
 /// The project a write is journaled under; an Ensure is authorized like its deploy.
@@ -138,23 +176,29 @@ pub(super) fn read(
         request,
         (manifest, now),
         limit,
-        |models, jobs| read_result(models, now, jobs),
+        |models, visible| read_result(models, now, visible),
     )
 }
 
-/// The answer `result` gives the reader: a deployer's `Jobs` lists only its deploys' jobs.
+/// The answer `result` gives the reader: a deployer's `Jobs` lists only its deploys' jobs,
+/// and `Stats` breaks usage down only by the consumers the reader may see.
 fn reached(
     store: &StateStore,
     authority: &Authority,
     models: &ModelsRequest,
-    result: impl FnOnce(&ModelsRequest, JobFilter) -> Result<Value>,
+    result: impl FnOnce(&ModelsRequest, Visible) -> Result<Value>,
 ) -> Result<Value> {
     let deployed = |operation_ids: &[String]| deploy_asked(store, authority, operation_ids);
     let jobs: JobFilter = match reach_of(authority, models)? {
         Reach::Everything => None,
         Reach::DeployedJobs => Some(&deployed),
     };
-    result(models, jobs)
+    let consumers = |consumer: &ModelConsumer| shows_usage_of(store, authority, consumer);
+    let visible = Visible {
+        jobs,
+        consumers: &consumers,
+    };
+    result(models, visible)
 }
 
 /// Checks the request and the reader, asks `result` for the answer, and fences it against
@@ -165,7 +209,7 @@ fn fenced_read(
     request: &ManagementRequest,
     (manifest, now): (&OnboardingManifest, i64),
     limit: usize,
-    result: impl FnOnce(&ModelsRequest, JobFilter) -> Result<Value>,
+    result: impl FnOnce(&ModelsRequest, Visible) -> Result<Value>,
 ) -> Result<ManagementResponse> {
     let models = models_request(request)?;
     models.validate().reject_as(RejectionCode::Invalid)?;
@@ -234,7 +278,7 @@ async fn read_blocking(
 }
 
 #[cfg(not(feature = "runtime"))]
-fn read_result(_: &ModelsRequest, _: i64, _: JobFilter) -> Result<Value> {
+fn read_result(_: &ModelsRequest, _: i64, _: Visible) -> Result<Value> {
     Err(without_host())
 }
 
@@ -246,20 +290,29 @@ fn without_host() -> anyhow::Error {
     )
 }
 
+/// A host that failed to start stays down until the agent restarts, so only a host that is
+/// still starting is worth a retry.
 #[cfg(feature = "runtime")]
 fn running_host() -> Result<std::sync::Arc<ModelHost>> {
     ModelHost::current().ok_or_else(|| {
-        refusal(
-            RejectionCode::Busy,
-            "The model host of this device is not running; it starts with the agent",
-        )
+        if crate::diagnostics::model_host_failed() {
+            refusal(
+                RejectionCode::Unsupported,
+                "The model host of this device did not start; models stay unavailable until the agent restarts",
+            )
+        } else {
+            refusal(
+                RejectionCode::Busy,
+                "The model host of this device is not running yet; it starts with the agent",
+            )
+        }
     })
 }
 
 #[cfg(feature = "runtime")]
-fn read_result(request: &ModelsRequest, now: i64, jobs: JobFilter) -> Result<Value> {
+fn read_result(request: &ModelsRequest, now: i64, visible: Visible) -> Result<Value> {
     let host = running_host()?;
-    read_from(&host, request, now, jobs)
+    read_from(&host, request, now, visible)
 }
 
 #[cfg(feature = "runtime")]
@@ -272,12 +325,14 @@ fn read_from(
     host: &ModelHost,
     request: &ModelsRequest,
     now: i64,
-    jobs: JobFilter,
+    visible: Visible,
 ) -> Result<Value> {
     match request {
         ModelsRequest::Overview {} => overview(host, now),
         ModelsRequest::Models { after, limit } => model_page(host, after.as_deref(), *limit),
-        ModelsRequest::Jobs { after, limit } => job_page(host, after.as_deref(), *limit, jobs),
+        ModelsRequest::Jobs { after, limit } => {
+            job_page(host, after.as_deref(), *limit, visible.jobs)
+        }
         ModelsRequest::Recommendations { after, limit } => {
             recommendation_page(host, after.as_deref(), *limit)
         }
@@ -286,7 +341,13 @@ fn read_from(
             from,
             to,
             step,
-        } => to_json(host.stats().query(model_id.as_deref(), *from, *to, *step)),
+        } => to_json(host.stats().query_shown(
+            model_id.as_deref(),
+            *from,
+            *to,
+            *step,
+            visible.consumers,
+        )),
         _ => anyhow::bail!("Models request {request:?} is not a read"),
     }
 }
@@ -302,6 +363,7 @@ fn overview(host: &ModelHost, now: i64) -> Result<Value> {
         observed_at: now,
         system: recommend::live_facts(host)?,
         runtimes: host.runtimes().infos()?,
+        runtime_manifest_url: host.runtimes().manifest_url().map(str::to_owned),
         summary: host.summary()?,
         recommendations: recommendations
             .into_iter()
@@ -415,10 +477,37 @@ fn recommendation_page(host: &ModelHost, after: Option<&str>, limit: u16) -> Res
     Ok(json!({"recommendations":recommendations,"next":next}))
 }
 
-/// The probe, or a journaled write, against `host`.
+/// Retries of one operation wait for its accepted write to finish.
+#[cfg(feature = "runtime")]
+fn operation_lock(
+    service: &ManagementService,
+    authority: &Authority,
+    request: &ManagementRequest,
+) -> Arc<tokio::sync::Mutex<()>> {
+    type Key = (PathBuf, String, String);
+    type Locks = std::collections::HashMap<Key, std::sync::Weak<tokio::sync::Mutex<()>>>;
+    static LOCKS: std::sync::LazyLock<std::sync::Mutex<Locks>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(Locks::new()));
+    let mut locks = LOCKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    locks.retain(|_, held| held.strong_count() > 0);
+    let key = (
+        service.state_dir.clone(),
+        authority.principal.clone(),
+        request.operation_id.clone(),
+    );
+    let entry = locks.entry(key).or_default();
+    let lock = entry
+        .upgrade()
+        .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(())));
+    *entry = Arc::downgrade(&lock);
+    lock
+}
+
 #[cfg(feature = "runtime")]
 async fn run_with(
-    host: &ModelHost,
+    host: &Arc<ModelHost>,
     service: &ManagementService,
     authority: &Authority,
     request: &ManagementRequest,
@@ -429,16 +518,63 @@ async fn run_with(
         return probe(host, service, authority, request, now).await;
     }
     let project = authorize_write(authority, models)?;
+    let guard = operation_lock(service, authority, request)
+        .lock_owned()
+        .await;
     let journal = match Journal::claim(service, authority, request, project.as_deref(), now)? {
         Claim::Replay(response) => return Ok(response),
         Claim::Run(journal) => journal,
     };
-    match apply(host, &service.state_dir, request, models).await {
-        Ok(result) => journal.complete(result),
-        Err(error) => {
-            journal.abandon();
-            Err(error)
+    // A disconnected caller does not cancel an accepted write or its journal completion.
+    let (host, state_dir, request) = (Arc::clone(host), service.state_dir.clone(), request.clone());
+    tokio::spawn(async move {
+        let _guard = guard;
+        let models = models_request(&request)?;
+        let result = if journal.resumed {
+            resumed_result(&host, models)?
+        } else {
+            None
+        };
+        let result = match result {
+            Some(result) => Ok(result),
+            None => apply(&host, &state_dir, &request, models).await,
+        };
+        match result {
+            Ok(result) => journal.complete(result),
+            Err(error) => {
+                journal.abandon();
+                Err(error)
+            }
         }
+    })
+    .await?
+}
+
+#[cfg(feature = "runtime")]
+fn resumed_result(host: &ModelHost, request: &ModelsRequest) -> Result<Option<Value>> {
+    match request {
+        ModelsRequest::Configure {
+            model_id,
+            expected_revision,
+            settings,
+            residency,
+        } => {
+            let current = host.supervisor().model(model_id);
+            match current.filter(|current| {
+                Some(current.revision) == expected_revision.checked_add(1)
+                    && current.settings == *settings
+                    && current.residency == *residency
+            }) {
+                Some(current) => Ok(Some(serde_json::to_value(current)?)),
+                None => Ok(None),
+            }
+        }
+        ModelsRequest::Remove { model_id, .. } if host.supervisor().model(model_id).is_none() => {
+            Ok(Some(serde_json::to_value(ModelRemoved {
+                model_id: model_id.clone(),
+            })?))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -491,9 +627,15 @@ async fn apply(
         ModelsRequest::Ensure { project_id, pins } => {
             ensure(host, state_dir, project_id, pins, &request.operation_id).await
         }
-        ModelsRequest::InstallRuntime { runtime, backend } => {
-            to_json(host.install_runtime(*runtime, *backend).await)
-        }
+        ModelsRequest::InstallRuntime {
+            runtime,
+            backend,
+            manifest_jws,
+        } => to_json(
+            host.runtimes()
+                .install_with_manifest(*runtime, *backend, manifest_jws.as_deref())
+                .await,
+        ),
         ModelsRequest::RemoveRuntime { runtime, backend } => {
             remove_runtime(host, *runtime, *backend)
         }
@@ -576,13 +718,11 @@ async fn configure(
     residency: Residency,
 ) -> Result<Value> {
     require_revision(host, model_id, expected_revision)?;
-    let (supervisor, id) = (host.supervisor().clone(), model_id.to_owned());
-    let settings = settings.clone();
-    let write = tokio::spawn(async move {
-        let configured = supervisor.configure(&id, expected_revision, settings, residency);
-        to_json(configured.await)
-    });
-    drained(model_id, write, || to_json(hosted(host, model_id))).await
+    to_json(
+        host.supervisor()
+            .configure(model_id, expected_revision, settings.clone(), residency)
+            .await,
+    )
 }
 
 #[cfg(feature = "runtime")]
@@ -606,17 +746,19 @@ async fn unload(host: &ModelHost, model_id: &str) -> Result<Value> {
 #[cfg(feature = "runtime")]
 async fn remove(host: &ModelHost, model_id: &str, expected_revision: u64) -> Result<Value> {
     require_revision(host, model_id, expected_revision)?;
-    let (supervisor, id) = (host.supervisor().clone(), model_id.to_owned());
-    let removed = || {
-        to_json(Ok(ModelRemoved {
-            model_id: model_id.to_owned(),
-        }))
-    };
-    let write = tokio::spawn(async move {
-        supervisor.remove(&id, expected_revision).await?;
-        to_json(Ok(ModelRemoved { model_id: id }))
-    });
-    drained(model_id, write, removed).await
+    refuse_unless(
+        !host.supervisor().placement_uses(model_id)?,
+        RejectionCode::RevisionConflict,
+        format!(
+            "Model {model_id} is used by a placement; remove that placement's model dependency first"
+        ),
+    )?;
+    host.supervisor()
+        .remove(model_id, expected_revision)
+        .await?;
+    to_json(Ok(ModelRemoved {
+        model_id: model_id.to_owned(),
+    }))
 }
 
 #[cfg(feature = "runtime")]
@@ -688,6 +830,7 @@ struct Journal {
     operation_id: String,
     digest: String,
     principal: String,
+    resumed: bool,
 }
 
 #[cfg(feature = "runtime")]
@@ -699,11 +842,12 @@ impl Journal {
         project: Option<&str>,
         now: i64,
     ) -> Result<Claim> {
-        let journal = Self {
+        let mut journal = Self {
             database: service.state_dir.join("management.sqlite"),
             operation_id: request.operation_id.clone(),
             digest: compact_digest(&serde_json::to_string(request)?),
             principal: authority.principal.clone(),
+            resumed: false,
         };
         let store = StateStore::open(&journal.database)?;
         store.connection.execute_batch("BEGIN IMMEDIATE")?;
@@ -723,7 +867,7 @@ impl Journal {
     /// The first answer of a completed write with this ID, else a pending row for it. A
     /// pending row of an interrupted attempt runs again; every write is idempotent.
     fn reserve(
-        &self,
+        &mut self,
         store: &StateStore,
         authority: &Authority,
         manifest: &OnboardingManifest,
@@ -738,6 +882,7 @@ impl Journal {
             authority,
         )?;
         if let Some(previous) = previous {
+            self.resumed = previous.state == "pending";
             return Ok((previous.state != "pending").then_some(previous));
         }
         reserve_journal_entry(&store.connection, authority, now)?;
@@ -935,8 +1080,8 @@ mod tests {
             if is_async(models_request(&request)?) {
                 return run_with(&self.host, &self.service, authority, &request, self.now).await;
             }
-            let read = |models: &ModelsRequest, jobs: JobFilter| {
-                read_from(&self.host, models, self.now, jobs)
+            let read = |models: &ModelsRequest, visible: Visible| {
+                read_from(&self.host, models, self.now, visible)
             };
             let manifest = self.service.device.manifest();
             let store = self.store();
@@ -1321,5 +1466,160 @@ mod tests {
             limit: 4,
         };
         assert_eq!(fixture.refused(&owner, "cursor", cursor).await, "invalid");
+    }
+
+    #[tokio::test]
+    async fn interrupted_revision_writes_resume_their_applied_result() -> Result<()> {
+        let fixture = fixture().await;
+        fixture.install("qwen").await;
+        let owner = fixture.owner();
+        for (id, models) in [
+            ("configure-resume", configure(1)),
+            ("remove-resume", remove(2)),
+        ] {
+            let request = fixture.request(id, models.clone());
+            assert!(matches!(
+                Journal::claim(&fixture.service, &owner, &request, None, fixture.now)?,
+                Claim::Run(_)
+            ));
+            let applied = apply(&fixture.host, &fixture.root, &request, &models).await?;
+            let replayed = fixture.send(&owner, id, models.clone()).await?;
+            assert_eq!(replayed.result, applied);
+            assert_eq!(fixture.send(&owner, id, models).await?.result, applied);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_disconnected_remove_is_journaled_only_after_its_requests_drain() -> Result<()> {
+        use crate::models::db::RuntimeRecord;
+        let fixture = fixture().await;
+        let runtime = fixture.root.join("runtimes/llamacpp/test-cpu");
+        std::fs::create_dir_all(&runtime)?;
+        std::fs::write(runtime.join("llama-server"), b"#!/bin/sh\n")?;
+        fixture.host.store().with_db(|db| {
+            db.put_runtime(&RuntimeRecord {
+                runtime: ModelRuntime::Llamacpp,
+                backend: ModelBackend::Cpu,
+                build: "test".into(),
+                entrypoint: "llama-server".into(),
+                size: 1,
+                needs_fallback: false,
+                installed_at: 0,
+            })
+        })?;
+        fixture.install("qwen").await;
+        fixture
+            .host
+            .supervisor()
+            .configure("qwen", 1, ModelSettings::default(), Residency::default())
+            .await?;
+        let lease = fixture.host.supervisor().acquire("qwen").await?;
+        let (host, service, owner, request, now) = (
+            Arc::clone(&fixture.host),
+            Arc::clone(&fixture.service),
+            fixture.owner(),
+            fixture.request("draining-remove", remove(2)),
+            fixture.now,
+        );
+        let caller =
+            tokio::spawn(async move { run_with(&host, &service, &owner, &request, now).await });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !fixture
+            .journaled()
+            .iter()
+            .any(|(id, _)| id == "draining-remove")
+        {
+            assert!(std::time::Instant::now() < deadline);
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        caller.abort();
+        tokio::time::sleep(DRAIN_WAIT + std::time::Duration::from_millis(100)).await;
+        assert!(fixture.host.supervisor().model("qwen").is_some());
+        assert!(
+            fixture
+                .journaled()
+                .contains(&("draining-remove".into(), "pending".into()))
+        );
+        drop(lease);
+        let response = fixture
+            .send(&fixture.owner(), "draining-remove", remove(2))
+            .await?;
+        assert_eq!(response.state, "completed");
+        assert!(fixture.host.supervisor().model("qwen").is_none());
+        fixture.host.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_model_used_by_a_placement_cannot_be_removed() -> Result<()> {
+        use crate::models::db::{AssetOwner, OwnerKind};
+        let fixture = fixture().await;
+        let installed = fixture.install("qwen").await;
+        let owner = AssetOwner::new(OwnerKind::Placement, "placement")?;
+        fixture
+            .host
+            .store()
+            .add_ref(&installed.model.assets[0], &owner)?;
+        assert_eq!(
+            fixture
+                .refused(&fixture.owner(), "remove-used", remove(1))
+                .await,
+            "revision_conflict"
+        );
+        assert!(fixture.host.supervisor().model("qwen").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn statistics_hide_other_people_and_unreadable_placements() -> Result<()> {
+        use crate::models::db::RequestRecord;
+        let fixture = fixture().await;
+        let [user, manager, _] = fixture.device_grants();
+        let consumer = |id: &str| ModelConsumer::Grant {
+            grant_id: id.into(),
+        };
+        let from = fixture.now - fixture.now.rem_euclid(60);
+        let identities = [
+            consumer("user"),
+            consumer("other"),
+            ModelConsumer::Placement {
+                placement_id: "hidden".into(),
+            },
+        ];
+        let rows: Vec<_> = identities
+            .into_iter()
+            .map(|consumer| RequestRecord {
+                at: from,
+                model_id: "qwen".into(),
+                consumer,
+                status: 200,
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                cached_tokens: 0,
+                ttft_ms: None,
+                duration_ms: 1,
+                decode_ms: 1,
+                queue_ms: 0,
+                request_bytes: 1,
+                response_bytes: 1,
+            })
+            .collect();
+        fixture.host.stats().write(&rows)?;
+        let request = || ModelsRequest::Stats {
+            model_id: None,
+            from,
+            to: from + 60,
+            step: StatsStep::Minute,
+        };
+        for (reader, expected) in [(&user, 1), (&manager, 2), (&fixture.owner(), 3)] {
+            let result: ModelStats = fixture.ok(reader, "consumer-stats", request()).await;
+            assert_eq!(result.consumers.len(), expected);
+            assert_eq!(result.series.requests, [3]);
+            if expected == 1 {
+                assert_eq!(result.consumers[0].consumer, consumer("user"));
+            }
+        }
+        Ok(())
     }
 }

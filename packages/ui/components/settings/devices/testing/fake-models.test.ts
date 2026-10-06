@@ -297,7 +297,7 @@ describe("writes", () => {
 			kind: "configure",
 			model_id: "nomic-embed-v1.5",
 			expected_revision: 2,
-			settings: { threads: 8 },
+			settings: {},
 			residency: { mode: "pinned_off" },
 		} as const;
 		expect(hostedModelSchema.parse(send(off).result).state).toBe("stopped");
@@ -347,14 +347,12 @@ describe("writes", () => {
 			kind: "configure",
 			model_id: nomic.id,
 			expected_revision: nomic.revision,
-			settings: { threads: 16 },
+			settings: {},
 			residency: nomic.residency,
 		} as const;
-		expect(hostedModelSchema.parse(send(onDemand).result).state).toBe(
-			"stopped",
-		);
+		expect(hostedModelSchema.parse(send(onDemand).result).state).toBe("loaded");
 		fake.finishLoads();
-		expect(model(fake, nomic.id).state).toBe("stopped");
+		expect(model(fake, nomic.id).state).toBe("loaded");
 		const residency = {
 			kind: "configure",
 			model_id: "qwen3-8b",
@@ -378,9 +376,7 @@ describe("writes", () => {
 		]);
 		expect(fake.state.jobs).toEqual([]);
 		send({ kind: "remove", model_id: "qwen3-8b", expected_revision: 3 });
-		expect(fake.state.recommendations.map((row) => row.code)).toEqual([
-			"cpu_threads",
-		]);
+		expect(fake.state.recommendations).toEqual([]);
 		const gone: ModelsRequest[] = [
 			{ kind: "remove", model_id: "qwen3-8b", expected_revision: 3 },
 			{ kind: "load", model_id: "qwen3-8b" },

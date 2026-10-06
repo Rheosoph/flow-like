@@ -17,6 +17,8 @@ import type {
 	ModelKind,
 	ModelsOverview,
 } from "../../../../../lib/device-management/models";
+import { modelsCommand } from "../../../../../lib/device-management/models";
+import { MAX_MANAGEMENT_PLAINTEXT } from "../../../../../lib/device-management/transport";
 import type { InstallBlock } from "./fit-copy";
 import {
 	type ModelCandidate,
@@ -26,7 +28,9 @@ import {
 	choiceBlock,
 	choiceFacts,
 	choiceFiles,
+	modelSpecOf,
 } from "./model-options";
+import type { InstallInput } from "./use-add-model";
 
 /*
  * The add-model wizard against one device (plan §3.6, §3.7): which versions
@@ -36,10 +40,39 @@ import {
 
 export interface DeviceModelFacts extends HostFacts {
 	features: AgentFeatures | undefined;
-	/** Asset digests of the device's models whose files are in its store. */
+	/** Reported digests known to be in the store; large model replies omit some. */
 	present: ReadonlySet<string>;
 	store: { bytes: number; budget: number };
 	models: readonly HostedModel[];
+}
+
+/** Fingerprints have fixed width, so the review can bound the request before fetching small files. */
+export function inlineInstallFits(input: InstallInput, deviceId: string) {
+	const fingerprints = new Map(
+		choiceFiles(input.choice).map((file) => [
+			file.file_name,
+			file.digest ?? { algorithm: "sha256" as const, hex: "0".repeat(64) },
+		]),
+	);
+	const command = modelsCommand({
+		kind: "install",
+		model_id: input.modelId,
+		model: modelSpecOf(input.choice, fingerprints),
+		settings: input.settings,
+		residency: input.residency,
+	});
+	const envelope = {
+		operation_id: "0".repeat(36),
+		device_id: deviceId,
+		// Leave room for the timestamps even if the client's clock changes before sending.
+		issued_at: Number.MAX_SAFE_INTEGER,
+		expires_at: Number.MAX_SAFE_INTEGER,
+		command,
+	};
+	return (
+		new TextEncoder().encode(JSON.stringify(envelope)).byteLength <=
+		MAX_MANAGEMENT_PLAINTEXT
+	);
 }
 
 const digestKey = (digest: ModelAssetDigest) =>
@@ -184,6 +217,7 @@ export function hostedTwin(choice: ModelChoice, device: DeviceModelFacts) {
 	);
 	return device.models.find(
 		(model) =>
+			(model.asset_count ?? model.assets.length) === model.assets.length &&
 			model.assets.length === wanted.size &&
 			model.assets.every((digest) => wanted.has(digestKey(digest))),
 	);

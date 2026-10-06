@@ -22,6 +22,37 @@ const MIB: u64 = 1024 * 1024;
 #[path = "download_smoke.rs"]
 mod download_smoke;
 
+#[test]
+fn the_operator_model_budget_limits_store_reservations() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    assert_eq!(HostConfig::from_state(root.path())?.store.max_bytes, None);
+    let path = root.path().join("agent.env");
+    crate::vault::write_new_private(&path, b"FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=100\n")?;
+    let config = HostConfig::from_state(root.path())?;
+    let store = ModelStore::open(root.path(), config.store)?;
+    let digest = ModelAssetDigest {
+        algorithm: DigestAlgorithm::Sha256,
+        hex: "a".repeat(64),
+    };
+    assert!(store.reserve(&digest, 101).is_err());
+    assert!(store.reserve(&digest, 100).is_ok());
+    std::fs::write(&path, "models_max_bytes=200\n")?;
+    assert_eq!(
+        HostConfig::from_state(root.path())?.store.max_bytes,
+        Some(200)
+    );
+    for invalid in [
+        "FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=0\n",
+        "FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=-1\n",
+        "FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=18446744073709551616\n",
+        "FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=100\nmodels_max_bytes=200\n",
+    ] {
+        std::fs::write(&path, invalid)?;
+        assert!(HostConfig::from_state(root.path()).is_err(), "{invalid}");
+    }
+    Ok(())
+}
+
 struct Fixture {
     _directory: tempfile::TempDir,
     host: Arc<ModelHost>,
@@ -568,6 +599,43 @@ async fn idle_unload_never_stops_a_model_with_a_request_in_flight() {
         .await;
     fixture.host.supervisor().check(a_day_later()).await;
     assert_eq!(fixture.state("qwen"), HostedModelState::Stopped);
+}
+
+#[tokio::test]
+async fn an_unloaded_model_reports_its_active_asset_download() {
+    let fixture = fixture().await;
+    let bytes = b"downloaded weights";
+    let asset = ModelAssetDescriptor {
+        digest: ModelAssetDigest {
+            algorithm: DigestAlgorithm::Blake3,
+            hex: blake3::hash(bytes).to_hex().to_string(),
+        },
+        size: bytes.len() as u64,
+        file_name: "weights.gguf".into(),
+        sources: vec![],
+    };
+    let mut model = spec(&fixture.host, "downloading", ModelKind::Chat);
+    model.assets = vec![asset.clone()];
+    install(&fixture.host, "downloading", model, Residency::default());
+    assert_eq!(fixture.state("downloading"), HostedModelState::Acquiring);
+    let acquisition = fixture.host.acquisition();
+    acquisition
+        .settled(&asset.digest)
+        .await
+        .expect("a no-source refusal");
+    assert_eq!(fixture.state("downloading"), HostedModelState::Stopped);
+    acquisition
+        .begin_push(&asset.digest, false)
+        .await
+        .expect("a push session");
+    assert_eq!(fixture.state("downloading"), HostedModelState::Acquiring);
+    acquisition
+        .push_chunk(&asset.digest, 0, bytes)
+        .await
+        .expect("verified weights");
+    assert_eq!(fixture.state("downloading"), HostedModelState::Stopped);
+    assert!(fixture.host.supervisor().gauges("downloading").is_none());
+    fixture.host.shutdown().await;
 }
 
 #[tokio::test]
@@ -1190,7 +1258,10 @@ async fn models_hosted_for_placements_go_once_no_placement_uses_them() {
 
 /// Runs the host's copy of a llama-server build from `FLOW_LIKE_SMOKE_LLAMA_DIR`.
 async fn smoke_host(directory: &Path, runtime: &str) -> Arc<ModelHost> {
-    let launcher = Arc::new(crate::models::engines::ProcessLauncher { sandbox: false });
+    let launcher = Arc::new(crate::models::engines::ProcessLauncher {
+        sandbox: false,
+        state_dir: None,
+    });
     let host = start(directory, launcher, HostConfig::default()).await;
     let slot = directory.join("runtimes/llamacpp");
     std::fs::create_dir_all(&slot).expect("a runtime slot");
@@ -1423,4 +1494,81 @@ async fn real_mlx_helper_streams_a_local_mlx_model() {
         .expect("an unload");
     assert_eq!(fixture.state("mlx"), HostedModelState::Stopped);
     fixture.host.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn private_engine_socket_serves_gateway_requests_health_and_usage() {
+    let fixture = fixture_with(
+        FakeBehaviour {
+            unix_socket: true,
+            ..behaviour()
+        },
+        HostConfig {
+            supervisor: SupervisorConfig {
+                free_memory: Some(4 * 1024 * MIB),
+                ..SupervisorConfig::default()
+            },
+            ..HostConfig::default()
+        },
+    )
+    .await;
+    fixture.install("private-engine", ModelKind::Chat, Residency::default());
+    let response = send(fixture.owner_chat("private-engine", "hello", json!(null))).await;
+    let status = response.status();
+    let answer: Value = response.json().await.expect("a JSON engine response");
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["choices"][0]["message"]["content"], "Hi there!");
+    assert!(fixture.loaded("private-engine"));
+    fixture.host.supervisor().check(Instant::now()).await;
+    let gauges = fixture
+        .host
+        .supervisor()
+        .gauges("private-engine")
+        .expect("engine gauges");
+    assert_eq!(gauges.kv_cache_usage_ratio, Some(0.25));
+    assert!(
+        fixture.loaded("private-engine"),
+        "the health check used the private socket"
+    );
+    let stats = fixture.stats("private-engine", 1).await;
+    assert_eq!(total(&stats.series.prompt_tokens), 7);
+    fixture.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn removing_a_placement_releases_its_auto_hosted_model_and_files() -> anyhow::Result<()> {
+    let fixture = fixture().await;
+    let model = spec(&fixture.host, "placement-model", ModelKind::Chat);
+    let asset = model.assets[0].digest.clone();
+    fixture
+        .host
+        .store()
+        .add_ref(&asset, &AssetOwner::new(OwnerKind::Placement, "gone")?)?;
+    let id = fixture.host.supervisor().ensure_hosted(model)?;
+    assert!(fixture.host.supervisor().placement_uses(&id)?);
+    fixture
+        .host
+        .supervisor()
+        .release_removed_placements(&std::collections::HashSet::new())?;
+    fixture
+        .until(|fixture| fixture.host.supervisor().model(&id).is_none())
+        .await;
+    assert!(fixture.host.supervisor().model(&id).is_none());
+    assert!(
+        fixture
+            .host
+            .store()
+            .with_db(|db| db.refs_of_kind(OwnerKind::Placement))?
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .host
+            .store()
+            .with_db(|db| db.refs_of_kind(OwnerKind::HostedModel))?
+            .is_empty()
+    );
+    fixture.host.shutdown().await;
+    Ok(())
 }

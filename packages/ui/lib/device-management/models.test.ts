@@ -130,6 +130,32 @@ describe("models replies", () => {
 		expect(modelAssetSummarySchema.safeParse(present).success).toBe(false);
 	});
 
+	test("large hosted models keep a bounded digest projection and their full asset count", () => {
+		const model = {
+			...fixture.overview.models[0],
+			assets: Array.from({ length: 32 }, (_, index) => ({
+				algorithm: "sha256",
+				hex: index.toString(16).padStart(64, "0"),
+			})),
+			asset_count: 256,
+		};
+		expect(hostedModelSchema.parse(model).asset_count).toBe(256);
+		expect(
+			hostedModelSchema.safeParse({ ...model, asset_count: 31 }).success,
+		).toBe(false);
+		expect(
+			hostedModelSchema.safeParse({
+				...model,
+				assets: [...model.assets, model.assets[0]],
+			}).success,
+		).toBe(false);
+		expect(
+			hostedModelSchema.safeParse({ ...model, asset_count: 257 }).success,
+		).toBe(false);
+		const { asset_count: _, ...older } = model;
+		expect(hostedModelSchema.parse(older).asset_count).toBeUndefined();
+	});
+
 	test("pages send their cursor and limit and refuse longer answers", async () => {
 		const { call, sent } = recorder(() => completed(fixture.jobs));
 		const jobs = await data(

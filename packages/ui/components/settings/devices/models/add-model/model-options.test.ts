@@ -258,6 +258,22 @@ describe("blocks", () => {
 		expect(choiceBlock(choice())).toBeUndefined();
 	});
 
+	test("a sharded MLX model keeps every descriptor beyond the reply projection", () => {
+		const files = Array.from({ length: 33 }, (_, index) => ({
+			...file(`model-${index}.safetensors`, GIB),
+			digest: {
+				algorithm: "sha256" as const,
+				hex: index.toString(16).padStart(64, "0"),
+			},
+		}));
+		const sharded = choice({ option: option({ engine: "mlx", files }) });
+		expect(choiceBlock(sharded)).toBeUndefined();
+		expect(modelSpecOf(sharded).assets).toHaveLength(33);
+		expect(modelSpecOf(sharded).assets.at(-1)?.digest).toEqual(
+			files.at(-1)?.digest,
+		);
+	});
+
 	test.each([
 		[
 			"a vision model on llama.cpp without a projector",
@@ -280,7 +296,7 @@ describe("blocks", () => {
 			"more files than the device takes",
 			choice({
 				option: option({
-					files: Array.from({ length: 33 }, (_, index) =>
+					files: Array.from({ length: 257 }, (_, index) =>
 						file(`model-${index}.gguf`, GIB),
 					),
 				}),

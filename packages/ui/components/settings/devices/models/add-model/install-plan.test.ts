@@ -16,6 +16,7 @@ import {
 	downloadNeed,
 	engineAvailable,
 	hostedTwin,
+	inlineInstallFits,
 	optionView,
 	optionViews,
 } from "./install-plan";
@@ -121,6 +122,71 @@ describe("device facts", () => {
 });
 
 describe("versions on a device", () => {
+	test("inline install counts every descriptor, placeholder fingerprint and UTF-8 byte before downloads", () => {
+		const selected = option({
+			files: [{ ...file("config.json", 900), digest: undefined }],
+		});
+		const input = {
+			choice: {
+				candidate: candidate([selected]),
+				option: selected,
+				kind: "chat" as const,
+			},
+			modelId: "my-model",
+			settings: {},
+			residency: { mode: "always_on" as const },
+		};
+		expect(inlineInstallFits(input, "device")).toBe(true);
+		const many = option({
+			files: Array.from({ length: 80 }, (_, index) =>
+				file(`part-${index}.safetensors`, GIB),
+			),
+		});
+		expect(
+			inlineInstallFits(
+				{ ...input, choice: { ...input.choice, option: many } },
+				"device",
+			),
+		).toBe(false);
+		const unicode = option({
+			files: [
+				{
+					...file("weights.gguf", GIB),
+					sources: [`https://cdn.example.com/${"界".repeat(6_000)}`],
+				},
+			],
+		});
+		expect(
+			inlineInstallFits(
+				{ ...input, choice: { ...input.choice, option: unicode } },
+				"device",
+			),
+		).toBe(false);
+	});
+
+	test("a digest projection proves shared files but cannot prove an exact hosted twin", () => {
+		const selected = option();
+		const choice = {
+			candidate: candidate([selected]),
+			option: selected,
+			kind: "chat" as const,
+		};
+		const sample = gpuBoxModels();
+		const model = sample.models.find((item) => item.id === "qwen3-8b");
+		if (!model) throw new Error("missing sample model");
+		model.asset_count = 256;
+		const device = deviceFactsOf(overviewOf(sample), MODEL_HOST_FEATURES);
+		expect(hostedTwin(choice, device)).toBeUndefined();
+		expect(downloadNeed(choice, device)).toEqual({ files: 0, bytes: 0 });
+		const unseen = file("another-part.gguf", GIB, {
+			algorithm: "sha256",
+			hex: "f".repeat(64),
+		});
+		expect(
+			downloadNeed({ ...choice, option: option({ files: [unseen] }) }, device),
+		).toEqual({ files: 1, bytes: GIB });
+	});
+
 	test("a file the device holds isn't downloaded again; one without a digest is", () => {
 		const choice = {
 			candidate: candidate([option()]),

@@ -408,6 +408,7 @@ export const AGENT_FEATURES = [
 	"discord_bots",
 	"model_store",
 	"model_host",
+	"model_runtime_manifest",
 	"model_runtime_llamacpp",
 	"model_runtime_mlx",
 	"model_runtime_onnx",

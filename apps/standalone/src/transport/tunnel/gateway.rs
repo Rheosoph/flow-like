@@ -88,14 +88,17 @@ async fn forward(State(target): State<Arc<GatewayTarget>>, request: Request) -> 
 
 async fn relay(target: &GatewayTarget, request: Request) -> Result<Response, Refused> {
     let (parts, body) = request.into_parts();
-    let body = axum::body::to_bytes(body, MAX_BODY_BYTES)
-        .await
-        .map_err(|_| {
-            Refused(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "The request body exceeds 32 MiB".into(),
-            )
-        })?;
+    if parts
+        .headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|length| length.to_str().ok()?.parse::<u64>().ok())
+        .is_some_and(|length| length > MAX_BODY_BYTES as u64)
+    {
+        return Err(Refused(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "The request body exceeds 32 MiB".into(),
+        ));
+    }
     let principal = principal_header(&target.consumer)
         .and_then(|principal| HeaderValue::from_str(&principal).ok())
         .ok_or_else(|| {
@@ -122,7 +125,11 @@ async fn relay(target: &GatewayTarget, request: Request) -> Result<Response, Ref
         .request(parts.method, format!("http://{}{path}", target.address))
         .header(AGENT_SECRET_HEADER, secret)
         .header(PRINCIPAL_HEADER, principal)
-        .body(body);
+        // The gateway reserves its bounded body budget before reading these chunks.
+        .body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    if let Some(length) = parts.headers.get(header::CONTENT_LENGTH) {
+        upstream = upstream.header(header::CONTENT_LENGTH, length);
+    }
     if let Some(content_type) = parts.headers.get(header::CONTENT_TYPE) {
         upstream = upstream.header(header::CONTENT_TYPE, content_type);
     }
@@ -304,6 +311,57 @@ mod tests {
         let again = within(http.get(format!("http://{stream}/v1/models")).send()).await;
         let again: Value = within(again.json()).await;
         assert_eq!(again["method"], "GET", "a second request shares the stream");
+    }
+
+    #[tokio::test]
+    async fn a_request_reaches_the_gateway_before_its_last_body_chunk() {
+        use futures_util::StreamExt;
+        let read_first = Arc::new(Notify::new());
+        let server_read = Arc::clone(&read_first);
+        let router = Router::new().fallback(move |request: Request| {
+            let read = Arc::clone(&server_read);
+            async move {
+                let mut chunks = request.into_body().into_data_stream();
+                assert_eq!(
+                    chunks.next().await.unwrap().unwrap(),
+                    Bytes::from_static(b"one")
+                );
+                read.notify_one();
+                assert_eq!(
+                    chunks.next().await.unwrap().unwrap(),
+                    Bytes::from_static(b"two")
+                );
+                StatusCode::OK
+            }
+        });
+        let (listener, address) = loopback().await;
+        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        let stream = stream_to(target(address, ModelConsumer::Owner)).await;
+        let chunks = futures_util::stream::unfold(0, move |index| {
+            let read = Arc::clone(&read_first);
+            async move {
+                if index >= 2 {
+                    return None;
+                }
+                if index == 1 {
+                    read.notified().await;
+                }
+                let bytes = if index == 0 { b"one" } else { b"two" };
+                Some((
+                    Ok::<_, std::io::Error>(Bytes::from_static(bytes)),
+                    index + 1,
+                ))
+            }
+        });
+        let response = within(
+            reqwest::Client::new()
+                .post(format!("http://{stream}/v1/chat/completions"))
+                .body(reqwest::Body::wrap_stream(chunks))
+                .send(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        server.abort();
     }
 
     #[tokio::test]

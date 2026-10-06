@@ -96,6 +96,7 @@ impl std::error::Error for AcquireError {}
 struct Running {
     process: AsyncMutex<Option<EngineProcess>>,
     base_url: String,
+    client: reqwest::Client,
     key: Zeroizing<String>,
     estimate: MemoryEstimate,
     slots: u8,
@@ -231,6 +232,10 @@ impl EngineLease {
         &self.engine.base_url
     }
 
+    pub fn client(&self) -> &reqwest::Client {
+        &self.engine.client
+    }
+
     pub fn key(&self) -> &str {
         &self.engine.key
     }
@@ -278,7 +283,6 @@ struct Inner {
     facts: Mutex<SystemFacts>,
     budget: Mutex<u64>,
     run_root: PathBuf,
-    client: reqwest::Client,
     models: Mutex<HashMap<String, Arc<Hosted>>>,
     /// Serializes admission so two loads never both count the same free memory.
     admission: AsyncMutex<()>,
@@ -324,8 +328,12 @@ fn wire(record: &HostedModelRecord, state: HostedModelState) -> HostedModel {
             .spec
             .assets
             .iter()
+            .take(flow_like_device_protocol::MODEL_MAX_LISTED_ASSETS)
             .map(|asset| asset.digest.clone())
             .collect(),
+        asset_count: (record.spec.assets.len()
+            > flow_like_device_protocol::MODEL_MAX_LISTED_ASSETS)
+            .then_some(record.spec.assets.len() as u32),
         settings: record.settings.clone(),
         residency: record.residency,
         revision: record.revision,
@@ -401,14 +409,6 @@ fn clear_run_root(run_root: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn engine_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("Build the engine HTTP client")
 }
 
 fn validate_config(settings: &ModelSettings, residency: &Residency) -> Result<()> {
@@ -502,7 +502,6 @@ impl Supervisor {
         let budget = config
             .memory_budget
             .unwrap_or_else(|| system::memory_budget(&facts));
-        let client = engine_client()?;
         let records = acquisition.store().with_db(|db| db.hosted_models())?;
         let models = records
             .into_iter()
@@ -517,7 +516,6 @@ impl Supervisor {
                 facts: Mutex::new(facts),
                 budget: Mutex::new(budget),
                 run_root,
-                client,
                 models: Mutex::new(models),
                 admission: AsyncMutex::new(()),
                 starting: Mutex::default(),
@@ -569,6 +567,9 @@ impl Supervisor {
     /// The published state, with the live memory and slot use of a loaded engine.
     fn observed(&self, hosted: &Hosted) -> HostedModelState {
         let state = hosted.state.borrow().clone();
+        if state == HostedModelState::Stopped && self.acquiring(hosted) {
+            return HostedModelState::Acquiring;
+        }
         let (HostedModelState::Loaded { .. }, Some(running)) = (&state, hosted.running()) else {
             return state;
         };
@@ -590,6 +591,20 @@ impl Supervisor {
             slots: running.slots,
             slots_busy,
         }
+    }
+
+    fn acquiring(&self, hosted: &Hosted) -> bool {
+        hosted.record().spec.assets.iter().any(|asset| {
+            matches!(
+                self.inner.acquisition.state(&asset.digest),
+                Ok(Some(
+                    ModelAssetState::Queued
+                        | ModelAssetState::Fetching { .. }
+                        | ModelAssetState::Verifying
+                        | ModelAssetState::AwaitingPush { .. }
+                ))
+            )
+        })
     }
 
     pub fn in_flight(&self, model_id: &str) -> usize {
@@ -800,9 +815,74 @@ impl Supervisor {
             "Remove model {model_id}: it is at revision {}, not {expected_revision}",
             record.revision
         );
+        ensure!(
+            !self.placement_uses(model_id)?,
+            "Remove model {model_id}: a placement still uses its files"
+        );
         self.drain_and_stop(&hosted).await;
+        ensure!(
+            hosted.record().revision == expected_revision && !self.placement_uses(model_id)?,
+            "Remove model {model_id}: its configuration or placement references changed while draining"
+        );
         lock!(self.inner.models).remove(model_id);
         self.forget(&record)
+    }
+
+    pub fn placement_uses(&self, model_id: &str) -> Result<bool> {
+        let Some(hosted) = self.hosted(model_id) else {
+            return Ok(false);
+        };
+        let references = self.placement_references()?;
+        Ok(references.values().any(|digests| {
+            hosted
+                .record()
+                .spec
+                .assets
+                .iter()
+                .any(|asset| digests.contains(&asset.digest))
+        }))
+    }
+
+    /// Placement deletion releases its files even when no later placement starts.
+    pub fn release_placement(&self, placement_id: &str) -> Result<()> {
+        let store = self.inner.acquisition.store();
+        let owner = AssetOwner::new(OwnerKind::Placement, placement_id)?;
+        let held = store.with_db(|db| db.refs_of_kind(OwnerKind::Placement))?;
+        let mut released = HashSet::new();
+        for (digest, holder) in held {
+            if holder == owner {
+                store.remove_ref(&digest, &owner)?;
+                released.insert(digest);
+            }
+        }
+        for hosted in self.all() {
+            let record = hosted.record();
+            if record.origin != ModelOrigin::Placement
+                || !record
+                    .spec
+                    .assets
+                    .iter()
+                    .any(|asset| released.contains(&asset.digest))
+                || self.placement_uses(&record.id)?
+            {
+                continue;
+            }
+            let supervisor = self.clone();
+            tokio::spawn(async move {
+                if let Err(error) = supervisor.remove(&record.id, record.revision).await {
+                    tracing::warn!(model = %record.id, "Release the removed placement's model: {error:#}");
+                }
+            });
+        }
+        Ok(())
+    }
+
+    pub fn release_removed_placements(&self, live: &HashSet<String>) -> Result<()> {
+        let references = self.placement_references()?;
+        for id in references.keys().filter(|id| !live.contains(*id)) {
+            self.release_placement(id)?;
+        }
+        Ok(())
     }
 
     /// Whether a loaded model runs from this runtime slot.
@@ -1271,10 +1351,14 @@ impl Supervisor {
         runtime: Option<&InstalledRuntime>,
     ) -> std::result::Result<Arc<Running>, (StartFailure, anyhow::Error)> {
         let model_id = record.id.as_str();
-        let mut process =
-            EngineProcess::spawn(self.inner.launcher.as_ref(), &plan.launch, model_id)
-                .await
-                .map_err(|error| (StartFailure::Exited(exit_failure()), error))?;
+        let mut process = EngineProcess::spawn(
+            self.inner.launcher.as_ref(),
+            &plan.launch,
+            model_id,
+            plan.estimate,
+        )
+        .await
+        .map_err(|error| (StartFailure::Exited(exit_failure()), error))?;
         let dir = self.inner.run_root.join(run_dir_name(model_id));
         if let Some(pid) = process.id()
             && let Err(error) = record_engine(&dir, pid)
@@ -1282,9 +1366,7 @@ impl Supervisor {
             tracing::warn!(model = %model_id, "Record the engine process: {error:#}");
         }
         let timeout = engines::ready_timeout(plan.estimate.weights);
-        let ready = process
-            .wait_ready(&self.inner.client, &plan.key, timeout)
-            .await;
+        let ready = process.wait_ready(&plan.key, timeout).await;
         let base_url = match ready {
             Ok(base_url) => base_url,
             Err(failure) => {
@@ -1299,6 +1381,7 @@ impl Supervisor {
             ..Gauges::default()
         };
         Ok(Arc::new(Running {
+            client: process.client().clone(),
             base_url,
             process: AsyncMutex::new(Some(process)),
             key: plan.key,
@@ -1330,8 +1413,7 @@ impl Supervisor {
 
     /// `/props` of a llama.cpp engine; `None` when it does not answer one.
     async fn props(&self, running: &Running) -> Option<serde_json::Value> {
-        let response = self
-            .inner
+        let response = running
             .client
             .get(format!("{}/props", running.base_url))
             .bearer_auth(running.key.as_str())
@@ -1388,8 +1470,7 @@ impl Supervisor {
                 .await;
             return;
         }
-        let healthy = self
-            .inner
+        let healthy = running
             .client
             .get(format!("{}/health", running.base_url))
             .bearer_auth(running.key.as_str())
@@ -1458,7 +1539,7 @@ impl Supervisor {
             return;
         }
         let get = |path: &str| {
-            self.inner
+            running
                 .client
                 .get(format!("{}{path}", running.base_url))
                 .bearer_auth(running.key.as_str())
@@ -1748,6 +1829,52 @@ fn tree_total(processes: &[(u32, Option<u32>, u64)], root: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_hosted_model_lists_a_bounded_prefix_without_losing_its_asset_count() -> Result<()> {
+        use flow_like_device_protocol::{
+            DigestAlgorithm, MODEL_MAX_ASSETS, MODEL_MAX_LISTED_ASSETS, ModelKind,
+        };
+        let spec = ModelSpec {
+            display_name: "Sharded model".into(),
+            kind: ModelKind::Chat,
+            engine: ModelEngine::Llamacpp,
+            assets: (0..MODEL_MAX_ASSETS)
+                .map(|index| ModelAssetDescriptor {
+                    digest: ModelAssetDigest {
+                        algorithm: DigestAlgorithm::Sha256,
+                        hex: format!("{index:064x}"),
+                    },
+                    size: 1,
+                    file_name: format!("shard-{index}.gguf"),
+                    sources: vec![],
+                })
+                .collect(),
+            projector: None,
+            pooling: None,
+        };
+        spec.validate()?;
+        let record = new_record(
+            "large-model",
+            &spec,
+            ModelSettings::default(),
+            Residency::default(),
+            ModelOrigin::User,
+        )?;
+        let reply = wire(&record, HostedModelState::Stopped);
+        reply.validate()?;
+        assert_eq!(reply.assets.len(), MODEL_MAX_LISTED_ASSETS);
+        assert_eq!(reply.asset_count, Some(MODEL_MAX_ASSETS as u32));
+        assert_eq!(
+            reply.assets.last(),
+            Some(&spec.assets[MODEL_MAX_LISTED_ASSETS - 1].digest)
+        );
+        assert_eq!(record.spec.assets.len(), MODEL_MAX_ASSETS);
+        assert!(
+            serde_json::to_vec(&reply)?.len() < flow_like_device_protocol::MODELS_REPLY_MAX_BYTES
+        );
+        Ok(())
+    }
 
     #[test]
     fn a_new_engine_fits_both_the_budget_and_the_free_memory() {

@@ -40,7 +40,7 @@ flow-like-device-protocol.workspace = true
 flow-like-offline-writes.workspace = true
 flow-like-device-crypto = { workspace = true, features = ["sqlite"] }
 flow-like-types-contracts = { workspace = true, default-features = false }
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
 url = "2"
 base64.workspace = true
 argon2.workspace = true
@@ -60,7 +60,7 @@ futures-util.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 webrtc = "=0.20.5"
-sysinfo = { version = "0.37.2", default-features = false, features = ["system", "network"] }
+sysinfo = { version = "0.38.4", default-features = false, features = ["system", "network"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }

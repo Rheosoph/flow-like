@@ -317,7 +317,7 @@ jobs:
 
 
   publish:
-    needs: [prepare, signed-bundle]
+    needs: [prepare, signed-bundle, runtime-publish]
     runs-on: ubuntu-24.04
     environment: standalone-release
     permissions:
@@ -403,7 +403,7 @@ jobs:
           - pack: mlx-macos-arm64-metal
             runner: macos-15
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.epoch }}
       RUNTIME_PACK: ${{ matrix.pack }}
@@ -411,45 +411,38 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Install the Linux packing tools and the libraries packs bundle
+      - id: linux-inputs
+        name: Read the pinned Linux image, Ubuntu snapshot and compiler cache key
         if: runner.os == 'Linux'
+        run: python3 .github/scripts/runtime_toolchain.py pins >> "$GITHUB_OUTPUT"
+      - name: Restore the pinned native arm64 C and C++ compiler
+        if: matrix.pack == 'llamacpp-linux-arm64-cpu'
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: ${{ runner.temp }}/runtime-toolchain
+          key: runtime-gcc-arm64-${{ steps.linux-inputs.outputs.key }}
+      - name: Build and check Linux packs in the frozen Ubuntu 22.04 environment
+        if: runner.os == 'Linux'
+        env:
+          RUNTIME_IMAGE: ${{ steps.linux-inputs.outputs.image }}
+          UBUNTU_SNAPSHOT: ${{ steps.linux-inputs.outputs.snapshot }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils patchelf libgomp1 libssl3 libvulkan1
+          mkdir -p "$RUNNER_TEMP/runtime-toolchain"
+          docker run --rm --volume "$PWD:/work:ro" --volume "$RUNNER_TEMP:/scratch" \
+            --volume "$RUNNER_TEMP/runtime-toolchain:/toolchain" \
+            --volume /etc/ssl/certs/ca-certificates.crt:/bootstrap-ca.crt:ro \
+            --env RUNTIME_PACK --env SOURCE_DATE_EPOCH --env UBUNTU_SNAPSHOT \
+            "$RUNTIME_IMAGE" bash /work/.github/scripts/build_linux_runtime.sh
       - id: pin
         name: Read the pinned llama.cpp build
         run: python3 .github/scripts/runtime_packs.py pin >> "$GITHUB_OUTPUT"
-      - name: Compile the pinned llama.cpp commit for Linux arm64 under the glibc 2.35 floor
-        if: matrix.pack == 'llamacpp-linux-arm64-cpu'
-        env:
-          LLAMACPP_COMMIT: ${{ steps.pin.outputs.commit }}
-          LLAMACPP_NUMBER: ${{ steps.pin.outputs.number }}
-        run: |
-          # Upstream's arm64 archive needs GLIBC_2.38, and its Arm CPU variants need GCC 14.
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 cmake libssl-dev
-          git init -q "$RUNNER_TEMP/llama.cpp"
-          git -C "$RUNNER_TEMP/llama.cpp" fetch -q --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMACPP_COMMIT"
-          git -C "$RUNNER_TEMP/llama.cpp" checkout -q --detach FETCH_HEAD
-          test "$(git -C "$RUNNER_TEMP/llama.cpp" rev-parse HEAD)" = "$LLAMACPP_COMMIT"
-          cmake -S "$RUNNER_TEMP/llama.cpp" -B "$RUNNER_TEMP/llama-build" -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 \
-            -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DGGML_BACKEND_DL=ON -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=ON -DGGML_RPC=OFF \
-            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON \
-            -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
-            -DLLAMA_BUILD_NUMBER="$LLAMACPP_NUMBER" -DLLAMA_BUILD_COMMIT="${LLAMACPP_COMMIT:0:9}"
-          cmake --build "$RUNNER_TEMP/llama-build" --config Release -j "$(nproc)"
-          cp "$RUNNER_TEMP/llama.cpp/LICENSE" "$RUNNER_TEMP/llama-build/bin/LICENSE"
-          echo "LLAMACPP_SOURCE=$RUNNER_TEMP/llama-build/bin" >> "$GITHUB_ENV"
       - name: Download the pinned upstream llama.cpp archive and check its digest
-        if: startsWith(matrix.pack, 'llamacpp-') && matrix.pack != 'llamacpp-linux-arm64-cpu'
+        if: startsWith(matrix.pack, 'llamacpp-') && runner.os == 'macOS'
         run: |
           source="$(python3 .github/scripts/runtime_packs.py fetch --pack "$RUNTIME_PACK" --output "$RUNNER_TEMP/upstream")"
           echo "LLAMACPP_SOURCE=$source" >> "$GITHUB_ENV"
       - name: Pack llama.cpp after bundling, closure, glibc floor and start checks
-        if: startsWith(matrix.pack, 'llamacpp-')
+        if: startsWith(matrix.pack, 'llamacpp-') && runner.os == 'macOS'
         run: python3 .github/scripts/runtime_packs.py llamacpp --pack "$RUNTIME_PACK" --source "$LLAMACPP_SOURCE" --epoch "$SOURCE_DATE_EPOCH" --output "$RUNNER_TEMP/runtime-packs"
       - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
         if: matrix.pack == 'mlx-macos-arm64-metal'
@@ -481,7 +474,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_runtime_packs.py'
+      - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_runtime*.py'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: runtime-pack-*
@@ -523,9 +516,9 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # Runs only after the agent release itself was published, under the same sequence.
+  # Publish the matching runtimes before agents adopt this release's rollback floor.
   runtime-publish:
-    needs: [prepare, runtime-manifest, publish]
+    needs: [prepare, runtime-manifest]
     runs-on: ubuntu-24.04
     environment: standalone-release
     permissions:

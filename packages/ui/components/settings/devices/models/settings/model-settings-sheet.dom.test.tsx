@@ -248,7 +248,14 @@ describe("model settings", () => {
 	});
 
 	test("an ONNX model shows only when it runs: its worker reads no settings, and Configure keeps what it stores", async () => {
-		const { view, closed } = await mountSheet("nomic-embed-v1.5");
+		const sample = gpuBoxModels();
+		const nomic = sample.models.find(
+			(model) => model.id === "nomic-embed-v1.5",
+		);
+		if (!nomic) throw new Error("The ONNX sample is missing");
+		// Older configurations can retain settings this worker does not read.
+		nomic.settings = { threads: 8 };
+		const { view, closed } = await mountSheet("nomic-embed-v1.5", sample);
 		expect(
 			[...sheet().querySelectorAll("[data-setting]")].map((node) =>
 				node.getAttribute("data-setting"),

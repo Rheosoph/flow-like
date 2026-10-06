@@ -203,10 +203,12 @@ async fn start_model_host(
     use flow_like_standalone::models::host::{HostConfig, HostParts, ModelHost};
     let diagnostics = diagnostics::global();
     diagnostics.track(diagnostics::MODEL_HOST);
-    let started = match HostParts::production(state_dir) {
-        Ok(parts) => ModelHost::start(state_dir, HostConfig::default(), parts).await,
-        Err(error) => Err(error),
-    };
+    let started = async {
+        let config = HostConfig::from_state(state_dir)?;
+        let parts = HostParts::production(state_dir)?;
+        ModelHost::start(state_dir, config, parts).await
+    }
+    .await;
     started
         .inspect_err(|error| {
             tracing::error!("The model host did not start; models stay unavailable: {error:#}");
@@ -726,13 +728,13 @@ async fn main() -> Result<()> {
                 ));
             }
             #[cfg(feature = "runtime")]
-            let model_host = start_model_host(&state_dir).await;
-            let result = supervisor::run_with_session_and_ready(
+            let mut model_host = None;
+            let result = supervisor::run_with_session_and_start(
                 &state_dir,
                 &std::env::current_exe()?,
                 cancel.clone(),
                 session.clone(),
-                || {
+                || async {
                     release::update::confirm_ready(
                         &state_dir,
                         session
@@ -741,7 +743,14 @@ async fn main() -> Result<()> {
                             .unwrap_or("unenrolled"),
                         &boot_id,
                         &run_id,
-                    )
+                    )?;
+                    // GPU probes must not delay the update watchdog's readiness signal.
+                    // Placements still wait until their model host is available.
+                    #[cfg(feature = "runtime")]
+                    {
+                        model_host = start_model_host(&state_dir).await;
+                    }
+                    Ok(())
                 },
             )
             .await;

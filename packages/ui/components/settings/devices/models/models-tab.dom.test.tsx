@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import { getI18n } from "@flow-like/locales";
 import {
 	allByRole,
@@ -455,6 +455,34 @@ describe("actions", () => {
 		expect(text(job(view, SAMPLE_JOB_IDS.fetching))).toContain("Cancelled.");
 	});
 
+	test("install runtime forwards a manifest only after confirmation on an agent advertising support", async () => {
+		const sample = gpuBoxModels();
+		sample.runtime_manifest_url =
+			"https://releases.example.com/runtimes/x86_64-unknown-linux-gnu.jws";
+		const manifest = "header.payload.signature";
+		const view = await open(IDS.edge, sample, {
+			...MODEL_HOST_FEATURES,
+			model_runtime_manifest: 1,
+		});
+		const download = spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(manifest),
+		);
+		try {
+			await click(byRole("button", "Install…", runtime(view, "llamacpp-cpu")));
+			expect(download).not.toHaveBeenCalled();
+			await confirm(view);
+			expect(download).toHaveBeenCalledTimes(1);
+			expect(lastOf(view, "install_runtime")).toEqual({
+				kind: "install_runtime",
+				runtime: "llamacpp",
+				backend: "cpu",
+				manifest_jws: manifest,
+			});
+		} finally {
+			download.mockRestore();
+		}
+	});
+
 	test("removing an installed runtime asks for an acknowledgement and sends its pack", async () => {
 		const view = await open(
 			IDS.studio,
@@ -793,7 +821,9 @@ describe("states", () => {
 			expect(keys.snapshot(deviceId).state).toBe("locked");
 		expect(row(view, "qwen3-8b")).toBeNull();
 		expect(
-			byRole("button", "Lock all devices", tab(view)).getAttribute("aria-disabled"),
+			byRole("button", "Lock all devices", tab(view)).getAttribute(
+				"aria-disabled",
+			),
 		).toBe("true");
 	});
 

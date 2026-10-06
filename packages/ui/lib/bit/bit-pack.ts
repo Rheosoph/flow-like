@@ -40,21 +40,23 @@ export class BitPack implements IBitPack {
 
 	public static fromObject(obj: IBitPack): BitPack {
 		const bitpack = new BitPack();
+		const values = bitpack as unknown as Record<string, unknown>;
 
 		for (const key of Object.keys(obj)) {
-			(bitpack as any)[key] = obj[key];
+			values[key] = obj[key];
 		}
 
 		return bitpack;
 	}
 
 	public toObject(): IBitPack {
-		const obj: Record<string, any> = {};
-		Object.keys(this).forEach((key) => {
-			if (typeof (this as any)[key] !== "function") {
-				obj[key] = (this as any)[key];
+		const obj: Record<string, unknown> = {};
+		const values = this as unknown as Record<string, unknown>;
+		for (const key of Object.keys(this)) {
+			if (typeof values[key] !== "function") {
+				obj[key] = values[key];
 			}
-		});
+		}
 		return obj as IBitPack;
 	}
 }

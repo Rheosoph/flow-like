@@ -2127,7 +2127,13 @@ fn execute(
         ManagementCommand::ServiceListeners { placement_id } => {
             return authorized_read(
                 store,
-                authority.read_guard(manifest, request, now, Some(ManagementCapability::ServiceConnect), Some(placement_id)),
+                authority.read_guard(
+                    manifest,
+                    request,
+                    now,
+                    Some(ManagementCapability::ServiceConnect),
+                    Some(placement_id),
+                ),
                 || tunnel::service_listeners(store, authority, request, placement_id),
             );
         }
@@ -2744,6 +2750,8 @@ fn require_buffered_writes_drained(
 /// gives a reserved queue place back.
 enum AfterCommit {
     Enqueue(run_queue::Reservation, run_queue::Admission),
+    #[cfg(feature = "runtime")]
+    ReleaseModels(String),
     Cancel {
         placement_id: String,
         operation_id: String,
@@ -2754,6 +2762,15 @@ impl AfterCommit {
     fn run(self, state_dir: &Path) {
         match self {
             Self::Enqueue(reservation, admission) => reservation.enqueue(admission),
+            #[cfg(feature = "runtime")]
+            Self::ReleaseModels(placement_id) => {
+                if let Some(host) = crate::models::host::ModelHost::current()
+                    .filter(|host| host.state_dir() == state_dir)
+                    && let Err(error) = host.supervisor().release_placement(&placement_id)
+                {
+                    tracing::warn!(placement = %placement_id, "Release removed placement model files: {error:#}");
+                }
+            }
             Self::Cancel {
                 placement_id,
                 operation_id,
@@ -3588,6 +3605,10 @@ fn execute_transaction(
             }
             if matches!(request.command, ManagementCommand::Remove { .. }) {
                 store.remove_placement(placement_id)?;
+                #[cfg(feature = "runtime")]
+                {
+                    after_commit = Some(AfterCommit::ReleaseModels(placement_id.clone()));
+                }
             } else {
                 store.set_desired_state(
                     placement_id,
@@ -5049,7 +5070,10 @@ mod tests {
         ] {
             assert_eq!(owned["features"][flag], 1, "{flag}");
         }
-        let hosts_models = cfg!(feature = "runtime");
+        // Model readiness can change while parallel host fixtures start and stop.
+        // Each captured inspection must advertise the complete supported family together.
+        let hosts_models = owned["features"].get("model_host").is_some();
+        assert!(!hosts_models || cfg!(feature = "runtime"));
         for (flag, built) in [
             ("api_events", crate::event_kind::API_EVENTS),
             ("scheduled_once", crate::event_kind::SCHEDULED_ONCE),
@@ -5060,6 +5084,7 @@ mod tests {
             ("model_host", hosts_models),
             ("model_runtime_llamacpp", hosts_models),
             ("model_runtime_onnx", hosts_models),
+            ("model_runtime_manifest", hosts_models),
             (
                 "model_runtime_mlx",
                 hosts_models && cfg!(all(target_os = "macos", target_arch = "aarch64")),

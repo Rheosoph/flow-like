@@ -3490,7 +3490,9 @@
 			"stale": "",
 			"staleTitle": "",
 			"unlockedTitle": "",
-			"unlocking": ""
+			"unlocking": "",
+			"models": "",
+			"modelsTitle": ""
 		},
 		"list": {
 			"remove": ""
@@ -9227,7 +9229,12 @@
 				"what": "",
 				"whatLoaded": "",
 				"who": "",
-				"whoLoaded": ""
+				"whoLoaded": "",
+				"whatOff": "",
+				"whatOnDemand": "",
+				"whatSame": "",
+				"whatStops": "",
+				"whoSame": ""
 			},
 			"ensure": {
 				"label": "",
@@ -9301,6 +9308,30 @@
 			"when": {
 				"background": "",
 				"now": ""
+			},
+			"onDemandButton": "",
+			"residency": {
+				"alwaysOn": {
+					"label": "",
+					"what": "",
+					"who": ""
+				},
+				"onDemand": {
+					"label": "",
+					"what": "",
+					"who": ""
+				},
+				"pinnedOff": {
+					"label": "",
+					"what": "",
+					"who": ""
+				},
+				"undo": ""
+			},
+			"updateRuntime": {
+				"label": "",
+				"undo": "",
+				"what": ""
 			}
 		},
 		"downloads": {
@@ -9317,7 +9348,8 @@
 				"httpStatusCode": "",
 				"io": "",
 				"noSources": "",
-				"sizeMismatch": ""
+				"sizeMismatch": "",
+				"unknown": ""
 			},
 			"finished_one": "",
 			"finished_other": "",
@@ -9419,7 +9451,8 @@
 			"reason": {
 				"blocked": "",
 				"pick": "",
-				"reference": ""
+				"reference": "",
+				"requestTooLarge": ""
 			},
 			"review": {
 				"diskMemory": "",
@@ -9512,7 +9545,8 @@
 				"stopped": "",
 				"thinking": "",
 				"waiting": "",
-				"you": ""
+				"you": "",
+				"loading": ""
 			},
 			"embed": {
 				"placeholder": "",
@@ -9547,7 +9581,9 @@
 				"unavailable": ""
 			},
 			"title": "",
-			"unsupported": ""
+			"unsupported": "",
+			"brokeOff": "",
+			"stalled": ""
 		},
 		"recommendations": {
 			"anyModel": "",
@@ -9600,7 +9636,9 @@
 			"runtimeOutdatedPlain": "",
 			"slowTtft": "",
 			"slowTtftPlain": "",
-			"theGpu": ""
+			"theGpu": "",
+			"runtimeOutdatedPack": "",
+			"runtimeOutdatedPackPlain": ""
 		},
 		"send": {
 			"button": "",
@@ -9615,7 +9653,10 @@
 			"stopped": "",
 			"unknownDesktop": "",
 			"unknownWeb": "",
-			"unsupported": ""
+			"unsupported": "",
+			"downloadingHere": "",
+			"tray": "",
+			"verifying": ""
 		},
 		"settings": {
 			"apply": "",
@@ -9722,7 +9763,8 @@
 			"olderAgentText": "",
 			"reading": "",
 			"retry": "",
-			"unlock": ""
+			"unlock": "",
+			"snapshotTitle": ""
 		},
 		"stats": {
 			"allModels": "",
@@ -9781,7 +9823,8 @@
 			"ttft": {
 				"title": ""
 			},
-			"upTo": ""
+			"upTo": "",
+			"tooLarge": ""
 		},
 		"table": {
 			"actions": "",
@@ -9796,7 +9839,8 @@
 				"engineExited": "",
 				"healthTimeout": "",
 				"insufficientMemory": "",
-				"runtimeMissing": ""
+				"runtimeMissing": "",
+				"unknown": ""
 			},
 			"foot": "",
 			"kind": {
@@ -9826,7 +9870,8 @@
 				"loaded": "",
 				"loading": "",
 				"stopped": "",
-				"unloading": ""
+				"unloading": "",
+				"unknown": ""
 			},
 			"title": "",
 			"usedBy": {
@@ -9880,7 +9925,8 @@
 				"undo": "",
 				"what": "",
 				"when": "",
-				"who": ""
+				"who": "",
+				"undoWeb": ""
 			},
 			"context": "",
 			"contextFixed": "",
@@ -9901,7 +9947,9 @@
 				"hubRefused": "",
 				"notAllowed": "",
 				"saved": "",
-				"savedNotActive": ""
+				"savedNotActive": "",
+				"savedNotActiveWeb": "",
+				"savedWeb": ""
 			},
 			"submit": "",
 			"subtitle": "",
@@ -9913,7 +9961,12 @@
 				"keepHintWeb": ""
 			},
 			"vector": "",
-			"vectorHint": ""
+			"vectorHint": "",
+			"badgeLocked": "",
+			"badgeLockedTitle": "",
+			"badgeUnlocked": "",
+			"badgeUnlockedTitle": "",
+			"subtitleWeb": ""
 		}
 	},
 	"newEvent": {

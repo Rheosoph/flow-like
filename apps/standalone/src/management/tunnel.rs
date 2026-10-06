@@ -46,6 +46,9 @@ pub(crate) struct ModelAssetTarget {
     pub job_id: String,
     pub digest: ModelAssetDigest,
     pub offset: u64,
+    /// Whether the push may stop a download the device runs itself: only the owner and Manage
+    /// models may, a deployer pushes only what the device could not fetch.
+    pub take_over: bool,
     principal: String,
 }
 
@@ -68,8 +71,8 @@ fn bulk_read(command: &ManagementCommand) -> bool {
     )
 }
 
-#[cfg(feature = "runtime")]
-fn consumer_of(authority: &Authority) -> ModelConsumer {
+/// The consumer the gateway records the requests of `authority` as.
+pub(super) fn consumer_of(authority: &Authority) -> ModelConsumer {
     authority
         .grant
         .as_ref()
@@ -165,6 +168,7 @@ fn asset_target(
         job_id: job.job_id,
         digest: job.asset.digest,
         offset,
+        take_over: authority.permits(ManagementCapability::ModelManage, None, None),
         principal: authority.principal.clone(),
     })
 }
@@ -814,6 +818,14 @@ mod tests {
         let deployed = fixture.push("deployer", &keys[1], &job);
         let deployed = deployed.expect("the deployer whose deploy asked pushes");
         assert_eq!(deployed.digest, managed.digest);
+        let owner = fixture.push("owner", &fixture.controller, &job);
+        let owner = owner.expect("the owner pushes");
+        let take_over = [&owner, &managed, &deployed].map(|target| target.take_over);
+        assert_eq!(
+            take_over,
+            [true, true, false],
+            "only the owner and Manage models stop the device's own download"
+        );
         let stranger = fixture.push("stranger", &keys[2], &job).err();
         let stranger = stranger.expect("a deployer of another project pushed to this job");
         assert_eq!(rejection_code(&stranger), RejectionCode::Unauthorized);

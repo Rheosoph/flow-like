@@ -6,7 +6,7 @@ use super::{
     acquire::AcquisitionManager,
     db::{AssetOwner, OwnerKind, RuntimeRecord},
 };
-use crate::{enrollment::unix_time, release::ReleaseTrust};
+use crate::{enrollment::unix_time, release::ReleaseTrust, vault};
 use anyhow::{Context, Result, bail, ensure};
 use flow_like_device_protocol::{
     DigestAlgorithm, Ed25519PublicKey, MAX_COMPACT_JWS_BYTES, MODEL_MAX_RUNTIMES,
@@ -29,6 +29,8 @@ use tokio::sync::watch;
 
 const MANIFEST_FLOOR_KEY: &str = "runtime_manifest_floor";
 const MANIFEST_KEY: &str = "runtime_manifest";
+const MANIFEST_JWS_KEY: &str = "runtime_manifest_jws";
+const MANIFEST_FLOOR_FILE: &str = "runtime-manifest-floor.json";
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(60);
 const LISTING_MAX_BYTES: u64 = 1024 * 1024;
 const START_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,11 +39,17 @@ const COPY_BUFFER_BYTES: usize = 256 * 1024;
 type Slot = (ModelRuntime, ModelBackend);
 type Outcome = Option<std::result::Result<(), String>>;
 
+struct PendingInstall {
+    pack: RuntimePack,
+    outcome: watch::Receiver<Outcome>,
+}
+
 /// Where the signed runtime manifest of this device's target lives, and who may sign it.
 pub struct RuntimeSource {
     manifest_url: String,
     keys: Vec<Ed25519PublicKey>,
     client: reqwest::Client,
+    minimum_sequence: u64,
 }
 
 impl RuntimeSource {
@@ -66,11 +74,13 @@ impl RuntimeSource {
             .timeout(MANIFEST_TIMEOUT)
             .build()
             .context("Build the runtime manifest HTTP client")?;
-        Ok(Self::new(
+        let mut source = Self::new(
             format!("{base}/runtimes/{}.jws", target.triple()),
             trust.keys()?,
             client,
-        ))
+        );
+        source.minimum_sequence = trust.minimum_sequence;
+        Ok(source)
     }
 
     pub fn new(manifest_url: String, keys: Vec<Ed25519PublicKey>, client: reqwest::Client) -> Self {
@@ -78,6 +88,7 @@ impl RuntimeSource {
             manifest_url,
             keys,
             client,
+            minimum_sequence: 0,
         }
     }
 
@@ -198,7 +209,9 @@ pub struct RuntimeInstaller {
     acquisition: AcquisitionManager,
     source: Option<RuntimeSource>,
     target: ReleaseTarget,
-    installs: Mutex<HashMap<Slot, watch::Receiver<Outcome>>>,
+    installs: Mutex<HashMap<Slot, PendingInstall>>,
+    install_lock: tokio::sync::Mutex<()>,
+    manifest_lock: tokio::sync::Mutex<()>,
 }
 
 impl RuntimeInstaller {
@@ -216,11 +229,19 @@ impl RuntimeInstaller {
             source,
             target,
             installs: Mutex::default(),
+            install_lock: tokio::sync::Mutex::new(()),
+            manifest_lock: tokio::sync::Mutex::new(()),
         }))
     }
 
     fn slot_dir(&self, runtime: ModelRuntime) -> PathBuf {
         self.root.join(wire(&runtime))
+    }
+
+    pub fn manifest_url(&self) -> Option<&str> {
+        self.source
+            .as_ref()
+            .map(|source| source.manifest_url.as_str())
     }
 
     fn install_dir(&self, runtime: ModelRuntime, build: &str, backend: ModelBackend) -> PathBuf {
@@ -314,44 +335,106 @@ impl RuntimeInstaller {
             .unwrap_or_default())
     }
 
-    /// The highest runtime manifest sequence this device accepted.
+    /// The release floor and highest accepted runtime sequence survive a model-store reset.
     fn manifest_floor(&self) -> Result<u64> {
-        let floor = self
+        let stored = self
             .acquisition
             .store()
             .with_db(|db| db.setting(MANIFEST_FLOOR_KEY))?;
-        Ok(floor.and_then(|value| value.as_u64()).unwrap_or(0))
+        let mut floor = stored.and_then(|value| value.as_u64()).unwrap_or(0).max(
+            self.source
+                .as_ref()
+                .map_or(0, |source| source.minimum_sequence),
+        );
+        let state = self
+            .root
+            .parent()
+            .context("Runtime directory has no state directory")?;
+        let path = state.join(MANIFEST_FLOOR_FILE);
+        if path.try_exists()? {
+            floor = floor.max(serde_json::from_slice::<u64>(&vault::read_private(&path)?)?);
+        }
+        let trust = state.join("release-trust.json");
+        if trust.try_exists()? {
+            floor = floor.max(ReleaseTrust::load(&trust)?.minimum_sequence);
+        }
+        Ok(floor)
     }
 
-    fn remember_manifest(&self, manifest: &RuntimeManifest, floor: u64, now: i64) -> Result<()> {
+    fn remember_manifest(
+        &self,
+        manifest: &RuntimeManifest,
+        compact: &str,
+        floor: u64,
+        now: i64,
+    ) -> Result<()> {
+        let floor = manifest.sequence.max(floor);
+        let state = self
+            .root
+            .parent()
+            .context("Runtime directory has no state directory")?;
+        let temporary = state.join(format!(
+            ".{MANIFEST_FLOOR_FILE}.{}.tmp",
+            uuid::Uuid::new_v4()
+        ));
+        vault::write_new_private(&temporary, &serde_json::to_vec(&floor)?)?;
+        let written = std::fs::rename(&temporary, state.join(MANIFEST_FLOOR_FILE))
+            .and_then(|()| File::open(state)?.sync_all());
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        written.context("Persist the runtime manifest rollback floor")?;
         let value = serde_json::to_value(manifest)?;
         self.acquisition.store().with_db(|db| {
+            db.set_setting(MANIFEST_FLOOR_KEY, &floor.into(), now)?;
             db.set_setting(
-                MANIFEST_FLOOR_KEY,
-                &manifest.sequence.max(floor).into(),
+                MANIFEST_JWS_KEY,
+                &serde_json::Value::String(compact.to_owned()),
                 now,
             )?;
             db.set_setting(MANIFEST_KEY, &value, now)
         })
     }
 
-    /// Verifies the newest manifest against the highest sequence this device accepted.
-    async fn manifest(&self) -> Result<RuntimeManifest> {
+    /// A controller may supply the signed bytes when the device cannot reach the CDN.
+    /// A failed fetch may reuse a signed cache entry, checked against current keys, time and floor.
+    async fn manifest(&self, supplied: Option<&str>) -> Result<RuntimeManifest> {
+        let _guard = self.manifest_lock.lock().await;
         let source = self
             .source
             .as_ref()
             .context("Install a runtime: this agent has no release trust to verify packs with")?;
-        let compact = source.fetch().await?;
+        let compact = match supplied {
+            Some(compact) => compact.to_owned(),
+            None => match source.fetch().await {
+                Ok(compact) => compact,
+                Err(error) => self
+                    .acquisition
+                    .store()
+                    .with_db(|db| db.setting(MANIFEST_JWS_KEY))?
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .with_context(|| {
+                        format!(
+                            "Fetch the runtime manifest and no signed cache is available: {error:#}"
+                        )
+                    })?,
+            },
+        };
         let floor = self.manifest_floor()?;
         let now = unix_time()?;
         let manifest = verify_runtime_manifest(&compact, &source.keys, floor, now)
             .with_context(|| format!("Verify the runtime manifest {}", source.manifest_url))?;
-        self.remember_manifest(&manifest, floor, now)?;
+        self.remember_manifest(&manifest, &compact, floor, now)?;
         Ok(manifest)
     }
 
-    async fn pack(&self, runtime: ModelRuntime, backend: ModelBackend) -> Result<RuntimePack> {
-        let manifest = self.manifest().await?;
+    async fn pack(
+        &self,
+        runtime: ModelRuntime,
+        backend: ModelBackend,
+        supplied: Option<&str>,
+    ) -> Result<RuntimePack> {
+        let manifest = self.manifest(supplied).await?;
         let pack = manifest
             .find(runtime, self.target, backend)
             .with_context(|| {
@@ -390,7 +473,28 @@ impl RuntimeInstaller {
         runtime: ModelRuntime,
         backend: ModelBackend,
     ) -> Result<RuntimeInstalled> {
-        let pack = self.pack(runtime, backend).await?;
+        self.install_with_manifest(runtime, backend, None).await
+    }
+
+    pub async fn install_with_manifest(
+        self: &Arc<Self>,
+        runtime: ModelRuntime,
+        backend: ModelBackend,
+        manifest_jws: Option<&str>,
+    ) -> Result<RuntimeInstalled> {
+        let _guard = self.install_lock.lock().await;
+        let pack = self.pack(runtime, backend, manifest_jws).await?;
+        let pending = {
+            let installs = lock!(self.installs);
+            let pending = installs
+                .get(&(runtime, backend))
+                .filter(|pending| pending.outcome.borrow().is_none());
+            ensure!(
+                pending.is_none_or(|pending| pending.pack == pack),
+                "Another runtime build is still installing; cancel its archive job before changing builds"
+            );
+            pending.is_some()
+        };
         let descriptor = archive_descriptor(&pack);
         if let Some(current) = self.current(&pack, &descriptor)? {
             return Ok(current);
@@ -399,7 +503,17 @@ impl RuntimeInstaller {
         self.acquisition
             .store()
             .add_ref(&descriptor.digest, &owner)?;
-        let asset = self.acquisition.ensure(&descriptor, None)?;
+        let asset = match self.acquisition.ensure(&descriptor, None) {
+            Ok(asset) => asset,
+            Err(error) => {
+                if !pending {
+                    self.acquisition
+                        .store()
+                        .remove_ref(&descriptor.digest, &owner)?;
+                }
+                return Err(error);
+            }
+        };
         let runtime = RuntimeInfo {
             runtime,
             backend,
@@ -407,7 +521,9 @@ impl RuntimeInstaller {
             installed: false,
             size: pack.size,
         };
-        self.start_install(pack, descriptor, owner);
+        if !pending {
+            self.start_install(pack, descriptor, owner);
+        }
         Ok(RuntimeInstalled { runtime, asset })
     }
 
@@ -419,14 +535,14 @@ impl RuntimeInstaller {
     ) {
         let slot = (pack.runtime, pack.backend);
         let mut installs = lock!(self.installs);
-        if installs
-            .get(&slot)
-            .is_some_and(|outcome| outcome.borrow().is_none())
-        {
-            return;
-        }
         let (sender, receiver) = watch::channel(None);
-        installs.insert(slot, receiver);
+        installs.insert(
+            slot,
+            PendingInstall {
+                pack: pack.clone(),
+                outcome: receiver,
+            },
+        );
         drop(installs);
         let installer = Arc::clone(self);
         tokio::spawn(async move {
@@ -453,12 +569,9 @@ impl RuntimeInstaller {
         pack: &RuntimePack,
         descriptor: &ModelAssetDescriptor,
     ) -> Result<()> {
-        let state = self.acquisition.settled(&descriptor.digest).await?;
-        ensure!(
-            state == ModelAssetState::Present,
-            "Install runtime {}: its archive did not arrive ({state:?})",
-            slot_name((pack.runtime, pack.backend))
-        );
+        self.acquisition
+            .wait_for_present(&descriptor.digest)
+            .await?;
         let archive = self
             .acquisition
             .store()
@@ -480,10 +593,33 @@ impl RuntimeInstaller {
             tokio::task::spawn_blocking(move || extract(&archive, &pack, &staging))
         };
         let size = unpack.await.context("Unpack a runtime pack")??;
+        // A newer manifest may arrive while this archive waits for a client push.
+        let _guard = self.manifest_lock.lock().await;
+        self.check_current_pack(pack)?;
         let fallback = pack.runtime == ModelRuntime::Llamacpp
             && needs_fallback(staging, &pack.entrypoint).await?;
         self.place(pack, staging)?;
         self.record(pack, size, fallback)
+    }
+
+    fn check_current_pack(&self, pack: &RuntimePack) -> Result<()> {
+        let source = self
+            .source
+            .as_ref()
+            .context("Runtime release trust is missing")?;
+        let compact = self
+            .acquisition
+            .store()
+            .with_db(|db| db.setting(MANIFEST_JWS_KEY))?
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .context("The signed runtime manifest is missing")?;
+        let manifest =
+            verify_runtime_manifest(&compact, &source.keys, self.manifest_floor()?, unix_time()?)?;
+        ensure!(
+            manifest.find(pack.runtime, self.target, pack.backend) == Some(pack),
+            "The pending runtime pack was replaced by a newer signed manifest; retry the install"
+        );
+        Ok(())
     }
 
     /// Records the installed build and removes the build it replaced.
@@ -535,7 +671,9 @@ impl RuntimeInstaller {
         runtime: ModelRuntime,
         backend: ModelBackend,
     ) -> Result<InstalledRuntime> {
-        let receiver = lock!(self.installs).get(&(runtime, backend)).cloned();
+        let receiver = lock!(self.installs)
+            .get(&(runtime, backend))
+            .map(|pending| pending.outcome.clone());
         if let Some(mut receiver) = receiver {
             let outcome = receiver
                 .wait_for(Option::is_some)
@@ -988,7 +1126,10 @@ pub(crate) mod tests {
         let acquisition = AcquisitionManager::start(
             store,
             origin.fetcher(),
-            crate::models::acquire::AcquisitionConfig::default(),
+            crate::models::acquire::AcquisitionConfig {
+                attempts_per_source: 1,
+                ..Default::default()
+            },
         )
         .expect("acquisition");
         let client = trusting(&origin);
@@ -1028,6 +1169,291 @@ pub(crate) mod tests {
                 .wait(ModelRuntime::Llamacpp, ModelBackend::Cpu)
                 .await
         }
+    }
+
+    #[tokio::test]
+    async fn forwarded_signed_manifest_and_client_push_install_without_device_egress() -> Result<()>
+    {
+        let pack = pack_archive(&[], false);
+        let mut fixture = fixture(&pack).await;
+        Arc::get_mut(&mut fixture.installer)
+            .unwrap()
+            .source
+            .as_mut()
+            .unwrap()
+            .manifest_url = fixture.origin.url("/unavailable.jws");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let archive_url = format!("https://{}/pack.tar.gz", listener.local_addr()?);
+        drop(listener);
+        let manifest = manifest_for(&archive_url, &pack, 3);
+        let forged = sign_runtime_manifest(&manifest, &SigningKey::generate())?;
+        assert!(
+            fixture
+                .installer
+                .install_with_manifest(ModelRuntime::Llamacpp, ModelBackend::Cpu, Some(&forged))
+                .await
+                .is_err()
+        );
+        assert!(fixture.installer.acquisition.jobs().is_empty());
+        let signed = sign_runtime_manifest(&manifest, &fixture.key)?;
+        let reply = fixture
+            .installer
+            .install_with_manifest(ModelRuntime::Llamacpp, ModelBackend::Cpu, Some(&signed))
+            .await?;
+        let acquisition = &fixture.installer.acquisition;
+        let state = tokio::time::timeout(
+            Duration::from_secs(5),
+            acquisition.settled(&reply.asset.digest),
+        )
+        .await??;
+        assert!(
+            matches!(
+                state,
+                ModelAssetState::Failed {
+                    reason: flow_like_device_protocol::ModelAssetFailure::EgressBlocked,
+                    ..
+                }
+            ),
+            "{state:?}"
+        );
+        assert_eq!(
+            acquisition.begin_push(&reply.asset.digest, false).await?,
+            ModelAssetState::AwaitingPush { bytes: 0 }
+        );
+        assert!(
+            fixture
+                .installer
+                .installed(ModelRuntime::Llamacpp, ModelBackend::Cpu)?
+                .is_none()
+        );
+        assert_eq!(
+            acquisition
+                .push_chunk(&reply.asset.digest, 0, &pack.archive)
+                .await?,
+            ModelAssetState::Present
+        );
+        let installed = tokio::time::timeout(
+            Duration::from_secs(5),
+            fixture
+                .installer
+                .wait(ModelRuntime::Llamacpp, ModelBackend::Cpu),
+        )
+        .await??;
+        assert_eq!(installed.record.build, "b1");
+        assert_eq!(std::fs::read(installed.entrypoint())?, SCRIPT);
+        assert_eq!(
+            fixture.origin.hits.total(),
+            0,
+            "the supplied manifest bypasses the device's unavailable source"
+        );
+        acquisition.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_pending_archive_cannot_be_replaced_or_install_after_its_manifest_changes()
+    -> Result<()> {
+        let pack = pack_archive(&[], false);
+        let fixture = fixture(&pack).await;
+        let manifest = manifest_for(&fixture.origin.url("/missing.tar.gz"), &pack, 1);
+        let signed = sign_runtime_manifest(&manifest, &fixture.key)?;
+        let install = || {
+            fixture.installer.install_with_manifest(
+                ModelRuntime::Llamacpp,
+                ModelBackend::Cpu,
+                Some(&signed),
+            )
+        };
+        let first = install().await?;
+        let acquisition = &fixture.installer.acquisition;
+        acquisition.settled(&first.asset.digest).await?;
+        acquisition.begin_push(&first.asset.digest, false).await?;
+        let duplicate = install().await?;
+        assert_eq!(duplicate.asset.job_id, first.asset.job_id);
+        assert_eq!(acquisition.jobs().len(), 1);
+        assert_eq!(acquisition.store().refs(&first.asset.digest)?.len(), 1);
+        let mut next = manifest.clone();
+        next.sequence = 2;
+        next.packs[0].build = "b2".into();
+        next.packs[0].sha256 = "b".repeat(64);
+        let next_signed = sign_runtime_manifest(&next, &fixture.key)?;
+        let refused = fixture
+            .installer
+            .install_with_manifest(
+                ModelRuntime::Llamacpp,
+                ModelBackend::Cpu,
+                Some(&next_signed),
+            )
+            .await
+            .unwrap_err();
+        assert!(format!("{refused:#}").contains("cancel its archive job"));
+        let next_digest = archive_descriptor(&next.packs[0]).digest;
+        assert!(acquisition.state(&next_digest)?.is_none());
+        assert!(acquisition.store().refs(&next_digest)?.is_empty());
+        acquisition
+            .push_chunk(&first.asset.digest, 0, &pack.archive)
+            .await?;
+        let refused = tokio::time::timeout(
+            Duration::from_secs(5),
+            fixture
+                .installer
+                .wait(ModelRuntime::Llamacpp, ModelBackend::Cpu),
+        )
+        .await?
+        .unwrap_err();
+        assert!(format!("{refused:#}").contains("replaced by a newer signed manifest"));
+        assert!(
+            fixture
+                .installer
+                .installed(ModelRuntime::Llamacpp, ModelBackend::Cpu)?
+                .is_none()
+        );
+        assert!(acquisition.store().refs(&first.asset.digest)?.is_empty());
+        acquisition.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cached_manifest_is_reverified_after_restart_against_time_signature_and_floor()
+    -> Result<()> {
+        let pack = pack_archive(&[], false);
+        let fixture = fixture(&pack).await;
+        let manifest = manifest_for(&fixture.origin.url("/pack.tar.gz"), &pack, 3);
+        let signed = sign_runtime_manifest(&manifest, &fixture.key)?;
+        fixture.installer.manifest(Some(&signed)).await?;
+        let restarted = RuntimeInstaller::open(
+            fixture._directory.path(),
+            fixture.installer.acquisition.clone(),
+            Some(RuntimeSource::new(
+                fixture.origin.url("/unavailable.jws"),
+                vec![fixture.key.public_key()],
+                trusting(&fixture.origin),
+            )),
+            ReleaseTarget::current().unwrap(),
+        )?;
+        assert_eq!(restarted.manifest(None).await?.sequence, 3);
+        let mut expired = manifest.clone();
+        expired.issued_at = unix_time()? - 100;
+        expired.expires_at = unix_time()? - 1;
+        let mut rolled_back = manifest.clone();
+        rolled_back.sequence = 2;
+        for invalid in [
+            sign_runtime_manifest(&expired, &fixture.key)?,
+            sign_runtime_manifest(&rolled_back, &fixture.key)?,
+            sign_runtime_manifest(&manifest, &SigningKey::generate())?,
+        ] {
+            restarted
+                .acquisition
+                .store()
+                .with_db(|db| db.set_setting(MANIFEST_JWS_KEY, &invalid.into(), unix_time()?))?;
+            assert!(restarted.manifest(None).await.is_err());
+        }
+        assert!(restarted.acquisition.jobs().is_empty());
+        restarted.acquisition.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn runtime_floor_uses_release_trust_and_survives_a_fresh_model_database() -> Result<()> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let pack = pack_archive(&[], false);
+        let mut fixture = fixture(&pack).await;
+        let state = fixture._directory.path();
+        let trust = ReleaseTrust {
+            manifest_url: fixture.origin.url("/release.jws"),
+            public_keys: vec![URL_SAFE_NO_PAD.encode(fixture.key.public_key().to_bytes()?)],
+            minimum_sequence: 7,
+        };
+        vault::write_new_private(
+            &state.join("release-trust.json"),
+            &serde_json::to_vec(&trust)?,
+        )?;
+        Arc::get_mut(&mut fixture.installer).unwrap().source = Some(RuntimeSource::from_trust(
+            state,
+            ReleaseTarget::current().unwrap(),
+        )?);
+        let old = manifest_for(&fixture.origin.url("/pack.tar.gz"), &pack, 6);
+        let error = fixture
+            .installer
+            .manifest(Some(&sign_runtime_manifest(&old, &fixture.key)?))
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("rollback"));
+        let current = manifest_for(&fixture.origin.url("/pack.tar.gz"), &pack, 8);
+        fixture
+            .installer
+            .manifest(Some(&sign_runtime_manifest(&current, &fixture.key)?))
+            .await?;
+        let replacement = tempfile::tempdir()?;
+        let acquisition = AcquisitionManager::start(
+            Arc::new(ModelStore::open(
+                replacement.path(),
+                ModelStoreConfig::default(),
+            )?),
+            fixture.origin.fetcher(),
+            Default::default(),
+        )?;
+        let restarted = RuntimeInstaller::open(
+            state,
+            acquisition,
+            Some(RuntimeSource::from_trust(
+                state,
+                ReleaseTarget::current().unwrap(),
+            )?),
+            ReleaseTarget::current().unwrap(),
+        )?;
+        assert!(
+            restarted
+                .acquisition
+                .store()
+                .with_db(|db| db.setting(MANIFEST_FLOOR_KEY))?
+                .is_none()
+        );
+        assert_eq!(restarted.manifest_floor()?, 8);
+        let older = manifest_for(&fixture.origin.url("/pack.tar.gz"), &pack, 7);
+        let error = restarted
+            .manifest(Some(&sign_runtime_manifest(&older, &fixture.key)?))
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("rollback"));
+        fixture.installer.acquisition.shutdown().await;
+        restarted.acquisition.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_or_stopping_acquisition_ends_a_runtime_waiting_for_push() -> Result<()> {
+        for shutdown in [false, true] {
+            let pack = pack_archive(&[], false);
+            let fixture = fixture(&pack).await;
+            let signed = sign_runtime_manifest(
+                &manifest_for(&fixture.origin.url("/missing.tar.gz"), &pack, 1),
+                &fixture.key,
+            )?;
+            let reply = fixture
+                .installer
+                .install_with_manifest(ModelRuntime::Llamacpp, ModelBackend::Cpu, Some(&signed))
+                .await?;
+            let acquisition = &fixture.installer.acquisition;
+            acquisition.settled(&reply.asset.digest).await?;
+            if shutdown {
+                acquisition.shutdown().await;
+            } else {
+                acquisition.cancel(&reply.asset.digest).await?;
+            }
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    fixture
+                        .installer
+                        .wait(ModelRuntime::Llamacpp, ModelBackend::Cpu)
+                )
+                .await?
+                .is_err()
+            );
+            acquisition.shutdown().await;
+        }
+        Ok(())
     }
 
     #[tokio::test]

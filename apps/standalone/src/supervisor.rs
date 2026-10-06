@@ -148,6 +148,7 @@ struct DataPreparation {
     cancel: CancellationToken,
     task: Option<tokio::task::JoinHandle<Result<PathBuf>>>,
     result: Option<std::result::Result<PathBuf, String>>,
+    copying: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct RolloutValidation {
@@ -266,7 +267,10 @@ async fn poll_data_preparation(
     if !jobs.contains_key(&config.id)
         && jobs
             .values()
-            .filter(|job| job.task.as_ref().is_some_and(|task| !task.is_finished()))
+            .filter(|job| {
+                job.copying.load(std::sync::atomic::Ordering::Acquire)
+                    && job.task.as_ref().is_some_and(|task| !task.is_finished())
+            })
             .count()
             >= 2
     {
@@ -277,20 +281,32 @@ async fn poll_data_preparation(
         let config = config.clone();
         let cancel = cancel.child_token();
         let task_cancel = cancel.clone();
-        let task = tokio::task::spawn_blocking(move || {
-            crate::placement_data::prepare_for_launch(
-                &root,
-                &config,
-                version.0,
-                version.1,
-                &task_cancel,
-            )
+        let copying = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let task_copying = Arc::clone(&copying);
+        let task = tokio::spawn(async move {
+            let (copy_root, copy_config, copy_cancel) =
+                (root.clone(), config.clone(), task_cancel.clone());
+            let data = tokio::task::spawn_blocking(move || {
+                crate::placement_data::prepare_for_launch(
+                    &copy_root,
+                    &copy_config,
+                    version.0,
+                    version.1,
+                    &copy_cancel,
+                )
+            })
+            .await??;
+            task_copying.store(false, std::sync::atomic::Ordering::Release);
+            #[cfg(feature = "runtime")]
+            crate::dependencies::prepare_model_assets(&root, &config, &data, &task_cancel).await?;
+            Ok(data)
         });
         DataPreparation {
             version,
             cancel,
             task: Some(task),
             result: None,
+            copying,
         }
     });
     if job.task.as_ref().is_some_and(|task| task.is_finished()) {
@@ -413,18 +429,6 @@ pub async fn run_with_session(
     run_with_session_and_ready(state_dir, program, cancel, session, || Ok(())).await
 }
 
-#[cfg(not(unix))]
-pub async fn run_with_session_and_ready<F: FnOnce() -> Result<()>>(
-    _state_dir: &Path,
-    _program: &Path,
-    _cancel: CancellationToken,
-    _session: Option<Arc<DeviceSession>>,
-    _ready: F,
-) -> Result<()> {
-    bail!("Standalone child credential channels currently require Unix");
-}
-
-#[cfg(unix)]
 pub async fn run_with_session_and_ready<F: FnOnce() -> Result<()>>(
     state_dir: &Path,
     program: &Path,
@@ -432,12 +436,47 @@ pub async fn run_with_session_and_ready<F: FnOnce() -> Result<()>>(
     session: Option<Arc<DeviceSession>>,
     ready: F,
 ) -> Result<()> {
+    run_with_session_and_start(state_dir, program, cancel, session, || {
+        std::future::ready(ready())
+    })
+    .await
+}
+
+#[cfg(not(unix))]
+pub async fn run_with_session_and_start<F, Fut>(
+    _state_dir: &Path,
+    _program: &Path,
+    _cancel: CancellationToken,
+    _session: Option<Arc<DeviceSession>>,
+    _ready: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    bail!("Standalone child credential channels currently require Unix");
+}
+
+#[cfg(unix)]
+/// Runs startup after acquiring the agent lock and resetting observations, before placements.
+/// Startup can acknowledge update readiness before awaiting slower optional services.
+pub async fn run_with_session_and_start<F, Fut>(
+    state_dir: &Path,
+    program: &Path,
+    cancel: CancellationToken,
+    session: Option<Arc<DeviceSession>>,
+    ready: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     let _lock = lock_file(&state_dir.join("agent.lock"))?;
     let mut store = StateStore::open(&state_dir.join("management.sqlite"))?;
     store.reset_observed()?;
     store.reset_rollout_observations()?;
     store.retire_previous_instances()?;
-    ready()?;
+    ready().await?;
     let retire_cancel = CancellationToken::new();
     let retire_wake = Arc::new(Notify::new());
     let _retire_cancel_guard = retire_cancel.clone().drop_guard();
@@ -602,6 +641,14 @@ impl Reconciler<'_> {
         .await;
         report_step(&mut self.failures, "rollout validation".into(), validations);
         let records = self.store.list_placements()?;
+        #[cfg(feature = "runtime")]
+        if let Some(host) = crate::models::host::ModelHost::current()
+            .filter(|host| host.state_dir() == self.state_dir)
+        {
+            let live = records.iter().map(|record| record.id.clone()).collect();
+            let released = host.supervisor().release_removed_placements(&live);
+            report_step(&mut self.failures, "model references".into(), released);
+        }
         let known = |id: &str| records.iter().any(|record| record.id == id);
         self.data_preparations.retain(|id, _| known(id));
         self.retries.retain(|(id, _), _| known(id));
@@ -1456,6 +1503,44 @@ pub fn require_supported_supervision() -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_can_signal_ready_before_optional_services_finish() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().to_owned();
+        let (ready, observed_ready) = tokio::sync::oneshot::channel();
+        let (finish, finishing) = tokio::sync::oneshot::channel();
+        let startup = run_with_session_and_start(
+            &root,
+            Path::new("/unused-worker"),
+            CancellationToken::new(),
+            None,
+            || async {
+                let _ = ready.send(());
+                finishing.await?;
+                anyhow::bail!("stop before placement reconciliation")
+            },
+        );
+        tokio::pin!(startup);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut startup => panic!("startup finished before its services: {result:?}"),
+                result = observed_ready => result,
+            }
+        })
+        .await??;
+        assert!(lock_file(&directory.path().join("agent.lock")).is_err());
+        finish.send(()).unwrap();
+        assert!(
+            startup
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("stop before placement")
+        );
+        Ok(())
+    }
+
     #[test]
     fn retry_state_reports_crash_loops_countdowns_and_the_restart_limit() {
         let policy = RestartPolicy {
@@ -1729,5 +1814,47 @@ mod tests {
         assert_eq!(step_placement("placement svc.1 slot 3"), Some("svc.1"));
         assert_eq!(step_placement("placement svc status"), Some("svc"));
         assert_eq!(step_placement("rollout reconciliation"), None);
+    }
+
+    #[tokio::test]
+    async fn model_waits_do_not_hold_the_data_copy_slots() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config: PlacementConfig = serde_json::from_value(serde_json::json!({
+            "id":"third","project_id":"project","deployment_id":"deployment","revision":"one",
+            "source":"online","online_metadata_sha256":"a".repeat(64),"project_path":directory.path(),
+            "resource_grant":{"grant_id":"grant","authz_version":1},
+            "events":[{"event_id":"http","event_version":[1,0,0],"board_version":[1,0,0]}]
+        }))?;
+        let cancel = CancellationToken::new();
+        let mut jobs = HashMap::new();
+        for id in ["first", "second"] {
+            let token = cancel.child_token();
+            let waiting = token.clone();
+            let task = tokio::spawn(async move {
+                waiting.cancelled().await;
+                anyhow::bail!("cancelled model wait")
+            });
+            jobs.insert(
+                id.to_owned(),
+                DataPreparation {
+                    version: (1, 1),
+                    cancel: token,
+                    task: Some(task),
+                    result: None,
+                    copying: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                },
+            );
+        }
+        assert!(
+            poll_data_preparation(&mut jobs, directory.path(), &config, (1, 1), &cancel)
+                .await?
+                .is_none()
+        );
+        assert!(
+            jobs.contains_key("third"),
+            "downloads do not block a third placement's data copy"
+        );
+        cancel.cancel();
+        Ok(())
     }
 }

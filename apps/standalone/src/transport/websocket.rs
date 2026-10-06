@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 type NoiseSenders = HashMap<String, (String, mpsc::Sender<NoiseEnvelope>)>;
 
-// Six MiB includes base64/envelope overhead for all sixteen 256 KiB stream windows.
+// Six MiB leaves room for envelopes and control frames above all sixteen 256 KiB windows.
 const TUNNEL_QUEUE_BYTES: usize = 6 * 1024 * 1024;
 const TUNNEL_QUEUE_FRAMES: usize = 512;
 

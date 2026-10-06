@@ -29,7 +29,7 @@ const WIRE =
 	/kv_percent|queue_p95|physical_cores|suggested_ctx|extra_bytes|free_bytes|idle_hours|ttft_p95|memory_percent|\{\{|undefined|NaN|_/;
 /** Model and quantization names are the user's own text and may hold underscores. */
 const NAMES =
-	/Qwen3-8B Q4_K_M|Q3_K_M|BGE Small EN v1\.5 Q8_0|Qwen3-4B MLX 4-bit/g;
+	/Qwen3-8B Q4_K_M|Gemma 3 4B Q4_K_M|Q3_K_M|BGE Small EN v1\.5 Q8_0|Qwen3-4B MLX 4-bit/g;
 const leaks = (sentence: string) => WIRE.test(sentence.replace(NAMES, "NAME"));
 
 const FULL: Record<Recommendation["code"], Recommendation["params"]> = {

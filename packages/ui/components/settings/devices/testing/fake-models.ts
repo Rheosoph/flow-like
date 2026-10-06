@@ -601,7 +601,10 @@ export class FakeModelHost {
 
 	private loaded(model: HostedModel): HostedModel {
 		const gpu = this.state.system.gpus.length > 0 && model.engine !== "onnx";
-		const slots = model.settings.parallel ?? (gpu ? 4 : 1);
+		const slots =
+			model.engine === "llamacpp"
+				? (model.settings.parallel ?? (gpu ? 4 : 1))
+				: 1;
 		return this.replace({
 			...stateless(model),
 			state: "loaded",

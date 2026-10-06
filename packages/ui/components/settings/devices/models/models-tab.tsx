@@ -13,8 +13,8 @@ import {
 	type ObserveTarget,
 	useObserveTarget,
 } from "../observe/use-observe-target";
-import { StateView } from "../primitives/state-view";
 import { DvButton } from "../primitives/dv-button";
+import { StateView } from "../primitives/state-view";
 import type { DeviceTabProps } from "../screen-props";
 import { stampOf } from "../shell/attention-popover";
 import { useKeyChip } from "../workspace/use-keys";
@@ -62,11 +62,14 @@ function LockAllDevices() {
 				onClick={() => {
 					keys.lockAll();
 					toast(
-						t("devices:chrome.keys.lockedAllToast", "All devices are locked on this computer."),
+						t(
+							"devices:chrome.keys.lockedAllToast",
+							"All devices are locked on this computer.",
+						),
 					);
 				}}
 			>
-				{t("devices:models.lockAll", "Lock all devices")}
+				{t("devices:shell.spotlight.lockAll", "Lock all devices")}
 			</DvButton>
 		</div>
 	);

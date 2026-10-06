@@ -14,7 +14,9 @@ import { LiveCallError, rejectionCode } from "./workspace/errors";
  */
 
 export const MODELS_PAGE_MAX = 32;
-export const MODEL_MAX_ASSETS = 32;
+export const MODEL_MAX_ASSETS = 256;
+export const MODEL_MAX_REPLY_ASSETS = 32;
+export const MODEL_RUNTIME_MANIFEST_MAX_BYTES = 15 * 1024;
 export const MODEL_ASSET_MAX_SOURCES = 8;
 export const MODEL_ASSET_SOURCE_MAX_LEN = 2048;
 export const MODEL_DISPLAY_NAME_MAX = 128;
@@ -221,7 +223,13 @@ export type ModelsRequest =
 			project_id: string;
 			pins: { bit_id: string; metadata_sha256: string }[];
 	  }
-	| { kind: "install_runtime"; runtime: ModelRuntime; backend: ModelBackend }
+	| {
+			kind: "install_runtime";
+			runtime: ModelRuntime;
+			backend: ModelBackend;
+			/** Only agents advertising `model_runtime_manifest` accept this field. */
+			manifest_jws?: string;
+	  }
 	| { kind: "remove_runtime"; runtime: ModelRuntime; backend: ModelBackend }
 	| { kind: "cancel_job"; job_id: string };
 
@@ -276,7 +284,9 @@ export const hostedModelSchema = z
 		display_name: label(MODEL_DISPLAY_NAME_MAX),
 		kind: z.enum(MODEL_KINDS),
 		engine: z.enum(MODEL_ENGINES),
-		assets: z.array(modelAssetDigestSchema).min(1).max(MODEL_MAX_ASSETS),
+		/** The first digests keep management replies within their byte limit. */
+		assets: z.array(modelAssetDigestSchema).min(1).max(MODEL_MAX_REPLY_ASSETS),
+		asset_count: count.min(1).max(MODEL_MAX_ASSETS).optional(),
 		settings: modelSettingsSchema,
 		residency: residencySchema,
 		/** `configure` and `remove` send it back as `expected_revision`. */
@@ -286,6 +296,12 @@ export const hostedModelSchema = z
 	.refine(
 		(model) => model.state !== "loaded" || model.slots_busy <= model.slots,
 		"busy slots exceed slots",
+	)
+	.refine(
+		(model) =>
+			model.asset_count === undefined ||
+			model.asset_count >= model.assets.length,
+		"asset count is smaller than the listed digests",
 	);
 export type HostedModel = z.infer<typeof hostedModelSchema>;
 
@@ -421,6 +437,8 @@ export type ModelsSummary = z.infer<typeof modelsSummarySchema>;
 
 export const modelsOverviewSchema = z.object({
 	observed_at: time,
+	/** The enrolled release trust's manifest URL, for client-assisted runtime installation. */
+	runtime_manifest_url: z.string().min(1).max(2048).optional().catch(undefined),
 	system: systemFactsSchema,
 	runtimes: lenientArray(runtimeInfoSchema, MODEL_MAX_RUNTIMES),
 	summary: modelsSummarySchema,

@@ -322,6 +322,22 @@ fn hosting(metadata: &BitMetadata) -> Result<Option<Hosting>> {
     Ok(Some(Hosting { spec, imports }))
 }
 
+/// Reject an unservable hosted model before Ensure acquires any of its files.
+pub(crate) fn validate_packaged_model(packaged: &PackagedBitMetadata) -> Result<()> {
+    if !matches!(packaged, PackagedBitMetadata::V2(_)) {
+        return Ok(());
+    }
+    let metadata = BitMetadata::typed(packaged.clone())?;
+    if hosts(&metadata.bit) {
+        ensure!(
+            hosting(&metadata)?.is_some(),
+            "Bit {} has no model assets",
+            metadata.bit.id
+        );
+    }
+    Ok(())
+}
+
 fn read_metadata(config: &PlacementConfig, bit_id: &str) -> Result<Option<BitMetadata>> {
     let Some(pin) = config.bit_pins.iter().find(|pin| pin.bit_id == bit_id) else {
         return Ok(None);
@@ -431,10 +447,7 @@ async fn hosted_model(
     device_id: &str,
 ) -> Result<Option<String>> {
     if let Some(named) = own_device_model(&metadata.bit, device_id) {
-        return match named? {
-            Some(model) if host.supervisor().model(&model).is_none() => Err(OwnModelMissing.into()),
-            named => Ok(named),
-        };
+        return still_hosted(host, named?);
     }
     if !metadata.v2 {
         return Ok(None);
@@ -464,6 +477,15 @@ fn reference_imports(
 fn own_device_model(bit: &Bit, device_id: &str) -> Option<Result<Option<String>>> {
     let target = DeviceModelTarget::from_bit(bit)?;
     Some(target.map(|target| (target.device_id == device_id).then_some(target.model)))
+}
+
+/// The model an own `device` Bit names, which fails with [`OwnModelMissing`] once the host no
+/// longer has it.
+fn still_hosted(host: &ModelHost, named: Option<String>) -> Result<Option<String>> {
+    match named {
+        Some(model) if host.supervisor().model(&model).is_none() => Err(OwnModelMissing.into()),
+        named => Ok(named),
+    }
 }
 
 /// The answer for a `device` Bit that names this device and a model it no longer hosts.
@@ -643,6 +665,49 @@ mod tests {
             size: bit.size.unwrap(),
             path,
         }
+    }
+
+    #[test]
+    fn deployment_validates_all_hosted_shards_before_acquiring_them() -> Result<()> {
+        use flow_like_device_protocol::{MODEL_MAX_ASSETS, PackagedBitMetadataV2};
+        let bit = bit(
+            "split",
+            "Llm",
+            Some("shard-0.gguf"),
+            llm("Local", json!({})),
+        );
+        let mut packaged = PackagedBitMetadata::V2(PackagedBitMetadataV2 {
+            version: Default::default(),
+            bit: serde_json::to_value(bit)?,
+            dependencies: vec![],
+            artifacts: vec![],
+            assets: (0..MODEL_MAX_ASSETS)
+                .map(|index| {
+                    let mut asset = descriptor('a', &format!("shard-{index}.gguf"));
+                    asset.digest.hex = format!("{index:064x}");
+                    PackagedBitAsset {
+                        bit_id: "split".into(),
+                        descriptor: asset,
+                    }
+                })
+                .collect(),
+        });
+        packaged.validate("split")?;
+        validate_packaged_model(&packaged)?;
+        if let PackagedBitMetadata::V2(metadata) = &mut packaged {
+            let mut extra = descriptor('b', "shard-extra.gguf");
+            extra.digest.hex = format!("{:064x}", MODEL_MAX_ASSETS);
+            metadata.assets.push(PackagedBitAsset {
+                bit_id: "split".into(),
+                descriptor: extra,
+            });
+        }
+        packaged.validate("split")?;
+        assert!(
+            format!("{:#}", validate_packaged_model(&packaged).unwrap_err())
+                .contains("model asset count")
+        );
+        Ok(())
     }
 
     #[test]

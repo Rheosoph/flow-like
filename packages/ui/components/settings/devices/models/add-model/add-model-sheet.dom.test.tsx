@@ -434,6 +434,39 @@ describe("add model", () => {
 		).toHaveLength(2);
 	});
 
+	test("an oversized model file list disables Add before fingerprinting or sending", async () => {
+		const repos = sampleRepos();
+		const repo = repos["mlx-community/Qwen3-4B-4bit"];
+		const { "model.safetensors": _weights, ...smallFiles } = repo.files;
+		repo.files = smallFiles;
+		for (let index = 0; index < 48; index++) {
+			repo.files[
+				`model-${String(index + 1).padStart(5, "0")}-${"shard".repeat(12)}.safetensors`
+			] = {
+				size: 1024 * 1024,
+				lfs: index.toString(16).padStart(64, "0"),
+			};
+		}
+		const wizard = await mountWizard({
+			deviceId: studio,
+			sample: macMiniModels(),
+			features: MAC_MODEL_HOST_FEATURES,
+			hub: fakeHuggingFace(repos),
+		});
+		await fromHuggingFace("mlx-community/Qwen3-4B-4bit");
+		await until(() => step() === "version", "the versions");
+		await advance("settings");
+		await advance("review");
+		expect(text(sheet())).toContain(
+			"This model's file list exceeds the 16 KiB limit for adding it here.",
+		);
+		expect(next().getAttribute("aria-disabled")).toBe("true");
+		const fetched = wizard.hub.requests.length;
+		await click(next());
+		expect(installs(wizard)).toEqual([]);
+		expect(wizard.hub.requests).toHaveLength(fetched);
+	});
+
 	test("MLX on a Mac without a llama.cpp pack: the GPU shares RAM, so it fits with the standard context", async () => {
 		const sample = macMiniModels();
 		sample.system = {

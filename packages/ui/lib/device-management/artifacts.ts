@@ -538,7 +538,8 @@ function modelAssetSource(source: unknown): boolean {
 			url.protocol === "https:" &&
 			url.hostname !== "" &&
 			!url.username &&
-			!url.password
+			!url.password &&
+			(!source.includes("?") || url.search === "?download=true")
 		);
 	} catch {
 		return false;

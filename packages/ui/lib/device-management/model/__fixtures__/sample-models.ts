@@ -58,6 +58,7 @@ export const MAC_MODEL_HOST_FEATURES: AgentFeatures = {
 
 export interface ModelHostSample {
 	system: SystemFacts;
+	runtime_manifest_url?: string;
 	runtimes: RuntimeInfo[];
 	/** Any order; answers list them by id. */
 	models: HostedModel[];
@@ -230,7 +231,7 @@ function gpuBoxHosted(): HostedModel[] {
 			state: "loaded",
 			ram_bytes: 590_558_003,
 			vram_bytes: 0,
-			slots: 2,
+			slots: 1,
 			slots_busy: 0,
 		},
 		{
@@ -596,6 +597,9 @@ export function overviewOf(
 	const models = [...sample.models].sort(byId);
 	const overview: ModelsOverview = {
 		observed_at: observedAt,
+		...(sample.runtime_manifest_url
+			? { runtime_manifest_url: sample.runtime_manifest_url }
+			: {}),
 		system: sample.system,
 		runtimes: sample.runtimes,
 		summary: summaryOf(sample),

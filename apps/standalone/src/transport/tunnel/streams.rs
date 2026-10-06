@@ -451,11 +451,40 @@ impl Pushing {
         }
     }
 
-    /// The open starts the push session, taking over a running fetch, and refuses an offset
-    /// past the bytes the device holds. Once the peer finishes, the stream answers the job's
-    /// state; a stream without bytes only asks where the device's copy ends.
+    /// The first bytes start a push and require permission to take over an active download.
+    /// A stream without bytes reports the job's state and leaves an active download running.
     async fn push(&self, target: ModelAssetTarget) -> Result<Vec<u8>> {
-        let state = target.acquisition.begin_push(&target.digest, true).await?;
+        let (first, _) = next_batch(&self.writer, true).await?;
+        let downloading = downloading(&target)?;
+        let state = if downloading && first.is_none() {
+            target
+                .acquisition
+                .state(&target.digest)?
+                .with_context(|| format!("Model job {} is no longer open", target.job_id))?
+        } else {
+            ensure!(
+                !downloading || target.take_over,
+                "Model job {} is downloading by itself; this push may not take it over",
+                target.job_id
+            );
+            self.session(&target, first).await?
+        };
+        bounded_response(&ModelAssetStatus {
+            digest: target.digest,
+            job_id: Some(target.job_id),
+            state,
+        })
+    }
+
+    async fn session(
+        &self,
+        target: &ModelAssetTarget,
+        first: Option<Vec<u8>>,
+    ) -> Result<ModelAssetState> {
+        let state = target
+            .acquisition
+            .begin_push(&target.digest, target.take_over)
+            .await?;
         if let ModelAssetState::AwaitingPush { bytes } = state {
             ensure!(
                 target.offset <= bytes,
@@ -464,21 +493,17 @@ impl Pushing {
                 target.offset
             );
         }
-        let state = self.write(&target, state).await?;
-        bounded_response(&ModelAssetStatus {
-            digest: target.digest,
-            job_id: Some(target.job_id),
-            state,
-        })
+        self.write(target, state, first).await
     }
 
     async fn write(
         &self,
         target: &ModelAssetTarget,
         mut state: ModelAssetState,
+        mut next: Option<Vec<u8>>,
     ) -> Result<ModelAssetState> {
         let mut offset = target.offset;
-        while let (Some(chunk), _) = next_batch(&self.writer, true).await? {
+        while let Some(chunk) = next {
             self.recheck(target).await?;
             state = target
                 .acquisition
@@ -489,6 +514,7 @@ impl Pushing {
                 .context("Model asset push offset overflow")?;
             let consumed = Event::Consumed(self.id, chunk.len() as u32);
             self.output.send(consumed).await?;
+            next = next_batch(&self.writer, true).await?.0;
         }
         Ok(state)
     }
@@ -502,6 +528,17 @@ impl Pushing {
         })
         .await?
     }
+}
+
+/// Whether the device downloads the asset itself right now.
+#[cfg(feature = "runtime")]
+fn downloading(target: &ModelAssetTarget) -> Result<bool> {
+    Ok(matches!(
+        target.acquisition.state(&target.digest)?,
+        Some(
+            ModelAssetState::Queued | ModelAssetState::Fetching { .. } | ModelAssetState::Verifying
+        )
+    ))
 }
 
 async fn next_batch(writer: &Writer, coalesce: bool) -> Result<(Option<Vec<u8>>, bool)> {

@@ -26,6 +26,7 @@ import {
 	runtimeInfoSchema,
 	runtimeInstalledSchema,
 } from "../../../../lib/device-management/models";
+import { prepareRuntimeInstall } from "../../../../lib/device-management/runtime-manifest";
 import type { DevicesT } from "../primitives/area-context";
 import type { ConfirmStrength } from "../primitives/confirm-sheet";
 import type { ConsequenceRows } from "../primitives/consequence-preview";
@@ -209,7 +210,17 @@ function command<T>(bound: Bound, spec: CommandSpec<T>): ModelCommand<T> {
 					...(copy.checkLabel ? { checkLabel: copy.checkLabel } : {}),
 				},
 				resultKey,
-				call: (context) => send(context, request, spec.parse),
+				call: async (context) => {
+					const prepared =
+						request.kind === "install_runtime"
+							? await prepareRuntimeInstall(
+									context.call,
+									context.workspace.live.inspection(deviceId)?.value.features,
+									request,
+								)
+							: request;
+					return send(context, prepared, spec.parse);
+				},
 				activity: {
 					kind: "command",
 					params: { command: "models", request: request.kind },

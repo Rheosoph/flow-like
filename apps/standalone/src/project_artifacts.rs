@@ -1494,7 +1494,14 @@ pub fn chunk(
         "Invalid artifact chunk encoding"
     );
     chunk_bytes(
-        store, root, project, transfer_id, owner, index, offset, &bytes,
+        store,
+        root,
+        project,
+        transfer_id,
+        owner,
+        index,
+        offset,
+        &bytes,
     )
 }
 
@@ -1873,7 +1880,7 @@ pub(crate) fn packaged_metadata(bytes: &[u8], pin: &ProjectBitPin) -> Result<Pac
 /// The agent advertises its model store once placements can use it; only then may metadata
 /// leave model weights out of the artifact.
 fn model_store_supported() -> bool {
-    crate::diagnostics::FEATURES.contains(&"model_store")
+    crate::diagnostics::model_host_available()
 }
 
 /// The artifact files a pin's metadata lists, by path.
@@ -2039,6 +2046,8 @@ fn committed_model_assets(
     let mut assets: Vec<ModelAssetDescriptor> = Vec::new();
     let mut listed = std::collections::HashMap::<ModelAssetDigest, usize>::new();
     for metadata in committed_metadata(root, project, pins)? {
+        #[cfg(feature = "runtime")]
+        crate::models::router::validate_packaged_model(&metadata)?;
         for asset in metadata.assets() {
             let descriptor = &asset.descriptor;
             let Some(&index) = listed.get(&descriptor.digest) else {

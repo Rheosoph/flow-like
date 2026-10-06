@@ -110,10 +110,8 @@ def readelf_versions(name, info):
 
 PACKAGES = {"libstdc++.so.6": "libstdc++6", "libgcc_s.so.1": "libgcc-s1", "libgomp.so.1": "libgomp1",
             "libssl.so.3": "libssl3", "libcrypto.so.3": "libssl3"}
-PPA_GCC = "16-20260315-1ubuntu1~22~ppa1"
-PACKAGE_VERSIONS = {"libstdc++6:arm64": PPA_GCC, "libgcc-s1:arm64": PPA_GCC, "libgomp1:arm64": PPA_GCC,
-                    "libssl3:arm64": "3.0.2-0ubuntu1.20", "gcc-14": "14.3.0-12ubuntu1~22~ppa2",
-                    "g++-14": "14.3.0-12ubuntu1~22~ppa2"}
+PACKAGE_VERSIONS = {"libstdc++6:arm64": "12.3.0-1ubuntu1~22.04.3", "libgcc-s1:arm64": "12.3.0-1ubuntu1~22.04.3",
+                    "libgomp1:arm64": "12.3.0-1ubuntu1~22.04.3", "libssl3:arm64": "3.0.2-0ubuntu1.20"}
 
 
 def fake_dpkg(argv, owners, versions):
@@ -595,9 +593,16 @@ class LinuxPackTests(unittest.TestCase):
         self.root = Path(self.folder.name)
         self.host = FakeLinuxHost(self.root)
         self.source = arm64_build_outputs(self.root, self.host)
+        stage(self.host.host, {"share/runtime-licenses/COPYING3": b"GPLv3\n",
+                               "share/runtime-licenses/COPYING.RUNTIME": b"GCC Runtime Library Exception\n"})
+        self.compiler = {"identity": runtime.toolchain.identity(), "version": runtime.toolchain.GCC_VERSION,
+                         "libraries": {name: {"path": name, "sha256": runtime.sha256_file(self.host.host / name)}
+                                       for name in runtime.toolchain.LIBRARIES}}
+        (self.host.host / "runtime-toolchain.json").write_text(json.dumps(self.compiler))
 
     def build(self, output="packs", host="aarch64-unknown-linux-gnu"):
-        with patch.object(runtime, "run", self.host.run), patch.object(runtime, "DEBIAN_DOCS", self.host.docs):
+        with patch.object(runtime, "run", self.host.run), patch.object(runtime, "DEBIAN_DOCS", self.host.docs), \
+                patch.dict(os.environ, {"RUNTIME_TOOLCHAIN_ROOT": str(self.host.host)}):
             return runtime.llamacpp("llamacpp-linux-arm64-cpu", self.source, EPOCH, self.root / output, host=host)
 
     def test_linux_pack_bundles_host_libraries_sets_origin_and_starts_with_and_without_fallback(self):
@@ -613,13 +618,14 @@ class LinuxPackTests(unittest.TestCase):
         self.assertEqual(contents["fallback/libstdc++.so.6"], b"\x7fELF host libstdc++.so.6")
         notices = contents["THIRD-PARTY-NOTICES.txt"].decode()
         self.assertTrue(notices.startswith(
-            f"# llama.cpp b10809 (MIT), compiled from {runtime.LLAMACPP_COMMIT} with gcc-14 14.3.0-12ubuntu1~22~ppa2, "
-            "g++-14 14.3.0-12ubuntu1~22~ppa2\n\nMIT License\n"))
+            f"# llama.cpp b10809 (MIT), compiled from {runtime.LLAMACPP_COMMIT} with GCC 14.3.0\n\nMIT License\n"))
         self.assertIn("# libssl3 3.0.2-0ubuntu1.20 (Ubuntu package copyright; bundled as libcrypto.so.3, libssl.so.3)\n\n"
                       "Copyright notice of libssl3\n", notices)
         self.assertEqual(sorted(re.findall(r"^# (\S+) (\S+) \(Ubuntu", notices, re.MULTILINE)),
-                         [("libgcc-s1", PPA_GCC), ("libgomp1", PPA_GCC), ("libssl3", "3.0.2-0ubuntu1.20"),
-                          ("libstdc++6", PPA_GCC)])
+                         [("libssl3", "3.0.2-0ubuntu1.20")])
+        for name in runtime.toolchain.LIBRARIES:
+            self.assertIn(f"GCC 14.3.0 ({name}; GPLv3 with GCC Runtime Library Exception)", notices)
+        self.assertIn(runtime.toolchain.SOURCES["gcc-14.3.0.tar.xz"][1], notices)
         patched = sorted(Path(argv[-1]).name for command, argv, _ in self.host.calls if command == "patchelf")
         self.assertEqual(patched, ["libcrypto.so.3", "libgcc_s.so.1", "libgomp.so.1", "libssl.so.3", "libstdc++.so.6"])
         starts = [env for command, _, env in self.host.calls if command == "llama-server"]
@@ -654,13 +660,13 @@ class LinuxPackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Install libgomp.so.1 on the build runner"):
             self.build("missing")
 
-    def test_linux_pack_refuses_a_compiler_or_library_whose_package_it_cannot_name(self):
-        del self.host.versions["g++-14"]
-        with self.assertRaisesRegex(ValueError, r"dpkg-query --show --showformat=\$\{Version\} failed for g\+\+-14"):
+    def test_linux_pack_refuses_a_changed_compiler_runtime_or_unowned_system_library(self):
+        (self.host.host / "libgomp.so.1").write_bytes(b"\x7fELF changed development runtime")
+        with self.assertRaisesRegex(ValueError, "libgomp.so.1 is not from the pinned GCC"):
             self.build()
-        self.host.versions["g++-14"] = PACKAGE_VERSIONS["g++-14"]
-        self.host.owners.pop(str((self.host.host / "libgomp.so.1").resolve()))
-        with self.assertRaisesRegex(ValueError, "No installed Debian package owns .*libgomp.so.1 or /usr/.*libgomp.so.1"):
+        (self.host.host / "libgomp.so.1").write_bytes(b"\x7fELF host libgomp.so.1")
+        self.host.owners.pop(str((self.host.host / "libssl.so.3").resolve()))
+        with self.assertRaisesRegex(ValueError, "No installed Debian package owns .*libssl.so.3"):
             self.build("unowned")
 
     def test_linux_pack_must_report_the_pinned_build_on_its_own_platform(self):
@@ -770,6 +776,8 @@ class ManifestTests(unittest.TestCase):
 
     def test_manifest_refuses_an_oversized_list_bad_inputs_and_tampered_packs(self):
         with patch.object(runtime, "MAX_COMPACT_JWS_BYTES", 1000), self.assertRaisesRegex(ValueError, "would sign to [0-9]+ bytes, above the 1000-byte JWS limit"):
+            runtime.manifest(self.packs, f"{BASE}/releases/9/runtimes", 9, self.root)
+        with patch.object(runtime, "compact_size", return_value=15 * 1024 + 1), self.assertRaisesRegex(ValueError, "above the 15360-byte JWS limit"):
             runtime.manifest(self.packs, f"{BASE}/releases/9/runtimes", 9, self.root)
         for base, sequence, reason in [("http://cdn.example/x", 9, "direct HTTPS prefix"), (f"{BASE}/", 9, "direct HTTPS prefix"),
                                        (f"{BASE}/runtimes", 0, "positive runtime manifest sequence")]:
@@ -936,17 +944,30 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("environment:", job)
 
     def test_arm64_source_build_takes_its_commit_from_the_pin(self):
-        build = step("runtime-packs", "name: Compile the pinned llama.cpp commit for Linux arm64 under the glibc 2.35 floor")
-        self.assertIn("LLAMACPP_COMMIT: ${{ steps.pin.outputs.commit }}", build)
+        build = (REPOSITORY / ".github/scripts/build_linux_runtime.sh").read_text()
+        self.assertIn("runtime_packs.py pin | sed -n 's/^commit=//p'", build)
         self.assertNotRegex(build, r"\b[0-9a-f]{40}\b")
-        self.assertIn('test "$(git -C "$RUNNER_TEMP/llama.cpp" rev-parse HEAD)" = "$LLAMACPP_COMMIT"', build)
+        self.assertIn('test "$(git -C /scratch/llama.cpp rev-parse HEAD)" = "$LLAMACPP_COMMIT"', build)
         self.assertIn("-DCMAKE_INSTALL_RPATH='$ORIGIN'", build)
 
     def test_arm64_source_build_compiles_with_the_toolchain_its_notices_record(self):
-        build = step("runtime-packs", "name: Compile the pinned llama.cpp commit for Linux arm64 under the glibc 2.35 floor")
-        c, cxx = runtime.LLAMACPP_PACKS["llamacpp-linux-arm64-cpu"]["toolchain"]
-        self.assertIn(f"sudo apt-get install -y {c} {cxx} ", build)
-        self.assertIn(f"-DCMAKE_C_COMPILER={c} -DCMAKE_CXX_COMPILER={cxx}", build)
+        build = (REPOSITORY / ".github/scripts/build_linux_runtime.sh").read_text()
+        self.assertEqual(runtime.LLAMACPP_PACKS["llamacpp-linux-arm64-cpu"]["toolchain"], runtime.toolchain.GCC_VERSION)
+        self.assertIn("python3 .github/scripts/runtime_toolchain.py build", build)
+        self.assertIn("export RUNTIME_TOOLCHAIN_ROOT=/toolchain", build)
+        self.assertIn("runtime_toolchain.py library-path", build)
+        self.assertIn("/etc/ld.so.conf.d/flow-runtime-gcc.conf", build)
+        self.assertIn("\n  ldconfig\n", build)
+        self.assertIn("-DCMAKE_C_COMPILER=/toolchain/bin/gcc -DCMAKE_CXX_COMPILER=/toolchain/bin/g++", build)
+        self.assertNotIn("ppa:", job_body("runtime-packs") + build)
+
+    def test_linux_build_uses_a_frozen_container_and_snapshot(self):
+        container = step("runtime-packs", "name: Build and check Linux packs in the frozen Ubuntu 22.04 environment")
+        self.assertIn('"$RUNTIME_IMAGE" bash /work/.github/scripts/build_linux_runtime.sh', container)
+        self.assertRegex(runtime.toolchain.IMAGE, r"^ubuntu:22\.04@sha256:[0-9a-f]{64}$")
+        self.assertIn("--env UBUNTU_SNAPSHOT", container)
+        self.assertIn("runtime-gcc-arm64-${{ steps.linux-inputs.outputs.key }}", job_body("runtime-packs"))
+        self.assertNotIn("restore-keys:", job_body("runtime-packs"))
 
     def run_fetch(self, outcome):
         with tempfile.TemporaryDirectory() as folder:
@@ -973,16 +994,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("\n    environment: standalone-release\n", job)
         self.assertEqual(job.count("secrets."), 1)
         self.assertLess(job.index("--example sign-runtime-manifest"), job.index("secrets.STANDALONE_RELEASE_SIGNING_KEY"))
-        self.assertLess(job.index("test_runtime_packs.py"), job.index("runtime_packs.py manifest"))
+        self.assertLess(job.index("test_runtime*.py"), job.index("runtime_packs.py manifest"))
         ours = script(step("runtime-manifest", "name: Sign the runtime manifests using the configured private release key"))
         theirs = script(step("signed-bundle", "name: Sign the release manifest using the configured private release key"))
         prefix = "trap 'rm -f \"$RUNNER_TEMP/standalone-signing-key\"' EXIT\n"
         self.assertEqual(ours.split(prefix)[0], theirs.split(prefix)[0])
         self.assertIn('"$RUNNER_TEMP/release-signer/debug/examples/sign-runtime-manifest" "$RUNNER_TEMP/standalone-signing-key" "$manifest" "${manifest%.json}.jws"', ours)
 
-    def test_publishing_follows_the_agent_release_with_the_same_publisher_handling(self):
+    def test_runtime_publication_precedes_agents_with_the_same_rollback_floor(self):
         job = job_body("runtime-publish")
-        self.assertIn("needs: [prepare, runtime-manifest, publish]\n", job)
+        self.assertIn("needs: [prepare, runtime-manifest]\n", job)
+        self.assertIn("needs: [prepare, signed-bundle, runtime-publish]\n", job_body("publish"))
         self.assertIn("\n    environment: standalone-release\n", job)
         self.assertNotIn("STANDALONE_RELEASE_SIGNING_KEY", job)
         identity = "name: Require exactly one publisher identity"

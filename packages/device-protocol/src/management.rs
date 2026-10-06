@@ -123,6 +123,8 @@ pub enum ManagementCapability {
 }
 
 pub const MAX_GRANT_CAPABILITIES: usize = 15;
+/// Includes capabilities a newer signer names which this build does not recognize.
+pub const MAX_WIRE_GRANT_CAPABILITIES: usize = 64;
 
 impl ManagementCapability {
     /// Held only with whole-device scope.
@@ -785,7 +787,7 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
         grant.controller_key.validate()?;
         if !grants.insert(&grant.grant_id)
             || grant.capabilities.is_empty()
-            || grant.capabilities.len() > MAX_GRANT_CAPABILITIES
+            || grant.capabilities.len() > MAX_WIRE_GRANT_CAPABILITIES
             || grant.expires_at > policy.expires_at
             || grant.expires_at <= policy.issued_at
             || grant.group_id.is_some() != grant.group_version.is_some()
@@ -801,7 +803,8 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
             .capabilities
             .iter()
             .filter(|cap| **cap != ManagementCapability::Unsupported);
-        if known.clone().collect::<HashSet<_>>().len() != known.count() {
+        let count = known.clone().count();
+        if count > MAX_GRANT_CAPABILITIES || known.collect::<HashSet<_>>().len() != count {
             return Err(ProtocolError::Invalid("duplicate capability"));
         }
         match &grant.scope {
@@ -1215,7 +1218,7 @@ mod tests {
             )
             .is_err()
         );
-        let mut sixteen = serde_json::to_value([
+        let mut full = serde_json::to_value([
             Status,
             Logs,
             Metrics,
@@ -1233,12 +1236,28 @@ mod tests {
             ModelManage,
         ])
         .unwrap();
-        sixteen.as_array_mut().unwrap().push("model_tune".into());
+        for index in MAX_GRANT_CAPABILITIES..MAX_WIRE_GRANT_CAPABILITIES {
+            full.as_array_mut()
+                .unwrap()
+                .push(format!("future_{index}").into());
+        }
+        let verified = verify_management_policy(
+            &sign_raw(full.clone(), &ManagementScope::Device),
+            &owner.public_key(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            verified.grants[0].capabilities.len(),
+            MAX_WIRE_GRANT_CAPABILITIES
+        );
+        assert!(sign_management_policy(&verified, &owner).is_err());
+        full.as_array_mut().unwrap().push("one_too_many".into());
         assert!(
             verify_management_policy(
-                &sign_raw(sixteen, &ManagementScope::Device),
+                &sign_raw(full, &ManagementScope::Device),
                 &owner.public_key(),
-                100
+                100,
             )
             .is_err()
         );

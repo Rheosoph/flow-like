@@ -179,6 +179,7 @@ fn gpu_unused(inputs: &Inputs) -> Option<Recommendation> {
             Some(ModelsRequest::InstallRuntime {
                 runtime: ModelRuntime::Llamacpp,
                 backend,
+                manifest_jws: None,
             }),
         )
     })
@@ -258,6 +259,7 @@ fn runtime_outdated(inputs: &Inputs) -> Vec<Recommendation> {
                 Some(ModelsRequest::InstallRuntime {
                     runtime: latest.runtime,
                     backend: latest.backend,
+                    manifest_jws: None,
                 }),
             ))
         })
@@ -832,6 +834,7 @@ mod tests {
                     algorithm: DigestAlgorithm::Blake3,
                     hex: "a".repeat(64),
                 }],
+                asset_count: None,
                 settings: ModelSettings::default(),
                 residency: Residency::default(),
                 revision: 3,
@@ -897,6 +900,7 @@ mod tests {
             Some(ModelsRequest::InstallRuntime {
                 runtime: ModelRuntime::Llamacpp,
                 backend: ModelBackend::Vulkan,
+                manifest_jws: None,
             })
         );
         device

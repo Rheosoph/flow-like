@@ -36,6 +36,14 @@ pub struct HostConfig {
     pub gateway: GatewayConfig,
 }
 
+impl HostConfig {
+    pub fn from_state(state_dir: &Path) -> Result<Self> {
+        let mut config = Self::default();
+        config.store.max_bytes = crate::isolation::models_max_bytes(state_dir)?;
+        Ok(config)
+    }
+}
+
 /// What a host is built from; production derives every part from the state directory.
 pub struct HostParts {
     pub fetcher: Fetcher,
@@ -54,7 +62,8 @@ impl HostParts {
         let capabilities = crate::isolation::capabilities(state_dir);
         let sandbox = cfg!(target_os = "linux")
             && capabilities.bubblewrap.is_some()
-            && capabilities.landlock_abi.is_some();
+            && capabilities.landlock_abi.is_some()
+            && capabilities.cgroup_root.is_some();
         ensure!(
             sandbox || !capabilities.require_isolation,
             "This device requires isolation, but engines cannot be sandboxed: {}",
@@ -63,7 +72,10 @@ impl HostParts {
         Ok(Self {
             fetcher: Fetcher::new(AddressPolicy::global_only())?,
             runtime_source,
-            launcher: Arc::new(ProcessLauncher { sandbox }),
+            launcher: Arc::new(ProcessLauncher {
+                sandbox,
+                state_dir: Some(state_dir.to_owned()),
+            }),
         })
     }
 }

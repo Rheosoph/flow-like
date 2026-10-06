@@ -94,7 +94,7 @@ describe("the device's own fixes", () => {
 		expect(labels).toEqual([
 			"Use an 8-bit cache…",
 			"Use 6 slots…",
-			"Use 16 threads…",
+			"Apply the recommended settings…",
 			"Install llama.cpp for Metal…",
 			"Use 16,384 tokens per slot…",
 		]);
@@ -244,10 +244,11 @@ describe("labels", () => {
 		expect(label({ parallel: 6, kv_cache_type: "q8_0" })).toBe(
 			"Apply the recommended settings…",
 		);
-		const nomic = modelOf(overview, "nomic-embed-v1.5");
 		expect(
-			fixOf(overview, configure(nomic, { settings: { gpu_layers: "auto" } }))
-				.fix?.label,
+			fixOf(
+				overview,
+				configure(qwen, { settings: { gpu_layers: { count: 1 }, threads: 8 } }),
+			).fix?.label,
 		).toBe("Apply the recommended settings…");
 		const { flash_attn: _flash, ...dropped } = qwen.settings;
 		expect(

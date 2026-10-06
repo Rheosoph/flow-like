@@ -169,6 +169,13 @@ that holds the agent's state until a tenth of it is left free. A download
 that would need more is refused before it starts. **Hardware and runtimes**
 shows the space models use under **Model disk**.
 
+To cap model storage, set `FLOW_LIKE_DEVICE_MODELS_MAX_BYTES` to a positive
+number of bytes in the state directory's private `agent.env` and restart the
+agent. For example, `FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=68719476736` caps stored,
+staged and reserved model files at 64 GiB. Lowering the limit keeps files
+that models or deployments still use. Downloads that would exceed the limit
+are refused.
+
 ## Runtimes and GPUs
 
 A runtime is the engine program that runs llama.cpp or MLX models. Runtimes
@@ -254,6 +261,9 @@ failed, time to first token (median and 95th percentile), generation speed,
 and queue wait. Choose **24 h**, **7 d**, or **90 d**, and one model or all of
 them. **Who called** breaks requests and tokens down by caller: the owner,
 each person the device is shared with, and each service on the device.
+The owner sees every caller. Other readers see their own usage; **Manage
+models** also shows other people's usage. A service's usage needs permission
+to read that service's status. The charts still show device totals.
 
 The device keeps the details of each request for 48 hours, per-minute totals
 for 7 days, and hourly totals for 90 days. Statistics hold counts and timings
@@ -315,8 +325,8 @@ device, such as a run started from the web app. Use Find Model when a flow
 should keep working there.
 
 To lock a device before you quit, lock it in **Devices**, or select
-**Lock All Devices** in the tray menu. Either clears its keys on this
-computer, also those the run's dialog unlocked and kept.
+**Lock All Devices** in the tray menu. Either clears the device's keys on
+this computer, including keys a run's dialog kept unlocked.
 
 ### Services on the device
 
@@ -361,7 +371,7 @@ appear under **Who called**.
 | --- | --- |
 | Swapped or corrupted weights | A fingerprint fixed before the download decides; the device stores a file only after it matches. A source, mirror, or computer that sends other bytes changes nothing. |
 | A download source that points into your network | Downloads use HTTPS only, and redirects (at most five) must stay on HTTPS. The device resolves every address and refuses loopback, private, link-local, unique-local, and cloud metadata addresses. |
-| A malicious model file | Model files are parsed by engines, not by the agent. On a Linux host with bubblewrap and Landlock, each engine runs in a sandbox: the system, the runtime, and the model files are read-only; it sees GPU devices and a private `/tmp`; it can only listen on its own loopback port and can't open outgoing TCP connections. A device whose host policy requires isolation doesn't start its model host without these facilities. On macOS and on other Linux hosts, engines run as ordinary processes of the agent's account. |
+| A malicious model file | Engines parse model files. On Linux with bubblewrap, Landlock and a usable delegated cgroup, each engine has read-only system, runtime and model mounts, GPU access, a private `/tmp` and a private network namespace. It communicates through a private UNIX socket on verified `/dev/shm` tmpfs; Internet binds and connections are blocked. Finite limits bound CPU, RAM and process/thread counts. Memory and process allowances count against the shared workload budget; engine CPU shares the parent ceiling. With a compatible host policy, macOS and Linux hosts without these facilities run engines under the agent's account. A required isolation policy refuses to start the model host without them. |
 | A tampered runtime | Runtimes are signed with the Flow-Like release key. The device checks the signed list and each file's sha256 before installing. |
 | Someone else's identity or quota | The gateway listens on loopback only. Each service gets its own token. For tunnel requests, the agent sets the caller from the grant the tunnel authenticated and removes any identity headers the client sent. |
 | One caller crowding out the others | Each caller gets 8 requests at a time. Further requests wait; the gateway answers `429 Too Many Requests` when 32 are already waiting or a request has waited 60 seconds. |

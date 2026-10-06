@@ -23,6 +23,8 @@ const TEST_NAME: &str = "models::engines::fake::fake_engine_main";
 pub struct FakeBehaviour {
     #[serde(default)]
     pub startup_delay_ms: u64,
+    #[serde(default)]
+    pub unix_socket: bool,
     /// When set, only these models start with the delay.
     #[serde(default)]
     pub delayed_models: Vec<String>,
@@ -54,6 +56,28 @@ fn flag(args: &[OsString], name: &str) -> Option<String> {
 }
 
 impl EngineLauncher for FakeLauncher {
+    #[cfg(all(unix, feature = "runtime"))]
+    fn prepare(
+        &self,
+        launch: &EngineLaunch,
+        _: super::MemoryEstimate,
+        _: &str,
+    ) -> Result<super::PreparedLaunch> {
+        let mut command = self.command(launch)?;
+        let socket = if self.behaviour.unix_socket {
+            let socket = super::EngineSocket::new()?;
+            command.env(super::endpoint::SOCKET_ENV, socket.path());
+            Some(socket)
+        } else {
+            None
+        };
+        Ok(super::PreparedLaunch {
+            command,
+            socket,
+            isolation: None,
+        })
+    }
+
     fn command(&self, launch: &EngineLaunch) -> Result<tokio::process::Command> {
         let config = FakeConfig {
             key_file: flag(&launch.args, "--api-key-file").map(PathBuf::from),
@@ -138,7 +162,6 @@ async fn serve(config: FakeConfig) -> Result<()> {
         template: config.behaviour.template,
         args: config.args,
     });
-    let listener = listen().await?;
     let router = Router::new()
         .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
         .route("/props", get(props))
@@ -147,7 +170,12 @@ async fn serve(config: FakeConfig) -> Result<()> {
         .route("/v1/chat/completions", post(chat))
         .route("/v1/embeddings", post(embeddings))
         .with_state(engine);
-    axum::serve(listener, router).await?;
+    #[cfg(unix)]
+    if let Some(socket) = std::env::var_os(super::endpoint::SOCKET_ENV) {
+        axum::serve(tokio::net::UnixListener::bind(socket)?, router).await?;
+        return Ok(());
+    }
+    axum::serve(listen().await?, router).await?;
     Ok(())
 }
 

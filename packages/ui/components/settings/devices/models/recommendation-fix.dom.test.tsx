@@ -75,7 +75,7 @@ describe("one-click fixes on the Models tab", () => {
 		for (const label of [
 			"Use an 8-bit cache…",
 			"Use 6 slots…",
-			"Use 16 threads…",
+			"Apply the recommended settings…",
 		])
 			expect(
 				byRole("button", label, recommendations(view)).getAttribute(
@@ -111,7 +111,11 @@ describe("one-click fixes on the Models tab", () => {
 			"the stale fixes to go",
 		);
 		expect(
-			queryByRole("button", "Use 16 threads…", recommendations(view)),
+			queryByRole(
+				"button",
+				"Apply the recommended settings…",
+				recommendations(view),
+			),
 		).not.toBeNull();
 	});
 

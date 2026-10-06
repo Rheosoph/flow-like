@@ -119,6 +119,7 @@ fn read_pinned(config: &PlacementConfig, pin: &ProjectBitPin) -> Result<PinnedPa
         PACKAGED_BIT_METADATA_MAX_BYTES,
     )?;
     let metadata = crate::project_artifacts::packaged_metadata(&bytes, pin)?;
+    crate::models::router::validate_packaged_model(&metadata)?;
     let typed = |value: &serde_json::Value| {
         serde_json::from_value::<Bit>(value.clone())
             .with_context(|| format!("Read a Bit in the metadata of Bit {}", pin.bit_id))
@@ -859,7 +860,7 @@ pub(crate) fn placement_bit_store(config: &PlacementConfig, data: &Path) -> Resu
 /// Agent side, before a placement starts: the placement references each of its model-store
 /// assets, a missing one is acquired again download-first, and each one its workload reads
 /// directly appears at its Bit store location without being copied.
-pub(crate) fn prepare_model_assets(
+pub(crate) async fn prepare_model_assets(
     state_dir: &Path,
     config: &PlacementConfig,
     data: &Path,
@@ -882,9 +883,7 @@ pub(crate) fn prepare_model_assets(
             .map(|record| record.id)
             .collect())
     };
-    tokio::runtime::Handle::try_current()
-        .context("Prepare the model assets of a placement outside the agent's runtime")?
-        .block_on(prepare_with(host.acquisition(), config, data, live, cancel))
+    prepare_with(host.acquisition(), config, data, live, cancel).await
 }
 
 async fn prepare_with(
