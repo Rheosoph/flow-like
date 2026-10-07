@@ -7,12 +7,8 @@
 
 use std::{path::PathBuf, time::Instant};
 
-use flow_like_model_provider::{
-    embedding::local::embed,
-    fastembed::{
-        self, InitOptionsUserDefined, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
-    },
-    ml::ort_runtime::{ensure_ort_initialized, session_execution_providers},
+use flow_like_model_provider::embedding::native::{
+    NativeTextEmbedding, Pooling, SessionOptions, TokenizerFiles,
 };
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -92,8 +88,8 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let dir = PathBuf::from(args.next().expect("dir"));
     let pooling = match args.next().unwrap_or_else(|| "Mean".into()).as_str() {
-        "CLS" => fastembed::Pooling::Cls,
-        _ => fastembed::Pooling::Mean,
+        "CLS" => Pooling::Cls,
+        _ => Pooling::Mean,
     };
     let max_tokens: usize = args
         .next()
@@ -103,12 +99,6 @@ fn main() {
     // A bit carries `prefix.query` and `prefix.paragraph`; asymmetric models need them.
     let query_prefix = args.next().unwrap_or_default().replace("\\n", "\n");
     let doc_prefix = args.next().unwrap_or_default().replace("\\n", "\n");
-
-    // A bit stores the weights as one file; `LocalEmbeddingModel` reads exactly that file.
-    let model = match std::fs::read(dir.join("model.onnx")) {
-        Ok(bytes) => bytes,
-        Err(e) => return println!("RESULT load_model_failed: {e}"),
-    };
 
     let read = |name: &str| std::fs::read(dir.join(name));
     let files = match (
@@ -126,21 +116,14 @@ fn main() {
         _ => return println!("RESULT missing_tokenizer_files"),
     };
 
-    if let Err(e) = ensure_ort_initialized() {
-        return println!("RESULT ort_init_failed: {e}");
-    }
-    let providers = match session_execution_providers(true) {
-        Ok(p) => p,
-        Err(e) => return println!("RESULT provider_select_failed: {e}"),
-    };
-
-    let user_model = UserDefinedEmbeddingModel::new(model, files).with_pooling(pooling.clone());
-    let options = InitOptionsUserDefined::new()
-        .with_max_length(max_tokens)
-        .with_execution_providers(providers);
-
     let start = Instant::now();
-    let mut embedder = match TextEmbedding::try_new_from_user_defined(user_model, options) {
+    let mut embedder = match NativeTextEmbedding::new_from_file(
+        dir.join("model.onnx"),
+        files,
+        max_tokens,
+        pooling,
+        SessionOptions::default(),
+    ) {
         Ok(m) => m,
         Err(e) => return println!("RESULT session_failed: {e}"),
     };
@@ -156,14 +139,14 @@ fn main() {
         .collect();
 
     let start = Instant::now();
-    let doc_vectors = match embed(&mut embedder, docs.clone(), Some(12), &pooling) {
+    let doc_vectors = match embedder.embed(docs.clone(), Some(12)) {
         Ok(v) => v,
         Err(e) => return println!("RESULT embed_failed: {e}"),
     };
     let index_ms = start.elapsed().as_millis();
 
     let start = Instant::now();
-    let query_vectors = match embed(&mut embedder, queries.clone(), Some(12), &pooling) {
+    let query_vectors = match embedder.embed(queries.clone(), Some(12)) {
         Ok(v) => v,
         Err(e) => return println!("RESULT embed_failed: {e}"),
     };
@@ -223,7 +206,7 @@ fn main() {
         .map(|i| format!("{} Passage {i}.", DOCUMENTS[i % DOCUMENTS.len()]))
         .collect();
     let bulk = Instant::now();
-    let bulk_ok = embed(&mut embedder, corpus.clone(), Some(16), &pooling).is_ok();
+    let bulk_ok = embedder.embed(corpus.clone(), Some(16)).is_ok();
     let bulk_ms = bulk.elapsed().as_millis();
     let per_doc = bulk_ms as f64 / corpus.len() as f64;
 

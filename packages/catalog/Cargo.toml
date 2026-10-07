@@ -156,7 +156,7 @@ local-ml = [
     "flow-like-catalog-processing/local-ml",
 ]
 # NVIDIA ORT distributions are deployment-specific, so expose them as opt-ins.
-# Feature unification applies the provider to ONNX nodes and core FastEmbed sessions.
+# Feature unification applies the provider to ONNX nodes and native embedding sessions.
 local-ml-cuda = ["local-ml", "flow-like-catalog-onnx/cuda"]
 local-ml-tensorrt = ["local-ml-cuda", "flow-like-catalog-onnx/tensorrt"]
 local-tts = ["package-media", "flow-like-catalog-media/local-tts"]

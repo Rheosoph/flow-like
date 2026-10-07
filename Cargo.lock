@@ -7900,22 +7900,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fastembed"
-version = "5.17.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "545e4fb17fc48768ff36c2a3854aa5b0b809d0ed595ab5530fa8ac94f31bd0ea"
-dependencies = [
- "anyhow",
- "image",
- "ndarray 0.17.2",
- "ort",
- "safetensors 0.8.0",
- "serde",
- "serde_json",
- "tokenizers 0.22.2",
-]
-
-[[package]]
 name = "fasteval"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8922,6 +8906,7 @@ dependencies = [
  "bytes",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
+ "flow-like-catalog-embedding",
  "flow-like-catalog-media-support",
  "flow-like-model-provider",
  "flow-like-runtime",
@@ -8929,8 +8914,11 @@ dependencies = [
  "flow-like-types",
  "google-cloud-auth",
  "http 1.4.0",
+ "re_mp4",
  "schemars 1.2.1",
  "serde",
+ "symphonia",
+ "tempfile",
  "tokio",
  "video-utils-rs",
  "zip 8.5.1",
@@ -9693,9 +9681,9 @@ dependencies = [
  "async-trait",
  "aws-types",
  "base64 0.22.1",
+ "blake3",
  "bytes",
  "dotenv",
- "fastembed",
  "flow-like-model-protocol",
  "flow-like-types-contracts",
  "futures 0.3.32",
@@ -9716,6 +9704,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "tempfile",
  "text-splitter",
  "tiktoken-rs 0.7.0",
  "tokenizers 0.22.2",
@@ -23329,19 +23318,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "safetensors"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79b079b829cb27a1c3c374341345ed2e8b2c0c839034522cee576c140bd7f846"
-dependencies = [
- "hashbrown 0.16.1",
- "libc",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

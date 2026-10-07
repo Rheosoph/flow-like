@@ -487,7 +487,7 @@ configure_boundary() {
             ;;
         model-protocol)
             CHECK_ARGS=(--package flow-like-model-protocol --no-default-features)
-            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-model-provider flow-like-storage fastembed ort candle-core tokenizers wasmtime tauri)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-model-provider flow-like-storage ort candle-core tokenizers wasmtime tauri)
             ;;
         wasm-schema)
             CHECK_ARGS=(--package flow-like-wasm-schema --no-default-features --features bundle,openapi)
@@ -592,7 +592,7 @@ configure_boundary() {
                 flow-like-catalog-onnx
                 ort
                 ort-sys
-                fastembed
+
                 face_id
                 tract-core
                 tract-onnx
@@ -613,7 +613,7 @@ configure_boundary() {
                 tauri
                 ort
                 ort-sys
-                fastembed
+
                 face_id
                 tract-core
                 tract-onnx
@@ -638,7 +638,7 @@ configure_boundary() {
         catalog-server-local-ml)
             CHECK_ARGS=(--package flow-like-catalog --no-default-features --features server-local-ml)
             FORBIDDEN=(flow-like-catalog-automation enigo rdev xcap tauri)
-            REQUIRED=(flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
+            REQUIRED=(flow-like-catalog-onnx ort ort-sys face_id tract-tflite)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(remote-metadata package-onnx local-ml runtime-catalog)
             FORBIDDEN_FEATURES=(package-automation)
@@ -661,7 +661,7 @@ configure_boundary() {
                 flow-like-catalog-geo
                 flow-like-catalog-automation
                 ort
-                fastembed
+
             )
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(
@@ -683,7 +683,7 @@ configure_boundary() {
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-catalog --no-default-features --features server-execute)
             FORBIDDEN=(flow-like-catalog-automation enigo rdev xcap tauri)
-            REQUIRED=(flow-like-catalog-onnx ort fastembed)
+            REQUIRED=(flow-like-catalog-onnx ort)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(
                 package-std
@@ -705,7 +705,7 @@ configure_boundary() {
             # but ONNX is reserved for the explicit executor-local-ml variant.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-catalog --no-default-features --features executor)
-            FORBIDDEN=(flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
+            FORBIDDEN=(flow-like-catalog-onnx ort ort-sys face_id tract-tflite)
             REQUIRED=(flow-like-catalog-automation flow-like-browser)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(executor remote-metadata package-automation portable-execute remote runtime-catalog)
@@ -716,7 +716,7 @@ configure_boundary() {
             # model support remains an explicit local-runtime-ml capability.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-catalog --no-default-features --features local-runtime)
-            FORBIDDEN=(flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
+            FORBIDDEN=(flow-like-catalog-onnx ort ort-sys face_id tract-tflite)
             REQUIRED=(flow-like-catalog-automation flow-like-browser)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(local-runtime remote-metadata package-automation portable-execute remote runtime-catalog)
@@ -727,7 +727,7 @@ configure_boundary() {
             # several optional catalog packages.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-catalog --no-default-features --features local-ml)
-            REQUIRED=(flow-like-catalog-onnx ort fastembed)
+            REQUIRED=(flow-like-catalog-onnx ort)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(
                 package-std
@@ -767,7 +767,7 @@ configure_boundary() {
             # metadata for nodes that the remote server cannot execute.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-executor --no-default-features --features server)
-            FORBIDDEN=(flow-like flow-like-editor flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
+            FORBIDDEN=(flow-like flow-like-editor flow-like-catalog-onnx ort ort-sys face_id tract-tflite)
             REQUIRED=(flow-like-runtime)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(remote-metadata package-std package-data package-web runtime-catalog)
@@ -791,7 +791,7 @@ configure_boundary() {
             # executors, so clients never receive ONNX or automation nodes.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package azure-api --package gcp-api)
-            FORBIDDEN=(flow-like-catalog-onnx flow-like-catalog-automation ort fastembed face_id)
+            FORBIDDEN=(flow-like-catalog-onnx flow-like-catalog-automation ort face_id)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(remote-metadata package-std package-data package-web runtime-catalog)
             FORBIDDEN_FEATURES=(package-onnx package-automation local-ml portable-execute)
@@ -801,7 +801,7 @@ configure_boundary() {
             # executors, but do not link node execution or ORT dependencies.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package aws-api --package aws-api-ecs)
-            FORBIDDEN=(flow-like-catalog-automation ort ort-sys fastembed face_id tract-tflite)
+            FORBIDDEN=(flow-like-catalog-automation ort ort-sys face_id tract-tflite)
             REQUIRED=(flow-like-catalog-onnx)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(server-local-metadata remote-metadata package-onnx runtime-catalog)
@@ -812,7 +812,7 @@ configure_boundary() {
             # local ONNX and automation without linking either implementation.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package local-api --package k8s-api --package docker-compose-api)
-            FORBIDDEN=(ort ort-sys fastembed face_id tract-tflite enigo rdev xcap flow-like-browser)
+            FORBIDDEN=(ort ort-sys face_id tract-tflite enigo rdev xcap flow-like-browser)
             REQUIRED=(flow-like-catalog-onnx flow-like-catalog-automation)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(executor-local-metadata server-local-metadata remote-metadata package-onnx package-automation runtime-catalog)
@@ -822,6 +822,11 @@ configure_boundary() {
             fail "unknown boundary '$boundary' (run --list to see valid names)"
             ;;
     esac
+    if [ -n "${FORBIDDEN[0]}" ]; then
+        FORBIDDEN+=(fastembed)
+    else
+        FORBIDDEN=(fastembed)
+    fi
 }
 
 base_cargo_command() {

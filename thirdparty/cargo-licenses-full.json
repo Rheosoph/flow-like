@@ -4383,15 +4383,6 @@
 		"description": "Fastdivide is a partial port of libdivide. It makes it possible to reduce the cost of divisions."
 	},
 	{
-		"name": "fastembed",
-		"version": "5.2.0",
-		"authors": "Anush008 <anushshetty90@gmail.com>|Josh Niemelä <josh@jniemela.dk>|GrisiaEvy <a115020115@gmail.com>|George MacKerron <georgemackerron@neon.tech>|Timon Vonk <mail@timonv.nl>|Luya Wang <luya.wang@qq.com>|Tri <tri@triandco.com>|Denny Wong <denwong47@hotmail.com>|Alex Rozgo <alex.rozgo@gmail.com>",
-		"repository": "https://github.com/Anush008/fastembed-rs",
-		"license": "Apache-2.0",
-		"license_file": null,
-		"description": "Library for generating vector embeddings, reranking locally."
-	},
-	{
 		"name": "fasteval",
 		"version": "0.2.4",
 		"authors": "Christopher Sebastian <christopher@likebike.com>",

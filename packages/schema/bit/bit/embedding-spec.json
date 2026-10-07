@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EmbeddingSpec",
+  "description": "Versioned model recipe stored in a Bit's `parameters.embedding` field.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "adapter": {
+      "type": "string"
+    },
+    "adapter_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 1
+    },
+    "space_id": {
+      "type": "string"
+    },
+    "dimensions": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "supported_dimensions": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0
+      },
+      "default": []
+    },
+    "max_tokens": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/EmbeddingArtifact"
+      }
+    },
+    "pooling": {
+      "$ref": "#/$defs/EmbeddingPooling",
+      "default": "mean"
+    },
+    "task_profiles": {
+      "type": "object",
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/EmbeddingTaskProfile"
+        },
+        "clustering": {
+          "$ref": "#/$defs/EmbeddingTaskProfile"
+        },
+        "code_query": {
+          "$ref": "#/$defs/EmbeddingTaskProfile"
+        },
+        "document": {
+          "$ref": "#/$defs/EmbeddingTaskProfile"
+        },
+        "query": {
+          "$ref": "#/$defs/EmbeddingTaskProfile"
+        },
+        "similarity": {
+          "$ref": "#/$defs/EmbeddingTaskProfile"
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "required": [
+    "schema_version",
+    "adapter",
+    "space_id",
+    "dimensions",
+    "max_tokens",
+    "artifacts"
+  ],
+  "$defs": {
+    "EmbeddingArtifact": {
+      "description": "A Bit dependency assigned to a model role and its graph-relative destination.",
+      "type": "object",
+      "properties": {
+        "bit": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EmbeddingArtifactSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "bit",
+        "path"
+      ]
+    },
+    "EmbeddingArtifactSource": {
+      "description": "A downloadable artifact whose bytes are pinned by a BLAKE3 digest.",
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "url",
+        "hash",
+        "size"
+      ]
+    },
+    "EmbeddingPooling": {
+      "type": "string",
+      "enum": [
+        "mean",
+        "cls",
+        "last_token"
+      ]
+    },
+    "EmbeddingTaskProfile": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "default": ""
+        },
+        "suffix": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    }
+  }
+}

@@ -1584,6 +1584,65 @@ impl Bit {
             .collect())
     }
 
+    /// Resolve recipe sources to content-verified leaf Bits before a model is published to a hub.
+    pub fn inline_embedding_asset_bits(&self) -> flow_like_types::Result<Vec<Bit>> {
+        if !matches!(
+            self.bit_type,
+            BitTypes::Embedding | BitTypes::ImageEmbedding
+        ) {
+            return Ok(vec![]);
+        }
+        let recipe = match self.parameters.get("embedding") {
+            None | Some(Value::Null) => return Ok(vec![]),
+            Some(recipe) => recipe.clone(),
+        };
+        let recipe: flow_like_model_provider::embedding::interface::EmbeddingSpec =
+            flow_like_types::json::from_value(recipe)?;
+        recipe.validate()?;
+        recipe
+            .artifacts
+            .into_values()
+            .filter_map(|artifact| {
+                artifact
+                    .source
+                    .map(|source| (artifact.bit, artifact.path, source))
+            })
+            .map(|(id, path, source)| {
+                if id == self.id {
+                    flow_like_types::bail!("Inline embedding artifact cannot use its root Bit ID");
+                }
+                let file_name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| {
+                        flow_like_types::anyhow!(
+                            "Embedding artifact must have a portable file name"
+                        )
+                    })?;
+                if file_name.contains('\0') {
+                    flow_like_types::bail!("Embedding artifact file name contains a NUL byte");
+                }
+                Ok(Bit {
+                    id,
+                    bit_type: inline_mlx_asset_bit_type(file_name),
+                    authors: self.authors.clone(),
+                    repository: self.repository.clone(),
+                    download_link: Some(source.url),
+                    file_name: Some(file_name.to_string()),
+                    hash: source.hash.clone(),
+                    size: Some(source.size),
+                    hub: self.hub.clone(),
+                    version: self.version.clone(),
+                    license: self.license.clone(),
+                    dependency_tree_hash: source.hash,
+                    created: self.created.clone(),
+                    updated: self.updated.clone(),
+                    ..Bit::default()
+                })
+            })
+            .collect()
+    }
+
     pub fn try_to_llm(&self) -> Option<LLMParameters> {
         if self.bit_type == BitTypes::Llm {
             let parameters =
@@ -1809,15 +1868,37 @@ impl Bit {
     }
 
     pub async fn pack(&self, state: Arc<FlowLikeState>) -> flow_like_types::Result<BitPack> {
+        let inline_embedding_assets = self.inline_embedding_asset_bits()?;
+        let inline_ids = inline_embedding_assets
+            .iter()
+            .map(|bit| bit.id.as_str())
+            .collect::<HashSet<_>>();
         // A bit that declares no dependencies has none to fetch — and user-owned
         // bits have no hub entry to ask, so the round trip would only 404.
-        let mut dependencies = if self.dependencies.is_empty() {
+        let mut dependencies = if self
+            .dependencies
+            .iter()
+            .all(|id| inline_ids.contains(id.as_str()))
+        {
             BitPack { bits: vec![] }
         } else {
             self.dependencies(state).await?
         };
         if self.dependencies.is_empty() && self.is_mlx_model() {
             dependencies.bits.extend(self.inline_mlx_asset_bits()?);
+        }
+        for asset in inline_embedding_assets {
+            if dependencies
+                .bits
+                .iter()
+                .any(|dependency| dependency.id == asset.id)
+            {
+                flow_like_types::bail!(
+                    "Inline embedding artifact {} conflicts with a hub dependency",
+                    asset.id
+                );
+            }
+            dependencies.bits.push(asset);
         }
         dependencies.bits.push(self.clone());
         if let Some(projection) = self.projection_bit() {
@@ -1887,7 +1968,18 @@ impl Bit {
     }
 
     pub fn is_multimodal(&self) -> bool {
-        self.bit_type == BitTypes::Vlm || self.bit_type == BitTypes::ImageEmbedding
+        self.bit_type == BitTypes::Vlm
+            || self.bit_type == BitTypes::ImageEmbedding
+            || (self.bit_type == BitTypes::Embedding
+                && self
+                    .parameters
+                    .get("embedding")
+                    .and_then(|spec| spec.get("artifacts"))
+                    .and_then(|artifacts| artifacts.as_object())
+                    .is_some_and(|artifacts| {
+                        artifacts.contains_key("vision_encoder")
+                            || artifacts.contains_key("audio_encoder")
+                    }))
     }
 
     pub fn to_path(&self, file_system: &Arc<LocalObjectStore>) -> Option<PathBuf> {
@@ -2358,6 +2450,113 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.file_name.as_deref() == Some("processor_config.json"))
         );
+    }
+
+    fn inline_gemma2_bit() -> Bit {
+        flow_like_types::json::from_str(include_str!(
+            "../../../model-provider/tests/fixtures/gemma2/bit.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn inline_embedding_sources_become_content_verified_leaf_bits() {
+        let bit = inline_gemma2_bit();
+        assert!(bit.try_to_embedding().is_some());
+        let assets = bit.inline_embedding_asset_bits().unwrap();
+        assert_eq!(assets.len(), 10);
+        assert_eq!(
+            assets.iter().map(|asset| asset.size.unwrap()).sum::<u64>(),
+            505_137_077
+        );
+        for asset in assets {
+            assert!(asset.dependencies.is_empty());
+            assert_ne!(asset.hash, asset.id);
+            assert!(!asset.has_matching_user_source_artifact_identity());
+            let digest = asset.content_digest(&bit).unwrap();
+            assert_eq!(digest.algorithm, BitDigestAlgorithm::Blake3);
+            assert_eq!(digest.hex, asset.hash);
+            let name = asset.file_name.as_deref().unwrap();
+            assert!(!name.contains(['/', '\\']));
+            assert!(
+                asset
+                    .download_link
+                    .as_deref()
+                    .unwrap()
+                    .contains("/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/")
+            );
+        }
+        let mut invalid = bit.clone();
+        invalid.parameters["embedding"]["artifacts"]["backbone"]["bit"] =
+            flow_like_types::json::json!(bit.id);
+        assert!(invalid.inline_embedding_asset_bits().is_err());
+        invalid = bit.clone();
+        invalid.parameters["embedding"]["artifacts"]["backbone"]["source"]["hash"] =
+            flow_like_types::json::json!("unverified");
+        assert!(invalid.inline_embedding_asset_bits().is_err());
+        invalid = bit;
+        invalid.parameters["embedding"]["artifacts"]["backbone"]["path"] =
+            flow_like_types::json::json!("../model.onnx");
+        assert!(invalid.inline_embedding_asset_bits().is_err());
+    }
+
+    #[tokio::test]
+    async fn pack_carries_inline_embedding_assets_without_asking_a_hub() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = FlowLikeConfig::new();
+        let store = LocalObjectStore::new(temp_dir.path().to_path_buf()).unwrap();
+        config.stores.bits_store = Some(FlowLikeStore::Local(store.into()));
+        let state = Arc::new(FlowLikeState::new(
+            config,
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut bit = inline_gemma2_bit();
+        for explicit_dependencies in [false, true] {
+            if explicit_dependencies {
+                bit.dependencies = bit
+                    .inline_embedding_asset_bits()
+                    .unwrap()
+                    .into_iter()
+                    .map(|asset| asset.id)
+                    .collect();
+            }
+            let pack = bit.pack(state.clone()).await.unwrap();
+            assert_eq!(pack.bits.len(), 11);
+            assert_eq!(
+                pack.bits
+                    .iter()
+                    .filter(|candidate| candidate.id == bit.id)
+                    .count(),
+                1
+            );
+            assert!(
+                pack.bits
+                    .iter()
+                    .any(|candidate| candidate.file_name.as_deref() == Some("model_q4.onnx_data"))
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_embedding_bits_do_not_gain_inline_dependencies() {
+        let fixture: Value = flow_like_types::json::from_str(include_str!(
+            "../../../model-provider/tests/fixtures/embedding_parity/manifest.json"
+        ))
+        .unwrap();
+        for entry in fixture["models"].as_array().unwrap() {
+            let mut bit: Bit = flow_like_types::json::from_value(entry["bit"].clone()).unwrap();
+            assert!(
+                bit.inline_embedding_asset_bits().unwrap().is_empty(),
+                "{}",
+                bit.id
+            );
+            bit.parameters["embedding"] = Value::Null;
+            assert!(
+                bit.inline_embedding_asset_bits().unwrap().is_empty(),
+                "{} with a null recipe",
+                bit.id
+            );
+        }
     }
 
     #[test]

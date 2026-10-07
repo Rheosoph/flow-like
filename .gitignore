@@ -117,3 +117,4 @@ output
 
 # Generated MapLibre workers, paired with the installed package version.
 **/public/maplibre/
+:memory:.ses

@@ -2,4 +2,5 @@ pub use flow_like_catalog_embedding::{CachedEmbeddingModel, CachedEmbeddingModel
 
 pub mod image;
 pub mod load;
+pub mod multimodal;
 pub mod text;
