@@ -29,13 +29,15 @@ import {
 	ShieldCheck,
 	Smartphone,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	type PushTargetPlatform,
+	REMOTE_PUSH_REGISTRATION_EVENT,
 	canUseRemotePushForPlatform,
 	detectPushPlatform,
 	getPushDeviceId,
+	getRemotePushPermission,
 	isRemotePushPreferenceEnabled,
 	loadRemotePushPlugin,
 	setRemotePushPreference,
@@ -71,11 +73,21 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function statusBadge(status: IPushTargetStatus | null, localEnabled: boolean) {
+function statusBadge(
+	status: IPushTargetStatus | null,
+	localEnabled: boolean,
+	permission: PermissionState,
+) {
 	if (!localEnabled) {
 		return {
 			label: i18next.t("offOnThisDevice", "Off on this device"),
 			variant: "secondary" as const,
+		};
+	}
+	if (permission === "denied") {
+		return {
+			label: i18next.t("notificationPermissionDenied", "Permission denied"),
+			variant: "destructive" as const,
 		};
 	}
 	if (!status?.registered) {
@@ -85,8 +97,26 @@ function statusBadge(status: IPushTargetStatus | null, localEnabled: boolean) {
 		};
 	}
 	if (status.push_enabled && !status.invalidated_at) {
+		if (status.stale) {
+			return {
+				label: i18next.t("pushRegistrationExpired", "Registration expired"),
+				variant: "destructive" as const,
+			};
+		}
+		if (status.last_delivery_status === "failed") {
+			return {
+				label: i18next.t("pushLastSendFailed", "Last send failed"),
+				variant: "destructive" as const,
+			};
+		}
+		if (status.eligible === false) {
+			return {
+				label: i18next.t("pushDeliveryUnavailable", "Delivery unavailable"),
+				variant: "secondary" as const,
+			};
+		}
 		return {
-			label: i18next.t("enabled", "Enabled"),
+			label: i18next.t("pushRegistered", "Registered"),
 			variant: "default" as const,
 		};
 	}
@@ -140,6 +170,8 @@ export default function NotificationsSettingsPage() {
 	const [localEnabled, setLocalEnabled] = useState(true);
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
+	const savingRef = useRef(false);
+	const statusRequest = useRef(0);
 	const [loadError, setLoadError] = useState<string | null>(null);
 
 	const canUseRemotePush = useMemo(
@@ -147,7 +179,7 @@ export default function NotificationsSettingsPage() {
 		[pushConfig, platform],
 	);
 	const isMobile = platform === "IOS" || platform === "ANDROID";
-	const badge = statusBadge(status, localEnabled);
+	const badge = statusBadge(status, localEnabled, permissionState);
 	const deliveryEnabled =
 		localEnabled &&
 		Boolean(
@@ -161,7 +193,7 @@ export default function NotificationsSettingsPage() {
 				"thisDeviceWasNotDetectedAsIosOrAndroid",
 				"This device was not detected as iOS or Android.",
 			);
-		if (!pushConfig) return `Hub config has not loaded from this profile.`;
+		if (!pushConfig) return "Hub config has not loaded from this profile.";
 		if (!pushConfig.enabled)
 			return t(
 				"pushIsDisabledInTheHubConfig",
@@ -187,9 +219,11 @@ export default function NotificationsSettingsPage() {
 		if (!deviceId)
 			return t("noDeviceIdIsAvailable", "No device id is available.");
 		return null;
-	}, [deviceId, isMobile, loading, pluginState, pushConfig, saving]);
+	}, [deviceId, isMobile, loading, pluginState, pushConfig, saving, t]);
 
 	const refreshStatus = useCallback(async () => {
+		if (savingRef.current) return;
+		const request = ++statusRequest.current;
 		setLoading(true);
 		setLoadError(null);
 		try {
@@ -201,20 +235,33 @@ export default function NotificationsSettingsPage() {
 				getPushDeviceId(),
 				loadRemotePushPlugin(),
 			]);
+			if (request !== statusRequest.current) return;
 			setDeviceId(nextDeviceId);
 			setPluginState(remotePushApi ? "available" : "unavailable");
 			if (!remotePushApi) {
 				setPermissionState("unavailable");
+			} else {
+				const permission = await getRemotePushPermission().catch(() => null);
+				if (request !== statusRequest.current) return;
+				setPermissionState(
+					permission === true
+						? "granted"
+						: permission === false
+							? "denied"
+							: "unknown",
+				);
 			}
 
 			const nextStatus =
 				await backend.userState.getPushTargetStatus(nextDeviceId);
+			if (request !== statusRequest.current) return;
 			setStatus(nextStatus);
 		} catch (error) {
+			if (request !== statusRequest.current) return;
 			setLoadError(errorMessage(error));
 			setStatus(null);
 		} finally {
-			setLoading(false);
+			if (request === statusRequest.current) setLoading(false);
 		}
 	}, [backend.userState]);
 
@@ -225,13 +272,33 @@ export default function NotificationsSettingsPage() {
 
 	useEffect(() => {
 		void refreshStatus();
+		const refreshOnReturn = () => {
+			if (document.visibilityState !== "hidden") void refreshStatus();
+		};
+		document.addEventListener("visibilitychange", refreshOnReturn);
+		window.addEventListener(REMOTE_PUSH_REGISTRATION_EVENT, refreshOnReturn);
+		return () => {
+			document.removeEventListener("visibilitychange", refreshOnReturn);
+			window.removeEventListener(
+				REMOTE_PUSH_REGISTRATION_EVENT,
+				refreshOnReturn,
+			);
+		};
 	}, [refreshStatus]);
 
 	const setEnabled = useCallback(
 		async (enabled: boolean) => {
-			if (!deviceId) return;
+			if (!deviceId || savingRef.current) return;
 
+			savingRef.current = true;
+			statusRequest.current++;
+			setLoading(false);
 			setSaving(true);
+			const previousPreference = isRemotePushPreferenceEnabled();
+			if (!enabled) {
+				setRemotePushPreference(false);
+				setLocalEnabled(false);
+			}
 			try {
 				if (enabled) {
 					const nextPlatform = detectPushPlatform();
@@ -250,7 +317,9 @@ export default function NotificationsSettingsPage() {
 					const permission = await remotePushApi.requestPermission();
 					if (!permission.granted) {
 						setPermissionState("denied");
-						throw new Error("Notification permission was denied.");
+						throw new Error(
+							"Allow notifications for Flow Like in your device Settings, then try again.",
+						);
 					}
 					setPermissionState("granted");
 
@@ -285,10 +354,14 @@ export default function NotificationsSettingsPage() {
 				setStatus(nextStatus);
 				toast.success(
 					enabled
-						? t("pushNotificationsEnabled", "Push notifications enabled")
+						? t("pushRegistrationUpdated", "Push registration updated")
 						: t("pushNotificationsDisabled", "Push notifications disabled"),
 				);
 			} catch (error) {
+				if (!enabled) {
+					setRemotePushPreference(previousPreference);
+					setLocalEnabled(previousPreference);
+				}
 				toast.error(
 					t(
 						"failedToUpdatePushNotificationsVal",
@@ -297,10 +370,11 @@ export default function NotificationsSettingsPage() {
 					),
 				);
 			} finally {
+				savingRef.current = false;
 				setSaving(false);
 			}
 		},
-		[backend.userState, deviceId, pushConfig],
+		[backend.userState, deviceId, pushConfig, t],
 	);
 
 	return (
@@ -368,6 +442,38 @@ export default function NotificationsSettingsPage() {
 									onCheckedChange={setEnabled}
 								/>
 							</div>
+
+							{localEnabled && status?.registered && (
+								<Button
+									variant="outline"
+									disabled={switchDisabledReason !== null}
+									onClick={() => void setEnabled(true)}
+								>
+									<RefreshCw className="h-4 w-4" />
+									{t("refreshPushRegistration", "Refresh registration")}
+								</Button>
+							)}
+
+							{status?.last_delivery_status === "failed" && (
+								<div
+									role="alert"
+									className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+								>
+									{status.last_delivery_error ??
+										t(
+											"pushLastDeliveryFailed",
+											"The last notification could not be sent.",
+										)}
+								</div>
+							)}
+							{status?.stale && (
+								<p className="text-sm text-muted-foreground">
+									{t(
+										"pushRegistrationNeedsRefresh",
+										"This registration has expired. Refresh registration to resume notifications.",
+									)}
+								</p>
+							)}
 
 							{switchDisabledReason && (
 								<div className="flex gap-3 rounded-md border border-border/70 bg-muted/30 p-3 text-sm text-muted-foreground">
@@ -451,6 +557,24 @@ export default function NotificationsSettingsPage() {
 								</div>
 							) : (
 								<div className="flex flex-col">
+									<StatusRow
+										label={t("pushLastDeliveryAttempt", "Last send attempt")}
+										value={formatDate(status?.last_delivery_at)}
+										muted={!status?.last_delivery_at}
+									/>
+									<StatusRow
+										label={t("pushLastDeliveryResult", "Last send result")}
+										value={
+											status?.last_delivery_status === "accepted"
+												? t(
+														"pushAcceptedByProvider",
+														"Accepted by push service",
+													)
+												: status?.last_delivery_status === "failed"
+													? t("failed", "Failed")
+													: t("pushNotAttempted", "Not reported")
+										}
+									/>
 									<StatusRow
 										label={t("deviceId", "Device ID")}
 										value={

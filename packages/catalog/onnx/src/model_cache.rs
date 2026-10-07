@@ -83,14 +83,6 @@ pub(crate) const REID_MODELS: ModelFamily = ModelFamily {
 };
 
 #[cfg(any(feature = "execute", test))]
-pub(crate) const LAYA_MODELS: ModelFamily = ModelFamily {
-    label: "Laya",
-    hash_domain: b"flowlike-laya-model-cache-v1",
-    file_prefix: "laya",
-    roles: &["weights", "tokenizer", "config"],
-};
-
-#[cfg(any(feature = "execute", test))]
 pub(crate) const DECISION_MODELS: ModelFamily = ModelFamily {
     label: "decision",
     hash_domain: b"flowlike-decision-model-cache-v1",
@@ -107,12 +99,7 @@ pub(crate) const DECISION_MODELS: ModelFamily = ModelFamily {
 
 /// Every family whose files count towards, and may be evicted by, the shared directory quota.
 #[cfg(any(feature = "execute", test))]
-const MANAGED_FAMILIES: &[&ModelFamily] = &[
-    &FACE_ID_MODELS,
-    &REID_MODELS,
-    &LAYA_MODELS,
-    &DECISION_MODELS,
-];
+const MANAGED_FAMILIES: &[&ModelFamily] = &[&FACE_ID_MODELS, &REID_MODELS, &DECISION_MODELS];
 
 #[cfg(any(feature = "execute", test))]
 pub(crate) fn validate_model_cache_dir(cache_dir: &FlowPath, label: &str) -> Result<()> {
@@ -1501,14 +1488,14 @@ mod tests {
                 .collect();
             std::fs::write(&source, &contents).unwrap();
             let spec = ModelSpec::new(
-                &LAYA_MODELS,
+                &DECISION_MODELS,
                 "weights",
                 contents.len() as u64,
                 "https://example.com/model.onnx",
                 &sha256_hex(&contents),
             )
             .unwrap();
-            let destination = object(&format!("models/laya/{}", spec.cache_file_name()));
+            let destination = object(&format!("models/decision/{}", spec.cache_file_name()));
 
             for android_safe in [false, true] {
                 let store = Arc::new(

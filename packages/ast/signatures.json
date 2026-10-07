@@ -90242,9 +90242,9 @@
       "alias": "gliner"
     },
     {
-      "node_type": "onnx_laya",
-      "display": "onnxLaya",
-      "friendly": "Typed Decision (Laya)",
+      "node_type": "onnx_gliner_decision",
+      "display": "onnxGlinerDecision",
+      "friendly": "GLiNER Decision",
       "category": "AI/ML/ONNX/NLP",
       "inputs": [
         {
@@ -90254,8 +90254,17 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Directory containing model.onnx, tokenizer/tokenizer.json (or tokenizer.json), and rl_agent_config.json. Missing files download automatically into this directory's managed cache (about 681 MB for the complete bundle)",
+          "doc": "FlowPath directory for downloaded ONNX models and reusable cache. Place your exported weights here for custom. Custom requires a complete GLiNER2 classification bundle and never downloads missing files",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "model",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Model weights to use. ONNX presets download once and reuse the Model Directory cache. Custom loads your own complete bundle"
         },
         {
           "name": "text",
@@ -90302,8 +90311,8 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Typed answer, calibrated probabilities, confidence, action probability and token count",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LayaResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/LayaQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LayaProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"act_probability\":{\"description\":\"Probability of action index zero from the model's separate action head.\",\"type\":\"number\",\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"act_probability\",\"input_tokens\"],\"$defs\":{\"LayaQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"LayaProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}"
+          "doc": "Typed answer, option probabilities, confidence and token count",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"DecisionResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/DecisionQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/DecisionProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"input_tokens\"],\"$defs\":{\"DecisionQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"DecisionProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}"
         },
         {
           "name": "choice",
@@ -90325,9 +90334,9 @@
         }
       ],
       "impure": true,
-      "doc": "Answer a choice, rubric score, or true-probability question about text using Laya multilingual. Connect one Model Directory; existing model files are loaded and missing files download automatically from mizchi/laya-multilingual-onnx. Loaded models are reused within the execution cache.",
+      "doc": "Answer a choice, rubric score, or true-probability question about text with GLiNER2.5. Select ONNX model weights and connect a Model Directory to cache downloads and reuse them across runs. Select custom to load your own complete bundle without downloading missing files.",
       "namespace": "onnx",
-      "alias": "laya"
+      "alias": "gliner_decision"
     },
     {
       "node_type": "onnx_model_info",

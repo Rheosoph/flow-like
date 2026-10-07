@@ -1129,12 +1129,12 @@ export const generatedNodeSidebar = [
                     "slug": "nodes/ai/ml/onnx/nlp"
                   },
                   {
-                    "label": "Named Entity Recognition",
-                    "slug": "nodes/ai/ml/onnx/nlp/onnx-ner"
+                    "label": "GLiNER Decision",
+                    "slug": "nodes/ai/ml/onnx/nlp/onnx-gliner-decision"
                   },
                   {
-                    "label": "Typed Decision",
-                    "slug": "nodes/ai/ml/onnx/nlp/onnx-laya"
+                    "label": "Named Entity Recognition",
+                    "slug": "nodes/ai/ml/onnx/nlp/onnx-ner"
                   },
                   {
                     "label": "Zero-Shot NER (GLiNER)",

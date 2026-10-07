@@ -449,9 +449,20 @@ describe("frame", () => {
 		const page = text(view.container);
 		expect(page).toContain("Endpoint & limits needs your attention first.");
 		expect(page).toContain("Set limits the device accepts");
+		expect(
+			view.container
+				.querySelector('ol[aria-label="Deploy steps"] li:nth-child(5)')
+				?.getAttribute("data-s"),
+		).toBe("err");
+		const summary = byRole("region", "Your choices", view.container);
+		expect(
+			summary.querySelector("li:nth-child(5)")?.getAttribute("data-s"),
+		).toBe("err");
+		expect(text(summary)).toContain("Set limits the device accepts");
 		// The step's own primary isn't offered while the plan can't be sent.
 		expect(kit.primaries(view.container)).toBe(0);
 		await clickByText("Go to Endpoint & limits", view.container);
+		await view.settle();
 		expect(lastHref(view)).toContain("step=endpoint");
 	});
 

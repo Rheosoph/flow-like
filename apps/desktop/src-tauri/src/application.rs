@@ -1486,6 +1486,7 @@ pub fn run() {
             functions::statistics::get_board_statistics,
             functions::statistics::get_cached_statistics,
             functions::notifications::get_pending_notification_tap,
+            functions::notifications::get_remote_push_token,
             functions::notifications::prepare_notification_attachment,
             functions::device_id::get_stable_device_id,
             functions::feedback::upsert_offline_feedback,

@@ -13,7 +13,7 @@
 #   "transformers>=5.17,<6",
 # ]
 # ///
-"""Export a GLiNER2 classification bundle for Flow-Like's Typed Decision node.
+"""Export a GLiNER2 classification bundle for Flow-Like's GLiNER Decision node.
 
 Run with uv to install the dependencies in an isolated environment:
   uv run tools/export-decision-model.py --model fastino/gliner2.5-small-v1 --output ./decision-small

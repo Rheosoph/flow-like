@@ -700,6 +700,8 @@ class LiveManager implements LiveSessionManagerImpl {
 
 	private settle(entry: Entry): void {
 		if (totalDemand(entry) > 0 || hasTasks(entry) || entry.draining) return;
+		entry.dataTunnel?.close();
+		entry.dataTunnel = undefined;
 		if (
 			entry.state.kind === "reconnecting" ||
 			entry.state.kind === "unreachable"
@@ -904,14 +906,22 @@ class LiveManager implements LiveSessionManagerImpl {
 		if (step) this.markStep(entry, step, "failed", stepDetail(failure.code));
 		if (error instanceof LiveCallError) return error;
 		if (!cause) {
+			entry.dataTunnel?.close();
+			entry.dataTunnel = undefined;
 			this.setState(entry, { kind: "idle" });
 			return new LiveCallError("cancelled", failure.message);
 		}
-		if (isFatalLiveError(cause))
+		if (isFatalLiveError(cause)) {
+			entry.dataTunnel?.close();
+			entry.dataTunnel = undefined;
 			this.setState(entry, { kind: "failed", cause });
-		else if (totalDemand(entry) > 0 || hasTasks(entry))
+		} else if (totalDemand(entry) > 0 || hasTasks(entry))
 			this.scheduleRetry(entry, cause);
-		else this.setState(entry, { kind: "idle" });
+		else {
+			entry.dataTunnel?.close();
+			entry.dataTunnel = undefined;
+			this.setState(entry, { kind: "idle" });
+		}
 		return new LiveCallError(
 			liveErrorCode(cause),
 			failure.message,
@@ -976,13 +986,7 @@ class LiveManager implements LiveSessionManagerImpl {
 				expiresAt: conn.expiresAt,
 			});
 		this.closeConnection(entry);
-		try {
-			return await this.connect(entry);
-		} catch (error) {
-			entry.dataTunnel?.close();
-			entry.dataTunnel = undefined;
-			throw error;
-		}
+		return this.connect(entry);
 	}
 
 	/** The connection stops being the entry's before it closes, so its close event is not taken for a drop. */
@@ -996,7 +1000,7 @@ class LiveManager implements LiveSessionManagerImpl {
 	private closed(
 		entry: Entry,
 		conn: LiveConnection,
-		_reason: "local" | "remote",
+		reason: "local" | "remote",
 	): void {
 		if (entry.conn !== conn) return;
 		entry.conn = undefined;
@@ -1004,9 +1008,10 @@ class LiveManager implements LiveSessionManagerImpl {
 		if (
 			(totalDemand(entry) > 0 || hasTasks(entry)) &&
 			this.ports.keys.controller(entry.id)
-		)
+		) {
+			if (reason === "remote") entry.dataTunnel = conn.detachDataTunnel?.();
 			this.scheduleRetry(entry, { step: "session", code: "closed" });
-		else this.setState(entry, { kind: "idle" });
+		} else this.setState(entry, { kind: "idle" });
 	}
 
 	/** A session with room for one full reply window; renews or connects when there is none. */

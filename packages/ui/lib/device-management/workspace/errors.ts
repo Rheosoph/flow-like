@@ -5,6 +5,7 @@ import {
 	ManagementRequestNotSentError,
 	ManagementUnconfirmedError,
 } from "../transport";
+import { DeviceTunnelError } from "../tunnel";
 import type { ManagementRejection } from "../types";
 import type {
 	FleetDeviceState,
@@ -128,6 +129,15 @@ const CONNECT_CODE: Record<ConnectErrorCode, DeviceErrorCode> = {
 	identity_confirmation_failed: "identity_confirmation_failed",
 	cancelled: "cancelled",
 };
+
+const TUNNEL_CODE = new Map<string, DeviceErrorCode>([
+	["connection_closed", "session_closed"],
+	["heartbeat_timeout", "timeout"],
+	["renewal_timeout", "timeout"],
+	["open_timeout", "timeout"],
+	["expired", "expired"],
+	["cancelled", "cancelled"],
+]);
 
 type Filed = readonly [ConnectionStep, DeviceErrorCode];
 
@@ -291,6 +301,16 @@ export function classifyDeviceError(
 		return { step: "reading_services", code: "not_sent", message };
 	if (error instanceof ManagementUnconfirmedError)
 		return { step: "reading_services", code: "no_reply", message };
+	const tunnelCode =
+		error instanceof DeviceTunnelError
+			? TUNNEL_CODE.get(error.code)
+			: undefined;
+	if (tunnelCode)
+		return {
+			step: "reading_services",
+			code: tunnelCode,
+			message,
+		};
 	const filed = TRANSPORT_MESSAGES[message];
 	if (filed) return { step: filed[0], code: filed[1], message };
 	if (message.startsWith(INSPECTION_REJECTED))

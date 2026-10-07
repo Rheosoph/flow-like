@@ -20371,6 +20371,156 @@ export const catalogNodes: CatalogNode[] = [
     "permissions": []
   },
   {
+    "slug": "nodes/ai/ml/onnx/nlp/onnx-gliner-decision",
+    "packageName": "onnx",
+    "name": "onnx_gliner_decision",
+    "friendlyName": "GLiNER Decision",
+    "description": "Answer a choice, rubric score, or true-probability question about text with GLiNER2.5. Select ONNX model weights and connect a Model Directory to cache downloads and reuse them across runs. Select custom to load your own complete bundle without downloading missing files.",
+    "category": "AI/ML/ONNX/NLP",
+    "categoryPath": [
+      "AI",
+      "ML",
+      "ONNX",
+      "NLP"
+    ],
+    "categorySlug": "nodes/ai/ml/onnx/nlp",
+    "icon": "/flow/icons/type.svg",
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Initiate execution",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "model_dir",
+        "friendlyName": "Model Directory",
+        "description": "FlowPath directory for downloaded ONNX models and reusable cache. Place your exported weights here for custom. Custom requires a complete GLiNER2 classification bundle and never downloads missing files",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "model",
+        "friendlyName": "Model",
+        "description": "Model weights to use. ONNX presets download once and reuse the Model Directory cache. Custom loads your own complete bundle",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "fastino/GLiNER2.5-Decide",
+        "index": 3,
+        "options": {
+          "validValues": [
+            "fastino/GLiNER2.5-Decide",
+            "fastino/GLiNER2.5-multi-Decide",
+            "fastino/GLiNER2.5-Decide-1B",
+            "fastino/gliner2.5-multi-v1",
+            "fastino/gliner2.5-base-v1",
+            "fastino/gliner2.5-small-v1",
+            "custom"
+          ]
+        }
+      },
+      {
+        "name": "text",
+        "friendlyName": "Text",
+        "description": "Text or serialized JSON state to evaluate",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "instructions",
+        "friendlyName": "Instructions",
+        "description": "Question to answer about Text",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "question_type",
+        "friendlyName": "Question Type",
+        "description": "choice selects a label; score returns an expected rubric level; noul returns P(true)",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "choice",
+        "index": 6,
+        "options": {
+          "validValues": [
+            "choice",
+            "score",
+            "noul"
+          ]
+        }
+      },
+      {
+        "name": "criteria",
+        "friendlyName": "Choices",
+        "description": "Unique labels to choose from",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Array",
+        "defaultValue": [],
+        "index": 7
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Output",
+        "description": "Decision complete",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "result",
+        "friendlyName": "Result",
+        "description": "Typed answer, option probabilities, confidence and token count",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"DecisionResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/DecisionQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/DecisionProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"input_tokens\"],\"$defs\":{\"DecisionQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"DecisionProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}",
+        "index": 2
+      },
+      {
+        "name": "choice",
+        "friendlyName": "Choice",
+        "description": "Selected choice label",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 3
+      },
+      {
+        "name": "confidence",
+        "friendlyName": "Confidence",
+        "description": "Normalized entropy confidence, or max(P(false), P(true)) for noul",
+        "pinType": "Output",
+        "dataType": "Float",
+        "valueType": "Normal",
+        "index": 6
+      }
+    ],
+    "inputCount": 7,
+    "outputCount": 4,
+    "flags": [],
+    "version": 1,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
     "slug": "nodes/ai/ml/onnx/nlp/onnx-ner",
     "packageName": "onnx",
     "name": "onnx_ner",
@@ -20530,157 +20680,6 @@ export const catalogNodes: CatalogNode[] = [
     "outputCount": 4,
     "flags": [],
     "version": 2,
-    "oauthProviders": [],
-    "requiredOauthScopes": {},
-    "permissions": []
-  },
-  {
-    "slug": "nodes/ai/ml/onnx/nlp/onnx-laya",
-    "packageName": "onnx",
-    "name": "onnx_laya",
-    "friendlyName": "Typed Decision",
-    "description": "Answer a choice, rubric score, or true-probability question about text with Laya or GLiNER2.5. Select ONNX model weights and connect a Model Directory to cache downloads and reuse them across runs. Select custom to load your own complete bundle without downloading missing files.",
-    "category": "AI/ML/ONNX/NLP",
-    "categoryPath": [
-      "AI",
-      "ML",
-      "ONNX",
-      "NLP"
-    ],
-    "categorySlug": "nodes/ai/ml/onnx/nlp",
-    "icon": "/flow/icons/type.svg",
-    "pins": [
-      {
-        "name": "exec_in",
-        "friendlyName": "Input",
-        "description": "Initiate execution",
-        "pinType": "Input",
-        "dataType": "Execution",
-        "valueType": "Normal",
-        "index": 1
-      },
-      {
-        "name": "model_dir",
-        "friendlyName": "Model Directory",
-        "description": "FlowPath directory for downloaded ONNX models and reusable cache. Place your exported weights here for custom. Custom requires a complete Laya or GLiNER2 classification bundle and never downloads missing files",
-        "pinType": "Input",
-        "dataType": "Struct",
-        "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
-        "index": 2,
-        "options": {
-          "enforceSchema": true
-        }
-      },
-      {
-        "name": "model",
-        "friendlyName": "Model",
-        "description": "Model weights to use. ONNX presets download once and reuse the Model Directory cache. Custom loads your own complete bundle",
-        "pinType": "Input",
-        "dataType": "String",
-        "valueType": "Normal",
-        "defaultValue": "mizchi/laya-multilingual-onnx",
-        "index": 3,
-        "options": {
-          "validValues": [
-            "mizchi/laya-multilingual-onnx",
-            "fastino/GLiNER2.5-Decide",
-            "fastino/GLiNER2.5-multi-Decide",
-            "fastino/GLiNER2.5-Decide-1B",
-            "fastino/gliner2.5-multi-v1",
-            "fastino/gliner2.5-base-v1",
-            "fastino/gliner2.5-small-v1",
-            "custom"
-          ]
-        }
-      },
-      {
-        "name": "text",
-        "friendlyName": "Text",
-        "description": "Text or serialized JSON state to evaluate",
-        "pinType": "Input",
-        "dataType": "String",
-        "valueType": "Normal",
-        "index": 4
-      },
-      {
-        "name": "instructions",
-        "friendlyName": "Instructions",
-        "description": "Question to answer about Text",
-        "pinType": "Input",
-        "dataType": "String",
-        "valueType": "Normal",
-        "index": 5
-      },
-      {
-        "name": "question_type",
-        "friendlyName": "Question Type",
-        "description": "choice selects a label; score returns an expected rubric level; noul returns P(true)",
-        "pinType": "Input",
-        "dataType": "String",
-        "valueType": "Normal",
-        "defaultValue": "choice",
-        "index": 6,
-        "options": {
-          "validValues": [
-            "choice",
-            "score",
-            "noul"
-          ]
-        }
-      },
-      {
-        "name": "criteria",
-        "friendlyName": "Choices",
-        "description": "Unique labels to choose from",
-        "pinType": "Input",
-        "dataType": "String",
-        "valueType": "Array",
-        "defaultValue": [],
-        "index": 7
-      },
-      {
-        "name": "exec_out",
-        "friendlyName": "Output",
-        "description": "Decision complete",
-        "pinType": "Output",
-        "dataType": "Execution",
-        "valueType": "Normal",
-        "index": 1
-      },
-      {
-        "name": "result",
-        "friendlyName": "Result",
-        "description": "Typed answer, option probabilities, confidence and token count. act_probability is Laya's action probability and null for models without an action head",
-        "pinType": "Output",
-        "dataType": "Struct",
-        "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LayaResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/LayaQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LayaProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"act_probability\":{\"description\":\"Laya's probability of action index zero; absent for models without an action head.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"input_tokens\"],\"$defs\":{\"LayaQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"LayaProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}",
-        "index": 2
-      },
-      {
-        "name": "choice",
-        "friendlyName": "Choice",
-        "description": "Selected choice label",
-        "pinType": "Output",
-        "dataType": "String",
-        "valueType": "Normal",
-        "index": 3
-      },
-      {
-        "name": "confidence",
-        "friendlyName": "Confidence",
-        "description": "Normalized entropy confidence, or max(P(false), P(true)) for noul",
-        "pinType": "Output",
-        "dataType": "Float",
-        "valueType": "Normal",
-        "index": 6
-      }
-    ],
-    "inputCount": 7,
-    "outputCount": 4,
-    "flags": [],
-    "version": 3,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []

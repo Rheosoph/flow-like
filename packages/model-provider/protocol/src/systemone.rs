@@ -88,6 +88,40 @@ fn structured(value: &Value) -> bool {
 }
 
 impl SystemOneRequest {
+    /// Put sidecar images into the flat content-part state accepted by OpenRouter.
+    pub fn with_images_in_state(&self) -> Result<Self> {
+        self.validate()?;
+        if self.images.is_empty() {
+            return Ok(self.clone());
+        }
+        let mut parts = match &self.state {
+            Value::Array(parts) if parts.iter().all(is_content_part) => parts.clone(),
+            state => {
+                ensure!(
+                    validate_state_images(state)? == 0,
+                    "Adding images to message-style image state requires flat text/image_url content parts"
+                );
+                let text = match state {
+                    Value::String(text) => text.clone(),
+                    state => serde_json::to_string(state)?,
+                };
+                vec![serde_json::json!({"type":"text","text":text})]
+            }
+        };
+        parts.extend(
+            self.images
+                .iter()
+                .map(|image| serde_json::json!({"type":"image_url","image_url":{"url":image}})),
+        );
+        let request = Self {
+            state: Value::Array(parts),
+            questions: self.questions.clone(),
+            images: Vec::new(),
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             serde_json::to_vec(self)?.len() <= MAX_REQUEST_BYTES,
@@ -169,6 +203,29 @@ impl SystemOneRequest {
     }
 }
 
+fn is_content_part(part: &Value) -> bool {
+    let Some(part) = part.as_object() else {
+        return false;
+    };
+    if part.len() != 2 {
+        return false;
+    }
+    match part.get("type").and_then(Value::as_str) {
+        Some("text") => part.get("text").is_some_and(Value::is_string),
+        Some("image_url") => part.get("image_url").is_some_and(|image| {
+            image.is_string()
+                || image.as_object().is_some_and(|image| {
+                    image.get("url").is_some_and(Value::is_string)
+                        && image
+                            .keys()
+                            .all(|key| matches!(key.as_str(), "url" | "detail"))
+                        && image.get("detail").is_none_or(Value::is_string)
+                })
+        }),
+        _ => false,
+    }
+}
+
 fn validate_image(image: &str) -> Result<()> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let (header, data) = image
@@ -186,28 +243,37 @@ fn validate_image(image: &str) -> Result<()> {
 }
 
 fn validate_state_images(state: &Value) -> Result<usize> {
-    let messages = state.get("messages").unwrap_or(state);
-    let Some(messages) = messages.as_array() else {
+    let parts = state.get("messages").unwrap_or(state);
+    let Some(parts) = parts.as_array() else {
         return Ok(0);
     };
     let mut count = 0;
-    for part in messages
-        .iter()
-        .filter_map(|m| m.get("content").and_then(Value::as_array))
-        .flatten()
-    {
-        if part.get("type").and_then(Value::as_str) == Some("image_url") {
-            let image = part.get("image_url").context("Missing image_url")?;
-            let image = image
-                .get("url")
-                .unwrap_or(image)
-                .as_str()
-                .context("Invalid image_url")?;
-            validate_image(image)?;
-            count += 1;
+    for part in parts {
+        count += validate_image_part(part, false)?;
+        if let Some(content) = part.get("content").and_then(Value::as_array) {
+            for nested in content {
+                count += validate_image_part(nested, true)?;
+            }
         }
     }
     Ok(count)
+}
+
+fn validate_image_part(part: &Value, require_image_url: bool) -> Result<usize> {
+    if part.get("type").and_then(Value::as_str) != Some("image_url") {
+        return Ok(0);
+    }
+    let Some(image) = part.get("image_url") else {
+        ensure!(!require_image_url, "Missing image_url");
+        return Ok(0);
+    };
+    let image = image
+        .get("url")
+        .unwrap_or(image)
+        .as_str()
+        .context("Invalid image_url")?;
+    validate_image(image)?;
+    Ok(1)
 }
 
 impl SystemOneResponse {
@@ -294,4 +360,142 @@ fn distribution(values: &BTreeMap<String, f64>, confidence: f64) -> Result<()> {
         "System One probabilities do not sum to 1"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const IMAGE: &str = "data:image/png;base64,AQ==";
+    const OTHER_IMAGE: &str = "data:image/png;base64,Ag==";
+
+    fn request(state: Value, images: Vec<String>) -> SystemOneRequest {
+        SystemOneRequest {
+            state,
+            images,
+            questions: BTreeMap::from([(
+                "visible".into(),
+                SystemOneQuestion::Noul {
+                    instructions: json!("Is the item visible?"),
+                    criteria: None,
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn state_images_preserve_text_questions_and_image_order() {
+        let original = request(
+            json!("Inspect these"),
+            vec![IMAGE.into(), OTHER_IMAGE.into()],
+        );
+        let adapted = original.with_images_in_state().unwrap();
+        assert_eq!(
+            adapted.state,
+            json!([
+                {"type":"text","text":"Inspect these"},
+                {"type":"image_url","image_url":{"url":IMAGE}},
+                {"type":"image_url","image_url":{"url":OTHER_IMAGE}}
+            ])
+        );
+        assert_eq!(
+            serde_json::to_value(&adapted.questions).unwrap(),
+            serde_json::to_value(&original.questions).unwrap()
+        );
+        assert!(
+            serde_json::to_value(&adapted)
+                .unwrap()
+                .get("images")
+                .is_none()
+        );
+        assert_eq!(original.state, json!("Inspect these"));
+        assert_eq!(original.images, [IMAGE, OTHER_IMAGE]);
+    }
+
+    #[test]
+    fn state_image_conversion_keeps_plain_json_and_existing_content() {
+        for state in [
+            json!({"ticket":{"id":7,"urgent":true},"labels":["a","b"]}),
+            json!([{"id":1}, {"id":2}]),
+            json!([{"type":"text","label":"invoice"}]),
+            json!([{"type":"text","text":"invoice","customer_id":42}]),
+            json!([{"type":"image_url","label":"invoice"}]),
+        ] {
+            let adapted = request(state.clone(), vec![IMAGE.into()])
+                .with_images_in_state()
+                .unwrap();
+            let recovered: Value =
+                serde_json::from_str(adapted.state[0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(recovered, state);
+        }
+        let parts = json!([
+            {"type":"image_url","image_url":{"url":IMAGE}},
+            {"type":"text","text":"Compare with the next image"}
+        ]);
+        let adapted = request(parts.clone(), vec![OTHER_IMAGE.into()])
+            .with_images_in_state()
+            .unwrap();
+        assert_eq!(adapted.state[0], parts[0]);
+        assert_eq!(adapted.state[1], parts[1]);
+        assert_eq!(adapted.state[2]["image_url"]["url"], OTHER_IMAGE);
+        let again = adapted.with_images_in_state().unwrap();
+        assert_eq!(
+            serde_json::to_value(again).unwrap(),
+            serde_json::to_value(adapted).unwrap()
+        );
+    }
+
+    #[test]
+    fn image_free_requests_keep_their_exact_state_shape() {
+        for state in [
+            json!("text"),
+            json!({"messages":[]}),
+            json!(["a", "b"]),
+            json!([{"type":"image_url","label":"invoice"}]),
+        ] {
+            let original = request(state, Vec::new());
+            assert_eq!(
+                serde_json::to_value(original.with_images_in_state().unwrap()).unwrap(),
+                serde_json::to_value(original).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn flat_state_images_share_validation_and_count_with_sidecars() {
+        assert!(
+            request(json!([{"content":[{"type":"image_url"}]}]), Vec::new())
+                .validate()
+                .is_err()
+        );
+        let state = json!([{"type":"image_url","image_url":{"url":IMAGE}}]);
+        let original = request(state, vec![OTHER_IMAGE.into(); 7]);
+        original.with_images_in_state().unwrap();
+        let mut excessive = original.clone();
+        excessive.images.push(OTHER_IMAGE.into());
+        assert!(excessive.validate().is_err());
+        assert!(excessive.with_images_in_state().is_err());
+        for image in ["https://example.com/image.png", "data:image/png;base64,!"] {
+            assert!(
+                request(
+                    json!([{"type":"image_url","image_url":{"url":image}}]),
+                    Vec::new()
+                )
+                .validate()
+                .is_err()
+            );
+        }
+        let messages = json!([{"role":"user","content":[
+            {"type":"text","text":"Keep this role and image"},
+            {"type":"image_url","image_url":{"url":IMAGE}}
+        ]}]);
+        let original = request(messages.clone(), Vec::new());
+        assert_eq!(original.with_images_in_state().unwrap().state, messages);
+        assert!(
+            request(messages, vec![OTHER_IMAGE.into()])
+                .with_images_in_state()
+                .is_err()
+        );
+    }
 }

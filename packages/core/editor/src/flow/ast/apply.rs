@@ -211,7 +211,7 @@ pub async fn apply_flowscript_to_board_file(
         "string_format",
         "string_render_template",
         "a2ui_push_csv_to_chart",
-        "onnx_laya",
+        "onnx_gliner_decision",
         "df_sql_query",
         "df_sql_query_cached",
         "df_execute_sql",

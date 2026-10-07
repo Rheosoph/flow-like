@@ -44,6 +44,8 @@ export interface DeploySummaryInput {
 	limitsOnly: boolean;
 	versionLabel?: string;
 	prepared?: DeployPrepared | null;
+	/** Current failures and pending checks, including preparation outside the plan's validation. */
+	blockers?: Partial<Record<DeployStepId, { text: string; busy?: boolean }>>;
 	deployed: boolean;
 	/** This plan's run once it started in this window (or was picked up after a reload). */
 	run?: DeployRunState | null;
@@ -436,6 +438,8 @@ function itemState(
 	if (step === "rollout") return input.deployed ? "done" : "todo";
 	const visited = index <= input.reached || input.prefilled.has(step);
 	if (!visited) return "todo";
+	const blocker = input.blockers?.[step];
+	if (blocker) return blocker.busy ? "busy" : "err";
 	return index < input.reached && errorsAt(input.check, step) ? "err" : "done";
 }
 
@@ -460,9 +464,14 @@ function summaryItems(context: ValueContext): WizardSummaryItem[] {
 		return {
 			id: step,
 			label: stepTitle(context.t, step, context.limitsOnly),
-			value: VALUES[step](context),
+			value:
+				(state === "err" || state === "busy") && context.blockers?.[step]
+					? context.blockers[step]?.text
+					: VALUES[step](context),
 			state,
-			...(state === "err" ? { errors: errorsAt(context.check, step) } : {}),
+			...(state === "err"
+				? { errors: Math.max(1, errorsAt(context.check, step)) }
+				: {}),
 			...(canVisit(context, step)
 				? { onSelect: () => context.goTo(step) }
 				: {}),

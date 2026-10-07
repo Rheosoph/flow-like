@@ -1,7 +1,9 @@
 //! GLiNER2 classification uses a schema prefix and scores its `[L]` label markers.
 //! The prompt layout follows Fastino's GLiNER2 processor and whitespace word splitter.
 
-use crate::laya::{LayaOptions, LayaProbability, LayaQuestionType, LayaResult};
+use crate::gliner_decision::{
+    DecisionOptions, DecisionProbability, DecisionQuestionType, DecisionResult,
+};
 use flow_like_model_provider::ml::{
     ndarray::Array2,
     ort::{
@@ -12,7 +14,7 @@ use flow_like_model_provider::ml::{
 };
 use flow_like_types::{Result, anyhow, regex::Regex};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, sync::LazyLock};
+use std::sync::LazyLock;
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,25 +58,12 @@ struct Question {
     labels: Vec<String>,
 }
 
-fn question(options: &LayaOptions) -> Result<Question> {
-    if options.instructions.trim().is_empty() {
-        return Err(anyhow!("Decision Instructions must contain a question"));
-    }
+fn question(options: &DecisionOptions) -> Result<Question> {
+    options.validate()?;
     let mut prompt = options.instructions.clone();
     let labels = match options.question_type {
-        LayaQuestionType::Choice | LayaQuestionType::Score => {
-            if options.criteria.is_empty()
-                || options.criteria.iter().any(|label| label.trim().is_empty())
-            {
-                return Err(anyhow!(
-                    "Decision choice and score questions need non-empty Criteria"
-                ));
-            }
-            if options.question_type == LayaQuestionType::Choice {
-                let unique: HashSet<_> = options.criteria.iter().collect();
-                if unique.len() != options.criteria.len() {
-                    return Err(anyhow!("Decision choice labels must be unique"));
-                }
+        DecisionQuestionType::Choice | DecisionQuestionType::Score => {
+            if options.question_type == DecisionQuestionType::Choice {
                 options.criteria.clone()
             } else {
                 for (index, description) in options.criteria.iter().enumerate() {
@@ -85,12 +74,7 @@ fn question(options: &LayaOptions) -> Result<Question> {
                     .collect()
             }
         }
-        LayaQuestionType::Noul => {
-            if !options.criteria.is_empty() && options.criteria.len() != 2 {
-                return Err(anyhow!(
-                    "Decision noul Criteria must be empty or contain false and true descriptions, in that order"
-                ));
-            }
+        DecisionQuestionType::Noul => {
             for (label, description) in ["false", "true"].into_iter().zip(&options.criteria) {
                 if !description.trim().is_empty() {
                     prompt.push_str(&format!(" [DESCRIPTION] {label}: {description}"));
@@ -119,7 +103,7 @@ static WORDS: LazyLock<Regex> = LazyLock::new(|| {
 pub fn prepare_gliner(
     tokenizer: &Tokenizer,
     text: &str,
-    options: &LayaOptions,
+    options: &DecisionOptions,
     config: &GlinerConfig,
 ) -> Result<GlinerInput> {
     config.validate()?;
@@ -265,9 +249,9 @@ pub fn validate_split_sessions(encoder: &Session, classifier: &Session) -> Resul
 fn decode_gliner(
     logits: &[f32],
     input_tokens: usize,
-    options: &LayaOptions,
+    options: &DecisionOptions,
     config: &GlinerConfig,
-) -> Result<LayaResult> {
+) -> Result<DecisionResult> {
     config.validate()?;
     let labels = question(options)?.labels;
     if logits.len() != labels.len() || logits.iter().any(|value| !value.is_finite()) {
@@ -291,7 +275,7 @@ fn decode_gliner(
             best
         }
     });
-    let confidence = if options.question_type == LayaQuestionType::Noul {
+    let confidence = if options.question_type == DecisionQuestionType::Noul {
         probabilities[0].max(probabilities[1])
     } else if labels.len() == 1 {
         1.0
@@ -300,10 +284,11 @@ fn decode_gliner(
         (1.0 - entropy / (labels.len() as f64).ln()).clamp(0.0, 1.0)
     };
     let round = |value: f64| (value * 10000.0).round_ties_even() / 10000.0;
-    Ok(LayaResult {
+    Ok(DecisionResult {
         question_type: options.question_type,
-        choice: (options.question_type == LayaQuestionType::Choice).then(|| labels[best].clone()),
-        score: (options.question_type == LayaQuestionType::Score).then(|| {
+        choice: (options.question_type == DecisionQuestionType::Choice)
+            .then(|| labels[best].clone()),
+        score: (options.question_type == DecisionQuestionType::Score).then(|| {
             round(
                 probabilities
                     .iter()
@@ -312,17 +297,17 @@ fn decode_gliner(
                     .sum(),
             )
         }),
-        noul: (options.question_type == LayaQuestionType::Noul).then(|| round(probabilities[1])),
+        noul: (options.question_type == DecisionQuestionType::Noul)
+            .then(|| round(probabilities[1])),
         probabilities: labels
             .into_iter()
             .zip(probabilities)
-            .map(|(label, probability)| LayaProbability {
+            .map(|(label, probability)| DecisionProbability {
                 label,
                 probability: round(probability),
             })
             .collect(),
         confidence: round(confidence),
-        act_probability: None,
         input_tokens,
     })
 }
@@ -331,9 +316,9 @@ pub fn infer_gliner(
     session: &mut Session,
     tokenizer: &Tokenizer,
     text: &str,
-    options: &LayaOptions,
+    options: &DecisionOptions,
     config: &GlinerConfig,
-) -> Result<LayaResult> {
+) -> Result<DecisionResult> {
     validate_session(session)?;
     let prepared = prepare_gliner(tokenizer, text, options, config)?;
     let length = prepared.input_ids.len();
@@ -364,9 +349,9 @@ pub fn infer_gliner_split(
     classifier: &mut Session,
     tokenizer: &Tokenizer,
     text: &str,
-    options: &LayaOptions,
+    options: &DecisionOptions,
     config: &GlinerConfig,
-) -> Result<LayaResult> {
+) -> Result<DecisionResult> {
     validate_split_sessions(encoder, classifier)?;
     let prepared = prepare_gliner(tokenizer, text, options, config)?;
     let length = prepared.input_ids.len();
@@ -415,8 +400,8 @@ pub fn infer_gliner_split(
 mod tests {
     use super::*;
 
-    fn options(kind: LayaQuestionType, criteria: &[&str]) -> LayaOptions {
-        LayaOptions {
+    fn options(kind: DecisionQuestionType, criteria: &[&str]) -> DecisionOptions {
+        DecisionOptions {
             question_type: kind,
             instructions: "Which applies?".into(),
             criteria: criteria.iter().map(|s| s.to_string()).collect(),
@@ -461,7 +446,7 @@ mod tests {
         let input = prepare_gliner(
             &tokenizer(),
             "GOOD bad",
-            &options(LayaQuestionType::Choice, &["positive", "negative"]),
+            &options(DecisionQuestionType::Choice, &["positive", "negative"]),
             &GlinerConfig::default(),
         )
         .unwrap();
@@ -495,7 +480,7 @@ mod tests {
 
     #[test]
     fn text_truncation_preserves_every_label_and_schema_overflow_fails() {
-        let options = options(LayaQuestionType::Choice, &["positive", "negative"]);
+        let options = options(DecisionQuestionType::Choice, &["positive", "negative"]);
         let config = GlinerConfig {
             max_length: 13,
             ..Default::default()
@@ -523,7 +508,7 @@ mod tests {
         let input = prepare_gliner(
             &tokenizer(),
             "",
-            &options(LayaQuestionType::Choice, &["positive [L]", "negative"]),
+            &options(DecisionQuestionType::Choice, &["positive [L]", "negative"]),
             &GlinerConfig::default(),
         )
         .unwrap();
@@ -533,13 +518,13 @@ mod tests {
 
     #[test]
     fn score_and_noul_use_label_descriptions() {
-        let score = question(&options(LayaQuestionType::Score, &["bad", "good"])).unwrap();
+        let score = question(&options(DecisionQuestionType::Score, &["bad", "good"])).unwrap();
         assert_eq!(score.labels, ["0", "1"]);
         assert_eq!(
             score.prompt,
             "Which applies? [DESCRIPTION] 0: bad [DESCRIPTION] 1: good"
         );
-        let noul = question(&options(LayaQuestionType::Noul, &["absent", "present"])).unwrap();
+        let noul = question(&options(DecisionQuestionType::Noul, &["absent", "present"])).unwrap();
         assert_eq!(noul.labels, ["false", "true"]);
         assert_eq!(
             noul.prompt,
@@ -548,22 +533,21 @@ mod tests {
     }
 
     #[test]
-    fn decoding_preserves_typed_results_and_has_no_action_probability() {
+    fn decoding_preserves_typed_results() {
         let config = GlinerConfig::default();
         let choice = decode_gliner(
             &[1000.0, 1000.0],
             10,
-            &options(LayaQuestionType::Choice, &["first", "second"]),
+            &options(DecisionQuestionType::Choice, &["first", "second"]),
             &config,
         )
         .unwrap();
         assert_eq!(choice.choice.as_deref(), Some("first"));
         assert_eq!(choice.confidence, 0.0);
-        assert_eq!(choice.act_probability, None);
         let score = decode_gliner(
             &[0.0; 3],
             10,
-            &options(LayaQuestionType::Score, &["low", "medium", "high"]),
+            &options(DecisionQuestionType::Score, &["low", "medium", "high"]),
             &config,
         )
         .unwrap();
@@ -571,7 +555,7 @@ mod tests {
         let noul = decode_gliner(
             &[0.0, 2.0],
             10,
-            &options(LayaQuestionType::Noul, &[]),
+            &options(DecisionQuestionType::Noul, &[]),
             &config,
         )
         .unwrap();
@@ -581,9 +565,9 @@ mod tests {
 
     #[test]
     fn invalid_question_configuration_and_outputs_fail() {
-        assert!(question(&options(LayaQuestionType::Choice, &["same", "same"])).is_err());
-        assert!(question(&options(LayaQuestionType::Choice, &[])).is_err());
-        assert!(question(&options(LayaQuestionType::Noul, &["yes"])).is_err());
+        assert!(question(&options(DecisionQuestionType::Choice, &["same", "same"])).is_err());
+        assert!(question(&options(DecisionQuestionType::Choice, &[])).is_err());
+        assert!(question(&options(DecisionQuestionType::Noul, &["yes"])).is_err());
         assert!(
             GlinerConfig {
                 temperature: f64::NAN,
@@ -596,7 +580,7 @@ mod tests {
             decode_gliner(
                 &[f32::INFINITY],
                 1,
-                &options(LayaQuestionType::Choice, &["one"]),
+                &options(DecisionQuestionType::Choice, &["one"]),
                 &GlinerConfig::default()
             )
             .is_err()
@@ -605,7 +589,7 @@ mod tests {
             decode_gliner(
                 &[0.0],
                 1,
-                &options(LayaQuestionType::Choice, &["one", "two"]),
+                &options(DecisionQuestionType::Choice, &["one", "two"]),
                 &GlinerConfig::default()
             )
             .is_err()
