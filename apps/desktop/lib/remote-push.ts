@@ -38,13 +38,50 @@ const REMOTE_PUSH_ENABLED_STORAGE_KEY = "flow-like-remote-push-enabled";
 
 export const REMOTE_PUSH_PREFERENCE_EVENT =
 	"flow-like:remote-push-preference-changed";
+export const REMOTE_PUSH_REGISTRATION_EVENT =
+	"flow-like:remote-push-registered";
+
+const TOKEN_REQUEST_TIMEOUT_MS = 25_000;
+let pendingTokenRequest: Promise<string> | undefined;
+
+function getRemotePushToken(
+	getPluginToken: () => Promise<string>,
+): Promise<string> {
+	if (pendingTokenRequest) return pendingTokenRequest;
+
+	// Settings and startup can request a token together. Share the native request
+	// and bound the wait so an unavailable push service cannot leave settings busy.
+	const request = new Promise<string>((resolve, reject) => {
+		const timeout = setTimeout(
+			() =>
+				reject(
+					new Error(
+						"Push registration timed out. Check your connection and try again.",
+					),
+				),
+			TOKEN_REQUEST_TIMEOUT_MS,
+		);
+		Promise.resolve()
+			.then(() =>
+				isIOSDevice()
+					? invoke<string>("get_remote_push_token")
+					: getPluginToken(),
+			)
+			.then(resolve, reject)
+			.finally(() => clearTimeout(timeout));
+	});
+	pendingTokenRequest = request.finally(() => {
+		pendingTokenRequest = undefined;
+	});
+	return pendingTokenRequest;
+}
 
 export async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
 	if (!isTauriRuntime()) return null;
 	try {
 		const mod = await import("tauri-plugin-remote-push-api");
 		return {
-			getToken: mod.getToken,
+			getToken: () => getRemotePushToken(mod.getToken),
 			requestPermission: mod.requestPermission,
 			onNotificationReceived: mod.onNotificationReceived,
 			onNotificationTapped: mod.onNotificationTapped,
@@ -53,6 +90,12 @@ export async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
 	} catch {
 		return null;
 	}
+}
+
+export async function getRemotePushPermission(): Promise<boolean | null> {
+	// Query native settings so returning from iOS Settings does not use the
+	// notification plugin's cached WebView permission value.
+	return invoke<boolean | null>("plugin:notification|is_permission_granted");
 }
 
 async function loadPersistentDeviceId(): Promise<string | null> {

@@ -1,9 +1,7 @@
-//! Model selection for the Typed Decision node. Downloads remain in the supplied FlowPath.
+//! Model selection for the GLiNER Decision node. Downloads remain in the supplied FlowPath.
 use super::{
     execution_providers::{configured_session_builder, ensure_ort_initialized},
-    laya::{
-        DECISION_MODELS, DEFAULT_DECISION_MODEL, LayaOptions, LayaResult, infer_laya_directory,
-    },
+    gliner_decision::{DECISION_MODELS, DecisionOptions, DecisionResult},
     model_cache::{hash_field, with_verified_models},
 };
 use flow_like::flow::execution::context::ExecutionContext;
@@ -361,7 +359,7 @@ async fn build_model(
     }
     let Some(preset) = presets::preset(model)? else {
         return Err(anyhow!(if model == "custom" {
-            "Custom Model Directory needs a complete Laya bundle or decision_config.json, model.onnx and tokenizer.json from tools/export-decision-model.py".to_string()
+            "Custom Model Directory needs decision_config.json, model.onnx and tokenizer.json from tools/export-decision-model.py".to_string()
         } else {
             format!(
                 "{model} needs a local ONNX export. Run tools/export-decision-model.py --model {model} --output <directory>, then connect that directory as Model Directory. No Python is needed during inference"
@@ -376,20 +374,10 @@ pub(crate) async fn infer_decision(
     model: &str,
     model_dir: &FlowPath,
     text: &str,
-    options: &LayaOptions,
-) -> Result<LayaResult> {
+    options: &DecisionOptions,
+) -> Result<DecisionResult> {
     if !DECISION_MODELS.contains(&model) {
         return Err(anyhow!("Unknown decision model '{model}'"));
-    }
-    if model == DEFAULT_DECISION_MODEL {
-        return infer_laya_directory(context, model_dir, text, options, false).await;
-    }
-    if model == "custom"
-        && read_config(context, &child(model_dir, "rl_agent_config.json"))
-            .await?
-            .is_some()
-    {
-        return infer_laya_directory(context, model_dir, text, options, true).await;
     }
     let providers = ensure_ort_initialized()?.active_providers;
     let key = cache_key(model, model_dir, &providers);
@@ -459,7 +447,7 @@ mod tests {
         let node = Arc::new(InternalNode::new(
             Node::new("test_decision", "Decision test", "", "Tests"),
             AHashMap::new(),
-            Arc::new(crate::laya::LayaNode::new()),
+            Arc::new(crate::gliner_decision::GlinerDecisionNode::new()),
             AHashMap::new(),
         ));
         let state = Arc::new(FlowLikeState::new(
@@ -580,7 +568,11 @@ mod tests {
 
     #[test]
     fn every_gliner_model_has_a_downloadable_preset() {
-        for model in &DECISION_MODELS[1..7] {
+        for model in DECISION_MODELS
+            .iter()
+            .copied()
+            .filter(|model| *model != "custom")
+        {
             assert!(
                 presets::preset(model).unwrap().is_some(),
                 "missing preset {model}"
@@ -662,7 +654,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "Set DECISION_MODEL_DIR to a bundle from tools/export-decision-model.py"]
     async fn custom_flowpath_bundle_runs_all_modes_and_reuses_its_session() {
-        use crate::laya::LayaQuestionType;
+        use crate::gliner_decision::DecisionQuestionType;
 
         let (mut context, _, _) = memory_context().await;
         let root = std::env::var_os("DECISION_MODEL_DIR")
@@ -675,21 +667,25 @@ mod tests {
         let text = "I love this product and the support was excellent.";
         let cases = [
             (
-                LayaQuestionType::Choice,
+                DecisionQuestionType::Choice,
                 "Which sentiment applies?",
                 vec!["positive", "neutral", "negative"],
             ),
             (
-                LayaQuestionType::Score,
+                DecisionQuestionType::Score,
                 "How satisfied is the customer?",
                 vec!["dissatisfied", "neutral", "satisfied"],
             ),
-            (LayaQuestionType::Noul, "The customer is satisfied.", vec![]),
+            (
+                DecisionQuestionType::Noul,
+                "The customer is satisfied.",
+                vec![],
+            ),
         ];
         let mut first_model = None;
         let mut first_cache_size = None;
         for (question_type, instructions, criteria) in cases {
-            let options = LayaOptions {
+            let options = DecisionOptions {
                 question_type,
                 instructions: instructions.into(),
                 criteria: criteria.into_iter().map(String::from).collect(),
@@ -697,7 +693,6 @@ mod tests {
             let result = infer_decision(&mut context, "custom", &directory, text, &options)
                 .await
                 .unwrap();
-            assert!(result.act_probability.is_none());
             assert!(result.confidence.is_finite());
             assert!(result.input_tokens > 0);
             assert!(
@@ -714,9 +709,9 @@ mod tests {
                 .sum();
             assert!((total - 1.0).abs() < 0.001);
             match question_type {
-                LayaQuestionType::Choice => assert!(result.choice.is_some()),
-                LayaQuestionType::Score => assert!(result.score.unwrap().is_finite()),
-                LayaQuestionType::Noul => assert!(result.noul.unwrap().is_finite()),
+                DecisionQuestionType::Choice => assert!(result.choice.is_some()),
+                DecisionQuestionType::Score => assert!(result.score.unwrap().is_finite()),
+                DecisionQuestionType::Noul => assert!(result.noul.unwrap().is_finite()),
             }
             let cache = context.cache.read().await;
             let loaded = cache
@@ -761,8 +756,8 @@ mod tests {
             let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
             cached_files.push((target, modified));
         }
-        let options = LayaOptions {
-            question_type: crate::laya::LayaQuestionType::Choice,
+        let options = DecisionOptions {
+            question_type: crate::gliner_decision::DecisionQuestionType::Choice,
             instructions: "Which sentiment applies?".into(),
             criteria: vec!["positive".into(), "neutral".into(), "negative".into()],
         };
@@ -872,8 +867,8 @@ mod tests {
             }
             specs = preset.assets;
         }
-        let options = LayaOptions {
-            question_type: crate::laya::LayaQuestionType::Choice,
+        let options = DecisionOptions {
+            question_type: crate::gliner_decision::DecisionQuestionType::Choice,
             instructions: "Which sentiment applies?".into(),
             criteria: vec!["positive".into(), "neutral".into(), "negative".into()],
         };

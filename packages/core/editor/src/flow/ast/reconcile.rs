@@ -5092,8 +5092,8 @@ fn synthesize_dynamic_input_pin(
     entity: &NodeEntity,
     existing: &Board,
 ) -> Option<PinMetadata> {
-    if meta.name == "onnx_laya" {
-        return laya_mode_metadata(meta.clone(), call)
+    if meta.name == "onnx_gliner_decision" {
+        return gliner_decision_mode_metadata(meta.clone(), call)
             .inputs
             .into_iter()
             .find(|pin| metadata_pin_name_matches(pin, &arg.name));
@@ -5112,10 +5112,10 @@ fn synthesize_dynamic_input_pin(
     synthesize_dynamic_input_pin_from_template(meta, &template, &arg.name)
 }
 
-/// Predict Laya's mode pins for source checks that cannot run native node logic.
+/// Predict GLiNER Decision's mode pins for source checks that cannot run native node logic.
 /// A connected selector can produce any mode, so its call exposes the complete pin family.
-fn laya_mode_metadata(mut meta: NodeMetadata, call: &Call) -> NodeMetadata {
-    if meta.name != "onnx_laya" {
+fn gliner_decision_mode_metadata(mut meta: NodeMetadata, call: &Call) -> NodeMetadata {
+    if meta.name != "onnx_gliner_decision" {
         return meta;
     }
     let mode = match call.args.iter().find(|arg| {
@@ -5198,12 +5198,12 @@ fn laya_mode_metadata(mut meta: NodeMetadata, call: &Call) -> NodeMetadata {
     meta
 }
 
-fn laya_runtime_selector_diagnostic(
+fn gliner_decision_runtime_selector_diagnostic(
     meta: &NodeMetadata,
     call: &Call,
     selector_is_connected: bool,
 ) -> Option<String> {
-    if meta.name != "onnx_laya"
+    if meta.name != "onnx_gliner_decision"
         || selector_is_connected
         || !call.args.iter().any(|arg| {
             metadata_input_pin(meta, &arg.name).is_some_and(|pin| pin.name == "question_type")
@@ -5212,7 +5212,7 @@ fn laya_runtime_selector_diagnostic(
     {
         return None;
     }
-    // Pin writes run before connections. The selector wire cannot expose Laya's full
+    // Pin writes run before connections. The selector wire cannot expose GLiNER Decision's full
     // mode family until after this revision has already applied its pin values.
     Some(format!(
         "node `{}` needs a literal `questionType` (\"choice\", \"score\", or \"noul\") until its selector is connected so the mode pins exist before their values and connections are applied. To select the mode at runtime, connect the selector on the canvas after creating the node",
@@ -5380,8 +5380,8 @@ fn arg_targets_predicted_dynamic_pin(
         return false;
     }
     let base = node_to_metadata(node);
-    if base.name == "onnx_laya" {
-        return laya_mode_metadata(base, call)
+    if base.name == "onnx_gliner_decision" {
+        return gliner_decision_mode_metadata(base, call)
             .inputs
             .iter()
             .any(|pin| metadata_pin_name_matches(pin, &arg.name));
@@ -8191,7 +8191,7 @@ impl<'a> StructuralPlanner<'a> {
     /// (the default for tests and the non-enriched entry points).
     fn enrich_meta(&self, meta: NodeMetadata, call: &Call) -> NodeMetadata {
         let Some(enricher) = self.enricher else {
-            return laya_mode_metadata(meta, call);
+            return gliner_decision_mode_metadata(meta, call);
         };
         let literal_args: Vec<(String, flow_like_types::Value)> = call
             .args
@@ -8200,7 +8200,7 @@ impl<'a> StructuralPlanner<'a> {
                 literal_expr_to_value(&arg.value).map(|value| (arg.name.clone(), value))
             })
             .collect();
-        laya_mode_metadata(
+        gliner_decision_mode_metadata(
             enricher(&meta, &literal_args, self.existing).unwrap_or(meta),
             call,
         )
@@ -11341,7 +11341,7 @@ impl<'a> StructuralPlanner<'a> {
                     && !pin.depends_on.is_empty()
             });
             if let Some(diagnostic) =
-                laya_runtime_selector_diagnostic(&meta, &call, selector_is_connected)
+                gliner_decision_runtime_selector_diagnostic(&meta, &call, selector_is_connected)
             {
                 self.result.diagnostics.push(diagnostic);
                 return None;
@@ -11537,7 +11537,7 @@ impl<'a> StructuralPlanner<'a> {
             self.result.diagnostics.push(diagnostic);
             return None;
         }
-        if let Some(diagnostic) = laya_runtime_selector_diagnostic(&meta, call, false) {
+        if let Some(diagnostic) = gliner_decision_runtime_selector_diagnostic(&meta, call, false) {
             self.result.diagnostics.push(diagnostic);
             return None;
         }
@@ -31210,15 +31210,15 @@ eventsSimple() {
         }
     }
 
-    fn laya_dynamic_catalog() -> Vec<NodeMetadata> {
+    fn gliner_decision_dynamic_catalog() -> Vec<NodeMetadata> {
         let mut mode = pin_meta("question_type", "String", PinType::Input);
         mode.default_value = Some("\"choice\"".to_string());
         let mut criteria = pin_meta("criteria", "String", PinType::Input);
         criteria.value_type = "Array".to_string();
         criteria.default_value = Some("[]".to_string());
-        vec![catalog_meta(
-            "onnx_laya",
-            "Typed Decision (Laya)",
+        let mut node = catalog_meta(
+            "onnx_gliner_decision",
+            "GLiNER Decision",
             vec![
                 pin_meta("exec_in", "Execution", PinType::Input),
                 pin_meta("model_dir", "Struct", PinType::Input),
@@ -31233,19 +31233,22 @@ eventsSimple() {
                 pin_meta("choice", "String", PinType::Output),
                 pin_meta("confidence", "Float", PinType::Output),
             ],
-        )]
+        );
+        node.namespace = Some("onnx".to_string());
+        node.alias = Some("gliner_decision".to_string());
+        vec![node]
     }
 
     #[test]
-    fn laya_score_output_is_predicted_without_runtime_enricher() {
+    fn gliner_decision_score_output_is_predicted_without_runtime_enricher() {
         let result = reconcile_text_with_catalog(
             &empty_board(),
             r#"function decide(): (score: float) {
-    const decision = onnxLaya({ modelDir: {}, text: "Useful", instructions: "Rate quality", questionType: "score", criteria: ["poor", "good"] })
+    const decision = onnx::gliner_decision({ modelDir: {}, text: "Useful", instructions: "Rate quality", questionType: "score", criteria: ["poor", "good"] })
     return decision.score
 }
 "#,
-            &laya_dynamic_catalog(),
+            &gliner_decision_dynamic_catalog(),
         );
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(result.commands.iter().any(|command| matches!(command,
@@ -31254,15 +31257,15 @@ eventsSimple() {
     }
 
     #[test]
-    fn laya_noul_inputs_and_output_are_predicted_without_runtime_enricher() {
+    fn gliner_decision_noul_inputs_and_output_are_predicted_without_runtime_enricher() {
         let result = reconcile_text_with_catalog(
             &empty_board(),
             r#"function decide(): (probability: float) {
-    const decision = onnxLaya({ modelDir: {}, text: "Useful", instructions: "Is this useful?", questionType: "noul", falseDescription: "No", trueDescription: "Yes" })
+    const decision = onnxGlinerDecision({ modelDir: {}, text: "Useful", instructions: "Is this useful?", questionType: "noul", falseDescription: "No", trueDescription: "Yes" })
     return decision.noul
 }
 "#,
-            &laya_dynamic_catalog(),
+            &gliner_decision_dynamic_catalog(),
         );
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         for expected in ["false_description", "true_description"] {
@@ -31280,15 +31283,15 @@ eventsSimple() {
     }
 
     #[test]
-    fn new_laya_wired_selector_reports_apply_order_constraint() {
+    fn new_gliner_decision_wired_selector_reports_apply_order_constraint() {
         let result = reconcile_text_with_catalog(
             &empty_board(),
             r#"function decide(mode: string): (probability: float) {
-    const decision = onnxLaya({ modelDir: {}, text: "Useful", instructions: "Is this useful?", questionType: mode, criteria: ["no", "yes"], falseDescription: "No", trueDescription: "Yes" })
+    const decision = onnxGlinerDecision({ modelDir: {}, text: "Useful", instructions: "Is this useful?", questionType: mode, criteria: ["no", "yes"], falseDescription: "No", trueDescription: "Yes" })
     return decision.noul
 }
 "#,
-            &laya_dynamic_catalog(),
+            &gliner_decision_dynamic_catalog(),
         );
         assert!(
             result.diagnostics.iter().any(|diagnostic| {
@@ -31299,12 +31302,12 @@ eventsSimple() {
             result.diagnostics
         );
         assert!(!result.commands.iter().any(|command| matches!(command,
-            BoardCommand::AddNode { node_type, .. } if node_type == "onnx_laya"
+            BoardCommand::AddNode { node_type, .. } if node_type == "onnx_gliner_decision"
         )));
     }
 
     #[test]
-    fn laya_existing_runtime_selector_requires_a_live_connection() {
+    fn gliner_decision_existing_runtime_selector_requires_a_live_connection() {
         for selector_connected in [false, true] {
             let mut board = empty_board();
             let mut event = Node::new("events_generic", "Generic Event", "", "events");
@@ -31320,7 +31323,7 @@ eventsSimple() {
                 .clone();
             board.nodes.insert(event.id.clone(), event);
 
-            let mut decision = Node::new("onnx_laya", "Typed Decision (Laya)", "", "ai");
+            let mut decision = Node::new("onnx_gliner_decision", "GLiNER Decision", "", "ai");
             decision.id = "decision".to_string();
             let exec_in = decision
                 .add_input_pin("exec_in", "In", "", VariableType::Execution)
@@ -31351,10 +31354,10 @@ eventsSimple() {
             let result = reconcile_text_with_catalog(
                 &board,
                 r#"eventsGeneric(mode: string) {   //@n:event
-    onnxLaya({ text: "Useful", instructions: "Decide", questionType: mode, criteria: ["no", "yes"], falseDescription: "No", trueDescription: "Yes" })   //@n:decision
+    onnxGlinerDecision({ text: "Useful", instructions: "Decide", questionType: mode, criteria: ["no", "yes"], falseDescription: "No", trueDescription: "Yes" })   //@n:decision
 }
 "#,
-                &laya_dynamic_catalog(),
+                &gliner_decision_dynamic_catalog(),
             );
             if selector_connected {
                 assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
@@ -31372,15 +31375,15 @@ eventsSimple() {
     }
 
     #[test]
-    fn laya_rejects_pins_from_inactive_modes() {
+    fn gliner_decision_rejects_pins_from_inactive_modes() {
         let result = reconcile_text_with_catalog(
             &empty_board(),
             r#"function decide(): (score: float) {
-    const decision = onnxLaya({ modelDir: {}, text: "Useful", instructions: "Rate quality", questionType: "choice", falseDescription: "No", criteria: ["poor", "good"] })
+    const decision = onnxGlinerDecision({ modelDir: {}, text: "Useful", instructions: "Rate quality", questionType: "choice", falseDescription: "No", criteria: ["poor", "good"] })
     return decision.score
 }
 "#,
-            &laya_dynamic_catalog(),
+            &gliner_decision_dynamic_catalog(),
         );
         assert!(
             result

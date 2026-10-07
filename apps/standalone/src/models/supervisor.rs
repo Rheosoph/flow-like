@@ -1792,7 +1792,9 @@ fn resident_bytes(pid: u32) -> u64 {
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
-        ProcessRefreshKind::nothing().with_memory(),
+        // Linux tasks share their process's RSS. Listing them counts that memory again
+        // for every engine thread and also scans every task on the device.
+        ProcessRefreshKind::nothing().with_memory().without_tasks(),
     );
     let processes: Vec<_> = system
         .processes()
@@ -1908,6 +1910,59 @@ mod tests {
         assert_eq!(tree_total(&rows, 14), 3);
         assert_eq!(tree_total(&rows, 99), 0);
         assert!(resident_bytes(std::process::id()) > 0);
+    }
+
+    #[test]
+    fn engine_memory_counts_threaded_process_memory_once() -> Result<()> {
+        use std::sync::Barrier;
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+        const CHILD: &str = "FLOW_LIKE_TEST_THREADED_MEMORY";
+        if std::env::var_os(CHILD).is_none() {
+            // Isolate the measured process from children that other tests start.
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "models::supervisor::tests::engine_memory_counts_threaded_process_memory_once",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .status()?;
+            assert!(status.success(), "The isolated memory check failed");
+            return Ok(());
+        }
+
+        let ready = Barrier::new(9);
+        let finished = Barrier::new(9);
+        let (reported, process_memory) = std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    ready.wait();
+                    finished.wait();
+                });
+            }
+            ready.wait();
+            let pid = std::process::id();
+            let reported = resident_bytes(pid);
+            let mut system = System::new();
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+                true,
+                ProcessRefreshKind::nothing().with_memory(),
+            );
+            let process_memory = system.process(Pid::from_u32(pid)).map(|p| p.memory());
+            finished.wait();
+            (reported, process_memory)
+        });
+        let process_memory = process_memory.expect("The isolated test process exists");
+        assert!(reported > 0);
+        // Allow allocations between the two samples, but never one RSS per thread.
+        assert!(
+            reported <= process_memory.saturating_mul(2),
+            "The process uses {process_memory} bytes but its tree reports {reported} bytes"
+        );
+        Ok(())
     }
 
     fn exits_within(child: &mut std::process::Child, wait: Duration) -> bool {

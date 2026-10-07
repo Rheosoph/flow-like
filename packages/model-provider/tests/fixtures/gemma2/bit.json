@@ -3,8 +3,8 @@
   "type": "Embedding",
   "meta": {
     "en": {
-      "name": "EmbeddingGemma 2 (ONNX Q4)",
-      "description": "Joint text, image, audio and video embeddings with 768 dimensions.",
+      "name": "Gemma 2",
+      "description": "EmbeddingGemma 2 embeds text, images, audio and video in one shared vector space.",
       "long_description": null,
       "release_notes": null,
       "tags": [
@@ -12,7 +12,7 @@
         "multimodal"
       ],
       "use_case": null,
-      "icon": null,
+      "icon": "https://cdn.flow-like.com/media/google.webp",
       "thumbnail": null,
       "preview_media": [],
       "age_rating": null,

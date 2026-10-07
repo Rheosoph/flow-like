@@ -5,7 +5,11 @@ use crate::{
     },
     error::ApiError,
     middleware::jwt::AppUser,
-    push_notifications::{configured_provider, prepare_provider_target_registration},
+    push_notifications::{
+        PushDispatchStatus, configured_provider, prepare_provider_target_registration,
+        push_delivery_record, push_target_is_stale, registration_metadata,
+        update_registration_metadata,
+    },
     routes::app::events::db::decrypt_token,
     routes::user::ensure_user_exists,
     state::AppState,
@@ -61,6 +65,11 @@ pub struct PushTargetStatusResponse {
     pub provider: Option<String>,
     pub registered: bool,
     pub push_enabled: bool,
+    pub eligible: bool,
+    pub stale: bool,
+    pub last_delivery_status: Option<PushDispatchStatus>,
+    pub last_delivery_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_delivery_error: Option<String>,
     pub platform: Option<String>,
     pub device_name: Option<String>,
     pub channel_id: Option<String>,
@@ -197,26 +206,30 @@ pub async fn register_push_target(
 
     let mut push_enabled = true;
     let target_id = if let Some(existing) = existing {
-        push_enabled = should_auto_enable_target(&existing);
+        let id = existing.id.clone();
         let mut active: push_notification_target::ActiveModel = existing.into();
         active.device_id = Set(body.device_id.clone());
         active.platform = Set(platform);
-        active.token_encrypted = Set(token_encrypted);
+        active.token_encrypted = Set(token_encrypted.clone());
         active.endpoint_arn = Set(provider_registration.endpoint_arn.clone());
         active.installation_id = Set(provider_registration.installation_id.clone());
         active.channel_id = Set(body.channel_id.clone());
         active.device_name = Set(body.device_name.clone());
-        active.metadata = Set(body.metadata.clone());
-        active.push_enabled = Set(push_enabled);
         active.failure_count = Set(0);
-        if push_enabled {
-            active.invalidated_at = Set(None);
-            active.invalidation_reason = Set(None);
-        }
         active.last_registered_at = Set(now);
         active.last_seen_at = Set(now);
         active.updated_at = Set(now);
-        active.update(&state.db).await?.id
+        registration_update(active)
+            .filter(push_notification_target::Column::Id.eq(id.clone()))
+            .exec(&state.db)
+            .await?;
+        update_registration_metadata(&state.db, &id, &token_encrypted, body.metadata.clone())
+            .await?;
+        push_enabled = push_notification_target::Entity::find_by_id(id.clone())
+            .one(&state.db)
+            .await?
+            .is_some_and(|target| target.push_enabled);
+        id
     } else {
         let target_id = create_id();
         push_notification_target::ActiveModel {
@@ -230,7 +243,7 @@ pub async fn register_push_target(
             installation_id: Set(provider_registration.installation_id),
             channel_id: Set(body.channel_id.clone()),
             device_name: Set(body.device_name.clone()),
-            metadata: Set(body.metadata.clone()),
+            metadata: Set(registration_metadata(body.metadata.clone(), None)),
             push_enabled: Set(true),
             failure_count: Set(0),
             last_registered_at: Set(now),
@@ -283,6 +296,7 @@ pub async fn get_push_target_status(
         device_id,
         provider.as_ref(),
         target,
+        &state.platform_config.push_notifications,
     )))
 }
 
@@ -374,6 +388,7 @@ pub async fn update_push_target_status(
         device_id,
         Some(&provider),
         target,
+        config,
     )))
 }
 
@@ -438,8 +453,33 @@ fn unregister_reason(reason: Option<&str>) -> String {
     }
 }
 
-fn should_auto_enable_target(target: &push_notification_target::Model) -> bool {
-    target.invalidation_reason.as_deref() != Some(USER_DISABLED_PUSH_REASON)
+fn registration_update(
+    active: push_notification_target::ActiveModel,
+) -> sea_orm::UpdateMany<push_notification_target::Entity> {
+    use push_notification_target::Column;
+    // Read the current preference in the UPDATE, because a settings disable can
+    // arrive after this registration loaded its target.
+    let user_disabled = Column::InvalidationReason.eq(USER_DISABLED_PUSH_REASON);
+    push_notification_target::Entity::update_many()
+        .set(active)
+        .col_expr(
+            Column::PushEnabled,
+            Expr::case(user_disabled.clone(), false)
+                .finally(true)
+                .into(),
+        )
+        .col_expr(
+            Column::InvalidatedAt,
+            Expr::case(user_disabled.clone(), Expr::col(Column::InvalidatedAt))
+                .finally(Expr::value(None::<chrono::DateTime<chrono::FixedOffset>>))
+                .into(),
+        )
+        .col_expr(
+            Column::InvalidationReason,
+            Expr::case(user_disabled, Expr::col(Column::InvalidationReason))
+                .finally(Expr::value(None::<String>))
+                .into(),
+        )
 }
 
 fn map_platform(platform: &PushTargetPlatformDto) -> PushNotificationTargetPlatform {
@@ -474,28 +514,52 @@ fn target_status_response(
     device_id: String,
     provider: Option<&PushNotificationTargetProvider>,
     target: Option<push_notification_target::Model>,
+    config: &flow_like::hub::PushNotificationsConfig,
 ) -> PushTargetStatusResponse {
     match target {
-        Some(target) => PushTargetStatusResponse {
-            device_id,
-            provider: Some(provider_name(&target.provider).to_string()),
-            registered: true,
-            push_enabled: target.push_enabled,
-            platform: Some(platform_name(&target.platform).to_string()),
-            device_name: target.device_name,
-            channel_id: target.channel_id,
-            failure_count: Some(target.failure_count),
-            last_registered_at: Some(utc(target.last_registered_at)),
-            last_seen_at: Some(utc(target.last_seen_at)),
-            invalidated_at: target.invalidated_at.map(utc),
-            invalidation_reason: target.invalidation_reason,
-            updated_at: Some(utc(target.updated_at)),
-        },
+        Some(target) => {
+            let stale = push_target_is_stale(&target, chrono::Utc::now());
+            let delivery = push_delivery_record(target.metadata.as_ref());
+            let platform_allowed = match target.platform {
+                PushNotificationTargetPlatform::Desktop => config.allow_desktop,
+                _ => config.allow_mobile,
+            };
+            PushTargetStatusResponse {
+                device_id,
+                provider: Some(provider_name(&target.provider).to_string()),
+                registered: true,
+                push_enabled: target.push_enabled,
+                eligible: config.enabled
+                    && configured_provider(config).as_ref() == Some(&target.provider)
+                    && platform_allowed
+                    && target.push_enabled
+                    && target.invalidated_at.is_none()
+                    && !stale,
+                stale,
+                last_delivery_status: delivery.as_ref().map(|record| record.status),
+                last_delivery_at: delivery.as_ref().map(|record| record.attempted_at),
+                last_delivery_error: delivery.and_then(|record| record.error),
+                platform: Some(platform_name(&target.platform).to_string()),
+                device_name: target.device_name,
+                channel_id: target.channel_id,
+                failure_count: Some(target.failure_count),
+                last_registered_at: Some(utc(target.last_registered_at)),
+                last_seen_at: Some(utc(target.last_seen_at)),
+                invalidated_at: target.invalidated_at.map(utc),
+                invalidation_reason: target.invalidation_reason,
+                updated_at: Some(utc(target.updated_at)),
+            }
+        }
         None => PushTargetStatusResponse {
             device_id,
             provider: provider.map(provider_name).map(str::to_string),
             registered: false,
             push_enabled: false,
+            eligible: false,
+            stale: false,
+            last_delivery_status: None,
+            last_delivery_at: None,
+            last_delivery_error: None,
             platform: None,
             device_name: None,
             channel_id: None,
@@ -644,31 +708,110 @@ mod tests {
         assert!(found.is_none());
     }
 
-    #[test]
-    fn user_disabled_targets_are_not_auto_enabled_by_registration() {
-        let encryption_key = [4u8; 32];
-        let target = target(
-            "disabled-ios",
-            "ios-token",
-            &encryption_key,
-            false,
-            Some(USER_DISABLED_PUSH_REASON),
+    #[tokio::test]
+    async fn registration_preserves_a_disable_that_arrived_after_loading_the_target() {
+        use sea_orm::{ConnectionTrait, Database, DatabaseBackend, QuerySelect, QueryTrait};
+        let db = Database::connect(
+            sea_orm::ConnectOptions::new("sqlite::memory:")
+                .max_connections(1)
+                .clone(),
+        )
+        .await
+        .unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        db.execute_unprepared(r#"CREATE TABLE public."PushNotificationTarget" (
+            id TEXT PRIMARY KEY, "pushEnabled" BOOLEAN, "invalidatedAt" TEXT, "invalidationReason" TEXT
+        ); INSERT INTO public."PushNotificationTarget" VALUES ('target', true, NULL, NULL)"#).await.unwrap();
+        // Construct the registration before the user disables notifications.
+        let registration = registration_update(Default::default());
+        db.execute_unprepared(
+            r#"UPDATE public."PushNotificationTarget"
+            SET "pushEnabled" = false, "invalidatedAt" = '2026-10-07',
+                "invalidationReason" = 'User disabled push notifications'"#,
+        )
+        .await
+        .unwrap();
+        registration.exec(&db).await.unwrap();
+        let query = push_notification_target::Entity::find()
+            .select_only()
+            .columns([
+                push_notification_target::Column::PushEnabled,
+                push_notification_target::Column::InvalidationReason,
+                push_notification_target::Column::InvalidatedAt,
+            ])
+            .build(DatabaseBackend::Sqlite);
+        let row = db.query_one_raw(query.clone()).await.unwrap().unwrap();
+        assert!(!row.try_get::<bool>("", "pushEnabled").unwrap());
+        assert_eq!(
+            row.try_get::<String>("", "invalidationReason").unwrap(),
+            USER_DISABLED_PUSH_REASON
+        );
+        assert_eq!(
+            row.try_get::<String>("", "invalidatedAt").unwrap(),
+            "2026-10-07"
         );
 
-        assert!(!should_auto_enable_target(&target));
+        db.execute_unprepared(
+            r#"UPDATE public."PushNotificationTarget"
+            SET "invalidationReason" = '15 consecutive invalidation-class failures'"#,
+        )
+        .await
+        .unwrap();
+        registration_update(Default::default())
+            .exec(&db)
+            .await
+            .unwrap();
+        let row = db.query_one_raw(query).await.unwrap().unwrap();
+        assert!(row.try_get::<bool>("", "pushEnabled").unwrap());
+        assert_eq!(
+            row.try_get::<Option<String>>("", "invalidationReason")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            row.try_get::<Option<String>>("", "invalidatedAt").unwrap(),
+            None
+        );
     }
 
     #[test]
-    fn invalidated_targets_are_auto_enabled_by_registration() {
-        let encryption_key = [5u8; 32];
-        let target = target(
-            "invalidated-ios",
-            "ios-token",
-            &encryption_key,
-            false,
-            Some("15 consecutive invalidation-class failures"),
+    fn status_reports_stale_targets_and_disabled_hub_as_ineligible() {
+        let mut target = target("ios", "token", &[5; 32], true, None);
+        let mut config = flow_like::hub::PushNotificationsConfig {
+            enabled: true,
+            allow_mobile: true,
+            provider: Some(flow_like::hub::PushNotificationProviderType::Fcm),
+            ..Default::default()
+        };
+        let status = target_status_response(
+            "device-ios".to_string(),
+            Some(&PushNotificationTargetProvider::Fcm),
+            Some(target.clone()),
+            &config,
         );
-
-        assert!(should_auto_enable_target(&target));
+        assert!(status.eligible);
+        assert!(!status.stale);
+        target.last_seen_at -= chrono::Duration::days(31);
+        let status = target_status_response(
+            "device-ios".to_string(),
+            Some(&PushNotificationTargetProvider::Fcm),
+            Some(target.clone()),
+            &config,
+        );
+        assert!(status.push_enabled);
+        assert!(status.stale);
+        assert!(!status.eligible);
+        target.last_seen_at = chrono::Utc::now().fixed_offset();
+        config.enabled = false;
+        let status = target_status_response(
+            "device-ios".to_string(),
+            Some(&PushNotificationTargetProvider::Fcm),
+            Some(target),
+            &config,
+        );
+        assert!(!status.stale);
+        assert!(!status.eligible);
     }
 }

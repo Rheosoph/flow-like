@@ -8,6 +8,7 @@ import {
 	CircleCheck,
 	CircleDashed,
 	CircleDot,
+	LoaderCircle,
 	type LucideIcon,
 	OctagonX,
 	X,
@@ -18,14 +19,28 @@ import { type Gate, GateInline, GatedAction } from "./gate-notice";
 import { ProgressBar } from "./meter";
 import { cx } from "./tone";
 
-type StepperState = "done" | "current" | "todo";
+export type WizardStepperState = "done" | "current" | "todo" | "err" | "busy";
 
 function StepperStep({
 	index,
 	step,
 	state,
-}: Readonly<{ index: number; step: string; state: StepperState }>) {
+	statusId,
+}: Readonly<{
+	index: number;
+	step: string;
+	state: WizardStepperState;
+	statusId: string;
+}>) {
 	const { t } = useTranslation("devices");
+	const status =
+		state === "done"
+			? t("view.wizard.doneSr", " (done)")
+			: state === "err"
+				? ` (${t("view.check.fail", "Failed")})`
+				: state === "busy"
+					? ` (${t("view.check.active", "Checking")})`
+					: null;
 	return (
 		<>
 			<span
@@ -35,10 +50,20 @@ function StepperStep({
 						"border-foreground bg-foreground text-background",
 					state === "done" && "border-good-line bg-good-bg text-good",
 					state === "todo" && "border-border bg-card text-muted-foreground",
+					state === "err" &&
+						"border-critical-line bg-critical-bg text-critical",
+					state === "busy" && "border-info-line bg-info-bg text-info",
 				)}
 			>
 				{state === "done" ? (
 					<Check aria-hidden className="size-3" />
+				) : state === "err" ? (
+					<OctagonX aria-hidden className="size-3.5" />
+				) : state === "busy" ? (
+					<LoaderCircle
+						aria-hidden
+						className="size-3.5 animate-spin motion-reduce:animate-none"
+					/>
 				) : (
 					index + 1
 				)}
@@ -50,11 +75,15 @@ function StepperStep({
 					state === "current" && "font-semibold text-foreground",
 					state === "done" && "text-ink-2",
 					state === "todo" && "text-muted-foreground",
+					state === "err" && "font-medium text-critical",
+					state === "busy" && "font-medium text-info",
 				)}
 			>
 				{step}
-				{state === "done" ? (
-					<span className="sr-only">{t("view.wizard.doneSr", " (done)")}</span>
+				{status ? (
+					<span id={statusId} className="sr-only">
+						{status}
+					</span>
 				) : null}
 			</span>
 		</>
@@ -74,6 +103,7 @@ export function WizardStepper({
 	current,
 	label,
 	done,
+	states,
 	titles,
 	reachable,
 	onSelect,
@@ -86,6 +116,8 @@ export function WizardStepper({
 	label?: string;
 	/** Per step: shows the check mark (a prefilled step ahead of the current one). Default: every earlier step. */
 	done?: readonly boolean[];
+	/** Per step: the actual state takes precedence over current position and completion. */
+	states?: readonly (WizardStepperState | undefined)[];
 	/** Per step: the full title for the phone line and the button names ("What to run"); the label otherwise. */
 	titles?: readonly string[];
 	/** Per step: may be opened from the stepper. Needs `onSelect`. */
@@ -96,6 +128,7 @@ export function WizardStepper({
 	className?: string;
 }>) {
 	const { t } = useTranslation("devices");
+	const statusId = useId();
 	const titleOf = (index: number) => titles?.[index] ?? steps[index] ?? "";
 	const compact = t(
 		"view.wizard.compact",
@@ -116,18 +149,27 @@ export function WizardStepper({
 				)}
 			>
 				{steps.map((step, index) => {
-					const state: StepperState =
-						index === current
+					const state: WizardStepperState =
+						states?.[index] ??
+						(index === current
 							? "current"
 							: (done?.[index] ?? index < current)
 								? "done"
-								: "todo";
-					const body = <StepperStep index={index} step={step} state={state} />;
+								: "todo");
+					const descriptionId = `${statusId}-${index}`;
+					const body = (
+						<StepperStep
+							index={index}
+							step={step}
+							state={state}
+							statusId={descriptionId}
+						/>
+					);
 					return (
 						<li
 							key={step}
 							data-s={state}
-							aria-current={state === "current" ? "step" : undefined}
+							aria-current={index === current ? "step" : undefined}
 							className={cx(
 								"flex min-w-0 flex-1 items-center gap-2 last:flex-none data-[s=current]:min-w-fit [&:not(:last-child)]:after:mr-2 [&:not(:last-child)]:after:h-px [&:not(:last-child)]:after:min-w-2 [&:not(:last-child)]:after:flex-auto [&:not(:last-child)]:after:bg-border [&:not(:last-child)]:after:content-['']",
 								fit &&
@@ -138,6 +180,11 @@ export function WizardStepper({
 								<button
 									type="button"
 									onClick={() => onSelect(index)}
+									aria-describedby={
+										state === "done" || state === "err" || state === "busy"
+											? descriptionId
+											: undefined
+									}
 									aria-label={t(
 										"view.wizard.goTo",
 										"Go to step {{n, number}}: {{step}}",
@@ -446,7 +493,7 @@ export function WizardFoot({
 	);
 }
 
-export type WizardSummaryState = "done" | "current" | "todo" | "err";
+export type WizardSummaryState = WizardStepperState;
 
 export interface WizardSummaryItem {
 	id: string;
@@ -467,6 +514,10 @@ const SUMMARY_ICON: Record<
 	current: { icon: CircleDot, tone: "text-foreground" },
 	todo: { icon: CircleDashed, tone: "text-unknown" },
 	err: { icon: OctagonX, tone: "text-critical" },
+	busy: {
+		icon: LoaderCircle,
+		tone: "animate-spin text-info motion-reduce:animate-none",
+	},
 };
 
 /** The side summary of choices per step; reachable steps are buttons. */
@@ -515,6 +566,13 @@ export function WizardSummary({
 											},
 										)
 									: item.label}
+								{item.state === "busy" || item.state === "err" ? (
+									<span className="sr-only">
+										{item.state === "busy"
+											? ` (${t("view.check.active", "Checking")})`
+											: ` (${t("view.check.fail", "Failed")})`}
+									</span>
+								) : null}
 							</span>
 							<span className="col-start-2 min-w-0 text-ui wrap-break-word">
 								{item.value ?? (

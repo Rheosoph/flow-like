@@ -6,6 +6,7 @@ import {
 	ManagementRequestNotSentError,
 	ManagementUnconfirmedError,
 } from "../transport";
+import { DeviceTunnelError } from "../tunnel";
 import {
 	CONNECTION_STEPS,
 	DEVICE_ERROR_CODES,
@@ -66,6 +67,28 @@ describe("transport error filing", () => {
 				),
 			).url,
 		).toBe("wss://hub/ws/devices");
+	});
+
+	test("tunnel closures, timeouts and expiry keep their cause", () => {
+		for (const [cause, code] of [
+			["connection_closed", "session_closed"],
+			["heartbeat_timeout", "timeout"],
+			["renewal_timeout", "timeout"],
+			["open_timeout", "timeout"],
+			["expired", "expired"],
+			["cancelled", "cancelled"],
+		]) {
+			expect(
+				classifyDeviceError(new DeviceTunnelError(cause, "detail")),
+			).toEqual({
+				step: "reading_services",
+				code,
+				message: "detail",
+			});
+		}
+		expect(
+			classifyDeviceError(new DeviceTunnelError("future_code", "detail")).code,
+		).toBe("connection_failed");
 	});
 
 	test("request outcomes and unknown errors", () => {

@@ -32,6 +32,7 @@ import {
 	type ExportCommands,
 	prepareDesktopProject,
 } from "../../../../lib/device-management/project-export";
+import { getErrorMessage } from "../../../../lib/error-message";
 import type { IApp } from "../../../../lib/schema/app/app";
 import {
 	type IBackendState,
@@ -163,11 +164,11 @@ class PrepareBlocked extends Error {
 	}
 }
 
-/** The hub's own sentence when it sent one: its error's `message` also carries the code and a reference. */
+/** Prefer the hub's sentence without its code and reference, then read native `{ error }` refusals. */
 const errorText = (error: unknown) => {
 	const server = (error as { serverMessage?: unknown } | null)?.serverMessage;
 	if (typeof server === "string" && server.trim()) return server;
-	return error instanceof Error ? error.message : String(error);
+	return getErrorMessage(error);
 };
 
 const OFFLINE_REFUSALS: readonly [RegExp, PrepareCheckId][] = [
@@ -536,7 +537,8 @@ function startPrepare(
  * (step 2 or later), again whenever that choice changes or `again()` is
  * called. Skipped for `version: "keep"` and for a local-only app on web.
  * `hubTypes` (the hub's `event_types`) decides which types the export names.
- * `modelStore`: every target acquires model files itself (Bit metadata v2).
+ * `modelStore` permits Bit metadata v2 for new preparations. A completed
+ * v1 bundle remains usable when devices later report model-store support.
  */
 export function useDeployPrepare(
 	plan: DeployPlan | null,
@@ -562,15 +564,18 @@ export function useDeployPrepare(
 		options.hubTypes,
 	);
 	const { appId, offline, eventKey, typeKey } = target;
-	const modelStore = options.modelStore === true;
 	const flows = useLatestFlows(plan?.app ? (plan.mode ?? null) : null);
 	// The names of the Latest events and the exported types are part of the choice: another set is another bundle.
 	const latestKey = target.latest
 		.map((row) => `${row.eventId}@${row.boardId}`)
 		.join(",");
-	const key = target.wanted
-		? `${appId}|${offline ? "offline" : "online"}|${eventKey}|${latestKey}|${typeKey}|${attempt}|${imported ? "import" : "app"}|${modelStore ? "v2" : "v1"}`
+	const contentKey = target.wanted
+		? `${appId}|${offline ? "offline" : "online"}|${eventKey}|${latestKey}|${typeKey}|${attempt}|${imported ? "import" : "app"}`
 		: "";
+	// Model-store agents also accept v1. Newly reported support must not discard a ready snapshot.
+	const keepsV1 = run.status === "ready" && run.key === `${contentKey}|v1`;
+	const modelStore = options.modelStore === true && !keepsV1;
+	const key = contentKey ? `${contentKey}|${modelStore ? "v2" : "v1"}` : "";
 	const newest = useRef({
 		backend,
 		profile,

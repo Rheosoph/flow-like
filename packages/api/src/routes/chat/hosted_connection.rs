@@ -59,7 +59,7 @@ impl HostedConnection {
     ) -> Result<RequestBuilder, ApiError> {
         self.authorize(state, bit_id, model_id, surface, body)
             .await?;
-        let wire_body = systemone_wire_body(&self.provider, model_id, body)?;
+        let wire_body = systemone_wire_body(&self.provider, model_id, surface, body)?;
         let client = if surface == ModelApiSurface::SystemOne {
             Client::builder()
                 .redirect(flow_like_types::reqwest::redirect::Policy::none())
@@ -90,8 +90,20 @@ impl HostedConnection {
 fn systemone_wire_body(
     provider: &HostedProvider,
     model_id: &str,
+    surface: ModelApiSurface,
     body: &Value,
 ) -> Result<Value, ApiError> {
+    if surface != ModelApiSurface::SystemOne {
+        return Ok(body.clone());
+    }
+    if *provider == HostedProvider::OpenRouter {
+        let request = super::systemone::validate_payload(body)?
+            .with_images_in_state()
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        let mut body = serde_json::to_value(request)?;
+        body["model"] = Value::String(model_id.to_owned());
+        return Ok(body);
+    }
     if *provider != HostedProvider::Cloudflare {
         return Ok(body.clone());
     }
@@ -203,15 +215,82 @@ mod tests {
     #[test]
     fn cloudflare_wrapper_preserves_questions_without_nested_model_or_chat_fields() {
         let canonical = serde_json::json!({"model":"typesafe/jev","state":"text","questions":{"ok":{"type":"noul","instructions":"Ready?"}}});
-        let body =
-            systemone_wire_body(&HostedProvider::Cloudflare, "typesafe/jev", &canonical).unwrap();
+        let body = systemone_wire_body(
+            &HostedProvider::Cloudflare,
+            "typesafe/jev",
+            ModelApiSurface::SystemOne,
+            &canonical,
+        )
+        .unwrap();
         assert_eq!(body["model"], "typesafe/jev");
         assert_eq!(body["input"]["questions"], canonical["questions"]);
         assert_eq!(body["input"]["state"], "text");
         assert!(body["input"].get("model").is_none());
         assert_eq!(
-            systemone_wire_body(&HostedProvider::OpenRouter, "typesafe/jev", &canonical).unwrap(),
+            systemone_wire_body(
+                &HostedProvider::OpenRouter,
+                "typesafe/jev",
+                ModelApiSurface::SystemOne,
+                &canonical,
+            )
+            .unwrap(),
             canonical
+        );
+    }
+
+    #[test]
+    fn openrouter_decision_images_use_state_parts_without_changing_other_surfaces() {
+        let model = "openai/gpt-6-luna-decisions";
+        let image = "data:image/png;base64,AA==";
+        let canonical = serde_json::json!({
+            "model": model,
+            "state": "What color is the image?",
+            "images": [image],
+            "questions": {"red": {"type": "noul", "instructions": "Is it red?"}}
+        });
+        let body = systemone_wire_body(
+            &HostedProvider::OpenRouter,
+            model,
+            ModelApiSurface::SystemOne,
+            &canonical,
+        )
+        .unwrap();
+        assert_eq!(body["model"], model);
+        assert_eq!(body["questions"], canonical["questions"]);
+        assert_eq!(
+            body["state"],
+            serde_json::json!([
+                {"type": "text", "text": "What color is the image?"},
+                {"type": "image_url", "image_url": {"url": image}}
+            ])
+        );
+        assert!(body.get("images").is_none());
+        for surface in [ModelApiSurface::ChatCompletions, ModelApiSurface::Responses] {
+            assert_eq!(
+                systemone_wire_body(&HostedProvider::OpenRouter, model, surface, &canonical)
+                    .unwrap(),
+                canonical
+            );
+        }
+        assert_eq!(
+            systemone_wire_body(
+                &HostedProvider::TypeSafe,
+                model,
+                ModelApiSurface::SystemOne,
+                &canonical,
+            )
+            .unwrap(),
+            canonical
+        );
+        assert_eq!(
+            systemone_wire_body(
+                &HostedProvider::Cloudflare,
+                model,
+                ModelApiSurface::SystemOne,
+                &canonical,
+            )
+            .unwrap()["input"]["images"],
+            canonical["images"]
         );
     }
 
