@@ -1,20 +1,20 @@
 ---
-title: "Make a typed decision with Laya"
-description: "Use Laya to classify text, score it against a rubric, or estimate whether a statement holds, then connect the typed output to an explicit workflow branch."
+title: "Make a typed decision with GLiNER2.5"
+description: "Use GLiNER2.5 to classify text, score it against a rubric, or estimate whether a statement holds, then connect the typed output to an explicit workflow branch."
 date: 2026-07-08
-tags: ["onnx", "machine-learning", "laya", "workflows"]
+tags: ["onnx", "machine-learning", "gliner", "workflows"]
 cover: "/images/community-A7.png"
 draft: false
 ---
 
 A support workflow may need one decision from a piece of text: is this a billing question, a technical problem, or an account-access request? A paragraph explaining the message can be useful to a person, but the next workflow step needs a value it can branch on.
 
-The Typed Decision node uses Laya to answer a constrained question about text. It supports choosing a label, scoring against an ordered rubric, and estimating the probability that a statement holds. Those outputs connect directly to the decisions you define in the rest of the workflow.
+The GLiNER Decision node uses GLiNER2.5 to answer a constrained question about text. It supports choosing a label, scoring against an ordered rubric, and estimating the probability that a statement holds. Those outputs connect directly to the decisions you define in the rest of the workflow.
 
 Inference uses ONNX on the execution host once the model assets are available. Choose your desktop or another configured runtime according to where the text may be processed.
 
 <figure>
-  <img src="/posts/community/A7/overview.svg" width="1600" height="1000" loading="lazy" alt="A support request enters Laya on the execution host, produces a typed category or probability, and follows an explicit workflow decision." />
+  <img src="/posts/community/A7/overview.svg" width="1600" height="1000" loading="lazy" alt="A support request enters GLiNER2.5 on the execution host, produces a typed category or probability, and follows an explicit workflow decision." />
   <figcaption>The model supplies an answer and statistics; the workflow defines the action that follows.</figcaption>
 </figure>
 
@@ -26,7 +26,7 @@ Make the labels useful to the next step. “Billing,” “technical support,”
 
 The node returns the selected choice and a structured result containing option probabilities and related statistics. Connect the choice to a branch that records or displays the proposed destination before adding an irreversible action.
 
-The [node reference](https://docs.flow-like.com/nodes/ai/ml/onnx/nlp/onnx-laya/) describes the pins. The [implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/catalog/onnx/src/laya.rs) validates the question type and requires non-empty, unique labels for choice questions.
+The [node reference](https://docs.flow-like.com/nodes/ai/ml/onnx/nlp/onnx-gliner-decision/) describes the pins. The [implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/catalog/onnx/src/gliner_decision.rs) validates the question type and requires non-empty, unique labels for choice questions.
 
 ## Use the mode that matches the output
 
@@ -40,7 +40,7 @@ For the support example, choice mode is the clearest starting point. A second ex
 
 ## Treat confidence as a model statistic
 
-The node exposes confidence and calibrated option probabilities. Confidence is calculated from the model's output distribution; its interpretation differs by mode.
+The node exposes confidence and option probabilities. Confidence is calculated from the model's output distribution; its interpretation differs by mode.
 
 A high value does not establish that the chosen category is correct for a real request. Ambiguous wording, an unfamiliar domain, or incomplete input can still produce a confident mistake. Set any routing threshold using representative cases from the task, including difficult and out-of-scope examples.
 
@@ -48,7 +48,7 @@ Keep a review path for cases your process cannot safely resolve automatically. T
 
 ## Prepare the execution host
 
-Connect a Model Directory where the runtime can find the assets. Existing files are loaded, and missing built-in files can be downloaded automatically. The [loading code](https://github.com/Rheosoph/flow-like/blob/dev/packages/catalog/onnx/src/laya/loading.rs) pins the built-in assets and verifies their expected hashes. Loaded models are reused within the execution cache.
+Choose a model preset, then connect a Model Directory where the runtime can find the assets. The default is `fastino/GLiNER2.5-Decide`. Existing files are loaded, and missing built-in files can be downloaded automatically. The [loading code](https://github.com/Rheosoph/flow-like/blob/dev/packages/catalog/onnx/src/decision.rs) pins the built-in assets and verifies their expected hashes. Loaded models are reused within the execution cache.
 
 If the deployment must run without network access, prepare and test those assets in advance on the intended host. A successful run on a connected development machine may have downloaded something that a disconnected device will lack.
 

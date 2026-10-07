@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Build the index. Then search it.</title>
+  <desc id="desc">Conceptual retrieval workflow with two lanes. Index: source inputs are encoded by EmbeddingGemma 2, and vectors with source references are saved in a vector store. Search: a query is encoded with the same model and vector dimensions, then vector search uses that store to return original sources. An optional answer model can use the retrieved sources downstream.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#95bfc9" stroke-opacity=".045"/></pattern>
+    <linearGradient id="index" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#12302f"/><stop offset="1" stop-color="#10232b"/></linearGradient>
+    <linearGradient id="search" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#273027"/><stop offset="1" stop-color="#15232b"/></linearGradient>
+    <marker id="teal-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="#75e8ce" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="lime-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="#ddec98" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="1200" height="800" rx="24" fill="#09141f"/>
+  <rect width="1200" height="800" rx="24" fill="url(#grid)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="48" y="59" fill="#75e8ce" font-size="26" font-weight="700" letter-spacing="2">CONCEPTUAL WORKFLOW</text>
+    <text x="48" y="121" fill="#f5f2e7" font-size="51" font-weight="700" letter-spacing="-1.4">Build the index. Then search it.</text>
+    <text x="48" y="166" fill="#a9becb" font-size="28">Keep the model and vector dimensions consistent across both paths.</text>
+
+    <rect x="48" y="209" width="1104" height="202" rx="22" fill="url(#index)" stroke="#75e8ce" stroke-opacity=".25" stroke-width="1.5"/>
+    <text x="73" y="250" fill="#75e8ce" font-size="27" font-weight="700" letter-spacing="1">01 / INDEX</text>
+    <g fill="#0c1b27" stroke="#75e8ce" stroke-opacity=".3" stroke-width="1.5">
+      <rect x="72" y="272" width="212" height="112" rx="15"/>
+      <rect x="333" y="272" width="257" height="112" rx="15"/>
+      <rect x="639" y="272" width="237" height="112" rx="15"/>
+      <rect x="925" y="272" width="203" height="112" rx="15"/>
+    </g>
+    <g fill="#f5f2e7" font-size="29" font-weight="700" text-anchor="middle">
+      <text x="178" y="317">Source inputs</text>
+      <text x="461" y="319" font-size="28" letter-spacing="-.8">EmbeddingGemma</text>
+      <text x="461" y="356">2</text>
+      <text x="757" y="311">Vectors</text>
+      <text x="1026" y="338">Vector store</text>
+    </g>
+    <g fill="#a9d6cd" font-size="26" text-anchor="middle">
+      <text x="178" y="353">Your media</text>
+      <text x="757" y="344">+ source</text><text x="757" y="373">references</text>
+    </g>
+    <g stroke="#75e8ce" stroke-width="2.5" fill="none" marker-end="url(#teal-arrow)">
+      <path d="M284 328h43"/><path d="M590 328h43"/><path d="M876 328h43"/>
+    </g>
+
+    <rect x="48" y="459" width="1104" height="209" rx="22" fill="url(#search)" stroke="#ddec98" stroke-opacity=".25" stroke-width="1.5"/>
+    <text x="73" y="500" fill="#ddec98" font-size="27" font-weight="700" letter-spacing="1">02 / SEARCH</text>
+    <g fill="#0e1d27" stroke="#ddec98" stroke-opacity=".32" stroke-width="1.5">
+      <rect x="72" y="522" width="212" height="121" rx="15"/>
+      <rect x="333" y="522" width="257" height="121" rx="15"/>
+      <rect x="639" y="522" width="237" height="121" rx="15"/>
+      <rect x="925" y="522" width="203" height="121" rx="15"/>
+    </g>
+    <g fill="#f5f2e7" font-size="29" font-weight="700" text-anchor="middle">
+      <text x="178" y="592">Your query</text>
+      <text x="461" y="562">Same model</text>
+      <text x="757" y="592">Vector search</text>
+      <text x="1026" y="572">Original</text><text x="1026" y="611">sources</text>
+    </g>
+    <g fill="#d7dfb9" font-size="26" text-anchor="middle">
+      <text x="461" y="598">+ same vector</text><text x="461" y="628">dimensions</text>
+    </g>
+    <g stroke="#ddec98" stroke-width="2.5" fill="none" marker-end="url(#lime-arrow)">
+      <path d="M284 583h43"/><path d="M590 583h43"/><path d="M876 583h43"/>
+    </g>
+    <path d="M1026 384v50H757v82" fill="none" stroke="#75e8ce" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#teal-arrow)"/>
+    <rect x="812" y="416" width="189" height="37" rx="10" fill="#09141f"/>
+    <text x="906" y="443" fill="#a9d6cd" font-size="26" text-anchor="middle">Stored vectors</text>
+
+    <path d="M1026 643v63" fill="none" stroke="#ddec98" stroke-width="2.5" stroke-dasharray="5 6" marker-end="url(#lime-arrow)"/>
+    <rect x="639" y="712" width="489" height="57" rx="14" fill="#172329" stroke="#758270" stroke-dasharray="5 6" stroke-width="1.5"/>
+    <text x="884" y="749" fill="#d5dec3" font-size="27" text-anchor="middle">Optional: send to an answer model</text>
+    <text x="48" y="737" fill="#a9becb" font-size="27">Retrieval returns sources.</text>
+    <text x="48" y="772" fill="#a9becb" font-size="27">Generation is a separate step.</text>
+  </g>
+</svg>
