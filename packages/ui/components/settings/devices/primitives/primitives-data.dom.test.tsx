@@ -1693,6 +1693,71 @@ describe("wizard and tray", () => {
 		);
 	});
 
+	test.each(["err", "busy"] as const)(
+		"stepper: %s overrides completion while the current step and navigation remain accessible",
+		async (state) => {
+			const went: number[] = [];
+			const { container } = await dom.render(
+				<wizard.WizardStepper
+					steps={["What", "How it runs", "Where"]}
+					current={1}
+					done={[true, true, true]}
+					states={[state, state]}
+					reachable={[true, true, true]}
+					onSelect={(index) => went.push(index)}
+				/>,
+			);
+			expect(attrs(container, "ol > li", "data-s")).toEqual([
+				state,
+				state,
+				"done",
+			]);
+			const current = container.querySelector("[aria-current=step]");
+			expect(current?.textContent).toContain("How it runs");
+			expect(current?.querySelector("button")).toBeNull();
+			expect(container.querySelectorAll("[aria-current=step]")).toHaveLength(1);
+			const label = state === "err" ? " (Failed)" : " (Checking)";
+			expect(current?.querySelector(".sr-only")?.textContent).toBe(label);
+			const button = byRole("button", "Go to step 1: What");
+			expect(
+				document.getElementById(button.getAttribute("aria-describedby") ?? "")
+					?.textContent,
+			).toBe(label);
+			if (state === "busy") {
+				expect(
+					current?.querySelector("svg")?.classList.contains("animate-spin"),
+				).toBe(true);
+				expect(classesOf(current?.querySelector("svg"))).toContain(
+					"motion-reduce:animate-none",
+				);
+			} else {
+				expect(classesOf(current?.querySelector("[title]"))).toContain(
+					"text-critical",
+				);
+			}
+			await click(button);
+			expect(went).toEqual([0]);
+		},
+	);
+
+	test("summary: work in progress and failures have spoken statuses", async () => {
+		const { container } = await dom.render(
+			<wizard.WizardSummary
+				items={[
+					{ id: "prepare", label: "Prepare", state: "busy", value: "Waiting" },
+					{ id: "validate", label: "Validate", state: "err", value: "Retry" },
+				]}
+			/>,
+		);
+		expect(texts(container, ".sr-only")).toEqual(["(Checking)", "(Failed)"]);
+		const spinner = container.querySelector("li[data-s=busy] svg");
+		expect(classesOf(spinner)).toContain("animate-spin");
+		expect(classesOf(spinner)).toContain("motion-reduce:animate-none");
+		expect(classesOf(container.querySelector("li[data-s=err] svg"))).toContain(
+			"text-critical",
+		);
+	});
+
 	test("title row stacks by its own wrapper; the layout takes a row above both columns", async () => {
 		const { container } = await dom.render(
 			<wizard.WizardLayout

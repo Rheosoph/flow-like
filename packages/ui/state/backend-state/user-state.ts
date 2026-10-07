@@ -250,6 +250,12 @@ export interface IRegisterPushTargetResponse {
 }
 
 export interface IPushTargetStatus {
+	/** Optional while older hubs roll out delivery diagnostics. */
+	eligible?: boolean;
+	stale?: boolean;
+	last_delivery_status?: "accepted" | "failed" | null;
+	last_delivery_at?: string | null;
+	last_delivery_error?: string | null;
 	device_id: string;
 	provider?: string | null;
 	registered: boolean;

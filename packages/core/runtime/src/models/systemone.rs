@@ -146,6 +146,9 @@ impl ModelFactory {
             // Catalog metadata must never choose where a user's proxy credential is sent.
             let mut client = SystemOneClient::new(&base, &bit.id, token.unwrap_or_default())?
                 .with_usage_headers(usage_headers(usage_context.as_ref()));
+            if name == "hosted:openrouter" {
+                client = client.with_openrouter_state_images();
+            }
             if let Some(authorizer) = authorizer {
                 client = client.with_authorizer(authorizer)?;
             }
@@ -190,6 +193,11 @@ impl ModelFactory {
                 )?
             }
             _ => bail!("Provider {name} does not support native SystemOne inference"),
+        };
+        let client = if matches!(name.as_str(), "custom:openrouter" | "openrouter") {
+            client.with_openrouter_state_images()
+        } else {
+            client
         };
         Ok(Arc::new(client))
     }
@@ -295,8 +303,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn hosted_decisions_use_the_trusted_proxy_bit_id_and_run_credential() {
+    async fn capture_request() -> (String, tokio::task::JoinHandle<(String, serde_json::Value)>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/api/v1", listener.local_addr().unwrap());
         let captured = tokio::spawn(async move {
@@ -331,11 +338,23 @@ mod tests {
                 serde_json::from_slice::<serde_json::Value>(&bytes[start..start + len]).unwrap(),
             )
         });
+        (endpoint, captured)
+    }
+
+    #[tokio::test]
+    async fn hosted_decisions_use_the_trusted_proxy_bit_id_and_run_credential() {
+        for provider in ["hosted:openrouter", "hosted:typesafe"] {
+            assert_hosted_decision_request(provider).await;
+        }
+    }
+
+    async fn assert_hosted_decision_request(provider: &str) {
+        let (endpoint, captured) = capture_request().await;
         let mut state = state();
         state.hosted_model_token = Some("run-token".into());
         let model = ModelFactory::new()
             .build_systemone(
-                &bit("hosted:openrouter"),
+                &bit(provider),
                 Arc::new(state),
                 Some("visitor-token".into()),
                 Some(ModelUsageContext {
@@ -346,7 +365,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let request: SystemOneRequest = serde_json::from_value(json!({"state":"Refund please", "questions":{"refund":{"type":"noul","instructions":"Does the customer want a refund?"}}})).unwrap();
+        let image = "data:image/png;base64,AQ==";
+        let request: SystemOneRequest = serde_json::from_value(json!({"state":"Refund please", "images":[image], "questions":{"refund":{"type":"noul","instructions":"Does the customer want a refund?"}}})).unwrap();
         timeout(Duration::from_secs(5), model.invoke(&request))
             .await
             .unwrap()
@@ -361,5 +381,59 @@ mod tests {
         assert_eq!(body["model"], "opaque-decision-bit");
         assert_eq!(body["questions"]["refund"]["type"], "noul");
         assert!(body.get("stream").is_none());
+        if provider == "hosted:openrouter" {
+            assert!(body.get("images").is_none());
+            assert_eq!(
+                body["state"],
+                json!([
+                    {"type":"text","text":"Refund please"},
+                    {"type":"image_url","image_url":{"url":image}}
+                ])
+            );
+        } else {
+            assert_eq!(body["state"], "Refund please");
+            assert_eq!(body["images"], json!([image]));
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_openrouter_moves_images_into_state_without_changing_other_providers() {
+        for provider in ["custom:openrouter", "custom:typesafe", "custom:systemone"] {
+            let (endpoint, captured) = capture_request().await;
+            let mut bit = bit(provider);
+            bit.parameters["provider"]["params"]["endpoint"] = json!(endpoint);
+            let model = ModelFactory::new()
+                .build_systemone(&bit, Arc::new(state()), None, None)
+                .await
+                .unwrap();
+            let image = "data:image/png;base64,AQ==";
+            let request: SystemOneRequest = serde_json::from_value(json!({
+                "state":"Refund please", "images":[image],
+                "questions":{"refund":{"type":"noul","instructions":"Does the customer want a refund?"}}
+            })).unwrap();
+            timeout(Duration::from_secs(5), model.invoke(&request))
+                .await
+                .unwrap()
+                .unwrap();
+            let (headers, body) = captured.await.unwrap();
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer catalog-key")
+            );
+            assert_eq!(body["model"], "upstream-model");
+            assert_eq!(
+                body["questions"],
+                serde_json::to_value(&request.questions).unwrap()
+            );
+            if provider == "custom:openrouter" {
+                assert!(body.get("images").is_none());
+                assert_eq!(body["state"][0]["text"], request.state);
+                assert_eq!(body["state"][1]["image_url"]["url"], image);
+            } else {
+                assert_eq!(body["state"], request.state);
+                assert_eq!(body["images"], json!([image]));
+            }
+        }
     }
 }

@@ -1157,7 +1157,12 @@ function Wizard({
 	const runState = useDeployRunState(state.draft.deploymentId);
 	const time = useAreaTime();
 	const blockingContext: BlockingContext = { t, time, state, prepare };
-	const blocking = stepBlocking(step, blockingContext);
+	const blockers: DeploySummaryInput["blockers"] = {};
+	for (const id of steps) {
+		const blocker = stepBlocking(id, blockingContext);
+		if (blocker) blockers[id] = blocker;
+	}
+	const blocking = blockers[step] ?? null;
 	const hold = step === "review" ? reviewHold(blockingContext) : null;
 	const blockingText = check.firstBlocking
 		? (gatedBlocking(blockingContext, check.firstBlocking)?.text ??
@@ -1184,6 +1189,7 @@ function Wizard({
 		limitsOnly,
 		...(state.versionLabel ? { versionLabel: state.versionLabel } : {}),
 		prepared: prepare.prepared,
+		blockers,
 		deployed: state.deployed,
 		run: runState,
 		...(state.outcome ? { outcome: state.outcome } : {}),
@@ -1253,6 +1259,14 @@ function Wizard({
 				current={index}
 				// A prefilled step ahead (the app of an app's page, the devices of the entry) is already done.
 				done={steps.map((id, at) => at < index || prefilled.has(id))}
+				states={steps.map((id) => {
+					const blocker = blockers[id];
+					return canVisit(summary, id) && blocker
+						? blocker.busy
+							? "busy"
+							: "err"
+						: undefined;
+				})}
 				reachable={steps.map((id) => canVisit(summary, id))}
 				onSelect={(at) => {
 					const target = steps[at];

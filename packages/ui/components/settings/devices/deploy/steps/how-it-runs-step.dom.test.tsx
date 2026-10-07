@@ -15,6 +15,7 @@ const { mountDevices, cleanupDevices, preloadDevices } = await import(
 	"../../testing/mount-devices"
 );
 const { createFakeWorkspace } = await import("../../testing/fake-workspace");
+const { act } = await import("react");
 const { deployPrepareSeams } = await import("../use-deploy-prepare");
 const kit = await import("../deploy-test-kit");
 const { EDGE, STUDIO, VISITOR, CRM, INVOICE, text } = kit;
@@ -155,6 +156,448 @@ describe("How it runs · online (APP §3.6)", () => {
 		expect(metadataRequests(view)).toBe(2);
 	});
 
+	test("prepare-blocked: a native collection error shows its reason and can be retried", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.on("GET", METADATA, () => {
+			const metadata = fake.hub.deviceMetadata(VISITOR);
+			metadata.documents.app = {
+				...(metadata.documents.app as object),
+				bits: ["badge-model"],
+			};
+			return metadata;
+		});
+		const reason = "The badge model could not be read. Download it again.";
+		let failure: { error: string } | null = { error: reason };
+		let attempts = 0;
+		const source = new TextEncoder().encode(
+			JSON.stringify({ version: 1, project_id: VISITOR }),
+		);
+		deployPrepareSeams.exportCommands = async () => ({
+			prepare: async (project) => {
+				attempts += 1;
+				if (failure) throw failure;
+				return {
+					export_id: "a0000000-0000-4000-8000-000000000000",
+					project_id: project,
+					source: "online",
+					files: [
+						{
+							path: `apps/${project}/online-source.json`,
+							size: source.length,
+						},
+					],
+					assets: { bit_pins: [], package_pins: [] },
+				};
+			},
+			read: async (_, _path, offset, length) =>
+				source.slice(offset, offset + length).buffer,
+			release: async () => {},
+		});
+		const view = await mount({ fake, platform: "desktop" });
+		expect(checks(view.container)).toEqual([
+			NO_FLOWS,
+			"pass: Reading what's published on the hub",
+			"pass: Checking which events can run on devices",
+			`fail: ${reason}`,
+			"skip: Definitions approved · not checked",
+		]);
+		expect(kit.footBlocking(view.container)).toBe(reason);
+		expect(text(view.container)).not.toMatch(/\[object Object\]|\{"error":/);
+		expect(
+			byRole("button", "Continue", view.container).getAttribute(
+				"aria-disabled",
+			),
+		).toBe("true");
+		const before = view.navigations.length;
+		await clickByText("Continue", view.container);
+		expect(view.navigations.length).toBe(before);
+		expect(attempts).toBe(1);
+
+		failure = null;
+		await clickByText("Prepare again", view.container);
+		await view.settle();
+		expect(checks(view.container)[3]).toBe(
+			"pass: Collecting models and packages",
+		);
+		expect(checks(view.container)[4]).toMatch(
+			/^pass: Definitions approved: [0-9a-f]{8}/,
+		);
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(
+			byRole("button", "Continue", view.container).getAttribute(
+				"aria-disabled",
+			),
+		).toBeNull();
+		expect(attempts).toBe(2);
+	});
+
+	test("Review shows the native preparation reason and sends the user back to How it runs", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.on("GET", METADATA, () => {
+			const metadata = fake.hub.deviceMetadata(VISITOR);
+			metadata.documents.app = {
+				...(metadata.documents.app as object),
+				bits: ["badge-model"],
+			};
+			return metadata;
+		});
+		const reason = "The badge model could not be read. Download it again.";
+		deployPrepareSeams.exportCommands = async () => ({
+			prepare: async () => {
+				throw { error: reason };
+			},
+			read: async () => new ArrayBuffer(0),
+			release: async () => {},
+		});
+		const view = await kit.mountApp(
+			mountDevices,
+			VISITOR,
+			{ device: EDGE, step: "review" },
+			{ fake, platform: "desktop" },
+		);
+		const page = text(view.container);
+		expect(page).toContain("How it runs needs your attention first.");
+		expect(page).toContain(reason);
+		for (const root of [
+			view.container.querySelector('ol[aria-label="Deploy steps"]'),
+			byRole("region", "Your choices", view.container),
+		]) {
+			expect(
+				root?.querySelectorAll("li[data-s]")[1]?.getAttribute("data-s"),
+			).toBe("err");
+		}
+		expect(page).not.toMatch(/\[object Object\]|\{"error":/);
+		expect(kit.primaries(view.container)).toBe(0);
+		expect(fake.api.sent("POST", /resource-grants/)).toEqual([]);
+		expect(fake.api.commands.filter(([, type]) => type === "apply")).toEqual(
+			[],
+		);
+		const writes = fake.api.writes().length;
+		await clickByText("Go to How it runs", view.container);
+		await view.settle();
+		expect(view.navigations.at(-1)?.href).toContain("step=how");
+		expect(checks(view.container)[3]).toBe(`fail: ${reason}`);
+		expect(kit.footBlocking(view.container)).toBe(reason);
+		expect(fake.api.writes().length).toBe(writes);
+	});
+
+	test("learning model-store support keeps the approved copy until the chosen events change", async () => {
+		const fake = await createFakeWorkspace();
+		kit.seedDraft(fake, {
+			appId: VISITOR,
+			scope: { kind: "app", appId: VISITOR },
+			route: { deviceIds: [EDGE], mode: "new" },
+			reached: 6,
+		});
+		fake.api.on("GET", METADATA, () => {
+			const metadata = fake.hub.deviceMetadata(VISITOR);
+			metadata.documents.app = {
+				...(metadata.documents.app as object),
+				bits: ["badge-model"],
+			};
+			return metadata;
+		});
+		const formats: boolean[] = [];
+		let releases = 0;
+		const source = new TextEncoder().encode(
+			JSON.stringify({ version: 1, project_id: VISITOR }),
+		);
+		deployPrepareSeams.exportCommands = async (_app, _account, modelStore) => ({
+			prepare: async (project) => {
+				formats.push(modelStore === true);
+				return {
+					export_id: "a0000000-0000-4000-8000-000000000000",
+					project_id: project,
+					source: "online",
+					files: [
+						{
+							path: `apps/${project}/online-source.json`,
+							size: source.length,
+						},
+					],
+					assets: { bit_pins: [], package_pins: [] },
+				};
+			},
+			read: async (_, _path, offset, length) =>
+				source.slice(offset, offset + length).buffer,
+			release: async () => {
+				releases += 1;
+			},
+		});
+		const view = await kit.mountApp(
+			mountDevices,
+			VISITOR,
+			{ device: EDGE, step: "how" },
+			{ fake, platform: "desktop" },
+		);
+		const hash = () =>
+			view.container
+				.querySelector("li[data-state=pass] [data-idref] button[title]")
+				?.getAttribute("title");
+		const approved = hash();
+		expect(approved).toMatch(/^[0-9a-f]{64}$/);
+		expect(formats).toEqual([false]);
+		await click(byRole("button", "Go to step 7: Review", view.container));
+		await view.settle();
+
+		await act(async () => {
+			const agent = fake.api.agent(EDGE);
+			agent.features = { ...agent.features, model_store: 1 };
+			await fake.workspace.live.refreshInspection(EDGE);
+		});
+		await view.settle();
+		expect(
+			fake.workspace.live.inspection(EDGE)?.value.features?.model_store,
+		).toBe(1);
+		for (const root of [
+			view.container.querySelector('ol[aria-label="Deploy steps"]'),
+			byRole("region", "Your choices", view.container),
+		]) {
+			expect(
+				root?.querySelectorAll("li[data-s]")[1]?.getAttribute("data-s"),
+			).toBe("done");
+		}
+		expect(formats).toEqual([false]);
+		expect(metadataRequests(view)).toBe(1);
+		expect(releases).toBe(0);
+
+		await click(byRole("button", "Go to step 2: How it runs", view.container));
+		await view.settle();
+		expect(hash()).toBe(approved);
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(formats).toEqual([false]);
+		expect(metadataRequests(view)).toBe(1);
+		expect(releases).toBe(0);
+
+		await click(byRole("button", "Go to step 1: What to run", view.container));
+		await view.settle();
+		await click(
+			view.container.querySelector(
+				"#deploy-event-evt_visitor_report",
+			) as Element,
+		);
+		await clickByText("Continue", view.container);
+		await view.settle();
+		expect(checks(view.container)[4]).toMatch(
+			/^pass: Definitions approved: [0-9a-f]{8}/,
+		);
+		expect(formats).toEqual([false, true]);
+		expect(metadataRequests(view)).toBe(2);
+		expect(releases).toBe(1);
+	});
+
+	test("losing model-store support prepares a compatible copy; returning from Review keeps its failure", async () => {
+		const fake = await createFakeWorkspace();
+		const agent = fake.api.agent(EDGE);
+		agent.features = { ...agent.features, model_store: 1 };
+		await fake.workspace.live.refreshInspection(EDGE);
+		kit.seedDraft(fake, {
+			appId: VISITOR,
+			scope: { kind: "app", appId: VISITOR },
+			route: { deviceIds: [EDGE], mode: "new" },
+			reached: 6,
+		});
+		fake.api.on("GET", METADATA, () => {
+			const metadata = fake.hub.deviceMetadata(VISITOR);
+			metadata.documents.app = {
+				...(metadata.documents.app as object),
+				bits: ["badge-model"],
+			};
+			return metadata;
+		});
+		const reason = "The badge model has no known size. Refresh its metadata.";
+		const formats: boolean[] = [];
+		let releases = 0;
+		let finishPreparation = () => {};
+		const preparation = new Promise<void>((resolve) => {
+			finishPreparation = resolve;
+		});
+		const source = new TextEncoder().encode(
+			JSON.stringify({ version: 1, project_id: VISITOR }),
+		);
+		deployPrepareSeams.exportCommands = async (_app, _account, modelStore) => ({
+			prepare: async (project) => {
+				formats.push(modelStore === true);
+				if (!modelStore) {
+					await preparation;
+					throw { error: reason };
+				}
+				return {
+					export_id: "a0000000-0000-4000-8000-000000000000",
+					project_id: project,
+					source: "online",
+					files: [
+						{
+							path: `apps/${project}/online-source.json`,
+							size: source.length,
+						},
+					],
+					assets: { bit_pins: [], package_pins: [] },
+				};
+			},
+			read: async (_, _path, offset, length) =>
+				source.slice(offset, offset + length).buffer,
+			release: async () => {
+				releases += 1;
+			},
+		});
+		const view = await kit.mountApp(
+			mountDevices,
+			VISITOR,
+			{ device: EDGE, step: "how" },
+			{ fake, platform: "desktop" },
+		);
+		expect(checks(view.container)[4]).toMatch(
+			/^pass: Definitions approved: [0-9a-f]{8}/,
+		);
+		expect(formats).toEqual([true]);
+		await click(byRole("button", "Go to step 7: Review", view.container));
+		await view.settle();
+		expect(formats).toEqual([true]);
+		const howStates = () =>
+			[
+				view.container.querySelector('ol[aria-label="Deploy steps"]'),
+				byRole("region", "Your choices", view.container),
+			].map((root) =>
+				root?.querySelectorAll("li[data-s]")[1]?.getAttribute("data-s"),
+			);
+		expect(howStates()).toEqual(["done", "done"]);
+
+		await act(async () => {
+			const { model_store: _modelStore, ...features } = agent.features;
+			agent.features = features;
+			await fake.workspace.live.refreshInspection(EDGE);
+		});
+		await view.settle();
+		expect(howStates()).toEqual(["busy", "busy"]);
+		expect(text(byRole("region", "Your choices", view.container))).toContain(
+			"Preparing on this computer…",
+		);
+		await act(async () => finishPreparation());
+		await view.settle();
+		expect(formats).toEqual([true, false]);
+		expect(releases).toBe(1);
+		expect(metadataRequests(view)).toBe(2);
+		expect(text(view.container)).toContain(
+			"How it runs needs your attention first.",
+		);
+		expect(text(view.container)).toContain(reason);
+		expect(howStates()).toEqual(["err", "err"]);
+		expect(text(byRole("region", "Your choices", view.container))).toContain(
+			reason,
+		);
+
+		await clickByText("Go to How it runs", view.container);
+		await view.settle();
+		expect(checks(view.container)[3]).toBe(`fail: ${reason}`);
+		expect(kit.footBlocking(view.container)).toBe(reason);
+		expect(formats).toEqual([true, false]);
+		expect(metadataRequests(view)).toBe(2);
+		expect(fake.api.commands.filter(([, type]) => type === "apply")).toEqual(
+			[],
+		);
+	});
+
+	test("a device reconnect keeps its model-store capability and prepared copy", async () => {
+		let reconnect: () => void = () => {
+			throw new Error("No reconnect was scheduled.");
+		};
+		const fake = await createFakeWorkspace(undefined, {
+			workspace: {
+				live: {
+					schedule: (run, ms) => {
+						if (ms === 1_000) {
+							reconnect = run;
+							return () => {};
+						}
+						const timer = setTimeout(run, ms);
+						return () => clearTimeout(timer);
+					},
+				},
+			},
+		});
+		const agent = fake.agent(EDGE);
+		agent.features = { ...agent.features, model_store: 1 };
+		await fake.workspace.live.refreshInspection(EDGE);
+		kit.seedDraft(fake, {
+			appId: VISITOR,
+			scope: { kind: "app", appId: VISITOR },
+			route: { deviceIds: [EDGE], mode: "new" },
+			reached: 6,
+		});
+		fake.api.on("GET", METADATA, () => {
+			const metadata = fake.hub.deviceMetadata(VISITOR);
+			metadata.documents.app = {
+				...(metadata.documents.app as object),
+				bits: ["badge-model"],
+			};
+			return metadata;
+		});
+		const formats: boolean[] = [];
+		const source = new TextEncoder().encode(
+			JSON.stringify({ version: 1, project_id: VISITOR }),
+		);
+		deployPrepareSeams.exportCommands = async (_app, _account, modelStore) => ({
+			prepare: async (project) => {
+				formats.push(modelStore === true);
+				return {
+					export_id: "a0000000-0000-4000-8000-000000000000",
+					project_id: project,
+					source: "online",
+					files: [
+						{
+							path: `apps/${project}/online-source.json`,
+							size: source.length,
+						},
+					],
+					assets: { bit_pins: [], package_pins: [] },
+				};
+			},
+			read: async (_, _path, offset, length) =>
+				source.slice(offset, offset + length).buffer,
+			release: async () => {},
+		});
+		const view = await kit.mountApp(
+			mountDevices,
+			VISITOR,
+			{ device: EDGE, step: "how" },
+			{ fake, platform: "desktop" },
+		);
+		const approved = checks(view.container)[4];
+		expect(approved).toMatch(/^pass: Definitions approved: [0-9a-f]{8}/);
+		expect(formats).toEqual([true]);
+		await click(byRole("button", "Go to step 7: Review", view.container));
+		await view.settle();
+		const inspection = fake.workspace.live.inspection(EDGE);
+
+		await act(async () => agent.disconnect());
+		await view.settle();
+		expect(fake.workspace.live.state(EDGE).kind).toBe("reconnecting");
+		expect(fake.workspace.live.inspection(EDGE)).toBe(inspection);
+		expect(inspection?.value.features?.model_store).toBe(1);
+		expect(formats).toEqual([true]);
+		await act(async () => reconnect());
+		await view.settle();
+		expect(fake.workspace.live.state(EDGE).kind).toBe("live");
+		expect(fake.workspace.live.inspection(EDGE)).not.toBe(inspection);
+		expect(
+			fake.workspace.live.inspection(EDGE)?.value.features?.model_store,
+		).toBe(1);
+		for (const root of [
+			view.container.querySelector('ol[aria-label="Deploy steps"]'),
+			byRole("region", "Your choices", view.container),
+		]) {
+			expect(
+				root?.querySelectorAll("li[data-s]")[1]?.getAttribute("data-s"),
+			).toBe("done");
+		}
+		await click(byRole("button", "Go to step 2: How it runs", view.container));
+		await view.settle();
+		expect(checks(view.container)[4]).toBe(approved);
+		expect(formats).toEqual([true]);
+		expect(metadataRequests(view)).toBe(1);
+	});
+
 	test("an event the hub doesn't publish for devices stops the preparation", async () => {
 		const view = await kit.mountApp(mountDevices, VISITOR);
 		const hub = view.fake.hub;
@@ -257,26 +700,29 @@ describe("How it runs · offline copy", () => {
 		expect(calls.release).toBe(1);
 	});
 
-	test("prepare-blocked: a saved secret value fails its own check", async () => {
-		const reason =
-			"The flow Sync contacts has a saved secret value. Move it into a secret variable, then prepare again.";
-		crmExport({
-			prepare: async () => {
-				throw new Error(reason);
-			},
-		});
-		const view = await mount();
-		expect(checks(view.container)).toEqual([
-			NO_FLOWS,
-			"pass: Reading the app on this computer",
-			`fail: ${reason}`,
-			"skip: No flow needs table history or search indexes · not checked",
-			"skip: Nothing else is writing to the app · not checked",
-			"skip: Under the limits: 8 GiB and 8,192 files · not checked",
-		]);
-		expect(kit.footBlocking(view.container)).toBe(reason);
-		expect(byRole("button", "Prepare again", view.container)).toBeTruthy();
-	});
+	test.each(["Error", "native error"])(
+		"prepare-blocked: a saved secret value fails its own check (%s)",
+		async (kind) => {
+			const reason =
+				"The flow Sync contacts has a saved secret value. Move it into a secret variable, then prepare again.";
+			crmExport({
+				prepare: async () => {
+					throw kind === "Error" ? new Error(reason) : { error: reason };
+				},
+			});
+			const view = await mount();
+			expect(checks(view.container)).toEqual([
+				NO_FLOWS,
+				"pass: Reading the app on this computer",
+				`fail: ${reason}`,
+				"skip: No flow needs table history or search indexes · not checked",
+				"skip: Nothing else is writing to the app · not checked",
+				"skip: Under the limits: 8 GiB and 8,192 files · not checked",
+			]);
+			expect(kit.footBlocking(view.container)).toBe(reason);
+			expect(byRole("button", "Prepare again", view.container)).toBeTruthy();
+		},
+	);
 
 	test("update-offline: a new copy replaces the app, the data on the device stays", async () => {
 		crmExport();

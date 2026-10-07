@@ -581,7 +581,7 @@ fn write_category_pages(
 }
 
 // Keep the setup guide in generated references after catalog regeneration.
-const TYPED_DECISION_GUIDE: &str = r#"Use Typed Decision to choose a label, score text against a rubric, or estimate whether a statement holds. **Model** selects the weights while the question inputs and result shape stay the same. Existing Laya nodes keep Laya as their default model.
+const GLINER_DECISION_GUIDE: &str = r#"Use GLiNER Decision to choose a label, score text against a rubric, or estimate whether a statement holds. **Model** selects the weights while the question inputs and result shape stay the same.
 
 ## Choose model weights
 
@@ -589,8 +589,7 @@ This node runs ONNX models. The dropdown includes these models:
 
 | Model | First use |
 | --- | --- |
-| `mizchi/laya-multilingual-onnx` | Downloads missing files, about 681 MB for the complete bundle. Default for existing flows. |
-| `fastino/GLiNER2.5-Decide` | Downloads a pinned community ONNX conversion, about 1.76 GB. |
+| `fastino/GLiNER2.5-Decide` | Default. Downloads a pinned community ONNX conversion, about 1.76 GB. |
 | `fastino/GLiNER2.5-multi-Decide` | Downloads a verified ONNX export from the Flow-Like CDN, about 1.13 GB. |
 | `fastino/GLiNER2.5-Decide-1B` | Downloads a verified ONNX export from the Flow-Like CDN, about 4.14 GB. |
 | `fastino/gliner2.5-multi-v1` | Downloads a pinned community ONNX conversion, about 1.13 GB. |
@@ -600,7 +599,7 @@ This node runs ONNX models. The dropdown includes these models:
 
 The Decide preset uses the `nishparadox/gliner2.5-decide-onnx` float32 conversion. The small, base, and multilingual v1 presets use the encoder and classifier from `codesoda/gliner2-onnx`. Multi-Decide and Decide-1B use Flow-Like ONNX exports from the CDN. Download URLs use fixed revisions, and downloaded files are checked against SHA-256 hashes.
 
-Connect **Model Directory** to a `FlowPath`, a reference to a directory in your flow's storage. Downloadable GLiNER models use a separate `.decision-cache/<model-name>` directory for each preset. Existing cached files are reused. Laya keeps its `.laya-cache` layout and also recognizes its older cache layout. Loaded model sessions are reused within an execution cache.
+Connect **Model Directory** to a `FlowPath`, a reference to a directory in your flow's storage. Downloadable GLiNER models use a separate `.decision-cache/<model-name>` directory for each preset. Existing cached files are reused. Loaded model sessions are reused within an execution cache.
 
 ## Ask a question
 
@@ -614,7 +613,7 @@ Connect **Model Directory** to a `FlowPath`, a reference to a directory in your 
 | `score` | **Levels**: rubric descriptions in order, starting at level zero. | **Score**: the expected rubric level, which can be fractional. |
 | `noul` | Optional **False Description** and **True Description**. | **P(True)**: the probability that the statement holds. |
 
-The result also contains option probabilities, confidence, and the number of input tokens. `act_probability` contains Laya's separate action-head probability and is `null` for GLiNER. Confidence summarizes the option distribution; it does not measure real-world accuracy.
+The result also contains option probabilities, confidence, and the number of input tokens. Confidence summarizes the option distribution; it does not measure real-world accuracy.
 
 ## Export weights
 
@@ -632,12 +631,9 @@ Place the resulting directory in storage accessible to the flow and connect its 
 
 ## Use custom weights
 
-Select `custom` and point **Model Directory** at your complete bundle. The node detects the format from its configuration and performs no model downloads.
+Select `custom` and point **Model Directory** at your complete bundle. The node reads `decision_config.json` and performs no model downloads.
 
-- A GLiNER classification export contains `decision_config.json`, `model.onnx`, `tokenizer.json`, and `model.onnx_data` when the export uses external tensor data. The export tool also accepts a local GLiNER2 checkpoint directory as `--model`.
-- A Laya bundle contains `model.onnx`, `rl_agent_config.json`, and either `tokenizer/tokenizer.json` or `tokenizer.json`.
-
-For compatibility, saved flows retain the internal node name `onnx_laya` and the FlowScript name `onnx::laya`.
+A GLiNER classification export contains `decision_config.json`, `model.onnx`, `tokenizer.json`, and `model.onnx_data` when the export uses external tensor data. The export tool also accepts a local GLiNER2 checkpoint directory as `--model`.
 
 "#;
 
@@ -659,8 +655,8 @@ fn write_node_pages(
             &docs_src.join("generated/catalog-nodes"),
         );
         let node_prop = format!("{{nodesBySlug[{}]}}", json_string(&node.slug));
-        let guide = if node.name == "onnx_laya" {
-            TYPED_DECISION_GUIDE
+        let guide = if node.name == "onnx_gliner_decision" {
+            GLINER_DECISION_GUIDE
         } else {
             ""
         };

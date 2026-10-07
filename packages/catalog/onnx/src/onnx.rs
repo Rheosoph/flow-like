@@ -34,8 +34,8 @@ pub mod face_id;
 pub mod feature;
 /// ONNX GLiNER Zero-Shot NER Nodes
 pub mod gliner;
-/// Laya multilingual typed decisions
-pub mod laya;
+/// GLiNER2.5 typed decisions
+pub mod gliner_decision;
 /// ONNX Model Loader Nodes
 pub mod load;
 /// Verified model downloads cached in a quota-bounded FlowPath directory

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="740" viewBox="0 0 1200 740" role="img" aria-labelledby="title desc">
+  <title id="title">Different formats. Shared meaning.</title>
+  <desc id="desc">Conceptual diagram: text, image, audio, and video inputs pass through EmbeddingGemma 2 into a shared embedding space. A query passes through the same model. Vector search retrieves matching original sources. The plotted symbols illustrate the concept; their positions do not show measured similarity.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#95bfc9" stroke-opacity=".045"/></pattern>
+    <linearGradient id="model" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#173938"/><stop offset="1" stop-color="#10262e"/></linearGradient>
+    <radialGradient id="space"><stop stop-color="#163b3d"/><stop offset="1" stop-color="#0d1c28"/></radialGradient>
+    <marker id="teal-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="#75e8ce" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="lime-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="#ddec98" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="1200" height="740" rx="24" fill="#09141f"/>
+  <rect width="1200" height="740" rx="24" fill="url(#grid)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="48" y="59" fill="#75e8ce" font-size="26" font-weight="700" letter-spacing="2">CONCEPTUAL DIAGRAM</text>
+    <text x="48" y="121" fill="#f5f2e7" font-size="51" font-weight="700" letter-spacing="-1.4">Different formats. Shared meaning.</text>
+    <text x="48" y="166" fill="#a9becb" font-size="28">One model turns your media and your query into comparable vectors.</text>
+
+    <g fill="#101f2c" stroke="#2d4b5a" stroke-width="1.5">
+      <rect x="48" y="219" width="192" height="58" rx="14"/>
+      <rect x="48" y="291" width="192" height="58" rx="14"/>
+      <rect x="48" y="363" width="192" height="58" rx="14"/>
+      <rect x="48" y="435" width="192" height="58" rx="14"/>
+    </g>
+    <g fill="none" stroke="#75e8ce" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M69 237h26m-13 0v23m-8 0h16"/>
+      <rect x="69" y="307" width="28" height="25" rx="3"/><path d="m70 329 8-9 6 5 6-8 7 10"/><circle cx="77" cy="314" r="2" fill="#75e8ce" stroke="none"/>
+      <path d="M69 387v10m7-18v26m7-31v36m7-29v22m7-15v8"/>
+      <rect x="68" y="452" width="30" height="25" rx="4"/><path d="m80 458 9 6-9 7Z"/>
+    </g>
+    <g fill="#f5f2e7" font-size="28" font-weight="700">
+      <text x="113" y="258">Text</text><text x="113" y="330">Image</text>
+      <text x="113" y="402">Audio</text><text x="113" y="474">Video</text>
+    </g>
+    <g fill="none" stroke="#75e8ce" stroke-width="2.5" stroke-linecap="round">
+      <path d="M240 248h20v216h-20M240 320h20M240 392h20"/>
+      <path d="M260 330h39" marker-end="url(#teal-arrow)"/>
+    </g>
+
+    <rect x="303" y="275" width="320" height="174" rx="22" fill="url(#model)" stroke="#75e8ce" stroke-opacity=".65" stroke-width="1.5"/>
+    <rect x="439" y="298" width="48" height="30" rx="8" fill="#75e8ce" fill-opacity=".12" stroke="#75e8ce" stroke-opacity=".55"/>
+    <path d="m450 312 7 7 19-16" fill="none" stroke="#75e8ce" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="463" y="372" text-anchor="middle" fill="#f5f2e7" font-size="30" font-weight="700" letter-spacing="-.7">EmbeddingGemma 2</text>
+    <text x="463" y="413" text-anchor="middle" fill="#a9d6cd" font-size="26">Encode into vectors</text>
+    <path d="M623 361h56" fill="none" stroke="#75e8ce" stroke-width="2.5" marker-end="url(#teal-arrow)"/>
+
+    <rect x="685" y="211" width="467" height="311" rx="22" fill="url(#space)" stroke="#2b525e" stroke-width="1.5"/>
+    <text x="714" y="253" fill="#d5e5e5" font-size="28" font-weight="700">Shared embedding space</text>
+    <g fill="none" stroke="#75e8ce" stroke-opacity=".1">
+      <ellipse cx="920" cy="383" rx="184" ry="80" transform="rotate(-15 920 383)"/>
+      <ellipse cx="920" cy="383" rx="114" ry="46" transform="rotate(-15 920 383)"/>
+      <path d="m743 448 345-132M775 316l286 141"/>
+    </g>
+    <g fill="#75e8ce" opacity=".45">
+      <circle cx="771" cy="332" r="6"/><circle cx="806" cy="462" r="5"/><circle cx="1064" cy="410" r="6"/>
+      <circle cx="1008" cy="303" r="5"/><circle cx="1092" cy="352" r="4"/><circle cx="990" cy="456" r="4"/>
+      <circle cx="851" cy="293" r="4"/><circle cx="755" cy="427" r="4"/>
+    </g>
+    <circle cx="920" cy="384" r="62" fill="#ddec98" fill-opacity=".06" stroke="#ddec98" stroke-opacity=".4" stroke-dasharray="5 7"/>
+    <g stroke="#75e8ce" stroke-width="2.5" fill="#143a3c">
+      <circle cx="883" cy="353" r="9"/><rect x="941" y="347" width="18" height="18" rx="3"/>
+      <path d="m958 393 10 17h-20Z"/><path d="m884 411 10 10-10 10-10-10Z"/>
+      <circle cx="1025" cy="339" r="7"/><rect x="799" y="369" width="14" height="14" rx="2"/>
+    </g>
+    <g stroke="#ddec98" stroke-width="2.5" fill="none" stroke-linecap="round">
+      <path d="M920 373v22m-11-11h22"/>
+      <circle cx="920" cy="384" r="17"/>
+    </g>
+    <text x="920" y="493" fill="#ddec98" text-anchor="middle" font-size="26">Query + related sources</text>
+
+    <rect x="48" y="566" width="192" height="86" rx="16" fill="#202a26" stroke="#ddec98" stroke-opacity=".55" stroke-width="1.5"/>
+    <text x="144" y="618" text-anchor="middle" fill="#edf4c6" font-size="29" font-weight="700">Your query</text>
+    <path d="M240 609h42V414h17" fill="none" stroke="#ddec98" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#lime-arrow)"/>
+    <text x="324" y="587" fill="#c2d1d7" font-size="27">Find by meaning,</text>
+    <text x="324" y="623" fill="#c2d1d7" font-size="27">across formats.</text>
+    <path d="M919 522v37" fill="none" stroke="#ddec98" stroke-width="2.5" marker-end="url(#lime-arrow)"/>
+    <rect x="685" y="566" width="467" height="86" rx="16" fill="#202a26" stroke="#ddec98" stroke-opacity=".55" stroke-width="1.5"/>
+    <text x="919" y="600" text-anchor="middle" fill="#ddec98" font-size="26">VECTOR SEARCH</text>
+    <text x="919" y="634" text-anchor="middle" fill="#f5f2e7" font-size="29" font-weight="700">Matching original sources</text>
+    <text x="48" y="705" fill="#93aab8" font-size="26">Conceptual geometry. Positions do not represent measured similarity.</text>
+  </g>
+</svg>

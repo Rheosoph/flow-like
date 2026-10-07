@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="1440" viewBox="0 0 480 1440" role="img" aria-labelledby="title desc">
+  <title id="title">Build the index. Then search it.</title>
+  <desc id="desc">Conceptual retrieval workflow in two stacked sections. Index: source inputs are encoded by EmbeddingGemma 2, and vectors with source references are saved in a vector store. Search: a query is encoded with the same model and vector dimensions, then vector search uses that store to return original sources. An optional answer model can use the retrieved sources downstream.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#95bfc9" stroke-opacity=".045"/></pattern>
+    <linearGradient id="index" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#12302f"/><stop offset="1" stop-color="#10232b"/></linearGradient>
+    <linearGradient id="search" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#273027"/><stop offset="1" stop-color="#15232b"/></linearGradient>
+    <marker id="teal-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="#75e8ce" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="lime-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="m1 1 5 3-5 3" fill="none" stroke="#ddec98" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="480" height="1440" rx="20" fill="#09141f"/>
+  <rect width="480" height="1440" rx="20" fill="url(#grid)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="24" y="43" fill="#75e8ce" font-size="22" font-weight="700" letter-spacing="1.2">CONCEPTUAL WORKFLOW</text>
+    <text x="24" y="96" fill="#f5f2e7" font-size="41" font-weight="700" letter-spacing="-1">Build the index.</text>
+    <text x="24" y="141" fill="#f5f2e7" font-size="41" font-weight="700" letter-spacing="-1">Then search it.</text>
+
+    <rect x="24" y="176" width="432" height="486" rx="20" fill="url(#index)" stroke="#75e8ce" stroke-opacity=".25" stroke-width="1.5"/>
+    <text x="48" y="216" fill="#75e8ce" font-size="25" font-weight="700" letter-spacing="1">01 / INDEX</text>
+    <g fill="#0c1b27" stroke="#75e8ce" stroke-opacity=".35" stroke-width="1.5">
+      <rect x="48" y="238" width="360" height="66" rx="14"/>
+      <rect x="48" y="346" width="360" height="66" rx="14"/>
+      <rect x="48" y="454" width="360" height="78" rx="14"/>
+      <rect x="48" y="574" width="360" height="66" rx="14"/>
+    </g>
+    <g fill="#f5f2e7" font-size="28" font-weight="700" text-anchor="middle">
+      <text x="228" y="281">Source inputs</text>
+      <text x="228" y="389" letter-spacing="-.7">EmbeddingGemma 2</text>
+      <text x="228" y="488">Vectors</text>
+      <text x="228" y="617">Vector store</text>
+    </g>
+    <text x="228" y="518" text-anchor="middle" fill="#a9d6cd" font-size="24">+ source references</text>
+    <g stroke="#75e8ce" stroke-width="2.5" fill="none" marker-end="url(#teal-arrow)">
+      <path d="M228 304v34"/><path d="M228 412v34"/><path d="M228 532v34"/>
+    </g>
+
+    <rect x="24" y="700" width="432" height="508" rx="20" fill="url(#search)" stroke="#ddec98" stroke-opacity=".25" stroke-width="1.5"/>
+    <text x="48" y="740" fill="#ddec98" font-size="25" font-weight="700" letter-spacing="1">02 / SEARCH</text>
+    <g fill="#0e1d27" stroke="#ddec98" stroke-opacity=".35" stroke-width="1.5">
+      <rect x="48" y="762" width="360" height="66" rx="14"/>
+      <rect x="48" y="870" width="360" height="96" rx="14"/>
+      <rect x="48" y="1008" width="360" height="66" rx="14"/>
+      <rect x="48" y="1116" width="360" height="66" rx="14"/>
+    </g>
+    <g fill="#f5f2e7" font-size="28" font-weight="700" text-anchor="middle">
+      <text x="228" y="805">Your query</text>
+      <text x="228" y="909">Same model</text>
+      <text x="228" y="1051">Vector search</text>
+      <text x="228" y="1159">Original sources</text>
+    </g>
+    <text x="228" y="944" text-anchor="middle" fill="#d7dfb9" font-size="24">+ same vector dimensions</text>
+    <g stroke="#ddec98" stroke-width="2.5" fill="none" marker-end="url(#lime-arrow)">
+      <path d="M228 828v34"/><path d="M228 966v34"/><path d="M228 1074v34"/>
+    </g>
+    <path d="M408 607h29v434h-21" fill="none" stroke="#75e8ce" stroke-width="2.5" stroke-linejoin="round" marker-end="url(#teal-arrow)"/>
+    <rect x="80" y="670" width="324" height="27" rx="8" fill="#09141f"/>
+    <text x="396" y="691" fill="#a9d6cd" font-size="22" text-anchor="end">Search uses stored vectors</text>
+
+    <path d="M228 1182v60" fill="none" stroke="#ddec98" stroke-width="2.5" stroke-dasharray="5 6" marker-end="url(#lime-arrow)"/>
+    <rect x="48" y="1250" width="384" height="84" rx="14" fill="#172329" stroke="#758270" stroke-dasharray="5 6" stroke-width="1.5"/>
+    <text x="240" y="1285" fill="#d5dec3" font-size="23" text-anchor="middle">OPTIONAL NEXT STEP</text>
+    <text x="240" y="1317" fill="#f5f2e7" font-size="28" font-weight="700" text-anchor="middle">Send to an answer model</text>
+    <text x="24" y="1379" fill="#a9becb" font-size="24">Retrieval returns sources.</text>
+    <text x="24" y="1412" fill="#a9becb" font-size="24">Generation is a separate step.</text>
+  </g>
+</svg>

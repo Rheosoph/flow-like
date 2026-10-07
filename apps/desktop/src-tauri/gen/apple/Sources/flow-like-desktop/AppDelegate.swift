@@ -5,6 +5,8 @@ import AppIntents
 import UIKit
 import UserNotifications
 import ObjectiveC
+import FirebaseCore
+import FirebaseMessaging
 
 /// Bridges iOS push-notification lifecycle events into the Tauri plugin.
 ///
@@ -15,6 +17,7 @@ import ObjectiveC
 @objc(PushNotificationBridge)
 final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     @objc static let shared = PushNotificationBridge()
+    private weak var localNotificationDelegate: UNUserNotificationCenterDelegate?
 
     /// Keys used to bridge a tapped notification's userInfo to JS on cold-start.
     /// On a tap that launches the app from a terminated state, the plugin
@@ -43,17 +46,19 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
             object: nil,
             queue: nil // synchronous on posting thread
         ) { _ in
-            install()
+            MainActor.assumeIsolated { install() }
         }
     }
 
     // MARK: - Installation
 
-    private static func install() {
-        callPlugin("configureFirebaseAppIfAvailable")
-        UNUserNotificationCenter.current().delegate = shared
-
-        guard let delegateClass = NSClassFromString("AppDelegate") else { return }
+    @MainActor private static func install() {
+        let application = UIApplication.shared
+        guard let delegate = application.delegate,
+              let delegateClass = object_getClass(delegate) else {
+            NSLog("[FlowLikePush] Cannot install push callbacks: application delegate is unavailable")
+            return
+        }
 
         // application:didRegisterForRemoteNotificationsWithDeviceToken:
         do {
@@ -64,8 +69,11 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
                 callPlugin(
                     "applicationDidRegisterForRemoteNotificationsWithDeviceToken:",
                     with: token as NSData)
+                MainActor.assumeIsolated {
+                    RemotePushTokenRequests.shared.didRegister(token)
+                }
             }
-            class_addMethod(
+            installMethod(
                 delegateClass, sel,
                 imp_implementationWithBlock(block), "v@:@@")
         }
@@ -79,8 +87,11 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
                 callPlugin(
                     "applicationDidFailToRegisterForRemoteNotificationsWithError:",
                     with: error)
+                MainActor.assumeIsolated {
+                    RemotePushTokenRequests.shared.didFail(error)
+                }
             }
-            class_addMethod(
+            installMethod(
                 delegateClass, sel,
                 imp_implementationWithBlock(block), "v@:@@")
         }
@@ -99,9 +110,34 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
                         with: userInfo)
                     handler(.newData)
                 }
-            class_addMethod(
+            installMethod(
                 delegateClass, sel,
                 imp_implementationWithBlock(block), "v@:@@@")
+        }
+
+        // UIKit caches optional delegate methods when the delegate is assigned.
+        // Refresh that cache after adding Tao's missing push callbacks.
+        application.delegate = nil
+        application.delegate = delegate
+        installNotificationDelegate()
+        callPlugin("configureFirebaseAppIfAvailable")
+    }
+
+    @MainActor static func installNotificationDelegate() {
+        let center = UNUserNotificationCenter.current()
+        if let previous = center.delegate, previous !== shared {
+            shared.localNotificationDelegate = previous
+        }
+        center.delegate = shared
+    }
+
+    private static func installMethod(
+        _ delegateClass: AnyClass, _ selector: Selector, _ implementation: IMP, _ types: String
+    ) {
+        guard class_addMethod(delegateClass, selector, implementation, types) else {
+            imp_removeBlock(implementation)
+            NSLog("[FlowLikePush] Push callback already exists: %@", NSStringFromSelector(selector))
+            return
         }
     }
 
@@ -123,12 +159,16 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
         if notification.request.trigger is UNPushNotificationTrigger {
             Self.callPlugin(
                 "applicationDidReceiveRemoteNotificationWithUserInfo:",
                 with: notification.request.content.userInfo as NSDictionary)
+        } else if let previous = localNotificationDelegate,
+                  previous.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:))) {
+            previous.userNotificationCenter?(center, willPresent: notification, withCompletionHandler: completionHandler)
+            return
         }
         if #available(iOS 14.0, *) {
             completionHandler([.banner, .sound, .badge])
@@ -140,9 +180,14 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
         guard response.notification.request.trigger is UNPushNotificationTrigger else {
+            if let previous = localNotificationDelegate,
+               previous.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:didReceive:withCompletionHandler:))) {
+                previous.userNotificationCenter?(center, didReceive: response, withCompletionHandler: completionHandler)
+                return
+            }
             completionHandler()
             return
         }
@@ -176,6 +221,101 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         defaults.set(json, forKey: pendingTapDefaultsKey)
         defaults.set(Date().timeIntervalSince1970, forKey: pendingTapTimestampKey)
         NSLog("[FlowLikePush] persistPendingTap: stored \(json.count) bytes under \(pendingTapDefaultsKey)")
+    }
+}
+
+typealias RemotePushTokenCallback = @convention(c) @Sendable (
+    UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?
+) -> Void
+
+@MainActor
+private final class RemotePushTokenRequests {
+    static let shared = RemotePushTokenRequests()
+
+    private struct Request {
+        let callback: RemotePushTokenCallback
+        var fetching = false
+    }
+
+    private var requests: [String: Request] = [:]
+
+    func request(_ id: String, callback: @escaping RemotePushTokenCallback) {
+        requests[id] = Request(callback: callback)
+        guard Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil else {
+            finish(id, error: "Firebase configuration is missing from this app build.")
+            return
+        }
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+        }
+        PushNotificationBridge.installNotificationDelegate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            self?.finish(id, error: "Push registration timed out. Check your connection and try again.")
+        }
+        // Always obtain the current APNs token before asking Firebase for its FCM token.
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    func didRegister(_ token: Data) {
+        guard FirebaseApp.app() != nil else { return }
+        Messaging.messaging().apnsToken = token
+        let waiting = requests.keys.filter { requests[$0]?.fetching == false }
+        guard !waiting.isEmpty else { return }
+        for id in waiting { requests[id]?.fetching = true }
+        Messaging.messaging().token { token, error in
+            DispatchQueue.main.async {
+                for id in waiting {
+                    if let error {
+                        self.finish(id, error: "Firebase push registration failed: \(error.localizedDescription)")
+                    } else if let token, !token.isEmpty {
+                        self.finish(id, token: token)
+                    } else {
+                        self.finish(id, error: "Firebase returned an empty push token.")
+                    }
+                }
+            }
+        }
+    }
+
+    func didFail(_ error: Error) {
+        for id in Array(requests.keys) {
+            finish(id, error: "Apple push registration failed: \(error.localizedDescription)")
+        }
+    }
+
+    func cancel(_ id: String) {
+        requests.removeValue(forKey: id)
+    }
+
+    private func finish(_ id: String, token: String? = nil, error: String? = nil) {
+        guard let request = requests.removeValue(forKey: id) else { return }
+        id.withCString { idPointer in
+            if let token {
+                token.withCString { request.callback(idPointer, $0, nil) }
+            } else {
+                (error ?? "Push registration failed.").withCString { request.callback(idPointer, nil, $0) }
+            }
+        }
+    }
+}
+
+@_cdecl("flow_like_request_remote_push_token")
+func flowLikeRequestRemotePushToken(
+    _ requestID: UnsafePointer<CChar>?, _ callback: @escaping RemotePushTokenCallback
+) {
+    guard let requestID else { return }
+    let id = String(cString: requestID)
+    DispatchQueue.main.async {
+        RemotePushTokenRequests.shared.request(id, callback: callback)
+    }
+}
+
+@_cdecl("flow_like_cancel_remote_push_token")
+func flowLikeCancelRemotePushToken(_ requestID: UnsafePointer<CChar>?) {
+    guard let requestID else { return }
+    let id = String(cString: requestID)
+    DispatchQueue.main.async {
+        RemotePushTokenRequests.shared.cancel(id)
     }
 }
 #endif

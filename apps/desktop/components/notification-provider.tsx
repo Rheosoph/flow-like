@@ -12,7 +12,7 @@ import { remoteNotificationIcon } from "@flow-like/flow-like-ui/lib/notification
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
@@ -27,8 +27,8 @@ import {
 } from "../lib/notification-presentation";
 import { addLocalNotification } from "../lib/notifications-db";
 import {
-	type PushTargetPlatform,
 	REMOTE_PUSH_PREFERENCE_EVENT,
+	REMOTE_PUSH_REGISTRATION_EVENT,
 	type RemotePushApi,
 	type RemotePushListener,
 	type RemotePushPayload,
@@ -38,6 +38,7 @@ import {
 	isRemotePushPreferenceEnabled,
 	loadRemotePushPlugin,
 } from "../lib/remote-push";
+import { startRemotePushRegistration } from "../lib/remote-push-registration";
 import type { TauriBackend } from "./tauri-provider";
 
 type NotificationPermission = "granted" | "denied" | "default";
@@ -190,77 +191,82 @@ export default function NotificationProvider({
 	hubOwnsPersistenceRef.current =
 		Boolean(isAuthenticated) && Boolean(tauriBackend?.profile);
 	const remotePushApi = useRef<RemotePushApi | null>(null);
-	const remotePushListeners = useRef<RemotePushListener[]>([]);
+	const pushRegistration = useRef<ReturnType<
+		typeof startRemotePushRegistration
+	> | null>(null);
 	const tapListener = useRef<RemotePushListener | null>(null);
-	const lastRegistrationKey = useRef<string | null>(null);
 	const deviceId = useRef<string | null>(null);
 	const [pushDeviceId, setPushDeviceId] = useState<string | null>(null);
 	const [remotePushPluginState, setRemotePushPluginState] =
 		useState<RemotePushPluginState>("loading");
 	const [remotePushPreferenceEnabled, setRemotePushPreferenceEnabled] =
 		useState(isRemotePushPreferenceEnabled);
+	const [remotePushActivation, setRemotePushActivation] = useState(0);
 	const pushConfig = hub.hub?.push_notifications;
 	const handleTapRef = useRef<(notification: RemotePushPayload) => void>(
 		() => {},
 	);
 
-	const storeNotification = async ({
-		title,
-		description,
-		icon,
-		link,
-		appIdOverride,
-		sourceRunId,
-		sourceNodeId,
-		notificationType,
-	}: {
-		title: string;
-		description?: string;
-		icon?: string;
-		link?: string;
-		appIdOverride?: string;
-		sourceRunId?: string;
-		sourceNodeId?: string;
-		notificationType?: "WORKFLOW" | "SYSTEM";
-	}) => {
-		try {
-			const notificationAppId = appIdOverride ?? appId;
+	const storeNotification = useCallback(
+		async ({
+			title,
+			description,
+			icon,
+			link,
+			appIdOverride,
+			sourceRunId,
+			sourceNodeId,
+			notificationType,
+		}: {
+			title: string;
+			description?: string;
+			icon?: string;
+			link?: string;
+			appIdOverride?: string;
+			sourceRunId?: string;
+			sourceNodeId?: string;
+			notificationType?: "WORKFLOW" | "SYSTEM";
+		}) => {
+			try {
+				const notificationAppId = appIdOverride ?? appId;
 
-			// Keep a local copy only for offline history; when the hub owns
-			// persistence the same notification already lives server-side, so writing
-			// it locally too would double it in the list and the unread badge.
-			if (!hubOwnsPersistenceRef.current) {
-				await addLocalNotification({
-					userId,
-					appId: notificationAppId,
-					title,
-					description,
-					icon,
-					link,
-					notificationType: notificationType ?? "WORKFLOW",
-					sourceRunId,
-					sourceNodeId,
+				// Keep a local copy only for offline history; when the hub owns
+				// persistence the same notification already lives server-side, so writing
+				// it locally too would double it in the list and the unread badge.
+				if (!hubOwnsPersistenceRef.current) {
+					await addLocalNotification({
+						userId,
+						appId: notificationAppId,
+						title,
+						description,
+						icon,
+						link,
+						notificationType: notificationType ?? "WORKFLOW",
+						sourceRunId,
+						sourceNodeId,
+					});
+				}
+
+				await queryClient.refetchQueries({
+					predicate: (query) => {
+						const key = query.queryKey[0];
+						return (
+							key === "getNotifications" ||
+							key === "listNotifications" ||
+							key === "getInvites" ||
+							key === "listMyInvitations"
+						);
+					},
 				});
+			} catch (error) {
+				console.error(
+					"[NotificationProvider] Failed to store local notification:",
+					error,
+				);
 			}
-
-			await queryClient.refetchQueries({
-				predicate: (query) => {
-					const key = query.queryKey[0];
-					return (
-						key === "getNotifications" ||
-						key === "listNotifications" ||
-						key === "getInvites" ||
-						key === "listMyInvitations"
-					);
-				},
-			});
-		} catch (error) {
-			console.error(
-				"[NotificationProvider] Failed to store local notification:",
-				error,
-			);
-		}
-	};
+		},
+		[appId, queryClient, userId],
+	);
 
 	handleTapRef.current = (notification: RemotePushPayload) => {
 		void storeNotification({
@@ -300,61 +306,55 @@ export default function NotificationProvider({
 		}
 	};
 
-	const pushTargetRegistrationKey = (
-		token: string,
-		platform: PushTargetPlatform,
-	): string => {
-		return JSON.stringify({
-			user: currentUser?.profile?.sub ?? "",
-			hub: backend?.profile?.hub ?? "",
-			deviceId: deviceId.current ?? pushDeviceId ?? "",
-			platform,
-			provider: pushConfig?.provider ?? "",
-			channelId: pushConfig?.channel_id ?? "",
-			token,
-		});
-	};
+	const registerPushTarget = useCallback(
+		async (token: string, signal: AbortSignal) => {
+			const platform = detectPushPlatform();
+			if (
+				!remotePushApi.current ||
+				!backend?.profile ||
+				!currentUser ||
+				!canUseRemotePushForPlatform(pushConfig, platform) ||
+				!platform
+			) {
+				return;
+			}
 
-	const registerPushTarget = async (token: string) => {
-		const platform = detectPushPlatform();
-		if (
-			!remotePushApi.current ||
-			!backend?.profile ||
-			!currentUser ||
-			!canUseRemotePushForPlatform(pushConfig, platform) ||
-			!platform
-		) {
-			return;
-		}
+			if (!deviceId.current) {
+				deviceId.current = await getPushDeviceId();
+			}
 
-		if (!deviceId.current) {
-			deviceId.current = await getPushDeviceId();
-		}
-
-		await fetcher<{ id: string; success: boolean }>(
-			backend.profile,
-			"user/push-targets/register",
-			{
-				method: "POST",
-				body: JSON.stringify({
-					device_id: deviceId.current,
-					platform,
-					token,
-					device_name:
-						typeof navigator !== "undefined" ? navigator.userAgent : undefined,
-					channel_id: pushConfig?.channel_id,
-					metadata: {
-						app_id: appId,
+			await fetcher<{ id: string; success: boolean }>(
+				backend.profile,
+				"user/push-targets/register",
+				{
+					method: "POST",
+					signal,
+					body: JSON.stringify({
+						device_id: deviceId.current,
 						platform,
-						provider: pushConfig?.provider,
-					},
-				}),
-			},
-			authContext,
-		);
-
-		lastRegistrationKey.current = pushTargetRegistrationKey(token, platform);
-	};
+						token,
+						device_name:
+							typeof navigator !== "undefined"
+								? navigator.userAgent
+								: undefined,
+						channel_id: pushConfig?.channel_id,
+						metadata: {
+							app_id: appId,
+							platform,
+							provider: pushConfig?.provider,
+						},
+					}),
+				},
+				authContext,
+			);
+			if (!signal.aborted) {
+				window.dispatchEvent(
+					new globalThis.Event(REMOTE_PUSH_REGISTRATION_EVENT),
+				);
+			}
+		},
+		[appId, authContext, backend?.profile, currentUser, pushConfig],
+	);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -412,16 +412,24 @@ export default function NotificationProvider({
 			// hydrated (or before the auth-gated effect runs) still navigate.
 			if (remotePushApi.current && !tapListener.current) {
 				try {
-					tapListener.current =
-						await remotePushApi.current.onNotificationTapped((notification) => {
+					const listener = await remotePushApi.current.onNotificationTapped(
+						(notification) => {
+							if (cancelled) return;
 							console.log(
 								"[NotificationProvider] live tap fired",
 								notification,
 							);
 							handleTapRef.current(notification);
-						});
+						},
+					);
+					if (cancelled) {
+						await listener.unregister();
+						return;
+					}
+					tapListener.current = listener;
 					console.log("[NotificationProvider] tap listener registered");
 				} catch (error) {
+					if (cancelled) return;
 					// The JS module imports on every platform, so a missing native
 					// command is the first proof the plugin is not actually there
 					// (desktop dev builds). Drop the handle so later runs of this
@@ -485,7 +493,12 @@ export default function NotificationProvider({
 		}
 
 		const handlePreferenceChange = () => {
-			setRemotePushPreferenceEnabled(isRemotePushPreferenceEnabled());
+			const enabled = isRemotePushPreferenceEnabled();
+			setRemotePushPreferenceEnabled(enabled);
+			// A failed disable can roll back in the same React batch. Restart even
+			// when the final preference equals its previous value.
+			if (enabled) setRemotePushActivation((revision) => revision + 1);
+			else pushRegistration.current?.stop();
 		};
 
 		window.addEventListener(
@@ -500,6 +513,7 @@ export default function NotificationProvider({
 		};
 	}, []);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Activation restarts registration after a batched preference rollback, even when the final enabled value is unchanged.
 	useEffect(() => {
 		const platform = detectPushPlatform();
 		if (
@@ -523,103 +537,64 @@ export default function NotificationProvider({
 			return;
 		}
 
-		let cancelled = false;
-
-		const initRemotePush = async () => {
-			if (!remotePushApi.current) {
-				return;
-			}
-
-			try {
-				const permission = await remotePushApi.current.requestPermission();
-				if (!permission.granted) {
-					console.warn(
-						"[NotificationProvider] Remote push permission not granted; keeping existing server target untouched.",
-					);
-					return;
-				}
-
-				const token = await remotePushApi.current.getToken();
-				if (!token) {
-					console.warn(
-						"[NotificationProvider] Remote push plugin returned an empty FCM token.",
-					);
-					return;
-				}
-				if (
-					!cancelled &&
-					token &&
-					pushTargetRegistrationKey(token, platform) !==
-						lastRegistrationKey.current
-				) {
-					await registerPushTarget(token);
-				}
-
-				remotePushListeners.current.push(
-					await remotePushApi.current.onTokenRefresh(async (nextToken) => {
-						if (
-							!nextToken ||
-							pushTargetRegistrationKey(nextToken, platform) ===
-								lastRegistrationKey.current
-						) {
-							return;
-						}
-
-						try {
-							await registerPushTarget(nextToken);
-						} catch (error) {
-							console.warn(
-								"[NotificationProvider] Failed to refresh push token:",
-								error,
-							);
-						}
-					}),
-				);
-
-				remotePushListeners.current.push(
-					await remotePushApi.current.onNotificationReceived(
-						async (notification) => {
-							await storeNotification({
-								title: notification.title ?? "Notification",
-								description: notification.body,
-								icon: remoteNotificationIcon(notification.data),
-								link: dataString(notification.data, "link"),
-								appIdOverride: dataString(notification.data, "app_id") ?? appId,
-								sourceRunId: dataString(notification.data, "source_run_id"),
-								sourceNodeId: dataString(notification.data, "source_node_id"),
-								notificationType:
-									(dataString(notification.data, "notification_type") as
-										| "WORKFLOW"
-										| "SYSTEM") ?? "SYSTEM",
-							});
-
-							if (shouldShowRemotePushToast(platform)) {
-								showNotificationToast(
-									notification.title ?? "Notification",
-									notification.body,
-									remoteNotificationIcon(notification.data),
-									dataString(notification.data, "app_id") ?? appId,
-								);
-							}
-						},
-					),
-				);
-			} catch (error) {
+		const abort = new AbortController();
+		const registration = startRemotePushRegistration({
+			api: remotePushApi.current,
+			register: (token) => registerPushTarget(token, abort.signal),
+			onError: (error) => {
 				console.warn(
-					"[NotificationProvider] Failed to initialize remote push registration:",
+					"[NotificationProvider] Push registration failed; retrying:",
 					error,
 				);
-			}
+			},
+			onNotification: async (notification) => {
+				await storeNotification({
+					title: notification.title ?? "Notification",
+					description: notification.body,
+					icon: remoteNotificationIcon(notification.data),
+					link: dataString(notification.data, "link"),
+					appIdOverride: dataString(notification.data, "app_id") ?? appId,
+					sourceRunId: dataString(notification.data, "source_run_id"),
+					sourceNodeId: dataString(notification.data, "source_node_id"),
+					notificationType:
+						(dataString(notification.data, "notification_type") as
+							| "WORKFLOW"
+							| "SYSTEM") ?? "SYSTEM",
+				});
+				if (shouldShowRemotePushToast(platform)) {
+					showNotificationToast(
+						notification.title ?? "Notification",
+						notification.body,
+						remoteNotificationIcon(notification.data),
+						dataString(notification.data, "app_id") ?? appId,
+					);
+				}
+			},
+		});
+		const handle = {
+			refresh: registration.refresh,
+			stop: () => {
+				registration.stop();
+				abort.abort();
+			},
 		};
-
-		initRemotePush();
+		pushRegistration.current = handle;
+		const refresh = () => {
+			if (document.visibilityState !== "hidden") registration.refresh();
+		};
+		window.addEventListener("online", refresh);
+		window.addEventListener("focus", refresh);
+		document.addEventListener("visibilitychange", refresh);
+		// Keep an active installation eligible even when its FCM token is unchanged.
+		const heartbeat = window.setInterval(refresh, 24 * 60 * 60 * 1000);
 
 		return () => {
-			cancelled = true;
-			const listeners = remotePushListeners.current.splice(0);
-			void Promise.allSettled(
-				listeners.map((listener) => Promise.resolve(listener.unregister())),
-			);
+			handle.stop();
+			if (pushRegistration.current === handle) pushRegistration.current = null;
+			window.clearInterval(heartbeat);
+			window.removeEventListener("online", refresh);
+			window.removeEventListener("focus", refresh);
+			document.removeEventListener("visibilitychange", refresh);
 		};
 	}, [
 		isAuthenticated,
@@ -629,7 +604,10 @@ export default function NotificationProvider({
 		appId,
 		pushDeviceId,
 		remotePushPreferenceEnabled,
+		remotePushActivation,
 		remotePushPluginState,
+		registerPushTarget,
+		storeNotification,
 	]);
 
 	useEffect(() => {
@@ -724,7 +702,7 @@ export default function NotificationProvider({
 				}
 			})();
 		};
-	}, [userId, appId, queryClient]);
+	}, [userId, appId, storeNotification]);
 
 	return null;
 }

@@ -89,13 +89,20 @@ describe("failures", () => {
 		);
 	});
 
-	test("anything else reads as the connection's failure, never as a raw message", () => {
+	test("a closed tunnel identifies the lost connection without exposing its raw message", () => {
 		const text = failureText(
 			t,
 			new DeviceTunnelError("connection_closed", "socket gone"),
 			DEVICE,
 		);
-		expect(text.length).toBeGreaterThan(10);
+		expect(text).toBe("The connection to the device closed.");
 		expect(text).not.toContain("socket gone");
+	});
+
+	test("a tunnel heartbeat or renewal timeout identifies the missing reply", () => {
+		for (const code of ["heartbeat_timeout", "renewal_timeout"])
+			expect(
+				failureText(t, new DeviceTunnelError(code, "detail"), DEVICE),
+			).toBe("The device didn't answer in time.");
 	});
 });

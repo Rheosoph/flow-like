@@ -13877,11 +13877,11 @@
     "class": null,
     "category": "AI/ML/ONNX/NLP"
   },
-  "onnx_laya": {
-    "qualified": "onnx::laya",
+  "onnx_gliner_decision": {
+    "qualified": "onnx::gliner_decision",
     "namespace": "onnx",
-    "alias": "laya",
-    "flat": "onnxLaya",
+    "alias": "gliner_decision",
+    "flat": "onnxGlinerDecision",
     "receiver": null,
     "class": null,
     "category": "AI/ML/ONNX/NLP"

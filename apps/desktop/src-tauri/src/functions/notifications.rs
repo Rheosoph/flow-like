@@ -4,6 +4,14 @@ use tauri::Manager;
 #[path = "notification_attachments.rs"]
 mod attachments;
 
+#[path = "notification_token.rs"]
+mod token;
+
+#[tauri::command]
+pub async fn get_remote_push_token(app: tauri::AppHandle) -> Result<String, String> {
+    token::get(app).await
+}
+
 #[tauri::command]
 pub async fn prepare_notification_attachment(
     app: tauri::AppHandle,

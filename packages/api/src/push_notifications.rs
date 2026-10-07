@@ -15,9 +15,9 @@ use flow_like_types::create_id;
 use flow_like_types::tokio::sync::RwLock;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::StatusCode;
-use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, EntityTrait,
+    QueryFilter, QueryOrder, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -64,7 +64,7 @@ pub struct DispatchNotificationInput {
 }
 
 /// Provider acceptance does not confirm that a device displayed the notification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PushDispatchStatus {
     Disabled,
@@ -94,6 +94,89 @@ impl PushDispatchStatus {
 pub struct DispatchNotificationResult {
     pub id: String,
     pub push_status: PushDispatchStatus,
+}
+
+const DELIVERY_METADATA_KEY: &str = "_flow_like_push_delivery";
+const TARGET_STALE_DAYS: i64 = 30;
+const TARGET_UPDATE_ATTEMPTS: usize = 5;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct PushDeliveryRecord {
+    pub status: PushDispatchStatus,
+    pub attempted_at: chrono::DateTime<chrono::Utc>,
+    pub error: Option<String>,
+    notification_id: String,
+}
+
+pub(crate) fn push_delivery_record(
+    metadata: Option<&serde_json::Value>,
+) -> Option<PushDeliveryRecord> {
+    serde_json::from_value(metadata?.get(DELIVERY_METADATA_KEY)?.clone()).ok()
+}
+
+pub(crate) fn push_target_is_stale(
+    target: &push_notification_target::Model,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    target.last_seen_at <= now - chrono::Duration::days(TARGET_STALE_DAYS)
+}
+
+/// The delivery record is server-owned. Client metadata updates cannot replace it.
+pub(crate) fn registration_metadata(
+    client: Option<serde_json::Value>,
+    previous: Option<&serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let mut metadata = match client {
+        Some(serde_json::Value::Object(object)) => object,
+        Some(value) => serde_json::Map::from_iter([("client".to_string(), value)]),
+        None => serde_json::Map::new(),
+    };
+    metadata.remove(DELIVERY_METADATA_KEY);
+    if let Some(record) = previous.and_then(|value| value.get(DELIVERY_METADATA_KEY)) {
+        metadata.insert(DELIVERY_METADATA_KEY.to_string(), record.clone());
+    }
+    (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
+}
+
+fn metadata_unchanged(metadata: &Option<serde_json::Value>) -> Condition {
+    Condition::all().add(match metadata {
+        Some(value) => push_notification_target::Column::Metadata.eq(value.clone()),
+        None => push_notification_target::Column::Metadata.is_null(),
+    })
+}
+
+pub(crate) async fn update_registration_metadata(
+    db: &impl ConnectionTrait,
+    target_id: &str,
+    token_encrypted: &str,
+    client: Option<serde_json::Value>,
+) -> Result<(), sea_orm::DbErr> {
+    for _ in 0..TARGET_UPDATE_ATTEMPTS {
+        let Some(target) = push_notification_target::Entity::find_by_id(target_id)
+            .filter(push_notification_target::Column::TokenEncrypted.eq(token_encrypted))
+            .one(db)
+            .await?
+        else {
+            return Ok(());
+        };
+        let metadata = registration_metadata(client.clone(), target.metadata.as_ref());
+        let changed = push_notification_target::Entity::update_many()
+            .col_expr(
+                push_notification_target::Column::Metadata,
+                Expr::value(metadata),
+            )
+            .filter(push_notification_target::Column::Id.eq(target_id))
+            .filter(push_notification_target::Column::TokenEncrypted.eq(token_encrypted))
+            .filter(metadata_unchanged(&target.metadata))
+            .exec(db)
+            .await?;
+        if changed.rows_affected > 0 {
+            return Ok(());
+        }
+    }
+    Err(sea_orm::DbErr::Custom(
+        "Push target metadata changed during registration; retry registration".to_string(),
+    ))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -232,9 +315,16 @@ pub async fn dispatch_notification_with_status(
                 source_node_id = ?input.source_node_id,
                 "Reusing recently-created matching notification"
             );
+            input.icon = prepared_icon.push_icon;
+            let push_status = push_to_user(state, &notification.id, &input, true)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, notification_id = %notification.id, "Failed to retry push notification");
+                    PushDispatchStatus::Failed
+                });
             return Ok(DispatchNotificationResult {
                 id: notification.id,
-                push_status: PushDispatchStatus::Deduplicated,
+                push_status,
             });
         }
     }
@@ -259,7 +349,7 @@ pub async fn dispatch_notification_with_status(
     notification.insert(&state.db).await?;
 
     input.icon = prepared_icon.push_icon;
-    let push_status = match push_to_user(state, &notification_id, &input).await {
+    let push_status = match push_to_user(state, &notification_id, &input, false).await {
         Ok(status) => status,
         Err(error) => {
             tracing::warn!(
@@ -311,7 +401,7 @@ pub async fn dispatch_notification_idempotent(
     .exec_without_returning(&state.db)
     .await?;
     input.icon = prepared_icon.push_icon;
-    let push_status = push_to_user(state, notification_id, &input)
+    let push_status = push_to_user(state, notification_id, &input, false)
         .await
         .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
     Ok(DispatchNotificationResult {
@@ -423,6 +513,7 @@ async fn push_to_user(
     state: &AppState,
     notification_id: &str,
     input: &DispatchNotificationInput,
+    retry_failed_only: bool,
 ) -> flow_like_types::Result<PushDispatchStatus> {
     let config = &state.platform_config.push_notifications;
     if !config.enabled {
@@ -435,7 +526,8 @@ async fn push_to_user(
         ));
     };
 
-    let stale_cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::days(30);
+    let stale_cutoff =
+        chrono::Utc::now().fixed_offset() - chrono::Duration::days(TARGET_STALE_DAYS);
 
     let targets = push_notification_target::Entity::find()
         .filter(push_notification_target::Column::UserId.eq(input.user_id.clone()))
@@ -453,10 +545,19 @@ async fn push_to_user(
         if !is_target_allowed(config, &target.platform) {
             continue;
         }
+        if retry_failed_only && !should_retry_delivery(&target, notification_id) {
+            continue;
+        }
+
+        let attempted_at = chrono::Utc::now();
 
         let Some(token) = decrypt_token(&target.token_encrypted, &state.encryption_key) else {
             failed += 1;
             tracing::warn!(target_id = %target.id, "Failed to decrypt push token");
+            record_delivery_result_logged(
+                &state.db, &target, notification_id, attempted_at,
+                Some("The server could not read this device's push token. Reactivate push notifications on this device."), false,
+            ).await;
             continue;
         };
 
@@ -493,9 +594,15 @@ async fn push_to_user(
         if let Err(error) = result {
             failed += 1;
             let message = error.to_string();
-            if should_invalidate_target(&message) {
-                record_invalidation_failure(state, &target.id, &message).await?;
-            }
+            record_delivery_result_logged(
+                &state.db,
+                &target,
+                notification_id,
+                attempted_at,
+                Some(delivery_error_message(&message)),
+                should_invalidate_target(&message),
+            )
+            .await;
 
             tracing::warn!(
                 error = %message,
@@ -506,15 +613,48 @@ async fn push_to_user(
             );
         } else {
             accepted += 1;
-            // Successful delivery clears the consecutive-failure streak so a
-            // healthy device never accumulates toward the disable threshold.
-            if target.failure_count > 0 {
-                reset_failure_count(state, &target.id).await?;
-            }
+            record_delivery_result_logged(
+                &state.db,
+                &target,
+                notification_id,
+                attempted_at,
+                None,
+                false,
+            )
+            .await;
         }
     }
 
+    if retry_failed_only && accepted == 0 && failed == 0 {
+        return Ok(PushDispatchStatus::Deduplicated);
+    }
     Ok(PushDispatchStatus::from_counts(accepted, failed))
+}
+
+fn should_retry_delivery(target: &push_notification_target::Model, notification_id: &str) -> bool {
+    push_delivery_record(target.metadata.as_ref()).is_some_and(|record| {
+        record.notification_id == notification_id && record.status == PushDispatchStatus::Failed
+    })
+}
+
+fn delivery_error_message(message: &str) -> &'static str {
+    if message.contains("THIRD_PARTY_AUTH_ERROR") {
+        "FCM THIRD_PARTY_AUTH_ERROR: Apple push credentials are missing or invalid. The hub administrator must check the APNs credentials in Firebase."
+    } else if message.contains("SENDER_ID_MISMATCH") {
+        "FCM SENDER_ID_MISMATCH: This device and the push server use different Firebase projects. The hub administrator must check the Firebase configuration."
+    } else if message.contains("UNREGISTERED") {
+        "FCM UNREGISTERED: This device's push token is no longer registered. Reactivate push notifications on this device."
+    } else if message.contains("INVALID_ARGUMENT") {
+        "FCM INVALID_ARGUMENT: Firebase rejected the push token or notification payload. The hub administrator must inspect the delivery logs."
+    } else if message.contains("service account")
+        || message.contains("OAuth")
+        || message.contains("status 401")
+        || message.contains("status 403")
+    {
+        "Push service authentication failed. The hub administrator must check the push credentials and permissions."
+    } else {
+        "The push provider did not accept this notification. Try again. If delivery keeps failing, ask the hub administrator to inspect the delivery logs."
+    }
 }
 
 fn is_target_allowed(
@@ -694,87 +834,126 @@ fn should_invalidate_target(message: &str) -> bool {
 /// counter. Only sustained, repeated invalidation-class errors disable.
 const INVALIDATION_FAILURE_THRESHOLD: i32 = 15;
 
-/// Increment the consecutive-failure counter on a target after the provider
-/// returned an invalidation-class error. When the counter crosses
-/// [`INVALIDATION_FAILURE_THRESHOLD`], the target is marked disabled with the
-/// last seen reason. Successful sends call [`reset_failure_count`] to clear
-/// the counter.
-async fn record_invalidation_failure(
-    state: &AppState,
-    target_id: &str,
-    reason: &str,
+async fn record_delivery_result_logged(
+    db: &impl ConnectionTrait,
+    target: &push_notification_target::Model,
+    notification_id: &str,
+    attempted_at: chrono::DateTime<chrono::Utc>,
+    error: Option<&str>,
+    invalidates_token: bool,
+) {
+    if let Err(error) = record_delivery_result(
+        db,
+        target,
+        notification_id,
+        attempted_at,
+        error,
+        invalidates_token,
+    )
+    .await
+    {
+        tracing::warn!(%error, target_id = %target.id, %notification_id, "Could not store push delivery result");
+    }
+}
+
+/// A send made with an old token must not invalidate a newer registration.
+async fn record_delivery_result(
+    db: &impl ConnectionTrait,
+    sent_target: &push_notification_target::Model,
+    notification_id: &str,
+    attempted_at: chrono::DateTime<chrono::Utc>,
+    error: Option<&str>,
+    invalidates_token: bool,
 ) -> Result<(), sea_orm::DbErr> {
-    let now = chrono::Utc::now().fixed_offset();
-
-    let updated = push_notification_target::Entity::update_many()
-        .col_expr(
-            push_notification_target::Column::FailureCount,
-            sea_orm::sea_query::Expr::col(push_notification_target::Column::FailureCount).add(1),
-        )
-        .col_expr(
-            push_notification_target::Column::UpdatedAt,
-            sea_orm::sea_query::Expr::value(now),
-        )
-        .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
-        .exec_with_returning(&state.db)
-        .await?;
-
-    let Some(target) = updated.into_iter().next() else {
-        return Ok(());
-    };
-
-    if target.failure_count >= INVALIDATION_FAILURE_THRESHOLD && target.push_enabled {
-        let summary = format!(
-            "{} consecutive invalidation-class failures; last reason: {}",
-            target.failure_count, reason
-        );
-        push_notification_target::Entity::update_many()
+    for _ in 0..TARGET_UPDATE_ATTEMPTS {
+        let Some(target) = push_notification_target::Entity::find_by_id(sent_target.id.clone())
+            .filter(
+                push_notification_target::Column::TokenEncrypted
+                    .eq(sent_target.token_encrypted.clone()),
+            )
+            .one(db)
+            .await?
+        else {
+            return Ok(());
+        };
+        if push_delivery_record(target.metadata.as_ref())
+            .is_some_and(|record| record.attempted_at > attempted_at)
+        {
+            return Ok(());
+        }
+        let record = PushDeliveryRecord {
+            status: if error.is_some() {
+                PushDispatchStatus::Failed
+            } else {
+                PushDispatchStatus::Accepted
+            },
+            attempted_at,
+            error: error.map(ToOwned::to_owned),
+            notification_id: notification_id.to_string(),
+        };
+        let mut metadata = registration_metadata(target.metadata.clone(), None)
+            .unwrap_or_else(|| serde_json::json!({}));
+        metadata[DELIVERY_METADATA_KEY] = serde_json::to_value(record)
+            .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+        let failures = if error.is_none() {
+            0
+        } else if invalidates_token {
+            target.failure_count.saturating_add(1)
+        } else {
+            target.failure_count
+        };
+        let now = chrono::Utc::now().fixed_offset();
+        let mut update = push_notification_target::Entity::update_many()
             .col_expr(
-                push_notification_target::Column::PushEnabled,
-                sea_orm::sea_query::Expr::value(false),
+                push_notification_target::Column::Metadata,
+                Expr::value(Some(metadata)),
             )
             .col_expr(
-                push_notification_target::Column::InvalidatedAt,
-                sea_orm::sea_query::Expr::value(Some(now)),
-            )
-            .col_expr(
-                push_notification_target::Column::InvalidationReason,
-                sea_orm::sea_query::Expr::value(Some(summary.clone())),
+                push_notification_target::Column::FailureCount,
+                Expr::value(failures),
             )
             .col_expr(
                 push_notification_target::Column::UpdatedAt,
-                sea_orm::sea_query::Expr::value(now),
+                Expr::value(now),
             )
-            .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
-            .exec(&state.db)
-            .await?;
-
-        tracing::warn!(
-            target_id = %target_id,
-            failure_count = target.failure_count,
-            reason = %summary,
-            "Push target disabled after exceeding failure threshold"
-        );
+            .filter(push_notification_target::Column::Id.eq(target.id.clone()))
+            .filter(
+                push_notification_target::Column::TokenEncrypted
+                    .eq(sent_target.token_encrypted.clone()),
+            )
+            .filter(push_notification_target::Column::FailureCount.eq(target.failure_count))
+            .filter(push_notification_target::Column::PushEnabled.eq(target.push_enabled))
+            .filter(metadata_unchanged(&target.metadata));
+        let disable =
+            invalidates_token && failures >= INVALIDATION_FAILURE_THRESHOLD && target.push_enabled;
+        if disable {
+            update = update
+                .col_expr(
+                    push_notification_target::Column::PushEnabled,
+                    Expr::value(false),
+                )
+                .col_expr(
+                    push_notification_target::Column::InvalidatedAt,
+                    Expr::value(Some(now)),
+                )
+                .col_expr(
+                    push_notification_target::Column::InvalidationReason,
+                    Expr::value(Some(format!(
+                        "{failures} consecutive invalidation-class failures; last reason: {}",
+                        error.unwrap_or_default()
+                    ))),
+                );
+        }
+        if update.exec(db).await?.rows_affected > 0 {
+            if disable {
+                tracing::warn!(target_id = %target.id, failure_count = failures, "Push target disabled after exceeding failure threshold");
+            }
+            return Ok(());
+        }
     }
-
-    Ok(())
-}
-
-/// Reset the consecutive-failure counter to zero. Called after a successful
-/// send so a previously-flaky-but-recovered target doesn't accumulate
-/// failures across long windows. Filters on `FailureCount > 0` to skip the
-/// no-op write on the steady-state happy path.
-async fn reset_failure_count(state: &AppState, target_id: &str) -> Result<(), sea_orm::DbErr> {
-    push_notification_target::Entity::update_many()
-        .col_expr(
-            push_notification_target::Column::FailureCount,
-            sea_orm::sea_query::Expr::value(0),
-        )
-        .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
-        .filter(push_notification_target::Column::FailureCount.gt(0))
-        .exec(&state.db)
-        .await?;
-    Ok(())
+    Err(sea_orm::DbErr::Custom(
+        "Push target changed while recording its delivery result".to_string(),
+    ))
 }
 
 /// Reads the service account JSON via the secret store.
@@ -1485,6 +1664,245 @@ pub(crate) async fn exchange_google_service_account(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn delivery_database(
+        target: &push_notification_target::Model,
+    ) -> sea_orm::DatabaseConnection {
+        let db = sea_orm::Database::connect(
+            sea_orm::ConnectOptions::new("sqlite::memory:")
+                .max_connections(1)
+                .clone(),
+        )
+        .await
+        .unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        db.execute_unprepared(r#"CREATE TABLE public."PushNotificationTarget" (
+            id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "deviceId" TEXT NOT NULL,
+            platform TEXT NOT NULL, provider TEXT NOT NULL, "tokenEncrypted" TEXT NOT NULL,
+            "endpointArn" TEXT, "installationId" TEXT, "channelId" TEXT, "deviceName" TEXT,
+            metadata TEXT, "pushEnabled" BOOLEAN NOT NULL, "failureCount" INTEGER NOT NULL,
+            "lastRegisteredAt" TEXT NOT NULL, "lastSeenAt" TEXT NOT NULL,
+            "invalidatedAt" TEXT, "invalidationReason" TEXT, "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL
+        )"#).await.unwrap();
+        let model: push_notification_target::ActiveModel = target.clone().into();
+        model.reset_all().insert(&db).await.unwrap();
+        db
+    }
+
+    async fn stored_target(db: &sea_orm::DatabaseConnection) -> push_notification_target::Model {
+        push_notification_target::Entity::find_by_id("target-id")
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn delivery_errors_survive_registration_until_a_successful_send() {
+        let mut target = target(PushNotificationTargetPlatform::Ios);
+        target.metadata = Some(serde_json::json!({"source": "startup"}));
+        let db = delivery_database(&target).await;
+        let failed_at = chrono::Utc::now();
+        let reason = delivery_error_message("FCM THIRD_PARTY_AUTH_ERROR: provider-private-details");
+        for offset in 0..INVALIDATION_FAILURE_THRESHOLD {
+            record_delivery_result(
+                &db,
+                &target,
+                "notice",
+                failed_at + chrono::Duration::seconds(offset as i64),
+                Some(reason),
+                false,
+            )
+            .await
+            .unwrap();
+        }
+        let stored = stored_target(&db).await;
+        assert!(stored.push_enabled);
+        assert_eq!(stored.failure_count, 0);
+        assert!(stored.invalidated_at.is_none());
+        assert_eq!(
+            push_delivery_record(stored.metadata.as_ref())
+                .unwrap()
+                .status,
+            PushDispatchStatus::Failed
+        );
+        assert!(should_retry_delivery(&stored, "notice"));
+        assert!(!should_retry_delivery(&stored, "different-notice"));
+
+        update_registration_metadata(
+            &db,
+            &target.id,
+            &target.token_encrypted,
+            Some(serde_json::json!({
+                "source": "settings", "_flow_like_push_delivery": {"status": "accepted"}
+            })),
+        )
+        .await
+        .unwrap();
+        let stored = stored_target(&db).await;
+        assert_eq!(stored.metadata.as_ref().unwrap()["source"], "settings");
+        assert_eq!(
+            push_delivery_record(stored.metadata.as_ref())
+                .unwrap()
+                .error
+                .as_deref(),
+            Some(reason)
+        );
+        assert!(
+            !stored
+                .metadata
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("provider-private-details")
+        );
+
+        record_delivery_result(
+            &db,
+            &target,
+            "notice",
+            failed_at + chrono::Duration::seconds(30),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        let stored = stored_target(&db).await;
+        let delivery = push_delivery_record(stored.metadata.as_ref()).unwrap();
+        assert_eq!(delivery.status, PushDispatchStatus::Accepted);
+        assert_eq!(delivery.error, None);
+        assert!(!should_retry_delivery(&stored, "notice"));
+    }
+
+    #[tokio::test]
+    async fn old_token_and_out_of_order_results_cannot_replace_current_delivery_state() {
+        let mut target = target(PushNotificationTargetPlatform::Ios);
+        target.failure_count = INVALIDATION_FAILURE_THRESHOLD - 1;
+        let db = delivery_database(&target).await;
+        let now = chrono::Utc::now();
+        record_delivery_result(&db, &target, "new-notice", now, None, false)
+            .await
+            .unwrap();
+        record_delivery_result(
+            &db,
+            &target,
+            "old-notice",
+            now - chrono::Duration::seconds(1),
+            Some("Old failure"),
+            true,
+        )
+        .await
+        .unwrap();
+        let stored = stored_target(&db).await;
+        assert_eq!(stored.failure_count, 0);
+        assert!(stored.push_enabled);
+        assert_eq!(
+            push_delivery_record(stored.metadata.as_ref())
+                .unwrap()
+                .notification_id,
+            "new-notice"
+        );
+
+        push_notification_target::Entity::update_many()
+            .col_expr(
+                push_notification_target::Column::TokenEncrypted,
+                Expr::value("new-encrypted-token"),
+            )
+            .exec(&db)
+            .await
+            .unwrap();
+        record_delivery_result(
+            &db,
+            &target,
+            "notice",
+            now + chrono::Duration::seconds(1),
+            Some("Old token failure"),
+            true,
+        )
+        .await
+        .unwrap();
+        let stored = stored_target(&db).await;
+        assert_eq!(stored.failure_count, 0);
+        assert!(stored.push_enabled);
+        assert_eq!(
+            push_delivery_record(stored.metadata.as_ref())
+                .unwrap()
+                .status,
+            PushDispatchStatus::Accepted
+        );
+    }
+
+    #[tokio::test]
+    async fn only_token_failures_reach_the_invalidation_threshold() {
+        let mut target = target(PushNotificationTargetPlatform::Ios);
+        target.failure_count = INVALIDATION_FAILURE_THRESHOLD - 1;
+        let db = delivery_database(&target).await;
+        record_delivery_result(
+            &db,
+            &target,
+            "notice",
+            chrono::Utc::now(),
+            Some("Token no longer registered"),
+            true,
+        )
+        .await
+        .unwrap();
+        let stored = stored_target(&db).await;
+        assert_eq!(stored.failure_count, INVALIDATION_FAILURE_THRESHOLD);
+        assert!(!stored.push_enabled);
+        assert!(stored.invalidated_at.is_some());
+        assert!(
+            stored
+                .invalidation_reason
+                .unwrap()
+                .contains("Token no longer registered")
+        );
+    }
+
+    #[test]
+    fn clients_cannot_supply_delivery_diagnostics_and_staleness_matches_dispatch_cutoff() {
+        let metadata = registration_metadata(
+            Some(serde_json::json!({
+                "source": "settings", "_flow_like_push_delivery": {"status": "accepted"}
+            })),
+            None,
+        )
+        .unwrap();
+        assert_eq!(metadata, serde_json::json!({"source": "settings"}));
+        let mut target = target(PushNotificationTargetPlatform::Ios);
+        let now = chrono::Utc::now();
+        target.last_seen_at = (now - chrono::Duration::days(30)).fixed_offset();
+        assert!(push_target_is_stale(&target, now));
+        target.last_seen_at += chrono::Duration::seconds(1);
+        assert!(!push_target_is_stale(&target, now));
+        assert!(!should_retry_delivery(&target, "notice"));
+    }
+
+    #[test]
+    fn metadata_compare_and_swap_binds_json_values_for_postgres() {
+        use sea_orm::{DatabaseBackend, QueryTrait};
+        let before = serde_json::json!({"source": "settings"});
+        let after = serde_json::json!({"source": "settings", "_flow_like_push_delivery": {"status": "accepted"}});
+        let query = push_notification_target::Entity::update_many()
+            .col_expr(
+                push_notification_target::Column::Metadata,
+                Expr::value(Some(after.clone())),
+            )
+            .filter(metadata_unchanged(&Some(before.clone())))
+            .build(DatabaseBackend::Postgres);
+        assert!(query.sql.contains("\"metadata\" = $1"));
+        assert!(query.sql.contains("\"metadata\" = $2"));
+        let values = query.values.unwrap().0;
+        assert_eq!(
+            values,
+            vec![
+                sea_orm::Value::Json(Some(Box::new(after))),
+                sea_orm::Value::Json(Some(Box::new(before)))
+            ]
+        );
+    }
 
     fn push_config() -> PushNotificationsConfig {
         PushNotificationsConfig {

@@ -49,6 +49,8 @@ targets:
     info:
       path: flow-like-desktop_iOS/Info.plist
       properties:
+        FirebaseAppDelegateProxyEnabled: false
+        UIBackgroundModes: [remote-notification, fetch]
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
@@ -70,6 +72,7 @@ targets:
     entitlements:
       path: flow-like-desktop_iOS/flow-like-desktop_iOS.entitlements
       properties:
+        aps-environment: development
         com.apple.security.application-groups: [group.com.flow-like.app]
     scheme:
       environmentVariables:

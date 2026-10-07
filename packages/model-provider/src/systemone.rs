@@ -27,6 +27,7 @@ pub struct SystemOneClient {
     model: String,
     bearer: String,
     usage_headers: Vec<(String, String)>,
+    images_in_state: bool,
     authorizer: Option<ScopedRequestAuthorizer>,
     client: reqwest::Client,
 }
@@ -70,6 +71,7 @@ impl SystemOneClient {
             model,
             bearer: bearer.into(),
             usage_headers: Vec::new(),
+            images_in_state: false,
             authorizer: None,
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -81,6 +83,12 @@ impl SystemOneClient {
 
     pub fn with_usage_headers(mut self, headers: Vec<(String, String)>) -> Self {
         self.usage_headers = headers;
+        self
+    }
+
+    /// Encode the Images pin as OpenRouter state content parts.
+    pub fn with_openrouter_state_images(mut self) -> Self {
+        self.images_in_state = true;
         self
     }
 
@@ -101,7 +109,11 @@ impl SystemOneClient {
     }
     async fn build_request(&self, request: &SystemOneRequest) -> Result<reqwest::Request> {
         request.validate()?;
-        let mut body = serde_json::to_value(request)?;
+        let mut body = if self.images_in_state && !request.images.is_empty() {
+            serde_json::to_value(request.with_images_in_state()?)?
+        } else {
+            serde_json::to_value(request)?
+        };
         body["model"] = Value::String(self.model.clone());
         let mut builder = self.client.post(self.endpoint.clone()).json(&body);
         if !self.bearer.is_empty() {
@@ -184,6 +196,46 @@ mod tests {
             "urgency":{"type":"score","score":0.7,"legend":{"0":"low","1":"high"},"probabilities":{"0":0.3,"1":0.7},"confidence":0.2}
         },"usage":{"input_tokens":50,"output_tokens":20,"cost":0.00002}})
     }
+    #[tokio::test]
+    async fn openrouter_image_dialect_is_explicit_and_preserves_text_requests() {
+        let client = SystemOneClient::new("https://example.test/v1", "decision-model", "").unwrap();
+        let openrouter = client.clone().with_openrouter_state_images();
+        let original = request();
+        let text_body = |request: reqwest::Request| {
+            serde_json::from_slice::<Value>(request.body().unwrap().as_bytes().unwrap()).unwrap()
+        };
+        assert_eq!(
+            text_body(client.build_request(&original).await.unwrap()),
+            text_body(openrouter.build_request(&original).await.unwrap())
+        );
+        let mut with_images = original.clone();
+        with_images.images = vec![
+            "data:image/png;base64,AQ==".into(),
+            "data:image/png;base64,Ag==".into(),
+        ];
+        let canonical = text_body(client.build_request(&with_images).await.unwrap());
+        assert_eq!(canonical["state"], original.state);
+        assert_eq!(canonical["images"], json!(with_images.images));
+        let adapted = text_body(openrouter.build_request(&with_images).await.unwrap());
+        assert!(adapted.get("images").is_none());
+        assert_eq!(adapted["model"], "decision-model");
+        assert_eq!(adapted["questions"], canonical["questions"]);
+        assert_eq!(
+            adapted["state"][1]["image_url"]["url"],
+            with_images.images[0]
+        );
+        assert_eq!(
+            adapted["state"][2]["image_url"]["url"],
+            with_images.images[1]
+        );
+        let recovered: Value =
+            serde_json::from_str(adapted["state"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(recovered, original.state);
+        with_images.images[0] = "https://example.test/image.png".into();
+        assert!(openrouter.build_request(&with_images).await.is_err());
+        assert!(client.build_request(&with_images).await.is_err());
+    }
+
     #[test]
     fn validates_all_native_question_types_and_rejects_chat_fields() {
         request().validate().unwrap();

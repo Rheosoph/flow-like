@@ -120,6 +120,39 @@ function serviceStream() {
 	return { stream, resets: () => resets, finish: () => resolve() };
 }
 
+function modelTunnel(env: Env) {
+	const { stream, resets, finish } = serviceStream();
+	const data = { close: () => stream.reset() } as DeviceTunnelDataClient;
+	const adopted: DeviceTunnelDataClient[] = [];
+	env.configureConnection = (conn) => {
+		let held: DeviceTunnelDataClient | undefined =
+			conn.serial === 1 ? data : undefined;
+		conn.openModelGateway = async () => stream;
+		conn.detachDataTunnel = () => {
+			const previous = held;
+			held = undefined;
+			return previous;
+		};
+		conn.adoptDataTunnel = (next) => {
+			held = next;
+			adopted.push(next);
+		};
+		const close = conn.close.bind(conn);
+		conn.close = () => {
+			held?.close();
+			held = undefined;
+			close();
+		};
+		const drop = conn.drop.bind(conn);
+		conn.drop = () => {
+			drop();
+			held?.close();
+			held = undefined;
+		};
+	};
+	return { stream, resets, finish, data, adopted };
+}
+
 function inspectPage(): ManagementResponse {
 	return completed({
 		device_id: DEVICE,
@@ -416,6 +449,28 @@ describe("connecting", () => {
 });
 
 describe("renewal", () => {
+	test("a model answer survives a failed scheduled renewal and its retry", async () => {
+		const { env, manager } = setup((env) => {
+			env.outcomes = [120];
+		});
+		const model = modelTunnel(env);
+		await manager.openModelGateway(DEVICE);
+		env.outcomes = [
+			new ConnectError("getting_pass", "http", "The hub is unavailable."),
+			300,
+		];
+		await env.advance(75_000);
+		expect(manager.state(DEVICE).kind).toBe("reconnecting");
+		expect(model.resets()).toBe(0);
+		await env.advance(1_000);
+		expect(manager.state(DEVICE).kind).toBe("live");
+		expect(model.adopted).toEqual([model.data]);
+		expect(model.resets()).toBe(0);
+		manager.close(DEVICE);
+		expect(model.resets()).toBe(1);
+		manager.dispose();
+	});
+
 	test("keeps service demand and adopts its tunnel across management renewal", async () => {
 		const { stream, resets, finish } = serviceStream();
 		const owner = { close: () => stream.reset() } as DeviceTunnelDataClient;
@@ -698,6 +753,83 @@ describe("renewal", () => {
 });
 
 describe("reconnecting", () => {
+	test("a failed management poll and transient reconnect failure leave the model answer running", async () => {
+		const { env, manager } = setup();
+		const model = modelTunnel(env);
+		await manager.openModelGateway(DEVICE);
+		await flush();
+		env.outcomes = [
+			new ConnectError("getting_pass", "http", "The hub is unavailable."),
+			300,
+		];
+		env.handler = (command, conn) => {
+			if (command.type === "models") {
+				conn.drop();
+				throw new ManagementUnconfirmedError("overview");
+			}
+			return defaultHandler(command, conn);
+		};
+		await expect(
+			manager.call(DEVICE, { lane: "poll" })({
+				type: "models",
+				request: { kind: "overview" },
+			}),
+		).rejects.toThrow("The hub is unavailable.");
+		expect(model.resets()).toBe(0);
+		await env.advance(2_000);
+		expect(model.adopted).toEqual([model.data]);
+		expect(model.resets()).toBe(0);
+		manager.close(DEVICE);
+		expect(model.resets()).toBe(1);
+		manager.dispose();
+	});
+
+	for (const failure of [
+		new ConnectError("getting_pass", "access_expired", "Access ended."),
+		new ConnectError(
+			"getting_pass",
+			"epoch_mismatch",
+			"Device identity changed.",
+		),
+		new ConnectError(
+			"securing",
+			"identity_confirmation_failed",
+			"Identity failed.",
+		),
+	])
+		test(`a reconnect refused with ${failure.code} closes the retained model tunnel`, async () => {
+			const { env, manager } = setup();
+			const model = modelTunnel(env);
+			await manager.openModelGateway(DEVICE);
+			await flush();
+			env.outcomes = [failure];
+			env.conns[0].drop();
+			expect(model.resets()).toBe(0);
+			await env.advance(1_000);
+			expect(model.resets()).toBe(1);
+			expect(manager.state(DEVICE).kind).toBe("failed");
+			manager.dispose();
+		});
+
+	for (const stop of ["close", "lock", "dispose", "finish"] as const)
+		test(`a retained model tunnel closes on ${stop} before management reconnects`, async () => {
+			const { env, manager } = setup();
+			const model = modelTunnel(env);
+			await manager.openModelGateway(DEVICE);
+			await flush();
+			env.conns[0].drop();
+			expect(model.resets()).toBe(0);
+			if (stop === "close") manager.close(DEVICE);
+			else if (stop === "lock") env.setController(undefined);
+			else if (stop === "dispose") manager.dispose();
+			else model.finish();
+			await flush();
+			expect(model.resets()).toBe(1);
+			await env.advance(2_000);
+			expect(env.conns).toHaveLength(1);
+			manager.dispose();
+		});
+
 	test("an unexpected close reconnects with 1, 2, 5, 10, 30, 60 s backoff", async () => {
 		const failure = new ConnectError(
 			"reaching_device",

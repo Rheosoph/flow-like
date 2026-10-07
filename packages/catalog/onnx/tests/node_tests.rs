@@ -362,7 +362,7 @@ mod node_metadata {
         depth::{DepthColorizeNode, DepthEstimationNode, DepthToPointCloudNode},
         face::{CompareFacesNode, CropFacesNode, FaceDetectionNode, FaceEmbeddingNode},
         face_id::{AnalyzeFacesNode, LoadFaceAnalyzerNode, UnloadFaceAnalyzerNode},
-        laya::LayaNode,
+        gliner_decision::GlinerDecisionNode,
         ocr::{CropTextRegionsNode, TextDetectionNode, TextRecognitionNode},
     };
 
@@ -386,32 +386,41 @@ mod node_metadata {
             .unwrap_or_else(|| panic!("Node {} is missing pin {name}", node.name))
     }
 
-    fn laya_board() -> flow_like::flow::board::Board {
+    fn gliner_decision_board() -> flow_like::flow::board::Board {
         flow_like::flow::board::Board::new_detached(
             None,
-            flow_like_storage::Path::from("test-laya"),
+            flow_like_storage::Path::from("test-gliner-decision"),
         )
     }
 
-    fn select_laya_mode(node: &mut flow_like::flow::node::Node, mode: &str) {
+    fn select_gliner_decision_mode(node: &mut flow_like::flow::node::Node, mode: &str) {
         node.get_pin_mut_by_name("question_type")
             .unwrap()
             .set_default_value(Some(serde_json::json!(mode)));
     }
 
     #[test]
-    fn typed_decision_preserves_laya_identity_and_offers_all_model_weights() {
-        let node = LayaNode::new().get_node();
+    fn gliner_decision_metadata_offers_supported_models() {
+        let node = GlinerDecisionNode::new().get_node();
         assert!(
             flow_like_catalog_onnx::get_catalog()
                 .iter()
                 .any(|logic| logic.get_node().name == node.name)
         );
-        assert_eq!(node.name, "onnx_laya");
-        assert_eq!(node.friendly_name, "Typed Decision");
+        assert!(
+            flow_like_catalog_onnx::get_catalog()
+                .iter()
+                .all(|logic| logic.get_node().name != "onnx_laya")
+        );
+        let result_schema: serde_json::Value =
+            serde_json::from_str(pin(&node, "result").schema.as_ref().unwrap()).unwrap();
+        assert_eq!(result_schema["title"], "DecisionResult");
+        assert!(result_schema["properties"].get("act_probability").is_none());
+        assert_eq!(node.name, "onnx_gliner_decision");
+        assert_eq!(node.friendly_name, "GLiNER Decision");
         assert_eq!(node.flowscript_namespace(), "onnx");
-        assert_eq!(node.alias.as_deref(), Some("laya"));
-        assert_eq!(node.version, Some(3));
+        assert_eq!(node.alias.as_deref(), Some("gliner_decision"));
+        assert_eq!(node.version, Some(1));
         assert!(
             pin(&node, "model_dir")
                 .schema
@@ -423,7 +432,7 @@ mod node_metadata {
         assert_eq!(
             serde_json::from_slice::<String>(pin(&node, "model").default_value.as_ref().unwrap())
                 .unwrap(),
-            "mizchi/laya-multilingual-onnx"
+            "fastino/GLiNER2.5-Decide"
         );
         assert_eq!(
             pin(&node, "model")
@@ -434,7 +443,6 @@ mod node_metadata {
                 .as_ref()
                 .unwrap(),
             &[
-                "mizchi/laya-multilingual-onnx",
                 "fastino/GLiNER2.5-Decide",
                 "fastino/GLiNER2.5-multi-Decide",
                 "fastino/GLiNER2.5-Decide-1B",
@@ -473,10 +481,10 @@ mod node_metadata {
 
     #[tokio::test]
     async fn decision_model_changes_preserve_mode_pins_and_validate_literals() {
-        let logic = LayaNode::new();
-        let board = laya_board();
+        let logic = GlinerDecisionNode::new();
+        let board = gliner_decision_board();
         let mut node = logic.get_node();
-        select_laya_mode(&mut node, "score");
+        select_gliner_decision_mode(&mut node, "score");
         logic.on_update(&mut node, &board).await;
         let ids: std::collections::BTreeSet<_> = node.pins.keys().cloned().collect();
         let models = pin(&node, "model")
@@ -523,53 +531,12 @@ mod node_metadata {
     }
 
     #[tokio::test]
-    async fn decision_catalog_update_defaults_existing_laya_nodes_without_changing_connections() {
-        let logic = LayaNode::new();
-        let board = laya_board();
-        let mut node = logic.get_node();
-        node.version = Some(2);
-        let model_id = pin(&node, "model").id.clone();
-        node.pins.remove(&model_id);
-        node.get_pin_mut_by_name("model_dir")
-            .unwrap()
-            .depends_on
-            .insert("cached-model".into());
-        node.get_pin_mut_by_name("choice")
-            .unwrap()
-            .connected_to
-            .insert("consumer".into());
-        let original_pins: Vec<_> = node
-            .pins
-            .values()
-            .map(|pin| (pin.name.clone(), pin.id.clone()))
-            .collect();
-        flow_like::flow::board::cleanup::sync_node_schema::sync_node_with_catalog(
-            &mut node,
-            &logic.get_node(),
-        );
-        logic.on_update(&mut node, &board).await;
-        assert_eq!(node.version, Some(3));
-        assert_eq!(node.friendly_name, "Typed Decision");
-        assert_eq!(
-            serde_json::from_slice::<String>(pin(&node, "model").default_value.as_ref().unwrap())
-                .unwrap(),
-            "mizchi/laya-multilingual-onnx"
-        );
-        for (name, id) in original_pins {
-            assert_eq!(pin(&node, &name).id, id);
-        }
-        assert!(pin(&node, "model_dir").depends_on.contains("cached-model"));
-        assert!(pin(&node, "choice").connected_to.contains("consumer"));
-        assert!(node.error.is_none());
-    }
-
-    #[tokio::test]
-    async fn laya_mode_updates_settle_without_changing_pin_ids_or_order() {
-        let logic = LayaNode::new();
-        let board = laya_board();
+    async fn gliner_decision_mode_updates_settle_without_changing_pin_ids_or_order() {
+        let logic = GlinerDecisionNode::new();
+        let board = gliner_decision_board();
         for mode in ["choice", "score", "noul"] {
             let mut node = logic.get_node();
-            select_laya_mode(&mut node, mode);
+            select_gliner_decision_mode(&mut node, mode);
             logic.on_update(&mut node, &board).await;
             for output in ["choice", "score", "noul"] {
                 assert_eq!(node.get_pin_by_name(output).is_some(), mode == output);
@@ -605,9 +572,9 @@ mod node_metadata {
     }
 
     #[tokio::test]
-    async fn laya_choice_to_score_keeps_criteria_and_common_connections() {
-        let logic = LayaNode::new();
-        let board = laya_board();
+    async fn gliner_decision_choice_to_score_keeps_criteria_and_common_connections() {
+        let logic = GlinerDecisionNode::new();
+        let board = gliner_decision_board();
         let mut node = logic.get_node();
         let criteria_id = pin(&node, "criteria").id.clone();
         let result_id = pin(&node, "result").id.clone();
@@ -618,7 +585,7 @@ mod node_metadata {
             .unwrap()
             .connected_to
             .insert("print".into());
-        select_laya_mode(&mut node, "score");
+        select_gliner_decision_mode(&mut node, "score");
         logic.on_update(&mut node, &board).await;
         assert_eq!(pin(&node, "criteria").id, criteria_id);
         assert_eq!(pin(&node, "criteria").friendly_name, "Levels");
@@ -636,16 +603,16 @@ mod node_metadata {
     }
 
     #[tokio::test]
-    async fn laya_retains_wired_inactive_pins_until_disconnected() {
-        let logic = LayaNode::new();
-        let board = laya_board();
+    async fn gliner_decision_retains_wired_inactive_pins_until_disconnected() {
+        let logic = GlinerDecisionNode::new();
+        let board = gliner_decision_board();
         let mut node = logic.get_node();
         let choice_id = pin(&node, "choice").id.clone();
         node.get_pin_mut_by_name("choice")
             .unwrap()
             .connected_to
             .insert("consumer".into());
-        select_laya_mode(&mut node, "score");
+        select_gliner_decision_mode(&mut node, "score");
         logic.on_update(&mut node, &board).await;
         assert_eq!(pin(&node, "choice").id, choice_id);
         assert!(pin(&node, "choice").connected_to.contains("consumer"));
@@ -663,11 +630,11 @@ mod node_metadata {
     }
 
     #[tokio::test]
-    async fn laya_wired_selector_exposes_all_modes_and_invalid_literals_keep_pins() {
-        let logic = LayaNode::new();
-        let board = laya_board();
+    async fn gliner_decision_wired_selector_exposes_all_modes_and_invalid_literals_keep_pins() {
+        let logic = GlinerDecisionNode::new();
+        let board = gliner_decision_board();
         let mut node = logic.get_node();
-        select_laya_mode(&mut node, "noul");
+        select_gliner_decision_mode(&mut node, "noul");
         node.get_pin_mut_by_name("question_type")
             .unwrap()
             .depends_on
@@ -688,7 +655,7 @@ mod node_metadata {
             .unwrap()
             .depends_on
             .clear();
-        select_laya_mode(&mut node, "typo");
+        select_gliner_decision_mode(&mut node, "typo");
         logic.on_update(&mut node, &board).await;
         assert_eq!(
             node.pins
@@ -698,71 +665,6 @@ mod node_metadata {
             ids
         );
         assert!(node.error.is_some());
-    }
-
-    #[tokio::test]
-    async fn laya_catalog_update_adopts_the_existing_directory_wire() {
-        let logic = LayaNode::new();
-        let board = laya_board();
-        let mut node = logic.get_node();
-        node.version = Some(1);
-        let model_id = pin(&node, "model").id.clone();
-        node.pins.remove(&model_id);
-        let directory = node.get_pin_mut_by_name("model_dir").unwrap();
-        let directory_id = directory.id.clone();
-        directory.name = "cache_dir".into();
-        directory.depends_on.insert("uploaded-directory".into());
-        for name in ["weights", "tokenizer", "config"] {
-            node.add_input_pin(
-                name,
-                name,
-                "",
-                flow_like::flow::variable::VariableType::Struct,
-            )
-            .set_default_value(Some(serde_json::json!(null)));
-        }
-        // Version 1 placed the text after the four asset pins.
-        for (name, index) in [
-            ("text", 6),
-            ("instructions", 7),
-            ("question_type", 8),
-            ("criteria", 9),
-        ] {
-            node.get_pin_mut_by_name(name).unwrap().index = index;
-        }
-        select_laya_mode(&mut node, "noul");
-        flow_like::flow::board::cleanup::sync_node_schema::sync_node_with_catalog(
-            &mut node,
-            &logic.get_node(),
-        );
-        logic.on_update(&mut node, &board).await;
-        assert_eq!(pin(&node, "model_dir").id, directory_id);
-        assert!(
-            pin(&node, "model_dir")
-                .depends_on
-                .contains("uploaded-directory")
-        );
-        for name in [
-            "weights",
-            "tokenizer",
-            "config",
-            "cache_dir",
-            "choice",
-            "score",
-            "criteria",
-        ] {
-            assert!(node.get_pin_by_name(name).is_none(), "unexpected {name}");
-        }
-        assert!(node.error.is_none());
-        assert_eq!(pin(&node, "model").index, 3);
-        assert_eq!(pin(&node, "text").index, 4);
-        assert_eq!(pin(&node, "instructions").index, 5);
-        assert_eq!(pin(&node, "question_type").index, 6);
-        assert_eq!(pin(&node, "false_description").index, 8);
-        assert_eq!(pin(&node, "true_description").index, 9);
-        let expected = serde_json::to_value(&node).unwrap();
-        logic.on_update(&mut node, &board).await;
-        assert_eq!(serde_json::to_value(&node).unwrap(), expected);
     }
 
     #[test]

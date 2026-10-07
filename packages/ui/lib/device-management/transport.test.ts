@@ -7,6 +7,8 @@ import {
 	ConnectError,
 	type ConnectProgress,
 	DeviceManagementConnection,
+	ManagementRequestNotSentError,
+	ManagementUnconfirmedError,
 } from "./transport";
 import {
 	DeviceTunnelDataClient,
@@ -31,6 +33,9 @@ type DeviceScript = {
 	/** Reply to the controller's hello; defaults to a matching handshake envelope. */
 	hello?: (sessionId: string) => Record<string, unknown>;
 	ready?: () => Record<string, unknown>;
+	message?: (
+		request: Record<string, unknown>,
+	) => Record<string, unknown> | null;
 	/** Close the socket instead of sending the "ready" frame. */
 	refuse?: boolean;
 };
@@ -117,18 +122,18 @@ class FakeSocket {
 		if (envelope.kind === "message") {
 			const request = JSON.parse(decoder.decode(unbase64url(envelope.data)));
 			commands.push(request.command.type);
+			const response = script.message
+				? script.message(request)
+				: {
+						operation_id: request.operation_id,
+						state: "completed",
+						result: { ok: true },
+					};
+			if (!response) return;
 			this.fromDevice({
 				kind: "message",
 				session_id: envelope.session_id,
-				data: base64url(
-					encoder.encode(
-						JSON.stringify({
-							operation_id: request.operation_id,
-							state: "completed",
-							result: { ok: true },
-						}),
-					),
-				),
+				data: base64url(encoder.encode(JSON.stringify(response))),
 			});
 		}
 	}
@@ -665,6 +670,122 @@ describe("typed connect errors", () => {
 });
 
 describe("close notifications", () => {
+	async function connectionWithData() {
+		script.ready = () => ({
+			ready: true,
+			device_id: DEVICE,
+			expires_at: nowS() + 300,
+			boot_id: "boot-1",
+			data_tunnel: 1,
+		});
+		const connection = (await connect()).result as DeviceManagementConnection;
+		class Data extends DeviceTunnelDataClient {
+			closes = 0;
+			override close() {
+				this.closes++;
+				super.close();
+			}
+		}
+		const data = new Data({
+			api: api(() => admission()),
+			profile: {} as IProfile,
+			controller,
+			receipt,
+			grantId: "owner",
+		});
+		connection.adoptDataTunnel(data);
+		return { connection, data };
+	}
+
+	test("a management timeout lets the workspace retain its independent data tunnel", async () => {
+		const { connection, data } = await connectionWithData();
+		script.message = () => null;
+		const reasons: string[] = [];
+		let detached: DeviceTunnelDataClient | undefined;
+		connection.onClosed((reason) => {
+			reasons.push(reason);
+			if (reason === "remote") detached = connection.detachDataTunnel();
+		});
+		const nativeSetTimeout = globalThis.setTimeout;
+		let expire: (() => void) | undefined;
+		globals.setTimeout = (callback: () => void, delay: number) => {
+			expect(delay).toBe(15_000);
+			const timer = nativeSetTimeout(callback, delay);
+			expire = () => {
+				clearTimeout(timer);
+				callback();
+			};
+			return timer;
+		};
+		try {
+			const polling = connection
+				.request({ type: "models", request: { kind: "overview" } })
+				.catch((error: unknown) => error);
+			expect(expire).toBeDefined();
+			expire?.();
+			const error = await polling;
+			expect(error).toBeInstanceOf(ManagementUnconfirmedError);
+			expect((error as ManagementUnconfirmedError).diagnostic).toMatchObject({
+				phase: "wait_reply",
+				cause: "timeout",
+			});
+			expect(reasons).toEqual(["remote"]);
+			expect(detached).toBe(data);
+			expect(data.closes).toBe(0);
+			expect(connection.open).toBe(false);
+		} finally {
+			globals.setTimeout = nativeSetTimeout;
+			connection.close();
+			detached?.close();
+		}
+	});
+
+	test("a transport send failure preserves data without claiming the management request was sent", async () => {
+		const { connection, data } = await connectionWithData();
+		script.message = () => {
+			throw new Error("The management channel stopped accepting messages.");
+		};
+		let detached: DeviceTunnelDataClient | undefined;
+		connection.onClosed((reason) => {
+			if (reason === "remote") detached = connection.detachDataTunnel();
+		});
+		await expect(connection.request({ type: "models" })).rejects.toBeInstanceOf(
+			ManagementRequestNotSentError,
+		);
+		expect(detached).toBe(data);
+		expect(data.closes).toBe(0);
+		detached?.close();
+	});
+
+	for (const stop of [
+		"local",
+		"remote",
+		"invalid_reply",
+		"listener_error",
+	] as const)
+		test(`closes unclaimed data after ${stop}`, async () => {
+			const { connection, data } = await connectionWithData();
+			if (stop === "local") connection.close();
+			else if (stop === "invalid_reply") {
+				const reasons: string[] = [];
+				connection.onClosed((reason) => reasons.push(reason));
+				script.message = () => ({ operation_id: "wrong" });
+				await expect(
+					connection.request({ type: "models" }),
+				).rejects.toBeInstanceOf(ManagementUnconfirmedError);
+				expect(reasons).toEqual(["local"]);
+			} else if (stop === "listener_error") {
+				connection.onClosed(() => {
+					throw new Error("listener failed");
+				});
+				expect(() => sockets.at(-1)?.close()).toThrow("listener failed");
+			} else sockets.at(-1)?.close();
+			expect(data.closes).toBe(1);
+			expect(connection.open).toBe(false);
+			connection.close();
+			expect(data.closes).toBe(1);
+		});
+
 	test("a dropped relay tells listeners once with a remote reason", async () => {
 		const connection = (await connect()).result as DeviceManagementConnection;
 		const reasons: string[] = [];

@@ -883,7 +883,7 @@ export class DeviceManagementConnection {
 	get open(): boolean {
 		return !this.closed && this.expiresAt > now();
 	}
-	/** Fires once on close: "local" after `close()` or a failed request, "remote" when the channel dropped. */
+	/** Fires once on close: "remote" for a dropped channel or unanswered request; "local" for explicit closure or an invalid reply. */
 	onClosed(listener: (reason: ConnectionCloseReason) => void): () => void {
 		if (this.closed) {
 			const reason = this.closeReason;
@@ -1059,6 +1059,7 @@ export class DeviceManagementConnection {
 			throw new Error("Wait for the current device operation to finish.");
 		this.busy = true;
 		let sent = false;
+		let readyToSend = false;
 		let phase: ManagementFailureDiagnostic["phase"] = "wait_reply";
 		try {
 			const issued = now();
@@ -1083,6 +1084,7 @@ export class DeviceManagementConnection {
 			} finally {
 				bytes.fill(0);
 			}
+			readyToSend = true;
 			this.pipe.send({
 				kind: "message",
 				session_id: this.sessionId,
@@ -1117,7 +1119,12 @@ export class DeviceManagementConnection {
 		} catch (error) {
 			if (error instanceof ManagementRequestNotSentError) throw error;
 			// An encrypted but unsent message has consumed a Noise nonce the device never saw.
-			this.close();
+			const interrupted =
+				readyToSend &&
+				phase === "wait_reply" &&
+				(!(error instanceof ManagementReadError) ||
+					error.code !== "invalid_reply");
+			this.shutdown(interrupted ? "remote" : "local");
 			if (!sent)
 				throw new ManagementRequestNotSentError(
 					`Device operation ${operationId} was not sent because the management session failed locally. Reconnect and retry.`,
@@ -1232,13 +1239,24 @@ export class DeviceManagementConnection {
 		if (this.closed) return;
 		this.closed = true;
 		this.closeReason = reason;
-		this.dataClient?.close();
-		this.dataClient = undefined;
-		this.pipe.close();
-		this.relay.close();
-		this.session.close();
-		this.session.free();
-		for (const listener of this.closeListeners) listener(reason);
-		this.closeListeners.clear();
+		try {
+			// The workspace can move an independent data tunnel to its replacement
+			// management connection before the remaining resources are closed.
+			if (reason === "remote")
+				for (const listener of this.closeListeners) listener(reason);
+		} finally {
+			this.dataClient?.close();
+			this.dataClient = undefined;
+			this.pipe.close();
+			this.relay.close();
+			this.session.close();
+			this.session.free();
+			try {
+				if (reason === "local")
+					for (const listener of this.closeListeners) listener(reason);
+			} finally {
+				this.closeListeners.clear();
+			}
+		}
 	}
 }
