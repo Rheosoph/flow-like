@@ -2,7 +2,14 @@ use std::{sync::Arc, time::Instant};
 
 use flow_like_model_provider::{
     embedding::{
-        EmbeddingModelLogic, endpoint::EndpointEmbeddingModel, openai::OpenAIEmbeddingModel,
+        EmbeddingModelLogic,
+        adapters::LegacyEmbeddingAdapter,
+        endpoint::EndpointEmbeddingModel,
+        interface::{
+            EmbeddingDescriptor, EmbeddingLimits, EmbeddingMetric, EmbeddingModality,
+            EmbeddingModel, EmbeddingPurpose, EmbeddingSpace, EmbeddingSpec,
+        },
+        openai::OpenAIEmbeddingModel,
     },
     image_embedding::ImageEmbeddingModelLogic,
     provider::is_hosted_provider_name,
@@ -17,7 +24,8 @@ use super::{
 };
 #[cfg(feature = "local-ml")]
 use super::{
-    embedding::local::LocalEmbeddingModel, image_embedding::local::LocalImageEmbeddingModel,
+    embedding::local::LocalEmbeddingModel, embedding::multimodal::LocalMultimodalEmbeddingModel,
+    image_embedding::local::LocalImageEmbeddingModel,
 };
 
 #[cfg(feature = "remote-ml")]
@@ -27,6 +35,8 @@ use flow_like_model_provider::embedding::proxy::ProxyEmbeddingModel;
 pub struct EmbeddingFactory {
     text_models: FactoryCache<dyn EmbeddingModelLogic>,
     image_models: FactoryCache<dyn ImageEmbeddingModelLogic>,
+    #[cfg(feature = "local-ml")]
+    multimodal_models: FactoryCache<LocalMultimodalEmbeddingModel>,
 }
 
 pub fn is_local_provider(provider_name: &str) -> bool {
@@ -102,7 +112,98 @@ impl EmbeddingFactory {
         Self {
             text_models: FactoryCache::default(),
             image_models: FactoryCache::default(),
+            #[cfg(feature = "local-ml")]
+            multimodal_models: FactoryCache::default(),
         }
+    }
+
+    /// Resolve a Bit to the common embedding contract while preserving legacy model behavior.
+    pub async fn build(
+        &self,
+        bit: &Bit,
+        app_state: Arc<FlowLikeState>,
+        access_token: Option<String>,
+        usage_context: Option<ModelUsageContext>,
+    ) -> flow_like_types::Result<Arc<dyn EmbeddingModel>> {
+        if versioned_embedding_spec(bit)?.is_some() {
+            #[cfg(feature = "local-ml")]
+            {
+                return Ok(self.build_multimodal(bit, app_state).await?);
+            }
+            #[cfg(not(feature = "local-ml"))]
+            {
+                return Err(flow_like_types::anyhow!(
+                    "This embedding adapter requires local ML execution"
+                ));
+            }
+        }
+        if bit.bit_type == crate::bit::BitTypes::ImageEmbedding {
+            let model = self.build_image(bit, app_state.clone()).await?;
+            let parameters = bit
+                .try_to_image_embedding()
+                .ok_or(flow_like_types::anyhow!("Invalid image embedding Bit"))?;
+            let dimensions = model
+                .output_dimensions()
+                .unwrap_or(parameters.vector_length as usize);
+            // Paired image/text Bits intentionally identify the same vector space.
+            let pack = bit.pack(app_state).await?;
+            let text_bit = pack
+                .bits
+                .iter()
+                .find(|dependency| dependency.bit_type == crate::bit::BitTypes::Embedding)
+                .ok_or(flow_like_types::anyhow!(
+                    "Image embedding Bit has no paired text model"
+                ))?;
+            let mut descriptor =
+                legacy_descriptor(bit, dimensions, model.context_tokens().unwrap_or(0), true)?;
+            descriptor.space.id = legacy_space_id(text_bit, dimensions);
+            Ok(Arc::new(LegacyEmbeddingAdapter::image(model, descriptor)))
+        } else {
+            let model = self
+                .build_text_routed(bit, app_state, access_token, usage_context)
+                .await?;
+            let parameters = bit
+                .try_to_embedding()
+                .ok_or(flow_like_types::anyhow!("Invalid text embedding Bit"))?;
+            let dimensions = model
+                .output_dimensions()
+                .unwrap_or(parameters.vector_length as usize);
+            let mut descriptor = legacy_descriptor(
+                bit,
+                dimensions,
+                model
+                    .context_tokens()
+                    .unwrap_or(parameters.input_length as usize),
+                false,
+            )?;
+            // Remote adapters forward provider vectors without imposing normalization.
+            descriptor.space.normalized = model.output_dimensions().is_some();
+            Ok(Arc::new(LegacyEmbeddingAdapter::text(model, descriptor)))
+        }
+    }
+
+    #[cfg(feature = "local-ml")]
+    pub async fn build_multimodal(
+        &self,
+        bit: &Bit,
+        app_state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<Arc<LocalMultimodalEmbeddingModel>> {
+        let spec = versioned_embedding_spec(bit)?
+            .ok_or(flow_like_types::anyhow!("Bit has no embedding recipe"))?;
+        let key = blake3::hash(&serde_json::to_vec(&(
+            bit.hub.as_str(),
+            bit.id.as_str(),
+            bit.hash.as_str(),
+            bit.dependency_tree_hash.as_str(),
+            spec,
+        ))?)
+        .to_hex()
+        .to_string();
+        self.multimodal_models
+            .get_or_build(&key, || async move {
+                LocalMultimodalEmbeddingModel::new(bit, app_state).await
+            })
+            .await
     }
 
     pub async fn build_text(
@@ -110,6 +211,18 @@ impl EmbeddingFactory {
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
+        if versioned_embedding_spec(bit)?.is_some() {
+            #[cfg(feature = "local-ml")]
+            {
+                return Ok(self.build_multimodal(bit, app_state).await?);
+            }
+            #[cfg(not(feature = "local-ml"))]
+            {
+                return Err(flow_like_types::anyhow!(
+                    "This embedding adapter requires local ML execution"
+                ));
+            }
+        }
         let provider_config = app_state.model_provider_config.clone();
 
         let provider = bit
@@ -123,9 +236,10 @@ impl EmbeddingFactory {
         if is_local_provider(&provider_name) {
             #[cfg(feature = "local-ml")]
             {
+                let key = local_embedding_cache_key(bit)?;
                 return self
                     .text_models
-                    .get_or_build(&bit.id, || async move {
+                    .get_or_build(&key, || async move {
                         let model = LocalEmbeddingModel::new(bit, app_state).await?;
                         Ok(model as Arc<dyn EmbeddingModelLogic>)
                     })
@@ -160,6 +274,9 @@ impl EmbeddingFactory {
         access_token: Option<String>,
         usage_context: Option<ModelUsageContext>,
     ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
+        if versioned_embedding_spec(bit)?.is_some() {
+            return self.build_text(bit, app_state).await;
+        }
         if let Some(endpoint) =
             device::resolve_endpoint(bit, &app_state, usage_context.as_ref()).await?
         {
@@ -275,6 +392,28 @@ impl EmbeddingFactory {
         bit: &Bit,
         _app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Arc<dyn ImageEmbeddingModelLogic>> {
+        if versioned_embedding_spec(bit)?.is_some() {
+            #[cfg(feature = "local-ml")]
+            {
+                let model = self.build_multimodal(bit, _app_state).await?;
+                if !model
+                    .descriptor()
+                    .modalities
+                    .contains(&EmbeddingModality::Image)
+                {
+                    return Err(flow_like_types::anyhow!(
+                        "Embedding model has no vision encoder"
+                    ));
+                }
+                return Ok(model);
+            }
+            #[cfg(not(feature = "local-ml"))]
+            {
+                return Err(flow_like_types::anyhow!(
+                    "This embedding adapter requires local ML execution"
+                ));
+            }
+        }
         let provider = bit
             .try_to_image_embedding()
             .ok_or(flow_like_types::anyhow!("Model type not supported"))?;
@@ -283,9 +422,10 @@ impl EmbeddingFactory {
         if is_local_provider(&provider) {
             #[cfg(feature = "local-ml")]
             {
+                let key = local_embedding_cache_key(bit)?;
                 return self
                     .image_models
-                    .get_or_build(&bit.id, || async move {
+                    .get_or_build(&key, || async move {
                         let model = LocalImageEmbeddingModel::new(bit, _app_state, self).await?;
                         Ok(model as Arc<dyn ImageEmbeddingModelLogic>)
                     })
@@ -364,7 +504,84 @@ impl EmbeddingFactory {
         let now = Instant::now();
         self.image_models.gc(now, MODEL_IDLE_TTL);
         self.text_models.gc(now, MODEL_IDLE_TTL);
+        #[cfg(feature = "local-ml")]
+        self.multimodal_models.gc(now, MODEL_IDLE_TTL);
     }
+}
+
+#[cfg(feature = "local-ml")]
+fn local_embedding_cache_key(bit: &Bit) -> flow_like_types::Result<String> {
+    Ok(blake3::hash(&serde_json::to_vec(&(
+        &bit.hub,
+        &bit.id,
+        &bit.hash,
+        &bit.dependency_tree_hash,
+        &bit.parameters,
+    ))?)
+    .to_hex()
+    .to_string())
+}
+
+pub fn versioned_embedding_spec(bit: &Bit) -> flow_like_types::Result<Option<EmbeddingSpec>> {
+    match bit.parameters.get("embedding") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => {
+            let spec: EmbeddingSpec = serde_json::from_value(value.clone())?;
+            spec.validate()?;
+            Ok(Some(spec))
+        }
+    }
+}
+
+fn legacy_space_id(bit: &Bit, dimensions: usize) -> String {
+    let recipe = blake3::hash(bit.parameters.to_string().as_bytes());
+    format!(
+        "legacy:{}:{}:{}:{}:{}:{dimensions}",
+        bit.hub,
+        bit.id,
+        bit.hash,
+        bit.dependency_tree_hash,
+        recipe.to_hex()
+    )
+}
+
+fn legacy_descriptor(
+    bit: &Bit,
+    dimensions: usize,
+    max_tokens: usize,
+    image: bool,
+) -> flow_like_types::Result<EmbeddingDescriptor> {
+    let fingerprint = blake3::hash(&serde_json::to_vec(&(
+        bit.hash.as_str(),
+        bit.dependency_tree_hash.as_str(),
+        &bit.parameters,
+    ))?)
+    .to_hex()
+    .to_string();
+    Ok(EmbeddingDescriptor {
+        model_id: bit.id.clone(),
+        adapter: if image { "legacy_image" } else { "legacy_text" }.into(),
+        modalities: if image {
+            vec![EmbeddingModality::Text, EmbeddingModality::Image]
+        } else {
+            vec![EmbeddingModality::Text]
+        },
+        joint_combinations: vec![],
+        purposes: vec![EmbeddingPurpose::Query, EmbeddingPurpose::Document],
+        space: EmbeddingSpace {
+            id: legacy_space_id(bit, dimensions),
+            dimensions,
+            normalized: true,
+            metric: EmbeddingMetric::Cosine,
+        },
+        supported_dimensions: vec![dimensions],
+        limits: EmbeddingLimits {
+            max_tokens,
+            max_images_per_item: Some(1),
+            ..Default::default()
+        },
+        pipeline_fingerprint: fingerprint,
+    })
 }
 
 #[cfg(test)]

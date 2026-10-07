@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EmbeddingDescriptor",
+  "type": "object",
+  "properties": {
+    "model_id": {
+      "type": "string"
+    },
+    "adapter": {
+      "type": "string"
+    },
+    "modalities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EmbeddingModality"
+      }
+    },
+    "joint_combinations": {
+      "description": "Exact sets of modalities supported in a joint item. Single modalities use `modalities`.",
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/EmbeddingModality"
+        }
+      }
+    },
+    "purposes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EmbeddingPurpose"
+      }
+    },
+    "space": {
+      "$ref": "#/$defs/EmbeddingSpace"
+    },
+    "supported_dimensions": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/EmbeddingLimits"
+    },
+    "pipeline_fingerprint": {
+      "description": "Hash of resolved weights, tokenizer, preprocessing, and output configuration.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "model_id",
+    "adapter",
+    "modalities",
+    "joint_combinations",
+    "purposes",
+    "space",
+    "supported_dimensions",
+    "limits",
+    "pipeline_fingerprint"
+  ],
+  "$defs": {
+    "EmbeddingModality": {
+      "type": "string",
+      "enum": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ]
+    },
+    "EmbeddingPurpose": {
+      "type": "string",
+      "enum": [
+        "query",
+        "document",
+        "similarity",
+        "classification",
+        "clustering",
+        "code_query"
+      ]
+    },
+    "EmbeddingSpace": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Identifies a validated compatible query/document space, including the output recipe.",
+          "type": "string"
+        },
+        "dimensions": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "normalized": {
+          "type": "boolean"
+        },
+        "metric": {
+          "$ref": "#/$defs/EmbeddingMetric"
+        }
+      },
+      "required": [
+        "id",
+        "dimensions",
+        "normalized",
+        "metric"
+      ]
+    },
+    "EmbeddingMetric": {
+      "type": "string",
+      "enum": [
+        "cosine",
+        "dot_product",
+        "euclidean"
+      ]
+    },
+    "EmbeddingLimits": {
+      "type": "object",
+      "properties": {
+        "max_tokens": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_batch_items": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_images_per_item": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_audio_duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_video_frames": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "max_tokens"
+      ]
+    }
+  }
+}

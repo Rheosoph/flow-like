@@ -1,20 +1,24 @@
 #![cfg(feature = "local-ml")]
+use super::{PREPARATION_SLOTS, run_embedding_session};
 use crate::{
     bit::{Bit, BitPack, BitTypes},
     models::local_utils::ensure_local_weights,
     state::FlowLikeState,
 };
 use flow_like_model_provider::{
-    embedding::{EmbeddingModelLogic, GeneralTextSplitter, local::embed},
-    fastembed::{
-        self, InitOptionsUserDefined, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
+    embedding::{
+        EmbeddingModelLogic, GeneralTextSplitter,
+        native::{
+            self, NativeTextEmbedding, NativeTextPreprocessor, SessionOptions, TokenizedBatch,
+            TokenizerFiles,
+        },
     },
-    ml::ort_runtime::{ensure_ort_initialized, session_execution_providers},
     provider::Pooling,
     text_splitter::{ChunkConfig, ChunkSizer, MarkdownSplitter, TextSplitter},
     tokenizer::{TokenizerSizer, load_tokenizer_from_file},
 };
 use flow_like_storage::files::store::{FlowLikeStore, local_store::LocalObjectStore};
+use flow_like_types::tokio::sync::Semaphore;
 use flow_like_types::{Cacheable, Result, anyhow, async_trait, sync::Mutex};
 use std::{any::Any, sync::Arc};
 
@@ -111,7 +115,7 @@ fn pool_chunks(vectors: &[Vec<f32>], weights: &[usize]) -> Vec<f32> {
 
 /// Group consecutive texts into batches that stay within the platform attention budget.
 ///
-/// fastembed pads every batch to its longest member, so one long text inflates the tensor for
+/// The tokenizer pads every batch to its longest member, so one long text inflates the tensor for
 /// the whole batch. Returns batch sizes in input order; a single text that exceeds the budget on
 /// its own still gets its own batch rather than being dropped.
 fn plan_batches(texts: &[String], cap: usize) -> Vec<usize> {
@@ -143,9 +147,12 @@ fn plan_batches(texts: &[String], cap: usize) -> Vec<usize> {
 #[derive(Clone)]
 pub struct LocalEmbeddingModel {
     pub bit: Arc<Bit>,
-    pub embedding_model: Arc<Mutex<fastembed::TextEmbedding>>,
+    pub embedding_model: Arc<Mutex<NativeTextEmbedding>>,
     pub tokenizer_files: Arc<TokenizerFiles>,
-    pooling: fastembed::Pooling,
+    preprocessor: NativeTextPreprocessor,
+    preparation_slots: Arc<Semaphore>,
+    output_dimensions: Option<usize>,
+    context_tokens: usize,
     max_tokens: usize,
     chunk_capacity: usize,
     sizer: Arc<TokenizerSizer>,
@@ -176,28 +183,34 @@ impl LocalEmbeddingModel {
         ensure_local_weights(&pack, &app_state, bit.id.as_str(), "embedding model").await?;
 
         let model_path = bit.to_path(&bit_store).ok_or(anyhow!("No model path"))?;
-        let loaded_model = std::fs::read(model_path)?;
-        let loaded_tokenizer = load_tokenizer(&pack, &bit_store).await?;
+        flow_like_types::tokio::task::spawn_blocking(move || {
+            let loaded_tokenizer = load_tokenizer(&pack, &bit_store)?;
+            Self::from_installed_assets(bit, &model_path, loaded_tokenizer, None)
+        })
+        .await
+        .map_err(|error| anyhow!("Embedding model loader task failed: {error}"))?
+    }
+
+    pub(in crate::models) fn from_installed_assets(
+        bit: Arc<Bit>,
+        model_path: &std::path::Path,
+        loaded_tokenizer: TokenizerFiles,
+        requested_max_tokens: Option<usize>,
+    ) -> Result<Arc<Self>> {
         let loaded_tokenizer_files = Arc::new(loaded_tokenizer.clone());
 
-        let mut pooling = fastembed::Pooling::Mean;
+        let mut pooling = native::Pooling::Mean;
 
         let params = bit
             .try_to_embedding()
             .ok_or(anyhow!("Not an Embedding Model"))?;
 
         if params.pooling == Pooling::CLS {
-            pooling = fastembed::Pooling::Cls;
+            pooling = native::Pooling::Cls;
         }
 
-        let user_embedding_model =
-            UserDefinedEmbeddingModel::new(loaded_model, loaded_tokenizer.clone())
-                .with_pooling(pooling.clone());
-        ensure_ort_initialized()
-            .map_err(|error| anyhow!("Failed to configure ONNX Runtime: {error}"))?;
-
         let declared_tokens = params.input_length as usize;
-        let max_tokens = effective_max_tokens(None, declared_tokens);
+        let max_tokens = effective_max_tokens(requested_max_tokens, declared_tokens);
         if max_tokens < declared_tokens {
             tracing::info!(
                 bit = bit.id.as_str(),
@@ -207,16 +220,12 @@ impl LocalEmbeddingModel {
             );
         }
 
-        let init_options = InitOptionsUserDefined::new()
-            .with_max_length(max_tokens)
-            .with_execution_providers(
-                session_execution_providers(true)
-                    .map_err(|error| anyhow!("Failed to select ONNX providers: {error}"))?,
-            );
-
-        let loaded_model = TextEmbedding::try_new_from_user_defined(
-            user_embedding_model.clone(),
-            init_options.clone(),
+        let loaded_model = NativeTextEmbedding::new_from_file(
+            model_path,
+            loaded_tokenizer,
+            max_tokens,
+            pooling,
+            SessionOptions::default(),
         )?;
 
         // Room for the prefix and the two special tokens the tokenizer adds, so a chunk that fills
@@ -239,9 +248,15 @@ impl LocalEmbeddingModel {
 
         let default_return_model = LocalEmbeddingModel {
             bit,
+            preprocessor: loaded_model.preprocessor(),
+            preparation_slots: Arc::new(Semaphore::new(PREPARATION_SLOTS)),
+            output_dimensions: loaded_model.output_dimensions(),
+            context_tokens: loaded_model
+                .tokenizer()
+                .get_truncation()
+                .map_or(max_tokens, |config| config.max_length),
             embedding_model: Arc::new(Mutex::new(loaded_model)),
             tokenizer_files: loaded_tokenizer_files,
-            pooling,
             max_tokens,
             chunk_capacity,
             sizer,
@@ -262,13 +277,15 @@ impl LocalEmbeddingModel {
         }
 
         let model = self.embedding_model.clone();
+        let preprocessor = self.preprocessor.clone();
+        let permit = self.preparation_slots.clone().acquire_owned().await?;
         let chunker = self.chunker.clone();
         let sizer = self.sizer.clone();
         let chunk_capacity = self.chunk_capacity;
         let max_tokens = self.max_tokens;
-        let pooling = self.pooling.clone();
 
         flow_like_types::tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let mut pieces: Vec<String> = Vec::with_capacity(texts.len());
             let mut spans: Vec<usize> = Vec::with_capacity(texts.len());
 
@@ -298,17 +315,21 @@ impl LocalEmbeddingModel {
 
             let sizes = plan_batches(&pieces, max_tokens);
             let mut vectors = Vec::with_capacity(pieces.len());
-            {
-                let mut model = model.blocking_lock();
-                let mut offset = 0;
-                for size in sizes {
-                    let batch = pieces[offset..offset + size].to_vec();
-                    tracing::debug!(size, max_tokens, "embedding batch");
-                    let batch = embed(&mut model, batch, Some(size), &pooling)
-                        .map_err(|e| anyhow!("Error embedding text: {}", e))?;
-                    vectors.extend(batch);
-                    offset += size;
-                }
+            let mut tokens = TokenizedBatch::default();
+            let mut offset = 0;
+            for size in sizes {
+                let started = std::time::Instant::now();
+                preprocessor.tokenize_into(&pieces[offset..offset + size], &mut tokens)?;
+                tracing::debug!(
+                    size,
+                    max_tokens,
+                    preprocessing_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "embedding batch"
+                );
+                let batch = run_embedding_session(&model, |model| model.embed_tokens(&tokens))
+                    .map_err(|e| anyhow!("Error embedding text: {}", e))?;
+                vectors.extend(batch);
+                offset += size;
             }
 
             if vectors.len() != pieces.len() {
@@ -323,7 +344,7 @@ impl LocalEmbeddingModel {
             let mut offset = 0;
             for span in spans {
                 embeddings.push(if span == 1 {
-                    vectors[offset].clone()
+                    std::mem::take(&mut vectors[offset])
                 } else {
                     // Mean pooling makes the token-weighted average of chunk vectors equal the mean
                     // pool over the whole text, so the weights have to be true token counts. The
@@ -347,6 +368,12 @@ impl LocalEmbeddingModel {
 
 #[async_trait]
 impl EmbeddingModelLogic for LocalEmbeddingModel {
+    fn output_dimensions(&self) -> Option<usize> {
+        self.output_dimensions
+    }
+    fn context_tokens(&self) -> Option<usize> {
+        Some(self.context_tokens)
+    }
     async fn get_splitter(
         &self,
         capacity: Option<usize>,
@@ -400,10 +427,7 @@ impl EmbeddingModelLogic for LocalEmbeddingModel {
     }
 }
 
-async fn load_tokenizer(
-    pack: &BitPack,
-    model_path: &Arc<LocalObjectStore>,
-) -> Result<TokenizerFiles> {
+fn load_tokenizer(pack: &BitPack, model_path: &Arc<LocalObjectStore>) -> Result<TokenizerFiles> {
     let config_bit = pack.bits.iter().find(|b| b.bit_type == BitTypes::Config);
     let tokenizer_bit = pack.bits.iter().find(|b| b.bit_type == BitTypes::Tokenizer);
     let tokenizer_config_bit = pack
@@ -461,6 +485,198 @@ mod tests {
         models::embedding_factory::EmbeddingFactory, state::FlowLikeConfig, utils::http::HTTPClient,
     };
     use std::{mem, path::PathBuf, ptr};
+
+    #[tokio::test]
+    #[ignore = "Requires all published model assets in FLOW_LIKE_EMBEDDING_MODELS"]
+    async fn runtime_and_modern_text_apis_match_all_published_golden_vectors() -> Result<()> {
+        use flow_like_model_provider::embedding::{
+            adapters::LegacyEmbeddingAdapter,
+            interface::{
+                EmbeddingDescriptor, EmbeddingLimits, EmbeddingMetric, EmbeddingModality,
+                EmbeddingModel, EmbeddingPurpose, EmbeddingRequest, EmbeddingSpace,
+            },
+        };
+
+        let assets = PathBuf::from(std::env::var_os("FLOW_LIKE_EMBEDDING_MODELS").ok_or_else(
+            || anyhow!("Set FLOW_LIKE_EMBEDDING_MODELS to the model asset directories"),
+        )?);
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../model-provider/tests/fixtures/embedding_parity");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixtures.join("manifest.json"))?)?;
+        let inputs: Vec<String> = serde_json::from_value(manifest["inputs"].clone())?;
+        let mut models = 0;
+        let mut comparisons = 0;
+        let mut maximum: f64 = 0.0;
+
+        for entry in manifest["models"]
+            .as_array()
+            .ok_or_else(|| anyhow!("Missing fixture models"))?
+        {
+            if entry["status"] == "remote_only" || entry["bit"]["type"] != "Embedding" {
+                continue;
+            }
+            if entry["status"] != "captured" {
+                return Err(anyhow!("Missing reference for {}", entry["bit"]["id"]));
+            }
+            let bit = Arc::new(serde_json::from_value::<Bit>(entry["bit"].clone())?);
+            let directory = assets.join(&bit.id);
+            let read = |name| std::fs::read(directory.join(name));
+            let files = TokenizerFiles {
+                tokenizer_file: read("tokenizer.json")?,
+                config_file: read("config.json")?,
+                tokenizer_config_file: read("tokenizer_config.json")?,
+                special_tokens_map_file: read("special_tokens_map.json")?,
+            };
+            let golden = std::fs::read(
+                fixtures.join(
+                    entry["vector_file"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Missing vector file"))?,
+                ),
+            )?;
+            let golden: Vec<f32> = golden
+                .chunks_exact(4)
+                .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                .collect();
+            let load_model = |limit| {
+                LocalEmbeddingModel::from_installed_assets(
+                    bit.clone(),
+                    &directory.join("model.onnx"),
+                    files.clone(),
+                    limit,
+                )
+            };
+            let mut model = load_model(None)?;
+            let mut active_limit = model.max_tokens;
+
+            for case in entry["cases"]
+                .as_array()
+                .ok_or_else(|| anyhow!("Missing fixture cases"))?
+            {
+                if case.get("batch_size").is_some() {
+                    continue;
+                }
+                let name = case["name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing case name"))?;
+                let limit = case["max_tokens"]
+                    .as_u64()
+                    .or_else(|| entry["max_tokens"].as_u64())
+                    .ok_or_else(|| anyhow!("Missing token limit"))?
+                    as usize;
+                if limit != active_limit {
+                    model = load_model(Some(limit))?;
+                    active_limit = limit;
+                }
+                let purpose = if name.ends_with("document") {
+                    EmbeddingPurpose::Document
+                } else {
+                    EmbeddingPurpose::Query
+                };
+                let vectors = if purpose == EmbeddingPurpose::Query {
+                    model.text_embed_query(&inputs).await?
+                } else {
+                    model.text_embed_document(&inputs).await?
+                };
+                maximum = maximum.max(assert_golden_runtime_vectors(
+                    &bit.id, name, case, &vectors, &golden,
+                )?);
+                comparisons += vectors.len();
+                let dimensions = case["dimensions"].as_u64().unwrap() as usize;
+                let modern = LegacyEmbeddingAdapter::text(
+                    model.clone(),
+                    EmbeddingDescriptor {
+                        model_id: bit.id.clone(),
+                        adapter: "legacy_text".into(),
+                        modalities: vec![EmbeddingModality::Text],
+                        joint_combinations: Vec::new(),
+                        purposes: vec![EmbeddingPurpose::Query, EmbeddingPurpose::Document],
+                        space: EmbeddingSpace {
+                            id: bit.id.clone(),
+                            dimensions,
+                            normalized: true,
+                            metric: EmbeddingMetric::Cosine,
+                        },
+                        supported_dimensions: vec![dimensions],
+                        limits: EmbeddingLimits {
+                            max_tokens: limit,
+                            ..Default::default()
+                        },
+                        pipeline_fingerprint: bit.hash.clone(),
+                    },
+                );
+                let result = modern
+                    .embed(EmbeddingRequest::texts(inputs.clone(), purpose))
+                    .await?;
+                maximum = maximum.max(assert_golden_runtime_vectors(
+                    &bit.id,
+                    name,
+                    case,
+                    &result.embeddings,
+                    &golden,
+                )?);
+                comparisons += result.embeddings.len();
+            }
+            eprintln!("{}: runtime and modern text APIs matched", bit.id);
+            models += 1;
+        }
+        assert!(models > 0, "No published local text models were checked");
+        eprintln!(
+            "{models} text models, {comparisons} vector comparisons, max cosine distance {maximum:.3e}"
+        );
+        Ok(())
+    }
+
+    fn assert_golden_runtime_vectors(
+        id: &str,
+        name: &str,
+        case: &serde_json::Value,
+        vectors: &[Vec<f32>],
+        golden: &[f32],
+    ) -> Result<f64> {
+        let rows = case["rows"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing row count"))? as usize;
+        let dimensions = case["dimensions"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing dimensions"))? as usize;
+        let offset = case["offset_floats"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing vector offset"))? as usize;
+        assert_eq!(vectors.len(), rows, "{id}/{name}");
+        let mut maximum: f64 = 0.0;
+        for (row, vector) in vectors.iter().enumerate() {
+            assert_eq!(vector.len(), dimensions, "{id}/{name}/{row}");
+            let reference = &golden[offset + row * dimensions..offset + (row + 1) * dimensions];
+            let mut dot = 0.0;
+            let mut left = 0.0;
+            let mut right = 0.0;
+            for (&actual, &expected) in vector.iter().zip(reference) {
+                assert!(actual.is_finite());
+                let actual = f64::from(actual);
+                let expected = f64::from(expected);
+                dot += actual * expected;
+                left += actual * actual;
+                right += expected * expected;
+            }
+            let distance = if left == 0.0 && right == 0.0 {
+                0.0
+            } else {
+                assert!(
+                    left > 0.0 && right > 0.0,
+                    "Zero/nonzero vector mismatch for {id}/{name}/{row}"
+                );
+                (1.0 - dot / (left * right).sqrt()).max(0.0)
+            };
+            assert!(
+                distance <= 1e-5,
+                "Cosine distance {distance:.9e} for {id}/{name}/{row}"
+            );
+            maximum = maximum.max(distance);
+        }
+        Ok(maximum)
+    }
 
     async fn flow_state() -> Arc<crate::state::FlowLikeState> {
         let temp_dir = tempfile::tempdir().unwrap();

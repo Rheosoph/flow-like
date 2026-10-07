@@ -9,6 +9,7 @@ fn catalog_and_wasm_support_share_the_same_cache_type() {
     let cached: Arc<dyn Cacheable> = Arc::new(CatalogModel {
         text_model: None,
         image_model: None,
+        model: None,
     });
     assert!(cached.as_any().downcast_ref::<SharedModel>().is_some());
 }

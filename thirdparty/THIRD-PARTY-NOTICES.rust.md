@@ -1749,10 +1749,6 @@ Repository: https://github.com/fulmicoton/fastdivide
 Fastdivide is a partial port of libdivide. It makes it possible to reduce the cost of divisions.
 
 
-## fastembed 4.9.1 — Apache-2.0
-Repository: https://github.com/Anush008/fastembed-rs
-Library for generating vector embeddings, reranking locally.
-
 
 ## fasteval 0.2.4 — MIT
 Repository: https://github.com/likebike/fasteval

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 #[cfg(feature = "local-ml")]
-use fastembed::TokenizerFiles;
+use crate::embedding::native::TokenizerFiles;
 use text_splitter::ChunkSizer;
 #[cfg(feature = "local-ml")]
 use tokenizers::{AddedToken, PaddingParams, PaddingStrategy, TruncationParams};

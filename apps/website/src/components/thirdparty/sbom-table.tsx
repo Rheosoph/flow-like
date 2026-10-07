@@ -194,10 +194,10 @@ const FEATURED_LIBRARIES: FeaturedLibrary[] = [
 	},
 	// AI/ML
 	{
-		name: "fastembed",
-		displayName: "FastEmbed",
-		description: "Fast, lightweight embedding generation for semantic search.",
-		url: "https://github.com/qdrant/fastembed",
+		name: "ort",
+		displayName: "ONNX Runtime",
+		description: "Local inference for embeddings and other ONNX models.",
+		url: "https://github.com/pykeio/ort",
 		category: "AI/ML",
 	},
 	{

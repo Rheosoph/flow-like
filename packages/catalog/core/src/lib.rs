@@ -62,6 +62,9 @@ pub use types::class_prediction::ClassPrediction;
 pub use types::db_connection::NodeDBConnection;
 #[cfg(feature = "execute")]
 pub use types::db_connection::{CachedDB, CachedDBRefreshHook, CachedDBRefresher};
+pub use types::embedding_content::{
+    EmbeddingAudio, EmbeddingContent, EmbeddingContentPart, EmbeddingVideo, EmbeddingVideoFrame,
+};
 pub use types::flow_path::{FlowPath, FlowPathRuntime, FlowPathStore, found_or_missing};
 pub use types::graph_overlay::{
     DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT,

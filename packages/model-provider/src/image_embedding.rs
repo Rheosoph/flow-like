@@ -11,6 +11,12 @@ use crate::embedding::GeneralTextSplitter;
 // cross-crate signature change, not a local readability fix.
 #[allow(clippy::ptr_arg)]
 pub trait ImageEmbeddingModelLogic: Send + Sync + Cacheable + 'static {
+    fn output_dimensions(&self) -> Option<usize> {
+        None
+    }
+    fn context_tokens(&self) -> Option<usize> {
+        None
+    }
     async fn get_splitter(
         &self,
         capacity: Option<usize>,

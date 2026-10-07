@@ -93,12 +93,10 @@ impl NodeLogic for EmbedQueryNode {
 
         if let Some(embedding_model) = &embedding_model.text_model {
             let vecs = embedding_model
-                .text_embed_query(&vec![query_string.clone()])
+                .text_embed_query(&vec![query_string])
                 .await?;
             embeddings = vecs;
-        }
-
-        if let Some(embedding_model) = &embedding_model.image_model {
+        } else if let Some(embedding_model) = &embedding_model.image_model {
             let vecs = embedding_model
                 .text_embed_query(&vec![query_string])
                 .await?;
