@@ -1,0 +1,174 @@
+{
+  "id": "eg2-daa72c512439-q4",
+  "type": "Embedding",
+  "meta": {
+    "en": {
+      "name": "EmbeddingGemma 2 (ONNX Q4)",
+      "description": "Joint text, image, audio and video embeddings with 768 dimensions.",
+      "long_description": null,
+      "release_notes": null,
+      "tags": [
+        "embedding",
+        "multimodal"
+      ],
+      "use_case": null,
+      "icon": null,
+      "thumbnail": null,
+      "preview_media": [],
+      "age_rating": null,
+      "website": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX",
+      "support_url": null,
+      "docs_url": null,
+      "organization_specific_values": null,
+      "created_at": {
+        "secs_since_epoch": 1791324000,
+        "nanos_since_epoch": 0
+      },
+      "updated_at": {
+        "secs_since_epoch": 1791324000,
+        "nanos_since_epoch": 0
+      }
+    }
+  },
+  "authors": [
+    "Google",
+    "ONNX Community"
+  ],
+  "repository": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX",
+  "download_link": null,
+  "file_name": null,
+  "hash": "184d277bee27e0249c4205da3f49f1cd555109f0e8c3355267ee8516537614c6",
+  "size": null,
+  "hub": "local",
+  "parameters": {
+    "languages": [],
+    "vector_length": 768,
+    "input_length": 8192,
+    "prefix": {
+      "query": "task: search result | query: ",
+      "paragraph": "title: none | text: "
+    },
+    "pooling": "Mean",
+    "provider": {
+      "provider_name": "Local",
+      "model_id": "embeddinggemma-2"
+    },
+    "remote": null,
+    "embedding": {
+      "schema_version": 1,
+      "adapter": "embedding_gemma2",
+      "adapter_version": 1,
+      "space_id": "embeddinggemma-2-onnx-q4-daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+      "dimensions": 768,
+      "supported_dimensions": [
+        128,
+        256,
+        512,
+        768
+      ],
+      "max_tokens": 8192,
+      "artifacts": {
+        "backbone": {
+          "bit": "eg2-daa72c512439-backbone",
+          "path": "onnx/model_q4.onnx",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/onnx/model_q4.onnx",
+            "hash": "eff53ef36d1c894117651eb9edfad9be450099f98c8ff8676f33122a04103506",
+            "size": 490742
+          }
+        },
+        "backbone_weights": {
+          "bit": "eg2-daa72c512439-backbone-weights",
+          "path": "onnx/model_q4.onnx_data",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/onnx/model_q4.onnx_data",
+            "hash": "152ed85f5db48d6b006bcc1e8d2decd4bf7826099da623fb17b7b9d4c19035b3",
+            "size": 174028800
+          }
+        },
+        "vision_encoder": {
+          "bit": "eg2-daa72c512439-vision-encoder",
+          "path": "onnx/vision_encoder_q4.onnx",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/onnx/vision_encoder_q4.onnx",
+            "hash": "2cb00373e30a80dde2cc7c4bb743081c39c6237dde1c3eebbdee05d667fadf39",
+            "size": 159400
+          }
+        },
+        "vision_weights": {
+          "bit": "eg2-daa72c512439-vision-weights",
+          "path": "onnx/vision_encoder_q4.onnx_data",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/onnx/vision_encoder_q4.onnx_data",
+            "hash": "32ad749474c8506a9302a3192889e53dc6019f1ebb1deb7b8c244435d8080b48",
+            "size": 108957696
+          }
+        },
+        "audio_encoder": {
+          "bit": "eg2-daa72c512439-audio-encoder",
+          "path": "onnx/audio_encoder_q4.onnx",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/onnx/audio_encoder_q4.onnx",
+            "hash": "194ba37a48d4a150ae205cd26b053ea95b344fea301aa46d79258d9ab9287975",
+            "size": 245543
+          }
+        },
+        "audio_weights": {
+          "bit": "eg2-daa72c512439-audio-weights",
+          "path": "onnx/audio_encoder_q4.onnx_data",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/onnx/audio_encoder_q4.onnx_data",
+            "hash": "282d230021e14db0b1b873dafa67e14b6b1aa4d12bcdb3c1e968b7d21568568e",
+            "size": 189075968
+          }
+        },
+        "tokenizer": {
+          "bit": "eg2-daa72c512439-tokenizer",
+          "path": "tokenizer.json",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/tokenizer.json",
+            "hash": "6b4990373a19d167397cba21d5531700b547a2f8fc832722a1d55b3fb16dfe6c",
+            "size": 32170510
+          }
+        },
+        "processor": {
+          "bit": "eg2-daa72c512439-processor",
+          "path": "processor_config.json",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/processor_config.json",
+            "hash": "25ae3e142fec6ffb5a289be58e0bd6b1fa8fe5430058addeb7625ac9ad326bb4",
+            "size": 1788
+          }
+        },
+        "config": {
+          "bit": "eg2-daa72c512439-config",
+          "path": "config.json",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/config.json",
+            "hash": "6294daa474ca9bf6674a3cbc137ca24485736df4508248c0bdd090e07014291f",
+            "size": 5031
+          }
+        },
+        "tokenizer_config": {
+          "bit": "eg2-daa72c512439-tokenizer-config",
+          "path": "tokenizer_config.json",
+          "source": {
+            "url": "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/daa72c51243991dfcaf9f9137d2c573d8f7790c0/tokenizer_config.json",
+            "hash": "374f3ba5c4a17a617701a3803448beacbc3b970dc98e1c1288b62bca6d180d29",
+            "size": 1599
+          }
+        }
+      },
+      "pooling": "mean",
+      "task_profiles": {}
+    }
+  },
+  "version": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+  "license": "Apache-2.0",
+  "dependencies": [],
+  "dependency_tree_hash": "184d277bee27e0249c4205da3f49f1cd555109f0e8c3355267ee8516537614c6",
+  "created": "2026-10-07T00:00:00Z",
+  "updated": "2026-10-07T00:00:00Z",
+  "model_slug": null,
+  "model_evaluation": null
+}

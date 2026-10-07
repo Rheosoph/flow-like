@@ -7,12 +7,17 @@ use text_splitter::Characters;
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tiktoken_rs::CoreBPE;
 
+pub mod adapters;
 pub mod endpoint;
+pub mod interface;
 pub mod openai;
 pub mod proxy_config;
 
 #[cfg(feature = "local-ml")]
-pub mod local;
+pub mod native;
+
+#[cfg(feature = "local-ml")]
+pub mod gemma2;
 
 #[cfg(feature = "remote-ml")]
 pub mod proxy;
@@ -57,6 +62,13 @@ impl GeneralTextSplitter {
 // cross-crate signature change, not a local readability fix.
 #[allow(clippy::ptr_arg)]
 pub trait EmbeddingModelLogic: Send + Sync + Cacheable + 'static {
+    fn output_dimensions(&self) -> Option<usize> {
+        None
+    }
+    /// Effective per-sequence context. Legacy wrappers may split longer inputs into chunks.
+    fn context_tokens(&self) -> Option<usize> {
+        None
+    }
     async fn get_splitter(
         &self,
         capacity: Option<usize>,

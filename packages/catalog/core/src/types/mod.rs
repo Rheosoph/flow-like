@@ -2,6 +2,7 @@ pub mod attachment;
 pub mod bounding_box;
 pub mod class_prediction;
 pub mod db_connection;
+pub mod embedding_content;
 pub mod flow_path;
 pub mod graph_overlay;
 pub mod inbound_email;

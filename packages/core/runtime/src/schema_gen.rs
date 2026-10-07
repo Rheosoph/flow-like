@@ -43,6 +43,7 @@ use crate::{
     profile::Profile,
 };
 use flow_like_model_provider::{
+    embedding::interface::{EmbeddingBatch, EmbeddingDescriptor, EmbeddingSpec},
     history::History,
     provider::{EmbeddingModelProvider, ImageEmbeddingModelProvider},
     response::Response,
@@ -91,6 +92,9 @@ pub fn generate_schema(base_path: PathBuf) -> flow_like_types::Result<()> {
         &base_path,
         "bit/bit/image-embedding-model-parameters.json",
     )?;
+    generate_and_save_schema::<EmbeddingSpec>(&base_path, "bit/bit/embedding-spec.json")?;
+    generate_and_save_schema::<EmbeddingDescriptor>(&base_path, "llm/embedding-descriptor.json")?;
+    generate_and_save_schema::<EmbeddingBatch>(&base_path, "llm/embedding-batch.json")?;
     generate_and_save_schema::<VLMParameters>(&base_path, "bit/bit/vlm-parameters.json")?;
     generate_and_save_schema::<LLMParameters>(&base_path, "bit/bit/llm-parameters.json")?;
     generate_and_save_schema::<TtsModelParameters>(&base_path, "bit/bit/tts-parameters.json")?;

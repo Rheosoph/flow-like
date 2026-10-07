@@ -1,7 +1,7 @@
 //! Process-wide ONNX Runtime configuration shared by every FlowLike model path.
 //!
 //! ORT fixes its environment when the first session builder is created. Keeping the
-//! initializer in the model-provider crate lets raw ONNX sessions and FastEmbed callers
+//! initializer in the model-provider crate lets raw ONNX sessions and native embedding adapters
 //! establish the same execution-provider policy before either one can create a builder.
 
 use std::sync::OnceLock;

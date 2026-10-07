@@ -1,0 +1,4008 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-06T22:32:29.723775+00:00",
+  "reference": {
+    "fastembed_version": "5.17.2",
+    "fastembed_crate_checksum": "545e4fb17fc48768ff36c2a3854aa5b0b809d0ed595ab5530fa8ac94f31bd0ea",
+    "cargo_lock_sha256": "149a176f13a0e65a43905a59178c11e4859cee92e3166877932d30dc7e83cb42",
+    "ort_version": "2.0.0-rc.12",
+    "image_version": "0.25.10",
+    "tokenizers_version": "0.22.2",
+    "chunk_tokenizers_version": "0.22.2",
+    "text_splitter_version": "0.27.0",
+    "execution_provider": "CPU",
+    "source_revision": "c4ff42aa7920f134a3617973d07d4584daf6bab7",
+    "source_sha256s": {
+      "main.rs": "2d99f644010459c1ed2f9f15de699980a52d23138106088172ccc85f45aefe0f",
+      "legacy_output.rs": "18f63be0b5aebe6aaf2779a289080a2c6da9806a7e9018967554ae595b7f5ee7",
+      "tokenizer.rs": "fb5692076aa8d832fa23a1ec8eba1af96933673009dedaf7728fc8a20b508a4d",
+      "ort_runtime.rs": "b43307b9c8c40c0dd6164468dbbbe93b9a17f15beb2919a33f2d919e206e22b1",
+      "runtime_source.rs": "a9c25b382eb97c7a1a38a2bab4bc07fbeafd7d4aea0b5855380fef44cfe6151c",
+      "window64.rs": "914bce4a3749c4a7d6815d0936a157720b84517e8537f18f929744338de838c1",
+      "external.rs": "fc68f5edeecc214ee565a44bd9642336d5cdb487b02069ff2f5da66a1321db88",
+      "external64.rs": "d755879d554513efbf530bd783db7c842b076747db80fcb631263371a9ed43cd"
+    },
+    "repository_source_sha256s": {
+      "packages/model-provider/src/embedding/local.rs": "18f63be0b5aebe6aaf2779a289080a2c6da9806a7e9018967554ae595b7f5ee7",
+      "packages/model-provider/src/tokenizer.rs": "fb5692076aa8d832fa23a1ec8eba1af96933673009dedaf7728fc8a20b508a4d",
+      "packages/model-provider/src/ml/ort_runtime.rs": "b43307b9c8c40c0dd6164468dbbbe93b9a17f15beb2919a33f2d919e206e22b1",
+      "packages/core/runtime/src/models/embedding/local.rs": "a9c25b382eb97c7a1a38a2bab4bc07fbeafd7d4aea0b5855380fef44cfe6151c"
+    }
+  },
+  "models": [
+    {
+      "bit": {
+        "id": "k10qlw21o4ct379j3lpy7fo1",
+        "type": "ImageEmbedding",
+        "meta": {
+          "en": {
+            "name": "Clip - Vision",
+            "description": "CLIP connects images and text in the same “language.” It lets you search for images by typing words, or describe an image and find related content instantly.",
+            "long_description": "CLIP is an AI model created to understand pictures and text together. It learns how to match what it “sees” in an image with the words we use to describe it. This makes it powerful for tasks like searching for photos using natural language (e.g. “a dog playing frisbee”), automatically tagging images with meaningful labels, or finding pictures similar to a description. Instead of relying on fixed categories, CLIP understands concepts more flexibly — closer to how people think about visuals and words.",
+            "release_notes": "",
+            "tags": [
+              "transformers",
+              "onnx",
+              "clip_vision_model",
+              "mit"
+            ],
+            "use_case": "",
+            "icon": "https://cdn-avatars.huggingface.co/v1/production/uploads/612689acc64ee1aa6818808a/y7jCVdW48MnIZVmsCefSC.png",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1755456550,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1755456550,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/Qdrant"
+        ],
+        "repository": "https://huggingface.co/Qdrant/clip-ViT-B-32-vision",
+        "download_link": "https://cdn.flow-like.com/bits/9269aed95f20e2113a0aa2208631eeb458a0dc613ef8bb3325869dd674b775d6",
+        "file_name": "model.onnx",
+        "hash": "3688fc47e7a511b084b07871be20642e9ad0d51a460e5937b59e990f647344a7",
+        "size": 351686194,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "multilingual"
+          ],
+          "input_length": 50,
+          "vector_length": 512
+        },
+        "version": "0.0.1",
+        "license": "mit",
+        "dependencies": [
+          "api.alpha.flow-like.com:f6neh9w69tvfwqjuvde5yhsq",
+          "api.alpha.flow-like.com:gtwsvv1epoippqc5gfq2qumv",
+          "api.alpha.flow-like.com:su0jov4dw1m6ou80vsu36jvt"
+        ],
+        "dependency_tree_hash": "c789a367ab7b5100bc64d72f08312270507d44bae4bba1760ffc940d133f8268",
+        "created": "2025-08-17T18:49:09.824+00:00",
+        "updated": "2025-08-17T18:49:09.824+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "3688fc47e7a511b084b07871be20642e9ad0d51a460e5937b59e990f647344a7",
+          "size": 351686194,
+          "sha256": "c68d3d9a200ddd2a8c8a5510b576d4c94d1ae383bf8b36dd8c084f94e1fb4d63",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "b1e6accf0b8205e806f94800e1f35ca82b6f64c28054dff63d9b7de63cad8c47",
+          "size": 482,
+          "sha256": "43bfed060ab82f57833bdd09acdcc2731995cb984651732a9d2b399e63113b9c",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "a144b6d0dbe52cba151cab8d521187b496fd68a455a99821a601a012e3fbc40a",
+          "size": 2224147,
+          "sha256": "b68d571997a1f81bf521fb73806740ddb91e4ed6666cb6e996c066bb289cf55b",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "86bb8df8ec5de9f45dc2b2770e9cade4c46e98441c7b634980891dcbd564e30c",
+          "size": 705,
+          "sha256": "6bdcee9ccce2a16ca2b4c0c5ed00b42c50ea225f4472a8c4c1e963a2902c2881",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "e4f2e11a2eb7ff6f0402a16f3bdbc01e298dd28d0e94212ff3abc1fe3a8c2e94",
+          "size": 588,
+          "sha256": "2cdb3b8331a60c92fc1e55a13e9fd61fd2293c5a51275fdcccd62b780052530e",
+          "blake3_verified": true
+        },
+        {
+          "role": "preprocessor_config.json",
+          "hash": "280272f02a65d952e0f36a4bcfb5d704cad9f0c9ec7f9b5e3b4cfedf5f84eaa5",
+          "size": 780,
+          "sha256": "ce945ef831c9972c135b5b198a03d8eeb70478cd69c0238f24caf1903a9965e6",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "k10qlw21o4ct379j3lpy7fo1.f32",
+      "vector_sha256": "0bafd2d812d6866ea4dfde26ffa3f56148ba0f3fca4c35199cfccb684754b7ee",
+      "cases": [
+        {
+          "name": "images_0",
+          "rows": 4,
+          "dimensions": 512,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 43.905,
+          "min_norm": 0.9999998625168852,
+          "max_norm": 1.00000015967503
+        },
+        {
+          "name": "images_1",
+          "rows": 4,
+          "dimensions": 512,
+          "offset_floats": 2048,
+          "reference_elapsed_ms": 44.876916,
+          "min_norm": 0.9999998625168852,
+          "max_norm": 1.00000015967503
+        },
+        {
+          "name": "images_2",
+          "rows": 4,
+          "dimensions": 512,
+          "offset_floats": 4096,
+          "reference_elapsed_ms": 44.571125,
+          "min_norm": 0.9999998625168852,
+          "max_norm": 1.00000015967503
+        }
+      ],
+      "load_ms": 229.501375
+    },
+    {
+      "bit": {
+        "id": "l6qsr57or0v8npz5i9fetizo",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Jina - EN / ES",
+            "description": "Great spanish and english model.",
+            "long_description": "Small and fast model for local embedding.",
+            "release_notes": "",
+            "tags": [
+              "apache-2.0",
+              "custom_code",
+              "deprecated",
+              "english",
+              "feature extraction",
+              "spanish",
+              "🇪🇺 region: eu"
+            ],
+            "use_case": "",
+            "icon": "https://cdn-avatars.huggingface.co/v1/production/uploads/603763514de52ff951d89793/AFoybzd5lpBQXEBrQHuTt.png",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1748700237,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789235093,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/jinaai"
+        ],
+        "repository": "https://huggingface.co/jinaai/jina-embeddings-v2-base-es",
+        "download_link": "https://cdn.flow-like.com/bits/b76f0f2c7e3c1bcc8f42a6dea122283e-11",
+        "file_name": "model_quantized.onnx",
+        "hash": "0cefa4879215317e5b82c0e9cad15398274c18d7ed89449aff612e5060e502ad",
+        "size": 161789773,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "jina-embeddings-v2-base-es",
+            "implementation": "Internal"
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "es"
+          ],
+          "input_length": 8192,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.alpha.flow-like.com:w12vwby4kg9xpzq5xuqif341",
+          "api.alpha.flow-like.com:b144lkg2lzk5ipd0318bb7gp",
+          "api.alpha.flow-like.com:w13sj87rmesqtf7vhq8te5j7",
+          "api.alpha.flow-like.com:ylatjd4ahwsdbll6awkty4bo"
+        ],
+        "dependency_tree_hash": "b7f4a7f85ec5539b0e36df6fc173a347cd872370e556214e2ef71a2adcd60aac",
+        "created": "2025-05-31T14:03:57.379+00:00",
+        "updated": "2025-05-31T14:03:57.379+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "0cefa4879215317e5b82c0e9cad15398274c18d7ed89449aff612e5060e502ad",
+          "size": 161789773,
+          "sha256": "5af68309317d5a7a5b63bf1c4e336dc8bd9a9104e8d16eebeb12499f33cb463c",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "ed66a876a4045ed5161d30c8e0e9ed6f6d4eb3952036e4501992d0dff97bb140",
+          "size": 1503,
+          "sha256": "1b01dc4ac97fcc8d2fa9ee5d7661a4a70394ac7b8f355f1f0871bbc0f23af009",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "71d6fa79bf0feae19cfd1d4ac28b353b7ecca3a11374ff964757a9dee2d26c2f",
+          "size": 2637974,
+          "sha256": "5cd8fa360a99a895a4afce83d98131bb74ec2e957ed238f6cdd6107358ca25dc",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "c623dc17d41aecc862a1c9bc956357c53da57d8e46d97df263a989116eb3b1b7",
+          "size": 1211,
+          "sha256": "99c5e1cf31def1533447759dca2f1c22853d499c0c73e13d9667ae2b5ff1fa0b",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "dbc4e387edc1d03fafa25a800972eb2da2bd90adde4afc6ee70a5479207c1481",
+          "size": 958,
+          "sha256": "f23c8e6099631c233c16d9bf8dab198f610826cdd1b358f270f6d55c1863e857",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "l6qsr57or0v8npz5i9fetizo.f32",
+      "vector_sha256": "717114b4e02956caa3966855214cc7c96308285b6e9985fc5959dc7b1d6c6a68",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 217.953708,
+          "min_norm": 0.9999996848641358,
+          "max_norm": 1.0000003631475824,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 210.354958,
+          "min_norm": 0.9999996848641358,
+          "max_norm": 1.0000003631475824,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 202.001917,
+          "min_norm": 0.9999996848641358,
+          "max_norm": 1.0000003631475824,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 99.992625,
+          "min_norm": 0.9999998527799002,
+          "max_norm": 1.0000004315828197,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 93.613458,
+          "min_norm": 0.9999999137819401,
+          "max_norm": 1.000000499357763,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 140.706667,
+          "min_norm": 0.9999996848641358,
+          "max_norm": 1.0000003631475824,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 559.491042,
+          "min_norm": 0.9999998754888908,
+          "max_norm": 1.0000002826889263,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 471.572542,
+          "min_norm": 0.9999998754888908,
+          "max_norm": 1.0000002826889263,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 418.569,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "rkhhottkdbbybjsplrxfmnhk",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Granite - Nano",
+            "description": "The smallest and fastest model we ship, and still multilingual.",
+            "long_description": "The 97M-parameter member of IBM's Granite Embedding R2 family.\n\n- 93 MB on disk and roughly three times faster per passage than anything else here.\n- Emits 384-dimensional vectors, halving the storage an index needs compared with a 768-dimensional model.\n- Keeps most of the cross-language strength of its larger sibling.\n- Reads up to 32,768 tokens per passage.\n- Ranks below the larger models on retrieval accuracy, which is the trade you are making.\n\nNeeds no query or passage prefix. Pick this one for mobile, for very large indexes, or wherever indexing throughput is the constraint.",
+            "release_notes": "",
+            "tags": [
+              "feature extraction",
+              "onnx",
+              "multilingual",
+              "compact",
+              "apache-2.0"
+            ],
+            "use_case": "",
+            "icon": "https://cdn.flow-like.com/media/ibm.webp",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2",
+            "support_url": "",
+            "docs_url": "https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1789232596,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789233213,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/ibm-granite"
+        ],
+        "repository": "https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2",
+        "download_link": "https://cdn.flow-like.com/bits/bb249229d598a164097a890d886b1185457ec7cf1be1c1431ad1883b0b610f7c",
+        "file_name": "model_quint8_avx2.onnx",
+        "hash": "2a24672d842c2defc2e2a889075a9567800bb367d236d88910e406a0eab68dee",
+        "size": 98247878,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "de",
+            "fr",
+            "es",
+            "zh",
+            "code",
+            "200+"
+          ],
+          "input_length": 32768,
+          "vector_length": 384
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.flow-like.com:mes6raavu6ll553qv6yvsl3e",
+          "api.flow-like.com:os4wlv4zupknk4zd929oz37l",
+          "api.flow-like.com:msegy04cmvijxxrvxxwrs2l1",
+          "api.flow-like.com:t1254iowjfc82d20rocx958a"
+        ],
+        "dependency_tree_hash": "04f81f55c6c7f53db646e52b05418395376caa6550f10590274f249dc546e7c6",
+        "created": "2026-09-12T17:03:15.956+00:00",
+        "updated": "2026-09-12T17:13:32.312+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "2a24672d842c2defc2e2a889075a9567800bb367d236d88910e406a0eab68dee",
+          "size": 98247878,
+          "sha256": "a6022dd8220ea6f6595562a1328ee216f4a94faa55362f2f4747c80f1e78772e",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "993a09678dc9dfaf163d472927e05fa042fdc0e36cc55b857e1bcf7f06fac099",
+          "size": 1216,
+          "sha256": "de948b0bdc6f356afad7a84b276d8dd7e7fe10fb9add1bb5e610621c28e41ebc",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "a4c80932105ba8e1f1d02320f297d45e18ee5aa1f9cb97f384687c5c55e27949",
+          "size": 25301672,
+          "sha256": "4f2842d568e2724370aec203652a42ac783c7937f8347a1a2cc7506d71f1582f",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "696de25e183f9c1fc8eeb2da64cfd2514ea36a61b5559dc55a3b2338f39cad16",
+          "size": 12860,
+          "sha256": "6ed69389e30a8ecabfce2f9ebcdf0c908b34056f24d994340f2f216521c057d5",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "2441a7a855dc6cf4d575fbaded6cdf40cf95ad92748012016179ee503cc79f31",
+          "size": 871,
+          "sha256": "013787ee251ff611722479197c00853b62113ad303cb0a36524231783c676c69",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "rkhhottkdbbybjsplrxfmnhk.f32",
+      "vector_sha256": "4c4ed2048ae29a00d78ead8b5e1fb79a4b75b65a729b98e878ca208907859eef",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 472.489125,
+          "min_norm": 0.9999998989165555,
+          "max_norm": 1.0000000383752117,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 2688,
+          "reference_elapsed_ms": 464.11870799999997,
+          "min_norm": 0.9999998989165555,
+          "max_norm": 1.0000000383752117,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 510.01,
+          "min_norm": 0.9999998989165555,
+          "max_norm": 1.0000000383752117,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 8064,
+          "reference_elapsed_ms": 53.350625,
+          "min_norm": 0.9999998974558107,
+          "max_norm": 1.0000001223537818,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 47.633250000000004,
+          "min_norm": 0.9999999659193283,
+          "max_norm": 1.0000001850004365,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 13440,
+          "reference_elapsed_ms": 75.91495900000001,
+          "min_norm": 0.9999998989165555,
+          "max_norm": 1.0000000383752117,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 1180.723292,
+          "min_norm": 0.999999774548193,
+          "max_norm": 1.0000001054236034,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 384,
+          "offset_floats": 18816,
+          "reference_elapsed_ms": 1016.9677079999999,
+          "min_norm": 0.999999774548193,
+          "max_norm": 1.0000001054236034,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 793.902583,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "z7xxufugq7mxomsx1mi4f1km",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Qwen - Instruct",
+            "description": "Instruction-tuned retrieval across 100+ languages and code, with a very long context.",
+            "long_description": "Qwen3-Embedding is the highest scoring open embedding family on the multilingual MTEB leaderboard. This is the 0.6B member, quantised to run locally.\n\n- Joint top of our retrieval benchmark alongside Harrier.\n- Reads up to 32,768 tokens per passage, sixteen times the Gemma model.\n- Covers natural language and source code in one vector space.\n- Emits 1,024-dimensional vectors, so an index built on it is wider and more expensive to store than a 768-dimensional one.\n\nThe query side is prefixed with a retrieval instruction automatically. Pick this one for the best all-round accuracy when you can afford the index width.",
+            "release_notes": "",
+            "tags": [
+              "feature extraction",
+              "onnx",
+              "multilingual",
+              "code",
+              "instruct"
+            ],
+            "use_case": "",
+            "icon": "https://cdn.flow-like.com/media/qwen.webp",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+            "support_url": "",
+            "docs_url": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1789232516,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789232516,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/Qwen"
+        ],
+        "repository": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+        "download_link": "https://cdn.flow-like.com/bits/a300cf061722f50ebc65f806f19cd866581ff9f08c8a228c70b91976b6596d63",
+        "file_name": "model_q4.onnx",
+        "hash": "20b1b83797bd105fb526934f24a7c9f982746bb071a03347f9a1e078c686c1bf",
+        "size": 597999199,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "@cf/qwen/qwen3-embedding-0.6b",
+            "implementation": "CloudflareWorkersAI"
+          },
+          "pooling": "Mean",
+          "pricing": {
+            "max_input_bytes": 204800000,
+            "request_micro_usd": 0,
+            "input_micro_usd_per_million_bytes": 50000
+          },
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "de",
+            "fr",
+            "es",
+            "zh",
+            "code",
+            "100+"
+          ],
+          "input_length": 8192,
+          "vector_length": 1024
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.flow-like.com:q5ricm5qzh0enhp3hiyg04sq",
+          "api.flow-like.com:y54txcbjvah43xruejbhrpe6",
+          "api.flow-like.com:ljgww96926zo5udpx7gmgcm5",
+          "api.flow-like.com:e4kzrm5nteh4ljxmrbmtb6au"
+        ],
+        "dependency_tree_hash": "18724c929888e9be381b01b514c0a374603840c74aec03189214708dbd18918a",
+        "created": "2026-09-12T17:01:55.453+00:00",
+        "updated": "2026-10-03T19:16:05.052+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "20b1b83797bd105fb526934f24a7c9f982746bb071a03347f9a1e078c686c1bf",
+          "size": 597999199,
+          "sha256": "2980ce85c5228b8e38a489a1ef2689dfa0b0017e25d0940fd1b30201de02b62f",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "d534ae8fe8b8a0b6fbb83fb496da77ce0f5638a8e93bd8e52ff500b217722e08",
+          "size": 1397,
+          "sha256": "be75ccca9e84dcb87267578fe7d4cf5d4a0ee2415bbd5f01258254e3408f259e",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "a3017f88114f37eeff338619e99f16ba9ba3127a4b0d110617bc56f9dc50899a",
+          "size": 11423705,
+          "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "1e1c1d9042b7f0ad16ce4adfbc41fb986c4f9ccc4643d90e946691c244bcaf05",
+          "size": 5404,
+          "sha256": "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "2eeb7e67715a2b89faa2410a71705e10232c62dbef646c3f1928230cecb4b245",
+          "size": 613,
+          "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "z7xxufugq7mxomsx1mi4f1km.f32",
+      "vector_sha256": "d1fb05dfa0848abd4404ad1c558f9dd56b4de10cb07765d77b979902e68b6016",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 591.27975,
+          "min_norm": 0.9999996792537709,
+          "max_norm": 1.0000002020078453,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 7168,
+          "reference_elapsed_ms": 564.705208,
+          "min_norm": 0.9999997612776694,
+          "max_norm": 1.0000001074374985,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 14336,
+          "reference_elapsed_ms": 793.981292,
+          "min_norm": 0.9999996792537709,
+          "max_norm": 1.0000002020078453,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 494.436542,
+          "min_norm": 0.9999999977767752,
+          "max_norm": 1.000000442353328,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 28672,
+          "reference_elapsed_ms": 391.088375,
+          "min_norm": 0.999999755464478,
+          "max_norm": 1.0000002470385874,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 35840,
+          "reference_elapsed_ms": 603.909583,
+          "min_norm": 0.9999996792537709,
+          "max_norm": 1.0000002020078453,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 43008,
+          "reference_elapsed_ms": 1652.753333,
+          "min_norm": 0.9999996153101263,
+          "max_norm": 1.0000001421303513,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            4
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 50176,
+          "reference_elapsed_ms": 1510.2948330000002,
+          "min_norm": 0.9999997502050355,
+          "max_norm": 1.000000321015144,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            4
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 1644.0629580000002,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "d310v8j1z1pfhkggv60xbwwq",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "BGE Large EN v1.5",
+            "description": "Hosted English text embeddings for passage retrieval. Returns 1,024-dimensional vectors with a 512-token input limit.",
+            "long_description": "Hosted English text embeddings for passage retrieval. Returns 1,024-dimensional vectors with a 512-token input limit. Flow-Like applies the model’s query and document prefixes before sending text to the hosted server.",
+            "release_notes": null,
+            "tags": [
+              "feature extraction",
+              "english",
+              "hosted",
+              "mit"
+            ],
+            "use_case": null,
+            "icon": null,
+            "thumbnail": null,
+            "preview_media": [],
+            "age_rating": null,
+            "website": null,
+            "support_url": null,
+            "docs_url": null,
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1790875169,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1790875169,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/BAAI"
+        ],
+        "repository": "https://huggingface.co/BAAI/bge-large-en-v1.5",
+        "download_link": null,
+        "file_name": null,
+        "hash": "d310v8j1z1pfhkggv60xbwwq",
+        "size": null,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "Represent this sentence for searching relevant passages: ",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "bge-large-en-v1.5",
+            "implementation": "Internal"
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": "bge-large-en-v1.5",
+            "provider_name": "Premium"
+          },
+          "languages": [
+            "en"
+          ],
+          "input_length": 512,
+          "vector_length": 1024
+        },
+        "version": "0.0.1",
+        "license": "mit",
+        "dependencies": [],
+        "dependency_tree_hash": "6253e0b46c324cb68c72c3f01716df9e37be8c2277fb243a98e0cf6e22cdb0aa",
+        "created": "2026-10-01T17:19:29.447+00:00",
+        "updated": "2026-10-01T17:19:29.447+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "remote_only",
+      "artifacts": []
+    },
+    {
+      "bit": {
+        "id": "lo2dywqbrsgoxropzv0l0f7p",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Jina v2 - Code",
+            "description": "Good in scenarios where Code Embedding is necessary.",
+            "long_description": "Supports bidirectional English <-> Code searches.",
+            "release_notes": "",
+            "tags": [
+              "apache-2.0",
+              "bert",
+              "code",
+              "deprecated",
+              "english",
+              "feature extraction",
+              "fill-mask",
+              "onnx",
+              "🇪🇺 region: eu"
+            ],
+            "use_case": "",
+            "icon": "https://cdn-avatars.huggingface.co/v1/production/uploads/603763514de52ff951d89793/AFoybzd5lpBQXEBrQHuTt.png",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1748692967,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789235098,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/jinaai"
+        ],
+        "repository": "https://huggingface.co/jinaai/jina-embeddings-v2-base-code",
+        "download_link": "https://cdn.flow-like.com/bits/6402275170039db97371483898a88e77-11",
+        "file_name": "model_quantized.onnx",
+        "hash": "59b0312fc7004bdda77cec08513f03d382fc39af4e39e7c2660bcb9cf779f1dc",
+        "size": 161895621,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "jina-embeddings-v2-base-code",
+            "implementation": "Internal"
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "code",
+            "en"
+          ],
+          "input_length": 8192,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.alpha.flow-like.com:lf5n6hbkv0mfkukt48egkgpd",
+          "api.alpha.flow-like.com:qa30gu7yseywn2o7mo3vxg4d",
+          "api.alpha.flow-like.com:ie0qj609330pdy5ppixyh867",
+          "api.alpha.flow-like.com:y5yhpw4jhnifqict29q6kvjl"
+        ],
+        "dependency_tree_hash": "a664580e7773f2e14f7891df7f133c45251e6ee7174a79da1f40f801f5482128",
+        "created": "2025-05-31T12:02:47.408+00:00",
+        "updated": "2025-05-31T12:02:47.408+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "59b0312fc7004bdda77cec08513f03d382fc39af4e39e7c2660bcb9cf779f1dc",
+          "size": 161895621,
+          "sha256": "ed45870251c9f0cf656e78aab0d37a23489066df8a222bb1c8caf8a45f2cb16d",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "74168a1911993c631b034eef6392c93191adc12af938a5f11f50648cfd6022fe",
+          "size": 1216,
+          "sha256": "e426aa684c7f9a95c5f020aa855faf93a24f065f5fad0c9e17b124670cabdea6",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "6d78fc2613ca74c29ccabbc5f9e7140efba14b7ca55c235fd4e2e349793e2452",
+          "size": 2561316,
+          "sha256": "b01c78a902aa4facb2f47f95449f48e2f7bbfea5d2472ee2f6ce92323c6f86e5",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "e61ed5314349e2bbc2a6038a4c909fa4e0edf61910baf0bf8faeb9e397816982",
+          "size": 493,
+          "sha256": "f477aeb15ff9f78d3c1ddf2361d2b0b8b20cf55220f839f29a37f3a18efddd89",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "15911dd358007ac20270dbf556e16f6548ca4b59895ee37276221f301447601a",
+          "size": 280,
+          "sha256": "06e405a36dfe4b9604f484f6a1e619af1a7f7d09e34a8555eb0b77b66318067f",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "lo2dywqbrsgoxropzv0l0f7p.f32",
+      "vector_sha256": "24554e5fbc031f3dfbbd526b66224c1429c5f5eee27bb84d6dcba02e5845deac",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 162.417959,
+          "min_norm": 0.9999996834970435,
+          "max_norm": 1.0000001265425351,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 174.622208,
+          "min_norm": 0.9999996834970435,
+          "max_norm": 1.0000001265425351,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 168.125042,
+          "min_norm": 0.9999996834970435,
+          "max_norm": 1.0000001265425351,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 91.48645800000001,
+          "min_norm": 0.9999996448167374,
+          "max_norm": 1.000000370964412,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 68.937083,
+          "min_norm": 0.9999999244094058,
+          "max_norm": 1.0000002210155319,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 132.824334,
+          "min_norm": 0.9999996834970435,
+          "max_norm": 1.0000001265425351,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 398.330667,
+          "min_norm": 0.9999999250840943,
+          "max_norm": 1.0000003489138496,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 601.056541,
+          "min_norm": 0.9999999250840943,
+          "max_norm": 1.0000003489138496,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 307.959459,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "gccb4h3bj8jdxxis2vcjuxuk",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Multilingual - Instruct",
+            "description": "The best multilingual model we have. Only available for paragraphs up to 512 tokens.",
+            "long_description": "Multilingual - E5 - Large Instruct is the best retrieval model you can use for your case in multilingual context.",
+            "release_notes": "",
+            "tags": [
+              "feature extraction",
+              "transformers",
+              "94 languages",
+              "xlm-roberta",
+              "mit"
+            ],
+            "use_case": "",
+            "icon": "https://huggingface.co/avatars/5a1ee74c2dbe349a6ec9843a1599d281.svg",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1748703905,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1748703905,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/intfloat"
+        ],
+        "repository": "https://huggingface.co/intfloat/multilingual-e5-large-instruct",
+        "download_link": "https://cdn.flow-like.com/bits/28b16a95a9dff7523f026940cc0161db",
+        "file_name": "model.onnx",
+        "hash": "64240b3fb39b8b583e83095f67e40ef81629fc19c635401dcaf739f9f2495944",
+        "size": 2236029308,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "multilingual-e5-large-instruct",
+            "implementation": "Internal"
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "multilingual"
+          ],
+          "input_length": 512,
+          "vector_length": 1024
+        },
+        "version": "0.0.1",
+        "license": "mit",
+        "dependencies": [
+          "api.alpha.flow-like.com:t1sh907f9zhwgzlzl7jmq9g2",
+          "api.alpha.flow-like.com:mwmdf7d6kehm9jpgoqnpoy4v",
+          "api.alpha.flow-like.com:hk9ka3t23oi9fqwcdsizfgdn",
+          "api.alpha.flow-like.com:savqyr25g6wv7cyowgvs56a2"
+        ],
+        "dependency_tree_hash": "73736ddb27ce834ffab201c644988f033a8fabfc3720dbe58865449f2a20be84",
+        "created": "2025-05-31T15:05:05.046+00:00",
+        "updated": "2026-10-01T17:19:29.447+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "64240b3fb39b8b583e83095f67e40ef81629fc19c635401dcaf739f9f2495944",
+          "size": 2236029308,
+          "sha256": "8a6a4dcd67e671153f25f3594e296c05aea932948209c1f54194571b792a8322",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "a5e7c98f30ef9e5fb5ca6e4dc59fdee5e93e3d34ca1875ac15f1c57f60018ec9",
+          "size": 763,
+          "sha256": "3762389b621283a0466d96f699fc1a0f160de49c4b50adcc87b537931e458ba3",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "bf350d6ba6c3cdb4f3d1e75f6ebf434a7b374abe324fa455c752ca59f522b40d",
+          "size": 17082756,
+          "sha256": "f59925fcb90c92b894cb93e51bb9b4a6105c5c249fe54ce1c704420ac39b81af",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "54e68376dd4a1bb9abad832571f74067919d40c35b9fd98b096ccb3702dae4af",
+          "size": 1182,
+          "sha256": "49f06d15a18f81855c338f8ab6241ca2e502a65b62968be69b74f094489f8175",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "7928b0181fe837ea946ad566a4c8c3421b414988e65c61af6cedf79586971810",
+          "size": 964,
+          "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
+          "blake3_verified": true
+        }
+      ],
+      "original_legacy_load_error": "Exception during loading: size too big: 18446744071650613628 details: string length exceeds max size",
+      "reference_loading": "external_initializers",
+      "repacked_graph_sha256": "849fd89a4e363c7151fe54ff9f38c041e8ebe07b76d0edd876008c427aefefd4",
+      "vector_file": "gccb4h3bj8jdxxis2vcjuxuk.f32",
+      "vector_sha256": "36678ca656000b8e37ad6b9f93481224ed09966f4af83cfc7badc8acc3d31e0a",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 729.1514169999999,
+          "min_norm": 0.9999997729114658,
+          "max_norm": 1.0000003280308916,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 7168,
+          "reference_elapsed_ms": 643.927083,
+          "min_norm": 0.9999997949038426,
+          "max_norm": 1.0000002645304726,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 14336,
+          "reference_elapsed_ms": 654.712541,
+          "min_norm": 0.9999997729114658,
+          "max_norm": 1.0000003280308916,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 298.39775000000003,
+          "min_norm": 0.9999997729114658,
+          "max_norm": 1.0000002897227755,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 28672,
+          "reference_elapsed_ms": 223.87,
+          "min_norm": 0.9999997729114658,
+          "max_norm": 1.0000003280308916,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 35840,
+          "reference_elapsed_ms": 363.24791600000003,
+          "min_norm": 0.9999997729114658,
+          "max_norm": 1.0000003280308916,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 43008,
+          "reference_elapsed_ms": 587.551416,
+          "min_norm": 0.9999998221598291,
+          "max_norm": 1.0000003280308916,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            5
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 50176,
+          "reference_elapsed_ms": 510.915708,
+          "min_norm": 0.9999997949038426,
+          "max_norm": 1.0000002645304726,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            5
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 4673.502791,
+      "max_tokens": 512
+    },
+    {
+      "bit": {
+        "id": "jw36q06zmu8rh2v6c7fvos12",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Jina - DE / EN",
+            "description": "Great German and English Model",
+            "long_description": "Great German and English Model",
+            "release_notes": "",
+            "tags": [
+              "apache-2.0",
+              "bert",
+              "deprecated",
+              "english",
+              "feature extraction",
+              "fill-mask",
+              "german",
+              "onnx",
+              "🇪🇺 region: eu"
+            ],
+            "use_case": "",
+            "icon": "https://cdn-avatars.huggingface.co/v1/production/uploads/603763514de52ff951d89793/AFoybzd5lpBQXEBrQHuTt.png",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1748700109,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789235091,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/jinaai"
+        ],
+        "repository": "https://huggingface.co/jinaai/jina-embeddings-v2-base-de",
+        "download_link": "https://cdn.flow-like.com/bits/36572799388e2bbaa287fe4bd9404880-11",
+        "file_name": "model_quantized.onnx",
+        "hash": "c29b0aa275c83b52c7ca1106b4297436d7799066ba8e8e6865fd3a0d8294e3fd",
+        "size": 161565240,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "jina-embeddings-v2-base-de",
+            "implementation": "Internal"
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "de",
+            "en"
+          ],
+          "input_length": 8192,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.alpha.flow-like.com:uhif41iq95mt43kjrt0fuk6z",
+          "api.alpha.flow-like.com:b144lkg2lzk5ipd0318bb7gp",
+          "api.alpha.flow-like.com:ie0qj609330pdy5ppixyh867",
+          "api.alpha.flow-like.com:ig8jb6cmhn6ntdiumqngm0ll"
+        ],
+        "dependency_tree_hash": "2fd9ff95ae0bda3d738401bc634947919e232925ee586780f433f922d2579559",
+        "created": "2025-05-31T14:01:49.650+00:00",
+        "updated": "2025-05-31T14:01:49.650+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "c29b0aa275c83b52c7ca1106b4297436d7799066ba8e8e6865fd3a0d8294e3fd",
+          "size": 161565240,
+          "sha256": "b19a38d186594d9784e6a2c8954035a6928b5da1df402e7942d25021cf488b6b",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "af74bc27dce2252b397170e25868763d202531ccf17f9b17bc8bc9181e2d4c83",
+          "size": 1177,
+          "sha256": "8d4c498741937d1467af5be739dc0fbcc4d033eb1fb93ece4f1c9c6bbdd37ec5",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "b222f2f58abecf6cc32977bfac12607167d8bf6edcb7d3485856545912451b33",
+          "size": 2633554,
+          "sha256": "376c53a06d6911569afc19f584002a11dbcd6b871afb6d96b8600eb3c4e7e7a7",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "c623dc17d41aecc862a1c9bc956357c53da57d8e46d97df263a989116eb3b1b7",
+          "size": 1211,
+          "sha256": "99c5e1cf31def1533447759dca2f1c22853d499c0c73e13d9667ae2b5ff1fa0b",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "15911dd358007ac20270dbf556e16f6548ca4b59895ee37276221f301447601a",
+          "size": 280,
+          "sha256": "06e405a36dfe4b9604f484f6a1e619af1a7f7d09e34a8555eb0b77b66318067f",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "jw36q06zmu8rh2v6c7fvos12.f32",
+      "vector_sha256": "f581fed87e64cecff7f1f7f00766ad04d8342a20d4e1870b1c0d054c73592eef",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 133.512833,
+          "min_norm": 0.9999995604165138,
+          "max_norm": 1.000000400174023,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 122.694667,
+          "min_norm": 0.9999995604165138,
+          "max_norm": 1.000000400174023,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 126.82866700000001,
+          "min_norm": 0.9999995604165138,
+          "max_norm": 1.000000400174023,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 60.802084,
+          "min_norm": 0.9999996530918813,
+          "max_norm": 1.000000068347252,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 55.838125000000005,
+          "min_norm": 0.9999997961888148,
+          "max_norm": 1.0000002362762683,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 78.799917,
+          "min_norm": 0.9999995604165138,
+          "max_norm": 1.000000400174023,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 450.709333,
+          "min_norm": 0.9999997257309271,
+          "max_norm": 1.0000005588878604,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 418.591459,
+          "min_norm": 0.9999997257309271,
+          "max_norm": 1.0000005588878604,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 259.32925,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "d7bvkpc7pdlf64h3l0w0049m",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Granite - Multilingual",
+            "description": "The strongest choice when questions and answers are in different languages.",
+            "long_description": "IBM's Granite Embedding R2, covering more than 200 languages with focused support for 52 of them plus source code.\n\n- By a wide margin the best model here at matching a question in one language to its answer in another. In our testing it scored 0.89 where GTE Multilingual scored 0.67.\n- Reads up to 32,768 tokens per passage.\n- Emits 768-dimensional vectors, so it drops into an existing GTE index without rebuilding at a new width.\n- 298 MB on disk.\n\nNeeds no query or passage prefix. Pick this one for a knowledge base your team searches in several languages.",
+            "release_notes": "",
+            "tags": [
+              "feature extraction",
+              "onnx",
+              "multilingual",
+              "cross-lingual",
+              "apache-2.0"
+            ],
+            "use_case": "",
+            "icon": "https://cdn.flow-like.com/media/ibm.webp",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2",
+            "support_url": "",
+            "docs_url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1789232588,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789233202,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/ibm-granite"
+        ],
+        "repository": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2",
+        "download_link": "https://cdn.flow-like.com/bits/539959befdb40ed244bfe946eaaf0e453ef51bbd80e4a3fb77ea18e0a3a371c5",
+        "file_name": "model_quint8_avx2.onnx",
+        "hash": "8a50f6fe475c436c37b0d46dc74a639d5b69948bc474fe33ef2a3eeac7a57dca",
+        "size": 313421909,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "de",
+            "fr",
+            "es",
+            "zh",
+            "code",
+            "200+"
+          ],
+          "input_length": 32768,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.flow-like.com:u13oum01qqvdo11lcjtgr2su",
+          "api.flow-like.com:vw54pg0v5z04f1ul7ic6a94d",
+          "api.flow-like.com:nnl6whgszuy7z5n2jcu3tpy9",
+          "api.flow-like.com:cbj72zd8w82jn0al1jp9j622"
+        ],
+        "dependency_tree_hash": "36229435eaf7fccf91e8d0372d0b7a019754b70b5f2271ba48adc020029845d5",
+        "created": "2026-09-12T17:03:07.126+00:00",
+        "updated": "2026-09-12T17:13:20.606+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "8a50f6fe475c436c37b0d46dc74a639d5b69948bc474fe33ef2a3eeac7a57dca",
+          "size": 313421909,
+          "sha256": "f1fdd44e7e1ac51f12ab7957c7bd092e064d596c288513bf9d326842f669edee",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "209f6d53cf68563fc2377ad24065d2846c0bdfd18b8bd838edb38093ce675046",
+          "size": 1191,
+          "sha256": "e1e3fc842a8e0537e25d6e4c93879698b92ae96722e8c162bef334b57978a3b0",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "3f59d2e136984b87e1dd2dd5f63244d1ed2325e68926234df4239d6a013b3f93",
+          "size": 33384821,
+          "sha256": "0087c868b33bad550a78a08d19798cfd7f713cde4f020803b8f51f405503e15f",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "b3f731b9bf9f4a377b86ea0dc2f654d7050494f6df7ae57c0ad3519ca1ad2406",
+          "size": 1155500,
+          "sha256": "7947bdf0378520e69ca412b8c4dacd1cffa8aef099f851fdd5c65aa27c6b36a0",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "ad65c53c871dab146ef660490c148a21e18923dbdf24a5132920cb7cebb1c59b",
+          "size": 694,
+          "sha256": "cb9e60dcf4d8d314315cb3e761fe4c2e664fda8dbf66d7815372b2639e381182",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "d7bvkpc7pdlf64h3l0w0049m.f32",
+      "vector_sha256": "b9edf1bccc7e36850509b251dcc3f8560e110297274c327157d65e27c77605d4",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 1806.562541,
+          "min_norm": 0.9999997734120513,
+          "max_norm": 1.0000001538837622,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 1657.931667,
+          "min_norm": 0.9999997734120513,
+          "max_norm": 1.0000001538837622,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 1520.7522500000002,
+          "min_norm": 0.9999997734120513,
+          "max_norm": 1.0000001538837622,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 276.686417,
+          "min_norm": 0.9999997093192979,
+          "max_norm": 1.0000001589484209,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 256.573833,
+          "min_norm": 0.9999998872376653,
+          "max_norm": 1.000000327278598,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 328.479333,
+          "min_norm": 0.9999997734120513,
+          "max_norm": 1.0000001538837622,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 1775.745333,
+          "min_norm": 0.9999998163705632,
+          "max_norm": 1.00000038337797,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 1432.675375,
+          "min_norm": 0.9999998163705632,
+          "max_norm": 1.00000038337797,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 2615.820875,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "emamoveivs0ax85tkq4ro90r",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "GTE Large EN v1.5",
+            "description": "Hosted English text embeddings for retrieval and similarity search. Returns 1,024-dimensional vectors with an 8,192-token input limit.",
+            "long_description": "Hosted English text embeddings for retrieval and similarity search. Returns 1,024-dimensional vectors with an 8,192-token input limit. Flow-Like applies the model’s query and document prefixes before sending text to the hosted server.",
+            "release_notes": null,
+            "tags": [
+              "feature extraction",
+              "english",
+              "hosted",
+              "apache-2.0"
+            ],
+            "use_case": null,
+            "icon": null,
+            "thumbnail": null,
+            "preview_media": [],
+            "age_rating": null,
+            "website": null,
+            "support_url": null,
+            "docs_url": null,
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1790875169,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1790875169,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/Alibaba-NLP"
+        ],
+        "repository": "https://huggingface.co/Alibaba-NLP/gte-large-en-v1.5",
+        "download_link": null,
+        "file_name": null,
+        "hash": "emamoveivs0ax85tkq4ro90r",
+        "size": null,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "gte-large-en-v1.5",
+            "implementation": "Internal"
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": "gte-large-en-v1.5",
+            "provider_name": "Premium"
+          },
+          "languages": [
+            "en"
+          ],
+          "input_length": 8192,
+          "vector_length": 1024
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [],
+        "dependency_tree_hash": "edd763e12300bea33ffb1aa9d8091e1eb19fdf3c1aecaab88ec67ce7d874589d",
+        "created": "2026-10-01T17:19:29.447+00:00",
+        "updated": "2026-10-01T17:19:29.447+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "remote_only",
+      "artifacts": []
+    },
+    {
+      "bit": {
+        "id": "s14ofcopraxeyu7dzx34hnwo",
+        "type": "ImageEmbedding",
+        "meta": {
+          "en": {
+            "name": "Nomic - Vision 1.5",
+            "description": "Nomic Embed creates powerful fingerprints of images and text, placing them in the same space so you can instantly search, compare, or organize content by meaning instead of exact words.",
+            "long_description": "Nomic Embed is a modern AI model designed to understand both images and text in a unified way. It doesn’t just look at pictures or words literally—it captures their meaning and places them on the same map. This means you can type a phrase like “a cozy living room” and quickly find matching photos, or group together similar items without predefined tags. It’s especially useful for organizing large collections of media, making recommendations, or building smarter search features that feel natural and intuitive.",
+            "release_notes": "",
+            "tags": [
+              "english",
+              "nomic_bert",
+              "apache-2.0"
+            ],
+            "use_case": "",
+            "icon": "https://cdn-avatars.huggingface.co/v1/production/uploads/641f01fe6d51620635e118e9/wy0ax27ok1-uHWoUAHSEs.png",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1755460184,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1755460184,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/nomic-ai"
+        ],
+        "repository": "https://huggingface.co/nomic-ai/nomic-embed-vision-v1.5",
+        "download_link": "https://cdn.flow-like.com/bits/537ec1382b385d711e0f99fcd3b58cb646e90f771eea29f657ff901d82db086e",
+        "file_name": "model.onnx",
+        "hash": "25225ec8c20844458985a2fc1de3f4718cb66bdc1163a8ac620e781aa436aadb",
+        "size": 374487555,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "search_query: ",
+            "paragraph": "search_document: "
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "multilingual"
+          ],
+          "input_length": 768,
+          "vector_length": 8192
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.alpha.flow-like.com:dztj51d8oexo6skxiy22tn28",
+          "api.alpha.flow-like.com:m1waev12bn5ttxbg1efljks5",
+          "api.alpha.flow-like.com:ct6duax23xbyq0xtjaacbgbn"
+        ],
+        "dependency_tree_hash": "9503fee71671088972b78a1d221dc2db315c5478a4819048fcd647ed8cfcae99",
+        "created": "2025-08-17T19:49:44.290+00:00",
+        "updated": "2025-08-17T19:49:44.290+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "25225ec8c20844458985a2fc1de3f4718cb66bdc1163a8ac620e781aa436aadb",
+          "size": 374487555,
+          "sha256": "53b4287e459193019bed6e094014344d4f3c892bd22b7159bf398d71eb82d750",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "b830a81b5883a1c96fab9237214d0f0988de2414cfb3fb909a0bb42ae18fe7f2",
+          "size": 2331,
+          "sha256": "0168e0883705b0bf8f2b381e10f45a9f3e1ef4b13869b43c160e4c8a70ddf442",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "6e933bf59db40b8b2a0de480fe5006662770757e1e1671eb7e48ff6a5f00b0b4",
+          "size": 711396,
+          "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "09f7437c1856dc74ee971e1e1609c46381ef035329aed60a7c9f2dcc98fdbecc",
+          "size": 1191,
+          "sha256": "d7e0000bcc80134debd2222220427e6bf5fa20a669f40a0d0d1409cc18e0a9bc",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "eaff0d8331fbe475d3ba22934ad574aa0f23b5b7a9e547f0105a82d050ab31fc",
+          "size": 695,
+          "sha256": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
+          "blake3_verified": true
+        },
+        {
+          "role": "preprocessor_config.json",
+          "hash": "9e0505a0aff3a2bb56717c289e3b719303dfaee1d2c44ae5d492eff64cd04dc7",
+          "size": 791,
+          "sha256": "77436fccc0108364dd52185181d65cace7e830113e3b81b2bad8009a47f59b34",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "s14ofcopraxeyu7dzx34hnwo.f32",
+      "vector_sha256": "98df94c21f338691a26d7c829413438d57235765ed58df0540a762d1bb18e0a3",
+      "cases": [
+        {
+          "name": "images_0",
+          "rows": 4,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 715.607833,
+          "min_norm": 0.9999997733032729,
+          "max_norm": 1.0000003349104685
+        },
+        {
+          "name": "images_1",
+          "rows": 4,
+          "dimensions": 768,
+          "offset_floats": 3072,
+          "reference_elapsed_ms": 711.505416,
+          "min_norm": 0.9999997733032729,
+          "max_norm": 1.0000003349104685
+        },
+        {
+          "name": "images_2",
+          "rows": 4,
+          "dimensions": 768,
+          "offset_floats": 6144,
+          "reference_elapsed_ms": 475.404959,
+          "min_norm": 0.9999997733032729,
+          "max_norm": 1.0000003349104685
+        }
+      ],
+      "load_ms": 1036.647541
+    },
+    {
+      "bit": {
+        "id": "cunjxwl4c42jqz9c1t2ovoc3",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "GTE Multilingual",
+            "description": "Strong multilingual model for local inference.",
+            "long_description": "The gte-multilingual-base model is the latest in the GTE (General Text Embedding) family of models, featuring several key attributes:\n\n- High Performance: Achieves state-of-the-art (SOTA) results in multilingual retrieval tasks and multi-task representation model evaluations when compared to models of similar size.\n- Training Architecture: Trained using an encoder-only transformers architecture, resulting in a smaller model size. Unlike previous models based on decode-only LLM architecture (e.g., gte-qwen2-1.5b-instruct), this model has lower hardware requirements for inference, offering a 10x increase in inference speed.\n- Long Context: Supports text lengths up to 8192 tokens.\n- Multilingual Capability: Supports over 70 languages.\n- Elastic Dense Embedding: Support elastic output dense representation while maintaining the effectiveness of downstream tasks, which significantly reduces storage costs and improves execution efficiency.\n- Sparse Vectors: In addition to dense representations, it can also generate sparse vectors.",
+            "release_notes": "",
+            "tags": [
+              "feature extraction",
+              "transformers.js",
+              "onnx",
+              "apache-2.0"
+            ],
+            "use_case": "",
+            "icon": "https://www.gravatar.com/avatar/1ae3fd9f5b9356f196c997d93eb23038?d=retro&size=100",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1748692652,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1748692652,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/Alibaba-NLP"
+        ],
+        "repository": "https://huggingface.co/Alibaba-NLP/gte-multilingual-base",
+        "download_link": "https://cdn.flow-like.com/bits/ea2964ba5d724e1f5bfc9224f8660aa896cbb88cb3f9af19cf6805124d469fa9",
+        "file_name": "model_quantized.onnx",
+        "hash": "f6abb0aec74369c882ee0fce81f9ab87a9541d0785bd41f7e837951a4e017456",
+        "size": 340318797,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "gte-multilingual-base",
+            "implementation": "Internal"
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "de",
+            "fr",
+            "70+"
+          ],
+          "input_length": 8192,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.alpha.flow-like.com:u11s8d6ho8gxw9d4oie6xiqs",
+          "api.alpha.flow-like.com:o4vqech4qpimcnqthkaevtqs",
+          "api.alpha.flow-like.com:hk9ka3t23oi9fqwcdsizfgdn",
+          "api.alpha.flow-like.com:y5nzxbhm8emiq97l8lr67zdn"
+        ],
+        "dependency_tree_hash": "571acffda8bfc64c72ad6fbac6f3428f1bef07785fc89225d14ed66b4e8e5681",
+        "created": "2025-05-31T11:57:32.734+00:00",
+        "updated": "2025-05-31T11:57:32.734+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "f6abb0aec74369c882ee0fce81f9ab87a9541d0785bd41f7e837951a4e017456",
+          "size": 340318797,
+          "sha256": "ab2bd164ebd8ca9003dc49a981b611e849b5d326f504c8873ba76e07fa6c0082",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "5092e2e20a5d0b3c0d17c856802f956a9da6bdab396d19ca90e9d591d9ed335c",
+          "size": 1648,
+          "sha256": "6ef2538d4286a7cd18d05225f659d8a1bceca7adb01c186868e53dbd4f822e17",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "e620c71761f03b4dca7c0c4b8d367f1b34faffe5ddcbba258560e78ac9c1c056",
+          "size": 17082734,
+          "sha256": "3a56def25aa40facc030ea8b0b87f3688e4b3c39eb8b45d5702b3a1300fe2a20",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "d4963338d8f59d6915bbd67f028c7d52c76566476380bbfae183317bdac13c1e",
+          "size": 1149,
+          "sha256": "24cebbf2ef20fc317256e03e52ac7b2ca326586f946a8427ecac036332bf0933",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "7928b0181fe837ea946ad566a4c8c3421b414988e65c61af6cedf79586971810",
+          "size": 964,
+          "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "cunjxwl4c42jqz9c1t2ovoc3.f32",
+      "vector_sha256": "ed46c657eaf5947a02a6d15fcc6d707d3e3f4c680ccc2a453ad8381b707d6db9",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 436.847083,
+          "min_norm": 0.9999997980293126,
+          "max_norm": 1.0000001306057433,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 425.784333,
+          "min_norm": 0.9999997980293126,
+          "max_norm": 1.0000001306057433,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 397.90637499999997,
+          "min_norm": 0.9999997980293126,
+          "max_norm": 1.0000001306057433,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 64.151375,
+          "min_norm": 0.9999997348172246,
+          "max_norm": 1.000000228699289,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 54.131125000000004,
+          "min_norm": 0.9999997980293126,
+          "max_norm": 1.000000136165573,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 104.983458,
+          "min_norm": 0.9999997980293126,
+          "max_norm": 1.0000001306057433,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 1112.887875,
+          "min_norm": 0.9999997980293126,
+          "max_norm": 1.0000001306057433,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 991.590375,
+          "min_norm": 0.9999997980293126,
+          "max_norm": 1.0000001306057433,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 642.972958,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "brza8lvz5me5877uu0rnukuz",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Gemma - Compact",
+            "description": "Small, fast and multilingual. The best quality per megabyte we ship.",
+            "long_description": "EmbeddingGemma is Google's 300M-parameter multilingual embedding model, built on Gemma 3 and trained across more than 100 languages.\n\n- Smallest capable option: 188 MB on disk, so it suits laptops and mobile devices.\n- Matches models five times its size on retrieval quality in our own testing.\n- Produces 768-dimensional vectors, the same width as GTE Multilingual, so it is a drop-in replacement for an existing index of that size.\n- Trades context for size: it reads up to 2,048 tokens per passage, where the other models here read far more.\n\nPick this one when index size and speed matter and your passages are short.",
+            "release_notes": "",
+            "tags": [
+              "feature extraction",
+              "onnx",
+              "multilingual",
+              "compact",
+              "gemma"
+            ],
+            "use_case": "",
+            "icon": "https://cdn.flow-like.com/media/google.webp",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "https://huggingface.co/google/embeddinggemma-300m",
+            "support_url": "",
+            "docs_url": "https://huggingface.co/google/embeddinggemma-300m",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1789232476,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789232476,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/google"
+        ],
+        "repository": "https://huggingface.co/google/embeddinggemma-300m",
+        "download_link": "https://cdn.flow-like.com/bits/84715475946069705be707b925435db68b39d3a387f69108b146afa6b1f54c3b",
+        "file_name": "model_q4.onnx",
+        "hash": "982b69229fd44b6d340646c40a68a364aa63e34423536c67f1aaeb2e6c0d6279",
+        "size": 197213123,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "task: search result | query: ",
+            "paragraph": "title: none | text: "
+          },
+          "remote": {
+            "model_id": "@cf/google/embeddinggemma-300m",
+            "implementation": "CloudflareWorkersAI"
+          },
+          "pooling": "Mean",
+          "pricing": {
+            "max_input_bytes": 204800000,
+            "request_micro_usd": 0,
+            "input_micro_usd_per_million_bytes": 50000
+          },
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "de",
+            "fr",
+            "es",
+            "zh",
+            "100+"
+          ],
+          "input_length": 2048,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "gemma",
+        "dependencies": [
+          "api.flow-like.com:z79w4o2dhrdnsbog8jtgjzd1",
+          "api.flow-like.com:y95bpsw3w1rattbgkde5udro",
+          "api.flow-like.com:z4v16mkha3xqtifzzd60gie8",
+          "api.flow-like.com:tyswsmmtml6omx57wbwprrms"
+        ],
+        "dependency_tree_hash": "ef2578c503c86e969e529fe9d5f6a67fc18e8dac77011129a34f072bf655ce45",
+        "created": "2026-09-12T17:01:15.948+00:00",
+        "updated": "2026-10-03T19:14:27.257+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "982b69229fd44b6d340646c40a68a364aa63e34423536c67f1aaeb2e6c0d6279",
+          "size": 197213123,
+          "sha256": "d9cf2cab65e81a1775ff5cb239f467b90c4853a614cdc5e4011f77d73d864e64",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "c67aa6d60f810b72761ad0d9503128caf115864af0b5d1bfea9db40751c93360",
+          "size": 1620,
+          "sha256": "039a9abbeb251c3b843a0a06d5f80bfe7a1ffe70cf3c4fa37b0690540df4ff4e",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "6b745bf905a7d920f9ebc1dd7649e76ee8023e2cfe59e4c23a44209a6e91b415",
+          "size": 20323312,
+          "sha256": "4dda02faaf32bc91031dc8c88457ac272b00c1016cc679757d1c441b248b9c47",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "ab0671c2e4aee179da8d3f7559c233dd898e81fcf9444a65d43f11f0dfa0b6b6",
+          "size": 1156830,
+          "sha256": "3ca953eea6c3c9fcda9cf3df22949ff18b216f7c74bd6459230f3f1013953f3a",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "55ce12369cbd287e0963d4d9981b1a148c2548d9d7dff6e92a5003e60cedeb94",
+          "size": 662,
+          "sha256": "2f7b0adf4fb469770bb1490e3e35df87b1dc578246c5e7e6fc76ecf33213a397",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "brza8lvz5me5877uu0rnukuz.f32",
+      "vector_sha256": "77f0aca80a093c8c9792432d22e3b5d8234f74973c7a77e5c3dd77e78655c636",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 701.085333,
+          "min_norm": 0.9999997557677514,
+          "max_norm": 1.000000243736425,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 727.703875,
+          "min_norm": 0.9999996645858615,
+          "max_norm": 1.0000001199704966,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 666.0695,
+          "min_norm": 0.9999997557677514,
+          "max_norm": 1.000000243736425,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 144.672167,
+          "min_norm": 0.9999997276936824,
+          "max_norm": 1.0000004671261318,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 96.25995800000001,
+          "min_norm": 0.9999997626967995,
+          "max_norm": 1.0000003193953224,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 122.497917,
+          "min_norm": 0.9999997557677514,
+          "max_norm": 1.000000243736425,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 3509.7208330000003,
+          "min_norm": 0.9999991489464203,
+          "max_norm": 1.0000001509411536,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 2990.589875,
+          "min_norm": 0.9999996860721331,
+          "max_norm": 1.000000105101599,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 806.4383330000001,
+      "max_tokens": 2048
+    },
+    {
+      "bit": {
+        "id": "puronf9t6j72eti9f12jmenz",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "E5 Large v2",
+            "description": "Hosted English text embeddings for query and passage retrieval. Returns 1,024-dimensional vectors with a 512-token input limit.",
+            "long_description": "Hosted English text embeddings for query and passage retrieval. Returns 1,024-dimensional vectors with a 512-token input limit. Flow-Like applies the model’s query and document prefixes before sending text to the hosted server.",
+            "release_notes": null,
+            "tags": [
+              "feature extraction",
+              "english",
+              "hosted",
+              "mit"
+            ],
+            "use_case": null,
+            "icon": null,
+            "thumbnail": null,
+            "preview_media": [],
+            "age_rating": null,
+            "website": null,
+            "support_url": null,
+            "docs_url": null,
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1790875169,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1790875169,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/intfloat"
+        ],
+        "repository": "https://huggingface.co/intfloat/e5-large-v2",
+        "download_link": null,
+        "file_name": null,
+        "hash": "puronf9t6j72eti9f12jmenz",
+        "size": null,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "query: ",
+            "paragraph": "passage: "
+          },
+          "remote": {
+            "model_id": "e5-large-v2",
+            "implementation": "Internal"
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": "e5-large-v2",
+            "provider_name": "Premium"
+          },
+          "languages": [
+            "en"
+          ],
+          "input_length": 512,
+          "vector_length": 1024
+        },
+        "version": "0.0.1",
+        "license": "mit",
+        "dependencies": [],
+        "dependency_tree_hash": "c5881d8c78657ead2b6c8fa2675491d1a872eeb5e799038caa0e0c6588a3038e",
+        "created": "2026-10-01T17:19:29.447+00:00",
+        "updated": "2026-10-01T17:19:29.447+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "remote_only",
+      "artifacts": []
+    },
+    {
+      "bit": {
+        "id": "s63sr9z1gdgxr04vcznqihhk",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Harrier - Precision",
+            "description": "Microsoft's retrieval model. Strongest on English, at the cost of size.",
+            "long_description": "Harrier is Microsoft's open embedding model, released under the MIT licence.\n\n- Joint top of our retrieval benchmark alongside Qwen.\n- Reads up to 32,768 tokens per passage and emits 1,024-dimensional vectors.\n- Strongest of everything we tested at ranking English passages.\n- Weakest of the multilingual options at matching a question in one language to an answer in another, so it is a poor fit for a mixed-language index.\n- The largest bit here at 1.3 GB.\n\nThe query side is prefixed with a retrieval instruction automatically. Pick this one for English-first search where accuracy outranks download size.",
+            "release_notes": "",
+            "tags": [
+              "feature extraction",
+              "onnx",
+              "english",
+              "instruct",
+              "mit"
+            ],
+            "use_case": "",
+            "icon": "https://cdn.flow-like.com/media/microsoft.webp",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "https://huggingface.co/microsoft/harrier-oss-v1-0.6b",
+            "support_url": "",
+            "docs_url": "https://huggingface.co/microsoft/harrier-oss-v1-0.6b",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1789232571,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789232571,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/microsoft"
+        ],
+        "repository": "https://huggingface.co/microsoft/harrier-oss-v1-0.6b",
+        "download_link": "https://cdn.flow-like.com/bits/8ff6196915cd12c35026f232e16b89d2150ae7fcd6b02ae0a985e66ce01088ec",
+        "file_name": "model-ffn_skip.onnx",
+        "hash": "20200ce9dedfdce953b1b047d46f56e57923a7dcee8b2fe53a99e732e35f986a",
+        "size": 1391833489,
+        "hub": "api.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+            "paragraph": ""
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "de",
+            "fr",
+            "es",
+            "75+"
+          ],
+          "input_length": 32768,
+          "vector_length": 1024
+        },
+        "version": "0.0.1",
+        "license": "mit",
+        "dependencies": [
+          "api.flow-like.com:pj53fbndfp5c9j5bajuhri8f",
+          "api.flow-like.com:y54txcbjvah43xruejbhrpe6",
+          "api.flow-like.com:ljgww96926zo5udpx7gmgcm5",
+          "api.flow-like.com:e4kzrm5nteh4ljxmrbmtb6au"
+        ],
+        "dependency_tree_hash": "1ee4a6f3837eccff8b949dc4ccd1adae99e52cad5c291558f2d38a2f68e5e9b3",
+        "created": "2026-09-12T17:02:50.897+00:00",
+        "updated": "2026-09-12T17:02:50.897+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "20200ce9dedfdce953b1b047d46f56e57923a7dcee8b2fe53a99e732e35f986a",
+          "size": 1391833489,
+          "sha256": "0e2f8d01bd8a3066c95f27aa9d158f946dd29fc3e5dd9e9a85a059748fce64b1",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "1991b97889dbeaba284bb12e1461ab2e7158ae10a9269ad1cf2467ace59ee1ed",
+          "size": 1355,
+          "sha256": "eb15983a1c7f53ecf3d3f1880e676a56967650b0c3c4ed2387c3851133f2d7ef",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "a3017f88114f37eeff338619e99f16ba9ba3127a4b0d110617bc56f9dc50899a",
+          "size": 11423705,
+          "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "1e1c1d9042b7f0ad16ce4adfbc41fb986c4f9ccc4643d90e946691c244bcaf05",
+          "size": 5404,
+          "sha256": "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "2eeb7e67715a2b89faa2410a71705e10232c62dbef646c3f1928230cecb4b245",
+          "size": 613,
+          "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "s63sr9z1gdgxr04vcznqihhk.f32",
+      "vector_sha256": "ec174ef4fc6260fcea257211fd09e0de711ba7a32ef4cd4114ac9fe5adcf5ce1",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 1855.4952500000002,
+          "min_norm": 0.9999997872208625,
+          "max_norm": 1.0000003205674433,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 7168,
+          "reference_elapsed_ms": 1399.3479579999998,
+          "min_norm": 0.9999996069511204,
+          "max_norm": 1.0000003232557637,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 14336,
+          "reference_elapsed_ms": 1684.002459,
+          "min_norm": 0.9999997872208625,
+          "max_norm": 1.0000003205674433,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 1150.026916,
+          "min_norm": 0.9999998001583582,
+          "max_norm": 1.0000001020932032,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 28672,
+          "reference_elapsed_ms": 978.8618749999999,
+          "min_norm": 0.9999995683498951,
+          "max_norm": 1.0000004053415987,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 35840,
+          "reference_elapsed_ms": 1087.5765,
+          "min_norm": 0.9999997872208625,
+          "max_norm": 1.0000003205674433,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 43008,
+          "reference_elapsed_ms": 1533.292083,
+          "min_norm": 0.9999996659083947,
+          "max_norm": 1.0000002223999018,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            4
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 1024,
+          "offset_floats": 50176,
+          "reference_elapsed_ms": 1041.172334,
+          "min_norm": 0.9999999719702428,
+          "max_norm": 1.0000003074312842,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            4
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 4309.832708,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "spjpy0dfsjrhjl1m1prshox1",
+        "type": "Embedding",
+        "meta": {
+          "en": {
+            "name": "Jina - EN / ZH",
+            "description": "Great english and chinese model.",
+            "long_description": "Great for fast local embeddings.",
+            "release_notes": "",
+            "tags": [
+              "apache-2.0",
+              "bert",
+              "chinese",
+              "deprecated",
+              "english",
+              "feature extraction",
+              "mteb"
+            ],
+            "use_case": "",
+            "icon": "https://cdn-avatars.huggingface.co/v1/production/uploads/603763514de52ff951d89793/AFoybzd5lpBQXEBrQHuTt.png",
+            "thumbnail": "",
+            "preview_media": [],
+            "age_rating": null,
+            "website": "",
+            "support_url": "",
+            "docs_url": "",
+            "organization_specific_values": null,
+            "created_at": {
+              "secs_since_epoch": 1748700337,
+              "nanos_since_epoch": 0
+            },
+            "updated_at": {
+              "secs_since_epoch": 1789235096,
+              "nanos_since_epoch": 0
+            }
+          }
+        },
+        "authors": [
+          "https://huggingface.co/jinaai"
+        ],
+        "repository": "https://huggingface.co/jinaai/jina-embeddings-v2-base-zh",
+        "download_link": "https://cdn.flow-like.com/bits/922e28de79a302465632ddec89b0c102-11",
+        "file_name": "model_quantized.onnx",
+        "hash": "f1eb8b20713838dc20a1bb4020baed5bb4ab04cd57d2bd439c3ea5ca13b98ffd",
+        "size": 161565239,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "remote": {
+            "model_id": "jina-embeddings-v2-base-zh",
+            "implementation": "Internal"
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "en",
+            "zh"
+          ],
+          "input_length": 8192,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.alpha.flow-like.com:ov2x2d9bcjn79qbwjzh7tngx",
+          "api.alpha.flow-like.com:zuif4mnzklt5tvki0n4f76qu",
+          "api.alpha.flow-like.com:ie0qj609330pdy5ppixyh867",
+          "api.alpha.flow-like.com:m2glz4i3bvyln6ss2n4148l3"
+        ],
+        "dependency_tree_hash": "fff29e2b50d665e3849225f3332858a49179940928f4a23c2f1e3546081b2e86",
+        "created": "2025-05-31T14:05:37.467+00:00",
+        "updated": "2025-05-31T14:05:37.467+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "f1eb8b20713838dc20a1bb4020baed5bb4ab04cd57d2bd439c3ea5ca13b98ffd",
+          "size": 161565239,
+          "sha256": "0a221ee9e6a6647ccc59cee7bdd26a7b8cf0c0cd3481a65f358d9585a23f02f4",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "6f8bfe55b1663150a512eb4adc37a370f1bbaecf35a0fa6dd2f211278c5b7c10",
+          "size": 1441,
+          "sha256": "85a9da5b54ecc2922656a8db6b9628c9123afe0a880062be891e0e4db60d10ff",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "8d431e9a1ba64dc6796e4ff3b5d575ab873790757a02bfde693863e45c9177a1",
+          "size": 2030772,
+          "sha256": "0046da43cc8c424b317f56b092b0512aaaa65c4f925d2f16af9d9eeb4d0ef902",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "29e9e47f56986fcdb7997dc83462f817311755b8bd3038bc148a26034f312a27",
+          "size": 1215,
+          "sha256": "d291c6652d96d56ffdbcf1ea19d9bae5ed79003f7648c627e725a619227ce8fa",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "15911dd358007ac20270dbf556e16f6548ca4b59895ee37276221f301447601a",
+          "size": 280,
+          "sha256": "06e405a36dfe4b9604f484f6a1e619af1a7f7d09e34a8555eb0b77b66318067f",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "spjpy0dfsjrhjl1m1prshox1.f32",
+      "vector_sha256": "5a43c5c131fcf3aaa0e5e1024d024a1c2678247b5e557dd8189ec59ce01584bd",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 1378.2069999999999,
+          "min_norm": 0.9999998224746528,
+          "max_norm": 1.0000002635927887,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 1450.47225,
+          "min_norm": 0.9999998224746528,
+          "max_norm": 1.0000002635927887,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 1379.854416,
+          "min_norm": 0.9999998224746528,
+          "max_norm": 1.0000002635927887,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 609.8919579999999,
+          "min_norm": 0.9999998600233686,
+          "max_norm": 1.0000002465332818,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 522.3932500000001,
+          "min_norm": 0.9999998587620639,
+          "max_norm": 1.0000002213335457,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 963.002417,
+          "min_norm": 0.9999998224746528,
+          "max_norm": 1.0000002635927887,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 864.970542,
+          "min_norm": 0.9999996809213153,
+          "max_norm": 1.0000001638712959,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 404.371792,
+          "min_norm": 0.9999996809213153,
+          "max_norm": 1.0000001638712959,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 1424.092792,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "cis3ujaqj8yx0fpfgoye1prn",
+        "type": "Embedding",
+        "meta": {},
+        "authors": [
+          "https://huggingface.co/Qdrant"
+        ],
+        "repository": "https://huggingface.co/canavar/clip-ViT-B-32-multilingual-v1-ONNX/resolve/main/model.onnx?download=true",
+        "download_link": "https://cdn.flow-like.com/bits/21fd886ace8afbbd34ff4d9f1f3fdec7",
+        "file_name": "model.onnx",
+        "hash": "0475c694cbf1b1e3cb7ff186008d777ab5e06d2c4a0fdb1155bca7889e6107c9",
+        "size": 540650752,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "pooling": "Mean",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "multilingual"
+          ],
+          "input_length": 50,
+          "vector_length": 512
+        },
+        "version": "0.0.1",
+        "license": "mit",
+        "dependencies": [
+          "api.alpha.flow-like.com:q84bxnfovyybon49bjofl93c",
+          "api.alpha.flow-like.com:i12gf3j9z8b8ukx7sje0c3sc",
+          "api.alpha.flow-like.com:wmyg0g1x26m1kh7sxsv2ngc3",
+          "api.alpha.flow-like.com:rw1vko6gn4lbmfxya7faa2o7"
+        ],
+        "dependency_tree_hash": "528bbae9e37a5cb550a367c7ec9971c3cf1818c8de5ed08b41b9987ddb385607",
+        "created": "2025-05-31T14:10:53.202+00:00",
+        "updated": "2025-05-31T14:10:53.202+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "0475c694cbf1b1e3cb7ff186008d777ab5e06d2c4a0fdb1155bca7889e6107c9",
+          "size": 540650752,
+          "sha256": "7f3129e76a60a33aa42941a369d54266151f9ca2e7e4d52295300edb85c5bbeb",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "479d73f7212ee2505ec5f53128af4f5e9c7209d05de4ba38533a8d18987b581a",
+          "size": 620,
+          "sha256": "0598ae1cdba127f58b62f647ae2ee971abbcb6232cd69e85a6eddd4e868fd167",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "bbd6f886613cb6e22a053d5281d2c707aee7e8d3db0cf0285c7e42246a5a56a1",
+          "size": 2919362,
+          "sha256": "bf1b59b7b11c95f194f51708d918eea378e09d05f84c0e1656dc5180e8117088",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "70ecef4c94d24008d8a0365c435ae83951e05c0110f1399133d0141fd8f42bef",
+          "size": 1249,
+          "sha256": "672e7474c88e20b75d57145dd7a170966fd0161f8ba0121426a0e58654d3443a",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "a18633786802dd5a6c0bd6b1a99ea58d6c846b73efd862830fdb86318943fdff",
+          "size": 125,
+          "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "cis3ujaqj8yx0fpfgoye1prn.f32",
+      "vector_sha256": "59ed9c98c185961c02308d0bc514bfbe551714db8bb745e1ebe66527611d0b6f",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 361.167917,
+          "min_norm": 0.9999996242793747,
+          "max_norm": 1.0000002378571746,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 3584,
+          "reference_elapsed_ms": 477.15941699999996,
+          "min_norm": 0.9999996242793747,
+          "max_norm": 1.0000002378571746,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 7168,
+          "reference_elapsed_ms": 126.629875,
+          "min_norm": 0.9999996242793747,
+          "max_norm": 1.0000002378571746,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 169.424083,
+          "min_norm": 0.999999658578511,
+          "max_norm": 1.0000002306644873,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 14336,
+          "reference_elapsed_ms": 78.04424999999999,
+          "min_norm": 0.9999996242793747,
+          "max_norm": 1.0000002378571746,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 17920,
+          "reference_elapsed_ms": 198.22475,
+          "min_norm": 0.9999996242793747,
+          "max_norm": 1.0000002378571746,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 319.904416,
+          "min_norm": 0.9999996242793747,
+          "max_norm": 1.0000002378571746,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 50
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 25088,
+          "reference_elapsed_ms": 185.502542,
+          "min_norm": 0.9999996242793747,
+          "max_norm": 1.0000002378571746,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 50
+        }
+      ],
+      "load_ms": 1421.0013749999998,
+      "max_tokens": 50
+    },
+    {
+      "bit": {
+        "id": "dztj51d8oexo6skxiy22tn28",
+        "type": "Embedding",
+        "meta": {},
+        "authors": [
+          "https://huggingface.co/nomic-ai"
+        ],
+        "repository": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5/resolve/main/onnx/model.onnx",
+        "download_link": "https://cdn.flow-like.com/bits/8de996c82e6d1d37bfba74841864e242a4242cd18c8cbdd981cb0ee624a45cf0",
+        "file_name": "model.onnx",
+        "hash": "34f5f98a1bb6ecd9e6095ec8d4da7b3491517dcf1d6dd5bd57c0171bf744b749",
+        "size": 547310275,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "search_query: ",
+            "paragraph": "search_document: "
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "multilingual"
+          ],
+          "input_length": 8192,
+          "vector_length": 768
+        },
+        "version": "0.0.1",
+        "license": "apache-2.0",
+        "dependencies": [
+          "api.alpha.flow-like.com:hkvgsfet1hfzay9dk96h0xlw",
+          "api.alpha.flow-like.com:w9tglszkwd3jwcozs6lerg9h",
+          "api.alpha.flow-like.com:w63r8u8gtag616pttq39djik",
+          "api.alpha.flow-like.com:jq85y3cz7n5zm2843zkc931a"
+        ],
+        "dependency_tree_hash": "1b169b91ab26ac923e2d34899b947b1c0cb9154396a197e7a11e67274adb747a",
+        "created": "2025-08-17T19:49:19.907+00:00",
+        "updated": "2026-10-01T17:19:29.447+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "34f5f98a1bb6ecd9e6095ec8d4da7b3491517dcf1d6dd5bd57c0171bf744b749",
+          "size": 547310275,
+          "sha256": "147d5aa88c2101237358e17796cf3a227cead1ec304ec34b465bb08e9d952965",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "b830a81b5883a1c96fab9237214d0f0988de2414cfb3fb909a0bb42ae18fe7f2",
+          "size": 2331,
+          "sha256": "0168e0883705b0bf8f2b381e10f45a9f3e1ef4b13869b43c160e4c8a70ddf442",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "6e933bf59db40b8b2a0de480fe5006662770757e1e1671eb7e48ff6a5f00b0b4",
+          "size": 711396,
+          "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "09f7437c1856dc74ee971e1e1609c46381ef035329aed60a7c9f2dcc98fdbecc",
+          "size": 1191,
+          "sha256": "d7e0000bcc80134debd2222220427e6bf5fa20a669f40a0d0d1409cc18e0a9bc",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "eaff0d8331fbe475d3ba22934ad574aa0f23b5b7a9e547f0105a82d050ab31fc",
+          "size": 695,
+          "sha256": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "dztj51d8oexo6skxiy22tn28.f32",
+      "vector_sha256": "e855ef8d83ec285fd243d1aa9a1fe6c45b1e154045d4d7d98e32eb813329325d",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 284.52054100000004,
+          "min_norm": 0.9999996783034414,
+          "max_norm": 1.0000001087237964,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 5376,
+          "reference_elapsed_ms": 348.189083,
+          "min_norm": 0.999999835516571,
+          "max_norm": 1.0000001531626517,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 321.845791,
+          "min_norm": 0.9999996783034414,
+          "max_norm": 1.0000001087237964,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 16128,
+          "reference_elapsed_ms": 168.016,
+          "min_norm": 0.9999996694758619,
+          "max_norm": 1.0000001178247682,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 139.654083,
+          "min_norm": 0.9999996694758619,
+          "max_norm": 1.0000001178247682,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 26880,
+          "reference_elapsed_ms": 272.86929100000003,
+          "min_norm": 0.9999996783034414,
+          "max_norm": 1.0000001087237964,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 32256,
+          "reference_elapsed_ms": 220.949,
+          "min_norm": 0.9999996783034414,
+          "max_norm": 1.0000001087237964,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 768,
+          "offset_floats": 37632,
+          "reference_elapsed_ms": 233.29820800000002,
+          "min_norm": 0.999999835516571,
+          "max_norm": 1.0000002101077565,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 64
+        }
+      ],
+      "load_ms": 562.0612080000001,
+      "max_tokens": 8192
+    },
+    {
+      "bit": {
+        "id": "f6neh9w69tvfwqjuvde5yhsq",
+        "type": "Embedding",
+        "meta": {},
+        "authors": [
+          "https://huggingface.co/Qdrant"
+        ],
+        "repository": "https://huggingface.co/Qdrant/clip-ViT-B-32-text/resolve/main/model.onnx",
+        "download_link": "https://cdn.flow-like.com/bits/059e6218e41763ca43daf34c4c262a403918fd8304c4e94af46a96c2815e4c8f",
+        "file_name": "model.onnx",
+        "hash": "9a152239720cdb888451acde8f6939831cee6786391cf412a9bb2233d8d3a55a",
+        "size": 254102519,
+        "hub": "api.alpha.flow-like.com",
+        "parameters": {
+          "prefix": {
+            "query": "",
+            "paragraph": ""
+          },
+          "pooling": "CLS",
+          "provider": {
+            "version": null,
+            "model_id": null,
+            "provider_name": "Local"
+          },
+          "languages": [
+            "multilingual"
+          ],
+          "input_length": 50,
+          "vector_length": 512
+        },
+        "version": "0.0.1",
+        "license": "mit",
+        "dependencies": [
+          "api.alpha.flow-like.com:g54o5n0tawjzhqzxe1v52j2s",
+          "api.alpha.flow-like.com:ehhtxyzok9bp0o2f4qpzlvjx",
+          "api.alpha.flow-like.com:vzz7udmv6sx3xdqibvrj4cfh",
+          "api.alpha.flow-like.com:qwg85qtsgyv8471k8hs32yy4"
+        ],
+        "dependency_tree_hash": "76aac529e1b79217ba9bd30c9221149921f8d716303a311e1b8d087dead369e1",
+        "created": "2025-08-17T18:48:43.739+00:00",
+        "updated": "2025-08-17T18:48:43.739+00:00",
+        "model_slug": null,
+        "model_evaluation": null
+      },
+      "status": "captured",
+      "artifacts": [
+        {
+          "role": "model.onnx",
+          "hash": "9a152239720cdb888451acde8f6939831cee6786391cf412a9bb2233d8d3a55a",
+          "size": 254102519,
+          "sha256": "4dbe762b11e36488304471e439cde89da053ad7acaddbf9e096745d142ec8d8b",
+          "blake3_verified": true
+        },
+        {
+          "role": "config.json",
+          "hash": "8ce652c31b128fa8c6b296a75947bba088685fa46e7161a8968c9a090eb6d475",
+          "size": 536,
+          "sha256": "4d5923d94bbc4e29864de837df14c138c12b93a0b738c64f3ca41f0c539e17b7",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer.json",
+          "hash": "a144b6d0dbe52cba151cab8d521187b496fd68a455a99821a601a012e3fbc40a",
+          "size": 2224147,
+          "sha256": "b68d571997a1f81bf521fb73806740ddb91e4ed6666cb6e996c066bb289cf55b",
+          "blake3_verified": true
+        },
+        {
+          "role": "tokenizer_config.json",
+          "hash": "86bb8df8ec5de9f45dc2b2770e9cade4c46e98441c7b634980891dcbd564e30c",
+          "size": 705,
+          "sha256": "6bdcee9ccce2a16ca2b4c0c5ed00b42c50ea225f4472a8c4c1e963a2902c2881",
+          "blake3_verified": true
+        },
+        {
+          "role": "special_tokens_map.json",
+          "hash": "e4f2e11a2eb7ff6f0402a16f3bdbc01e298dd28d0e94212ff3abc1fe3a8c2e94",
+          "size": 588,
+          "sha256": "2cdb3b8331a60c92fc1e55a13e9fd61fd2293c5a51275fdcccd62b780052530e",
+          "blake3_verified": true
+        }
+      ],
+      "vector_file": "f6neh9w69tvfwqjuvde5yhsq.f32",
+      "vector_sha256": "34fd9a941e78f82aeb8c8a8e353c36514d2c4c561da277bc53cf6e0571631c4f",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 0,
+          "reference_elapsed_ms": 243.285959,
+          "min_norm": 0.9999996823578744,
+          "max_norm": 1.000000165016396,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ]
+        },
+        {
+          "name": "document",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 3584,
+          "reference_elapsed_ms": 203.22758399999998,
+          "min_norm": 0.9999996823578744,
+          "max_norm": 1.000000165016396,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ]
+        },
+        {
+          "name": "query_repeat",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 7168,
+          "reference_elapsed_ms": 282.88541699999996,
+          "min_norm": 0.9999996823578744,
+          "max_norm": 1.000000165016396,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ]
+        },
+        {
+          "name": "raw_batch_1",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 10752,
+          "reference_elapsed_ms": 107.963083,
+          "min_norm": 0.9999999012570394,
+          "max_norm": 1.000000165016396,
+          "batch_size": 1
+        },
+        {
+          "name": "raw_batch_3",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 14336,
+          "reference_elapsed_ms": 76.028167,
+          "min_norm": 0.9999999012570394,
+          "max_norm": 1.000000165016396,
+          "batch_size": 3
+        },
+        {
+          "name": "raw_batch_7",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 17920,
+          "reference_elapsed_ms": 74.845875,
+          "min_norm": 0.9999999012570394,
+          "max_norm": 1.000000165016396,
+          "batch_size": 7
+        },
+        {
+          "name": "runtime_window64_query",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 21504,
+          "reference_elapsed_ms": 200.578959,
+          "min_norm": 0.9999996823578744,
+          "max_norm": 1.000000165016396,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 50
+        },
+        {
+          "name": "runtime_window64_document",
+          "rows": 7,
+          "dimensions": 512,
+          "offset_floats": 25088,
+          "reference_elapsed_ms": 216.163833,
+          "min_norm": 0.9999996823578744,
+          "max_norm": 1.000000165016396,
+          "chunk_counts": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2
+          ],
+          "max_tokens": 50
+        }
+      ],
+      "load_ms": 906.996417,
+      "max_tokens": 50
+    }
+  ],
+  "inputs": [
+    "",
+    "A red fox crosses the snowy forest.",
+    "How do I rotate a leaked API token?",
+    "Der Export schreibt alle Boards und Medien in ein Archiv.",
+    "向量索引在后台重建。重建期间仍然可以查询。",
+    "fn add(left: i64, right: i64) -> i64 { left + right }",
+    "Audio, images, and video should share a searchable embedding space. The storage layer keeps source timestamps, while the model encodes each ordered sequence of media and text. A query can find the matching passage, photograph, or recording. Long documents are divided into chunks before their embeddings are combined. The tail of this text mentions a blue bicycle by a yellow house."
+  ],
+  "image_fixtures": [
+    [
+      224,
+      224,
+      0
+    ],
+    [
+      320,
+      180,
+      1
+    ],
+    [
+      127,
+      251,
+      2
+    ],
+    [
+      31,
+      19,
+      3
+    ]
+  ],
+  "runtime_policy": {
+    "desktop_max_tokens": 8192,
+    "mobile_max_tokens": 2048,
+    "desktop_attention_budget": 16777216,
+    "prefix_reserved_special_tokens": 2,
+    "estimated_bytes_per_token": 3,
+    "chunk_overlap": 0,
+    "chunk_pooling": "token_count_weighted_mean_then_l2_normalize",
+    "prefix_escape_handling": "literal_as_published"
+  }
+}

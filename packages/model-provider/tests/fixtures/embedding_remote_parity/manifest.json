@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "reference": "Unchanged EndpointEmbeddingModel with published Bit query/document prefixes",
+  "reference_source_blake3": "8b22f49e472a4ce4be3305bc2e0cb474f0af86d67c96dd5e39c6bb34489cf279",
+  "inputs": [
+    "A small cat sits beside a sunny window.",
+    "Database indexes make relevant records easier to retrieve.",
+    "How can renewable energy reduce industrial emissions?"
+  ],
+  "models": [
+    {
+      "id": "d310v8j1z1pfhkggv60xbwwq",
+      "model": "bge-large-en-v1.5",
+      "parameters": {
+        "prefix": {
+          "query": "Represent this sentence for searching relevant passages: ",
+          "paragraph": ""
+        },
+        "remote": {
+          "model_id": "bge-large-en-v1.5",
+          "implementation": "Internal"
+        },
+        "pooling": "CLS",
+        "provider": {
+          "version": null,
+          "model_id": "bge-large-en-v1.5",
+          "provider_name": "Premium"
+        },
+        "languages": [
+          "en"
+        ],
+        "input_length": 512,
+        "vector_length": 1024
+      },
+      "vector_file": "d310v8j1z1pfhkggv60xbwwq.f32",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 3,
+          "dimensions": 1024,
+          "offset_floats": 0
+        },
+        {
+          "name": "document",
+          "rows": 3,
+          "dimensions": 1024,
+          "offset_floats": 3072
+        }
+      ]
+    },
+    {
+      "id": "emamoveivs0ax85tkq4ro90r",
+      "model": "gte-large-en-v1.5",
+      "parameters": {
+        "prefix": {
+          "query": "",
+          "paragraph": ""
+        },
+        "remote": {
+          "model_id": "gte-large-en-v1.5",
+          "implementation": "Internal"
+        },
+        "pooling": "CLS",
+        "provider": {
+          "version": null,
+          "model_id": "gte-large-en-v1.5",
+          "provider_name": "Premium"
+        },
+        "languages": [
+          "en"
+        ],
+        "input_length": 8192,
+        "vector_length": 1024
+      },
+      "vector_file": "emamoveivs0ax85tkq4ro90r.f32",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 3,
+          "dimensions": 1024,
+          "offset_floats": 0
+        },
+        {
+          "name": "document",
+          "rows": 3,
+          "dimensions": 1024,
+          "offset_floats": 3072
+        }
+      ]
+    },
+    {
+      "id": "puronf9t6j72eti9f12jmenz",
+      "model": "e5-large-v2",
+      "parameters": {
+        "prefix": {
+          "query": "query: ",
+          "paragraph": "passage: "
+        },
+        "remote": {
+          "model_id": "e5-large-v2",
+          "implementation": "Internal"
+        },
+        "pooling": "Mean",
+        "provider": {
+          "version": null,
+          "model_id": "e5-large-v2",
+          "provider_name": "Premium"
+        },
+        "languages": [
+          "en"
+        ],
+        "input_length": 512,
+        "vector_length": 1024
+      },
+      "vector_file": "puronf9t6j72eti9f12jmenz.f32",
+      "cases": [
+        {
+          "name": "query",
+          "rows": 3,
+          "dimensions": 1024,
+          "offset_floats": 0
+        },
+        {
+          "name": "document",
+          "rows": 3,
+          "dimensions": 1024,
+          "offset_floats": 3072
+        }
+      ]
+    }
+  ],
+  "captured_unix_seconds": 1791328423
+}

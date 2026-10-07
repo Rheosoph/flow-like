@@ -74,20 +74,13 @@ impl NodeLogic for LoadModelNode {
             bail!("Not an Embedding Model");
         }
 
-        if context.has_cache(&bit.id).await {
-            let model = CachedEmbeddingModel {
-                cache_key: bit.id.clone(),
-                model_type: bit.bit_type.clone(),
-            };
-            context.set_pin_value("model", json!(model)).await?;
-            context.activate_exec_pin("exec_out").await?;
-            return Ok(());
-        }
-
+        let versioned =
+            flow_like::models::embedding_factory::versioned_embedding_spec(&bit)?.is_some();
         let app_state = context.app_state.clone();
         let model_factory = context.app_state.embedding_factory.clone();
 
-        if bit.bit_type == BitTypes::ImageEmbedding
+        if !versioned
+            && bit.bit_type == BitTypes::ImageEmbedding
             && !flow_like::models::embedding_factory::prefers_local_execution(
                 &bit,
                 &context.app_state,
@@ -99,38 +92,89 @@ impl NodeLogic for LoadModelNode {
             );
         }
 
-        let model = match bit.bit_type {
-            BitTypes::Embedding => {
-                let model = model_factory
-                    .build_text_routed(
-                        &bit,
-                        app_state,
-                        context.token.clone(),
-                        context.model_usage_context(),
-                    )
-                    .await?;
+        let unified = model_factory
+            .build(
+                &bit,
+                app_state.clone(),
+                context.token.clone(),
+                context.model_usage_context(),
+            )
+            .await?;
+        let cache_key = format!(
+            "embedding:{}:{}",
+            bit.id,
+            unified.descriptor().pipeline_fingerprint
+        );
+        if let Some(cached) = context.get_cache(&cache_key).await
+            && cached.as_any().is::<CachedEmbeddingModelObject>()
+        {
+            let model = CachedEmbeddingModel {
+                cache_key,
+                model_type: bit.bit_type.clone(),
+            };
+            context.set_pin_value("model", json!(model)).await?;
+            context.activate_exec_pin("exec_out").await?;
+            return Ok(());
+        }
 
-                CachedEmbeddingModelObject {
-                    text_model: Some(model),
-                    image_model: None,
-                }
+        let model = if versioned {
+            let text = model_factory
+                .build_text_routed(
+                    &bit,
+                    app_state.clone(),
+                    context.token.clone(),
+                    context.model_usage_context(),
+                )
+                .await?;
+            let image =
+                if unified.descriptor().modalities.contains(
+                    &flow_like_model_provider::embedding::interface::EmbeddingModality::Image,
+                ) {
+                    Some(model_factory.build_image(&bit, app_state).await?)
+                } else {
+                    None
+                };
+            CachedEmbeddingModelObject {
+                text_model: Some(text),
+                image_model: image,
+                model: Some(unified),
             }
-            BitTypes::ImageEmbedding => {
-                let model = model_factory.build_image(&bit, app_state).await?;
+        } else {
+            match bit.bit_type {
+                BitTypes::Embedding => {
+                    let model = model_factory
+                        .build_text_routed(
+                            &bit,
+                            app_state,
+                            context.token.clone(),
+                            context.model_usage_context(),
+                        )
+                        .await?;
 
-                CachedEmbeddingModelObject {
-                    text_model: None,
-                    image_model: Some(model),
+                    CachedEmbeddingModelObject {
+                        text_model: Some(model),
+                        image_model: None,
+                        model: Some(unified),
+                    }
                 }
-            }
-            _ => {
-                bail!("Unsupported Bit Type");
+                BitTypes::ImageEmbedding => {
+                    let model = model_factory.build_image(&bit, app_state).await?;
+
+                    CachedEmbeddingModelObject {
+                        text_model: None,
+                        image_model: Some(model),
+                        model: Some(unified),
+                    }
+                }
+                _ => {
+                    bail!("Unsupported Bit Type");
+                }
             }
         };
 
-        context.set_cache(&bit.id, Arc::new(model)).await;
+        context.set_cache(&cache_key, Arc::new(model)).await;
         let model = CachedEmbeddingModel {
-            cache_key: bit.id.clone(),
+            cache_key,
             model_type: bit.bit_type.clone(),
         };
 

@@ -17,11 +17,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_device_protocol::{ModelPooling, ModelSpec};
 use flow_like_runtime::flow_like_model_provider::{
-    embedding::local::embed,
-    fastembed::{
-        InitOptionsUserDefined, Pooling, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
-    },
-    ml::ort_runtime::{ensure_ort_initialized, session_execution_providers},
+    embedding::native::{NativeTextEmbedding, Pooling, SessionOptions, TokenizerFiles},
     tokenizers::Tokenizer,
 };
 use serde::{Deserialize, Serialize};
@@ -82,7 +78,7 @@ fn model_file(spec: &ModelSpec) -> Result<&str> {
     Ok(model)
 }
 
-fn fastembed_pooling(pooling: ModelPooling) -> Result<Pooling> {
+fn native_pooling(pooling: ModelPooling) -> Result<Pooling> {
     match pooling {
         ModelPooling::Mean => Ok(Pooling::Mean),
         ModelPooling::Cls => Ok(Pooling::Cls),
@@ -92,7 +88,7 @@ fn fastembed_pooling(pooling: ModelPooling) -> Result<Pooling> {
 
 pub fn plan(model_id: &str, spec: &ModelSpec, files: &ModelFiles) -> Result<EnginePlan> {
     let pooling = spec.pooling.unwrap_or(ModelPooling::Mean);
-    fastembed_pooling(pooling)?;
+    native_pooling(pooling)?;
     let key = random_key();
     let config = WorkerConfig {
         model_id: model_id.to_owned(),
@@ -144,9 +140,8 @@ fn max_tokens(dir: &Path) -> usize {
 struct Worker {
     model_id: String,
     key: Zeroizing<String>,
-    model: Mutex<TextEmbedding>,
+    model: Mutex<NativeTextEmbedding>,
     tokenizer: Tokenizer,
-    pooling: Pooling,
     max_tokens: usize,
 }
 
@@ -170,24 +165,22 @@ fn session(
     files: TokenizerFiles,
     pooling: Pooling,
     max_tokens: usize,
-) -> Result<TextEmbedding> {
-    ensure_ort_initialized().map_err(|error| anyhow::anyhow!("Configure ONNX Runtime: {error}"))?;
-    let providers = session_execution_providers(true)
-        .map_err(|error| anyhow::anyhow!("Select ONNX Runtime providers: {error}"))?;
-    let options = InitOptionsUserDefined::new()
-        .with_max_length(max_tokens)
-        .with_execution_providers(providers);
-    let model = UserDefinedEmbeddingModel::new(read_file(config, &config.model_file)?, files)
-        .with_pooling(pooling);
-    TextEmbedding::try_new_from_user_defined(model, options)
-        .with_context(|| format!("Load ONNX model {}", config.model_id))
+) -> Result<NativeTextEmbedding> {
+    NativeTextEmbedding::new_from_file(
+        config.dir.join(&config.model_file),
+        files,
+        max_tokens,
+        pooling,
+        SessionOptions::default(),
+    )
+    .with_context(|| format!("Load ONNX model {}", config.model_id))
 }
 
 fn load(config: &WorkerConfig) -> Result<Worker> {
     let files = tokenizer_files(config)?;
     let tokenizer = Tokenizer::from_bytes(&files.tokenizer_file)
         .map_err(|error| anyhow::anyhow!("Load the tokenizer of {}: {error}", config.model_id))?;
-    let pooling = fastembed_pooling(config.pooling)?;
+    let pooling = native_pooling(config.pooling)?;
     let max_tokens = max_tokens(&config.dir);
     let model = session(config, files, pooling.clone(), max_tokens)?;
     Ok(Worker {
@@ -195,7 +188,6 @@ fn load(config: &WorkerConfig) -> Result<Worker> {
         key: Zeroizing::new(config.key.clone()),
         model: Mutex::new(model),
         tokenizer,
-        pooling,
         max_tokens,
     })
 }
@@ -280,7 +272,7 @@ async fn compute(worker: &Arc<Worker>, texts: Vec<String>) -> Result<(Vec<Vec<f3
             })
             .sum();
         let mut model = lock!(worker.model);
-        let vectors = embed(&mut model, &texts, Some(BATCH), &worker.pooling)?;
+        let vectors = model.embed(&texts, Some(BATCH))?;
         Ok((vectors, tokens))
     })
     .await?
