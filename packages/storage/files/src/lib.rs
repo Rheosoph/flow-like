@@ -1,5 +1,6 @@
 pub mod bounded;
 pub mod credentials;
+pub mod immutable_lance_cache;
 pub mod object_path;
 pub mod store;
 

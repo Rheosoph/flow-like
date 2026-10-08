@@ -467,6 +467,30 @@ impl TrainingRepository {
                         save_trial(&tx, &trial)?;
                     }
                 }
+                JobStatus::Succeeded | JobStatus::Failed | JobStatus::Cancelled
+                    if trial.status == ExperimentTrialStatus::Scheduled =>
+                {
+                    // The controller may have stopped before settling the worker's result.
+                    // Charge its reservation because the elapsed attempt time was not saved.
+                    let elapsed = trial.reserved_training_time_ms;
+                    settle_time(&mut value, &mut trial, elapsed)?;
+                    if trial.artifact_id.is_none()
+                        && let Some(artifact_id) = job.artifact_id.as_deref()
+                    {
+                        let artifact: ModelArtifact =
+                            read(&tx, "SELECT body FROM artifacts WHERE id=?", artifact_id)?;
+                        value.usage.artifact_bytes = value
+                            .usage
+                            .artifact_bytes
+                            .checked_add(artifact.blob.bytes)
+                            .ok_or_else(|| invalid("artifact budget overflow"))?;
+                        trial.artifact_id = Some(artifact.id);
+                    }
+                    trial.status = ExperimentTrialStatus::Cancelled;
+                    trial.updated_at_ms = at_ms;
+                    save_trial(&tx, &trial)?;
+                    continue;
+                }
                 _ => continue,
             }
             job.updated_at_ms = at_ms;

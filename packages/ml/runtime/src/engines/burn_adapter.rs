@@ -280,10 +280,25 @@ fn dataset(
             Some(burn::Objective::Regression) => {
                 let values = samples
                     .iter()
-                    .map(|sample| match &sample.annotation {
-                        Annotation::Scalar { value } => Ok(vec![*value as f32]),
-                        Annotation::Values { values } => Ok(values.clone()),
-                        _ => Err(invalid("regression requires scalar/dense annotations")),
+                    .map(|sample| {
+                        let values = match &sample.annotation {
+                            Annotation::Scalar { value } => vec![*value as f32],
+                            Annotation::Values { values } => values.clone(),
+                            _ => {
+                                return Err(invalid(
+                                    "regression requires scalar/dense annotations",
+                                ));
+                            }
+                        };
+                        if values.len() != recipe.outputs() {
+                            return Err(invalid(format!(
+                                "regression sample {} has target width {}; model requires {}",
+                                sample.id,
+                                values.len(),
+                                recipe.outputs()
+                            )));
+                        }
+                        Ok(values)
                     })
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()

@@ -210,14 +210,8 @@ impl TableProvider for ZeroColumnSafeProvider {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        // The Lance adapter answers Exact, which makes the optimizer delete the
-        // Filter node above the scan — but UPDATE/DELETE planning harvests its
-        // WHERE clause from exactly that Filter node, so with Exact every DML
-        // statement would arrive with an empty (= refused) predicate. Inexact
-        // keeps Lance-side pruning for reads while preserving the Filter node.
-        if self.dml_table.is_some() {
-            return Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()]);
-        }
+        // DataFusion 53 also extracts UPDATE/DELETE predicates from TableScan.filters,
+        // so exact Lance filters can remove redundant filtering and push down limits.
         let mut supported = self.inner.supports_filters_pushdown(filters)?;
         for (expression, support) in filters.iter().zip(&mut supported) {
             if contains_spatial_function(expression) {

@@ -289,6 +289,12 @@ impl TrainingRepository {
         }
         let body = serde_json::to_string(review)?;
         reserve_collection_bytes(&mut value, body.len() as u64)?;
+        // A review may arrive while promotion evaluates its evidence. Invalidate
+        // that promotion without moving the project clock to a future outcome.
+        value.generation = value
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| invalid("learning project generation overflow"))?;
         save_project(&tx, &value)?;
         tx.execute(
             "INSERT INTO learning_reviews(project_id,sample_id,revision,body) VALUES(?,?,?,?)",
@@ -838,6 +844,16 @@ impl TrainingRepository {
             cycle_id,
         )
     }
+    /// Review corrections require fresh canary evidence; saved predictions remain immutable.
+    pub fn reconcile_learning_canary_reviews(&self, project_id: &str, at_ms: i64) -> Result<bool> {
+        self.writable()?;
+        let mut connection = self.connection()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut value = project(&tx, project_id)?;
+        let rejected = reject_stale_canary_reviews(&tx, &mut value, at_ms)?;
+        tx.commit()?;
+        Ok(!rejected)
+    }
     pub fn learning_canary_ready(&self, project_id: &str, at_ms: i64) -> Result<bool> {
         let connection = self.connection()?;
         let value = project(&connection, project_id)?;
@@ -846,6 +862,9 @@ impl TrainingRepository {
         }
         let cohort = canary_cohort(&connection, &value, at_ms)?;
         if cohort.len() < value.request.policy.minimum_audit_samples {
+            return Ok(false);
+        }
+        if stale_canary_review(&connection, &value, &cohort, at_ms)?.is_some() {
             return Ok(false);
         }
         for artifact_id in [&value.candidate_artifact_id, &value.champion_artifact_id]
@@ -971,6 +990,11 @@ impl TrainingRepository {
                 "candidate is not awaiting promotion in this project".into(),
             ));
         }
+        if !self.reconcile_learning_canary_reviews(&before.id, at_ms)? {
+            return Err(invalid(
+                "canary review changed after prediction; candidate rejected",
+            ));
+        }
         let comparison = self.compare_learning_cycle(cycle_id, at_ms)?;
         if !comparison.eligible {
             return Err(invalid(format!(
@@ -1081,6 +1105,14 @@ impl TrainingRepository {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut value = project(&tx, &before.id)?;
         cas(&value, before.generation, at_ms)?;
+        // Bind the final decision to the current review revisions while the
+        // promotion transaction prevents another review from arriving.
+        if reject_stale_canary_reviews(&tx, &mut value, at_ms)? {
+            tx.commit()?;
+            return Err(invalid(
+                "canary review changed after prediction; candidate rejected",
+            ));
+        }
         let cohort = cycle.audit_sample_ids.iter().cloned().collect();
         let candidate_report: EvaluationReport = read(
             &tx,
@@ -1224,6 +1256,151 @@ impl TrainingRepository {
         Ok(champion
             .map(|artifact_id| LearningRoute::Champion { artifact_id })
             .unwrap_or(LearningRoute::Teacher))
+    }
+}
+
+fn reject_stale_canary_reviews(
+    connection: &Connection,
+    value: &mut LearningProject,
+    at_ms: i64,
+) -> Result<bool> {
+    if value.state != LearningState::Canary {
+        return Ok(false);
+    }
+    let cohort = canary_cohort(connection, value, at_ms)?;
+    let Some(sample_id) = stale_canary_review(connection, value, &cohort, at_ms)? else {
+        return Ok(false);
+    };
+    let candidate = value
+        .candidate_artifact_id
+        .as_deref()
+        .ok_or_else(|| invalid("canary has no candidate"))?;
+    let mut cycle: LearningCycle = read_two(
+        connection,
+        "SELECT body FROM learning_cycles WHERE project_id=? AND json_extract(body,'$.artifact_id')=? ORDER BY rowid DESC LIMIT 1",
+        &value.id,
+        candidate,
+    )?;
+    if cycle.canary_sample_ids.is_empty() {
+        cycle.canary_sample_ids = cohort.iter().cloned().collect();
+    }
+    for sample_id in &cohort {
+        let observation: LearningObservation = read_two(
+            connection,
+            "SELECT body FROM learning_observations WHERE project_id=? AND sample_id=?",
+            &value.id,
+            sample_id,
+        )?;
+        connection.execute("INSERT OR IGNORE INTO learning_exposure(project_id,sample_id,group_id,role,cycle_id) VALUES(?,?,?,'audit',?)", params![value.id,sample_id,observation.group_id,cycle.id])?;
+    }
+    cycle.error = Some(format!(
+        "Canary review changed after prediction for sample '{sample_id}'; candidate rejected and champion retained"
+    ));
+    cycle.updated_at_ms = at_ms;
+    save_cycle(connection, &cycle)?;
+    let mut comparison: LearningComparison = read(
+        connection,
+        "SELECT body FROM learning_comparisons WHERE cycle_id=?",
+        &cycle.id,
+    )?;
+    comparison.eligible = false;
+    comparison.reasons.push("canary_review_changed".into());
+    connection.execute(
+        "UPDATE learning_comparisons SET body=? WHERE cycle_id=?",
+        params![serde_json::to_string(&comparison)?, cycle.id],
+    )?;
+    value.candidate_artifact_id = None;
+    value.canary_started_at_ms = None;
+    value.state = LearningState::Active;
+    touch(value, at_ms);
+    save_project(connection, value)?;
+    Ok(true)
+}
+
+fn stale_canary_review(
+    connection: &Connection,
+    value: &LearningProject,
+    cohort: &BTreeSet<String>,
+    at_ms: i64,
+) -> Result<Option<String>> {
+    for sample_id in cohort {
+        let body: Option<String> = connection.query_row(
+            "SELECT body FROM learning_reviews WHERE project_id=? AND sample_id=? AND json_extract(body,'$.available_at_ms')<=? ORDER BY revision DESC LIMIT 1",
+            params![value.id, sample_id, at_ms],
+            |row| row.get(0),
+        ).optional()?;
+        let review: LearningReview =
+            serde_json::from_str(&body.ok_or_else(|| invalid("canary review is unavailable"))?)?;
+        for artifact_id in [&value.candidate_artifact_id, &value.champion_artifact_id]
+            .into_iter()
+            .flatten()
+        {
+            let body: Option<String> = connection
+                .query_row(
+                    "SELECT body FROM predictions WHERE artifact_id=? AND sample_id=?",
+                    params![artifact_id, sample_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(body) = body else { continue };
+            let prediction: PredictionRecord = serde_json::from_str(&body)?;
+            // Old records did not bind their truth to a review revision. Only
+            // an initial review can be trusted without that binding.
+            let revision = prediction
+                .details
+                .get("learning_review_revision")
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
+            if revision != review.revision {
+                return Ok(Some(sample_id.clone()));
+            }
+            let accepted: TrainingSample = read_two(
+                connection,
+                "SELECT body FROM annotations WHERE scope=? AND sample_id=? ORDER BY revision DESC LIMIT 1",
+                &serde_json::to_string(&value.request.stream)?,
+                sample_id,
+            )?;
+            let payload = accepted.payload.get("sample").unwrap_or(&accepted.payload);
+            if !accepted.accepted
+                || accepted.source != review.source
+                || !review_annotation_matches(payload.get("annotation"), &review.annotation)?
+                || payload.get("outcome").filter(|v| !v.is_null())
+                    != review.outcome.as_ref().filter(|v| !v.is_null())
+                || accepted.label_available_at_ms < review.available_at_ms
+            {
+                return Ok(Some(sample_id.clone()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn review_annotation_matches(accepted: Option<&Value>, reviewed: &Value) -> Result<bool> {
+    let Some(accepted) = accepted else {
+        return Ok(false);
+    };
+    #[cfg(any(feature = "native", feature = "burn"))]
+    {
+        // Preparation converts numeric targets to their declared tensor types.
+        // Compare those exact values rather than their original JSON spelling.
+        let accepted: flow_like_ml_core::Annotation = serde_json::from_value(accepted.clone())?;
+        let reviewed: flow_like_ml_core::Annotation = serde_json::from_value(reviewed.clone())?;
+        Ok(accepted == reviewed)
+    }
+    #[cfg(not(any(feature = "native", feature = "burn")))]
+    {
+        // Execution-only builds evaluate classification without the typed core.
+        if accepted.get("kind").and_then(Value::as_str) == Some("class")
+            && reviewed.get("kind").and_then(Value::as_str) == Some("class")
+        {
+            return Ok(accepted
+                .get("class_id")
+                .and_then(Value::as_u64)
+                .is_some_and(|class| {
+                    reviewed.get("class_id").and_then(Value::as_u64) == Some(class)
+                }));
+        }
+        Ok(accepted == reviewed)
     }
 }
 

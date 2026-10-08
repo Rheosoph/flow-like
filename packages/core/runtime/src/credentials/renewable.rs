@@ -73,6 +73,10 @@ pub struct RenewableSharedCredentials {
     scope_id: String,
     this: Weak<Self>,
     content_decorator: std::sync::OnceLock<Arc<dyn ContentStoreDecorator>>,
+    lance_read_cache: std::sync::OnceLock<(
+        Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,
+        String,
+    )>,
 }
 impl fmt::Debug for RenewableSharedCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -277,6 +281,7 @@ impl RenewableSharedCredentials {
             scope_id: flow_like_types::create_id(),
             this: this.clone(),
             content_decorator: std::sync::OnceLock::new(),
+            lance_read_cache: std::sync::OnceLock::new(),
         });
         let weak = Arc::downgrade(&value);
         tokio::spawn(async move {
@@ -497,6 +502,15 @@ impl RenewableSharedCredentials {
         self.content_decorator.set(decorator).is_ok()
     }
 
+    /// Hosts may persist immutable Lance ranges without enabling offline writes.
+    pub fn install_lance_read_cache(
+        &self,
+        cache: Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,
+        namespace: String,
+    ) -> bool {
+        self.lance_read_cache.set((cache, namespace)).is_ok()
+    }
+
     pub async fn to_store_type(&self, kind: StoreType) -> Result<FlowLikeStore> {
         let store = self.to_store_type_undecorated(kind).await?;
         match self.content_decorator.get() {
@@ -657,6 +671,19 @@ impl RenewableSharedCredentials {
             _ => return Err(AuthorizationError::InvalidResponse.into()),
         };
         let uri = format!("{scheme}://{bucket}/{prefix}");
+        let mut store = self.native_store(purpose)?.as_generic();
+        if purpose != Purpose::Logs
+            && let Some((cache, namespace)) = self.lance_read_cache.get()
+        {
+            store = Arc::new(
+                flow_like_storage::files::immutable_lance_cache::CachedLanceStore::new(
+                    store,
+                    cache.clone(),
+                    format!("{namespace}:{uri}"),
+                    self.provider(purpose)?,
+                ),
+            );
+        }
         Ok(
             flow_like_storage::renewable_lance::LanceStorageBinding::new(
                 &uri,
@@ -664,7 +691,7 @@ impl RenewableSharedCredentials {
                 self.provider(purpose)?,
             )?
             .with_object_prefix(prefix.as_ref())?
-            .with_store(self.native_store(purpose)?.as_generic()),
+            .with_store(store),
         )
     }
 

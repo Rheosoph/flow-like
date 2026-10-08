@@ -74,6 +74,26 @@ fn rolling_temporal_boundaries_advance_without_changing_embargo() {
 
 #[tokio::test]
 async fn learning_project_reopens_source_retrains_and_promotes_on_fresh_audit_groups() {
+    run_learning_project(CanaryReviewScenario::Unchanged).await;
+}
+
+#[tokio::test]
+async fn corrected_canary_review_rejects_cached_predictions_and_retains_champion() {
+    run_learning_project(CanaryReviewScenario::CorrectedAutomatic).await;
+}
+
+#[tokio::test]
+async fn manual_promotion_preserves_corrected_canary_rejection() {
+    run_learning_project(CanaryReviewScenario::CorrectedManual).await;
+}
+
+enum CanaryReviewScenario {
+    Unchanged,
+    CorrectedAutomatic,
+    CorrectedManual,
+}
+
+async fn run_learning_project(scenario: CanaryReviewScenario) {
     use ahash::AHashMap;
     use flow_like::{
         flow::{
@@ -313,6 +333,47 @@ async fn learning_project_reopens_source_retrains_and_promotes_on_fresh_audit_gr
         )
         .unwrap();
     }
+    if !matches!(scenario, CanaryReviewScenario::Unchanged) {
+        let project = repo.get_learning_project(&id).unwrap();
+        inference::audit_canary(&repo, &project).unwrap();
+        let predictions = json!(repo.predictions(&candidate).unwrap());
+        let cohort = repo
+            .learning_canary_sample_ids(&id, flow_like_ml_runtime::now_ms())
+            .unwrap();
+        assert!(!cohort.is_empty());
+        let mut corrected = repo
+            .learning_training_reviews(&id)
+            .unwrap()
+            .into_iter()
+            .find(|review| review.sample_id == cohort[0])
+            .unwrap();
+        corrected.revision += 1;
+        corrected.available_at_ms = flow_like_ml_runtime::now_ms();
+        corrected.annotation["class_id"] =
+            json!(1 - corrected.annotation["class_id"].as_u64().unwrap());
+        repo.record_learning_review(&id, &corrected).unwrap();
+
+        let rejected = match scenario {
+            CanaryReviewScenario::CorrectedManual => promote(
+                &mut context,
+                LearningProjectId {
+                    project_id: id.clone(),
+                },
+            )
+            .await
+            .unwrap(),
+            _ => finish_learning_cycle(&mut context, &id).await.unwrap(),
+        };
+        assert_eq!(rejected.project.state, LearningState::Active);
+        assert_eq!(rejected.project.champion_artifact_id, Some(champion));
+        assert!(rejected.project.candidate_artifact_id.is_none());
+        let comparison = rejected.comparison.unwrap();
+        assert!(!comparison.eligible);
+        assert!(comparison.reasons.contains(&"canary_review_changed".into()));
+        assert_eq!(json!(repo.predictions(&candidate).unwrap()), predictions);
+        return;
+    }
+
     let promoted = step(
         &mut context,
         LearningProjectId {

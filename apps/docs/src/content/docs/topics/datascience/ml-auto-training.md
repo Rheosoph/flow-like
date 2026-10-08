@@ -99,6 +99,8 @@ For a time split, optional `rolling_time_split` on project creation supplies `va
 
 Set explicit quality bounds before enabling `automatic_promotion`. **Promote Learning Model** checks those bounds, audited sample counts, and `minimum_improvement`. With a positive `canary_fraction` and an existing champion, **Route Learning Project** assigns deterministic candidate traffic. Full promotion then requires fresh reviewed canary samples and actual predictions from both models. Supplied observation labels do not substitute for those predictions.
 
+Revising a review after its canary predictions were recorded invalidates that audit evidence. On the next audit or promotion attempt, the project rejects the candidate, retains the champion, and records the reason. Later training cycles can continue with fresh evidence.
+
 **Get Learning Project** exposes state, blocking reasons, cycles, and spending. Reservations, experiments, and completed predictions survive executor restarts when local app storage persists; later ticks resume saved work. **Pause Learning Project** suspends training and routes decisions to the teacher, **Resume Learning Project** continues the saved project, and **Rollback Learning Model** restores the prior deployment. Aggregate cycle, training, consultation, storage, and observation budgets bound the loop.
 
 ## The four tuning nodes

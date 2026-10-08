@@ -10,7 +10,7 @@ use burn::{
         loss::{CrossEntropyLossConfig, Reduction, SmoothL1LossConfig},
     },
     tensor::{
-        Device, Int, Tensor, TensorData as BurnData,
+        Device, Distribution, Int, Tensor, TensorData as BurnData,
         activation::{relu, softmax},
     },
 };
@@ -127,6 +127,14 @@ impl MaskRcnn {
         if let Some(targets) = targets {
             validate_targets(targets, batch, self.config.classes, height, width)?;
         }
+        let sampling_seed = targets.map(|_| {
+            values(Tensor::<1>::random(
+                [1],
+                Distribution::Uniform(0.0, 1.0),
+                &input.device(),
+            ))[0]
+                .to_bits() as u64
+        });
         let mut features = input;
         for block in &self.backbone {
             features = block.forward(features);
@@ -179,7 +187,12 @@ impl MaskRcnn {
             )?;
             if let Some(targets) = targets {
                 proposals.extend(targets[image].iter().map(|target| coords(&target.bbox)));
-                proposals = sample_rois(proposals, &targets[image], self.config.training_samples);
+                proposals = sample_rois(
+                    proposals,
+                    &targets[image],
+                    self.config.training_samples,
+                    sampling_seed.unwrap().wrapping_add(image as u64),
+                );
             }
             if proposals.is_empty() {
                 proposals.push([0.0, 0.0, 1.0, 1.0]);
@@ -689,20 +702,24 @@ fn sample_rois(
     proposals: Vec<BoxCoords>,
     targets: &[InstanceTarget],
     limit: usize,
+    seed: u64,
 ) -> Vec<BoxCoords> {
     let mut positive = Vec::new();
     let mut negative = Vec::new();
     for bounds in proposals {
         let score = best_match(bounds, targets).map_or(0.0, |(_, q)| q);
         if score >= 0.5 {
-            positive.push((bounds, score));
+            positive.push(bounds);
         } else {
             negative.push(bounds);
         }
     }
-    positive.sort_by(|a, b| b.1.total_cmp(&a.1));
-    positive.truncate(limit / 4);
-    let mut result = positive.into_iter().map(|(b, _)| b).collect::<Vec<_>>();
+    // Ground-truth boxes have perfect IoU; ranking by IoU would exclude useful regression examples.
+    let mut result = crate::engine::shuffled_indices(positive.len(), seed)
+        .into_iter()
+        .take(limit / 4)
+        .map(|index| positive[index])
+        .collect::<Vec<_>>();
     negative.truncate(limit - result.len());
     result.extend(negative);
     result
@@ -819,6 +836,47 @@ mod tests {
         );
     }
     #[test]
+    fn positive_roi_sampling_keeps_imperfect_regression_examples() {
+        let truth = InstanceTarget {
+            bbox: crate::BoundingBox {
+                class_id: 0,
+                x_min: 0.2,
+                y_min: 0.2,
+                x_max: 0.8,
+                y_max: 0.8,
+            },
+            mask: TensorData {
+                shape: vec![1, 1],
+                values: vec![1.0],
+            },
+        };
+        let exact = coords(&truth.bbox);
+        let imperfect = [0.15, 0.2, 0.75, 0.8];
+        assert!(iou(imperfect, exact) > 0.5);
+        let mut selected_imperfect = false;
+        let mut selected_exact = false;
+        for seed in 0..32 {
+            let proposals = vec![imperfect, exact];
+            let selected = sample_rois(proposals.clone(), std::slice::from_ref(&truth), 4, seed);
+            assert_eq!(selected.len(), 1);
+            assert_eq!(
+                selected,
+                sample_rois(proposals, std::slice::from_ref(&truth), 4, seed),
+                "Restoring the sampling seed must reproduce the same proposals"
+            );
+            selected_imperfect |= encode_box(selected[0], exact) != [0.0; 4];
+            selected_exact |= selected[0] == exact;
+        }
+        assert!(
+            selected_imperfect,
+            "Box refinement needs nonzero regression targets"
+        );
+        assert!(
+            selected_exact,
+            "Ground-truth proposals must remain eligible"
+        );
+    }
+    #[test]
     fn mask_rcnn_learns_instances_and_reloads() {
         let _lock = crate::tests::TEST_LOCK
             .lock()
@@ -891,8 +949,8 @@ mod tests {
             .unwrap()
             .try_load_file(&path)
             .unwrap();
-        let first = values(model.forward(input(), Some(&truth)).unwrap().class_logits);
-        let second = values(loaded.forward(input(), Some(&truth)).unwrap().class_logits);
+        let first = values(model.forward(input(), None).unwrap().class_logits);
+        let second = values(loaded.forward(input(), None).unwrap().class_logits);
         assert_eq!(first, second);
         let prediction = model
             .forward(input(), None)

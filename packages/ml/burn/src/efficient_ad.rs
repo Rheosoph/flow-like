@@ -425,6 +425,7 @@ fn run(
     state.calibration = None;
     checkpoint(dir, &model, &optimizer, &mut state)?;
     let batches = data.images.shape[0].div_ceil(config.batch_size);
+    let penalty_sampler = PenaltySampler::new(data, config.seed);
     for epoch in state.next_epoch..config.epochs {
         let indices = crate::engine::shuffled_indices(
             data.images.shape[0],
@@ -442,7 +443,12 @@ fn run(
             }
             let start = batch_index * config.batch_size;
             let end = (start + config.batch_size).min(indices.len());
-            let batch = data.batch(&indices[start..end]);
+            // The sample cursor is recoverable from the saved epoch and batch, including partial batches.
+            let offset = epoch as u128 * data.images.shape[0] as u128 + start as u128;
+            let batch = data.batch(
+                &indices[start..end],
+                &penalty_sampler.indices(offset, end - start),
+            );
             device.seed(
                 config
                     .seed
@@ -587,6 +593,7 @@ fn evaluate(
     cancel: &CancellationToken,
 ) -> Result<f32> {
     let model = model.valid();
+    let penalty_sampler = PenaltySampler::new(data, config.seed);
     let mut sum = 0.0f64;
     for start in (0..data.images.shape[0]).step_by(config.batch_size) {
         if cancel.is_cancelled() {
@@ -595,7 +602,10 @@ fn evaluate(
         let indices =
             (start..(start + config.batch_size).min(data.images.shape[0])).collect::<Vec<_>>();
         sum += scalar(model.loss(
-            &data.batch(&indices),
+            &data.batch(
+                &indices,
+                &penalty_sampler.indices(start as u128, indices.len()),
+            ),
             normalization,
             config.hard_quantile,
             device,
@@ -604,6 +614,31 @@ fn evaluate(
     }
     Ok((sum / data.images.shape[0] as f64) as f32)
 }
+
+struct PenaltySampler {
+    order: Vec<usize>,
+}
+impl PenaltySampler {
+    fn new(data: &EfficientAdDataset, seed: u64) -> Self {
+        Self {
+            order: data
+                .penalty_images
+                .as_ref()
+                .map_or_else(Vec::new, |images| {
+                    crate::engine::shuffled_indices(images.shape[0], seed ^ 0x70656e616c7479)
+                }),
+        }
+    }
+    fn indices(&self, offset: u128, count: usize) -> Vec<usize> {
+        if self.order.is_empty() {
+            return Vec::new();
+        }
+        (0..count)
+            .map(|index| self.order[((offset + index as u128) % self.order.len() as u128) as usize])
+            .collect()
+    }
+}
+
 fn calibrate(
     model: &EfficientAdModel,
     images: &TensorData,
@@ -871,6 +906,16 @@ mod tests {
                 .map(|x| x + 0.03)
                 .collect(),
         };
+        let penalty = TensorData {
+            shape: vec![5, 1, 256, 256],
+            values: (0..5)
+                .flat_map(|image| {
+                    images.values[..256 * 256]
+                        .iter()
+                        .map(move |value| value + image as f32 * 0.05)
+                })
+                .collect(),
+        };
         (
             EfficientAdConfig {
                 teacher,
@@ -886,10 +931,53 @@ mod tests {
             EfficientAdDataset {
                 images,
                 autoencoder_images: Some(augment),
-                penalty_images: None,
+                penalty_images: Some(penalty),
             },
             validation,
         )
+    }
+    #[test]
+    fn penalty_sampling_covers_larger_dataset_across_partial_batches_and_epochs() {
+        let data = EfficientAdDataset {
+            images: TensorData {
+                shape: vec![3, 1, 256, 256],
+                values: vec![0.0; 3 * 256 * 256],
+            },
+            autoencoder_images: None,
+            penalty_images: Some(TensorData {
+                shape: vec![12, 1, 256, 256],
+                values: (0..12)
+                    .flat_map(|id| std::iter::repeat_n(id as f32, 256 * 256))
+                    .collect(),
+            }),
+        };
+        data.validate(1).unwrap();
+        let seed = 73;
+        let sampler = PenaltySampler::new(&data, seed);
+        let mut seen = Vec::new();
+        for epoch in 0..4 {
+            let training_indices = crate::engine::shuffled_indices(3, seed + epoch as u64);
+            for start in (0..3).step_by(2) {
+                let end = (start + 2).min(3);
+                let offset = epoch * 3 + start;
+                let penalty_indices = sampler.indices(offset as u128, end - start);
+                let batch = data.batch(&training_indices[start..end], &penalty_indices);
+                seen.extend(
+                    batch
+                        .penalty_images
+                        .unwrap()
+                        .values
+                        .chunks_exact(256 * 256)
+                        .map(|pixels| pixels[0] as usize),
+                );
+            }
+        }
+        assert_eq!(seen, sampler.order);
+        seen.sort_unstable();
+        assert_eq!(seen, (0..12).collect::<Vec<_>>());
+        let resumed = PenaltySampler::new(&data, seed);
+        assert_eq!(resumed.indices(5, 1), sampler.indices(5, 1));
+        assert_eq!(sampler.indices(12, 3), sampler.indices(0, 3));
     }
     #[test]
     fn efficient_ad_trains_dual_branches_calibrates_and_resumes_on_cpu() {
@@ -996,10 +1084,34 @@ mod tests {
         .unwrap();
         assert_eq!(resumed.steps, report.steps);
         assert_eq!(resumed.backend, Some(BackendChoice::Cpu));
-        let actual = EfficientAdPredictor::load(partial.path(), BackendChoice::Cpu)
-            .unwrap()
-            .predict(&validation)
-            .unwrap();
+        assert!((resumed.final_loss - report.final_loss).abs() < 1e-6);
+        let resumed_predictor =
+            EfficientAdPredictor::load(partial.path(), BackendChoice::Cpu).unwrap();
+        let layers = |model: &EfficientAdModel| {
+            model
+                .student
+                .convolutions
+                .iter()
+                .chain(&model.autoencoder.encoder)
+                .chain(&model.autoencoder.decoder)
+                .chain(std::iter::once(&model.autoencoder.final_conv))
+                .flat_map(|layer| {
+                    let mut values = to_data(layer.weight.val()).unwrap().values;
+                    values.extend(to_data(layer.bias.as_ref().unwrap().val()).unwrap().values);
+                    values
+                })
+                .collect::<Vec<_>>()
+        };
+        let weight_error = layers(&resumed_predictor.model)
+            .iter()
+            .zip(layers(&first.model))
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            weight_error < 1e-6,
+            "Resume changed trained parameters: {weight_error}"
+        );
+        let actual = resumed_predictor.predict(&validation).unwrap();
         let error = actual
             .anomaly_maps
             .values
