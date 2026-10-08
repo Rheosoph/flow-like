@@ -1,12 +1,12 @@
 use crate::config::CompilerConfig;
 use crate::error::CompilerError;
-use crate::jwt::{CompilerClaims, verify_jwt_async};
+use crate::jwt::{verify_jwt_async, CompilerClaims};
 use crate::metadata::extract_nodes;
 use flow_like_types_contracts::dispatch::{
-    CompilationJob, CompilationResult, CompilationStatus, CompilationStorageProvider,
-    CompilationTarget, compilation_job_payload_hash,
+    compilation_job_payload_hash, CompilationJob, CompilationResult, CompilationStatus,
+    CompilationStorageProvider, CompilationTarget,
 };
-use flow_like_wasm::aot_cache::{WASM_ARTIFACT_VERSION, artifact_target};
+use flow_like_wasm::aot_cache::{artifact_target, WASM_ARTIFACT_VERSION};
 use flow_like_wasm::{WasmConfig, WasmEngine};
 
 #[cfg(test)]
@@ -977,7 +977,7 @@ async fn send_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types_contracts::dispatch::{CompilationTarget, compilation_job_payload_hash};
+    use flow_like_types_contracts::dispatch::{compilation_job_payload_hash, CompilationTarget};
 
     fn azure_config() -> CompilerConfig {
         CompilerConfig {
@@ -1212,11 +1212,9 @@ mod tests {
         assert!(validate_job_envelope(&job, &claims_for(&job), &azure_config()).is_ok());
         job.targets[0].cross_triple = Some("aarch64-unknown-linux-gnu".into());
         let error = validate_job_envelope(&job, &claims_for(&job), &azure_config()).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("does not match its portable platform")
-        );
+        assert!(error
+            .to_string()
+            .contains("does not match its portable platform"));
     }
 
     #[test]
@@ -1681,30 +1679,26 @@ mod tests {
             "https://flowlikedevdata.blob.core.windows.net/content/{path}?{}&sig=second",
             sas_query("r")
         );
-        assert!(
-            validate_storage_url(
-                &duplicate_signature,
-                CompilationStorageProvider::AzureBlob,
-                StorageOperation::Download,
-                path,
-                Some("content"),
-                &config,
-            )
-            .is_err()
-        );
+        assert!(validate_storage_url(
+            &duplicate_signature,
+            CompilationStorageProvider::AzureBlob,
+            StorageOperation::Download,
+            path,
+            Some("content"),
+            &config,
+        )
+        .is_err());
 
         let cleartext = duplicate_signature.replacen("https://", "http://", 1);
-        assert!(
-            validate_storage_url(
-                &cleartext,
-                CompilationStorageProvider::AzureBlob,
-                StorageOperation::Download,
-                path,
-                Some("content"),
-                &config,
-            )
-            .is_err()
-        );
+        assert!(validate_storage_url(
+            &cleartext,
+            CompilationStorageProvider::AzureBlob,
+            StorageOperation::Download,
+            path,
+            Some("content"),
+            &config,
+        )
+        .is_err());
     }
 
     fn aws_query() -> &'static str {

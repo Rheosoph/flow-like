@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       sequence:
-        description: Unused sequence greater than the published sequence; also bump the agent version in apps/standalone/Cargo.toml
+        description: Unused sequence greater than every published release and runtime sequence; also bump the agent version in apps/standalone/Cargo.toml
         required: true
         type: string
       validity_days:

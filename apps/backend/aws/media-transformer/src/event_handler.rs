@@ -3,9 +3,9 @@ use aws_lambda_events::{
     s3::S3EventRecord,
     sqs::{SqsBatchResponse, SqsEvent},
 };
-use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
+use aws_sdk_s3::{primitives::ByteStream, Client as S3Client};
 use image::{GenericImageView, ImageReader};
-use lambda_runtime::{Error, LambdaEvent, tracing};
+use lambda_runtime::{tracing, Error, LambdaEvent};
 use std::io::Cursor;
 use std::io::{BufRead, BufReader, Seek};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};

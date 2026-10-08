@@ -844,21 +844,63 @@ class PublishTests(unittest.TestCase):
 
     def test_rollback_replacement_and_concurrent_publishers_cannot_move_a_stable_list(self):
         store = MemoryStore()
-        self.signed(9)
+        issued_at = int(runtime.time.time()) - 1000
+        self.signed(9, issued_at=issued_at)
         self.publish(store)
         stable = dict(store.objects)
+        writes = list(store.writes)
         self.signed(8)
-        with self.assertRaisesRegex(ValueError, "roll back or replace signed sequence 9"):
+        with self.assertRaisesRegex(ValueError, "requested sequence 8 would roll back published sequence 9"):
             self.publish(store)
-        self.signed(9, validity_days=30)
-        with self.assertRaisesRegex(ValueError, "roll back or replace signed sequence 9"):
+        self.assertEqual(store.writes, writes)
+        self.signed(9, issued_at=issued_at + 1)
+        with self.assertRaises(ValueError) as error:
             self.publish(store)
-        self.assertEqual({key: store.objects[key] for key in stable}, stable)
+        self.assertIn("requested sequence 9 differs from the signed manifest already published at sequence 9", str(error.exception))
+        self.assertIn("Retry the publish job with the original signed artifacts", str(error.exception))
+        self.assertIn("unused sequence greater than 9", str(error.exception))
+        self.assertEqual(store.objects, stable)
+        self.assertEqual(store.writes, writes)
         newer = self.signed(12)["aarch64-apple-darwin"]
         store.race = newer
         self.signed(11)
         with self.assertRaisesRegex(ValueError, "changed concurrently"):
             self.publish(store)
+
+    def test_interrupted_archive_upload_leaves_manifests_that_preflight_can_find(self):
+        signed = self.signed(9)
+        store = MemoryStore()
+
+        def stop_at_archive(url, *_):
+            if url.endswith(".tar.gz"):
+                raise ValueError("archive readback interrupted")
+
+        with self.assertRaisesRegex(ValueError, "archive readback interrupted"):
+            self.publish(store, stop_at_archive)
+        for target, compact in signed.items():
+            self.assertEqual(store.objects[f"standalone/releases/9/runtimes/{target}.jws"], compact)
+        self.assertEqual(len(store.objects), len(signed) + 1)
+        self.assertFalse(any(key.startswith("standalone/runtimes/") for key in store.objects))
+
+    def test_original_signed_artifacts_resume_after_only_one_stable_list_advances(self):
+        signed = self.signed(9)
+        first_target, second_target = sorted(signed)
+        store = MemoryStore()
+
+        def stop_after_first_promotion(url, *_):
+            if url == f"{BASE}/runtimes/{first_target}.jws":
+                raise ValueError("stable readback interrupted")
+
+        with self.assertRaisesRegex(ValueError, "stable readback interrupted"):
+            self.publish(store, stop_after_first_promotion)
+        self.assertEqual(store.objects[f"standalone/runtimes/{first_target}.jws"], signed[first_target])
+        self.assertNotIn(f"standalone/runtimes/{second_target}.jws", store.objects)
+        committed = dict(store.objects)
+        writes = list(store.writes)
+        self.assertEqual(self.publish(store)["sequence"], 9)
+        self.assertEqual(store.writes, writes + [(f"standalone/runtimes/{second_target}.jws", False)])
+        self.assertEqual({key: store.objects[key] for key in committed}, committed)
+        self.assertEqual(store.objects[f"standalone/runtimes/{second_target}.jws"], signed[second_target])
 
     def test_untrusted_wrong_type_mixed_or_altered_bundles_upload_nothing(self):
         cases = []

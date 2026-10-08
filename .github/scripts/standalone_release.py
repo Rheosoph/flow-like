@@ -241,10 +241,10 @@ def published_object(url, method="GET", limit=16384):
 
 
 def preflight(base_url, sequence, public_keys, release_version=None):
-    base_url = secure_prefix(base_url)
+    base_url, keys = secure_prefix(base_url), json.loads(public_keys)
     stable = published_object(f"{base_url}/release.jws")
     if stable is not None:
-        published = verified_release(stable, json.loads(public_keys), current=False)
+        published = verified_release(stable, keys, current=False)
         if sequence <= published["sequence"]:
             raise ValueError(f"Release sequence {sequence} must be greater than the published sequence {published['sequence']}")
         if release_version is not None and release_version == published.get("release_version"):
@@ -252,8 +252,19 @@ def preflight(base_url, sequence, public_keys, release_version=None):
                              f"which is already published in sequence {published['sequence']}; "
                              "bump the agent version in apps/standalone/Cargo.toml and update Cargo.lock. "
                              "Changing the sequence alone does not change the agent version; the update button compares versions")
+    # Runtimes publish first, so a failed run can leave them ahead of the agent release.
+    for target in TARGETS:
+        stable = published_object(f"{base_url}/runtimes/{target}.jws")
+        if stable is not None:
+            published = verified_release(stable, keys, False, RUNTIME_MANIFEST_JWS_TYPE)
+            if sequence <= published["sequence"]:
+                raise ValueError(f"Release sequence {sequence} must be greater than the {target} runtime manifest "
+                                 f"sequence {published['sequence']}; an earlier run may have published runtimes "
+                                 "before the agent release. Dispatch a new run with an unused higher sequence")
     # Immutable objects of a failed run keep their bytes; a rebuild under the same sequence cannot replace them.
-    for name in [f"flow-like-standalone-{target}" for target in TARGETS] + ["release.jws"]:
+    names = ([f"flow-like-standalone-{target}" for target in TARGETS] + ["release.jws"]
+             + [f"runtimes/{target}.jws" for target in TARGETS])
+    for name in names:
         if published_object(f"{base_url}/releases/{sequence}/{name}", "HEAD") is not None:
             raise ValueError(f"An earlier run already uploaded {name} for sequence {sequence}; dispatch with a higher sequence")
 

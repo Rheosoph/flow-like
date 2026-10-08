@@ -1,20 +1,20 @@
 //! Durable local training state. SQLite owns mutable coordination; immutable blobs hold data.
 #[cfg(any(feature = "native", feature = "burn"))]
 pub mod engines;
+pub mod experiment;
 #[cfg(feature = "execution")]
 mod repository;
 #[cfg(feature = "execution")]
 pub mod worker;
-pub mod experiment;
 pub use experiment::*;
 pub mod learning;
 pub use learning::*;
-#[cfg(feature = "execution")]
-mod learning_repository;
-#[cfg(feature = "execution")]
-mod experiment_repository;
 #[cfg(all(feature = "native", feature = "burn"))]
 pub mod auto_training;
+#[cfg(feature = "execution")]
+mod experiment_repository;
+#[cfg(feature = "execution")]
+mod learning_repository;
 
 #[cfg(feature = "execution")]
 pub use repository::*;

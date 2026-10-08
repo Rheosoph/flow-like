@@ -1,11 +1,11 @@
 pub mod auto_training;
 pub mod auto_training_legacy;
 pub mod auto_training_tables;
-pub mod feature_engineering;
-pub mod learning;
 pub mod compute;
 pub mod data;
+pub mod feature_engineering;
 pub mod image;
+pub mod learning;
 pub mod lifecycle;
 pub mod metrics;
 pub mod models;
