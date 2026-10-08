@@ -35,6 +35,35 @@ pub(crate) const OPEN_TIMEOUT: Duration = Duration::from_secs(20);
 /// A device certificate lasts 300 s; anything later than this is not a real expiry.
 const MAX_EXPIRY_AHEAD: i64 = 305;
 
+/// Only transport failures may try another route; identity and protocol refusals stay final.
+#[derive(Debug)]
+pub(crate) enum EstablishError {
+    Transport(String),
+    Rejected(String),
+}
+
+impl EstablishError {
+    pub(crate) fn into_error(self, device_id: &str) -> Error {
+        let (Self::Transport(message) | Self::Rejected(message)) = self;
+        Error::Unreachable {
+            device_id: device_id.into(),
+            message,
+        }
+    }
+}
+
+impl From<String> for EstablishError {
+    fn from(message: String) -> Self {
+        Self::Rejected(message)
+    }
+}
+
+impl From<&str> for EstablishError {
+    fn from(message: &str) -> Self {
+        Self::Rejected(message.into())
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum OpenBody {
     Service(TunnelOpen),
@@ -154,7 +183,7 @@ pub(crate) async fn establish(
     certified: CertifiedHandshake,
     keys: Arc<ControllerKeys>,
     target: DeviceTarget,
-) -> Result<Tunnel> {
+) -> Result<Tunnel, EstablishError> {
     let route = certified.certificate.session_id.clone();
     let confirmed = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -162,14 +191,11 @@ pub(crate) async fn establish(
     )
     .await
     .unwrap_or_else(|_| {
-        Err(format!(
+        Err(EstablishError::Transport(format!(
             "the device did not finish the tunnel handshake within {HANDSHAKE_TIMEOUT:?}"
-        ))
+        )))
     });
-    let (session, expires_at) = confirmed.map_err(|message| Error::Unreachable {
-        device_id: target.device_id.clone(),
-        message,
-    })?;
+    let (session, expires_at) = confirmed?;
     Ok(driver::start(
         pipe, session, expires_at, route, keys, &target,
     ))
@@ -180,7 +206,7 @@ async fn handshake(
     certified: CertifiedHandshake,
     grant_id: &str,
     route: &str,
-) -> Result<(noise::Session, i64), String> {
+) -> Result<(noise::Session, i64), EstablishError> {
     let CertifiedHandshake {
         certificate_jws,
         mut handshake,
@@ -205,7 +231,7 @@ async fn respond(
     pipe: &mut Pipe,
     route: &str,
     mut handshake: noise::Handshake,
-) -> Result<noise::Session, String> {
+) -> Result<noise::Session, EstablishError> {
     let TunnelEnvelopeBody::Handshake(reply) = receive_envelope(pipe, route).await? else {
         return Err("the device skipped its handshake reply".into());
     };
@@ -218,7 +244,7 @@ async fn respond(
     send_envelope(pipe, route, TunnelEnvelopeBody::Handshake(last)).await?;
     handshake
         .finish()
-        .map_err(|error| handshake_failure(&error))
+        .map_err(|error| handshake_failure(&error).into())
 }
 
 /// The device confirms the tunnel with `Renewed` at sequence 0, under the new session.
@@ -226,7 +252,7 @@ async fn confirmation(
     pipe: &mut Pipe,
     session: &mut noise::Session,
     route: &str,
-) -> Result<i64, String> {
+) -> Result<i64, EstablishError> {
     let TunnelEnvelopeBody::Message(ciphertext) = receive_envelope(pipe, route).await? else {
         return Err("the device did not confirm the tunnel".into());
     };
@@ -240,7 +266,7 @@ async fn confirmation(
             sequence: 0,
             stream_id: 0,
             body: TunnelFrameBody::Renewed(TunnelRenewed { expires_at }),
-        }) => valid_expiry(expires_at, unix_now()),
+        }) => valid_expiry(expires_at, unix_now()).map_err(EstablishError::Rejected),
         _ => Err("the device confirmed the tunnel with another frame".into()),
     }
 }
@@ -268,7 +294,11 @@ fn renewal_time(expires_at: i64) -> Instant {
     Instant::now() + Duration::from_secs(lead as u64)
 }
 
-async fn send_envelope(pipe: &Pipe, route: &str, body: TunnelEnvelopeBody) -> Result<(), String> {
+async fn send_envelope(
+    pipe: &Pipe,
+    route: &str,
+    body: TunnelEnvelopeBody,
+) -> Result<(), EstablishError> {
     let bytes = TunnelEnvelope {
         session_id: route.into(),
         body,
@@ -279,22 +309,26 @@ async fn send_envelope(pipe: &Pipe, route: &str, body: TunnelEnvelopeBody) -> Re
         .await
         .ok()
         .and_then(Result::ok)
-        .ok_or_else(|| "the transport stopped accepting the handshake".to_owned())
+        .ok_or_else(|| {
+            EstablishError::Transport("the transport stopped accepting the handshake".into())
+        })
 }
 
-async fn receive_envelope(pipe: &mut Pipe, route: &str) -> Result<TunnelEnvelopeBody, String> {
-    let bytes = pipe
-        .incoming
-        .recv()
-        .await
-        .ok_or_else(|| "the transport closed during the handshake".to_owned())?;
+async fn receive_envelope(
+    pipe: &mut Pipe,
+    route: &str,
+) -> Result<TunnelEnvelopeBody, EstablishError> {
+    let bytes = pipe.incoming.recv().await.ok_or_else(|| {
+        EstablishError::Transport("the transport closed during the handshake".into())
+    })?;
     let envelope = TunnelEnvelope::decode(&bytes)
         .map_err(|error| format!("the device sent an invalid envelope: {error}"))?;
     if envelope.session_id != route {
         return Err(format!(
             "the device answered tunnel {}, not {route}",
             envelope.session_id
-        ));
+        )
+        .into());
     }
     if envelope.body == TunnelEnvelopeBody::Close {
         return Err("the device refused the tunnel".into());

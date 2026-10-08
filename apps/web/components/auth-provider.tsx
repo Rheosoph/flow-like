@@ -3,6 +3,7 @@
 import { LoadingScreen, useBackend } from "@flow-like/flow-like-ui";
 import type { IProfile } from "@flow-like/flow-like-ui";
 import { createAccountTokenProvider } from "@flow-like/flow-like-ui/components/account/account-session";
+import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { Amplify } from "aws-amplify";
 import {
 	type AuthTokens,
@@ -18,6 +19,7 @@ import { getWebOidcSettings } from "../lib/oidc-settings";
 import { getPublicApiUrl, getPublicWebConfig } from "../lib/public-config";
 import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
 import { SignInRequired } from "./sign-in-required";
+import { useSessionRecovery } from "./use-session-recovery";
 import { WebBackend } from "./web-provider";
 
 const PUBLIC_PATHS = [
@@ -140,6 +142,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		pathname === "/debug/markdown" ||
 		pathname === "/debug/upgrade" ||
 		PUBLIC_PATHS.some((path) => pathname?.startsWith(path));
+	const sessionRecovery = useSessionRecovery(auth, isPublicPath);
+
+	useEffect(() => {
+		if (!auth.isAuthenticated || sessionRecovery !== "ready") {
+			setProfileLoaded(false);
+		}
+	}, [auth.isAuthenticated, sessionRecovery]);
 
 	// Listen for auth changes from other tabs
 	useEffect(() => {
@@ -198,18 +207,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		}
 
 		if (!auth.user?.id_token) {
+			setAuthPushed(false);
 			console.warn("User is authenticated but no ID token found.");
 			return;
 		}
 
 		setAuthPushed(true);
-	}, [
-		auth?.isAuthenticated,
-		auth?.isLoading,
-		auth?.user?.id_token,
-		auth?.activeNavigator,
-		backend,
-	]);
+	}, [auth, backend]);
 
 	// Ensure user exists in DB, then fetch and push profile
 	useEffect(() => {
@@ -217,6 +221,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			!authPushed ||
 			!auth?.isAuthenticated ||
 			!auth?.user?.access_token ||
+			sessionRecovery !== "ready" ||
 			!backend
 		) {
 			return;
@@ -235,6 +240,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 					await backend.userState.getInfo();
 					break;
 				} catch (error) {
+					if (error instanceof ApiResponseError && error.status === 401) return;
 					if (attempt === MAX_RETRIES) {
 						console.error("Failed to ensure user exists after retries:", error);
 					} else {
@@ -248,11 +254,14 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 
 			try {
 				const profile = await backend.userState.getProfile();
+				if (cancelled) return;
 				if (profile && backend instanceof WebBackend) {
 					backend.pushProfile(profile);
 					setProfileLoaded(true);
 				}
 			} catch (error) {
+				if (cancelled) return;
+				if (error instanceof ApiResponseError && error.status === 401) return;
 				console.error("Failed to fetch profile:", error);
 				if (backend instanceof WebBackend) {
 					backend.pushProfile(defaultProfile());
@@ -264,43 +273,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		return () => {
 			cancelled = true;
 		};
-	}, [authPushed, auth?.isAuthenticated, auth?.user?.access_token, backend]);
-
-	useEffect(() => {
-		if (!auth) return;
-
-		(async () => {
-			try {
-				const existingUser = auth.user;
-
-				if (existingUser && !existingUser.expired) {
-					return;
-				}
-
-				if (existingUser?.expired) {
-					try {
-						const user = await auth?.signinSilent();
-						if (!user) {
-							console.warn(
-								"Silent login returned no user, attempting redirect login.",
-							);
-							await auth?.signinRedirect({ url_state: currentRelativeUrl() });
-						}
-					} catch {
-						console.warn("Silent login failed, attempting normal login");
-
-						try {
-							await auth?.signinRedirect({ url_state: currentRelativeUrl() });
-						} catch {
-							console.error("Both silent and redirect login failed");
-						}
-					}
-				}
-			} catch {
-				console.error("Login process failed");
-			}
-		})();
-	}, [auth.user?.profile?.sub]);
+	}, [
+		authPushed,
+		auth?.isAuthenticated,
+		auth?.user?.access_token,
+		backend,
+		sessionRecovery,
+	]);
 
 	// Preserve the pre-login location (e.g. /join?appId=…&token=…) so the
 	// callback can restore it. url_state on signinRedirect is the primary
@@ -321,6 +300,9 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	if (auth.isLoading && !isPublicPath) {
 		return <LoadingScreen progress={95} />;
 	}
+
+	if (sessionRecovery === "sign-in-required") return <SignInRequired />;
+	if (sessionRecovery === "redirecting") return <LoadingScreen progress={98} />;
 
 	// Show loading state while redirecting to sign-in
 	if (!auth.isAuthenticated && auth.activeNavigator && !isPublicPath) {

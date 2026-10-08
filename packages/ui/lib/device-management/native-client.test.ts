@@ -8,6 +8,7 @@ import {
 	desktopArtifactUpload,
 	desktopModelPush,
 } from "./native-client";
+import { NativeArtifactUploadError } from "./native-errors";
 import { type ExportCommands, prepareDesktopProject } from "./project-export";
 import type { DeviceAccountScope, LocalDeviceVault } from "./storage";
 import type { TunnelArtifactUpload, TunnelUploadFile } from "./tunnel-data";
@@ -308,6 +309,52 @@ test("without the desktop's keys or off the desktop, uploads use the live sessio
 	)(uploadOf(manifest));
 	expect(live).toBe(2);
 	expect(bridge.calls).toHaveLength(0);
+});
+
+test("native upload failures keep only recognized desktop diagnostics", async () => {
+	const { data } = await snapshotFiles();
+	for (const [failure, phase, code] of [
+		[
+			{ phase: "connect", code: "connection_failed", message: "private token" },
+			"connect",
+			"connection_failed",
+		],
+		[{ phase: "open", code: "stream_failed" }, "open", "stream_failed"],
+		[{ phase: "write", code: "stream_failed" }, "write", "stream_failed"],
+		[{ phase: "verify", code: "stream_failed" }, "verify", "stream_failed"],
+		[new Error("private native file path"), undefined, "native_upload_failed"],
+		["private legacy native error", undefined, "native_upload_failed"],
+		[
+			{ phase: "private_phase", code: "stream_failed" },
+			undefined,
+			"native_upload_failed",
+		],
+		[
+			{ phase: "connect", code: "private_code" },
+			undefined,
+			"native_upload_failed",
+		],
+	] as const) {
+		const bridge = new FakeBridge();
+		bridge.answers.set("device_upload_artifact", () => {
+			throw failure;
+		});
+		let fallback = false;
+		const error = await desktopArtifactUpload(
+			DEVICE,
+			async () => {
+				fallback = true;
+				return STATUS;
+			},
+			bridge,
+			ready,
+		)(uploadOf(data)).catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(NativeArtifactUploadError);
+		expect(error).toMatchObject({ phase, code });
+		expect(JSON.stringify(error)).not.toContain("private");
+		expect(String(error)).not.toContain("private");
+		expect(fallback).toBe(false);
+	}
 });
 
 test("aborting a native upload cancels its transfer in the desktop app", async () => {

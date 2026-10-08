@@ -320,7 +320,13 @@ export interface TargetOption {
 export function targetOptions(
 	release: StandaloneRelease | undefined,
 ): TargetOption[] {
-	return SETUP_TARGETS.map((target) => {
+	// Intel Macs are offered only by older releases that include an artifact.
+	const targets = SETUP_TARGETS.filter(
+		(target) =>
+			target !== "x86_64-apple-darwin" ||
+			release?.artifacts.some((item) => item.target === target),
+	);
+	return targets.map((target) => {
 		const artifact = release?.artifacts.find((item) => item.target === target);
 		const modes = release
 			? standalonePackageModes(release, target)

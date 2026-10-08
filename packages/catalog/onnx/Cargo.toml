@@ -27,6 +27,7 @@ all-eps = ["cuda", "tensorrt", "coreml", "directml", "xnnpack"]
 flow-like-catalog-core.workspace = true
 flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true
+flow-like-ml-core.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage = { workspace = true, default-features = false }
 flow-like-catalog-macros.workspace = true

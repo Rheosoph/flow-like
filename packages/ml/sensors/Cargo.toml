@@ -1,0 +1,21 @@
+[package]
+name = "flow-like-ml-sensors"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+opcua = ["dep:opcua"]
+genicam = ["dep:telegenic"]
+genicam-emulator = ["genicam", "telegenic/emulator"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+schemars.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time"] }
+opcua = { package = "async-opcua", version = "0.19", default-features = false, features = ["client"], optional = true }
+telegenic = { version = "=1.0.3", default-features = false, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "io-util", "time"] }

@@ -1,0 +1,36 @@
+[package]
+name = "flow-like-ml-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["execution"]
+execution = ["dep:rusqlite"]
+native = ["execution", "dep:flow-like-ml-core", "dep:flow-like-ml-native"]
+burn = ["execution", "dep:flow-like-ml-core", "dep:flow-like-ml-burn", "dep:tempfile"]
+wgpu = ["burn", "flow-like-ml-burn/wgpu"]
+cuda = ["burn", "flow-like-ml-burn/cuda"]
+rocm = ["burn", "flow-like-ml-burn/rocm"]
+training-auto = ["burn", "flow-like-ml-burn/training-auto"]
+onnx-export = ["burn", "flow-like-ml-burn/onnx-export"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
+sha2 = "0.10"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+schemars = { version = "1", features = ["derive"] }
+flow-like-ml-core = { path = "../core", optional = true }
+flow-like-ml-native = { path = "../native", optional = true }
+flow-like-ml-burn = { path = "../burn", optional = true }
+tempfile = { version = "3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "flow-like-ml-worker"
+path = "src/bin/ml-worker.rs"
+required-features = ["native", "burn"]

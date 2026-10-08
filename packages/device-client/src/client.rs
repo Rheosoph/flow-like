@@ -255,7 +255,8 @@ impl DeviceSession {
     }
 }
 
-/// Admission, relay, WebRTC first, then the relay itself when no direct path opens.
+/// WebRTC is usable only after the encrypted tunnel opens. A failed transport setup
+/// falls back to the relay before any application stream is sent.
 async fn connect(
     hub: &Arc<dyn HubClient>,
     target: &DeviceTarget,
@@ -274,7 +275,7 @@ async fn connect(
     let mut relay =
         Relay::open(&admission, &participant, &target.device_id, DESKTOP_ORIGIN).await?;
     let direct = keys.begin_tunnel(&target.grant_id, target.management_key, unix_now())?;
-    let (pipe, certified) = match rtc::connect(
+    let direct_failure = match rtc::connect(
         &mut relay,
         &admission,
         &direct,
@@ -283,15 +284,28 @@ async fn connect(
     )
     .await
     {
-        Ok(pipe) => (pipe, direct),
-        Err(error) => {
-            tracing::info!(device_id = %target.device_id, "Device tunnel uses the relay: {error}");
-            let certified =
-                keys.begin_tunnel(&target.grant_id, target.management_key, unix_now())?;
-            (relay.into_pipe(hub.clone(), target.auth_epoch), certified)
-        }
+        Ok(pipe) => match tunnel::establish(pipe, direct, keys.clone(), target.clone()).await {
+            Ok(tunnel) => return Ok(tunnel),
+            Err(error @ tunnel::EstablishError::Rejected(_)) => {
+                return Err(error.into_error(&target.device_id));
+            }
+            Err(error) => error.into_error(&target.device_id),
+        },
+        Err(error) => error,
     };
-    tunnel::establish(pipe, certified, keys.clone(), target.clone()).await
+    tracing::info!(device_id = %target.device_id, "Device tunnel uses the relay: {direct_failure}");
+    // The failed offer may still occupy a device slot. Use another certificate and Noise key.
+    let certified = keys.begin_tunnel(&target.grant_id, target.management_key, unix_now())?;
+    let pipe = relay.into_pipe(hub.clone(), target.auth_epoch);
+    tunnel::establish(pipe, certified, keys.clone(), target.clone())
+        .await
+        .map_err(|error| {
+            let error = error.into_error(&target.device_id);
+            Error::Unreachable {
+                device_id: target.device_id.clone(),
+                message: format!("WebRTC failed: {direct_failure}; relay failed: {error}"),
+            }
+        })
 }
 
 pub(crate) fn validate_admission(

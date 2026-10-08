@@ -199,7 +199,6 @@ before it installs a runtime.
 | --- | --- |
 | Linux x86-64 | CPU, Vulkan |
 | Linux ARM64 | CPU |
-| macOS Intel | CPU |
 | macOS Apple silicon | Metal, MLX |
 
 When a llama.cpp model loads for the first time and no runtime is installed,

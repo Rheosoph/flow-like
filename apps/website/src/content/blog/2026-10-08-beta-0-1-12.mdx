@@ -1,0 +1,136 @@
+---
+title: "Flow-Like Beta 0.1.12 brings workflow checks and BPMN imports"
+description: "A major update with deeper FlowPilot checks, BPMN import, 91 new geometry nodes, persistent undo, streaming app archives, and easier self-hosting."
+date: 2026-10-08
+tags: ["release", "beta", "beta-0-1-12", "flowpilot", "bpmn", "geometry", "self-hosting"]
+cover: "/images/0-1-12.webp"
+draft: false
+---
+
+**Flow-Like Beta 0.1.12 is out.** You can bring an existing BPMN process into the editor, catch workflow problems as you build, let FlowPilot test a data transformation before applying it, and draw geographic shapes directly on a map. Moving a large app between installations gets a new archive format, while self-hosting gains a clearer path from a published image to a pinned deployment.
+
+This is a big release: **689 files changed since 0.1.11**. Much of that work tackles the moments when an app starts to grow: finding logic someone already wrote, keeping state consistent across several screens, undoing an assistant's edit, or figuring out why a file will not open.
+
+Here are the changes to try first:
+
+- **FlowPilot can inspect more of your workspace and test supported drafts against expected results.**
+- **The editor gains a live Quality panel and persistent local undo and redo.**
+- **BPMN joins the import tools, with a preview and diagnostics inside the editor.**
+- **91 new geometry nodes and a visual geometry editor expand spatial workflows.**
+- **App archives gain streaming export, inspection, progress, and explicit restore choices.**
+- **Published self-hosting images become easier to pull and pin across AMD64 and ARM64.**
+
+## FlowPilot can find existing work and check a draft
+
+An assistant working on an established app needs to understand what is already there. Adding a second implementation of the same rule creates more work for the person who has to maintain both.
+
+In 0.1.12, FlowPilot's specialists can search persisted workflow code, event input contracts, table fields, page bindings, and selected documentation. Search understands declarations in **FlowScript**, the editable text representation of a visual workflow. That lets the assistant look for a particular function or event and then read its actual source. Source reads check revisions again, so an old search result cannot silently stand in for code that has changed.
+
+The same attention extends to changes FlowPilot makes. Board and page inspection can read saved workflow source, UI components, actions, and lifecycle bindings directly. Readback checks give the assistant evidence that an edit reached the saved app, and widget results distinguish a staged proposal from persisted UI.
+
+There is also a new way to check a small piece of logic before applying it. The `test_flowscript` tool runs the exact draft FlowPilot has written on a disposable board and compares its result with an expected JSON value. For example, a transformation that normalizes an incoming record can be checked against a known input and expected output. If the draft changes, the old test result no longer counts for that revision.
+
+These tests cover supported deterministic JSON and primitive transformations. They do not call external services or exercise storage, UI, or WebAssembly nodes. A passing case establishes what that draft did with that input. You still need to run and review the complete app with its real dependencies.
+
+Alongside this work, we fixed board-format handling behind failed board fetches, improved web chat history handling, and preserved the initiating profile when chat delegates work. The developer tools also gain a workflow benchmark runner with fixed input and output checks, making these behaviors easier to exercise repeatedly.
+
+## Find problems while the workflow is still open
+
+The new **Quality** panel brings workflow diagnostics into the editor. It checks for missing required inputs, unreachable nodes, unused results, functions without the expected return, cycles, and excessive complexity. It also highlights credential-like values and nodes whose privacy or security metadata deserves attention.
+
+Findings appear as errors, warnings, or hints. You can filter them, see markers on the canvas, jump to affected nodes inside nested layers, or open the variables view. A missing connection becomes something you can investigate while building instead of discovering it only after starting a run.
+
+These are static checks. They help you review the graph, but they cannot establish that a business rule is correct or that a workflow is free of security problems.
+
+Undo and redo receive a substantial upgrade too. Each board now has a **persistent local history**, including FlowPilot edits. Closing and reopening a board no longer means relying on a temporary in-memory stack. Edits and undo operations are ordered so that an undo requested during a commit waits for that change and then targets it. History is bounded and local; published versions remain the place to keep deliberate release snapshots.
+
+Navigation keeps more context when you enter and leave functions or layers, including across tabs and split views. Pin matching now caches resolved schemas, addressing the lag when dragging a typed output such as Get Element across candidate nodes.
+
+## Bring a BPMN process into the editor
+
+Many teams already have their processes documented in **BPMN 2.0**, a standard notation for business process diagrams. The new importer gives those diagrams a path into an editable Flow-Like workflow.
+
+Open **Import Flow** from the Flow Explorer, then choose a file, drop it into the dialog, or paste its contents. The dialog previews the detected format, mapping counts, and diagnostics. You can import into the current file or create a new module, and the import is recorded as one undoable change.
+
+BPMN support maps supported tasks, gateways, timers, and other process elements to nodes or compositions. Where an operation needs your app's business logic, the importer preserves it as a named, editable placeholder layer with the original details. You have a place to implement the operation and a report showing what still needs attention.
+
+That distinction matters for a process someone will depend on. Conditions may need manual wiring, human tasks need an actual interaction and continuation path, and some gateway or termination behavior differs from the source process. Review the diagnostics and test the important branches before using an imported process operationally.
+
+The editor's import dialog also brings the existing n8n and Dify importers into the same workflow. For a worked migration example, start with [bringing a BPMN process into Flow-Like](/blog/bring-a-bpmn-process-into-flow-like/).
+
+## Draw shapes and work with 91 new geometry nodes
+
+Spatial work gets one of the largest catalog expansions in this release: **91 new geometry nodes**.
+
+They cover constructing and taking apart shapes, polygon operations such as union and difference, spatial predicates, buffers, route analysis, and geometry validation. There are also adapters for GeoJSON features, encoded polylines, H3 cells, and geohashes, plus explicit coordinate conversion tools.
+
+A delivery workflow can combine several service polygons, test whether an address falls within a region, and choose the next action. A route workflow can inspect a section of a line, add intermediate points, or calculate a geodesic destination. Those operations can now stay visible in the flow alongside the business decisions they support.
+
+The editor gains direct manipulation of geometry as well. Place and drag points or vertices on the map, add polygon holes or multipart shapes, edit coordinates, and switch to GeoJSON text when that is more convenient. The visual editor supports points, lines, polygons, and their multipart forms. Geometry collections remain editable as JSON.
+
+Native Geometry values use two-dimensional WGS 84 longitude and latitude. Choose the measurement operation deliberately: planar operations use coordinate degrees, while explicitly geodesic operations provide physical units such as meters. Projected Web Mercator output is a separate structure, keeping it distinct from native Geometry values.
+
+The [delivery-area tutorial](/blog/check-a-delivery-area-with-geometry/) shows how a point and service polygon become a workflow decision, including the difference between an interior point and one exactly on the boundary.
+
+## Keep data contracts consistent from input to output
+
+The new **AI Extractor with Struct Schema** can reuse a type already present in your workflow. Connect a typed pin as the schema reference, and the extractor reads its schema metadata without executing the referenced value. The extracted response carries that same schema downstream.
+
+This removes a common source of drift. If your workflow already defines the fields of a support ticket, you can use that definition for extraction instead of maintaining another copy in an AI prompt. Extractor responses are validated against the schema before the node reports success. The configured model must support the required tool or function calling behavior. The [extraction guide](https://docs.flow-like.com/topics/genai/extraction/) covers the available inputs and schema choices.
+
+AI document extraction gains editable page, image, and batch prompts, plus OCR presets for models such as olmOCR and Nanonets-OCR. You can inspect the prompt on the node and keep custom wording when switching presets. A **Force OCR** control sends every PDF page through the model; specialized document-reader presets select that behavior and process one image per request.
+
+Generic Events also gain **optional inputs with defaults**. An Event is an entry point that callers can use to run a workflow. In FlowScript, an optional parameter can be written as `retries?: int = 3`; callers that omit it receive the stored default. Without an explicit default, the runtime uses the type's empty value.
+
+The editor, input forms, runtime, and generated API descriptions carry that distinction through. MCP tool schemas and REST OpenAPI request schemas can describe which arguments are required and which have defaults. Optional syntax applies to Generic Event parameters; the main `payload` cannot be marked optional, and ordinary function parameters retain their existing rules.
+
+## Move large apps with more control
+
+App export and import have been rebuilt around a **streaming v2 archive format**. Large objects can be spooled to temporary files, and the exporter bounds the amount of blob data buffered at once. Password-protected archives use chunked encryption. Export writes to a staging file before replacing the destination, preserving an existing archive if writing fails.
+
+The dialogs now show estimated file counts and size before export, then report progress during the operation. You can cancel an operation, inspect an archive before importing it, and verify a password before restoration begins. Older encrypted and unencrypted v1 archives remain importable.
+
+When an app already exists, the import dialog gives you an explicit choice:
+
+- **Merge** restores archive content over matching paths and preserves extra local files.
+- **Replace** also removes local files that are absent from the archive.
+
+The result reports restored, skipped, and deleted files. Keep in mind that cancelling an import does not undo files already restored.
+
+Export also offers optional table compaction. This can reduce what needs to be carried, but it permanently removes version history from the **local tables**, not just the exported copy. Leave it off when you need to retain that history. The export dialog also warns when an unencrypted archive would include populated secret variables.
+
+## Keep pages and widgets in step
+
+An app can have a page, a dialog, a chat, and several widgets participating in the same interaction. They need a consistent view of application state.
+
+This release brings those surfaces onto one subscribed, persisted state store per app. Page and widget actions, dialogs, chat, and lifecycle runs use the shared state when constructing workflow inputs. Each run reads its starting snapshot; updates become available to subsequent runs. A value changed through one surface can therefore inform the next action elsewhere in the app.
+
+Home's **Image and caption** widget now supports app-storage images alongside URLs. Stories and banners gain the same source choices, and temporary storage download links refresh as needed. People viewing those images still need permission to read the files.
+
+Team invitations become easier to fill out too. The picker suggests people from other project teams you can read, combines cached matches with directory search, and accepts names, handles, email addresses, or user IDs. Existing members and pending invitees are filtered out.
+
+## Pull and pin self-hosted images
+
+Self-hosting gains a more direct route to published containers. The release tooling assembles multi-architecture image indexes for the self-hosted services, covering **AMD64 and ARM64**.
+
+Docker Compose defaults to published images and includes a pull helper that resolves a chosen tag into immutable image digests. Kubernetes gains a registry resolver that writes digest overrides without requiring Docker on the machine running it. Helm applies those resolved values during deployment, and private mirrors have pull-secret support for execution jobs and scheduled triggers as well as services.
+
+The container tag for this beta is `0.1.12-beta`; `beta` is the moving channel. For an installation you intend to keep stable, retain the selected digests or immutable build tags with its configuration. Follow the [Compose installation guide](https://docs.flow-like.com/self-hosting/docker-compose/installation/) or the [Kubernetes installation guide](https://docs.flow-like.com/self-hosting/kubernetes/installation/) for the deployment path.
+
+Runtime configuration also gets tighter handling. Automatic variable-read logs and debug snapshots omit secret and runtime-configured values. Remote requests carrying runtime values must use direct HTTP or Lambda streaming dispatch; queue and staged-job backends reject them before dispatch because those paths would retain the values. The [runtime variables guide](https://docs.flow-like.com/apps/runtime-variables/) explains the consequences for local and remote runs.
+
+For integrations using hosted MCP, tool responses now return through POST without keeping an idle GET/SSE listener open. Clients should use the supported Streamable HTTP path; legacy SSE transport is not interchangeable with it.
+
+## Fixes you will notice in everyday work
+
+File paths now handle raw and percent-encoded names consistently across storage, archives, connectors, Python workspace access, and WebAssembly nodes. Names containing spaces, non-ASCII characters, or `#` should no longer turn into a different storage key because they were encoded twice. Display and download names remain readable.
+
+Model downloads also handle more of the failures real networks produce. A blocked HEAD request can fall back to a ranged GET probe, concurrent downloads can wait for a shared artifact, and a server that ignores a resume request is handled correctly. Failed or missing artifacts now propagate an error instead of allowing the pack to appear installed.
+
+## Get 0.1.12
+
+**Beta 0.1.12 is available now.** Get it from the [download page](/download/) or the [GitHub release](https://github.com/Rheosoph/flow-like/releases/tag/beta-v0.1.12). The [full comparison with 0.1.11](https://github.com/Rheosoph/flow-like/compare/beta-v0.1.11...beta-v0.1.12) includes the implementation, tests, and documentation changes behind this release.
+
+Open an existing workflow and look through its Quality findings. Try importing a process your team already understands, or give FlowPilot a small transformation with an expected result to check. Those are useful places to see what changed without rebuilding your app.
+
+If something breaks, [open an issue with steps to reproduce it](https://github.com/Rheosoph/flow-like/issues). To share what you are building or talk through a workflow, [join us on Discord](https://discord.com/invite/mdBA9kMjFJ).

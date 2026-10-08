@@ -1,6 +1,7 @@
 import { isTauri } from "../platform";
 import type { ArtifactTransferStatus } from "./artifacts";
 import type { ModelPush, PushFile } from "./model-push";
+import { nativeArtifactUploadError } from "./native-errors";
 import { snapshotSource } from "./project-export";
 import type { DeviceAccountScope, LocalDeviceVault } from "./storage";
 import {
@@ -288,18 +289,22 @@ export function desktopArtifactUpload(
 			() => upload(input),
 			() =>
 				transfer(bridge, input.signal, (id) =>
-					bridge.invoke<ArtifactTransferStatus>("device_upload_artifact", {
-						transfer: id,
-						upload: {
-							deviceId,
-							exportId: source.exportId,
-							path: source.path,
-							projectId: input.projectId,
-							transferId: input.transferId,
-							fileIndex,
-							offset: input.offset,
-						},
-					}),
+					bridge
+						.invoke<ArtifactTransferStatus>("device_upload_artifact", {
+							transfer: id,
+							upload: {
+								deviceId,
+								exportId: source.exportId,
+								path: source.path,
+								projectId: input.projectId,
+								transferId: input.transferId,
+								fileIndex,
+								offset: input.offset,
+							},
+						})
+						.catch((error: unknown) => {
+							throw nativeArtifactUploadError(error);
+						}),
 				),
 		);
 	};

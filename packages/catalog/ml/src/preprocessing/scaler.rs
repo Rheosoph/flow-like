@@ -185,10 +185,11 @@ impl NodeLogic for FitFeatureScalerNode {
                         .filter(
                             "true",
                             Some(vec![records_col.clone()]),
-                            MAX_ML_PREDICTION_RECORDS,
+                            MAX_ML_PREDICTION_RECORDS + 1,
                             0,
                         )
-                        .await?
+                        .await
+                        .and_then(crate::ml::ensure_complete_ml_read)?
                 };
                 (records, records_col)
             }
@@ -207,14 +208,6 @@ impl NodeLogic for FitFeatureScalerNode {
             return Err(anyhow!(
                 "Column `{records_col}` returned no rows, a scaler cannot learn statistics from an empty table"
             ));
-        }
-        if records.len() >= MAX_ML_PREDICTION_RECORDS {
-            context.log_message(
-                &format!(
-                    "Hit the {MAX_ML_PREDICTION_RECORDS} row cap, the scaler describes that sample rather than the full table"
-                ),
-                LogLevel::Warn,
-            );
         }
 
         let array = values_to_array2_f64(&records, &records_col)?;

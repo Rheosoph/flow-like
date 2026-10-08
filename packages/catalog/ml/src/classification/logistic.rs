@@ -274,10 +274,11 @@ impl NodeLogic for FitLogisticRegressionNode {
                         .filter(
                             "true",
                             Some(vec![records_col.to_string(), targets_col.to_string()]),
-                            MAX_ML_PREDICTION_RECORDS,
+                            MAX_ML_PREDICTION_RECORDS + 1,
                             0,
                         )
-                        .await?
+                        .await
+                        .and_then(crate::ml::ensure_complete_ml_read)?
                 };
                 if records.is_empty() {
                     return Err(anyhow!(

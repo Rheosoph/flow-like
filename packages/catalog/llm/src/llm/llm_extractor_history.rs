@@ -191,77 +191,8 @@ impl NodeLogic for LLMExtractHistoryNode {
         let history: History = context.evaluate_pin("history").await?;
         let hint: String = context.evaluate_pin("hint").await.unwrap_or_default();
 
-        let prepared_schema = prepare_schema(&schema_str)?;
-
-        context.log_message(
-            &format!("Using extraction mode: {:?}", prepared_schema.mode),
-            LogLevel::Debug,
-        );
-
-        let preamble = if hint.trim().is_empty() {
-            "You are a knowledge extraction assistant. Extract data by calling the 'submit' tool with structured data matching the provided schema.".to_string()
-        } else {
-            format!(
-                "You are a knowledge extraction assistant. Extract data by calling the 'submit' tool with structured data matching the provided schema.\n\nExtraction hint: {}",
-                hint
-            )
-        };
-
-        let (prompt, chat_history) = history
-            .extract_prompt_and_history()
-            .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
-
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(&preamble)
-            .tool(DynamicSubmitTool {
-                parameters: prepared_schema.tool_parameters.clone(),
-                output_schema: prepared_schema.output_schema.clone(),
-            })
-            .tool_choice(ToolChoice::Required);
-
-        let agent = agent_builder.build();
-
-        let start = Instant::now();
-        let response = agent
-            .completion(prompt, chat_history.into_iter().collect::<Vec<_>>())
-            .await
-            .map_err(|e| anyhow!("Model completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send completion request: {}", e))?;
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        let stats = LLMUsageStats {
-            usage: Usage::from_rig(response.usage),
-            model: model_bit.meta.get("en").map(|m| m.name.clone()),
-            duration_ms: Some(duration_ms),
-            iterations: None,
-            calls: vec![],
-        };
-
-        let mut last_args: Option<Value> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit"
-            {
-                last_args = Some(arguments);
-            }
-        }
-
-        let args = last_args.ok_or_else(|| {
-            anyhow!("Model did not return a 'submit' tool call. Ensure the model supports function calling.")
-        })?;
-
-        let extracted = validate_extracted_value(&prepared_schema, args)?;
-
-        context.log_message("Successfully extracted structured data", LogLevel::Debug);
+        let (extracted, stats) =
+            extract_structured_history(context, model_bit, history, schema_str, hint).await?;
 
         context.set_pin_value("response", extracted).await?;
         context.set_pin_value("stats", json::json!(stats)).await?;
@@ -340,4 +271,87 @@ impl NodeLogic for LLMExtractHistoryNode {
         node.error = None;
         node.harmonize_type(vec!["response"], true);
     }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) async fn extract_structured_history(
+    context: &mut ExecutionContext,
+    model_bit: Bit,
+    history: History,
+    schema_str: String,
+    hint: String,
+) -> flow_like_types::Result<(Value, LLMUsageStats)> {
+    let prepared_schema = prepare_schema(&schema_str)?;
+
+    context.log_message(
+        &format!("Using extraction mode: {:?}", prepared_schema.mode),
+        LogLevel::Debug,
+    );
+
+    let preamble = if hint.trim().is_empty() {
+        "You are a knowledge extraction assistant. Extract data by calling the 'submit' tool with structured data matching the provided schema.".to_string()
+    } else {
+        format!(
+            "You are a knowledge extraction assistant. Extract data by calling the 'submit' tool with structured data matching the provided schema.\n\nExtraction hint: {}",
+            hint
+        )
+    };
+
+    let (prompt, chat_history) = history
+        .extract_prompt_and_history()
+        .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
+
+    let agent_builder = model_bit
+        .agent(context, &Some(history))
+        .await?
+        .preamble(&preamble)
+        .tool(DynamicSubmitTool {
+            parameters: prepared_schema.tool_parameters.clone(),
+            output_schema: prepared_schema.output_schema.clone(),
+        })
+        .tool_choice(ToolChoice::Required);
+
+    let agent = agent_builder.build();
+
+    let start = Instant::now();
+    let response = agent
+        .completion(prompt, chat_history.into_iter().collect::<Vec<_>>())
+        .await
+        .map_err(|e| anyhow!("Model completion failed: {}", e))?
+        .send()
+        .await
+        .map_err(|e| anyhow!("Failed to send completion request: {}", e))?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    let stats = LLMUsageStats {
+        usage: Usage::from_rig(response.usage),
+        model: model_bit.meta.get("en").map(|m| m.name.clone()),
+        duration_ms: Some(duration_ms),
+        iterations: None,
+        calls: vec![],
+    };
+
+    let mut last_args: Option<Value> = None;
+    for content in response.choice {
+        if let AssistantContent::ToolCall(ToolCall {
+            function: ToolFunction {
+                name, arguments, ..
+            },
+            ..
+        }) = content
+            && name == "submit"
+        {
+            last_args = Some(arguments);
+        }
+    }
+
+    let args = last_args.ok_or_else(|| {
+        anyhow!(
+            "Model did not return a 'submit' tool call. Ensure the model supports function calling."
+        )
+    })?;
+
+    let extracted = validate_extracted_value(&prepared_schema, args)?;
+
+    Ok((extracted, stats))
 }

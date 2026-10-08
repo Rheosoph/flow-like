@@ -234,10 +234,11 @@ impl NodeLogic for FitSVMMultiClassNode {
                         .filter(
                             "true",
                             Some(vec![records_col.to_string(), targets_col.to_string()]),
-                            MAX_ML_PREDICTION_RECORDS,
+                            MAX_ML_PREDICTION_RECORDS + 1,
                             0,
                         )
-                        .await?
+                        .await
+                        .and_then(crate::ml::ensure_complete_ml_read)?
                 }; // drop db
                 context.log_message(
                     &format!("Got {} records for training", records.len()),

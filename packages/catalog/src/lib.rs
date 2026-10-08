@@ -398,11 +398,61 @@ impl CatalogBuilder {
 
 #[cfg(feature = "runtime-catalog")]
 fn runtime_implementation_available(node: &dyn NodeLogic) -> bool {
-    match node.get_node().name.as_str() {
+    let definition = node.get_node();
+    if matches!(
+        definition.category.as_str(),
+        "AI/ML/Lifecycle" | "AI/ML/Compute" | "AI/ML/Auto Training" | "AI/ML/Continuous Learning"
+    ) && !cfg!(feature = "training-metadata")
+    {
+        return false;
+    }
+    match definition.name.as_str() {
+        "ml_export_student_onnx" => cfg!(feature = "training-onnx-export"),
+        "ml_read_opcua_sensor" => cfg!(feature = "sensor-opcua"),
+        "ml_capture_genicam_frame" => cfg!(feature = "sensor-genicam"),
         "ai_audio_local_text_to_speech" => cfg!(feature = "local-tts"),
         "ai_audio_local_speech_to_text" => cfg!(feature = "local-stt"),
         "df_register_oracle" | "df_register_athena" => cfg!(feature = "odbc"),
         _ => true,
+    }
+}
+
+#[cfg(all(test, feature = "package-ml", feature = "runtime-catalog"))]
+mod inspection_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn inspection_nodes_follow_runtime_features() {
+        let catalog = get_catalog_from(&[CatalogPackage::Ml]);
+        let has = |name: &str| catalog.iter().any(|node| node.get_node().name == name);
+        for name in [
+            "ml_train_burn_model",
+            "ml_student_inference",
+            "ml_promote_student",
+            "ml_probe_training_device",
+            "ml_auto_train_tabular",
+            "ml_auto_train_forecast",
+            "ml_auto_train_vision",
+            "ml_auto_train_anomaly",
+            "ml_get_auto_training",
+            "ml_predict_auto_model",
+            "ml_export_auto_model",
+            "ml_create_learning_project",
+            "ml_step_learning_project",
+            "ml_route_learning_project",
+        ] {
+            assert_eq!(has(name), cfg!(feature = "training-metadata"), "{name}");
+        }
+        assert_eq!(
+            has("ml_export_student_onnx"),
+            cfg!(feature = "training-onnx-export")
+        );
+        assert_eq!(has("ml_read_opcua_sensor"), cfg!(feature = "sensor-opcua"));
+        assert_eq!(
+            has("ml_capture_genicam_frame"),
+            cfg!(feature = "sensor-genicam")
+        );
+        assert!(has("ml_make_inspection_sample"));
     }
 }
 

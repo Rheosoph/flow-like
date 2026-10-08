@@ -387,6 +387,26 @@ const CLASSIFIERS: ((error: unknown) => Classified | undefined)[] = [
 					code: error.rejection?.code ?? "upload_unconfirmed",
 					detail: [
 						error.rejection?.error ?? error.message,
+						...(error.uploadDiagnostic
+							? [
+									"Client upload diagnostics:",
+									`Upload phase: ${error.uploadDiagnostic.phase}`,
+									`Upload cause: ${error.uploadDiagnostic.cause}`,
+									...(error.uploadDiagnostic.nativePhase
+										? [
+												`Desktop upload phase: ${error.uploadDiagnostic.nativePhase}`,
+											]
+										: []),
+									...(error.uploadDiagnostic.fileIndex !== undefined
+										? [
+												`Upload file index: ${error.uploadDiagnostic.fileIndex ?? "manifest"}`,
+											]
+										: []),
+									...(error.uploadDiagnostic.offset !== undefined
+										? [`Upload start offset: ${error.uploadDiagnostic.offset}`]
+										: []),
+								]
+							: []),
 						...(error.diagnostic
 							? [
 									"Client transport diagnostics:",

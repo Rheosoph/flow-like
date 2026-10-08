@@ -704,6 +704,11 @@ function Platforms({ release }: Readonly<{ release: VerifiedRelease }>) {
 	const { t } = useTranslation("devices");
 	const locale = useLocale();
 	const { manifest } = release;
+	const targets = TARGETS.filter(
+		({ target }) =>
+			target !== "x86_64-apple-darwin" ||
+			manifest.artifacts.some((item) => item.target === target),
+	);
 	const image = manifest.container;
 	const labels = {
 		platform: t("hub.platforms.platform", "Platform"),
@@ -723,12 +728,12 @@ function Platforms({ release }: Readonly<{ release: VerifiedRelease }>) {
 						? t(
 								"hub.platforms.countDocker",
 								"{{count, number}} of {{total, number}} platforms + Docker image",
-								{ count: manifest.artifacts.length, total: TARGETS.length },
+								{ count: manifest.artifacts.length, total: targets.length },
 							)
 						: t(
 								"hub.platforms.count",
 								"{{count, number}} of {{total, number}} platforms",
-								{ count: manifest.artifacts.length, total: TARGETS.length },
+								{ count: manifest.artifacts.length, total: targets.length },
 							)
 				}
 			/>
@@ -746,7 +751,7 @@ function Platforms({ release }: Readonly<{ release: VerifiedRelease }>) {
 					</tr>
 				}
 			>
-				{TARGETS.map(({ target, docker }) => {
+				{targets.map(({ target, docker }) => {
 					const artifact = manifest.artifacts.find(
 						(item) => item.target === target,
 					);

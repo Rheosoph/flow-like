@@ -303,10 +303,11 @@ impl NodeLogic for GridSearchNode {
                         .filter(
                             "true",
                             Some(vec![records_col.to_string(), targets_col.to_string()]),
-                            MAX_ML_PREDICTION_RECORDS,
+                            MAX_ML_PREDICTION_RECORDS + 1,
                             0,
                         )
-                        .await?
+                        .await
+                        .and_then(crate::ml::ensure_complete_ml_read)?
                 };
 
                 let train_array = values_to_array2_f64(&records, &records_col)?;

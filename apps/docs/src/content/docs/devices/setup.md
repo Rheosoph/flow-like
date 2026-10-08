@@ -28,8 +28,10 @@ The signed release determines which packages the setup wizard offers:
 | --- | --- | --- |
 | Linux x86-64 | Supported | Supported when the release includes the image |
 | Linux ARM64 | Supported | Supported when the release includes the image |
-| macOS Intel | Supported | Not offered |
 | macOS Apple silicon | Supported | Not offered |
+
+New standalone releases do not include Intel Mac packages. An older signed
+release can still offer its Intel Mac package while that release remains valid.
 
 A Raspberry Pi needs a compatible 64-bit Linux installation for the ARM64
 package. Check the target rather than the computer on which you create the

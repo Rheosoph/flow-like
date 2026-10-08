@@ -1,0 +1,77 @@
+name: Inspection ML
+
+on:
+  pull_request:
+    paths:
+      - 'packages/ml/**'
+      - 'packages/catalog/ml/**'
+      - 'packages/catalog/llm/**'
+      - 'packages/catalog/onnx/**'
+      - 'packages/catalog/Cargo.toml'
+      - 'packages/catalog/src/lib.rs'
+      - 'packages/executor/Cargo.toml'
+      - 'apps/desktop/src-tauri/Cargo.toml'
+      - 'apps/standalone/Cargo.toml'
+      - 'apps/backend/**/Cargo.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/actions/setup-rust/**'
+      - '.github/scripts/check_ml_platform_features.py'
+      - '.github/workflows/inspection-ml.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-training:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: ./.github/actions/setup-rust
+      - name: CPU learning, durable lifecycle, and protocol tests
+        run: cargo test --locked -p flow-like-ml-core -p flow-like-ml-native -p flow-like-ml-burn -p flow-like-ml-runtime -p flow-like-ml-sensors --features flow-like-ml-runtime/native,flow-like-ml-runtime/burn,flow-like-ml-sensors/opcua,flow-like-ml-sensors/genicam-emulator
+      - name: Automatic platform backends and ONNX export compile
+        run: cargo check --locked -p flow-like-ml-burn --features training-auto,onnx-export
+      - name: Automatic backend fallback tests
+        run: |
+          cargo test --locked -p flow-like-ml-burn --features training-auto backend::tests
+          cargo test --locked -p flow-like-ml-burn --features training-auto automatic_training_records_actual_backend_and_preserves_requested_mode
+      - name: ONNX export graph and shape tests
+        run: cargo test --locked -p flow-like-ml-burn --features onnx-export onnx_export_requires_a_supported_graph_and_matching_shape
+      - name: Metadata without training engines
+        run: cargo check --locked -p flow-like-ml-burn -p flow-like-ml-runtime --no-default-features
+
+  catalog-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: ./.github/actions/setup-rust
+      - name: Platform feature selection and CPU isolation
+        run: python3 .github/scripts/check_ml_platform_features.py
+      - name: Install catalog build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libclang-dev
+      - name: Catalog metadata and pin-schema tests
+        run: |
+          cargo test --locked -p flow-like-catalog-ml --lib
+          cargo test --locked -p flow-like-catalog --no-default-features --features package-ml,runtime-catalog --lib inspection_catalog_tests
+          cargo test --locked -p flow-like-catalog --no-default-features --features package-ml,runtime-catalog,training-metadata --lib inspection_catalog_tests
+          cargo check --locked -p flow-like-catalog-llm -p flow-like-catalog-onnx --no-default-features
+      - name: Compile ML, teacher, and ONNX execution nodes
+        run: >-
+          cargo check --locked
+          -p flow-like-catalog-ml -p flow-like-catalog-llm -p flow-like-catalog-onnx
+          --no-default-features
+          --features flow-like-catalog-ml/training-cpu,flow-like-catalog-ml/opcua,flow-like-catalog-ml/genicam,flow-like-catalog-ml/onnx-export,flow-like-catalog-llm/training,flow-like-catalog-onnx/execute
+      - name: Table experiments, continuous learning, and consultant action schemas
+        run: |
+          cargo test --locked -p flow-like-catalog-ml --features training-cpu --lib inspection::
+          cargo test --locked -p flow-like-catalog-llm --lib llm::auto_training
+          cargo test --locked -p flow-like-catalog-llm --lib llm::learning

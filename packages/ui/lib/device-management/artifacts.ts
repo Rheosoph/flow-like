@@ -1,11 +1,17 @@
 import { sha256 } from "@noble/hashes/sha2";
 import type { ModelAssetDescriptor } from "./models";
+import {
+	type NativeArtifactUploadCode,
+	NativeArtifactUploadError,
+	type NativeArtifactUploadPhase,
+} from "./native-errors";
 import { type DeviceAccountScope, accountStorageKey } from "./storage";
 import {
 	type ManagementFailureDiagnostic,
+	ManagementReadError,
 	managementFailureDiagnostic,
 } from "./transport";
-import type { TunnelArtifactUpload } from "./tunnel";
+import { DeviceTunnelError, type TunnelArtifactUpload } from "./tunnel";
 import { type ManagementRejection, managementRejection } from "./types";
 import { LiveCallError } from "./workspace/errors";
 
@@ -137,6 +143,53 @@ export type ArtifactProgress = {
 	completedFiles: number;
 	totalFiles: number;
 };
+const TUNNEL_UPLOAD_CAUSES = [
+	"timeout",
+	"invalid_reply",
+	"open_timeout",
+	"heartbeat_timeout",
+	"renewal_timeout",
+	"connection_closed",
+	"invalid_frame",
+	"capacity",
+	"expired",
+	"cancelled",
+	"stream_failed",
+	"unauthorized",
+	"unsupported",
+] as const;
+
+/** Local upload position and fixed failure codes; excludes paths, credentials and raw errors. */
+export interface ArtifactUploadDiagnostic {
+	phase: "begin" | "resume" | "manifest" | "file_status" | "file" | "commit";
+	cause:
+		| (typeof TUNNEL_UPLOAD_CAUSES)[number]
+		| NativeArtifactUploadCode
+		| "tunnel_failed"
+		| "management_failed"
+		| "upload_failed"
+		| "rejected";
+	/** Null identifies the manifest; file indices are zero-based. */
+	fileIndex?: number | null;
+	/** The start of the attempted stream, not a claim that later bytes arrived. */
+	offset?: number;
+	nativePhase?: NativeArtifactUploadPhase;
+}
+
+function uploadFailureCause(
+	error: unknown,
+	diagnostic: ManagementFailureDiagnostic | undefined,
+): ArtifactUploadDiagnostic["cause"] {
+	if (error instanceof NativeArtifactUploadError) return error.code;
+	if (error instanceof ManagementReadError) return error.code;
+	if (error instanceof DeviceTunnelError)
+		return (
+			TUNNEL_UPLOAD_CAUSES.find((code) => code === error.code) ??
+			"tunnel_failed"
+		);
+	if (error instanceof Error && error.name === "AbortError") return "cancelled";
+	return diagnostic ? "management_failed" : "upload_failed";
+}
 function rejectionHint(
 	rejection: ManagementRejection,
 	transferId: string | undefined,
@@ -166,6 +219,7 @@ export class ArtifactUploadError extends Error {
 		readonly transferId: string | undefined,
 		readonly rejection?: ManagementRejection,
 		readonly diagnostic?: ManagementFailureDiagnostic,
+		readonly uploadDiagnostic?: ArtifactUploadDiagnostic,
 	) {
 		super(uploadErrorMessage(transferId, rejection));
 		this.name = "ArtifactUploadError";
@@ -1010,6 +1064,7 @@ export async function uploadProjectArtifact(options: {
 		"Prepared artifact has changed.",
 	);
 	let started = false;
+	let position: Omit<ArtifactUploadDiagnostic, "cause"> = { phase: "begin" };
 	const send = (payload: Record<string, unknown>, operationId?: string) =>
 		requestArtifact(
 			request,
@@ -1028,6 +1083,8 @@ export async function uploadProjectArtifact(options: {
 			throw new ArtifactUploadError(
 				started || rejection.retryable ? transferId : undefined,
 				rejection,
+				undefined,
+				{ ...position, cause: "rejected" },
 			);
 		check(
 			["accepted", "completed"].includes(response.state),
@@ -1049,14 +1106,17 @@ export async function uploadProjectArtifact(options: {
 		size: number,
 		operationId?: string,
 	) => accept(await send(payload, operationId), index, size);
-	const begin = () =>
-		call(
+	const begin = () => {
+		position = { phase: "begin" };
+		return call(
 			{ kind: "begin", descriptor },
 			null,
 			descriptor.manifest_size,
 			transferId,
 		);
+	};
 	const resume = async () => {
+		position = { phase: "resume" };
 		const response = await send({
 			kind: "status",
 			project_id: descriptor.project_id,
@@ -1096,6 +1156,11 @@ export async function uploadProjectArtifact(options: {
 			file: ArtifactBlob,
 			status: ArtifactTransferStatus,
 		) => {
+			position = {
+				phase: index === null ? "manifest" : "file",
+				fileIndex: index,
+				offset: status.offset,
+			};
 			if (status.complete) return status;
 			cancelled(signal);
 			// A full file without a verified hash needs its final bytes checked again.
@@ -1103,6 +1168,7 @@ export async function uploadProjectArtifact(options: {
 				status.offset === file.size
 					? Math.max(0, file.size - ARTIFACT_CHUNK_BYTES)
 					: status.offset;
+			position.offset = offset;
 			const next = transferStatus(
 				await options.upload({
 					projectId: descriptor.project_id,
@@ -1134,6 +1200,7 @@ export async function uploadProjectArtifact(options: {
 			"Device did not verify the artifact manifest.",
 		);
 		for (let index = 0; index < prepared.files.length; index++) {
+			position = { phase: "file_status", fileIndex: index };
 			const input = prepared.files[index];
 			check(input, "Missing prepared project file.");
 			const status = await call(
@@ -1152,6 +1219,7 @@ export async function uploadProjectArtifact(options: {
 			progress("files");
 		}
 		progress("commit");
+		position = { phase: "commit" };
 		const result = await call(
 			{
 				kind: "commit",
@@ -1168,13 +1236,17 @@ export async function uploadProjectArtifact(options: {
 		return result;
 	} catch (error) {
 		if (error instanceof ArtifactUploadError) throw error;
-		throw new ArtifactUploadError(
-			transferId,
-			undefined,
+		const diagnostic =
 			error instanceof LiveCallError
 				? error.diagnostic
-				: managementFailureDiagnostic(error),
-		);
+				: managementFailureDiagnostic(error);
+		throw new ArtifactUploadError(transferId, undefined, diagnostic, {
+			...position,
+			cause: uploadFailureCause(error, diagnostic),
+			...(error instanceof NativeArtifactUploadError && error.phase
+				? { nativePhase: error.phase }
+				: {}),
+		});
 	}
 }
 export async function abortProjectArtifact(

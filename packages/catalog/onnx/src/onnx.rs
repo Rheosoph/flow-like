@@ -36,6 +36,7 @@ pub mod feature;
 pub mod gliner;
 /// GLiNER2.5 typed decisions
 pub mod gliner_decision;
+pub mod inspection;
 /// ONNX Model Loader Nodes
 pub mod load;
 /// Verified model downloads cached in a quota-bounded FlowPath directory
@@ -48,6 +49,7 @@ pub mod ocr;
 pub mod pose;
 /// ONNX Semantic/Instance Segmentation Nodes
 pub mod segmentation;
+pub mod tensor;
 /// ONNX Model Utility Nodes
 pub mod utils;
 

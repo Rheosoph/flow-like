@@ -1136,7 +1136,7 @@ describe("hub checks", () => {
 		await unmount();
 	});
 
-	test("large agents stay selectable with the first-start download explained; Intel Mac and Docker on a Mac are disabled with reasons", async () => {
+	test("large agents stay selectable with the first-start download explained; absent Intel Mac packages are hidden and Docker on a Mac is disabled", async () => {
 		const fake = await largeAgentHub();
 		const { calls, settle } = await mountSetup({ fake });
 		await next();
@@ -1146,11 +1146,9 @@ describe("hub checks", () => {
 
 		const linux = byRole("radio", /Linux \(Intel\/AMD 64-bit\)/);
 		const macArm = byRole("radio", /Mac \(Apple silicon\)/);
-		const macIntel = byRole("radio", /Mac \(Intel\)/);
 		expect(linux.hasAttribute("disabled")).toBe(false);
 		expect(macArm.hasAttribute("disabled")).toBe(false);
-		expect(macIntel.hasAttribute("disabled")).toBe(true);
-		expect(text()).toContain("This release has no package for Mac (Intel).");
+		expect(queryByRole("radio", /Mac \(Intel\)/)).toBeNull();
 		expect(text()).toContain(
 			"Downloads on first start (larger than 256 MiB). Needs internet, curl and shasum on the device.",
 		);

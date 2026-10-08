@@ -3,6 +3,7 @@ import type { IProfile } from "../../types";
 import { base64url } from "./crypto";
 import {
 	FrameQueue,
+	ManagementReadError,
 	type Relay,
 	eventReady,
 	openRelay,
@@ -57,6 +58,16 @@ interface RawPipe {
 	close(): void;
 }
 
+function relayTunnel(connection: Relay): RawPipe {
+	return {
+		kind: "websocket",
+		send: (bytes) => connection.sendTunnel(bytes),
+		next: () => connection.tunnel.next(45_000),
+		writable: () => connection.waitWritable(),
+		close: () => connection.close(),
+	};
+}
+
 async function rtcTunnel(
 	relay: Relay,
 	handshake: NoiseHandshake,
@@ -82,18 +93,30 @@ async function rtcTunnel(
 		TUNNEL_MAX_BUFFER,
 		(v) => v.length,
 	);
+	let ended = false;
+	const end = (error?: Error) => {
+		if (ended) return;
+		ended = true;
+		input.close(error);
+	};
 	const close = () => {
-		input.close();
+		end();
 		channel.close();
 		peer.close();
 	};
-	channel.onclose = () => input.close();
-	channel.onerror = () => input.close();
+	channel.onclose = () => end();
+	channel.onerror = () => end();
 	channel.onmessage = (event) => {
 		if (
 			!(event.data instanceof ArrayBuffer) ||
 			event.data.byteLength > 32_768
 		) {
+			end(
+				new ManagementReadError(
+					"invalid_reply",
+					"Invalid device tunnel frame.",
+				),
+			);
 			close();
 			return;
 		}
@@ -128,23 +151,32 @@ async function rtcTunnel(
 			close,
 			next: () => input.next(45_000),
 			send(bytes) {
-				if (
-					channel.readyState !== "open" ||
-					channel.bufferedAmount > 98_304 ||
-					bytes.length > 32_768
-				)
+				if (channel.readyState !== "open")
+					throw new ManagementReadError(
+						"connection_closed",
+						"Device tunnel transport closed.",
+					);
+				if (channel.bufferedAmount > 98_304 || bytes.length > 32_768)
 					throw new Error("Device tunnel transport is unavailable.");
 				channel.send(bytes as Uint8Array<ArrayBuffer>);
 			},
 			async writable() {
 				const deadline = Date.now() + 15_000;
 				while (channel.bufferedAmount > 32_768) {
-					if (channel.readyState !== "open" || Date.now() >= deadline)
+					if (channel.readyState !== "open")
+						throw new ManagementReadError(
+							"connection_closed",
+							"Device tunnel transport closed.",
+						);
+					if (Date.now() >= deadline)
 						throw new Error("Device tunnel transport stalled.");
 					await new Promise((resolve) => setTimeout(resolve, 10));
 				}
 				if (channel.readyState !== "open")
-					throw new Error("Device tunnel transport closed.");
+					throw new ManagementReadError(
+						"connection_closed",
+						"Device tunnel transport closed.",
+					);
 			},
 		};
 	} catch (error) {
@@ -190,6 +222,11 @@ export async function connectTunnelTransport(
 	let handshake: NoiseHandshake | undefined;
 	let admissionTimer: ReturnType<typeof setTimeout> | undefined;
 	let closed = false;
+	const closeSession = () => {
+		session?.close();
+		session?.free();
+		session = undefined;
+	};
 	const close = () => {
 		if (closed) return;
 		closed = true;
@@ -198,9 +235,7 @@ export async function connectTunnelTransport(
 		options.signal?.removeEventListener("abort", close);
 		pipe?.close();
 		relay?.close();
-		session?.close();
-		session?.free();
-		session = undefined;
+		closeSession();
 	};
 	options.signal?.addEventListener("abort", close, { once: true });
 	if (options.signal?.aborted) close();
@@ -237,20 +272,13 @@ export async function connectTunnelTransport(
 			if (signal.signal.aborted)
 				throw new Error("Device tunnel connection cancelled.");
 			handshake = freshHandshake(options);
-			const connection = relay;
-			pipe = {
-				kind: "websocket",
-				send: (bytes) => connection.sendTunnel(bytes),
-				next: () => connection.tunnel.next(45_000),
-				writable: () => connection.waitWritable(),
-				close: () => connection.close(),
-			};
+			pipe = relayTunnel(relay);
 		}
 		if (closed) {
 			pipe.close();
 			throw new Error("Device tunnel connection cancelled.");
 		}
-		const route = handshake.sessionId();
+		let route = handshake.sessionId();
 		const sendRaw = async (
 			kind: "hello" | "handshake" | "message",
 			body: Uint8Array,
@@ -266,34 +294,59 @@ export async function connectTunnelTransport(
 				throw new Error("Device tunnel envelope does not match this session.");
 			return envelope.body;
 		};
-		await sendRaw(
-			"hello",
-			tunnelJson({
-				grant_id: options.grantId ?? "owner",
-				certificate_jws: handshake.certificate(),
-				data: base64url(handshake.write(now())),
-			}),
-		);
-		handshake.read(await receiveRaw("handshake"), now());
-		await sendRaw("handshake", handshake.write(now()));
-		const finishing = handshake;
-		handshake = undefined;
-		session = finishing.finish(now());
-		const initial = session.decrypt(await receiveRaw("message"), now());
+		const authenticate = async () => {
+			if (!handshake)
+				throw new Error("Device tunnel handshake is unavailable.");
+			await sendRaw(
+				"hello",
+				tunnelJson({
+					grant_id: options.grantId ?? "owner",
+					certificate_jws: handshake.certificate(),
+					data: base64url(handshake.write(now())),
+				}),
+			);
+			handshake.read(await receiveRaw("handshake"), now());
+			await sendRaw("handshake", handshake.write(now()));
+			const finishing = handshake;
+			handshake = undefined;
+			session = finishing.finish(now());
+			const initial = session.decrypt(await receiveRaw("message"), now());
+			try {
+				const ready = decodeTunnelFrame(initial);
+				if (
+					ready.kind !== TunnelKind.Renewed ||
+					ready.stream !== 0 ||
+					ready.sequence !== 0n
+				)
+					throw new Error("Device did not confirm its encrypted tunnel.");
+				const expiry = readTunnelJson(ready.body).expires_at;
+				validExpiry(expiry);
+				return expiry;
+			} finally {
+				initial.fill(0);
+			}
+		};
 		let expiresAt: number;
 		try {
-			const ready = decodeTunnelFrame(initial);
+			expiresAt = await authenticate();
+		} catch (error) {
 			if (
-				ready.kind !== TunnelKind.Renewed ||
-				ready.stream !== 0 ||
-				ready.sequence !== 0n
+				closed ||
+				pipe.kind !== "webrtc" ||
+				!(error instanceof ManagementReadError) ||
+				(error.code !== "timeout" && error.code !== "connection_closed")
 			)
-				throw new Error("Device did not confirm its encrypted tunnel.");
-			const expiry = readTunnelJson(ready.body).expires_at;
-			validExpiry(expiry);
-			expiresAt = expiry;
-		} finally {
-			initial.fill(0);
+				throw error;
+			// No application stream has opened. Retry transport setup with fresh Noise keys.
+			pipe.close();
+			handshake?.close();
+			handshake?.free();
+			handshake = undefined;
+			closeSession();
+			handshake = freshHandshake(options);
+			route = handshake.sessionId();
+			pipe = relayTunnel(relay);
+			expiresAt = await authenticate();
 		}
 		const activeRelay = relay;
 		const activePipe = pipe;
