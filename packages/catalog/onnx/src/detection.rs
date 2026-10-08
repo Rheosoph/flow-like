@@ -1817,7 +1817,7 @@ impl NodeLogic for ObjectDetectionNode {
             "AI/ML/ONNX",
         );
         node.set_flowscript_name("onnx", "objectDetection");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -1859,6 +1859,12 @@ impl NodeLogic for ObjectDetectionNode {
         .set_options(PinOptions::new().set_range((0., 1000.)).build())
         .set_default_value(Some(json!(300)));
 
+        node.add_input_pin("class_labels", "Class Labels",
+            "Optional class names indexed by the model class ID; empty uses the model adapter's labels",
+            VariableType::String)
+            .set_value_type(flow_like::flow::pin::ValueType::Array)
+            .set_default_value(Some(json!([])));
+
         // outputs
         node.add_output_pin(
             "exec_out",
@@ -1893,7 +1899,12 @@ impl NodeLogic for ObjectDetectionNode {
             let max_detect: usize = context.evaluate_pin("max").await?;
 
             // run inference
-            let predictions = {
+            let labels: Vec<String> = if context.get_pin_by_name("class_labels").await.is_ok() {
+                context.evaluate_pin("class_labels").await?
+            } else {
+                Vec::new()
+            };
+            let mut predictions = {
                 let img = node_img.get_image(context).await?;
                 let img_guard = img.lock().await;
                 let session = node_session.get_session(context).await?;
@@ -2000,6 +2011,21 @@ impl NodeLogic for ObjectDetectionNode {
                 }?
             };
 
+            if !labels.is_empty() {
+                for prediction in &mut predictions {
+                    let index = usize::try_from(prediction.class_idx)
+                        .map_err(|_| anyhow!("Detector returned a negative class ID"))?;
+                    prediction.class_name = Some(
+                        labels
+                            .get(index)
+                            .filter(|label| !label.trim().is_empty())
+                            .ok_or_else(|| {
+                                anyhow!("Class Labels has no name for class ID {index}")
+                            })?
+                            .clone(),
+                    );
+                }
+            }
             // set outputs
             context.set_pin_value("bboxes", json!(predictions)).await?;
             context.activate_exec_pin("exec_out").await?;

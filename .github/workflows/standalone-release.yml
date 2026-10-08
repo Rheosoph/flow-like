@@ -147,9 +147,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             arch: arm64
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
-            arch: ''
           - target: aarch64-apple-darwin
             runner: macos-15
             arch: ''
@@ -190,7 +187,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          # ort does not publish Intel macOS binaries; the vendored static archive supports both architectures.
+          # Link the vendored static ONNX Runtime archive into the macOS release.
           echo "ORT_LIB_LOCATION=${GITHUB_WORKSPACE}/apps/desktop/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
@@ -392,8 +389,6 @@ jobs:
         include:
           - pack: llamacpp-macos-arm64-metal
             runner: macos-15
-          - pack: llamacpp-macos-x64-cpu
-            runner: macos-15-intel
           - pack: llamacpp-linux-x64-cpu
             runner: ubuntu-22.04
           - pack: llamacpp-linux-x64-vulkan

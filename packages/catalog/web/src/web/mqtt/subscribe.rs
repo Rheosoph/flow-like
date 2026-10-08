@@ -1,5 +1,3 @@
-#[cfg(feature = "execute")]
-use ahash::AHashSet;
 #[cfg(not(feature = "execute"))]
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
@@ -13,9 +11,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::{async_trait, json::json};
-
-#[cfg(feature = "execute")]
-use std::sync::Arc;
 
 #[cfg(feature = "execute")]
 use super::MqttQoS;
@@ -38,7 +33,7 @@ impl NodeLogic for MqttSubscribeNode {
             "mqtt_subscribe",
             "MQTT Subscribe",
             "Subscribes to an MQTT topic and invokes a handler for each incoming message. \
-             Holds execution until the connection closes or timeout, then triggers on_close.",
+             Receives text or raw bytes through payload_bytes on the handler. Holds execution until the connection closes or timeout, then triggers on_close.",
             "Web/MQTT",
         );
         node.set_flowscript_name("mqtt", "subscribe");
@@ -125,330 +120,111 @@ impl NodeLogic for MqttSubscribeNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like::flow::pin::PinType;
-        use flow_like_types::sync::{DashMap, Mutex};
-
+        use crate::web::message_handler::{
+            IncomingPayload, create_message_handler_context, trigger_message_handler_checked,
+        };
         context.deactivate_exec_pin("on_subscribed").await?;
         context.deactivate_exec_pin("on_close").await?;
         context.activate_exec_pin("exec_error").await?;
-
         let session: MqttSession = context.evaluate_pin("session").await?;
         let topic: String = context.evaluate_pin("topic").await?;
         let qos_str: String = context.evaluate_pin("qos").await?;
-        let referenced_fns = context.get_referenced_functions().await?;
-        let handler = referenced_fns
-            .first()
-            .ok_or_else(|| flow_like_types::anyhow!("No on-message handler function referenced"))?
-            .clone();
         let timeout: i64 = context.evaluate_pin("timeout_seconds").await?;
-
+        if timeout < 0 {
+            return Err(flow_like_types::anyhow!(
+                "MQTT subscription timeout cannot be negative"
+            ));
+        }
+        let referenced_fns = context.get_referenced_functions().await?;
+        if referenced_fns.len() != 1 {
+            return Err(flow_like_types::anyhow!(
+                "Reference exactly one MQTT on-message handler"
+            ));
+        }
+        let handler = create_message_handler_context(
+            context,
+            referenced_fns[0].clone(),
+            &["topic", "payload_bytes", "qos", "retain"],
+        )
+        .await;
         let qos = match qos_str.as_str() {
             "AtLeastOnce" => MqttQoS::AtLeastOnce,
             "ExactlyOnce" => MqttQoS::ExactlyOnce,
             _ => MqttQoS::AtMostOnce,
         };
-
         let conn = super::get_mqtt_connection(context, &session.ref_id).await?;
-
-        {
-            let client = conn.client.lock().await;
-            client
-                .subscribe(&topic, super::to_rumqttc_qos(&qos))
-                .await
-                .map_err(|e| {
-                    context.log_message(&format!("MQTT subscribe error: {}", e), LogLevel::Error);
-                    flow_like_types::anyhow!("MQTT subscribe failed: {}", e)
-                })?;
-        }
-
+        let mut messages = conn
+            .subscribe(topic.clone(), super::to_rumqttc_qos(&qos))
+            .await?;
         context.deactivate_exec_pin("exec_error").await?;
         context.activate_exec_pin("on_subscribed").await?;
-
         let on_sub_pin = context.get_pin_by_name("on_subscribed").await?;
-        let connected_on_sub = on_sub_pin.get_connected_nodes();
-        for node in connected_on_sub {
+        for node in on_sub_pin.get_connected_nodes() {
             let mut sub = context.create_sub_context(&node).await;
             sub.delegated = true;
             let mut message = LogMessage::new("MQTT on_subscribed", LogLevel::Debug, None);
-            let _ = InternalNode::trigger(&mut sub, &mut None, true).await;
+            let result = InternalNode::trigger(&mut sub, &mut None, true).await;
             message.end();
             sub.log(message);
             sub.end_trace();
             context.push_sub_context(&mut sub);
-        }
-
-        let reference_function = &handler;
-
-        let ref_node_pins = reference_function.pins.clone();
-        let mut has_string_pin = false;
-        let mut has_byte_pin = false;
-        let mut has_payload_pin = false;
-        let mut has_topic_pin = false;
-        let mut typed_pin_count: usize = 0;
-
-        for pin in ref_node_pins.iter() {
-            if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
-                continue;
-            }
-            if pin.name.as_ref() == "payload" {
-                has_payload_pin = true;
-                continue;
-            }
-            if pin.name.as_ref() == "topic" {
-                has_topic_pin = true;
-                continue;
-            }
-            typed_pin_count += 1;
-            match pin.data_type {
-                VariableType::String => has_string_pin = true,
-                VariableType::Byte => has_byte_pin = true,
-                _ => {}
+            if let Err(error) = result {
+                let _ = messages.close().await;
+                return Err(flow_like_types::anyhow!(
+                    "MQTT on_subscribed failed: {error:?}"
+                ));
             }
         }
-
-        let single_string = typed_pin_count == 1 && has_string_pin;
-        let single_byte = typed_pin_count == 1 && has_byte_pin;
-        let only_payload = typed_pin_count == 0 && has_payload_pin;
-
-        let connected_nodes: Arc<DashMap<String, Arc<Mutex<ExecutionContext>>>> =
-            Arc::new(DashMap::new());
-
-        let on_message_node = reference_function.clone();
-        let sub = Arc::new(Mutex::new(
-            context.create_sub_context(&on_message_node).await,
-        ));
-        connected_nodes.insert(on_message_node.node.lock().await.id.clone(), sub);
-
-        let parent_node_id = context.node.node.lock().await.id.clone();
-        let close_notify = conn.close_notify.clone();
-        let event_loop = conn.event_loop.clone();
-        let close_notify_spawn = close_notify.clone();
-
-        let handle = tokio::spawn(async move {
-            loop {
-                let event = {
-                    let mut el = event_loop.lock().await;
-                    el.poll().await
-                };
-
-                let event = match event {
-                    Ok(e) => e,
-                    Err(e) => {
-                        tracing::warn!("MQTT event loop error: {}", e);
-                        break;
-                    }
-                };
-
-                let publish = match event {
-                    rumqttc::Event::Incoming(rumqttc::Packet::Publish(p)) => p,
-                    _ => continue,
-                };
-
-                let payload_bytes = publish.payload.to_vec();
-                let msg_topic = publish.topic.clone();
-                let text = String::from_utf8_lossy(&payload_bytes);
-
-                let mut recursion_guard = AHashSet::new();
-                recursion_guard.insert(parent_node_id.clone());
-
-                for entry in connected_nodes.iter() {
-                    let (_id, ctx) = entry.pair();
-                    let mut ctx = ctx.lock().await;
-
-                    if has_topic_pin {
-                        let topic_pins: Vec<_> = ctx
-                            .node
-                            .pins
-                            .iter()
-                            .filter(|p| p.pin_type == PinType::Output && p.name.as_ref() == "topic")
-                            .map(|p| (*p).clone())
-                            .collect();
-                        for pin in topic_pins {
-                            pin.set_value(json!(msg_topic.as_str())).await;
-                        }
-                    }
-
-                    if single_string {
-                        let pins = &ctx.node.pins;
-                        for pin in pins.iter() {
-                            if pin.pin_type == PinType::Output
-                                && pin.data_type == VariableType::String
-                                && pin.name.as_ref() != "payload"
-                                && pin.name.as_ref() != "topic"
-                            {
-                                pin.set_value(json!(text.as_ref())).await;
-                                break;
-                            }
-                        }
-                    } else if single_byte {
-                        let pins: Vec<_> = ctx
-                            .node
-                            .pins
-                            .iter()
-                            .filter(|p| {
-                                p.pin_type == PinType::Output
-                                    && p.data_type == VariableType::Byte
-                                    && p.name.as_ref() != "payload"
-                                    && p.name.as_ref() != "topic"
-                            })
-                            .map(|p| (*p).clone())
-                            .collect();
-                        if let Some(pin) = pins.first() {
-                            pin.set_value(json!(payload_bytes)).await;
-                        }
-                    } else if only_payload {
-                        let parsed =
-                            flow_like_types::json::from_str::<flow_like_types::Value>(&text);
-                        let value = parsed.unwrap_or_else(|_| json!(text.as_ref()));
-                        let payload_pins: Vec<_> = ctx
-                            .node
-                            .pins
-                            .iter()
-                            .filter(|p| {
-                                p.pin_type == PinType::Output && p.name.as_ref() == "payload"
-                            })
-                            .map(|p| (*p).clone())
-                            .collect();
-                        for pin in payload_pins {
-                            pin.set_value(value.clone()).await;
-                        }
-                    } else if let Ok(parsed) =
-                        flow_like_types::json::from_str::<flow_like_types::Value>(&text)
-                    {
-                        if let Some(obj) = parsed.as_object() {
-                            let mut remaining = obj.clone();
-                            let pins: Vec<_> = ctx
-                                .node
-                                .pins
-                                .iter()
-                                .filter(|p| {
-                                    p.pin_type == PinType::Output
-                                        && p.data_type != VariableType::Execution
-                                        && p.name.as_ref() != "payload"
-                                        && p.name.as_ref() != "topic"
-                                })
-                                .map(|p| (p.name.to_string(), (*p).clone()))
-                                .collect();
-
-                            for (name, pin) in &pins {
-                                if let Some(val) = remaining.remove(name) {
-                                    pin.set_value(val).await;
-                                } else {
-                                    let normalized = name.to_lowercase().replace('_', "");
-                                    let key = remaining
-                                        .keys()
-                                        .find(|k| k.to_lowercase().replace('_', "") == normalized)
-                                        .cloned();
-                                    if let Some(k) = key
-                                        && let Some(val) = remaining.remove(&k)
-                                    {
-                                        pin.set_value(val).await;
-                                    }
-                                }
-                            }
-                            let payload_pins: Vec<_> = ctx
-                                .node
-                                .pins
-                                .iter()
-                                .filter(|p| {
-                                    p.pin_type == PinType::Output && p.name.as_ref() == "payload"
-                                })
-                                .map(|p| (*p).clone())
-                                .collect();
-                            for pin in payload_pins {
-                                pin.set_value(json!(remaining)).await;
-                            }
-                        } else {
-                            let payload_pins: Vec<_> = ctx
-                                .node
-                                .pins
-                                .iter()
-                                .filter(|p| {
-                                    p.pin_type == PinType::Output && p.name.as_ref() == "payload"
-                                })
-                                .map(|p| (*p).clone())
-                                .collect();
-                            for pin in payload_pins {
-                                pin.set_value(parsed.clone()).await;
-                            }
-                        }
-                    } else {
-                        let payload_pins: Vec<_> = ctx
-                            .node
-                            .pins
-                            .iter()
-                            .filter(|p| {
-                                p.pin_type == PinType::Output && p.name.as_ref() == "payload"
-                            })
-                            .map(|p| (*p).clone())
-                            .collect();
-                        for pin in payload_pins {
-                            pin.set_value(json!(text.as_ref())).await;
-                        }
-                    }
-
-                    let mut log_message = LogMessage::new("MQTT on_message", LogLevel::Debug, None);
-                    let run =
-                        InternalNode::trigger(&mut ctx, &mut Some(recursion_guard.clone()), true)
-                            .await;
-                    log_message.end();
-                    ctx.log(log_message);
-                    ctx.end_trace();
-                    if let Err(e) = run {
-                        tracing::warn!("MQTT on_message handler error: {:?}", e);
-                    }
-                }
-            }
-
-            close_notify_spawn.notify_waiters();
-        });
-
-        let timeout = timeout as u64;
-        let cancellation_token = context.get_cancellation_token();
-        let mut cancelled = false;
-        if timeout > 0 {
-            tokio::select! {
-                _ = close_notify.notified() => {}
-                _ = tokio::time::sleep(std::time::Duration::from_secs(timeout)) => {
-                    context.log_message("MQTT subscription timed out", LogLevel::Warn);
-                    let client = conn.client.lock().await;
-                    let _ = client.disconnect().await;
-                }
-                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
-                    cancelled = true;
-                    context.log_message("MQTT subscription cancelled", LogLevel::Warn);
-                    close_notify.notify_waiters();
-                    let client = conn.client.lock().await;
-                    let _ = client.disconnect().await;
-                }
-            }
-        } else {
-            tokio::select! {
-                _ = close_notify.notified() => {}
-                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
-                    cancelled = true;
-                    context.log_message("MQTT subscription cancelled", LogLevel::Warn);
-                    close_notify.notify_waiters();
-                    let client = conn.client.lock().await;
-                    let _ = client.disconnect().await;
-                }
-            }
-        }
-
-        handle.abort();
-
-        {
-            let mut cache = context.cache.write().await;
-            cache.remove(&session.ref_id);
-        }
-
         context.deactivate_exec_pin("on_subscribed").await?;
+        let deadline = async {
+            if timeout == 0 {
+                std::future::pending::<()>().await;
+            } else {
+                tokio::time::sleep(std::time::Duration::from_secs(timeout as u64)).await;
+            }
+        };
+        tokio::pin!(deadline);
+        let cancellation = context.get_cancellation_token();
+        let result = loop {
+            let message = tokio::select! {
+                _ = crate::web::wait_for_cancel(cancellation.clone()) => break Ok(()),
+                _ = &mut deadline => break Ok(()),
+                closed = conn.closed() => break closed,
+                message = messages.recv() => match message {
+                    Ok(message) => message,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => break Err(flow_like_types::anyhow!("MQTT handler queue overflowed; {count} messages were lost")),
+                    Err(_) => break Err(flow_like_types::anyhow!("MQTT message stream closed")),
+                },
+            };
+            if !rumqttc::matches(&message.topic, &topic) {
+                continue;
+            }
+            let bytes = message.payload.to_vec();
+            let payload = match String::from_utf8(bytes.clone()) {
+                Ok(text) => IncomingPayload::Text(text),
+                Err(_) => IncomingPayload::Binary(bytes.clone()),
+            };
+            let metadata = [
+                ("topic", json!(message.topic)),
+                ("payload_bytes", json!(bytes)),
+                ("qos", json!(message.qos as u8)),
+                ("retain", json!(message.retain)),
+            ];
+            tokio::select! {
+                _ = crate::web::wait_for_cancel(cancellation.clone()) => break Ok(()),
+                _ = &mut deadline => break Ok(()),
+                handled = trigger_message_handler_checked(&handler, payload, &metadata, "MQTT on_message") => { if let Err(error) = handled { break Err(error); } },
+            }
+        };
+        let cleanup = messages.close().await;
         context.activate_exec_pin("on_close").await?;
-
-        if cancelled {
-            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        if result.is_err() {
+            context.activate_exec_pin("exec_error").await?;
         }
-
+        result?;
+        if !cancellation.is_some_and(|token| token.is_cancelled()) {
+            cleanup?;
+        }
         Ok(())
     }
 

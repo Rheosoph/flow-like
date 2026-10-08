@@ -1,0 +1,86 @@
+name: Industrial protocols
+
+on:
+  pull_request:
+    paths:
+      - 'packages/industrial/**'
+      - 'packages/catalog/industrial/**'
+      - 'packages/catalog/web/src/web/mqtt/**'
+      - 'packages/catalog/web/src/web/mqtt.rs'
+      - 'packages/catalog/web/src/web/message_handler.rs'
+      - 'packages/ml/sensors/**'
+      - 'packages/catalog/Cargo.toml'
+      - 'packages/catalog/src/lib.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/industrial-protocols.yml'
+      - '.github/fixtures/industrial-brokers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUSTC_WRAPPER: ''
+
+jobs:
+  adapters:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: ./.github/actions/setup-rust
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config protobuf-compiler libssl-dev
+      - name: Protocol codecs, lifecycle, and loopback interoperability
+        run: cargo test --locked -p flow-like-industrial --features execute --lib
+      - name: Legacy sensor API compatibility
+        run: cargo check --locked -p flow-like-ml-sensors --features opcua
+      - name: Start test brokers
+        if: runner.os == 'Linux'
+        run: docker compose -p industrial-ci -f .github/fixtures/industrial-brokers.yml up -d --wait --wait-timeout 180
+      - name: Broker delivery, replay, acknowledgements, and close
+        if: runner.os == 'Linux'
+        env:
+          FLOW_LIKE_NATS_URL: nats://127.0.0.1:18422
+          FLOW_LIKE_REDIS_URL: redis://127.0.0.1:16379
+          FLOW_LIKE_AMQP_URL: amqp://flowtest:flowtest-tests-only@127.0.0.1:15672/%2f
+          FLOW_LIKE_KAFKA_BROKERS: 127.0.0.1:19093
+        run: cargo test --locked -p flow-like-industrial --lib --features execute broker_ -- --include-ignored --test-threads=1
+      - name: Stop test brokers
+        if: always() && runner.os == 'Linux'
+        run: docker compose -p industrial-ci -f .github/fixtures/industrial-brokers.yml down --volumes
+
+  catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: ./.github/actions/setup-rust
+      - name: Install catalog build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libclang-dev
+      - name: Industrial dependency boundaries and default product features
+        run: >-
+          bash tools/check-feature-boundaries.sh --mode deps --no-rustc-wrapper
+          industrial-adapters catalog-industrial catalog-industrial-execute
+          catalog-portable catalog-server catalog-executor catalog-local-runtime
+      - name: Metadata schemas and registration
+        run: cargo test --locked -p flow-like-catalog-industrial --lib
+      - name: Handler failure and cancellation behavior
+        run: cargo test --locked -p flow-like-catalog-industrial --features execute --lib
+      - name: Existing inspection node compatibility
+        run: cargo test --locked -p flow-like-catalog --no-default-features --features package-ml,package-industrial,runtime-catalog --lib inspection_catalog_tests
+      - name: MQTT transport and binary payloads
+        run: |
+          cargo test --locked -p flow-like-catalog-web --features execute --lib web::mqtt
+          cargo test --locked -p flow-like-catalog-web --features execute --lib web::message_handler

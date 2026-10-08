@@ -138,10 +138,11 @@ impl NodeLogic for AccuracyNode {
                 .filter(
                     "true",
                     Some(vec![predictions_col.clone(), actuals_col.clone()]),
-                    MAX_ML_PREDICTION_RECORDS,
+                    MAX_ML_PREDICTION_RECORDS + 1,
                     0,
                 )
-                .await?
+                .await
+                .and_then(crate::ml::ensure_complete_ml_read)?
         };
 
         let total_count = records.len();

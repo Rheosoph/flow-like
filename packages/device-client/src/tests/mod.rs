@@ -388,6 +388,40 @@ async fn webrtc_is_preferred_and_carries_streams() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_webrtc_channel_with_a_broken_handshake_falls_back_to_relay() -> Result<()> {
+    let harness = Harness::start(RtcMode::HandshakeClosed, echo_service().await?).await?;
+    let session = harness.connect().await?;
+    assert_eq!(session.transport(), Some(TransportKind::Relay));
+    {
+        let sessions = harness.device.stats.hello_sessions.lock().unwrap();
+        assert_eq!(sessions.len(), 2, "both transports reached the Noise hello");
+        assert_ne!(sessions[0], sessions[1], "the relay needs a fresh session");
+    }
+    assert_eq!(harness.device.stats.opens.load(Ordering::SeqCst), 0);
+    echo_bytes(&session, 600 * 1024).await?;
+    assert_eq!(harness.device.stats.opens.load(Ordering::SeqCst), 1);
+    harness.assert_clean();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_webrtc_device_identity_mismatch_does_not_fall_back() -> Result<()> {
+    let mut harness = Harness::start(RtcMode::Answer, echo_service().await?).await?;
+    harness.target.management_key =
+        x25519_dalek::x25519([5; 32], x25519_dalek::X25519_BASEPOINT_BYTES);
+    let error = harness
+        .connect()
+        .await
+        .err()
+        .context("a device with another Noise key was accepted")?;
+    assert!(error.to_string().contains("pinned identity"), "{error}");
+    assert_eq!(harness.device.stats.hellos.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.device.stats.opens.load(Ordering::SeqCst), 0);
+    harness.assert_clean();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn relay_fallback_carries_concurrent_streams_within_their_windows() -> Result<()> {
     let harness = Harness::start(RtcMode::Mismatch, echo_service().await?).await?;
     let session = harness.connect().await?;

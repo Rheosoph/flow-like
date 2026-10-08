@@ -30,6 +30,14 @@ plist = "1.8.0"
 default = []
 local-ml-cuda = ["flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
 local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
+training-cpu = ["flow-like-catalog/training-cpu"]
+training-auto = ["flow-like-catalog/training-auto"]
+training-wgpu = ["training-cpu", "flow-like-catalog/training-wgpu"]
+training-cuda = ["training-cpu", "flow-like-catalog/training-cuda"]
+training-rocm = ["training-cpu", "flow-like-catalog/training-rocm"]
+training-onnx-export = ["training-cpu", "flow-like-catalog/training-onnx-export"]
+sensor-opcua = ["flow-like-catalog/sensor-opcua"]
+sensor-genicam = ["flow-like-catalog/sensor-genicam"]
 local-tts-accelerate = ["flow-like/local-tts-accelerate", "flow-like-catalog/local-tts-accelerate"]
 local-tts-cuda = ["flow-like/local-tts-cuda", "flow-like-catalog/local-tts-cuda"]
 local-tts-metal = ["flow-like/local-tts-metal", "flow-like-catalog/local-tts-metal"]
@@ -152,6 +160,9 @@ windows = { version = "0.61", features = [
 webview2-com = "0.38"
 
 [target."cfg(target_os = \"ios\")".dependencies]
+# libc 0.2.190 removed Apple APIs still used by sysinfo on iOS.
+# Remove this pin when sysinfo supports the changed bindings.
+libc = "=0.2.189"
 flow-like-catalog = { workspace = true, default-features = false, features = ["mobile-apple", "draft-testing"] }
 objc2 = "0.6.3"
 security-framework = "3.7"

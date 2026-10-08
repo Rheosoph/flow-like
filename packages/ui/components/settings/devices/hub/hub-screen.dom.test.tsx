@@ -352,13 +352,32 @@ describe("Hub status: a ready hub", () => {
 		const view = await mount();
 		const releases = block(view, "releases");
 		const targets = all(releases, "tr[data-target]");
-		expect(releases.textContent).toContain("1 of 4 platforms");
-		expect(targets.length).toBe(4);
-		expect(targets.filter((row) => row.dataset.dim).length).toBe(3);
+		expect(releases.textContent).toContain("1 of 3 platforms");
+		expect(targets.length).toBe(3);
+		expect(targets.filter((row) => row.dataset.dim).length).toBe(2);
 		expect(targets[0].textContent).toContain("Linux (Intel/AMD 64-bit)");
 		expect(targets[0].textContent).toContain("Run directly");
 		expect(targets[1].textContent).toContain("Not in this release");
 	});
+
+	test.each([false, true])(
+		"counts complete releases, including optional historical Intel Mac artifacts: %s",
+		async (includeIntelMac) => {
+			const artifacts: NonNullable<TestReleaseOptions["artifacts"]> = [
+				{ target: "x86_64-unknown-linux-gnu", size: 1_024 },
+				{ target: "aarch64-unknown-linux-gnu", size: 1_024 },
+				{ target: "aarch64-apple-darwin", size: 1_024 },
+			];
+			if (includeIntelMac)
+				artifacts.push({ target: "x86_64-apple-darwin", size: 1_024 });
+			const { view } = await mountWith({ artifacts });
+			const releases = block(view, "releases");
+			const count = artifacts.length;
+			expect(releases.textContent).toContain(`${count} of ${count} platforms`);
+			expect(all(releases, "tr[data-target]")).toHaveLength(count);
+			expect(all(releases, "tr[data-target][data-dim]")).toHaveLength(0);
+		},
+	);
 
 	test("lists each device's agent with older agents first", async () => {
 		const view = await mount();

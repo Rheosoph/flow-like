@@ -1,7 +1,7 @@
 #[cfg(not(feature = "execute"))]
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
-use flow_like::flow::execution::{LogLevel, context::ExecutionContext};
+use flow_like::flow::execution::context::ExecutionContext;
 
 use flow_like::flow::{
     node::{Node, NodeLogic},
@@ -76,33 +76,16 @@ impl NodeLogic for MqttDisconnectNode {
 
         let session: MqttSession = context.evaluate_pin("session").await?;
 
-        let disconnect_err = {
-            let cache = context.cache.read().await;
-            if let Some(conn) = cache.get(&session.ref_id) {
-                if let Some(conn) = conn.as_any().downcast_ref::<super::CachedMqttConnection>() {
-                    let client = conn.client.lock().await;
-                    let result = client.disconnect().await.err();
-                    conn.close_notify.notify_waiters();
-                    result
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+        let result = if context.get_cache(&session.ref_id).await.is_some() {
+            super::get_mqtt_connection(context, &session.ref_id)
+                .await?
+                .disconnect()
+                .await
+        } else {
+            Ok(())
         };
-
-        if let Some(e) = disconnect_err {
-            context.log_message(
-                &format!("MQTT disconnect error (non-fatal): {}", e),
-                LogLevel::Warn,
-            );
-        }
-
-        {
-            let mut cache = context.cache.write().await;
-            cache.remove(&session.ref_id);
-        }
+        context.cache.write().await.remove(&session.ref_id);
+        result?;
 
         context.activate_exec_pin("exec_out").await?;
 

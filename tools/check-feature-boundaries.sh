@@ -59,6 +59,7 @@ CATALOG_NODE_PACKAGES=(
     flow-like-catalog-media-image
     flow-like-catalog-media-video
     flow-like-catalog-ml
+    flow-like-catalog-industrial
     flow-like-catalog-onnx
     flow-like-catalog-llm
     flow-like-catalog-processing
@@ -122,6 +123,9 @@ catalog-data-linkedin
 catalog-llm
 catalog-llm-execute
 catalog-embedding
+industrial-adapters
+catalog-industrial
+catalog-industrial-execute
 dev-default
 core-flow-metadata
 core-flow
@@ -253,6 +257,9 @@ if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
         catalog-llm
         catalog-llm-execute
         catalog-embedding
+        industrial-adapters
+        catalog-industrial
+        catalog-industrial-execute
         dev-default
         core-flow-metadata
         core-flow
@@ -299,6 +306,18 @@ configure_boundary() {
     REQUIRED_FEATURES=("")
     DEPENDENCY_ONLY=0
     case "$boundary" in
+        industrial-adapters)
+            CHECK_ARGS=(--package flow-like-industrial --no-default-features --features execute)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-storage flow-like-model-provider "${CATALOG_NODE_PACKAGES[@]}" burn lancedb datafusion wasmtime tauri)
+            ;;
+        catalog-industrial|catalog-industrial-execute)
+            CHECK_ARGS=(--package flow-like-catalog-industrial --no-default-features)
+            if [ "$boundary" = catalog-industrial-execute ]; then
+                CHECK_ARGS+=(--features execute)
+            fi
+            FORBIDDEN=(flow-like flow-like-editor flow-like-catalog-ml flow-like-ml-native flow-like-ml-burn flow-like-ml-runtime burn)
+            REQUIRED=(flow-like-industrial)
+            ;;
         core-contracts)
             CHECK_ARGS=(--package flow-like-core-contracts --no-default-features)
             FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-storage flow-like-model-provider lancedb datafusion wasmtime tauri)
@@ -627,6 +646,7 @@ configure_boundary() {
                 package-web
                 package-media
                 package-ml
+                package-industrial
                 package-llm
                 package-processing
                 package-geo
@@ -655,6 +675,7 @@ configure_boundary() {
                 flow-like-catalog-web
                 flow-like-catalog-media
                 flow-like-catalog-ml
+                flow-like-catalog-industrial
                 flow-like-catalog-onnx
                 flow-like-catalog-llm
                 flow-like-catalog-processing
@@ -670,6 +691,7 @@ configure_boundary() {
                 package-web
                 package-media
                 package-ml
+                package-industrial
                 package-onnx
                 package-llm
                 package-processing
@@ -691,6 +713,7 @@ configure_boundary() {
                 package-web
                 package-media
                 package-ml
+                package-industrial
                 package-onnx
                 package-llm
                 package-processing

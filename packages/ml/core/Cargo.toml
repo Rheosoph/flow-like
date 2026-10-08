@@ -1,0 +1,11 @@
+[package]
+name = "flow-like-ml-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+sha2 = "0.10"

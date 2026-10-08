@@ -8,6 +8,7 @@ default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
 remote-ml = ["flow-like-catalog-core/remote-ml"]
 tauri = ["flow-like-catalog-core/tauri"]
+training = ["execute", "flow-like-catalog-ml/training"]
 # Execution feature - enables heavy dependencies for node execution
 execute = [
     "flow-like-catalog-core/execute",
@@ -19,6 +20,10 @@ execute = [
 ]
 
 [dependencies]
+flow-like-ml-core.workspace = true
+flow-like-ml-runtime = { workspace = true, default-features = false }
+flow-like-catalog-ml.workspace = true
+flow-like-ml-burn = { workspace = true, default-features = false }
 flow-like-catalog-embedding.workspace = true
 flow-like-catalog-core.workspace = true
 flow-like-catalog-data-support.workspace = true

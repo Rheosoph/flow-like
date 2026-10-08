@@ -169,10 +169,11 @@ impl NodeLogic for SilhouetteScoreNode {
                 .filter(
                     "true",
                     Some(vec![features_col.clone(), labels_col.clone()]),
-                    MAX_ML_PREDICTION_RECORDS,
+                    MAX_ML_PREDICTION_RECORDS + 1,
                     0,
                 )
-                .await?
+                .await
+                .and_then(crate::ml::ensure_complete_ml_read)?
         };
 
         let total = records.len();

@@ -7,7 +7,7 @@ use std::{
 
 use flow_like::app::sharing::device::MAX_DEVICE_EXPORT_CHUNK;
 use flow_like_device_client::TunnelDataOpen;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::AppHandle;
 use tokio::{
@@ -44,6 +44,28 @@ pub(crate) struct ArtifactUpload {
     transfer_id: String,
     file_index: u32,
     offset: u64,
+}
+
+/// Only bounded diagnostic fields cross the webview; the local log keeps the cause.
+#[derive(Debug, Serialize)]
+pub(crate) struct ArtifactUploadFailure {
+    phase: &'static str,
+    code: &'static str,
+}
+
+impl ArtifactUploadFailure {
+    pub(super) fn new(phase: &'static str, error: impl std::fmt::Display) -> Self {
+        tracing::warn!(phase, error = %error, "Native artifact upload failed");
+        Self {
+            phase,
+            code: match phase {
+                "connect" => "connection_failed",
+                "open" | "write" | "verify" => "stream_failed",
+                "cancel" => "cancelled",
+                _ => "native_upload_failed",
+            },
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -118,7 +140,7 @@ pub(super) async fn upload(
     app: &AppHandle,
     transfer: &str,
     upload: ArtifactUpload,
-) -> Result<Value, String> {
+) -> Result<Value, ArtifactUploadFailure> {
     let ArtifactUpload {
         device_id,
         export_id,
@@ -128,40 +150,66 @@ pub(super) async fn upload(
         file_index,
         offset,
     } = upload;
-    let failed = |error: String| format!("Uploading {path} to device {device_id} failed: {error}");
+    let failed = |phase, error: String| {
+        ArtifactUploadFailure::new(
+            phase,
+            format!(
+                "Uploading {path} to device {device_id} (transfer {transfer_id}, file {file_index}, offset {offset}) failed: {error}"
+            ),
+        )
+    };
     let snapshot = export_snapshot(app, &export_id)
         .await
-        .map_err(|error| failed(error.to_string()))?;
+        .map_err(|error| failed("prepare", error.to_string()))?;
     let size = snapshot
         .files()
         .into_iter()
         .find(|file| file.path == path)
         .map(|file| file.size)
-        .ok_or_else(|| failed(format!("prepared export {export_id} holds no such file")))?;
+        .ok_or_else(|| {
+            failed(
+                "prepare",
+                format!("prepared export {export_id} holds no such file"),
+            )
+        })?;
     if offset > size {
-        return Err(failed(format!(
-            "offset {offset} lies beyond its {size} bytes"
-        )));
+        return Err(failed(
+            "prepare",
+            format!("offset {offset} lies beyond its {size} bytes"),
+        ));
     }
     let source = path.clone();
     let read: ReadAt = Arc::new(move |at, length| snapshot.read_chunk(&source, at, length));
     let open = TunnelDataOpen::Artifact {
         project_id,
-        transfer_id,
+        transfer_id: transfer_id.clone(),
         file_index: Some(file_index),
         offset,
     };
+    let mut phase = "connect";
     cancellable(transfer, async {
         let session = crate::device_models::session(&device_id).await?;
+        phase = "open";
         let mut stream = session
             .open_data(open)
             .await
             .map_err(|error| error.to_string())?;
+        phase = "write";
         write_range(&mut stream, &read, offset, size, &|_| {}).await?;
+        phase = "verify";
         answer(&mut stream, VERIFY).await
     })
     .await
-    .map_err(failed)
+    .map_err(|error| {
+        failed(
+            if error == "the transfer was cancelled" {
+                "cancel"
+            } else {
+                phase
+            },
+            error,
+        )
+    })
 }
 
 pub(super) async fn push(
@@ -326,6 +374,15 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tokio::io::DuplexStream;
+
+    #[test]
+    fn upload_failures_send_the_phase_without_local_error_details() {
+        let failure = ArtifactUploadFailure::new("open", "private path or credential");
+        assert_eq!(
+            serde_json::to_value(failure).unwrap(),
+            json!({"phase": "open", "code": "stream_failed"})
+        );
+    }
 
     fn file(size: usize) -> Vec<u8> {
         (0..size).map(|index| (index % 251) as u8).collect()

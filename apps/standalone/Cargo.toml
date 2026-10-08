@@ -1,12 +1,14 @@
 [package]
 name = "flow-like-standalone"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Persistent Flow-Like device agent and project service host"
 
 [features]
-default = ["runtime"]
-frontend = ["runtime"]
+default = ["runtime", "training-auto"]
+frontend = ["runtime", "training-auto"]
+training-auto = ["runtime", "flow-like-catalog/training-auto"]
+training-cpu = ["runtime", "flow-like-catalog/training-cpu"]
 runtime = [
     "dep:axum",
     "dep:flow-like-runtime",

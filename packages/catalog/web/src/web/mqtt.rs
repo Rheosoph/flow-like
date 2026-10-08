@@ -24,6 +24,30 @@ pub struct MqttConfig {
     pub use_tls: bool,
     #[serde(default)]
     pub tls: TlsConfig,
+    /// Broker session retention is independent of the bounded in-memory workflow queues.
+    #[serde(default = "default_clean_session")]
+    pub clean_session: bool,
+    #[serde(default)]
+    pub last_will: Option<MqttLastWill>,
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout_seconds: u64,
+}
+
+fn default_connect_timeout() -> u64 {
+    10
+}
+
+fn default_clean_session() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct MqttLastWill {
+    pub topic: String,
+    pub payload: Vec<u8>,
+    pub qos: MqttQoS,
+    #[serde(default)]
+    pub retain: bool,
 }
 
 fn default_keep_alive() -> u64 {
@@ -60,61 +84,6 @@ pub enum MqttQoS {
 }
 
 #[cfg(feature = "execute")]
-use flow_like::flow::execution::context::ExecutionContext;
+mod runtime;
 #[cfg(feature = "execute")]
-use flow_like_types::Cacheable;
-#[cfg(feature = "execute")]
-use std::any::Any;
-#[cfg(feature = "execute")]
-use std::sync::Arc;
-#[cfg(feature = "execute")]
-use tokio::sync::Mutex;
-
-#[cfg(feature = "execute")]
-pub struct CachedMqttConnection {
-    pub client: Arc<Mutex<rumqttc::AsyncClient>>,
-    pub event_loop: Arc<Mutex<rumqttc::EventLoop>>,
-    pub close_notify: Arc<tokio::sync::Notify>,
-}
-
-#[cfg(feature = "execute")]
-impl Cacheable for CachedMqttConnection {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
-#[cfg(feature = "execute")]
-pub async fn get_mqtt_connection(
-    context: &ExecutionContext,
-    ref_id: &str,
-) -> flow_like_types::Result<Arc<CachedMqttConnection>> {
-    let cache = context.cache.read().await;
-    let conn: Arc<dyn Cacheable> = cache
-        .get(ref_id)
-        .ok_or_else(|| flow_like_types::anyhow!("MQTT connection not found in cache: {}", ref_id))?
-        .clone();
-
-    let conn = conn
-        .as_any()
-        .downcast_ref::<CachedMqttConnection>()
-        .ok_or_else(|| flow_like_types::anyhow!("Failed to downcast MQTT connection"))?;
-
-    Ok(Arc::new(CachedMqttConnection {
-        client: conn.client.clone(),
-        event_loop: conn.event_loop.clone(),
-        close_notify: conn.close_notify.clone(),
-    }))
-}
-
-#[cfg(feature = "execute")]
-pub fn to_rumqttc_qos(qos: &MqttQoS) -> rumqttc::QoS {
-    match qos {
-        MqttQoS::AtMostOnce => rumqttc::QoS::AtMostOnce,
-        MqttQoS::AtLeastOnce => rumqttc::QoS::AtLeastOnce,
-        MqttQoS::ExactlyOnce => rumqttc::QoS::ExactlyOnce,
-    }
-}
+pub use runtime::*;

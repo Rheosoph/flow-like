@@ -338,6 +338,8 @@ impl Peer {
 pub(crate) enum RtcMode {
     /// Answers with a real WebRTC peer.
     Answer,
+    /// Opens the data channel, then closes after the initial Noise hello.
+    HandshakeClosed,
     /// Answers for another session, so the controller falls back at once.
     Mismatch,
 }
@@ -352,6 +354,7 @@ pub(crate) enum Service {
 #[derive(Default)]
 pub(crate) struct Stats {
     pub hellos: AtomicUsize,
+    pub hello_sessions: Mutex<Vec<String>>,
     pub refusals: AtomicUsize,
     pub opens: AtomicUsize,
     pub renewals: AtomicUsize,
@@ -664,7 +667,7 @@ impl FakeDevice {
     }
 
     async fn serve_channel(self: Arc<Self>, channel: Arc<dyn DataChannel>, admission: Admission) {
-        let (input_tx, input) = mpsc::channel(AGENT_QUEUE);
+        let (input_tx, mut input) = mpsc::channel(AGENT_QUEUE);
         let (output, mut outgoing) = mpsc::channel::<Vec<u8>>(AGENT_QUEUE);
         let source = channel.clone();
         let read = async move {
@@ -682,9 +685,22 @@ impl FakeDevice {
                 }
             }
         };
+        let serve = async {
+            if matches!(self.options.rtc, RtcMode::HandshakeClosed) {
+                self.hello(
+                    &admission.certificate,
+                    &admission.certificate_jws,
+                    &mut input,
+                )
+                .await
+                .map(|_| ())
+            } else {
+                self.clone().serve_tunnel(admission, input, output).await
+            }
+        };
         tokio::select! {
             _ = read => {}
-            _ = async { tokio::join!(self.clone().serve_tunnel(admission, input, output), write) } => {}
+            _ = async { tokio::join!(serve, write) } => {}
         }
     }
 
@@ -757,6 +773,11 @@ impl FakeDevice {
             return Err(self.violation("the hello does not repeat the admitted certificate"));
         }
         self.stats.hellos.fetch_add(1, Ordering::SeqCst);
+        self.stats
+            .hello_sessions
+            .lock()
+            .unwrap()
+            .push(first.session_id.clone());
         Ok((first.session_id, URL_SAFE_NO_PAD.decode(&hello.data)?))
     }
 

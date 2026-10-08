@@ -16,6 +16,7 @@ package-data = ["dep:flow-like-catalog-data"]
 package-web = ["dep:flow-like-catalog-web"]
 package-media = ["dep:flow-like-catalog-media"]
 package-ml = ["dep:flow-like-catalog-ml"]
+package-industrial = ["dep:flow-like-catalog-industrial"]
 package-onnx = ["dep:flow-like-catalog-onnx"]
 package-llm = ["dep:flow-like-catalog-llm"]
 package-processing = ["dep:flow-like-catalog-processing"]
@@ -37,6 +38,7 @@ portable-metadata = [
     "package-std",
     "package-data",
     "package-web",
+    "package-industrial",
     "package-media",
     "package-ml",
     "package-onnx",
@@ -52,6 +54,7 @@ remote-metadata = [
     "package-std",
     "package-data",
     "package-web",
+    "package-industrial",
     "package-media",
     "package-ml",
     "package-llm",
@@ -59,8 +62,8 @@ remote-metadata = [
     "package-geo",
 ]
 # Metadata advertised by APIs paired with a local-ML server executor. The API
-# can describe ONNX nodes without linking their execution dependencies.
-server-local-metadata = ["remote-metadata", "package-onnx"]
+# can describe ONNX and training nodes without linking their execution dependencies.
+server-local-metadata = ["remote-metadata", "package-onnx", "training-metadata"]
 # Metadata paired with executors that also ship desktop/RPA automation.
 executor-local-metadata = ["server-local-metadata", "package-automation"]
 all-metadata = [
@@ -70,7 +73,7 @@ all-metadata = [
 
 # Product-oriented bundles keep the CLI/task UX simple. Applications select one intent rather
 # than reproducing a long and easy-to-drift feature list.
-desktop = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local"]
+desktop = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local", "training-auto"]
 desktop-apple = [
     "desktop",
     "local-tts-metal",
@@ -98,7 +101,7 @@ mobile-apple = [
 # ship a native inference runtime. The historical `server-execute` feature
 # remains compatibility-complete below; product crates should use this bundle.
 server = ["remote-all", "portable-execute", "remote"]
-server-local-ml = ["server", "package-onnx", "local-ml"]
+server-local-ml = ["server", "package-onnx", "local-ml", "training-auto"]
 executor = [
     "remote-all",
     "portable-execute",
@@ -106,7 +109,7 @@ executor = [
     "flow-like-catalog-automation/execute",
     "remote",
 ]
-executor-local-ml = ["executor", "local-ml"]
+executor-local-ml = ["executor", "local-ml", "training-auto"]
 # Self-contained local runtime bundle. Depending on this feature alone must
 # enable both the package cfg flags used by get_catalog() and their execution
 # implementations; relying on a sibling executor dependency to unify `all`
@@ -118,7 +121,7 @@ local-runtime = [
     "flow-like-catalog-automation/execute",
     "remote",
 ]
-local-runtime-ml = ["local-runtime", "local-ml"]
+local-runtime-ml = ["local-runtime", "local-ml", "training-auto"]
 
 # Execution environment - determines how interactions are handled
 # local: Desktop app with polling-based interactions
@@ -159,6 +162,15 @@ local-ml = [
 # Feature unification applies the provider to ONNX nodes and native embedding sessions.
 local-ml-cuda = ["local-ml", "flow-like-catalog-onnx/cuda"]
 local-ml-tensorrt = ["local-ml-cuda", "flow-like-catalog-onnx/tensorrt"]
+training-metadata = ["package-ml"]
+training-cpu = ["training-metadata", "flow-like-catalog-ml/training-cpu", "flow-like-catalog-llm?/training"]
+training-auto = ["training-metadata", "flow-like-catalog-ml/training-auto", "flow-like-catalog-llm?/training"]
+training-wgpu = ["training-cpu", "flow-like-catalog-ml/training-wgpu"]
+training-cuda = ["training-cpu", "flow-like-catalog-ml/training-cuda"]
+training-rocm = ["training-cpu", "flow-like-catalog-ml/training-rocm"]
+training-onnx-export = ["training-cpu", "flow-like-catalog-ml/onnx-export"]
+sensor-opcua = ["package-industrial", "flow-like-catalog-industrial/execute"]
+sensor-genicam = ["package-industrial", "flow-like-catalog-industrial/genicam"]
 local-tts = ["package-media", "flow-like-catalog-media/local-tts"]
 local-tts-metal = ["local-tts", "flow-like-catalog-media/local-tts-metal"]
 local-tts-cuda = ["local-tts", "flow-like-catalog-media/local-tts-cuda"]
@@ -185,6 +197,8 @@ mimalloc = ["dep:mimalloc"]
 # `local-ml` enables it only for products that opt in, leaving the base `server`
 # bundle remote-only.
 portable-execute = [
+    "package-industrial",
+    "flow-like-catalog-industrial/execute",
     "runtime-catalog",
     "remote-ml",
     "flow-like-catalog-core/execute",
@@ -270,6 +284,7 @@ flow-like-catalog-data = { workspace = true, optional = true }
 flow-like-catalog-web = { workspace = true, optional = true }
 flow-like-catalog-media = { workspace = true, optional = true }
 flow-like-catalog-ml = { workspace = true, optional = true }
+flow-like-catalog-industrial = { workspace = true, optional = true }
 flow-like-catalog-onnx = { workspace = true, optional = true }
 flow-like-catalog-llm = { workspace = true, optional = true }
 flow-like-catalog-processing = { workspace = true, optional = true }

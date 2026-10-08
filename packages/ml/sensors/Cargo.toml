@@ -1,0 +1,13 @@
+[package]
+name = "flow-like-ml-sensors"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+opcua = ["flow-like-industrial/opcua"]
+genicam = ["flow-like-industrial/genicam"]
+genicam-emulator = ["flow-like-industrial/genicam-emulator"]
+
+[dependencies]
+flow-like-industrial.workspace = true

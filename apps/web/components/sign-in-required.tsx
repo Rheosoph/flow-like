@@ -33,6 +33,7 @@ export function SignInRequired() {
 			await auth.signinRedirect({ url_state: currentRelativeUrl() });
 		} catch (error) {
 			console.error("Sign-in redirect failed:", error);
+		} finally {
 			setIsRedirecting(false);
 		}
 	};

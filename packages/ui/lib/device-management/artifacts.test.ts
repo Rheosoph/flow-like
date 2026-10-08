@@ -21,8 +21,13 @@ import {
 	uploadProjectArtifact,
 	validateProjectArtifactPath,
 } from "./artifacts";
-import { ConnectError, ManagementUnconfirmedError } from "./transport";
-import type { TunnelArtifactUpload } from "./tunnel";
+import { NativeArtifactUploadError } from "./native-errors";
+import {
+	ConnectError,
+	ManagementReadError,
+	ManagementUnconfirmedError,
+} from "./transport";
+import { DeviceTunnelError, type TunnelArtifactUpload } from "./tunnel";
 import { LiveCallError } from "./workspace/errors";
 const hex = (v: Uint8Array) =>
 	Array.from(v, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -321,6 +326,147 @@ test("upload failures retain safe request and reconnect diagnostics with a resum
 		expect(resumed.state).toBe("committed");
 		expect(fake.calls.filter((call) => call.kind === "begin")).toHaveLength(1);
 	}
+});
+
+test("upload diagnostics retain stream failure codes and positions without peer error text", async () => {
+	const artifact = await prepared();
+	for (const [code, cause] of [
+		["open_timeout", "open_timeout"],
+		["connection_closed", "connection_closed"],
+		["stream_failed", "stream_failed"],
+		["private_peer_code", "tunnel_failed"],
+	] as const) {
+		const fake = server(artifact);
+		const error = await uploadProjectArtifact({
+			prepared: artifact,
+			request: fake.request,
+			upload: async (input) => {
+				if (input.fileIndex === 0)
+					throw new DeviceTunnelError(code, "private /project/token=secret");
+				return fake.upload(input);
+			},
+		}).catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(ArtifactUploadError);
+		if (!(error instanceof ArtifactUploadError)) throw error;
+		expect(error.uploadDiagnostic).toEqual({
+			phase: "file",
+			cause,
+			fileIndex: 0,
+			offset: 0,
+		});
+		expect(error.transferId).toBeString();
+		expect(error.rejection).toBeUndefined();
+		expect(JSON.stringify(error)).not.toContain("private");
+		expect(error.message).not.toContain("private");
+		const resumed = await uploadProjectArtifact({
+			prepared: artifact,
+			request: fake.request,
+			upload: fake.upload,
+			transferId: error.transferId,
+		});
+		expect(resumed.state).toBe("committed");
+	}
+});
+
+test("tunnel setup read failures retain their safe cause in upload diagnostics", async () => {
+	const artifact = await prepared();
+	for (const code of [
+		"timeout",
+		"connection_closed",
+		"invalid_reply",
+	] as const) {
+		const fake = server(artifact);
+		const error = await uploadProjectArtifact({
+			prepared: artifact,
+			request: fake.request,
+			upload: async () => {
+				throw new ManagementReadError(code, "private transport details");
+			},
+		}).catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(ArtifactUploadError);
+		if (!(error instanceof ArtifactUploadError)) throw error;
+		expect(error.uploadDiagnostic).toEqual({
+			phase: "manifest",
+			cause: code,
+			fileIndex: null,
+			offset: 0,
+		});
+		expect(JSON.stringify(error)).not.toContain("private");
+	}
+});
+
+test("native upload diagnostics reach the resumable artifact failure", async () => {
+	const artifact = await prepared();
+	const fake = server(artifact);
+	const error = await uploadProjectArtifact({
+		prepared: artifact,
+		request: fake.request,
+		upload: async (input) => {
+			if (input.fileIndex === 0)
+				throw new NativeArtifactUploadError("connect", "connection_failed");
+			return fake.upload(input);
+		},
+	}).catch((error: unknown) => error);
+	expect(error).toBeInstanceOf(ArtifactUploadError);
+	if (!(error instanceof ArtifactUploadError)) throw error;
+	expect(error.uploadDiagnostic).toEqual({
+		phase: "file",
+		cause: "connection_failed",
+		fileIndex: 0,
+		offset: 0,
+		nativePhase: "connect",
+	});
+	expect(error.transferId).toBeString();
+	expect(error.rejection).toBeUndefined();
+});
+
+test("upload diagnostics distinguish management phases and local read failures", async () => {
+	const artifact = await prepared();
+	for (const phase of ["begin", "resume", "file_status", "commit"] as const) {
+		const fake = server(artifact);
+		const error = await uploadProjectArtifact({
+			prepared: artifact,
+			...(phase === "resume" ? { transferId: crypto.randomUUID() } : {}),
+			request: async (command, operationId) => {
+				const request = command.request as Record<string, unknown>;
+				if (
+					request.kind === phase ||
+					(request.kind === "status" &&
+						(phase === "resume" || phase === "file_status"))
+				)
+					throw new ManagementUnconfirmedError("op", {
+						phase: "wait_reply",
+						cause: "timeout",
+					});
+				return fake.request(command, operationId);
+			},
+			upload: fake.upload,
+		}).catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(ArtifactUploadError);
+		if (!(error instanceof ArtifactUploadError)) throw error;
+		expect(error.uploadDiagnostic).toEqual({
+			phase,
+			cause: "management_failed",
+			...(phase === "file_status" ? { fileIndex: 0 } : {}),
+		});
+	}
+	const fake = server(artifact);
+	const local = await uploadProjectArtifact({
+		prepared: artifact,
+		request: fake.request,
+		upload: async () => {
+			throw new Error("private file could not be opened");
+		},
+	}).catch((error: unknown) => error);
+	expect(local).toBeInstanceOf(ArtifactUploadError);
+	if (!(local instanceof ArtifactUploadError)) throw local;
+	expect(local.uploadDiagnostic).toEqual({
+		phase: "manifest",
+		cause: "upload_failed",
+		fileIndex: null,
+		offset: 0,
+	});
+	expect(JSON.stringify(local)).not.toContain("private");
 });
 
 test("selected Bit and WASM assets are pinned exactly and unrelated assets stay out", async () => {

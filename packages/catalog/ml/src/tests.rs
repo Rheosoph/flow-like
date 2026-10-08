@@ -6,15 +6,48 @@
 #[allow(clippy::approx_constant)]
 mod ml_tests {
     use crate::NodeLogic;
+    #[cfg(feature = "execute")]
+    use crate::ml::make_new_field;
     use crate::ml::{
         AccuracyMetrics, ConfusionMatrixResult, GridSearchEntry, GridSearchResult, KMeansCentroids,
-        LinearCoefficients, ParameterSpec, RegressionMetrics, make_new_field,
-        prediction::MLPredictNode, values_to_array1_f64, values_to_array1_target,
-        values_to_array1_usize, values_to_array2_f64,
+        LinearCoefficients, ParameterSpec, RegressionMetrics, prediction::MLPredictNode,
+        values_to_array1_f64, values_to_array1_target, values_to_array1_usize,
+        values_to_array2_f64,
     };
     use flow_like_types::Value;
     use flow_like_types::json::{self, json};
     use std::collections::HashMap;
+
+    #[test]
+    fn bounded_ml_reads_accept_the_exact_limit_and_reject_overflow() {
+        use crate::ml::{MAX_ML_PREDICTION_RECORDS, ensure_complete_ml_read};
+        assert!(
+            ensure_complete_ml_read::<u8>(Vec::new())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            ensure_complete_ml_read(vec![0_u8; MAX_ML_PREDICTION_RECORDS])
+                .unwrap()
+                .len(),
+            MAX_ML_PREDICTION_RECORDS
+        );
+        let error = ensure_complete_ml_read(vec![0_u8; MAX_ML_PREDICTION_RECORDS + 1])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("No partial result"));
+    }
+
+    #[test]
+    fn weighted_f1_averages_class_scores_by_support() {
+        use crate::ml::weighted_f1_score;
+        let result = weighted_f1_score(&[0.5, 1.0], &[1.0, 0.5], &[10, 10]);
+        assert!((result - 2.0 / 3.0).abs() < 1e-12);
+        let imbalanced = weighted_f1_score(&[1.0, 0.0], &[0.5, 0.0], &[9, 1]);
+        assert!((imbalanced - 0.6).abs() < 1e-12);
+        assert_eq!(weighted_f1_score(&[], &[], &[]), 0.0);
+        assert_eq!(weighted_f1_score(&[0.0], &[0.0], &[1]), 0.0);
+    }
 
     // ============================================================================
     // values_to_array2_f64 tests
@@ -223,6 +256,7 @@ mod ml_tests {
     // ============================================================================
 
     #[test]
+    #[cfg(feature = "execute")]
     fn test_make_new_field_float() {
         let value = json!({"prediction": 3.14});
         let field = make_new_field(&value, "prediction").unwrap();
@@ -230,6 +264,7 @@ mod ml_tests {
     }
 
     #[test]
+    #[cfg(feature = "execute")]
     fn test_make_new_field_integer() {
         let value = json!({"count": 42});
         let field = make_new_field(&value, "count").unwrap();
@@ -237,6 +272,7 @@ mod ml_tests {
     }
 
     #[test]
+    #[cfg(feature = "execute")]
     fn test_make_new_field_string() {
         let value = json!({"label": "hello"});
         let field = make_new_field(&value, "label").unwrap();
@@ -244,6 +280,7 @@ mod ml_tests {
     }
 
     #[test]
+    #[cfg(feature = "execute")]
     fn test_make_new_field_missing() {
         let value = json!({"other": 1.0});
         let result = make_new_field(&value, "prediction");

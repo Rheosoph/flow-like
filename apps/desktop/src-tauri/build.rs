@@ -319,6 +319,7 @@ fn main() {
         // its SwiftPM products and AppDelegate, so allow only those symbols
         // to remain undefined in this intermediate artifact.
         for symbol in [
+            "_flow_like_install_ios_app_delegate_callbacks",
             "_flow_like_request_remote_push_token",
             "_flow_like_cancel_remote_push_token",
             "_flow_like_mlx_cancel",

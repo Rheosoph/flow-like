@@ -140,10 +140,11 @@ impl NodeLogic for ConfusionMatrixNode {
                 .filter(
                     "true",
                     Some(vec![predictions_col.clone(), actuals_col.clone()]),
-                    MAX_ML_PREDICTION_RECORDS,
+                    MAX_ML_PREDICTION_RECORDS + 1,
                     0,
                 )
-                .await?
+                .await
+                .and_then(crate::ml::ensure_complete_ml_read)?
         };
 
         if records.is_empty() {
@@ -252,11 +253,7 @@ impl NodeLogic for ConfusionMatrixNode {
             0.0
         };
 
-        let f1_score = if weighted_precision + weighted_recall > 0.0 {
-            2.0 * weighted_precision * weighted_recall / (weighted_precision + weighted_recall)
-        } else {
-            0.0
-        };
+        let f1_score = crate::ml::weighted_f1_score(&precisions, &recalls, &supports);
 
         context.log_message(
             &format!(

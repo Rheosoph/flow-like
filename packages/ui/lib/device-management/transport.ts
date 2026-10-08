@@ -32,7 +32,7 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
 
-class ManagementReadError extends Error {
+export class ManagementReadError extends Error {
 	constructor(
 		readonly code: "timeout" | "connection_closed" | "invalid_reply",
 		message: string,
@@ -112,6 +112,7 @@ export class FrameQueue<T> {
 			"Management connection closed.",
 		),
 	): void {
+		if (this.failure) return;
 		this.failure = error;
 		this.values = [];
 		this.bytes = 0;

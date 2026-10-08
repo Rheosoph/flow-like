@@ -287,20 +287,13 @@ impl NodeLogic for OrdinalMetricsNode {
             }
 
             database
-                .filter("true", Some(projection), MAX_ML_PREDICTION_RECORDS, 0)
-                .await?
+                .filter("true", Some(projection), MAX_ML_PREDICTION_RECORDS + 1, 0)
+                .await
+                .and_then(crate::ml::ensure_complete_ml_read)?
         };
 
         if records.is_empty() {
             return Err(anyhow!("No records found in database"));
-        }
-        if records.len() >= MAX_ML_PREDICTION_RECORDS {
-            context.log_message(
-                &format!(
-                    "Evaluation is capped at {MAX_ML_PREDICTION_RECORDS} rows; the metrics describe that sample, not the full table"
-                ),
-                LogLevel::Warn,
-            );
         }
 
         // One vocabulary for both columns: the explicit order when given, otherwise the order

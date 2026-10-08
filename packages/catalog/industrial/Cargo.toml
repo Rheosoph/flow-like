@@ -1,0 +1,29 @@
+[package]
+name = "flow-like-catalog-industrial"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+execute = ["flow-like-industrial/execute", "flow-like-catalog-core/execute"]
+opcua = ["execute"]
+genicam = ["execute", "flow-like-industrial/genicam"]
+
+[dependencies]
+flow-like-industrial.workspace = true
+flow-like-catalog-core.workspace = true
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
+flow-like-types.workspace = true
+flow-like-storage = { workspace = true, default-features = false }
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1"
+schemars.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+ahash.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+futures.workspace = true
+
+[build-dependencies]
+flow-like-catalog-build-helper.workspace = true

@@ -7,6 +7,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { AuthContextProps } from "react-oidc-context";
+import { reportUnauthorized } from "./auth-session";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"payments",
@@ -82,23 +83,11 @@ function ensureProtectedAppRouteAuth(
 	if (!isProtectedAppRoute(path, method)) return;
 	if (auth?.user?.access_token) return;
 
-	if (auth?.isAuthenticated) {
-		requestSilentRenew(auth, "before API request");
-	}
+	reportUnauthorized(auth, undefined);
 
 	throw new Error(
 		`Authentication token required for app request: ${redactApiPathSecrets(path)}`,
 	);
-}
-
-function requestSilentRenew(auth: AuthContextProps, reason: string): void {
-	try {
-		void Promise.resolve(auth.startSilentRenew()).catch(() => {
-			console.warn(`[Auth] Silent renew failed ${reason}`);
-		});
-	} catch {
-		console.warn(`[Auth] Silent renew failed ${reason}`);
-	}
 }
 
 export async function get<T>(
@@ -107,8 +96,9 @@ export async function get<T>(
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
 	ensureProtectedAppRouteAuth(path, auth, "GET");
-	const authHeader: Record<string, string> = auth?.user?.access_token
-		? { Authorization: `Bearer ${auth.user.access_token}` }
+	const accessToken = auth?.user?.access_token;
+	const authHeader: Record<string, string> = accessToken
+		? { Authorization: `Bearer ${accessToken}` }
 		: {};
 
 	const url = constructUrl(profile, path);
@@ -121,6 +111,7 @@ export async function get<T>(
 	});
 
 	if (!response.ok) {
+		if (response.status === 401) reportUnauthorized(auth, accessToken);
 		await response.text();
 		console.error(`HTTP error: ${response.status}`);
 		return undefined;
@@ -136,8 +127,9 @@ export async function post<T>(
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
 	ensureProtectedAppRouteAuth(path, auth, "POST");
-	const authHeader: Record<string, string> = auth?.user?.access_token
-		? { Authorization: `Bearer ${auth.user.access_token}` }
+	const accessToken = auth?.user?.access_token;
+	const authHeader: Record<string, string> = accessToken
+		? { Authorization: `Bearer ${accessToken}` }
 		: {};
 
 	const url = constructUrl(profile, path);
@@ -151,6 +143,7 @@ export async function post<T>(
 	});
 
 	if (!response.ok) {
+		if (response.status === 401) reportUnauthorized(auth, accessToken);
 		await response.text();
 		console.error(`HTTP error: ${response.status}`);
 		return undefined;
@@ -166,8 +159,9 @@ export async function put<T>(
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
 	ensureProtectedAppRouteAuth(path, auth, "PUT");
-	const authHeader: Record<string, string> = auth?.user?.access_token
-		? { Authorization: `Bearer ${auth.user.access_token}` }
+	const accessToken = auth?.user?.access_token;
+	const authHeader: Record<string, string> = accessToken
+		? { Authorization: `Bearer ${accessToken}` }
 		: {};
 
 	const url = constructUrl(profile, path);
@@ -181,6 +175,7 @@ export async function put<T>(
 	});
 
 	if (!response.ok) {
+		if (response.status === 401) reportUnauthorized(auth, accessToken);
 		await response.text();
 		console.error(`HTTP error: ${response.status}`);
 		return undefined;
@@ -195,8 +190,9 @@ export async function del<T>(
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
 	ensureProtectedAppRouteAuth(path, auth, "DELETE");
-	const authHeader: Record<string, string> = auth?.user?.access_token
-		? { Authorization: `Bearer ${auth.user.access_token}` }
+	const accessToken = auth?.user?.access_token;
+	const authHeader: Record<string, string> = accessToken
+		? { Authorization: `Bearer ${accessToken}` }
 		: {};
 
 	const url = constructUrl(profile, path);
@@ -209,6 +205,7 @@ export async function del<T>(
 	});
 
 	if (!response.ok) {
+		if (response.status === 401) reportUnauthorized(auth, accessToken);
 		await response.text();
 		console.error(`HTTP error: ${response.status}`);
 		return undefined;
@@ -228,10 +225,17 @@ export async function fetcher<T>(
 		auth,
 		(options?.method ?? "GET").toUpperCase(),
 	);
-	const headers: HeadersInit = {};
-	if (auth?.user?.access_token) {
-		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;
+	const accessToken = auth?.user?.access_token;
+	const headers = new Headers({ "Content-Type": "application/json" });
+	new Headers(options?.headers).forEach((value, key) =>
+		headers.set(key, value),
+	);
+	if (accessToken) {
+		headers.set("Authorization", `Bearer ${accessToken}`);
 	}
+	const usesAccountToken =
+		headers.get("Authorization") ===
+		(accessToken ? `Bearer ${accessToken}` : null);
 
 	// Check network status before attempting request
 	if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -244,17 +248,13 @@ export async function fetcher<T>(
 	try {
 		const response = await fetch(url, {
 			...options,
-			headers: {
-				"Content-Type": "application/json",
-				...options?.headers,
-				...headers,
-			},
+			headers,
 			keepalive: true,
 		});
 
 		if (!response.ok) {
-			if (response.status === 401 && auth) {
-				requestSilentRenew(auth, "after 401");
+			if (response.status === 401 && usesAccountToken) {
+				reportUnauthorized(auth, accessToken);
 			}
 			const errorText = await response.text();
 			const error = apiResponseError(response, errorText, path);

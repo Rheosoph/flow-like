@@ -154,8 +154,9 @@ pub(crate) async fn device_upload_artifact(
     webview: tauri::Webview,
     transfer: String,
     upload: transfer::ArtifactUpload,
-) -> Result<serde_json::Value, String> {
-    main_webview(&webview)?;
+) -> Result<serde_json::Value, transfer::ArtifactUploadFailure> {
+    main_webview(&webview)
+        .map_err(|error| transfer::ArtifactUploadFailure::new("prepare", error))?;
     transfer::upload(&app_handle, &transfer, upload).await
 }
 
