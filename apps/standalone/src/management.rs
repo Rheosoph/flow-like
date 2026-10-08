@@ -1441,7 +1441,7 @@ fn inspection_result(
         "features":crate::diagnostics::features(),
         "can_delegate_certificate_renewal":authority.grant.is_none(),
         "can_manage_certificates":authority.permits(ManagementCapability::ManageCertificates,None,None),
-        "host_operations":{"reboot":REMOTE_HOST_OPERATIONS,"update_agent":REMOTE_HOST_OPERATIONS},
+        "host_operations":{"reboot":REMOTE_HOST_OPERATIONS,"update_agent":crate::release::update::supported()},
         "boot_id":device_status.then_some(boot_id),
         "host_isolation":isolation.as_ref().map(host_isolation_mode),
         "isolation":isolation,
@@ -3812,9 +3812,9 @@ fn execute_transaction(
         } => {
             authority.require(ManagementCapability::UpdateAgent, None, None)?;
             refuse_unless(
-                REMOTE_HOST_OPERATIONS,
+                crate::release::update::supported(),
                 RejectionCode::Unsupported,
-                "Automatic updates require Linux systemd",
+                "Automatic updates require a managed Linux systemd service or macOS LaunchAgent",
             )?;
             refuse_unless(
                 uuid::Uuid::parse_str(&request.operation_id)
@@ -3825,8 +3825,10 @@ fn execute_transaction(
             let trust = crate::release::ReleaseTrust::load(&state_dir.join("release-trust.json"))?;
             let release = crate::release::VerifiedRelease::verify(release_jws.clone(), &trust)
                 .reject_as(RejectionCode::Invalid)?;
+            crate::host::validate_update_candidate(state_dir, &release)
+                .reject_as(RejectionCode::Invalid)?;
             require_host_operation_slot(store, expected_boot_id, boot_id)?;
-            store.connection.execute("INSERT INTO host_operations(operation_id,kind,boot_id,state,created_at,payload_json) VALUES(?1,'update',?2,'pending',?3,?4)",params![request.operation_id,boot_id,now,serde_json::to_string(&json!({"release_jws":release_jws}))?])?;
+            crate::host::queue_update(store, boot_id, &request.operation_id, release_jws, now)?;
             json!({"boot_id":boot_id,"update":"pending","release_version":release.manifest().release_version})
         }
         _ => {
@@ -4279,6 +4281,10 @@ mod tests {
         assert_eq!(
             inspected.result["host_operations"]["reboot"],
             cfg!(target_os = "linux")
+        );
+        assert_eq!(
+            inspected.result["host_operations"]["update_agent"],
+            crate::release::update::supported()
         );
         assert_eq!(inspected.result["agent_version"], env!("CARGO_PKG_VERSION"));
         let reader = project_grant("reader", vec![ManagementCapability::Status], 1000);

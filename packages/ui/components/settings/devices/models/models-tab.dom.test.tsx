@@ -483,6 +483,117 @@ describe("actions", () => {
 		}
 	});
 
+	test("a newer available build beside an installed runtime offers Update and preserves loaded models", async () => {
+		const sample = gpuBoxModels();
+		const installed = sample.runtimes.find((pack) => pack.installed);
+		if (!installed) throw new Error("the sample has no installed runtime");
+		sample.runtimes.push({
+			...installed,
+			build: "next-build",
+			installed: false,
+		});
+		const view = await open(IDS.edge, sample);
+		const update = view.container.querySelector(
+			'[data-runtime-build="next-build"]',
+		) as HTMLElement;
+		expect(text(update)).toContain("Available");
+		await click(byRole("button", "Update…", update));
+		expect(text(inPortal("alertdialog"))).toContain(
+			"Loaded models keep using their current build. Reload them to use the update; newly loaded models use it immediately.",
+		);
+		await confirm(view);
+		expect(lastOf(view, "install_runtime")).toEqual({
+			kind: "install_runtime",
+			runtime: installed.runtime,
+			backend: installed.backend,
+		});
+	});
+
+	test("runtime update checks refresh device releases before reading the overview again", async () => {
+		const sample = gpuBoxModels();
+		sample.runtime_manifest_url =
+			"https://releases.example.com/runtimes/test.jws";
+		const view = await open(IDS.edge, sample, {
+			...MODEL_HOST_FEATURES,
+			model_runtime_updates: 1,
+		});
+		const before = modelRequests(view).length;
+		await click(
+			byRole(
+				"button",
+				"Check for runtime updates",
+				block(view, "models-hardware"),
+			),
+		);
+		await view.settle();
+		const requests = modelRequests(view)
+			.slice(before)
+			.map((request) => request.kind);
+		expect(requests[0]).toBe("probe");
+		expect(requests).toContain("overview");
+		expect(text(block(view, "models-hardware"))).toContain(
+			"Runtime releases checked.",
+		);
+	});
+
+	test("a runtime update check failure stays visible without claiming releases were checked", async () => {
+		const sample = gpuBoxModels();
+		sample.runtime_manifest_url =
+			"https://releases.example.com/runtimes/test.jws";
+		const view = await open(IDS.edge, sample, {
+			...MODEL_HOST_FEATURES,
+			model_runtime_updates: 1,
+		});
+		view.fake
+			.agent(IDS.edge)
+			.models.refuse(
+				"probe",
+				"failed",
+				"Runtime release signature verification failed.",
+			);
+		await click(
+			byRole(
+				"button",
+				"Check for runtime updates",
+				block(view, "models-hardware"),
+			),
+		);
+		await view.settle();
+		expect(text(block(view, "models-hardware"))).toContain(
+			"Runtime release signature verification failed.",
+		);
+		expect(text(block(view, "models-hardware"))).not.toContain(
+			"Runtime releases checked.",
+		);
+	});
+
+	test("older agents cannot claim to refresh runtime releases with a hardware-only probe", async () => {
+		const view = await open(IDS.edge, gpuBoxModels());
+		const button = byRole(
+			"button",
+			"Check for runtime updates",
+			block(view, "models-hardware"),
+		);
+		expect(button.getAttribute("aria-disabled")).toBe("true");
+		await click(button);
+		expect(sentKinds(view)).not.toContain("probe");
+	});
+
+	test("a runtime check needs a configured release source", async () => {
+		const view = await open(IDS.edge, gpuBoxModels(), {
+			...MODEL_HOST_FEATURES,
+			model_runtime_updates: 1,
+		});
+		const hardware = block(view, "models-hardware");
+		const button = byRole("button", "Check for runtime updates", hardware);
+		expect(button.getAttribute("aria-disabled")).toBe("true");
+		expect(text(hardware)).toContain(
+			"This device has no trusted runtime release source configured.",
+		);
+		await click(button);
+		expect(sentKinds(view)).not.toContain("probe");
+	});
+
 	test("removing an installed runtime asks for an acknowledgement and sends its pack", async () => {
 		const view = await open(
 			IDS.studio,

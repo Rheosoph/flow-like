@@ -104,6 +104,10 @@ const ACTIVATION_WINDOW: i64 = 600;
 const WATCHDOG_RUNTIME: i64 = 120;
 /// A watchdog must start within the activation window and lives at most its runtime.
 const WATCHDOG_HORIZON: i64 = ACTIVATION_WINDOW + WATCHDOG_RUNTIME + 60;
+
+pub const fn supported() -> bool {
+    cfg!(any(target_os = "linux", target_os = "macos"))
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Journal {
@@ -414,8 +418,8 @@ pub async fn stage(
     run_id: &str,
 ) -> Result<UpdateTicket> {
     ensure!(
-        cfg!(target_os = "linux"),
-        "Automatic binary updates currently require Linux systemd"
+        supported(),
+        "Automatic binary updates require Linux systemd or macOS launchd"
     );
     let state_dir = supervisor::prepare_state_dir(state_dir)?;
     let _lock = supervisor::lock_file(&state_dir.join("release.lock"))?;
@@ -521,6 +525,7 @@ pub async fn stage(
     Ok(journal.ticket)
 }
 
+#[cfg(target_os = "linux")]
 async fn command(program: &str, args: &[std::ffi::OsString]) -> Result<()> {
     let status = tokio::time::timeout(
         Duration::from_secs(15),
@@ -540,6 +545,7 @@ async fn command(program: &str, args: &[std::ffi::OsString]) -> Result<()> {
     Ok(())
 }
 /// The agent is the unit's main process, so it only queues its own restart and exits.
+#[cfg(target_os = "linux")]
 async fn restart_service(wait: bool) -> Result<()> {
     let mut args: Vec<std::ffi::OsString> = vec!["--user".into(), "--no-ask-password".into()];
     if !wait {
@@ -552,8 +558,8 @@ async fn restart_service(wait: bool) -> Result<()> {
 /// Arm an independent watchdog before atomically replacing a drained agent's executable.
 pub async fn activate(state_dir: &Path, operation_id: &str) -> Result<()> {
     ensure!(
-        cfg!(target_os = "linux"),
-        "Automatic binary updates currently require Linux systemd"
+        supported(),
+        "Automatic binary updates require Linux systemd or macOS launchd"
     );
     let state_dir = state_dir.canonicalize()?;
     let _lock = supervisor::lock_file(&state_dir.join("release.lock"))?;
@@ -580,7 +586,19 @@ pub async fn activate(state_dir: &Path, operation_id: &str) -> Result<()> {
             .context("Executable has no parent")?,
     )?
     .sync_all()?;
-    restart_service(false).await
+    #[cfg(target_os = "linux")]
+    {
+        restart_service(false).await?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // The independent watchdog restarts launchd; a self-restart would kill its caller.
+        atomic(
+            &operation_directory(&state_dir, operation_id)?.join("restart-requested.json"),
+            &serde_json::to_vec(&journal.nonce)?,
+        )?;
+    }
+    Ok(())
 }
 
 async fn prepare_swap(state_dir: &Path, journal: &mut Journal) -> Result<()> {
@@ -593,12 +611,12 @@ async fn prepare_swap(state_dir: &Path, journal: &mut Journal) -> Result<()> {
     private_executable(&journal.executable)?;
     let release = VerifiedRelease::verify(journal.new_release_jws.clone(), &journal.trust)?;
     verify_artifact_file(&journal.candidate, artifact(release.manifest())?)?;
-    verify_artifact_file(
-        &journal.backup,
-        artifact(&historical(&journal.old_release_jws, &journal.trust)?)?,
-    )?;
+    let old = historical(&journal.old_release_jws, &journal.trust)?;
+    verify_artifact_file(&journal.executable, artifact(&old)?)?;
+    verify_artifact_file(&journal.backup, artifact(&old)?)?;
     journal.phase = Phase::Armed;
     save(state_dir, journal)?;
+    #[cfg(target_os = "linux")]
     let args = vec![
         "--user".into(),
         "--collect".into(),
@@ -616,9 +634,12 @@ async fn prepare_swap(state_dir: &Path, journal: &mut Journal) -> Result<()> {
         "--operation-id".into(),
         operation_id.as_str().into(),
     ];
+    #[cfg(target_os = "linux")]
     command("systemd-run", &args)
         .await
         .context("Start the update watchdog as a transient user service")?;
+    #[cfg(target_os = "macos")]
+    service::start_update_watchdog(&journal.backup, state_dir, &operation_id).await?;
     let ready_path = operation_directory(state_dir, &operation_id)?.join("watchdog-ready.json");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -640,11 +661,10 @@ async fn prepare_swap(state_dir: &Path, journal: &mut Journal) -> Result<()> {
         file_identity(&journal.executable)? == journal.previous_file,
         "Installed binary changed after the update was staged"
     );
-    verify_artifact_file(
-        &journal.executable,
-        artifact(&historical(&journal.old_release_jws, &journal.trust)?)?,
-    )?;
-    verify_artifact_file(&journal.candidate, artifact(release.manifest())?)?;
+    ensure!(
+        file_identity(&journal.candidate)? == journal.candidate_file,
+        "Candidate binary changed after the update was staged"
+    );
     journal.phase = Phase::Swapped;
     save(state_dir, journal)
 }
@@ -657,6 +677,23 @@ fn readiness_matches(journal: &Journal, ready: &Readiness) -> bool {
         && ready.boot_id == journal.boot_id
         && !ready.run_id.is_empty()
         && ready.run_id != journal.previous_run_id
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn restart_request_ready(state_dir: &Path, journal: &Journal) -> Result<bool> {
+    if journal.phase != Phase::Swapped {
+        return Ok(false);
+    }
+    let path = operation_directory(state_dir, &journal.ticket.operation_id)?
+        .join("restart-requested.json");
+    if !path.try_exists()? {
+        return Ok(false);
+    }
+    let nonce: String = serde_json::from_slice(&vault::read_private(&path)?)?;
+    ensure!(nonce == journal.nonce, "Update restart request mismatch");
+    let release = historical(&journal.new_release_jws, &journal.trust)?;
+    verify_artifact_file(&journal.executable, artifact(&release)?)?;
+    Ok(true)
 }
 
 /// Called by the newly started agent after management DB and supervisor initialization.
@@ -700,9 +737,15 @@ pub fn confirm_ready(state_dir: &Path, device_id: &str, boot_id: &str, run_id: &
 /// Runs from the retained old executable in a separate transient user service.
 pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
     ensure!(
-        cfg!(target_os = "linux"),
-        "Update watchdog requires Linux systemd"
+        supported(),
+        "Update watchdog requires Linux systemd or macOS launchd"
     );
+    #[cfg(target_os = "macos")]
+    {
+        // launchd has no RuntimeMaxSec equivalent. This process only runs the watchdog.
+        // SAFETY: alarm takes a duration in seconds and needs no initialized memory.
+        unsafe { libc::alarm(WATCHDOG_RUNTIME as u32) };
+    }
     let mut journal = load(state_dir, operation_id)?;
     ensure!(
         journal.phase == Phase::Armed
@@ -721,10 +764,37 @@ pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
         &serde_json::to_vec(&journal.nonce)?,
     )?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    #[cfg(target_os = "macos")]
+    let mut restart_requested = false;
     loop {
         journal = load(state_dir, operation_id)?;
         if journal.phase.terminal() {
             return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        if !restart_requested {
+            match restart_request_ready(state_dir, &journal) {
+                Ok(false) => {}
+                Ok(true) => {
+                    if let Err(error) =
+                        service::restart_after_update(&journal.executable, state_dir).await
+                    {
+                        tracing::warn!(
+                            operation_id,
+                            "Update restart failed; restoring the previous release: {error:#}"
+                        );
+                        break;
+                    }
+                    restart_requested = true;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        operation_id,
+                        "Update restart request is invalid; restoring the previous release: {error:#}"
+                    );
+                    break;
+                }
+            }
         }
         let ready_path = operation_directory(state_dir, operation_id)?.join("agent-ready.json");
         if journal.phase == Phase::Swapped && ready_path.try_exists()? {
@@ -740,6 +810,14 @@ pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
                 }
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
+            }
+            let _lock = supervisor::lock_file_within(
+                &state_dir.join("release.lock"),
+                Duration::from_secs(15),
+            )?;
+            journal = load(state_dir, operation_id)?;
+            if journal.phase.terminal() {
+                return Ok(());
             }
             match commit(state_dir, &mut journal) {
                 // The old image stays as this operation's backup until a later update's cleanup.
@@ -758,8 +836,20 @@ pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    rollback(state_dir, &mut journal)?;
-    restart_service(true).await
+    {
+        let _lock =
+            supervisor::lock_file_within(&state_dir.join("release.lock"), Duration::from_secs(15))?;
+        journal = load(state_dir, operation_id)?;
+        if journal.phase.terminal() {
+            return Ok(());
+        }
+        rollback(state_dir, &mut journal)?;
+    }
+    #[cfg(target_os = "linux")]
+    restart_service(true).await?;
+    #[cfg(target_os = "macos")]
+    service::restart_after_update(&journal.executable, state_dir).await?;
+    Ok(())
 }
 
 fn promoted_trust(journal: &Journal) -> ReleaseTrust {
@@ -885,19 +975,20 @@ fn watchdog_gone(journal: &Journal) -> Result<bool> {
     Ok(unix_time()?.saturating_sub(journal.created_at) > WATCHDOG_HORIZON)
 }
 
-/// A swapped update whose watchdog is gone stays unconfirmed until boot recovery restores it.
+/// A swapped update whose watchdog is gone stays unconfirmed until startup recovery restores it.
 pub fn orphaned_swap(state_dir: &Path, operation_id: &str) -> Result<bool> {
     let journal = load(state_dir, operation_id)?;
     Ok(journal.phase == Phase::Swapped && watchdog_gone(&journal)?)
 }
 
-/// A transient watchdog does not survive an OS reboot. Recover its journal before opening the DB.
+/// Recover after reboot, or after a dead watchdog's full lifetime, before opening the DB.
 pub fn recover_after_boot(state_dir: &Path, boot_id: &str) -> Result<bool> {
     let Some(operation) = active(state_dir)? else {
         return Ok(false);
     };
+    let _lock = supervisor::lock_file(&state_dir.join("release.lock"))?;
     let mut journal = load(state_dir, &operation)?;
-    if journal.boot_id == boot_id {
+    if journal.boot_id == boot_id && !watchdog_gone(&journal)? {
         return Ok(false);
     }
     if journal.phase == Phase::Staged {
@@ -1147,6 +1238,53 @@ mod tests {
         assert_eq!(std::fs::read(&journal.executable)?, b"old-image");
         assert!(!directory.path().join("management.sqlite").exists());
         assert!(!recover_after_boot(directory.path(), "new-boot")?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn startup_recovers_an_expired_watchdog_without_requiring_an_os_reboot() -> Result<()> {
+        let (directory, mut journal) = swapped_fixture()?;
+        assert!(!recover_after_boot(directory.path(), "old-boot")?);
+        journal.created_at -= WATCHDOG_HORIZON + 1;
+        save(directory.path(), &journal)?;
+        let operation = &journal.ticket.operation_id;
+        {
+            let _activation = supervisor::lock_file(&directory.path().join("release.lock"))?;
+            assert!(recover_after_boot(directory.path(), "old-boot").is_err());
+            assert_eq!(std::fs::read(&journal.executable)?, b"new-image");
+            assert_eq!(
+                operation_outcome(directory.path(), operation)?.state,
+                "swapped"
+            );
+        }
+        assert!(recover_after_boot(directory.path(), "old-boot")?);
+        assert_eq!(std::fs::read(&journal.executable)?, b"old-image");
+        assert_eq!(
+            operation_outcome(directory.path(), operation)?.state,
+            "rolled_back"
+        );
+        assert!(!directory.path().join("management.sqlite").exists());
+        assert!(!recover_after_boot(directory.path(), "old-boot")?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn watchdog_restarts_only_after_the_bound_new_binary_is_installed() -> Result<()> {
+        let (directory, mut journal) = swapped_fixture()?;
+        let request = operation_directory(directory.path(), &journal.ticket.operation_id)?
+            .join("restart-requested.json");
+        assert!(!restart_request_ready(directory.path(), &journal)?);
+        atomic(&request, &serde_json::to_vec("wrong nonce")?)?;
+        assert!(restart_request_ready(directory.path(), &journal).is_err());
+        atomic(&request, &serde_json::to_vec(&journal.nonce)?)?;
+        assert!(restart_request_ready(directory.path(), &journal)?);
+        journal.phase = Phase::Armed;
+        assert!(!restart_request_ready(directory.path(), &journal)?);
+        journal.phase = Phase::Swapped;
+        replace_executable(&journal, b"old-image")?;
+        assert!(restart_request_ready(directory.path(), &journal).is_err());
         Ok(())
     }
 

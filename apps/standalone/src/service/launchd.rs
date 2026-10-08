@@ -55,6 +55,9 @@ impl User {
     fn target(&self) -> String {
         format!("{}/{LAUNCHD_LABEL}", self.domain())
     }
+    fn watchdog_domain(&self) -> String {
+        format!("user/{}", self.uid)
+    }
 
     fn directory(&self, path: &Path, private: bool) -> Result<()> {
         let metadata = std::fs::symlink_metadata(path)
@@ -190,7 +193,11 @@ impl Runner for Launchctl {
 }
 
 async fn domain_available(runner: &impl Runner, user: &User) -> Result<bool> {
-    let reply = runner.run(&["print", &user.domain()]).await?;
+    domain_exists(runner, &user.domain()).await
+}
+
+async fn domain_exists(runner: &impl Runner, domain: &str) -> Result<bool> {
+    let reply = runner.run(&["print", domain]).await?;
     if reply.code == Some(0) {
         return Ok(true);
     }
@@ -198,7 +205,7 @@ async fn domain_available(runner: &impl Runner, user: &User) -> Result<bool> {
     if reply.code == Some(113) && reply.err.contains("Could not find domain") {
         return Ok(false);
     }
-    reply.success("Inspect the user's GUI login session")?;
+    reply.success("Inspect the launchd user domain")?;
     unreachable!()
 }
 
@@ -391,6 +398,129 @@ pub(super) async fn status(executable: &Path, state: &Path) -> Result<ServiceSta
     status_with(&Launchctl, &User::current()?, executable, state).await
 }
 
+async fn verify_with(
+    runner: &impl Runner,
+    user: &User,
+    executable: &Path,
+    state: &Path,
+) -> Result<()> {
+    user.executable(executable)?;
+    user.directory(state, true)?;
+    let status = status_with(runner, user, executable, state).await?;
+    ensure!(
+        status.installed && status.loaded,
+        "Install and load this exact managed LaunchAgent before requesting automatic updates"
+    );
+    Ok(())
+}
+
+pub(super) async fn verify(executable: &Path, state: &Path) -> Result<()> {
+    verify_with(&Launchctl, &User::current()?, executable, state).await
+}
+
+pub(super) async fn verify_update_watchdog() -> Result<()> {
+    ensure!(
+        domain_exists(&Launchctl, &User::current()?.watchdog_domain()).await?,
+        "The launchd user domain must be available to supervise automatic updates"
+    );
+    Ok(())
+}
+
+fn watchdog_definition(executable: &Path, state: &Path, operation_id: &str) -> Result<String> {
+    ensure!(
+        uuid::Uuid::parse_str(operation_id)?.to_string() == operation_id,
+        "Update operation ID must be a canonical UUID"
+    );
+    ensure!(
+        executable
+            == state
+                .join("updates")
+                .join(operation_id)
+                .join("previous-binary"),
+        "The update watchdog must use this operation's retained binary"
+    );
+    let executable = xml_escape(unit_path(executable, "Watchdog executable")?);
+    let state = xml_escape(unit_path(state, "State directory")?);
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>{LAUNCHD_LABEL}.update.{operation_id}</string>
+<key>ProgramArguments</key><array><string>{executable}</string><string>--state-dir</string><string>{state}</string><string>update-guard</string><string>--operation-id</string><string>{operation_id}</string></array>
+<key>WorkingDirectory</key><string>{state}</string>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><false/>
+<key>ExitTimeOut</key><integer>5</integer>
+<key>Umask</key><integer>63</integer>
+</dict></plist>
+"#
+    ))
+}
+
+async fn start_watchdog_with(
+    runner: &impl Runner,
+    user: &User,
+    executable: &Path,
+    state: &Path,
+    operation_id: &str,
+) -> Result<()> {
+    let expected = watchdog_definition(executable, state, operation_id)?;
+    user.executable(executable)?;
+    user.directory(state, true)?;
+    let directory = state.join("updates").join(operation_id);
+    user.directory(&directory, true)?;
+    let path = directory.join("watchdog.plist");
+    ensure!(
+        domain_exists(runner, &user.watchdog_domain()).await?,
+        "The launchd user domain must be available to supervise automatic updates"
+    );
+    private_file::create_or_verify(&path, &expected)?;
+    // The user domain keeps the watchdog separate from the GUI agent it restarts.
+    // This definition is outside LaunchAgents, so login cannot replay an old update.
+    runner
+        .run(&[
+            "bootstrap",
+            &user.watchdog_domain(),
+            unit_path(&path, "Watchdog plist")?,
+        ])
+        .await?
+        .success("Start the independent update watchdog")?;
+    Ok(())
+}
+
+pub(super) async fn start_update_watchdog(
+    executable: &Path,
+    state: &Path,
+    operation_id: &str,
+) -> Result<()> {
+    start_watchdog_with(
+        &Launchctl,
+        &User::current()?,
+        executable,
+        state,
+        operation_id,
+    )
+    .await
+}
+
+async fn restart_with(
+    runner: &impl Runner,
+    user: &User,
+    executable: &Path,
+    state: &Path,
+) -> Result<()> {
+    verify_with(runner, user, executable, state).await?;
+    runner
+        .run(&["kickstart", "-k", "-p", &user.target()])
+        .await?
+        .success("Restart the managed LaunchAgent after updating its executable")?;
+    Ok(())
+}
+
+pub(super) async fn restart_after_update(executable: &Path, state: &Path) -> Result<()> {
+    restart_with(&Launchctl, &User::current()?, executable, state).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +613,101 @@ mod tests {
             home,
         };
         Ok((temp, user, executable, state))
+    }
+
+    #[tokio::test]
+    async fn watchdog_uses_a_one_shot_job_in_the_independent_user_domain() -> Result<()> {
+        let (_temp, user, _, state) = fixture()?;
+        let operation = uuid::Uuid::new_v4().to_string();
+        let directory = state.join("updates").join(&operation);
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)?;
+        let backup = directory.join("previous-binary");
+        std::fs::write(&backup, b"verified backup fixture")?;
+        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o700))?;
+        let path = directory.join("watchdog.plist");
+        let fake = Fake::new(vec![
+            ok(&["print", &user.watchdog_domain()]),
+            ok(&["bootstrap", &user.watchdog_domain(), path.to_str().unwrap()]),
+        ]);
+        start_watchdog_with(&fake, &user, &backup, &state, &operation).await?;
+        fake.complete();
+        let definition = watchdog_definition(&backup, &state, &operation)?;
+        assert!(private_file::matches(&path, &definition)?);
+        assert!(definition.contains("<key>KeepAlive</key><false/>"));
+        assert!(definition.contains(&format!("{LAUNCHD_LABEL}.update.{operation}")));
+        assert!(!definition.contains("LimitLoadToSessionType"));
+        assert!(!user.home.join("Library").exists());
+        assert!(watchdog_definition(&backup, &state, "../../escape").is_err());
+        assert!(watchdog_definition(&state.join("other-binary"), &state, &operation).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn watchdog_requires_its_user_domain_and_preserves_conflicting_definitions() -> Result<()>
+    {
+        let (_temp, user, _, state) = fixture()?;
+        let operation = uuid::Uuid::new_v4().to_string();
+        let directory = state.join("updates").join(&operation);
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)?;
+        let backup = directory.join("previous-binary");
+        std::fs::write(&backup, b"verified backup fixture")?;
+        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o700))?;
+        let path = directory.join("watchdog.plist");
+        let fake = Fake::new(vec![step(
+            &["print", &user.watchdog_domain()],
+            113,
+            String::new(),
+            "Could not find domain for",
+        )]);
+        assert!(
+            start_watchdog_with(&fake, &user, &backup, &state, &operation)
+                .await
+                .is_err()
+        );
+        fake.complete();
+        assert!(!path.exists());
+        private_file::create_or_verify(&path, "operator definition")?;
+        let fake = Fake::new(vec![ok(&["print", &user.watchdog_domain()])]);
+        assert!(
+            start_watchdog_with(&fake, &user, &backup, &state, &operation)
+                .await
+                .is_err()
+        );
+        fake.complete();
+        assert!(private_file::matches(&path, "operator definition")?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_restart_verifies_the_exact_agent_before_replacing_its_process() -> Result<()> {
+        let (_temp, user, exe, state) = fixture()?;
+        let path = user.plist(true)?;
+        private_file::create_or_verify(&path, &launchd_user_plist(&exe, &state)?)?;
+        for process in [Some(42), None] {
+            let fake = Fake::new(vec![
+                ok(&["print", &user.domain()]),
+                running(&user, &path, process),
+                ok(&["kickstart", "-k", "-p", &user.target()]),
+            ]);
+            restart_with(&fake, &user, &exe, &state).await?;
+            fake.complete();
+        }
+        let fake = Fake::new(vec![
+            ok(&["print", &user.domain()]),
+            running(&user, Path::new("/unrelated/agent.plist"), Some(99)),
+        ]);
+        assert!(restart_with(&fake, &user, &exe, &state).await.is_err());
+        fake.complete();
+        let fake = Fake::new(vec![ok(&["print", &user.domain()]), absent(&user)]);
+        assert!(restart_with(&fake, &user, &exe, &state).await.is_err());
+        fake.complete();
+        Ok(())
     }
 
     #[tokio::test]

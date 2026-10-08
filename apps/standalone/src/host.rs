@@ -10,6 +10,143 @@ const REBOOT_OUTCOME_WINDOW: i64 = 600;
 const UPDATE_STAGING_WINDOW: i64 = 600;
 const MAX_WATCH_BACKOFF: Duration = Duration::from_secs(30);
 
+/// Check the installed release authority without creating device state or stopping workloads.
+pub async fn check_update(
+    state_dir: &Path,
+) -> Result<(crate::release::VerifiedRelease, serde_json::Value)> {
+    let trust = crate::release::ReleaseTrust::load(&state_dir.join("release-trust.json")).context(
+        "This installation has no valid release authority; enroll from a signed setup package",
+    )?;
+    let latest = crate::release::fetch_release(&trust).await?;
+    let installed = crate::release::installed_release(state_dir)
+        .context("This installation has no recorded signed release")?;
+    let compatible = validate_update_compatibility(state_dir, &latest);
+    let result = serde_json::json!({
+        "installed_version": installed.release_version,
+        "installed_sequence": installed.sequence,
+        "available_version": latest.manifest().release_version,
+        "available_sequence": latest.manifest().sequence,
+        "update_available": latest.manifest().sequence > installed.sequence,
+        "supported": crate::release::update::supported(),
+        "compatible": compatible.is_ok(),
+        "reason": compatible.err().map(|error| error.to_string()),
+    });
+    Ok((latest, result))
+}
+
+pub(crate) fn validate_update_candidate(
+    state_dir: &Path,
+    release: &crate::release::VerifiedRelease,
+) -> Result<()> {
+    validate_update_compatibility(state_dir, release)?;
+    let installed = crate::release::installed_release(state_dir)
+        .context("This installation has no recorded signed release")?;
+    ensure!(
+        release.manifest().sequence > installed.sequence,
+        "No newer release is available"
+    );
+    Ok(())
+}
+
+fn validate_update_compatibility(
+    state_dir: &Path,
+    release: &crate::release::VerifiedRelease,
+) -> Result<()> {
+    release.check_fresh()?;
+    release.artifact(flow_like_device_protocol::ReleaseTarget::current()?)?;
+    let installed = crate::release::installed_release(state_dir)
+        .context("This installation has no recorded signed release")?;
+    ensure!(
+        i64::from(release.manifest().state_schema_version) == crate::state::SCHEMA_VERSION
+            && i64::from(installed.state_schema_version) == crate::state::SCHEMA_VERSION,
+        "Automatic rollback requires the current management database schema"
+    );
+    Ok(())
+}
+
+/// Local and remote callers share the same durable queue and workload drain path.
+pub async fn request_local_update(state_dir: &Path) -> Result<serde_json::Value> {
+    ensure!(
+        crate::release::update::supported(),
+        "Automatic updates require a managed Linux systemd service or macOS LaunchAgent"
+    );
+    ensure!(
+        crate::supervisor::agent_is_running(state_dir)?,
+        "Start the installed agent service before requesting an update"
+    );
+    let executable = std::env::current_exe()?;
+    crate::service::verify_user_service(&executable, state_dir).await?;
+    crate::service::verify_update_watchdog().await?;
+    let (release, _) = check_update(state_dir).await?;
+    validate_update_candidate(state_dir, &release)?;
+    let store = open(state_dir)?;
+    let boot = boot_id()?;
+    let operation = uuid::Uuid::new_v4().to_string();
+    let now = unix_time()?;
+    let response = serde_json::json!({
+        "operation_id": operation,
+        "state": "accepted",
+        "result": {"boot_id": boot, "update": "pending", "release_version": release.manifest().release_version},
+    });
+    store.with_rollout_transaction(|| {
+        queue_update(&store, &boot, &operation, release.compact(), now)?;
+        store.connection.execute(
+            "INSERT INTO management_operations(operation_id,request_digest,principal,accepted_at,result_json) VALUES(?1,?2,'local',?3,?4)",
+            params![operation, flow_like_device_protocol::compact_digest(release.compact()), now, serde_json::to_string(&response)?],
+        )?;
+        Ok(())
+    })?;
+    Ok(response)
+}
+
+pub(crate) fn queue_update(
+    store: &StateStore,
+    boot_id: &str,
+    operation_id: &str,
+    release_jws: &str,
+    now: i64,
+) -> Result<()> {
+    store.with_rollout_transaction(|| {
+        ensure!(!store.has_active_rollouts()?, "A workflow update is active");
+        ensure!(active_operation(store)?.is_none(), "Another host operation is pending");
+        store.connection.execute(
+            "INSERT INTO host_operations(operation_id,kind,boot_id,state,created_at,payload_json) VALUES(?1,'update',?2,'pending',?3,?4)",
+            params![operation_id, boot_id, now, serde_json::to_string(&serde_json::json!({"release_jws":release_jws}))?],
+        )?;
+        Ok(())
+    })
+}
+
+/// Return the latest local or remote update, including failures before a candidate was staged.
+pub fn update_status(state_dir: &Path) -> Result<serde_json::Value> {
+    let store = open(state_dir)?;
+    let status = store.connection.query_row(
+        "SELECT h.operation_id,h.state,h.created_at,m.result_json FROM host_operations h LEFT JOIN management_operations m ON m.operation_id=h.operation_id WHERE h.kind='update' ORDER BY h.created_at DESC,h.rowid DESC LIMIT 1",
+        [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, Option<String>>(3)?)),
+    ).optional()?;
+    let Some((operation_id, mut state, created_at, detail)) = status else {
+        return Ok(serde_json::json!({"state":"none"}));
+    };
+    let mut result = detail
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
+        .and_then(|value| value.get("result").cloned());
+    if let Ok(outcome) = crate::release::update::operation_outcome(state_dir, &operation_id)
+        && matches!(
+            outcome.state.as_str(),
+            "completed" | "rolled_back" | "failed"
+        )
+    {
+        state = outcome.state;
+        if let Some(serde_json::Value::Object(result)) = &mut result {
+            result.insert("update".into(), state.clone().into());
+        }
+    }
+    Ok(
+        serde_json::json!({"operation_id":operation_id,"state":state,"created_at":created_at,"result":result}),
+    )
+}
+
 pub fn boot_id() -> Result<String> {
     #[cfg(target_os = "linux")]
     {
@@ -172,7 +309,7 @@ fn reconcile_updates(state_dir: &Path, store: &StateStore, boot_id: &str) -> Res
                     }
                 }
             }
-            // Only boot recovery may restore the binary, so the operation must not block a reboot.
+            // Startup recovery restores the binary, so the operation must not block a restart.
             Ok(outcome)
                 if matches!(state.as_str(), "requesting" | "unknown")
                     && outcome.state == "swapped"
@@ -184,7 +321,7 @@ fn reconcile_updates(state_dir: &Path, store: &StateStore, boot_id: &str) -> Res
                     store,
                     &operation,
                     "failed",
-                    "The update watchdog stopped without confirming the new binary; the next reboot restores the previous release",
+                    "The update watchdog stopped without confirming the new binary; restart the agent to restore the previous release",
                 )?;
             }
             _ => (),
@@ -433,12 +570,11 @@ async fn stage_pending_update(
         }
         Err(error) => {
             tracing::warn!(operation_id = %operation, "Update candidate could not be staged: {error:#}");
-            fail_staging(
-                state_dir,
-                &store,
-                &operation,
-                "Candidate verification or host readiness failed",
-            )?;
+            let detail: String = format!("Update could not be staged: {error:#}")
+                .chars()
+                .take(1024)
+                .collect();
+            fail_staging(state_dir, &store, &operation, &detail)?;
             Ok(false)
         }
     }
@@ -480,6 +616,85 @@ pub async fn dispatch_update(state_dir: &Path, boot_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_and_remote_updates_share_the_host_operation_slot() -> Result<()> {
+        let (directory, store) = store_with_operations(&[])?;
+        queue_update(&store, "boot", "local", "signed-release", 100)?;
+        assert!(queue_update(&store, "boot", "remote", "another-release", 101).is_err());
+        assert_eq!(update_status(directory.path())?["state"], "pending");
+        update_result(&store, "local", "failed", "Candidate rejected")?;
+        queue_update(&store, "boot", "remote", "another-release", 101)?;
+        let status = update_status(directory.path())?;
+        assert_eq!(status["operation_id"], "remote");
+        assert_eq!(status["state"], "pending");
+        Ok(())
+    }
+
+    #[test]
+    fn update_queue_failure_rolls_back_without_disturbing_other_operations() -> Result<()> {
+        let (_directory, store) = store_with_operations(&[("reboot", "reboot", "pending", 100)])?;
+        assert!(queue_update(&store, "boot", "update", "signed-release", 101).is_err());
+        assert!(store.connection.is_autocommit());
+        assert_eq!(active_operation(&store)?.unwrap().kind, "reboot");
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT COUNT(*) FROM host_operations", [], |row| row
+                    .get::<_, u64>(0))?,
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn update_candidates_use_release_sequence_and_require_compatible_state() -> Result<()> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use flow_like_device_protocol::{
+            SigningKey, StandaloneArtifact, StandaloneRelease, sign_standalone_release,
+        };
+        let directory = tempfile::tempdir()?;
+        let signing = SigningKey::generate();
+        let trust = crate::release::ReleaseTrust {
+            manifest_url: "https://releases.example/release.jws".into(),
+            public_keys: vec![URL_SAFE_NO_PAD.encode(signing.public_key().to_bytes()?)],
+            minimum_sequence: 1,
+        };
+        let now = unix_time()?;
+        let mut manifest = StandaloneRelease {
+            version: 1,
+            state_schema_version: crate::state::SCHEMA_VERSION.try_into()?,
+            sequence: 1,
+            release_version: "1.0.0".into(),
+            issued_at: now - 1,
+            expires_at: now + 3600,
+            artifacts: vec![StandaloneArtifact {
+                target: flow_like_device_protocol::ReleaseTarget::current()?,
+                url: "https://releases.example/agent".into(),
+                size: 1,
+                sha256: "a".repeat(64),
+            }],
+            container: None,
+        };
+        let signed = sign_standalone_release(&manifest, &signing)?;
+        crate::vault::write_new_private(
+            &directory.path().join("active-release.jws"),
+            signed.as_bytes(),
+        )?;
+        let candidate = |value: &StandaloneRelease| {
+            crate::release::VerifiedRelease::verify(
+                sign_standalone_release(value, &signing)?,
+                &trust,
+            )
+        };
+        validate_update_compatibility(directory.path(), &candidate(&manifest)?)?;
+        assert!(validate_update_candidate(directory.path(), &candidate(&manifest)?).is_err());
+        manifest.sequence = 2;
+        validate_update_candidate(directory.path(), &candidate(&manifest)?)?;
+        manifest.state_schema_version += 1;
+        assert!(validate_update_candidate(directory.path(), &candidate(&manifest)?).is_err());
+        Ok(())
+    }
 
     fn store_with_operations(
         rows: &[(&str, &str, &str, i64)],

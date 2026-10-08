@@ -294,6 +294,14 @@ complete `/v1/embeddings` URL. Azure also accepts a resource base URL and uses
 Azure, Hugging Face, or a compatible service. The legacy `remote.endpoint` URL
 does not select the destination.
 
+For EmbeddingGemma 2, set `remote.implementation` to `Internal` and
+`remote.model_id` to `embeddinggemma-2`. The `/embeddings/embed` API accepts text
+strings, structured image/audio/video inputs, combined multimodal inputs, and
+mixed batches for this model. Media fields contain URLs or base64 strings; the
+API forwards them to the gateway without downloading them. Other embedding
+providers retain their text input contract. See [embedding models](/topics/genai/models/#embedding-models)
+for media limits and workflow nodes.
+
 Before upgrading, review existing Bits that use `CloudflareWorkersAI` or
 `HuggingfaceEndpoint`. Earlier releases treated these names as aliases for
 `Internal`; they now select the named provider. If a Bit should continue using

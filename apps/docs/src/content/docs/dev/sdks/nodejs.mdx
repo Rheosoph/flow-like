@@ -268,6 +268,31 @@ const result = await client.embed("bit-id-for-embedding", [
 console.log(result.embeddings); // number[][]
 ```
 
+For media, select a compatible model such as Gemma 2
+(`i6un3u7arw9mt59xzpc6rmzm`). `embed()` also accepts structured `text`, `image`,
+`audio`, and `video` inputs, or a mixed array that returns one vector per item.
+A `multimodal` input combines text and up to one file per modality into one vector:
+
+```typescript
+const signedVideoUrl =
+  "https://storage.googleapis.com/bucket/demo.mp4?X-Goog-Signature=...";
+const result = await client.embed("i6un3u7arw9mt59xzpc6rmzm", {
+  type: "multimodal",
+  text: "A product demonstration: <|image|> <|audio|> <|video|>",
+  image: "https://example.com/product.jpg",
+  audio: "https://example.com/narration.wav",
+  video: signedVideoUrl,
+}, { embed_type: "document" });
+console.log(result.embeddings[0]); // One 768-dimensional vector
+```
+
+Replace the example URLs with final download URLs. Media fields take a string
+containing a public or signed HTTP(S) URL, a base64 data URL, or raw base64. The SDK
+forwards signed URLs with their query parameters unchanged. Keep them valid through
+the worker's download, including cold starts. Redirects, private addresses, and local
+paths are rejected. Video contributes sampled frames; provide its soundtrack in
+`audio` to include it in the combined embedding.
+
 ## Model Discovery
 
 ```typescript

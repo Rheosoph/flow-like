@@ -3,9 +3,10 @@ use std::{collections::HashSet, sync::Arc};
 use flow_like::flow::{
     execution::{context::ExecutionContext, internal_pin::InternalPin},
     node::{Node, NodeLogic},
-    pin::PinType,
+    pin::{PinType, ValueType, resolve_schema},
     variable::{VariableType, effective_default},
 };
+use flow_like_catalog_core::{FlowPath, UploadedFile, materialize_uploaded_files};
 use flow_like_types::{Value, async_trait, json::json};
 pub mod push_generic_result;
 
@@ -67,6 +68,107 @@ async fn optional_pin_ids(context: &ExecutionContext) -> HashSet<String> {
         .collect()
 }
 
+fn is_flow_path_schema(schema: &Value) -> bool {
+    if schema.get("title").and_then(Value::as_str) == Some("FlowPath") {
+        return true;
+    }
+    if schema.get("type").and_then(Value::as_str) == Some("array") {
+        return schema.get("items").is_some_and(is_flow_path_schema);
+    }
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(required) = schema.get("required").and_then(Value::as_array) else {
+        return false;
+    };
+    ["path", "store_ref"].iter().all(|name| {
+        properties.contains_key(*name) && required.iter().any(|value| value.as_str() == Some(*name))
+    })
+}
+
+fn uploaded_file(value: &Value) -> Option<UploadedFile> {
+    let url = value.get("url")?.as_str().filter(|url| !url.is_empty())?;
+    let flow_path = flow_like_types::json::from_value::<FlowPath>(value.clone()).ok()?;
+    Some(UploadedFile {
+        flow_path: Some(flow_path),
+        url: Some(url.to_string()),
+        name: value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ..Default::default()
+    })
+}
+
+/// Form uploads retain their source URL until the Event can hand them to this run's store.
+async fn materialize_pin_uploads(
+    context: &mut ExecutionContext,
+    pin: &InternalPin,
+    value: &Value,
+) -> flow_like_types::Result<Value> {
+    if pin.data_type != VariableType::Struct {
+        return Ok(value.clone());
+    }
+    let collection = matches!(pin.value_type, ValueType::Array | ValueType::HashSet);
+    let values = if collection {
+        match value.as_array() {
+            Some(values) => values.as_slice(),
+            None => return Ok(value.clone()),
+        }
+    } else if pin.value_type == ValueType::Normal {
+        std::slice::from_ref(value)
+    } else {
+        return Ok(value.clone());
+    };
+    let (indices, mut files): (Vec<_>, Vec<_>) = values
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| uploaded_file(value).map(|file| (index, file)))
+        .unzip();
+    if files.is_empty() {
+        return Ok(value.clone());
+    }
+    let Some(schema) = pin.schema.as_deref() else {
+        return Ok(value.clone());
+    };
+    let schema = {
+        let board = context.get_board().await?;
+        let schema = resolve_schema(schema, &board.refs)?;
+        flow_like_types::json::from_str::<Value>(schema).ok()
+    };
+    if !schema.as_ref().is_some_and(is_flow_path_schema) {
+        return Ok(value.clone());
+    }
+
+    // Form sources are signed upload URLs. Local picks already carry a staged FlowPath.
+    for file in &files {
+        let url = file.url.as_deref().unwrap_or_default();
+        let remote_url = flow_like_types::reqwest::Url::parse(url)
+            .ok()
+            .is_some_and(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.host_str() != Some("asset.localhost")
+            });
+        if !remote_url {
+            return Err(flow_like_types::anyhow!(
+                "Form file input '{}' requires an HTTP or HTTPS upload URL",
+                pin.name()
+            ));
+        }
+    }
+
+    let paths = materialize_uploaded_files(context, pin.id(), &mut files).await?;
+    let mut prepared = values.to_vec();
+    for (index, path) in indices.into_iter().zip(paths) {
+        prepared[index] = json!(path);
+    }
+    Ok(if collection {
+        Value::Array(prepared)
+    } else {
+        prepared.remove(0)
+    })
+}
+
 async fn try_match_and_set_pin(
     context: &mut ExecutionContext,
     obj: &flow_like_types::json::Map<String, flow_like_types::Value>,
@@ -74,14 +176,16 @@ async fn try_match_and_set_pin(
 ) -> flow_like_types::Result<Option<String>> {
     let pin_name = pin.name();
     if let Some(value) = obj.get(pin_name) {
-        context.set_pin_ref_value(pin, value.clone()).await?;
+        let value = materialize_pin_uploads(context, pin, value).await?;
+        context.set_pin_ref_value(pin, value).await?;
         return Ok(Some(pin_name.to_string()));
     }
 
     if let Some(key) = find_matching_key(obj, pin_name)
         && let Some(value) = obj.get(&key)
     {
-        context.set_pin_ref_value(pin, value.clone()).await?;
+        let value = materialize_pin_uploads(context, pin, value).await?;
+        context.set_pin_ref_value(pin, value).await?;
         return Ok(Some(key));
     }
 
@@ -244,12 +348,13 @@ mod tests {
         state::{FlowLikeConfig, FlowLikeState, FlowNodeRegistryInner},
         utils::http::HTTPClient,
     };
-    use flow_like_storage::Path;
+    use flow_like_storage::{Path, files::store::FlowLikeStore};
     use flow_like_types::{
         geometry::{GeometryKind, marker},
         intercom::BufferedInterComHandler,
         sync::RwLock,
     };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const EVENT_ID: &str = "event";
 
@@ -366,6 +471,14 @@ mod tests {
     }
 
     async fn build_run(payload: Option<Value>) -> (Arc<FlowLikeState>, InternalRun) {
+        build_run_with_node(payload, event_node(), Default::default()).await
+    }
+
+    async fn build_run_with_node(
+        payload: Option<Value>,
+        node: Node,
+        refs: std::collections::HashMap<String, String>,
+    ) -> (Arc<FlowLikeState>, InternalRun) {
         let state = Arc::new(FlowLikeState::new(
             FlowLikeConfig::new(),
             HTTPClient::new_without_refetch(),
@@ -376,7 +489,7 @@ mod tests {
         state.node_registry.write().await.node_registry = Arc::new(registry);
 
         let mut board = Board::new_detached(Some("generic-event".to_string()), Path::default());
-        let node = event_node();
+        board.refs = refs;
         board.nodes.insert(node.id.clone(), node);
 
         let run_payload = RunPayload {
@@ -391,7 +504,7 @@ mod tests {
             Some(400),
             Some(false),
         );
-        let mut run = InternalRun::new(
+        let run = InternalRun::new(
             "test-app",
             Arc::new(board),
             None,
@@ -406,6 +519,60 @@ mod tests {
         )
         .await
         .expect("build generic event run");
+        (state, run)
+    }
+
+    async fn serve_upload(body: &'static [u8]) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upload server");
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 2048];
+            socket.read(&mut request).await.unwrap();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(headers.as_bytes()).await.unwrap();
+            socket.write_all(body).await.unwrap();
+        });
+        format!("http://{address}/picked.png")
+    }
+
+    fn uploaded_path(path: &str, url: &str) -> Value {
+        json!({
+            "path": path,
+            "store_ref": flow_like_types::dispatch::REQUEST_FILES_STORE_REF,
+            "cache_store_ref": null,
+            "url": url,
+            "name": "picked.png"
+        })
+    }
+
+    async fn build_file_run(
+        value_type: ValueType,
+        value: Value,
+        compact_schema: bool,
+    ) -> (Arc<FlowLikeState>, InternalRun) {
+        let mut node = event_node();
+        let pin = node
+            .add_output_pin("dateien", "Dateien", "", VariableType::Struct)
+            .set_value_type(value_type)
+            .set_schema::<FlowPath>();
+        let mut refs = std::collections::HashMap::new();
+        if compact_schema {
+            refs.insert("123".to_string(), pin.schema.take().unwrap());
+            pin.schema = Some("123".to_string());
+        }
+        let (state, run) = build_run_with_node(Some(json!({"Dateien": value})), node, refs).await;
+        run.cache.write().await.insert(
+            flow_like_types::dispatch::REQUEST_FILES_STORE_REF.to_string(),
+            Arc::new(FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ))),
+        );
         (state, run)
     }
 
@@ -449,6 +616,121 @@ mod tests {
             .expect("output pin")
             .get_raw_value()
             .await
+    }
+
+    #[tokio::test]
+    async fn scalar_form_upload_reaches_its_output_as_a_readable_flow_path() {
+        let bytes = b"uploaded image bytes";
+        let url = serve_upload(bytes).await;
+        let path = "tmp/user/viewer/apps/test-app/2026/10/07/picked.png";
+        let (state, run) = build_file_run(ValueType::Normal, uploaded_path(path, &url), true).await;
+        let run = execute(state.clone(), run).await;
+        let value = pin_value(&run, "dateien").await.unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "path": path,
+                "store_ref": flow_like_types::dispatch::REQUEST_FILES_STORE_REF,
+                "cache_store_ref": null
+            })
+        );
+        let output: FlowPath = flow_like_types::json::from_value(value).unwrap();
+        let mut context = delegated_context(&state, &run).await;
+        assert_eq!(output.get(&mut context, false).await.unwrap(), bytes);
+        assert_eq!(pin_value(&run, "payload").await, Some(json!({})));
+    }
+
+    #[tokio::test]
+    async fn array_and_set_form_uploads_materialize_each_file_in_order() {
+        for value_type in [ValueType::Array, ValueType::HashSet] {
+            let first_url = serve_upload(b"first image").await;
+            let second_url = serve_upload(b"second image").await;
+            let (state, run) = build_file_run(
+                value_type,
+                json!([
+                    uploaded_path("tmp/user/viewer/apps/test-app/first.png", &first_url),
+                    uploaded_path("tmp/user/viewer/apps/test-app/second.png", &second_url)
+                ]),
+                false,
+            )
+            .await;
+            let run = execute(state.clone(), run).await;
+            let value = pin_value(&run, "dateien").await.unwrap();
+            assert!(
+                value
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|value| value.get("url").is_none())
+            );
+            let paths: Vec<FlowPath> = flow_like_types::json::from_value(value).unwrap();
+            let mut context = delegated_context(&state, &run).await;
+            assert_eq!(paths.len(), 2);
+            assert_eq!(
+                paths[0].get(&mut context, false).await.unwrap(),
+                b"first image"
+            );
+            assert_eq!(
+                paths[1].get(&mut context, false).await.unwrap(),
+                b"second image"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unrelated_structs_and_flow_paths_without_source_urls_are_unchanged() {
+        let unrelated = uploaded_path("unrelated", "file:///unrelated/picked.png");
+        let mut node = event_node();
+        node.add_output_pin("unrelated", "Unrelated", "", VariableType::Struct)
+            .set_open_schema();
+        node.add_output_pin("dateien", "Dateien", "", VariableType::Struct)
+            .set_schema::<FlowPath>();
+        let path = json!({"path": "existing.png", "store_ref": "other-run"});
+        let (state, run) = build_run_with_node(
+            Some(json!({"unrelated": unrelated, "dateien": path})),
+            node,
+            Default::default(),
+        )
+        .await;
+        let run = execute(state, run).await;
+        assert_eq!(pin_value(&run, "unrelated").await, Some(unrelated));
+        assert_eq!(pin_value(&run, "dateien").await, Some(path));
+    }
+
+    #[tokio::test]
+    async fn form_upload_urls_cannot_read_local_files() {
+        let source = std::env::temp_dir().join(format!(
+            "flow-like-form-source-{}.png",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&source, b"local file stays private").unwrap();
+        let file_url = flow_like_types::reqwest::Url::from_file_path(&source).unwrap();
+        let urls = [
+            file_url.to_string(),
+            format!("asset://localhost{}", file_url.path()),
+            format!("http://asset.localhost{}", file_url.path()),
+            format!("https://asset.localhost{}", file_url.path()),
+            "https://asset.localhost/".to_string(),
+            "data:image/png;base64,bG9jYWw=".to_string(),
+        ];
+        let (state, run) = build_file_run(ValueType::Normal, Value::Null, false).await;
+        let mut context = delegated_context(&state, &run).await;
+        let pin = context.get_pin_by_name("dateien").await.unwrap();
+        let path = "tmp/user/viewer/apps/test-app/local.png";
+        for url in urls {
+            let error = materialize_pin_uploads(&mut context, &pin, &uploaded_path(path, &url))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("HTTP or HTTPS upload URL"));
+        }
+        let target = FlowPath::new(
+            path.to_string(),
+            flow_like_types::dispatch::REQUEST_FILES_STORE_REF.to_string(),
+            None,
+        );
+        assert!(target.get(&mut context, true).await.is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), b"local file stays private");
+        std::fs::remove_file(source).unwrap();
     }
 
     #[tokio::test]

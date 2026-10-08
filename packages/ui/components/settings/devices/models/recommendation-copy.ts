@@ -546,9 +546,10 @@ function runtimeFix(
 	overview: ModelsOverview,
 	actions: ModelsActions,
 ): RecommendationFix | undefined {
-	const runtime = overview.runtimes.find(
+	const matching = overview.runtimes.filter(
 		(row) => row.runtime === fix.runtime && row.backend === fix.backend,
 	);
+	const runtime = matching.find((row) => row.installed) ?? matching[0];
 	if (!runtime) return undefined;
 	const name = runtimeName(t, runtime);
 	return {

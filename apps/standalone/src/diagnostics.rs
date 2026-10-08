@@ -43,6 +43,8 @@ pub const FEATURES: &[&str] = &[
     "model_runtime_onnx",
     #[cfg(feature = "runtime")]
     "model_runtime_manifest",
+    #[cfg(feature = "runtime")]
+    "model_runtime_updates",
     #[cfg(all(feature = "runtime", target_os = "macos", target_arch = "aarch64"))]
     "model_runtime_mlx",
 ];
@@ -2717,6 +2719,7 @@ mod tests {
             ("model_runtime_llamacpp", hosts_models),
             ("model_runtime_onnx", hosts_models),
             ("model_runtime_manifest", hosts_models),
+            ("model_runtime_updates", hosts_models),
             ("model_runtime_mlx", serves_mlx),
         ] {
             if built {

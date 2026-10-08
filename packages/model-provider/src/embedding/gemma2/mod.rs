@@ -331,6 +331,9 @@ impl Gemma2Preprocessor {
         for part in &input.parts {
             match part {
                 EmbeddingPart::Text(_) => {}
+                EmbeddingPart::EncodedMedia { .. } => {
+                    anyhow::bail!("Local embedding models require decoded media inputs");
+                }
                 EmbeddingPart::Image(image) => media.push(PreparedMedia::Image(
                     vision::preprocess(image, self.options.image_soft_tokens)?,
                 )),
@@ -383,6 +386,9 @@ impl Gemma2Preprocessor {
                 EmbeddingPart::Text(value) => {
                     validate_text(value)?;
                     text.push_str(value);
+                }
+                EmbeddingPart::EncodedMedia { .. } => {
+                    anyhow::bail!("Local embedding models require decoded media inputs");
                 }
                 EmbeddingPart::Image(image) => {
                     ensure!(

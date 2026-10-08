@@ -211,12 +211,43 @@ wrong local state.
 | Device checks in, but cannot be unlocked | Restore the correct keys from **Keys & recovery** and verify that the account, hub, and profile match. |
 | Service installation fails | Read the reported service-manager or permissions error. `service-status` inspects the exact managed service without creating a new device identity. |
 
-**Check for agent update** compares the running agent with the hub's verified
-release. Automatic agent replacement currently requires the exact managed
-Linux user service and a compatible state schema. It restarts the agent and
-interrupts its services, with a watchdog that can restore the previous
-verified binary if startup fails. This is separate from updating an app's
-service version. Do not assume this update path applies to Docker or macOS.
+**Check for agent update** compares the installed release sequence with the
+hub's verified release. The standalone binary contains both the orchestrator
+and the workflow runtime, so an agent update replaces both. A new release can
+have the same version label and a higher sequence.
+
+You can also check, request, and inspect an update from the device:
+
+```sh
+./flow-like-standalone --state-dir ./state check-update
+./flow-like-standalone --state-dir ./state update
+./flow-like-standalone --state-dir ./state update-status
+```
+
+`update` queues the request and returns an operation ID. The running agent
+downloads and verifies the candidate while services continue running, then
+drains its workloads and restarts. `update-status` reports the latest request,
+including failures before the restart. A watchdog restores the previous
+verified binary if the replacement fails to start.
+
+Automatic replacement requires the exact managed systemd user service on
+Linux, with systemd 254 or newer, or the managed LaunchAgent on macOS while
+the owner is logged in. Both releases must use the current management database
+schema, and the agent must be able to write beside its installed executable.
+Docker installations are updated by replacing their container image. Older
+macOS agents without update support need an operator-assisted upgrade of both
+the binary and its matching signed release records before they can use this
+path. Replacing only the executable leaves its recorded release inconsistent
+and causes later verification to fail.
+
+Binary updates are explicitly requested; the agent does not install new
+releases unattended. App service versions and model runtime packs are separate.
+In **Models**, use **Check for runtime updates** to refresh the signed pack
+list and **Update** to install an available build. Loaded models keep their
+current build until reloaded; the agent also checks for runtime packs at
+startup and every six hours. It retains one previous build per runtime and
+backend until the agent restarts. Restart the agent before updating that same
+runtime again so it can reclaim the retained files.
 
 To stop and remove the native autostart integration while preserving device
 and project data:

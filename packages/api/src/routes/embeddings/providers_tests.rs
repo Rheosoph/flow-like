@@ -38,6 +38,233 @@ fn payload() -> EmbedRequest {
     }
 }
 
+fn gemma2() -> (EmbeddingModelProvider, RemoteExecutionConfig) {
+    let mut provider = provider();
+    provider.vector_length = 768;
+    let mut config = config(RemoteEmbeddingProvider::Internal);
+    config.model_id = Some("embeddinggemma-2".into());
+    (provider, config)
+}
+
+fn request(input: serde_json::Value) -> EmbedRequest {
+    serde_json::from_value(serde_json::json!({"model": "bit-id", "input": input})).unwrap()
+}
+
+#[test]
+fn accepts_single_text_structured_inputs_and_legacy_or_mixed_batches() {
+    for input in [
+        serde_json::json!("text"),
+        serde_json::json!({"type": "text", "text": "text"}),
+        serde_json::json!({"type": "image", "image": "AAAA"}),
+        serde_json::json!({"type": "audio", "audio": "data:audio/wav;base64,AAAA"}),
+        serde_json::json!({"type": "video", "video": "https://media.example/video.mp4"}),
+    ] {
+        assert_eq!(request(input).input.len(), 1);
+    }
+    let mixed = request(serde_json::json!([
+        "text", {"type": "text", "text": "second"},
+        {"type": "multimodal", "text": "Describe <|image|>", "image": "AAAA"}
+    ]));
+    assert_eq!(mixed.input.len(), 3);
+    let (provider, config) = gemma2();
+    validate_request(&provider, &config, &mixed).unwrap();
+    assert_eq!(
+        request(serde_json::json!(["first", "second"])).input.len(),
+        2
+    );
+    for invalid in [
+        serde_json::json!({"type": "image", "audio": "AAAA"}),
+        serde_json::json!({"type": "text", "text": "text", "image": "AAAA"}),
+        serde_json::json!(42),
+    ] {
+        assert!(
+            serde_json::from_value::<EmbedRequest>(serde_json::json!({
+                "model": "bit-id", "input": invalid
+            }))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn rejects_media_for_every_other_provider_model_and_wrong_gemma_dimensions() {
+    let input = request(serde_json::json!({"type": "image", "image": "AAAA"}));
+    let multimodal_text = request(serde_json::json!({"type": "multimodal", "text": "hello"}));
+    let (mut provider, mut config) = gemma2();
+    validate_request(&provider, &config, &input).unwrap();
+    for implementation in [
+        RemoteEmbeddingProvider::CloudflareWorkersAI,
+        RemoteEmbeddingProvider::OpenAI,
+        RemoteEmbeddingProvider::AzureOpenAI,
+        RemoteEmbeddingProvider::HuggingfaceEndpoint,
+        RemoteEmbeddingProvider::OpenAICompatible,
+        RemoteEmbeddingProvider::Cohere,
+        RemoteEmbeddingProvider::VoyageAI,
+    ] {
+        config.implementation = Some(implementation);
+        assert!(validate_request(&provider, &config, &input).is_err());
+        assert!(validate_request(&provider, &config, &multimodal_text).is_err());
+    }
+    config.implementation = Some(RemoteEmbeddingProvider::Internal);
+    config.model_id = Some("gte-multilingual-base".into());
+    assert!(validate_request(&provider, &config, &input).is_err());
+    config.model_id = Some("embeddinggemma-2".into());
+    provider.vector_length = 256;
+    assert!(validate_request(&provider, &config, &input).is_err());
+}
+
+#[test]
+fn preserves_signed_media_and_placeholders_while_prefixing_text_only() {
+    let (provider, config) = gemma2();
+    let signed = "https://media.example/video.mp4?X-Signature=a%2Fb%2Bc&part=2&part=1";
+    let mut payload = request(serde_json::json!([
+        "plain",
+        {"type": "image", "image": "AAAA"},
+        {"type": "multimodal", "text": "Hear <|audio|> then see <|video|>",
+         "audio": "data:audio/wav;base64,AAAA", "video": signed}
+    ]));
+    validate_request(&provider, &config, &payload).unwrap();
+    let body = request_body(&provider, &config, &payload);
+    assert_eq!(body["input"][0], "query: plain");
+    assert_eq!(
+        body["input"][1],
+        serde_json::json!({"type": "image", "image": "AAAA"})
+    );
+    assert_eq!(
+        body["input"][2]["text"],
+        "query: Hear <|audio|> then see <|video|>"
+    );
+    assert_eq!(body["input"][2]["video"], signed);
+    assert_eq!(body["input"][2]["audio"], "data:audio/wav;base64,AAAA");
+    payload.embed_type = EmbedType::Document;
+    assert_eq!(
+        request_body(&provider, &config, &payload)["input"][2]["text"],
+        "passage: Hear <|audio|> then see <|video|>"
+    );
+    let text = request(serde_json::json!({"type": "text", "text": "structured"}));
+    assert_eq!(
+        request_body(&provider, &config, &text)["input"][0],
+        serde_json::json!({"type": "text", "text": "query: structured"})
+    );
+    assert_eq!(
+        request_body(
+            &provider,
+            &self::config(RemoteEmbeddingProvider::OpenAICompatible),
+            &text
+        )["input"][0],
+        "query: structured"
+    );
+}
+
+#[test]
+fn validates_empty_media_invalid_schemes_and_inline_limits_without_fetching() {
+    let (provider, config) = gemma2();
+    for input in [
+        serde_json::json!({"type": "multimodal"}),
+        serde_json::json!({"type": "image", "image": ""}),
+        serde_json::json!({"type": "image", "image": "file:///tmp/image.png"}),
+        serde_json::json!({"type": "audio", "audio": "data:audio/wav,AAAA"}),
+        serde_json::json!({"type": "video", "video": "data:video/mp4;base64,"}),
+    ] {
+        assert!(validate_request(&provider, &config, &request(input)).is_err());
+    }
+    // A URL cannot be contacted during validation, including hosts that do not resolve.
+    validate_request(
+        &provider,
+        &config,
+        &request(serde_json::json!({
+            "type": "image", "image": "https://unresolved.invalid/image?signature=keep%2Bme"
+        })),
+    )
+    .unwrap();
+    assert!(validate_media(&"A".repeat(MAX_ENCODED_MEDIA_BYTES + 1)).is_err());
+}
+
+#[test]
+fn media_accounting_includes_inline_data_and_reserves_download_bounds_for_urls() {
+    let payload = request(serde_json::json!({
+        "type": "multimodal", "text": "<|image|> <|audio|>",
+        "image": "data:image/png;base64,AAAA", "audio": "https://media.example/a.wav?token=x"
+    }));
+    let text_bytes = "query: <|image|> <|audio|>".len();
+    assert_eq!(
+        input_metered_bytes(&payload.input[0], "query: "),
+        (text_bytes
+            + "data:image/png;base64,AAAA".len()
+            + "https://media.example/a.wav?token=x".len()) as i64
+    );
+    assert_eq!(
+        reservation_input_bytes(&payload.input, "query: "),
+        (text_bytes + "data:image/png;base64,AAAA".len() + MAX_ENCODED_MEDIA_BYTES) as i64
+    );
+    let media_only =
+        request(serde_json::json!({"type": "image", "image": "https://media.example/a"}));
+    assert!(input_metered_bytes(&media_only.input[0], "") > 0);
+    assert_eq!(
+        reservation_input_bytes(&media_only.input, ""),
+        MAX_ENCODED_MEDIA_BYTES as i64
+    );
+    assert_eq!(
+        media_metering_details(&payload.input),
+        serde_json::json!({
+            "inlineMediaCount": 1,
+            "mediaUrlCount": 1,
+            "mediaByteBasis": "supplied_encoded_bytes_and_url_strings",
+            "downloadedMediaBytesAvailable": false
+        })
+    );
+}
+
+#[tokio::test]
+async fn sends_mixed_gemma2_batch_to_gateway_and_restores_index_order() {
+    use axum::{Json, Router, http::HeaderMap, routing::post};
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let router = Router::new().route(
+        "/v1/embeddings",
+        post(
+            move |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                sender.send((headers, body)).await.unwrap();
+                Json(serde_json::json!({
+                    "model": "embeddinggemma-2",
+                    "data": [
+                        {"index": 1, "embedding": vec![0.2; 768]},
+                        {"index": 0, "embedding": vec![0.1; 768]}
+                    ], "usage": {"prompt_tokens": 3, "total_tokens": 3}
+                }))
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let (provider, config) = gemma2();
+    let payload = request(serde_json::json!([
+        "plain", {"type": "video", "video": "https://media.invalid/v?key=a%2Bb&x=2"}
+    ]));
+    validate_request(&provider, &config, &payload).unwrap();
+    let body = request_body(&provider, &config, &payload);
+    let result = send_request(
+        &RemoteEmbeddingProvider::Internal,
+        Url::parse(&format!("http://{address}/v1/embeddings")).unwrap(),
+        "test-gateway-key",
+        &body,
+        2,
+        768,
+        2000,
+    )
+    .await
+    .unwrap();
+    let (headers, sent) = receiver.recv().await.unwrap();
+    assert_eq!(headers["authorization"], "Bearer test-gateway-key");
+    assert_eq!(
+        sent["input"][1]["video"],
+        "https://media.invalid/v?key=a%2Bb&x=2"
+    );
+    assert_eq!(sent, body);
+    assert_eq!(result.embeddings, vec![vec![0.1; 768], vec![0.2; 768]]);
+    server.abort();
+}
+
 #[test]
 fn builds_cloudflare_and_openai_urls_without_using_configured_origins() {
     let cloudflare = endpoint_url(
@@ -180,7 +407,7 @@ fn validates_before_admission_and_applies_exact_query_or_document_prefix() {
         vec![String::new()],
         vec!["x".repeat(MAX_INPUT_BYTES)],
     ] {
-        input.input = invalid;
+        input.input = invalid.into_iter().map(Into::into).collect();
         assert!(validate_request(&provider, &config, &input).is_err());
     }
     input.input = vec!["x".into(); MAX_BATCH_SIZE + 1];

@@ -256,6 +256,36 @@ print(result.embeddings)  # list[list[float]]
 result = client.embed(bit_id="bit-id-for-embedding", input=["Hello", "World"])
 ```
 
+For media, select a compatible model such as Gemma 2
+(`i6un3u7arw9mt59xzpc6rmzm`). `embed()` and `aembed()` also accept structured `text`,
+`image`, `audio`, and `video` inputs, or a mixed sequence that returns one vector per
+item. A `multimodal` input combines text and up to one file per modality into one vector:
+
+```python
+from flow_like import EmbeddingMultimodalInput
+
+signed_video_url = "https://storage.googleapis.com/bucket/demo.mp4?X-Goog-Signature=..."
+result = client.embed(
+    bit_id="i6un3u7arw9mt59xzpc6rmzm",
+    input=EmbeddingMultimodalInput(
+        type="multimodal",
+        text="A product demonstration: <|image|> <|audio|> <|video|>",
+        image="https://example.com/product.jpg",
+        audio="https://example.com/narration.wav",
+        video=signed_video_url,
+    ),
+    embed_type="document",
+)
+print(result.embeddings[0])  # One 768-dimensional vector
+```
+
+Replace the example URLs with final download URLs. Media fields take a string
+containing a public or signed HTTP(S) URL, a base64 data URL, or raw base64. The SDK
+forwards signed URLs with their query parameters unchanged. Keep them valid through
+the worker's download, including cold starts. Redirects, private addresses, and local
+paths are rejected. Video contributes sampled frames; provide its soundtrack in
+`audio` to include it in the combined embedding.
+
 ## Model Discovery
 
 ```python

@@ -39,6 +39,12 @@ enum Commands {
     Init,
     /// Print release compatibility without opening device state.
     ReleaseInfo,
+    /// Check the installed release source for an orchestrator and workflow runtime update.
+    CheckUpdate,
+    /// Update the running managed service, draining workloads before restarting.
+    Update,
+    /// Print the latest local or device-management binary update outcome.
+    UpdateStatus,
     #[command(hide = true)]
     UpdateGuard {
         #[arg(long)]
@@ -275,6 +281,32 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let selected_state_dir = resolve_state_dir(cli.state_dir.as_deref(), cli.env_file.as_deref())?;
+    if matches!(
+        cli.command,
+        Commands::CheckUpdate | Commands::Update | Commands::UpdateStatus
+    ) {
+        let state_dir = selected_state_dir.canonicalize().context(
+            "Select an existing installation with --state-dir before checking or applying updates",
+        )?;
+        ensure!(
+            state_dir.join("management.sqlite").is_file(),
+            "The selected directory has no device state"
+        );
+        let result = match cli.command {
+            Commands::CheckUpdate => {
+                flow_like_standalone::host::check_update(&state_dir)
+                    .await?
+                    .1
+            }
+            Commands::Update => {
+                flow_like_standalone::host::request_local_update(&state_dir).await?
+            }
+            Commands::UpdateStatus => flow_like_standalone::host::update_status(&state_dir)?,
+            _ => unreachable!(),
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     // Service inspection and removal must not create a new device identity.
     if matches!(
         &cli.command,
@@ -357,7 +389,9 @@ async fn main() -> Result<()> {
     if matches!(cli.command, Commands::Run)
         && release::update::recover_after_boot(&state_dir, &flow_like_standalone::host::boot_id()?)?
     {
-        anyhow::bail!("Restored the previous verified release after reboot; restart the agent");
+        anyhow::bail!(
+            "Restored the previous verified release after an interrupted update; restart the agent"
+        );
     }
     let mut store = StateStore::open(&state_dir.join("management.sqlite"))?;
     match cli.command {
@@ -712,11 +746,14 @@ async fn main() -> Result<()> {
                     }),
                 );
             }
-            if let Some(device) = &session {
+            {
                 let root = state_dir.clone();
                 let boot = boot_id.clone();
                 let run = run_id.clone();
-                let id = device.manifest().device_id.clone();
+                let id = session
+                    .as_ref()
+                    .map(|device| device.manifest().device_id.clone())
+                    .unwrap_or_else(|| "unenrolled".into());
                 let stop = cancel.clone();
                 background.push(diagnostics.spawn_monitored(
                     diagnostics::UPDATE_WATCHER,
@@ -772,6 +809,9 @@ async fn main() -> Result<()> {
         Commands::RunPlacement { .. }
         | Commands::ModelWorker { .. }
         | Commands::ReleaseInfo
+        | Commands::CheckUpdate
+        | Commands::Update
+        | Commands::UpdateStatus
         | Commands::UpdateGuard { .. } => {
             unreachable!()
         }

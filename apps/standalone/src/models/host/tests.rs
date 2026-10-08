@@ -153,6 +153,53 @@ async fn fixture() -> Fixture {
     fixture_with(behaviour(), HostConfig::default()).await
 }
 
+#[tokio::test]
+async fn runtime_updates_are_discovered_on_start_and_periodically_without_installing() -> Result<()>
+{
+    use crate::models::runtime::tests::{fixture, manifest_for, pack_archive};
+
+    let pack = pack_archive(&[], false);
+    let fixture = fixture(&pack).await;
+    let mut manifest = manifest_for(&fixture.origin.url("/pack.tar.gz"), &pack, 3);
+    fixture.publish(&manifest);
+    let cancel = CancellationToken::new();
+    refresh_runtimes(Arc::clone(&fixture.installer), cancel.clone());
+    let wait_for_build = |build: &'static str| {
+        let installer = Arc::clone(&fixture.installer);
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if installer
+                        .available()?
+                        .iter()
+                        .any(|pack| pack.build == build)
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await?
+        }
+    };
+    wait_for_build("b1").await?;
+    manifest.sequence += 1;
+    manifest.packs[0].build = "b2".into();
+    fixture.publish(&manifest);
+    tokio::time::pause();
+    tokio::time::advance(RUNTIME_REFRESH_INTERVAL).await;
+    tokio::time::resume();
+    wait_for_build("b2").await?;
+    assert!(
+        fixture
+            .installer
+            .installed(ModelRuntime::Llamacpp, ModelBackend::Cpu)?
+            .is_none()
+    );
+    cancel.cancel();
+    Ok(())
+}
+
 fn publish(host: &ModelHost, bytes: &[u8], name: &str) -> ModelAssetDescriptor {
     let descriptor = ModelAssetDescriptor {
         digest: ModelAssetDigest {

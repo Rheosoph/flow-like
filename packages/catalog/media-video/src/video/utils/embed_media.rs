@@ -9,8 +9,10 @@ use {
         EmbeddingMediaKind, decode_embedding_media, embedding_media_kind,
     },
     flow_like_model_provider::embedding::interface::{
-        EmbeddingDescriptor, EmbeddingError, EmbeddingModality, EmbeddingRequest,
+        EmbeddingDescriptor, EmbeddingError, EmbeddingInput, EmbeddingModality, EmbeddingPart,
+        EmbeddingRequest,
     },
+    flow_like_storage::object_store::ObjectStoreExt,
 };
 
 fn media_embedding_node(video: bool) -> Node {
@@ -87,7 +89,7 @@ fn media_embedding_node(video: bool) -> Node {
         node.add_input_pin(
             "max_frames",
             "Max Frames",
-            "Maximum uniformly sampled frames when the source is a video",
+            "Maximum uniformly sampled frames for local models; hosted models sample frames on the server",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(16)));
@@ -183,9 +185,13 @@ async fn run_media_embedding(
     }
     validate_media_request(model.descriptor(), kind, purpose, &options)?;
     let (store, path) = flow_path_object(context, &source).await?;
-    let input = decode_embedding_media(store.as_ref(), &path, kind)
-        .await?
-        .into_input()?;
+    let input = if model.supports_encoded_media() && kind != EmbeddingMediaKind::Text {
+        encoded_media_input(store.as_ref(), &path, kind).await?
+    } else {
+        decode_embedding_media(store.as_ref(), &path, kind)
+            .await?
+            .into_input()?
+    };
     let dimensions = options
         .dimensions
         .unwrap_or(model.descriptor().space.dimensions);
@@ -212,6 +218,66 @@ async fn run_media_embedding(
     context.set_pin_value("result", json!(result)).await?;
     context.activate_exec_pin("exec_out").await?;
     Ok(())
+}
+
+#[cfg(feature = "execute")]
+pub(super) async fn encoded_media_input(
+    store: &dyn ObjectStore,
+    path: &ObjectPath,
+    kind: EmbeddingMediaKind,
+) -> flow_like_types::Result<EmbeddingInput> {
+    use flow_like_types::{
+        base64::{Engine, engine::general_purpose::STANDARD},
+        futures::StreamExt,
+    };
+
+    const MAX_MEDIA_BYTES: usize = 100 * 1024 * 1024;
+    let object = store.get(path).await?;
+    if object.meta.size > MAX_MEDIA_BYTES as u64 {
+        return Err(flow_like_types::anyhow!(
+            "Hosted embedding media exceeds 100 MiB"
+        ));
+    }
+    let mut stream = object.into_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_MEDIA_BYTES {
+            return Err(flow_like_types::anyhow!(
+                "Hosted embedding media exceeds 100 MiB"
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let modality = match kind {
+        EmbeddingMediaKind::Image => EmbeddingModality::Image,
+        EmbeddingMediaKind::Audio => EmbeddingModality::Audio,
+        EmbeddingMediaKind::Video { .. } => EmbeddingModality::Video,
+        EmbeddingMediaKind::Text => {
+            return Err(flow_like_types::anyhow!("Text must be decoded as UTF-8"));
+        }
+    };
+    let mut parts = vec![EmbeddingPart::EncodedMedia {
+        modality,
+        source: STANDARD.encode(&bytes),
+    }];
+    if matches!(
+        kind,
+        EmbeddingMediaKind::Video {
+            include_audio: true,
+            ..
+        }
+    ) {
+        // Keep the soundtrack on the same timeline and use the bounded video bytes.
+        let audio = super::prepare_embedding_media::decode_hosted_video_audio(
+            Bytes::from(bytes),
+            path.clone(),
+        )
+        .await?
+        .into_audio()?;
+        parts.push(EmbeddingPart::Audio(audio));
+    }
+    Ok(EmbeddingInput { parts, title: None })
 }
 
 #[cfg(not(feature = "execute"))]
