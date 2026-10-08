@@ -17,6 +17,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like::bit::Bit;
+use flow_like::flow_like_model_provider::embedding::hosted_input::HostedEmbeddingInput;
 use flow_like::flow_like_model_provider::provider::{
     EmbeddingModelProvider, RemoteEmbeddingProvider, RemoteExecutionConfig,
 };
@@ -96,9 +97,28 @@ const BIT_CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbedRequest {
     pub model: String, // bit_id
-    pub input: Vec<String>,
+    #[serde(deserialize_with = "deserialize_embedding_inputs")]
+    pub input: Vec<HostedEmbeddingInput>,
     #[serde(default)]
     pub embed_type: EmbedType, // "query" or "document"
+}
+
+fn deserialize_embedding_inputs<'de, D>(
+    deserializer: D,
+) -> Result<Vec<HostedEmbeddingInput>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Inputs {
+        Batch(Vec<HostedEmbeddingInput>),
+        Single(HostedEmbeddingInput),
+    }
+    Ok(match Inputs::deserialize(deserializer)? {
+        Inputs::Batch(inputs) => inputs,
+        Inputs::Single(input) => vec![input],
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -275,7 +295,7 @@ fn internal_embedding_rate() -> HostedRateSnapshot {
         provider_pricing_available: true,
         input_micro_usd_per_million_tokens: 0,
         input_micro_usd_per_million_bytes: Some(50_000),
-        max_input_bytes: Some((INTERNAL_MAX_BATCH_SIZE * INTERNAL_MAX_TEXT_LEN) as i64),
+        max_input_bytes: Some(super::MAX_EMBEDDING_BODY_BYTES as i64),
         output_micro_usd_per_million_tokens: 0,
         request_micro_usd: 0,
         context_tokens: 1,
@@ -366,9 +386,11 @@ async fn embed_authorized_text(
             "Embedding batch exceeds the configured input byte limit",
         ));
     }
-    let token_count_estimate = embedding_reservation_units(&rate, input_bytes, payload.input.len());
+    let reservation_bytes = providers::reservation_input_bytes(&payload.input, prefix);
+    let token_count_estimate =
+        embedding_reservation_units(&rate, reservation_bytes, payload.input.len());
     let price_estimate = match rate.input_micro_usd_per_million_bytes {
-        Some(_) => rate.provider_cost_bytes(input_bytes)?,
+        Some(_) => rate.provider_cost_bytes(reservation_bytes)?,
         None => rate.provider_cost(token_count_estimate, 0),
     };
     let implementation = remote_config.implementation.unwrap_or_default();
@@ -432,11 +454,11 @@ pub(crate) struct HostedEmbeddingJob {
     token_count_estimate: i64,
 }
 
-fn embedding_input_bytes(input: &[String], prefix: &str) -> i64 {
+fn embedding_input_bytes(input: &[HostedEmbeddingInput], prefix: &str) -> i64 {
     input
         .iter()
-        .map(|text| text.len().saturating_add(prefix.len()) as i64)
-        .sum()
+        .map(|input| providers::input_metered_bytes(input, prefix))
+        .fold(0_i64, i64::saturating_add)
 }
 
 fn embedding_reservation_units(
@@ -515,7 +537,7 @@ mod byte_meter_tests {
     #[test]
     fn input_meter_counts_utf8_and_prefixes_without_relying_on_words() {
         assert_eq!(
-            embedding_input_bytes(&["x".repeat(10_000)], "query: "),
+            embedding_input_bytes(&["x".repeat(10_000).into()], "query: "),
             10_007
         );
         assert_eq!(
@@ -682,13 +704,14 @@ pub(crate) async fn execute_hosted_embedding(
         EmbedType::Document => &embedding_provider.prefix.paragraph,
     };
     let input_bytes = embedding_input_bytes(&payload.input, prefix);
-    let metering = embedding_metering(
+    let mut metering = embedding_metering(
         implementation,
         &result,
         &rate,
         input_bytes,
         token_count_estimate,
     )?;
+    metering.details["media"] = providers::media_metering_details(&payload.input);
     let token_count = metering.tokens;
     let price = metering.price;
     let upstream = providers::provider_name(implementation);
@@ -809,10 +832,6 @@ async fn track_embedding_usage(
 
     Ok(())
 }
-
-/// Maximum batch size and per-item bytes admitted by the internal gateway.
-const INTERNAL_MAX_BATCH_SIZE: usize = 2048;
-const INTERNAL_MAX_TEXT_LEN: usize = 100_000;
 
 #[cfg(test)]
 mod tests {

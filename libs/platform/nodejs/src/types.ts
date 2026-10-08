@@ -245,6 +245,46 @@ export interface ChatUsage {
 	totalTokens: number;
 }
 
+export interface EmbeddingTextInput {
+	type: "text";
+	text: string;
+}
+
+export interface EmbeddingImageInput {
+	type: "image";
+	/** HTTP(S) URL, base64 data URL, or raw base64. */
+	image: string;
+}
+
+export interface EmbeddingAudioInput {
+	type: "audio";
+	/** HTTP(S) URL, base64 data URL, or raw base64. */
+	audio: string;
+}
+
+export interface EmbeddingVideoInput {
+	type: "video";
+	/** HTTP(S) URL, base64 data URL, or raw base64. */
+	video: string;
+}
+
+/** Combines text and up to one file per modality into one embedding. */
+export interface EmbeddingMultimodalInput {
+	type: "multimodal";
+	text?: string;
+	image?: string;
+	audio?: string;
+	video?: string;
+}
+
+export type EmbeddingInput =
+	| string
+	| EmbeddingTextInput
+	| EmbeddingImageInput
+	| EmbeddingAudioInput
+	| EmbeddingVideoInput
+	| EmbeddingMultimodalInput;
+
 export interface EmbedOptions {
 	embed_type?: "query" | "document";
 	signal?: AbortSignal;

@@ -1,7 +1,8 @@
 /*
- * What a run sends for its inputs (PLAN §3.3 step 5). FlowPath fields send FlowPath objects and
- * never a URL; legacy PathBuf/Byte fields send URL strings; scalar dates and lists of dates send
- * `YYYY-MM-DDT00:00:00Z`, an object property follows its schema format; switches are always sent;
+ * What a run sends for its inputs (PLAN §3.3 step 5). FlowPath fields retain their upload URL
+ * so the receiving run can materialize the file; legacy PathBuf/Byte fields send URL strings;
+ * scalar dates and lists of dates send `YYYY-MM-DDT00:00:00Z`. Object properties follow their
+ * schema format; switches are always sent;
  * an empty optional field is left out so the server fills its default. Scalar and JSON parsing is
  * `lib/event-form.ts`'s.
  */
@@ -313,10 +314,16 @@ const SLOT_PROBLEM: Readonly<Partial<Record<FileSlotState, FieldProblemCode>>> =
 		sending: "fileSending",
 	};
 
-function flowPathOf(ref: FileRef | null) {
+function flowPathOf(slot: FileSlot) {
+	const ref = slot.ref;
 	if (ref?.kind !== "flowpath") return null;
 	const { path, store_ref, cache_store_ref } = ref.flowPath;
-	return { path, store_ref, cache_store_ref: cache_store_ref ?? null };
+	return {
+		path,
+		store_ref,
+		cache_store_ref: cache_store_ref ?? null,
+		...(ref.url ? { url: ref.url, name: slot.name } : {}),
+	};
 }
 
 function urlOf(ref: FileRef | null) {
@@ -334,7 +341,7 @@ const slotWire = (field: WorkbenchField, slot: FileSlot): Wire => {
 	if (blocked)
 		return { ok: false, problem: { code: blocked, fileName: slot.name } };
 	const value =
-		field.fileMode === "flowpath" ? flowPathOf(slot.ref) : urlOf(slot.ref);
+		field.fileMode === "flowpath" ? flowPathOf(slot) : urlOf(slot.ref);
 	if (value !== null) return { ok: true, value };
 	const notYet = slot.ref?.kind === "inline" ? "fileSending" : "fileFailed";
 	return { ok: false, problem: { code: notYet, fileName: slot.name } };

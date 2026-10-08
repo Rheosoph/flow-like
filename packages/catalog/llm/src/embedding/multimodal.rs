@@ -67,6 +67,9 @@ async fn resolve_content(
                 EmbeddingPart::Image(resolver.resolve(image).await?)
             }
             EmbeddingContentPart::Audio(audio) => EmbeddingPart::Audio(audio.into_audio()?),
+            EmbeddingContentPart::EncodedMedia { modality, source } => {
+                EmbeddingPart::EncodedMedia { modality, source }
+            }
             EmbeddingContentPart::Video(video) => {
                 ensure(
                     !video.frames.is_empty() && video.duration_ms > 0,
@@ -417,6 +420,21 @@ mod tests {
         assert_eq!(video.frames[1].timestamp_ms, 500);
         assert_eq!(video.duration_ms, 1000);
         assert_eq!(video.audio.as_ref().unwrap().sample_rate, 8000);
+    }
+
+    #[tokio::test]
+    async fn preserves_encoded_media_and_signed_url_without_resolving_it() {
+        let url = "https://storage.example.test/demo.mp4?X-Amz-Signature=a%2Fb&X-Amz-Expires=600";
+        let content = flow_like_types::json::from_value(json!({
+            "parts": [{"type": "encoded_media", "modality": "video", "source": url}]
+        }))
+        .unwrap();
+        let mut resolver = Images::default();
+        let resolved = resolve_content(content, &mut resolver).await.unwrap();
+        assert!(resolver.0.is_empty());
+        assert!(
+            matches!(&resolved.parts[0], EmbeddingPart::EncodedMedia { modality: flow_like_model_provider::embedding::interface::EmbeddingModality::Video, source } if source == url)
+        );
     }
 
     #[tokio::test]

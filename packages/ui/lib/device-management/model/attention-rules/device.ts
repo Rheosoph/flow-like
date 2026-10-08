@@ -13,6 +13,7 @@ import {
 	deviceRoute,
 	fleetFacts,
 	hubSource,
+	isNewerAgentRelease,
 	localSource,
 	perDevice,
 } from "../device-view";
@@ -345,16 +346,6 @@ const backgroundTask = perDevice("background_task_failing", (input, device) => {
 	});
 });
 
-/** Release sequences decide when both sides have one (M-BACK BG8); release versions otherwise. */
-function isNewerRelease(
-	latest: NonNullable<AttentionInputExt["latestRelease"]>,
-	agent: NonNullable<DeviceFacts["agent"]>,
-) {
-	return latest.sequence != null && agent.sequence !== undefined
-		? latest.sequence > agent.sequence
-		: compareVersions(latest.version, agent.version) > 0;
-}
-
 /** Agents before this release refuse any release list that is valid for longer than 30 days. */
 const LONG_RELEASES_FROM = "0.1.1";
 const SHORT_RELEASE_S = 30 * 86_400;
@@ -374,7 +365,12 @@ function refusesLongRelease(
 const agentUpdate = perDevice("agent_update_available", (input, device) => {
 	const latest = input.latestRelease;
 	const agent = device.agent;
-	if (!device.active || !latest || !agent || !isNewerRelease(latest, agent))
+	if (
+		!device.active ||
+		!latest ||
+		!agent ||
+		!isNewerAgentRelease(latest, agent)
+	)
 		return undefined;
 	if (device.relationship !== "owner" && !canUpdateAgent(input, device.id))
 		return undefined;

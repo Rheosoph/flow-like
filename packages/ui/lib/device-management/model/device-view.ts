@@ -766,3 +766,13 @@ export function compareVersions(a: string, b: string): number {
 	}
 	return 0;
 }
+
+/** Signed release sequences take precedence over labels, which can stay the same for a new build. */
+export function isNewerAgentRelease(
+	latest: { version: string; sequence?: number | null },
+	agent: { version: string; sequence?: number | null },
+): boolean {
+	return latest.sequence != null && agent.sequence != null
+		? latest.sequence > agent.sequence
+		: compareVersions(latest.version, agent.version) > 0;
+}

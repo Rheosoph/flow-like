@@ -126,14 +126,14 @@ impl NodeLogic for LoadModelNode {
                     context.model_usage_context(),
                 )
                 .await?;
-            let image =
-                if unified.descriptor().modalities.contains(
+            let image = if !unified.supports_encoded_media()
+                && unified.descriptor().modalities.contains(
                     &flow_like_model_provider::embedding::interface::EmbeddingModality::Image,
                 ) {
-                    Some(model_factory.build_image(&bit, app_state).await?)
-                } else {
-                    None
-                };
+                Some(model_factory.build_image(&bit, app_state).await?)
+            } else {
+                None
+            };
             CachedEmbeddingModelObject {
                 text_model: Some(text),
                 image_model: image,

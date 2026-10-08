@@ -1,5 +1,5 @@
 use super::node_image::NodeImage;
-use flow_like_model_provider::embedding::interface::AudioInput;
+use flow_like_model_provider::embedding::interface::{AudioInput, EmbeddingModality};
 use flow_like_types::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -60,10 +60,19 @@ pub struct EmbeddingVideo {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EmbeddingContentPart {
-    Text { text: String },
-    Image { image: NodeImage },
+    Text {
+        text: String,
+    },
+    Image {
+        image: NodeImage,
+    },
     Audio(EmbeddingAudio),
     Video(EmbeddingVideo),
+    /// A hosted model reads a URL, data URL, or raw base64 without decoding it locally.
+    EncodedMedia {
+        modality: EmbeddingModality,
+        source: String,
+    },
 }
 
 /// Ordered parts form one joint input and produce one vector.

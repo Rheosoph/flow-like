@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use flow_like_catalog_core::FlowPath;
 use flow_like_catalog_embedding::{CachedEmbeddingModel, CachedEmbeddingModelObject};
 use flow_like_catalog_media_video::video::utils::embed_media::{EmbedAudioNode, EmbedVideoNode};
+use flow_like_catalog_media_video::video::utils::prepare_embedding_media::PrepareEmbeddingMediaNode;
 use flow_like_model_provider::embedding::interface::*;
 use flow_like_runtime::{
     bit::BitTypes,
@@ -59,6 +60,7 @@ struct RecordingModel {
     descriptor: EmbeddingDescriptor,
     calls: StdMutex<Vec<EmbeddingRequest>>,
     reply: Reply,
+    encoded: bool,
 }
 
 impl RecordingModel {
@@ -82,6 +84,7 @@ impl RecordingModel {
             },
             calls: StdMutex::new(Vec::new()),
             reply: Reply::Valid,
+            encoded: false,
         }
     }
 
@@ -92,6 +95,10 @@ impl RecordingModel {
 
 #[async_trait]
 impl EmbeddingModel for RecordingModel {
+    fn supports_encoded_media(&self) -> bool {
+        self.encoded
+    }
+
     fn descriptor(&self) -> &EmbeddingDescriptor {
         &self.descriptor
     }
@@ -203,16 +210,18 @@ async fn context(
             )
             .await;
     }
-    context
-        .set_pin_value(
-            "model",
-            json!(CachedEmbeddingModel {
-                cache_key: "fixture-model".into(),
-                model_type: BitTypes::Embedding,
-            }),
-        )
-        .await
-        .unwrap();
+    if context.node.get_pin_by_name("model").await.is_ok() {
+        context
+            .set_pin_value(
+                "model",
+                json!(CachedEmbeddingModel {
+                    cache_key: "fixture-model".into(),
+                    model_type: BitTypes::Embedding,
+                }),
+            )
+            .await
+            .unwrap();
+    }
     context
         .set_pin_value(
             "source",
@@ -254,6 +263,104 @@ async fn assert_failed(context: &ExecutionContext) {
     assert_eq!(output(context, "exec_out").await, Some(json!(false)));
     assert!(output(context, "vector").await.is_none());
     assert!(output(context, "result").await.is_none());
+}
+
+#[tokio::test]
+async fn hosted_media_nodes_preserve_original_files() {
+    use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
+    for (name, bytes, modality) in [
+        ("tone.wav", WAV, EmbeddingModality::Audio),
+        ("video.mp4", VIDEO, EmbeddingModality::Video),
+    ] {
+        let logic = Arc::new(EmbedVideoNode::new());
+        let mut recording = RecordingModel::new(vec![modality]);
+        recording.encoded = true;
+        let model = Arc::new(recording);
+        let mut context = context(logic.clone(), Some(model.clone()), name, Some(bytes)).await;
+        logic.run(&mut context).await.unwrap();
+        assert_success(&context, 3).await;
+        let calls = model.calls();
+        let [
+            EmbeddingPart::EncodedMedia {
+                modality: actual,
+                source,
+            },
+        ] = calls[0].items[0].parts.as_slice()
+        else {
+            panic!("hosted models need the original encoded file");
+        };
+        assert_eq!(*actual, modality);
+        assert_eq!(STANDARD.decode(source).unwrap(), bytes);
+    }
+}
+
+#[tokio::test]
+async fn hosted_video_keeps_original_file_and_aligned_soundtrack() {
+    use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
+
+    let logic = Arc::new(EmbedVideoNode::new());
+    let mut recording =
+        RecordingModel::new(vec![EmbeddingModality::Audio, EmbeddingModality::Video]);
+    recording.encoded = true;
+    let model = Arc::new(recording);
+    let mut context = context(
+        logic.clone(),
+        Some(model.clone()),
+        "offset.mp4",
+        Some(VIDEO_AUDIO),
+    )
+    .await;
+    context
+        .set_pin_value("include_audio", json!(true))
+        .await
+        .unwrap();
+    logic.run(&mut context).await.unwrap();
+    let result = assert_success(&context, 3).await;
+    let calls = model.calls();
+    let [
+        EmbeddingPart::EncodedMedia { modality, source },
+        EmbeddingPart::Audio(audio),
+    ] = calls[0].items[0].parts.as_slice()
+    else {
+        panic!("expected original video and a separate soundtrack");
+    };
+    assert_eq!(*modality, EmbeddingModality::Video);
+    assert_eq!(STANDARD.decode(source).unwrap(), VIDEO_AUDIO);
+    assert_eq!(
+        (audio.sample_rate, audio.channels, audio.samples.len()),
+        (16_000, 1, 14_400)
+    );
+    assert!(audio.samples[..2176].iter().all(|sample| *sample == 0.0));
+    assert!(audio.samples.iter().any(|sample| sample.abs() > 0.05));
+    assert_eq!(result.usage.audio_duration_ms, 900);
+    assert_eq!(result.usage.video_frames, 0);
+}
+
+#[tokio::test]
+async fn prepare_media_checks_frame_limits_before_reading_encoded_or_decoded_video() {
+    let logic = Arc::new(PrepareEmbeddingMediaNode::new());
+    for encoded in [false, true] {
+        for max_frames in [-1, 0, 1025] {
+            let mut context = context(logic.clone(), None, "missing.mp4", None).await;
+            context.set_pin_value("kind", json!("video")).await.unwrap();
+            context
+                .set_pin_value("encoded", json!(encoded))
+                .await
+                .unwrap();
+            context
+                .set_pin_value("max_frames", json!(max_frames))
+                .await
+                .unwrap();
+            let error = logic.run(&mut context).await.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Max Frames must be between 1 and 1024")
+            );
+            assert_eq!(output(&context, "exec_out").await, Some(json!(false)));
+            assert!(output(&context, "content").await.is_none());
+        }
+    }
 }
 
 #[tokio::test]

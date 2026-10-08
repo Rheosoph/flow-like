@@ -420,6 +420,12 @@ function AgentLayer({ page }: Readonly<{ page: DevicePage }>) {
 				)
 			}
 		>
+			<p className="text-sm text-muted-foreground">
+				{t(
+					"device.settings.agentIncludesRuntime",
+					"The agent binary contains the orchestrator and workflow runtime. Updating the agent replaces both.",
+				)}
+			</p>
 			<KeyValueList>
 				<KvRow
 					label={t("device.settings.running", "Running")}
@@ -455,7 +461,12 @@ function AgentLayer({ page }: Readonly<{ page: DevicePage }>) {
 								"Unknown until it is read live",
 							)
 						: hostOperations.update_agent
-							? t("device.settings.remoteUpdateLinux", "Linux with systemd")
+							? page.inspection?.isolation?.platform === "macos"
+								? t("device.settings.remoteUpdateMac", "macOS with launchd")
+								: t(
+										"device.settings.remoteUpdateSupported",
+										"Available on this device",
+									)
 							: t(
 									"device.settings.remoteUpdateNo",
 									"Not supported on this system: update the agent from the device itself",

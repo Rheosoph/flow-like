@@ -8,7 +8,7 @@ edition = "2024"
 default = []
 local-ml = ["dep:ort", "dep:tempfile", "image/default-formats", "image/rayon"]
 # Remote ML execution via API proxy (for executors without local model capabilities)
-remote-ml = []
+remote-ml = ["image/png"]
 # Execution feature - alias for local-ml for consistency across catalog crates
 execute = ["local-ml"]
 
@@ -32,6 +32,7 @@ xnnpack = ["ort/xnnpack"]
 
 [dependencies]
 bytes.workspace = true
+blake3.workspace = true
 reqwest-rig = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls"] }
 flow-like-model-protocol.workspace = true
 flow-like-types-contracts.workspace = true
@@ -86,7 +87,6 @@ ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24"
 ndk-sys = "0.6"
 
 [dev-dependencies]
-blake3.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 dotenv = "0.15.0"
 

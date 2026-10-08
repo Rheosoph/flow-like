@@ -86,7 +86,7 @@ describe("files", () => {
 		optional: true,
 	});
 
-	test("a FlowPath field sends the FlowPath its upload returned; several files send a list", () => {
+	test("FlowPath fields retain the upload URL for handover, for one file and a list", () => {
 		expect(send(invoice, slot("a.pdf", flowRef("tmp/a.pdf")))).toEqual({
 			ok: true,
 			payload: {
@@ -94,6 +94,8 @@ describe("files", () => {
 					path: "tmp/a.pdf",
 					store_ref: REQUEST_FILES_STORE_REF,
 					cache_store_ref: null,
+					url: "https://files.example/tmp/a.pdf",
+					name: "a.pdf",
 				},
 			},
 		});
@@ -110,15 +112,32 @@ describe("files", () => {
 						path: "tmp/a",
 						store_ref: REQUEST_FILES_STORE_REF,
 						cache_store_ref: null,
+						url: "https://files.example/tmp/a",
+						name: "a.pdf",
 					},
 					{
 						path: "tmp/b",
 						store_ref: REQUEST_FILES_STORE_REF,
 						cache_store_ref: null,
+						url: "https://files.example/tmp/b",
+						name: "b.pdf",
 					},
 				],
 			},
 		});
+	});
+
+	test("a locally staged file keeps its FlowPath without download metadata", () => {
+		const flowPath = {
+			path: "tmp/global/apps/a/events/e/requests/r/photo.png",
+			store_ref: REQUEST_FILES_STORE_REF,
+			cache_store_ref: null,
+		};
+		for (const url of [null, ""]) {
+			expect(
+				send(invoice, slot("photo.png", { kind: "flowpath", flowPath, url })),
+			).toEqual({ ok: true, payload: { invoice_file: flowPath } });
+		}
 	});
 
 	test("a FlowPath field never falls back to a URL", () => {

@@ -12,3 +12,4 @@ pub mod ontology_action_schema;
 pub mod ontology_bindings;
 pub mod remote_ontology;
 pub mod segmentation_mask;
+pub mod uploaded_file;

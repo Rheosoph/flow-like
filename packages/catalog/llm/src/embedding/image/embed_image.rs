@@ -98,6 +98,18 @@ impl NodeLogic for EmbedImageNode {
         if let Some(embedding_model) = &embedding_model.image_model {
             let vecs = embedding_model.image_embed(vec![dynamic_image]).await?;
             embeddings = vecs;
+        } else if let Some(model) = &embedding_model.model {
+            use flow_like_model_provider::embedding::interface::{
+                EmbeddingInput, EmbeddingOptions, EmbeddingPurpose, EmbeddingRequest,
+            };
+            embeddings = model
+                .embed(EmbeddingRequest {
+                    items: vec![EmbeddingInput::image(dynamic_image)],
+                    purpose: EmbeddingPurpose::Document,
+                    options: EmbeddingOptions::default(),
+                })
+                .await?
+                .embeddings;
         } else {
             bail!("Bit not an image embedding model");
         }

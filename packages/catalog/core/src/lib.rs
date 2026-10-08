@@ -89,6 +89,7 @@ pub use types::ontology_action_schema::{
 pub use types::ontology_bindings::{ontology_binding_nodes, remote_ontology_binding_nodes};
 pub use types::remote_ontology::RemoteOntologyImport;
 pub use types::segmentation_mask::{InstanceSegmentation, SegmentationMask};
+pub use types::uploaded_file::{UploadedFile, decode_local_file_url, materialize_uploaded_files};
 
 /// A node constructor function type
 pub struct NodeConstructor {

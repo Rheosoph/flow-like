@@ -125,16 +125,12 @@ impl EmbeddingFactory {
         access_token: Option<String>,
         usage_context: Option<ModelUsageContext>,
     ) -> flow_like_types::Result<Arc<dyn EmbeddingModel>> {
-        if versioned_embedding_spec(bit)?.is_some() {
+        if versioned_embedding_spec(bit)?.is_some()
+            && FlowLikeState::can_execute_local_bit_models(&app_state).await
+        {
             #[cfg(feature = "local-ml")]
             {
                 return Ok(self.build_multimodal(bit, app_state).await?);
-            }
-            #[cfg(not(feature = "local-ml"))]
-            {
-                return Err(flow_like_types::anyhow!(
-                    "This embedding adapter requires local ML execution"
-                ));
             }
         }
         if bit.bit_type == crate::bit::BitTypes::ImageEmbedding {
@@ -162,6 +158,19 @@ impl EmbeddingFactory {
             let model = self
                 .build_text_routed(bit, app_state, access_token, usage_context)
                 .await?;
+            #[cfg(feature = "remote-ml")]
+            if let Some(proxy) = model
+                .as_cacheable()
+                .as_any()
+                .downcast_ref::<ProxyEmbeddingModel>()
+                && bit.try_to_embedding().as_ref().is_some_and(
+                    flow_like_model_provider::embedding::hosted_input::supports_internal_multimodal,
+                )
+            {
+                return Ok(Arc::new(
+                    flow_like_model_provider::embedding::proxy_multimodal::ProxyMultimodalEmbeddingModel::new(proxy.clone())?,
+                ));
+            }
             let parameters = bit
                 .try_to_embedding()
                 .ok_or(flow_like_types::anyhow!("Invalid text embedding Bit"))?;
@@ -274,7 +283,10 @@ impl EmbeddingFactory {
         access_token: Option<String>,
         usage_context: Option<ModelUsageContext>,
     ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
-        if versioned_embedding_spec(bit)?.is_some() {
+        // A local recipe does not replace the Bit's remote execution contract.
+        if versioned_embedding_spec(bit)?.is_some()
+            && FlowLikeState::can_execute_local_bit_models(&app_state).await
+        {
             return self.build_text(bit, app_state).await;
         }
         if let Some(endpoint) =
@@ -393,6 +405,11 @@ impl EmbeddingFactory {
         _app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Arc<dyn ImageEmbeddingModelLogic>> {
         if versioned_embedding_spec(bit)?.is_some() {
+            if !FlowLikeState::can_execute_local_bit_models(&_app_state).await {
+                return Err(flow_like_types::anyhow!(
+                    "Image embedding execution requires local ML and a filesystem-backed Bit store; remote image embedding is not supported"
+                ));
+            }
             #[cfg(feature = "local-ml")]
             {
                 let model = self.build_multimodal(bit, _app_state).await?;
@@ -629,6 +646,33 @@ mod tests {
         }
     }
 
+    fn with_embedding_recipe(mut bit: Bit) -> Bit {
+        bit.parameters["embedding"] = json::json!({
+            "schema_version": 1,
+            "adapter": "embedding_gemma2",
+            "space_id": "local-multimodal-space",
+            "dimensions": 768,
+            "supported_dimensions": [128, 256, 768],
+            "max_tokens": 8192,
+            "artifacts": {
+                "backbone": {"bit": "backbone", "path": "model.onnx"},
+                "vision_encoder": {"bit": "vision", "path": "vision.onnx"}
+            }
+        });
+        versioned_embedding_spec(&bit).expect("valid embedding recipe");
+        bit
+    }
+
+    fn memory_state() -> FlowLikeState {
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        FlowLikeState::new(
+            crate::state::FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        )
+    }
+
     fn headers(usage_context: Option<&ModelUsageContext>) -> HashMap<String, String> {
         embedding_usage_headers(usage_context).into_iter().collect()
     }
@@ -743,25 +787,182 @@ mod tests {
 
     #[cfg(feature = "remote-ml")]
     #[tokio::test]
-    async fn routed_builder_requires_token_for_remote_capable_local_bit() {
-        let bit = embedding_bit("Local");
-        let store = FlowLikeStore::Memory(Arc::new(
-            flow_like_storage::object_store::memory::InMemory::new(),
+    async fn gemma2_recipe_uses_multimodal_proxy_when_local_execution_is_unavailable() {
+        let mut bit = with_embedding_recipe(embedding_bit("Local"));
+        bit.parameters["remote"]["model_id"] = json::json!("embeddinggemma-2");
+        bit.parameters["vector_length"] = json::json!(768);
+        bit.parameters["input_length"] = json::json!(8192);
+        let model = EmbeddingFactory::new()
+            .build(
+                &bit,
+                Arc::new(memory_state()),
+                Some("user-token".into()),
+                None,
+            )
+            .await
+            .expect("Gemma 2 can use the multimodal proxy");
+        assert!(model.supports_encoded_media());
+        assert_eq!(model.descriptor().space.dimensions, 768);
+        assert_eq!(model.descriptor().limits.max_tokens, 8192);
+        assert!(
+            model
+                .descriptor()
+                .modalities
+                .contains(&EmbeddingModality::Video)
+        );
+        assert!(
+            model
+                .descriptor()
+                .modalities
+                .contains(&EmbeddingModality::Audio)
+        );
+        assert_ne!(model.descriptor().space.id, "local-multimodal-space");
+    }
+
+    #[cfg(feature = "remote-ml")]
+    #[tokio::test]
+    async fn versioned_recipe_uses_proxy_and_its_text_contract_on_object_storage() {
+        let bit = with_embedding_recipe(embedding_bit("Local"));
+        let state = Arc::new(memory_state());
+        let factory = EmbeddingFactory::new();
+        let token = Some("user-token".to_string());
+
+        let routed = factory
+            .build_text_routed(&bit, state.clone(), token.clone(), None)
+            .await
+            .expect("a versioned recipe can use the API proxy");
+        assert!(routed.as_cacheable().as_any().is::<ProxyEmbeddingModel>());
+
+        let model = factory
+            .build(&bit, state, token, None)
+            .await
+            .expect("the unified builder can use the API proxy");
+        let descriptor = model.descriptor();
+        assert_eq!(descriptor.adapter, "legacy_text");
+        assert_eq!(descriptor.modalities, vec![EmbeddingModality::Text]);
+        assert!(descriptor.joint_combinations.is_empty());
+        assert_eq!(descriptor.space.id, legacy_space_id(&bit, 384));
+        assert_eq!(descriptor.space.dimensions, 384);
+        assert!(!descriptor.space.normalized);
+        assert_eq!(descriptor.supported_dimensions, vec![384]);
+        assert_eq!(descriptor.limits.max_tokens, 512);
+    }
+
+    #[tokio::test]
+    async fn versioned_recipe_without_remote_config_reports_unavailable_execution() {
+        let mut bit = with_embedding_recipe(embedding_bit("Local"));
+        bit.parameters["remote"] = serde_json::Value::Null;
+        let state = Arc::new(memory_state());
+        let factory = EmbeddingFactory::new();
+
+        let routed_error = factory
+            .build_text_routed(&bit, state.clone(), Some("user-token".to_string()), None)
+            .await
+            .err()
+            .expect("a local-only recipe cannot execute on object storage");
+        let unified_error = factory
+            .build(&bit, state, Some("user-token".to_string()), None)
+            .await
+            .err()
+            .expect("the unified builder cannot execute a local-only recipe");
+        for error in [routed_error, unified_error] {
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not provide remote execution configuration")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn versioned_image_recipe_reports_unsupported_remote_execution() {
+        let mut bit = with_embedding_recipe(embedding_bit("Local"));
+        bit.bit_type = BitTypes::ImageEmbedding;
+        let state = Arc::new(memory_state());
+        let factory = EmbeddingFactory::new();
+
+        let image_error = factory
+            .build_image(&bit, state.clone())
+            .await
+            .err()
+            .expect("remote image execution is unavailable");
+        let unified_error = factory
+            .build(&bit, state, Some("user-token".to_string()), None)
+            .await
+            .err()
+            .expect("the unified builder must reject remote image execution");
+        for error in [image_error, unified_error] {
+            assert!(
+                error
+                    .to_string()
+                    .contains("remote image embedding is not supported")
+            );
+        }
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[tokio::test]
+    async fn recipe_only_bit_reaches_native_loader_on_a_filesystem_store() {
+        use flow_like_storage::files::store::local_store::LocalObjectStore;
+
+        let directory = tempfile::tempdir().expect("temporary Bit store");
+        let store = FlowLikeStore::Local(Arc::new(
+            LocalObjectStore::new(directory.path().to_path_buf()).expect("local Bit store"),
         ));
         let state = Arc::new(FlowLikeState::new(
             crate::state::FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         ));
+        let mut bit = with_embedding_recipe(embedding_bit("Local"));
+        bit.parameters = json::json!({"embedding": bit.parameters["embedding"]});
+        // Invalid native dimensions stop the loader before it fetches any model artifacts.
+        bit.parameters["embedding"]["dimensions"] = json::json!(384);
+        bit.parameters["embedding"]["supported_dimensions"] = json::json!([128, 256]);
+        let factory = EmbeddingFactory::new();
 
-        let error = match EmbeddingFactory::new()
-            .build_text_routed(&bit, state, None, None)
+        let routed_error = factory
+            .build_text_routed(&bit, state.clone(), None, None)
             .await
-        {
-            Ok(_) => panic!("proxy routing without a token must fail explicitly"),
-            Err(error) => error,
-        };
+            .err()
+            .expect("the native loader validates dimensions");
+        let unified_error = factory
+            .build(&bit, state, None, None)
+            .await
+            .err()
+            .expect("the unified builder reaches the native loader");
+        for error in [routed_error, unified_error] {
+            assert!(
+                error
+                    .to_string()
+                    .contains("native output has 768 dimensions")
+            );
+        }
+    }
 
-        assert!(error.to_string().contains("requires an access token"));
+    #[cfg(feature = "remote-ml")]
+    #[tokio::test]
+    async fn routed_builder_requires_token_for_remote_capable_local_bit() {
+        for bit in [
+            embedding_bit("Local"),
+            with_embedding_recipe(embedding_bit("Local")),
+        ] {
+            let state = Arc::new(memory_state());
+            let factory = EmbeddingFactory::new();
+            let routed_error = factory
+                .build_text_routed(&bit, state.clone(), None, None)
+                .await
+                .err()
+                .expect("proxy routing without a token must fail explicitly");
+            let unified_error = factory
+                .build(&bit, state, None, None)
+                .await
+                .err()
+                .expect("the unified builder requires a proxy token");
+
+            for error in [routed_error, unified_error] {
+                assert!(error.to_string().contains("requires an access token"));
+            }
+        }
     }
 
     #[cfg(feature = "remote-ml")]
@@ -819,28 +1020,31 @@ mod tests {
     #[cfg(not(feature = "remote-ml"))]
     #[tokio::test]
     async fn routed_builder_reports_missing_remote_capability() {
-        let bit = embedding_bit("Local");
-        let store = FlowLikeStore::Memory(Arc::new(
-            flow_like_storage::object_store::memory::InMemory::new(),
-        ));
-        let state = Arc::new(FlowLikeState::new(
-            crate::state::FlowLikeConfig::with_default_store(store),
-            crate::utils::http::HTTPClient::new_without_refetch(),
-        ));
+        for bit in [
+            embedding_bit("Local"),
+            with_embedding_recipe(embedding_bit("Local")),
+        ] {
+            let state = Arc::new(memory_state());
+            let factory = EmbeddingFactory::new();
+            let routed_error = factory
+                .build_text_routed(&bit, state.clone(), Some("user-token".to_string()), None)
+                .await
+                .err()
+                .expect("a build without remote ML cannot create the proxy");
+            let unified_error = factory
+                .build(&bit, state, Some("user-token".to_string()), None)
+                .await
+                .err()
+                .expect("the unified builder requires remote ML for the proxy");
 
-        let error = match EmbeddingFactory::new()
-            .build_text_routed(&bit, state, Some("user-token".to_string()), None)
-            .await
-        {
-            Ok(_) => panic!("a build without remote ML cannot create the proxy"),
-            Err(error) => error,
-        };
-
-        assert!(
-            error
-                .to_string()
-                .contains("requires the 'remote-ml' feature")
-        );
+            for error in [routed_error, unified_error] {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("requires the 'remote-ml' feature")
+                );
+            }
+        }
     }
 
     mod endpoints {
@@ -849,16 +1053,6 @@ mod tests {
             Interaction, ModelUnavailableReason, model_unavailable,
             testing::{FakeConnector, FakeRouter, device_embedding_bit, endpoint},
         };
-
-        fn memory_state() -> FlowLikeState {
-            let store = FlowLikeStore::Memory(Arc::new(
-                flow_like_storage::object_store::memory::InMemory::new(),
-            ));
-            FlowLikeState::new(
-                crate::state::FlowLikeConfig::with_default_store(store),
-                crate::utils::http::HTTPClient::new_without_refetch(),
-            )
-        }
 
         fn is_endpoint_model(model: &Arc<dyn EmbeddingModelLogic>) -> bool {
             model.as_cacheable().as_any().is::<EndpointEmbeddingModel>()
@@ -926,6 +1120,40 @@ mod tests {
                 .expect("a routed Local embedding needs no local runtime");
 
             assert!(is_endpoint_model(&model));
+        }
+
+        #[tokio::test]
+        async fn versioned_recipes_keep_device_and_local_endpoint_routing() {
+            for bit in [
+                device_embedding_bit("device-embedding", "dev-1"),
+                embedding_bit("Local"),
+            ] {
+                let bit = with_embedding_recipe(bit);
+                let mut state = memory_state();
+                if bit.is_device_model() {
+                    state.device_model_connector =
+                        Some(FakeConnector::serving(endpoint("http://127.0.0.1:9/v1")));
+                } else {
+                    state.local_model_router =
+                        Some(Arc::new(FakeRouter(endpoint("http://127.0.0.1:9/v1"))));
+                }
+                let state = Arc::new(state);
+                let factory = EmbeddingFactory::new();
+
+                let routed = factory
+                    .build_text_routed(&bit, state.clone(), None, None)
+                    .await
+                    .expect("a versioned recipe can use an endpoint without a token");
+                assert!(is_endpoint_model(&routed));
+
+                let model = factory
+                    .build(&bit, state, None, None)
+                    .await
+                    .expect("the unified builder preserves endpoint routing");
+                assert_eq!(model.descriptor().adapter, "legacy_text");
+                assert_eq!(model.descriptor().modalities, vec![EmbeddingModality::Text]);
+                assert_eq!(model.descriptor().limits.max_tokens, 512);
+            }
         }
     }
 }

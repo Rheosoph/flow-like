@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# Keep upstream's standalone Swift binding tests out of workspace test runs.
+exclude = ["packages/vendor/swift-rs"]
 # Bare Cargo commands target the shared editing loop. Product crates remain one
 # short alias away, while CI always passes --workspace explicitly.
 default-members = [
@@ -325,6 +327,8 @@ wasmtime-wasi-http = "=48.0.3"
 [patch.crates-io]
 # Stabilize htmlize's generated entity matcher across clean release builds.
 matchgen = { path = "packages/vendor/matchgen" }
+# swift-rs requires SwiftPM's native build engine for iOS targets and artifact paths.
+swift-rs = { path = "packages/vendor/swift-rs" }
 # Pin the complete Lance workspace to the create-only commit fix. Its crates
 # must share a source because their public types cross crate boundaries.
 lance = { git = "https://github.com/Rheosoph/lance.git", rev = "82a122e817e1cd61af9d3bc20aee9600fae066f9" }
