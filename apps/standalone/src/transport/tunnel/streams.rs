@@ -5,6 +5,7 @@ use tokio::{
     net::TcpStream,
     sync::{Notify, watch},
 };
+use tracing::Instrument;
 
 pub(super) enum Event {
     Opened(u32),
@@ -201,12 +202,47 @@ impl Stream {
     }
 
     pub fn start_internal(
+        session_id: &str,
         id: u32,
         open: flow_like_device_protocol::TunnelDataOpen,
         access: LiveTunnelAuthority,
         output: mpsc::Sender<Event>,
         parent: &CancellationToken,
     ) -> Self {
+        let span = match &open {
+            flow_like_device_protocol::TunnelDataOpen::Artifact {
+                project_id,
+                transfer_id,
+                file_index,
+                offset,
+            } => tracing::warn_span!(
+                "device_data_stream",
+                session_id,
+                stream_id = id,
+                kind = "artifact",
+                project_id = %project_id,
+                upload_id = %transfer_id,
+                file_index = ?file_index,
+                offset,
+            ),
+            flow_like_device_protocol::TunnelDataOpen::Request { request } => tracing::warn_span!(
+                "device_data_stream",
+                session_id,
+                stream_id = id,
+                kind = "request",
+                operation_id = %request.operation_id,
+            ),
+            flow_like_device_protocol::TunnelDataOpen::ModelAsset { job_id, offset } => {
+                tracing::warn_span!(
+                    "device_data_stream",
+                    session_id,
+                    stream_id = id,
+                    kind = "model_asset",
+                    job_id = %job_id,
+                    offset,
+                )
+            }
+        };
         let accepts_data = matches!(
             open,
             flow_like_device_protocol::TunnelDataOpen::Artifact { .. }
@@ -229,11 +265,18 @@ impl Stream {
                 .await;
                 let event = match result {
                     Ok(()) => Event::Closed(id),
-                    Err(error) => Event::Failed(id, Reset::of(&error)),
+                    Err(error) => {
+                        tracing::warn!(
+                            phase = "internal_stream",
+                            "Device data stream failed: {error:#}"
+                        );
+                        Event::Failed(id, Reset::of(&error))
+                    }
                 };
                 tokio::select! { _ = task_cancel.cancelled() => {}, _ = output.send(event) => {} }
             }
-            .with_cancel(stream.cancel.clone()),
+            .with_cancel(stream.cancel.clone())
+            .instrument(span),
         );
         stream
     }
@@ -360,7 +403,9 @@ async fn internal(
 ) -> Result<()> {
     let live = access.clone();
     let target = tokio::task::spawn_blocking(move || live_authority(&live)?.internal_target(&open))
-        .await??;
+        .await
+        .context("Join internal data stream admission")?
+        .context("Admit internal data stream")?;
     output
         .send(Event::InternalOpened(id, target.clone()))
         .await?;
@@ -380,7 +425,9 @@ async fn internal(
             let mut offset = target.offset;
             let mut received = false;
             loop {
-                let (chunk, _) = next_batch(&writer, true).await?;
+                let (chunk, _) = next_batch(&writer, true)
+                    .await
+                    .context("Receive project artifact bytes")?;
                 let Some(chunk) = chunk else {
                     break;
                 };
@@ -392,7 +439,9 @@ async fn internal(
                     ensure!(!check_cancel.is_cancelled(), "Tunnel stream cancelled");
                     live_authority(&live)?.write_artifact(&target, offset, &chunk)
                 })
-                .await??;
+                .await
+                .context("Join project artifact write")?
+                .with_context(|| format!("Write project artifact bytes at offset {offset}"))?;
                 offset = offset
                     .checked_add(count as u64)
                     .context("Artifact stream offset overflow")?;
@@ -411,7 +460,9 @@ async fn internal(
                 };
                 bounded_response(&status)
             })
-            .await??
+            .await
+            .context("Join project artifact status")?
+            .context("Confirm project artifact stream status")?
         }
         #[cfg(feature = "runtime")]
         InternalTarget::ModelAsset(target) => {
@@ -420,7 +471,9 @@ async fn internal(
                 .await?
         }
     };
-    read_service(id, bytes.as_slice(), credit, output).await
+    read_service(id, bytes.as_slice(), credit, output)
+        .await
+        .context("Return internal data stream response")
 }
 
 /// One model asset push: where its bytes come from and where progress goes.

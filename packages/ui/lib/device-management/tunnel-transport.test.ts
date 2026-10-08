@@ -28,7 +28,99 @@ let admissionExpiry = 0;
 let admitCount = 0;
 let opens: Socket[] = [];
 let readyKind = TunnelKind.Renewed;
+let noiseCount = 0;
+let relayHellos: string[] = [];
+let rtcMode:
+	| "ready"
+	| "closed"
+	| "confirmation_closed"
+	| "timeout"
+	| "wrong_route"
+	| "invalid_frame" = "ready";
+let peers: Peer[] = [];
+let onRtcHello: (() => void) | undefined;
+let closedSessions: string[] = [];
+let freedSessions: string[] = [];
 const active: TunnelTransport[] = [];
+
+class Channel extends EventTarget {
+	readyState = "open";
+	bufferedAmount = 0;
+	binaryType = "arraybuffer";
+	onclose?: () => void;
+	onerror?: () => void;
+	onmessage?: (event: { data: ArrayBuffer | string }) => void;
+	sent: ReturnType<typeof decodeTunnelEnvelope>[] = [];
+
+	send(bytes: Uint8Array) {
+		const envelope = decodeTunnelEnvelope(bytes);
+		this.sent.push(envelope);
+		if (envelope.kind === "hello") onRtcHello?.();
+		queueMicrotask(() => {
+			if (this.readyState !== "open") return;
+			if (envelope.kind === "hello") {
+				if (rtcMode === "closed") return this.close();
+				if (rtcMode === "timeout") return;
+				if (rtcMode === "invalid_frame") {
+					this.onmessage?.({ data: "invalid binary frame" });
+					return;
+				}
+				this.onmessage?.({
+					data: encodeTunnelEnvelope(
+						"handshake",
+						rtcMode === "wrong_route" ? "another-session" : envelope.sessionId,
+						new Uint8Array([2]),
+					).buffer as ArrayBuffer,
+				});
+			}
+			if (envelope.kind === "handshake") {
+				if (rtcMode === "confirmation_closed") return this.close();
+				this.onmessage?.({
+					data: encodeTunnelEnvelope(
+						"message",
+						envelope.sessionId,
+						encodeTunnelFrame({
+							kind: readyKind,
+							stream: 0,
+							sequence: 0n,
+							body:
+								readyKind === TunnelKind.Ping
+									? new Uint8Array(8)
+									: tunnelJson({ expires_at: now() + 300 }),
+						}),
+					).buffer as ArrayBuffer,
+				});
+			}
+		});
+	}
+
+	close() {
+		this.readyState = "closed";
+		this.onclose?.();
+	}
+}
+
+class Peer extends EventTarget {
+	iceGatheringState = "complete";
+	localDescription = { type: "offer", sdp: "offer" };
+	channel = new Channel();
+	closed = false;
+	constructor() {
+		super();
+		peers.push(this);
+	}
+	createDataChannel() {
+		return this.channel;
+	}
+	async createOffer() {
+		return this.localDescription;
+	}
+	async setLocalDescription() {}
+	async setRemoteDescription() {}
+	close() {
+		this.closed = true;
+	}
+}
 
 class Socket {
 	static OPEN = 1;
@@ -78,9 +170,32 @@ class Socket {
 			return;
 		}
 		if (frame.type !== "frame") return;
+		if (frame.channel === "signal") {
+			const offer = JSON.parse(
+				new TextDecoder().decode(unbase64url(frame.payload)),
+			);
+			this.deliver({
+				type: "frame",
+				from: DEVICE,
+				from_role: "device",
+				to: participant,
+				channel: "signal",
+				payload: base64url(
+					new TextEncoder().encode(
+						JSON.stringify({
+							kind: "answer",
+							session_id: offer.session_id,
+							sdp: "answer",
+						}),
+					),
+				),
+			});
+			return;
+		}
 		expect(frame.channel).toBe("tunnel");
 		const envelope = decodeTunnelEnvelope(unbase64url(frame.payload));
-		if (envelope.kind === "hello")
+		if (envelope.kind === "hello") {
+			relayHellos.push(envelope.sessionId);
 			this.frame(
 				encodeTunnelEnvelope(
 					"handshake",
@@ -88,6 +203,7 @@ class Socket {
 					new Uint8Array([2]),
 				),
 			);
+		}
 		if (envelope.kind === "handshake")
 			this.frame(
 				encodeTunnelEnvelope(
@@ -123,16 +239,21 @@ function admission(): SignalingAdmission {
 }
 const controller = {
 	beginTunnelNoise() {
+		const sessionId = `session-${++noiseCount}`;
 		return {
 			certificate: () => "signed-certificate",
-			sessionId: () => "session-1",
+			sessionId: () => sessionId,
 			write: () => new Uint8Array([1]),
 			read() {},
 			finish: () => ({
 				encrypt: (bytes: Uint8Array) => bytes.slice(),
 				decrypt: (bytes: Uint8Array) => bytes.slice(),
-				close() {},
-				free() {},
+				close() {
+					closedSessions.push(sessionId);
+				},
+				free() {
+					freedSessions.push(sessionId);
+				},
 			}),
 			close() {},
 			free() {},
@@ -167,6 +288,13 @@ beforeEach(() => {
 	admitCount = 0;
 	opens = [];
 	readyKind = TunnelKind.Renewed;
+	noiseCount = 0;
+	relayHellos = [];
+	peers = [];
+	rtcMode = "ready";
+	onRtcHello = undefined;
+	closedSessions = [];
+	freedSessions = [];
 });
 afterEach(() => {
 	for (const transport of active.splice(0)) transport.close();
@@ -175,6 +303,108 @@ afterEach(() => {
 });
 
 describe("encrypted tunnel transport", () => {
+	test("keeps WebRTC after encrypted tunnel confirmation", async () => {
+		globals.RTCPeerConnection = Peer;
+		const transport = await connectTunnelTransport(options());
+		active.push(transport);
+		expect(transport.kind).toBe("webrtc");
+		expect(noiseCount).toBe(1);
+		expect(relayHellos).toEqual([]);
+	});
+
+	for (const mode of ["closed", "confirmation_closed", "timeout"] as const) {
+		test(`retries an RTC ${mode} during initial authentication with fresh relay keys`, async () => {
+			globals.RTCPeerConnection = Peer;
+			rtcMode = mode;
+			const original = globalThis.setTimeout;
+			globalThis.setTimeout = ((callback: () => void, delay: number) =>
+				original(callback, delay === 45_000 ? 1 : delay)) as typeof setTimeout;
+			try {
+				const transport = await connectTunnelTransport(options());
+				active.push(transport);
+				expect(transport.kind).toBe("websocket");
+				expect(noiseCount).toBe(2);
+				expect(relayHellos).toEqual(["session-2"]);
+				expect(peers[0].channel.sent[0].sessionId).toBe("session-1");
+				expect(
+					peers[0].channel.sent.every((frame) => frame.kind !== "message"),
+				).toBe(true);
+				expect(peers[0].closed).toBe(true);
+				expect(opens).toHaveLength(1);
+				if (mode === "confirmation_closed") {
+					expect(closedSessions).toEqual(["session-1"]);
+					expect(freedSessions).toEqual(["session-1"]);
+				}
+			} finally {
+				globalThis.setTimeout = original;
+			}
+		});
+	}
+
+	for (const mode of ["wrong_route", "invalid_frame"] as const) {
+		test(`does not retry an RTC ${mode} through the relay`, async () => {
+			globals.RTCPeerConnection = Peer;
+			rtcMode = mode;
+			await expect(connectTunnelTransport(options())).rejects.toThrow();
+			expect(noiseCount).toBe(1);
+			expect(relayHellos).toEqual([]);
+			expect(peers[0].closed).toBe(true);
+			expect(opens[0].readyState).toBe(3);
+		});
+	}
+
+	test("does not retry rejected encrypted confirmation through the relay", async () => {
+		globals.RTCPeerConnection = Peer;
+		readyKind = TunnelKind.Ping;
+		await expect(connectTunnelTransport(options())).rejects.toThrow(
+			"did not confirm",
+		);
+		expect(noiseCount).toBe(1);
+		expect(relayHellos).toEqual([]);
+	});
+
+	test("does not retry a pinned device identity failure through the relay", async () => {
+		globals.RTCPeerConnection = Peer;
+		const untrusted = {
+			beginTunnelNoise() {
+				return {
+					...controller.beginTunnelNoise?.("owner", new Uint8Array(32), now()),
+					read() {
+						throw new Error("Pinned device identity mismatch.");
+					},
+				};
+			},
+		} as unknown as BrowserController;
+		await expect(
+			connectTunnelTransport({ ...options(), controller: untrusted }),
+		).rejects.toThrow("Pinned device identity mismatch");
+		expect(noiseCount).toBe(1);
+		expect(relayHellos).toEqual([]);
+	});
+
+	test("does not replay an established RTC tunnel through the relay", async () => {
+		globals.RTCPeerConnection = Peer;
+		const transport = await connectTunnelTransport(options());
+		active.push(transport);
+		const received = transport.next();
+		peers[0].channel.close();
+		await expect(received).rejects.toThrow();
+		expect(noiseCount).toBe(1);
+		expect(relayHellos).toEqual([]);
+	});
+
+	test("does not retry an aborted RTC handshake through the relay", async () => {
+		globals.RTCPeerConnection = Peer;
+		const signal = new AbortController();
+		onRtcHello = () => signal.abort();
+		await expect(
+			connectTunnelTransport({ ...options(), signal: signal.signal }),
+		).rejects.toThrow();
+		expect(noiseCount).toBe(1);
+		expect(relayHellos).toEqual([]);
+		expect(opens[0].readyState).toBe(3);
+	});
+
 	test("uses a binary relay handshake with a distinct tunnel Noise session", async () => {
 		const transport = await connectTunnelTransport(options());
 		active.push(transport);

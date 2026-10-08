@@ -10,11 +10,8 @@ import {
 	CURRENT_BOARD_FORMAT_VERSION,
 } from "@flow-like/flow-like-ui/lib/board-format";
 import type { IProfile } from "@flow-like/flow-like-ui/types";
-import {
-	type WebBackendRef,
-	ensureProtectedAppRouteAuth,
-	requestSilentRenew,
-} from "./api-utils";
+import { reportUnauthorized } from "../auth-session";
+import { type WebBackendRef, ensureProtectedAppRouteAuth } from "./api-utils";
 
 /**
  * W3C trace propagation for outgoing API calls. Empty when no trace is active
@@ -120,15 +117,15 @@ export class WebApiState implements IApiState {
 		return getApiUrl(profile, path);
 	}
 
-	private getHeaders(): HeadersInit {
-		const headers: HeadersInit = {
+	private getHeaders(accessToken?: string, overrides?: HeadersInit): Headers {
+		const headers = new Headers({
 			"Content-Type": "application/json",
 			[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
-		};
-		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+		});
+		if (accessToken) {
+			headers.set("Authorization", `Bearer ${accessToken}`);
 		}
+		new Headers(overrides).forEach((value, key) => headers.set(key, value));
 		return headers;
 	}
 
@@ -137,24 +134,29 @@ export class WebApiState implements IApiState {
 		path: string,
 		options?: RequestInit,
 	): Promise<T> {
+		const auth = this.backend.auth;
+		const accessToken = auth?.user?.access_token;
 		ensureProtectedAppRouteAuth(
 			path,
-			this.backend.auth,
+			auth,
 			(options?.method ?? "GET").toUpperCase(),
 		);
+		const headers = this.getHeaders(accessToken, traceHeaders());
+		new Headers(options?.headers).forEach((value, key) =>
+			headers.set(key, value),
+		);
+		const usesAccountToken =
+			headers.get("Authorization") ===
+			(accessToken ? `Bearer ${accessToken}` : null);
 		const url = this.constructUrl(profile, path);
 		const response = await fetch(url, {
 			...options,
-			headers: {
-				...this.getHeaders(),
-				...traceHeaders(),
-				...options?.headers,
-			},
+			headers,
 		});
 
 		if (!response.ok) {
-			if (response.status === 401 && this.backend.auth) {
-				requestSilentRenew(this.backend.auth, "after 401");
+			if (response.status === 401 && usesAccountToken) {
+				reportUnauthorized(auth, accessToken);
 			}
 			const errorText = await response.text();
 			throw apiResponseError(response, errorText, path);
@@ -203,18 +205,21 @@ export class WebApiState implements IApiState {
 		options?: RequestInit,
 		onMessage?: (data: T) => void,
 	): Promise<void> {
+		const auth = this.backend.auth;
+		const accessToken = auth?.user?.access_token;
+		const headers = this.getHeaders(accessToken, options?.headers);
+		const usesAccountToken =
+			headers.get("Authorization") ===
+			(accessToken ? `Bearer ${accessToken}` : null);
 		const url = this.constructUrl(profile, path);
 		const response = await fetch(url, {
 			...options,
-			headers: {
-				...this.getHeaders(),
-				...options?.headers,
-			},
+			headers,
 		});
 
 		if (!response.ok) {
-			if (response.status === 401 && this.backend.auth) {
-				requestSilentRenew(this.backend.auth, "after 401");
+			if (response.status === 401 && usesAccountToken) {
+				reportUnauthorized(auth, accessToken);
 			}
 			const errorText = await response.text();
 			throw apiResponseError(response, errorText, path);

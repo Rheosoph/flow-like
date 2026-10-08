@@ -201,10 +201,11 @@ impl NodeLogic for RocAucNode {
                 .filter(
                     "true",
                     Some(vec![probabilities_col.clone(), actuals_col.clone()]),
-                    MAX_ML_PREDICTION_RECORDS,
+                    MAX_ML_PREDICTION_RECORDS + 1,
                     0,
                 )
-                .await?
+                .await
+                .and_then(crate::ml::ensure_complete_ml_read)?
         };
 
         if records.is_empty() {

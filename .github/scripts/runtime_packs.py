@@ -33,7 +33,6 @@ LLAMACPP_DOWNLOADS = "https://github.com/ggml-org/llama.cpp/releases/download"
 # Official v0.6.0 selects b11429. GitHub's asset digests were checked on 2026-10-06.
 UPSTREAM_ARCHIVES = {
     "macos-arm64": (11971406, "740288ec6887be94280a5dfa25b5e23a78285cab104519e6c7e218904ee82459"),
-    "macos-x64": (11487431, "29ac3ea02be6bd143e824973f2cc5fa74bc4094393a9eaab0ff6814f19dd8522"),
     "ubuntu-x64": (17693462, "f6d25dde8f51133143d1453da4fd5f73b145127177612a283bf7995957af3392"),
     "ubuntu-vulkan-x64": (31636673, "632c4e98feba2b94407a2130e3133e0c3aefb0ea1ab41337e926d8bfafdd0b74"),
 }
@@ -70,8 +69,6 @@ FALLBACK_LIBRARIES = ("libgcc_s.so.1", "libstdc++.so.6")
 LLAMACPP_PACKS = {
     "llamacpp-macos-arm64-metal": {"target": "aarch64-apple-darwin", "backend": "metal", "archive": "macos-arm64",
                                    "files": MAC_LIBRARIES + ("libggml-metal.0.dylib",)},
-    "llamacpp-macos-x64-cpu": {"target": "x86_64-apple-darwin", "backend": "cpu", "archive": "macos-x64",
-                               "files": MAC_LIBRARIES},
     "llamacpp-linux-x64-cpu": {"target": "x86_64-unknown-linux-gnu", "backend": "cpu", "archive": "ubuntu-x64",
                                "files": LINUX_LIBRARIES + X64_CPU_BACKENDS, "bundled": BUNDLED,
                                "fallback": FALLBACK_LIBRARIES},

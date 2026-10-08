@@ -86,7 +86,10 @@ impl Connection {
             self.authority.check()?;
             Ok::<_, anyhow::Error>(())
         };
-        tokio::select! { _ = cancel.cancelled() => return Ok(()), result = tokio::time::timeout(HANDSHAKE_TIMEOUT, setup) => result?? }
+        tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            result = tokio::time::timeout(HANDSHAKE_TIMEOUT, setup) => result.context("Authenticate encrypted tunnel timed out")?.context("Authenticate encrypted tunnel")?,
+        }
         let session = self.handshake.finish()?;
         let access = Arc::new(std::sync::RwLock::new(self.authority.clone()));
         let mut pump = Pump {
@@ -110,7 +113,9 @@ impl Connection {
             }),
         )
         .await?;
-        pump.run(input, cancel).await
+        pump.run(input, cancel)
+            .await
+            .context("Run encrypted tunnel")
     }
 }
 
@@ -294,6 +299,7 @@ impl Pump {
                 self.streams.insert(
                     id,
                     streams::Stream::start_internal(
+                        &self.session_id,
                         id,
                         open,
                         self.access.clone(),

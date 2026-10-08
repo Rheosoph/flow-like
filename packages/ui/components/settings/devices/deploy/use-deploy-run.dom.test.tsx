@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { ApiResponseError } from "../../../../lib/api-error";
+import type { ArtifactTransferStatus } from "../../../../lib/device-management/artifacts";
 import type {
 	DeployDraft,
 	DeployPlan,
@@ -9,6 +10,7 @@ import type {
 	PlanEntry,
 } from "../../../../lib/device-management/model/deploy-plan";
 import type { DeployRunState } from "../../../../lib/device-management/model/deploy-run";
+import { nativeArtifactUploadError } from "../../../../lib/device-management/native-errors";
 import { installDom, settle } from "../testing/dom-harness";
 import type { FakeAgent } from "../testing/fake-device-api";
 import type { FakeWorkspace } from "../testing/fake-workspace";
@@ -668,6 +670,8 @@ describe("useDeployRun", () => {
 		expect(detail).toContain("Transport: websocket");
 		expect(detail).toContain("Transport phase: wait_reply");
 		expect(detail).toContain("Transport cause: connection_closed");
+		expect(detail).toContain("Upload phase: begin");
+		expect(detail).toContain("Upload cause: management_failed");
 		expect(types(fake, EDGE)).toEqual(["artifact"]);
 		expect(grants(fake, EDGE)).toHaveLength(1);
 		const pending = pendingArtifactTransfers(
@@ -676,6 +680,75 @@ describe("useDeployRun", () => {
 			fake.scope,
 		);
 		expect(pending.map((transfer) => transfer.confirmed)).toEqual([false]);
+		for (const transfer of pending)
+			forgetArtifactTransfer(EDGE, transfer.transfer_id, fake.scope);
+	});
+
+	test("a failed desktop file upload retains safe diagnostics for copying and retry", async () => {
+		const plan = visitorPlan([EDGE]);
+		const { fake, sink, state } = await mountRun(plan);
+		const prepared = await visitorBundle();
+		const { descriptor } = prepared.artifact;
+		run.setDeployRunExtras(plan.draft.deploymentId, { prepared });
+		let transferId = "";
+		const status = (
+			fileIndex: number | null,
+			complete = false,
+		): ArtifactTransferStatus => ({
+			transfer_id: transferId,
+			descriptor,
+			state: "receiving",
+			expires_at: fake.agent(EDGE).now() + 86_400,
+			manifest_ready: complete || fileIndex !== null,
+			file_index: fileIndex,
+			offset: complete ? descriptor.manifest_size : 0,
+			complete,
+			project_path: null,
+		});
+		fake.agent(EDGE).handle("artifact", (command, { operationId }) => {
+			const request = command.request as Record<string, unknown>;
+			if (request.kind === "begin") transferId = operationId;
+			return {
+				state: "completed",
+				result: status((request.file_index as number | undefined) ?? null),
+			};
+		});
+		fake.workspace.live.uploadArtifact = async (_deviceId, input) => {
+			if (input.fileIndex === null) return status(null, true);
+			throw nativeArtifactUploadError({
+				phase: "connect",
+				code: "connection_failed",
+				message: "private path /project and token=secret",
+			});
+		};
+
+		await start(sink);
+		await until(
+			() => state().status === "finished",
+			"the native upload failure",
+		);
+		expect(state().rows[0]?.error).toMatchObject({
+			phase: "upload",
+			code: "upload_unconfirmed",
+		});
+		const detail = state().rows[0]?.error?.detail ?? "";
+		expect(detail).toContain("Upload phase: file");
+		expect(detail).toContain("Upload cause: connection_failed");
+		expect(detail).toContain("Desktop upload phase: connect");
+		expect(detail).toContain("Upload file index: 0");
+		expect(detail).toContain("Upload start offset: 0");
+		expect(detail).not.toContain("private");
+		expect(detail).not.toContain("secret");
+		expect(types(fake, EDGE)).toEqual(["artifact"]);
+		expect(grants(fake, EDGE)).toHaveLength(1);
+		const pending = pendingArtifactTransfers(
+			EDGE,
+			"app_visitor_checkin",
+			fake.scope,
+		);
+		expect(pending.map((transfer) => transfer.transfer_id)).toEqual([
+			transferId,
+		]);
 		for (const transfer of pending)
 			forgetArtifactTransfer(EDGE, transfer.transfer_id, fake.scope);
 	});

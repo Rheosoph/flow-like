@@ -60,6 +60,7 @@ use std::sync::Arc;
 pub mod classification;
 pub mod clustering;
 pub mod dataset;
+pub mod inspection;
 pub mod load;
 pub mod load_binary;
 pub mod metrics;
@@ -228,9 +229,39 @@ pub struct AutoMLResult {
     pub metric: String,
 }
 
-/// Max number of records for train/prediction
-/// TODO: block-wise processing, at least for predictions
+/// Maximum rows loaded by a legacy ML node. Queries fetch one extra row to detect overflow.
 pub const MAX_ML_PREDICTION_RECORDS: usize = 20000;
+
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn ensure_complete_ml_read<T>(records: Vec<T>) -> Result<Vec<T>> {
+    if records.len() > MAX_ML_PREDICTION_RECORDS {
+        return Err(anyhow!(
+            "Dataset exceeds the {MAX_ML_PREDICTION_RECORDS} row limit. Select or sample the input explicitly before running this ML node. No partial result was produced."
+        ));
+    }
+    Ok(records)
+}
+
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn weighted_f1_score(precisions: &[f64], recalls: &[f64], supports: &[usize]) -> f64 {
+    let total_support: usize = supports.iter().sum();
+    if total_support == 0 {
+        return 0.0;
+    }
+    precisions
+        .iter()
+        .zip(recalls)
+        .zip(supports)
+        .map(|((&precision, &recall), &support)| {
+            if precision + recall > 0.0 {
+                support as f64 * 2.0 * precision * recall / (precision + recall)
+            } else {
+                0.0
+            }
+        })
+        .sum::<f64>()
+        / total_support as f64
+}
 
 #[cfg(feature = "execute")]
 #[derive(Debug, Serialize, Deserialize)]

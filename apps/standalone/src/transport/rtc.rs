@@ -112,7 +112,7 @@ pub(super) async fn serve(
             .with_udp_addrs(vec!["0.0.0.0:0".to_owned(), "[::]:0".to_owned()])
             .with_sctp_receive_buffer_size(if protocol == wire::TUNNEL_PROTOCOL { 1024 * 1024 } else { 64 * 1024 })
             .with_data_channel_send_buffer_limit(if protocol == wire::TUNNEL_PROTOCOL { 1024 * 1024 } else { 64 * 1024 })
-            .build()) => result??,
+            .build()) => result.context("Build WebRTC peer timed out")?.context("Build WebRTC peer")?,
     };
     let result: Result<()> = async {
         let setup = async {
@@ -128,22 +128,22 @@ pub(super) async fn serve(
         };
         tokio::select! {
             _ = closed.cancelled() => return Ok(()),
-            result = tokio::time::timeout(Duration::from_secs(15), setup) => result??,
+            result = tokio::time::timeout(Duration::from_secs(15), setup) => result.context("Prepare WebRTC answer timed out")?.context("Prepare WebRTC answer")?,
         }
         let channel = tokio::select! {
             _ = closed.cancelled() => return Ok(()),
-            result = tokio::time::timeout(HANDSHAKE_TIMEOUT, channels.recv()) => result?.context("WebRTC data channel missing")?,
+            result = tokio::time::timeout(HANDSHAKE_TIMEOUT, channels.recv()) => result.context("Wait for WebRTC data channel timed out")?.context("WebRTC data channel missing")?,
         };
-        validate_channel(&channel, protocol).await?;
+        validate_channel(&channel, protocol).await.context("Validate WebRTC data channel")?;
         opened();
         let mut noise = match session {
             PeerSession::Management(noise) => noise,
-            PeerSession::Tunnel(connection) => return serve_tunnel_channel(connection, channel, closed.clone()).await,
+            PeerSession::Tunnel(connection) => return serve_tunnel_channel(connection, channel, closed.clone()).await.context("Serve WebRTC tunnel"),
         };
         loop {
             let event = tokio::select! {
                 _ = closed.cancelled() => break,
-                result = tokio::time::timeout(noise.timeout(), channel.poll()) => result?.context("WebRTC data channel closed")?,
+                result = tokio::time::timeout(noise.timeout(), channel.poll()) => result.context("Read WebRTC management frame timed out")?.context("WebRTC data channel closed")?,
             };
             match event {
                 DataChannelEvent::OnMessage(message) => {
@@ -152,11 +152,11 @@ pub(super) async fn serve(
                     if matches!(envelope, NoiseEnvelope::Close { .. }) {
                         break;
                     }
-                    let response = noise.receive(envelope).await?;
+                    let response = noise.receive(envelope).await.context("Handle WebRTC management frame")?;
                     let text = std::str::from_utf8(&response)?;
                     tokio::select! {
                         _ = closed.cancelled() => break,
-                        result = tokio::time::timeout(IO_TIMEOUT, channel.send_text(text)) => result??,
+                        result = tokio::time::timeout(IO_TIMEOUT, channel.send_text(text)) => result.context("Write WebRTC management reply timed out")?.context("Write WebRTC management reply")?,
                     }
                 }
                 DataChannelEvent::OnError | DataChannelEvent::OnClosing | DataChannelEvent::OnClose => break,

@@ -7,6 +7,7 @@ import {
 	ConnectError,
 	type ConnectProgress,
 	DeviceManagementConnection,
+	FrameQueue,
 	ManagementRequestNotSentError,
 	ManagementUnconfirmedError,
 } from "./transport";
@@ -232,6 +233,25 @@ beforeEach(() => {
 afterEach(() => {
 	globals.WebSocket = saved.WebSocket;
 	globals.RTCPeerConnection = saved.RTCPeerConnection;
+});
+
+describe("management frame queue", () => {
+	for (const limit of ["frames", "bytes"] as const) {
+		test(`keeps the ${limit} overflow rejection when the transport closes`, async () => {
+			const queue = new FrameQueue<Uint8Array>(
+				limit === "frames" ? 1 : 4,
+				limit === "bytes" ? 1 : 4,
+				(bytes) => bytes.length,
+			);
+			queue.push(new Uint8Array([1]));
+			queue.push(new Uint8Array([2]));
+			queue.close();
+			await expect(queue.next()).rejects.toMatchObject({
+				code: "invalid_reply",
+				message: "Management input exceeded its bound.",
+			});
+		});
+	}
 });
 
 describe("connect progress and fallback", () => {

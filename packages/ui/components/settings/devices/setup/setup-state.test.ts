@@ -139,14 +139,25 @@ describe("platforms of a release", () => {
 		expect(of("aarch64-unknown-linux-gnu")).toMatchObject({
 			available: false,
 		});
-		expect(of("x86_64-apple-darwin")).toMatchObject({
-			available: false,
-			mac: true,
-		});
+		expect(of("x86_64-apple-darwin")).toBeUndefined();
 		expect(of("aarch64-apple-darwin")).toMatchObject({
 			available: true,
 			docker: false,
 			deferredDownload: true,
+			mac: true,
+		});
+	});
+
+	test("historical releases can still offer their Intel Mac artifact", () => {
+		const legacy = targetOptions(
+			release([["x86_64-apple-darwin", 100 * MIB]], null),
+		);
+		expect(
+			legacy.find((option) => option.target === "x86_64-apple-darwin"),
+		).toMatchObject({
+			available: true,
+			binary: true,
+			docker: false,
 			mac: true,
 		});
 	});

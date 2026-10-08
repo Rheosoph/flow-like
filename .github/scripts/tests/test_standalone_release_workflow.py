@@ -128,7 +128,7 @@ class StandaloneReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual([operation for operation, _ in calls], ["cargo", "describe"])
         self.assertFalse(artifacts.exists())
 
-    def test_macos_build_uses_a_static_onnx_archive_for_both_release_architectures(self):
+    def test_macos_build_uses_a_static_onnx_archive_for_apple_silicon(self):
         setup = step("binaries", "name: Configure macOS ONNX Runtime")
         self.assertIn("if: runner.os == 'macOS'", setup)
         job = job_body("binaries")
@@ -144,10 +144,11 @@ class StandaloneReleaseWorkflowTests(unittest.TestCase):
         archive = Path(environment["ORT_LIB_LOCATION"]) / "libonnxruntime.a"
         with archive.open("rb") as binary:
             magic, count = struct.unpack(">II", binary.read(8))
-            self.assertEqual(magic, 0xCAFEBABE, "ONNX Runtime must contain both macOS architectures")
+            self.assertEqual(magic, 0xCAFEBABE, "Expected the vendored universal ONNX Runtime archive")
             architectures = [struct.unpack(">IIIII", binary.read(20)) for _ in range(count)]
-            self.assertEqual({cpu for cpu, *_ in architectures}, {0x01000007, 0x0100000C})
-            for _, _, offset, _, _ in architectures:
+            arm64 = [entry for entry in architectures if entry[0] == 0x0100000C]
+            self.assertEqual(len(arm64), 1, "ONNX Runtime must contain Apple Silicon code")
+            for _, _, offset, _, _ in arm64:
                 binary.seek(offset)
                 self.assertEqual(binary.read(8), b"!<arch>\n", "The release needs a static ONNX archive")
 

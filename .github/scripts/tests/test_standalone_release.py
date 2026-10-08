@@ -66,7 +66,9 @@ class StandaloneReleaseTests(unittest.TestCase):
             self.assertEqual(value["state_schema_version"], 4)
             self.assertEqual(value["issued_at"], 100)
             self.assertEqual(value["expires_at"], 100 + 365 * DAY)
-            self.assertEqual(len(value["artifacts"]), 4)
+            self.assertEqual([artifact["target"] for artifact in value["artifacts"]], [
+                "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin",
+            ])
             self.assertTrue(all(len(artifact["sha256"]) == 64 for artifact in value["artifacts"]))
             self.assertEqual((directory / "release.json").read_text(), json.dumps(value, separators=(",", ":")))
 
@@ -656,7 +658,7 @@ class StandalonePublisherTests(unittest.TestCase):
         verified = []
         def readback(url, size, digest):
             if url.endswith("/standalone/release.jws"):
-                self.assertEqual(len(verified), 5)
+                self.assertEqual(len(verified), 4)
             else:
                 self.assertNotIn("standalone/release.jws", store.objects)
             verified.append(url)

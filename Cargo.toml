@@ -75,6 +75,12 @@ members = [
     "packages/catalog/web",
     "packages/catalog/media",
     "packages/catalog/ml",
+    "packages/ml/core",
+    "packages/ml/native",
+    "packages/ml/burn",
+    "packages/ml/platform",
+    "packages/ml/runtime",
+    "packages/ml/sensors",
     "packages/ordinal",
     "packages/catalog/onnx",
     "packages/catalog/llm",
@@ -181,6 +187,11 @@ flow-like-catalog-data = { path = "packages/catalog/data" }
 flow-like-catalog-web = { path = "packages/catalog/web" }
 flow-like-catalog-media = { path = "packages/catalog/media" }
 flow-like-catalog-ml = { path = "packages/catalog/ml" }
+flow-like-ml-core = { path = "packages/ml/core" }
+flow-like-ml-native = { path = "packages/ml/native" }
+flow-like-ml-burn = { path = "packages/ml/burn", default-features = false }
+flow-like-ml-runtime = { path = "packages/ml/runtime", default-features = false }
+flow-like-ml-sensors = { path = "packages/ml/sensors", default-features = false }
 flow-like-ordinal = { path = "packages/ordinal" }
 flow-like-catalog-onnx = { path = "packages/catalog/onnx" }
 flow-like-catalog-llm = { path = "packages/catalog/llm" }

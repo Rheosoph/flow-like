@@ -202,7 +202,14 @@ impl Relayed {
                 }
                 Ok::<_, anyhow::Error>(())
             };
-            tokio::select! { _ = cancel.cancelled() => {}, _ = connection.serve(receiver, output, cancel.clone()) => {}, _ = forward => {} }
+            let (phase, result) = tokio::select! {
+                _ = cancel.cancelled() => ("cancelled", Ok(())),
+                result = connection.serve(receiver, output, cancel.clone()) => ("tunnel_session", result),
+                result = forward => ("tunnel_relay_output", result),
+            };
+            if let Err(error) = result {
+                tracing::warn!(session_id = %session_id, transport = "websocket", phase, "Device tunnel failed: {error:#}");
+            }
             if !cancel.is_cancelled()
                 && let Ok(bytes) = (TunnelEnvelope { session_id, body: TunnelEnvelopeBody::Close }).encode()
                 && let Ok(frame) = wire::outbound(&from, Channel::Tunnel, &bytes) {
@@ -260,7 +267,8 @@ impl Relayed {
         if sender.try_send(envelope).is_err() {
             return;
         }
-        self.inputs.insert(session_id, (from.to_owned(), sender));
+        self.inputs
+            .insert(session_id.clone(), (from.to_owned(), sender));
         let from = from.to_owned();
         let outbound = self.outbound.clone();
         self.sessions.spawn(async move {
@@ -278,7 +286,9 @@ impl Relayed {
                 }
                 Ok(())
             }.await;
-            drop(result);
+            if let Err(error) = result {
+                tracing::warn!(session_id = %session_id, transport = "websocket", phase = "management_session", "Device management session failed: {error:#}");
+            }
         });
     }
 
@@ -326,9 +336,14 @@ impl Relayed {
         };
         let output = self.outbound.clone();
         let from = from.to_owned();
+        let session_id = session_id.clone();
         self.peers.spawn(async move {
             let (cancel, opened) = (permit.cancel.clone(), permit.on_open());
-            let _ = rtc::serve(offer, session, &from, admission, output, cancel, opened).await;
+            if let Err(error) =
+                rtc::serve(offer, session, &from, admission, output, cancel, opened).await
+            {
+                tracing::warn!(session_id = %session_id, transport = "webrtc", tunnel = is_tunnel, phase = "peer_session", "Device peer session failed: {error:#}");
+            }
             drop(permit);
         });
     }

@@ -18,7 +18,6 @@ from urllib.parse import urlsplit
 TARGETS = {
     "x86_64-unknown-linux-gnu": "amd64",
     "aarch64-unknown-linux-gnu": "arm64",
-    "x86_64-apple-darwin": None,
     "aarch64-apple-darwin": None,
 }
 MAX_RELEASE_BINARY_BYTES = 2 * 1024**3
@@ -507,7 +506,7 @@ def redated(path, previous, key, public_keys):
 
 
 def runtime_renewals(artifacts, prefix, public_keys, store):
-    """Each stable runtime manifest with its re-dated copy: every published one is renewed, and only its dates change."""
+    """Renew each supported target's published runtime manifest, changing only its dates."""
     renewals = []
     for target in TARGETS:
         key, path = f"{prefix}/runtimes/{target}.jws", artifacts / "runtimes" / f"{target}.jws"

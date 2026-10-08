@@ -248,10 +248,11 @@ impl NodeLogic for FitOneClassSVMNode {
                         .filter(
                             "true",
                             Some(vec![records_col.to_string()]),
-                            MAX_ML_PREDICTION_RECORDS,
+                            MAX_ML_PREDICTION_RECORDS + 1,
                             0,
                         )
-                        .await?
+                        .await
+                        .and_then(crate::ml::ensure_complete_ml_read)?
                 };
                 context.log_message(
                     &format!("Got {} records for training", records.len()),

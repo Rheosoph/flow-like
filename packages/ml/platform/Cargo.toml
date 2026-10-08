@@ -1,0 +1,19 @@
+[package]
+name = "flow-like-ml-platform"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+# Target-specific Burn features live here so explicit CPU builds stay CPU-only.
+[features]
+default = []
+automatic = ["dep:burn"]
+
+[target.'cfg(all(target_arch = "x86_64", any(all(target_os = "linux", target_env = "gnu"), all(target_os = "windows", target_env = "msvc"))))'.dependencies]
+burn = { version = "=0.22.0", optional = true, default-features = false, features = ["std", "flex", "cuda", "rocm", "wgpu"] }
+
+[target.'cfg(all(any(target_os = "linux", target_os = "windows", target_os = "macos"), any(target_arch = "x86_64", target_arch = "aarch64"), not(all(target_arch = "x86_64", any(all(target_os = "linux", target_env = "gnu"), all(target_os = "windows", target_env = "msvc"))))))'.dependencies]
+burn = { version = "=0.22.0", optional = true, default-features = false, features = ["std", "flex", "wgpu"] }
+
+[target.'cfg(not(all(any(target_os = "linux", target_os = "windows", target_os = "macos"), any(target_arch = "x86_64", target_arch = "aarch64"))))'.dependencies]
+burn = { version = "=0.22.0", optional = true, default-features = false, features = ["std", "flex"] }

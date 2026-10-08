@@ -1,0 +1,11 @@
+[package]
+name = "flow-like-ml-native"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flow-like-ml-core = { path = "../core" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+schemars.workspace = true
+rustfft = "6.4"

@@ -15,6 +15,7 @@ import {
 	withRequestDeadline,
 } from "@flow-like/flow-like-ui/lib/request-deadline";
 import type { AuthContextProps } from "react-oidc-context";
+import { reportUnauthorized } from "../auth-session";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"payments",
@@ -115,26 +116,11 @@ export function ensureProtectedAppRouteAuth(
 	if (!isProtectedAppRoute(path, method)) return;
 	if (auth?.user?.access_token) return;
 
-	if (auth?.isAuthenticated) {
-		requestSilentRenew(auth, "before API request");
-	}
+	reportUnauthorized(auth, undefined);
 
 	throw new Error(
 		`Authentication token required for app request: ${redactApiPathSecrets(path)}`,
 	);
-}
-
-export function requestSilentRenew(
-	auth: AuthContextProps,
-	reason: string,
-): void {
-	try {
-		void Promise.resolve(auth.startSilentRenew()).catch(() => {
-			console.warn(`[Auth] Silent renew failed ${reason}`);
-		});
-	} catch {
-		console.warn(`[Auth] Silent renew failed ${reason}`);
-	}
 }
 
 export async function apiFetch<T>(
@@ -144,14 +130,21 @@ export async function apiFetch<T>(
 ): Promise<T> {
 	const method = methodOf(options);
 	ensureProtectedAppRouteAuth(path, auth, method);
-	const headers: HeadersInit = {
+	const accessToken = auth?.user?.access_token;
+	const headers = new Headers({
 		"Content-Type": "application/json",
 		[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
-	};
+	});
 
-	if (auth?.user?.access_token) {
-		headers.Authorization = `Bearer ${auth.user.access_token}`;
+	if (accessToken) {
+		headers.set("Authorization", `Bearer ${accessToken}`);
 	}
+	new Headers(options?.headers).forEach((value, key) =>
+		headers.set(key, value),
+	);
+	const usesAccountToken =
+		headers.get("Authorization") ===
+		(accessToken ? `Bearer ${accessToken}` : null);
 
 	const url = constructApiUrl(path);
 	const safePath = redactApiPathSecrets(path) ?? path;
@@ -164,16 +157,13 @@ export async function apiFetch<T>(
 		async (deadline) => {
 			const response = await fetch(url, {
 				...init,
-				headers: {
-					...headers,
-					...init.headers,
-				},
+				headers,
 				signal: deadline.signal,
 			});
 
 			if (!response.ok) {
-				if (response.status === 401 && auth) {
-					requestSilentRenew(auth, "after 401");
+				if (response.status === 401 && usesAccountToken) {
+					reportUnauthorized(auth, accessToken);
 				}
 				const errorText = await response.text();
 				const error = apiResponseError(response, errorText, path);

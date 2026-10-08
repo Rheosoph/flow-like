@@ -468,7 +468,7 @@ class UpstreamTests(unittest.TestCase):
                  for pack, spec in runtime.LLAMACPP_PACKS.items() if spec["archive"]}
         shared = sorted(set(packs) & downloads)
         self.assertEqual(shared, [f"llama-{runtime.LLAMACPP_BUILD}-bin-{asset}.tar.gz"
-                                  for asset in ("macos-arm64", "macos-x64", "ubuntu-vulkan-x64")])
+                                  for asset in ("macos-arm64", "ubuntu-vulkan-x64")])
         for name in shared:
             self.assertEqual(desktop[name], packs[name], f"{name} has other pins in update-llama-server.ts than in runtime_packs.py")
 
@@ -934,7 +934,7 @@ class WorkflowTests(unittest.TestCase):
         job = job_body("runtime-packs")
         matrix = dict(re.findall(r"^          - pack: (\S+)\n            runner: (\S+)$", job, re.MULTILINE))
         self.assertEqual(set(matrix), set(runtime.LLAMACPP_PACKS) | {"mlx-macos-arm64-metal"})
-        runners = {"aarch64-apple-darwin": "macos-15", "x86_64-apple-darwin": "macos-15-intel",
+        runners = {"aarch64-apple-darwin": "macos-15",
                    "x86_64-unknown-linux-gnu": "ubuntu-22.04", "aarch64-unknown-linux-gnu": "ubuntu-22.04-arm"}
         for pack, spec in runtime.LLAMACPP_PACKS.items():
             self.assertEqual(matrix[pack], runners[spec["target"]], pack)
