@@ -25,15 +25,22 @@ impl NodeLogic for PrepareEmbeddingMediaNode {
         let mut node = Node::new(
             "prepare_embedding_media",
             "Prepare Embedding Media",
-            "Decodes an audio or video file into content accepted by Embed Content",
+            "Prepares an audio or video file as decoded content or an encoded source for a hosted model",
             "AI/Embedding",
         );
         node.set_flowscript_name("ai.embedding", "prepareMedia");
-        node.set_version(1);
+        node.set_version(2);
         node.set_long_running(true);
         add_video_icon_and_scores(&mut node);
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Audio or video file");
+        node.add_input_pin(
+            "encoded",
+            "Encoded Source",
+            "Keep the original media file for hosted models; local models need decoded content",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
         node.add_input_pin(
             "kind",
             "Kind",
@@ -83,6 +90,11 @@ impl NodeLogic for PrepareEmbeddingMediaNode {
                 let max_frames = usize::try_from(max_frames).map_err(|_| {
                     flow_like_types::anyhow!("Max Frames must be between 1 and 1024")
                 })?;
+                if !(1..=1024).contains(&max_frames) {
+                    return Err(flow_like_types::anyhow!(
+                        "Max Frames must be between 1 and 1024"
+                    ));
+                }
                 let include_audio: bool = context.evaluate_pin("include_audio").await?;
                 EmbeddingMediaKind::Video {
                     max_frames,
@@ -96,10 +108,34 @@ impl NodeLogic for PrepareEmbeddingMediaNode {
             }
         };
         let (store, location) = flow_path_object(context, &source).await?;
-        let content = decode_embedding_media(store.as_ref(), &location, kind)
-            .await?
-            .into_content(context)
-            .await?;
+        let encoded: bool = context.evaluate_pin("encoded").await?;
+        let content = if encoded {
+            let input =
+                super::embed_media::encoded_media_input(store.as_ref(), &location, kind).await?;
+            let parts = input
+                .parts
+                .into_iter()
+                .map(|part| match part {
+                    EmbeddingPart::EncodedMedia { modality, source } => {
+                        Ok(EmbeddingContentPart::EncodedMedia { modality, source })
+                    }
+                    EmbeddingPart::Audio(audio) => {
+                        Ok(EmbeddingContentPart::Audio(EmbeddingAudio {
+                            samples: audio.samples.to_vec(),
+                            sample_rate: audio.sample_rate,
+                            channels: audio.channels,
+                        }))
+                    }
+                    _ => Err(flow_like_types::anyhow!("Unexpected encoded media content")),
+                })
+                .collect::<flow_like_types::Result<Vec<_>>>()?;
+            EmbeddingContent { parts, title: None }
+        } else {
+            decode_embedding_media(store.as_ref(), &location, kind)
+                .await?
+                .into_content(context)
+                .await?
+        };
         context.set_pin_value("content", json!(content)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -386,6 +422,77 @@ struct DecodedVideo {
 }
 
 #[cfg(feature = "execute")]
+struct VideoTiming {
+    origin_seconds: f64,
+    duration_ms: u64,
+}
+
+#[cfg(feature = "execute")]
+fn video_packet_timing(
+    packets: &[&video_utils_rs::EncodedPacket],
+    require_ordered: bool,
+) -> flow_like_types::Result<VideoTiming> {
+    let first = packets
+        .first()
+        .ok_or_else(|| flow_like_types::anyhow!("Video has no packets"))?;
+    let mut origin_seconds = first.pts_seconds();
+    let mut end_seconds = origin_seconds;
+    let mut previous = origin_seconds;
+    for packet in packets {
+        let timestamp = packet.pts_seconds();
+        let duration = packet.duration_seconds();
+        if !timestamp.is_finite() || !duration.is_finite() || packet.duration < 0 {
+            return Err(flow_like_types::anyhow!(
+                "Video packets need finite timestamps and nonnegative durations"
+            ));
+        }
+        if require_ordered && timestamp < previous {
+            return Err(flow_like_types::anyhow!(
+                "This video needs a decoder that retains reordered presentation timestamps. Supply timestamped frames to Embed Content."
+            ));
+        }
+        previous = timestamp;
+        origin_seconds = origin_seconds.min(timestamp);
+        end_seconds = end_seconds.max(timestamp + duration);
+    }
+    if !origin_seconds.is_finite() || !end_seconds.is_finite() || end_seconds <= origin_seconds {
+        return Err(flow_like_types::anyhow!(
+            "Video needs a finite, positive duration"
+        ));
+    }
+    Ok(VideoTiming {
+        origin_seconds,
+        duration_ms: ((end_seconds - origin_seconds) * 1000.0).ceil() as u64,
+    })
+}
+
+#[cfg(feature = "execute")]
+pub(super) async fn decode_hosted_video_audio(
+    bytes: Bytes,
+    path: ObjectPath,
+) -> flow_like_types::Result<EmbeddingAudio> {
+    decode_off_thread(move || {
+        let demuxed = demux_embedding_video_bytes(&bytes, &path)?;
+        if let Some(movie) = mp4_timeline(&bytes, &path)? {
+            validate_mp4_video_edits(&movie, &demuxed)?;
+        }
+        let stream = selected_video_stream(&demuxed.media, None)?;
+        let packets = demuxed
+            .packets
+            .iter()
+            .filter(|packet| packet.track_id == stream.track_id)
+            .collect::<Vec<_>>();
+        let timing = video_packet_timing(&packets, false)?;
+        audio_content(
+            decode_embedding_audio_bytes(&bytes, &path)?,
+            Some(timing.origin_seconds),
+            Some(timing.duration_ms),
+        )
+    })
+    .await
+}
+
+#[cfg(feature = "execute")]
 fn decode_video_content(
     demuxed: &video_utils_rs::DemuxedMedia,
     max_frames: usize,
@@ -412,28 +519,10 @@ fn decode_video_content(
         })
         .collect::<flow_like_types::Result<Vec<_>>>()?;
     let packets = packets.iter().collect::<Vec<_>>();
-    let first = packets
-        .first()
-        .ok_or_else(|| flow_like_types::anyhow!("Video has no packets"))?;
-    let origin_seconds = first.pts_seconds();
-    let mut end_seconds = origin_seconds;
-    let mut previous = origin_seconds;
-    for packet in &packets {
-        let timestamp = packet.pts_seconds();
-        if !timestamp.is_finite() || timestamp < previous || packet.duration < 0 {
-            return Err(flow_like_types::anyhow!(
-                "This video needs a decoder that retains reordered presentation timestamps. Supply timestamped frames to Embed Content."
-            ));
-        }
-        previous = timestamp;
-        end_seconds = end_seconds.max(timestamp + packet.duration_seconds());
-    }
-    if !origin_seconds.is_finite() || end_seconds <= origin_seconds {
-        return Err(flow_like_types::anyhow!(
-            "Video needs a finite, positive duration"
-        ));
-    }
-    let duration_ms = ((end_seconds - origin_seconds) * 1000.0).ceil() as u64;
+    let VideoTiming {
+        origin_seconds,
+        duration_ms,
+    } = video_packet_timing(&packets, true)?;
     let indices = sample_indices(packets.len(), max_frames);
     let sampled = (|| {
         let mut decoder = platform_video_decoder(stream)?;
@@ -878,6 +967,27 @@ mod tests {
     use super::*;
     #[cfg(feature = "execute")]
     use flow_like_storage::object_store::ObjectStoreExt;
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn hosted_timing_handles_packet_reordering_without_changing_local_validation() {
+        let bytes = Bytes::from_static(include_bytes!(
+            "../../../tests/fixtures/embedding-lowdelay.mp4"
+        ));
+        let demuxed = demux_embedding_video_bytes(&bytes, &ObjectPath::from("video.mp4")).unwrap();
+        let stream = selected_video_stream(&demuxed.media, None).unwrap();
+        let mut packets = demuxed
+            .packets
+            .iter()
+            .filter(|packet| packet.track_id == stream.track_id)
+            .collect::<Vec<_>>();
+        let expected = video_packet_timing(&packets, true).unwrap();
+        packets.reverse();
+        let actual = video_packet_timing(&packets, false).unwrap();
+        assert_eq!(actual.origin_seconds, expected.origin_seconds);
+        assert_eq!(actual.duration_ms, expected.duration_ms);
+        assert!(video_packet_timing(&packets, true).is_err());
+    }
 
     #[test]
     fn frame_sampling_keeps_endpoints_without_duplicates() {

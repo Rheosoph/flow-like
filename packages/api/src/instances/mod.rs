@@ -712,6 +712,14 @@ pub(crate) async fn authenticate_model_request(
         .await
 }
 
+/// Reject unauthenticated large media bodies before buffering them. The full
+/// model authorization still verifies and consumes the proof after parsing.
+pub(crate) fn validate_model_request_headers(headers: &HeaderMap) -> Result<(), ApiError> {
+    let (token, _) = credentials(headers)?;
+    jwt::verify(token).map_err(bad_proof)?;
+    Ok(())
+}
+
 pub(super) async fn authenticate_model_request_with_context(
     state: &DeviceContext<'_>,
     headers: &HeaderMap,

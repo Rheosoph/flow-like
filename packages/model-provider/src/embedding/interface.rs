@@ -90,6 +90,11 @@ pub enum EmbeddingPart {
     Image(Arc<DynamicImage>),
     Audio(AudioInput),
     Video(VideoInput),
+    /// An encoded media file or HTTP(S) URL, passed intact to a remote adapter.
+    EncodedMedia {
+        modality: EmbeddingModality,
+        source: String,
+    },
 }
 
 impl EmbeddingPart {
@@ -99,6 +104,7 @@ impl EmbeddingPart {
             Self::Image(_) => EmbeddingModality::Image,
             Self::Audio(_) => EmbeddingModality::Audio,
             Self::Video(_) => EmbeddingModality::Video,
+            Self::EncodedMedia { modality, .. } => *modality,
         }
     }
 }
@@ -261,6 +267,10 @@ impl std::error::Error for EmbeddingError {
 #[async_trait]
 pub trait EmbeddingModel: Send + Sync {
     fn descriptor(&self) -> &EmbeddingDescriptor;
+    /// Remote adapters can receive original encoded files without decoding media on the caller.
+    fn supports_encoded_media(&self) -> bool {
+        false
+    }
     async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingBatch, EmbeddingError>;
 }
 
@@ -298,6 +308,16 @@ impl EmbeddingDescriptor {
                 modalities.push(modality);
                 match part {
                     EmbeddingPart::Text(_) => {}
+                    EmbeddingPart::EncodedMedia { modality, source } => {
+                        if *modality == EmbeddingModality::Text || source.trim().is_empty() {
+                            return Err(EmbeddingError::InvalidInput(
+                                "Encoded media needs an image, audio, or video source".into(),
+                            ));
+                        }
+                        if *modality == EmbeddingModality::Image {
+                            images += 1;
+                        }
+                    }
                     EmbeddingPart::Image(image) => {
                         validate_image(image)?;
                         images += 1;

@@ -44,16 +44,8 @@ pub fn launchd_user_plist(executable: &Path, state_dir: &Path) -> Result<String>
     let executable = unit_path(executable, "Executable")?;
     let state_dir = unit_path(state_dir, "State directory")?;
     ensure!(!executable.ends_with('/'), "Executable must name a file");
-    let escape = |value: &str| {
-        value
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&apos;")
-    };
-    let executable = escape(executable);
-    let state_dir = escape(state_dir);
+    let executable = xml_escape(executable);
+    let state_dir = xml_escape(state_dir);
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -71,6 +63,15 @@ pub fn launchd_user_plist(executable: &Path, state_dir: &Path) -> Result<String>
 </dict></plist>
 "#
     ))
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 pub async fn user_service_status(executable: &Path, state_dir: &Path) -> Result<ServiceStatus> {
@@ -205,10 +206,14 @@ pub async fn verify_user_service(executable: &Path, state_dir: &Path) -> Result<
     {
         linux::verify(executable, state_dir).await
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        launchd::verify(executable, state_dir).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (executable, state_dir);
-        anyhow::bail!("Managed updates require Linux with systemd")
+        anyhow::bail!("Managed updates require Linux systemd or macOS launchd")
     }
 }
 
@@ -218,10 +223,28 @@ pub async fn verify_update_watchdog() -> Result<()> {
     {
         linux::verify_update_watchdog().await
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        anyhow::bail!("Managed updates require Linux with systemd")
+        launchd::verify_update_watchdog().await
     }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        anyhow::bail!("Managed updates require Linux systemd or macOS launchd")
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn start_update_watchdog(
+    executable: &Path,
+    state_dir: &Path,
+    operation_id: &str,
+) -> Result<()> {
+    launchd::start_update_watchdog(executable, state_dir, operation_id).await
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn restart_after_update(executable: &Path, state_dir: &Path) -> Result<()> {
+    launchd::restart_after_update(executable, state_dir).await
 }
 
 #[cfg(unix)]

@@ -1,12 +1,13 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	type QueryKey,
 	useQueries,
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AgentRead } from "../../../../lib/device-management/agent-reads";
 import { fleetFacts } from "../../../../lib/device-management/model/device-view";
 import { classify } from "../../../../lib/device-management/model/freshness";
@@ -25,6 +26,7 @@ import {
 	type ModelsOverview,
 	type ModelsSummary,
 	type Recommendation,
+	probeModelSystem,
 	readHostedModels,
 	readModelJobs,
 	readModelRecommendations,
@@ -251,6 +253,56 @@ export function useModelsOverview(
 		staleS: MODELS_POLL_S / 2,
 		cadenceS: options.poll === false ? 0 : MODELS_POLL_S,
 	});
+}
+
+/** Refresh the device's signed runtime catalog, then read its installed and available builds again. */
+export function useRuntimeUpdateCheck(deviceId: string, manifestUrl?: string) {
+	const { t } = useTranslation("devices");
+	const { workspace } = useAttentionState();
+	const access = useModelsAccess(deviceId);
+	const supported = access.features?.model_runtime_updates === 1;
+	const configured = !!manifestUrl;
+	const queryClient = useQueryClient();
+	const [busy, setBusy] = useState(false);
+	const [result, setResult] = useState<
+		{ ok: true } | { ok: false; error: string }
+	>();
+	return {
+		gate: access.gate,
+		supported,
+		configured,
+		busy,
+		result,
+		run: async () => {
+			if (!access.readable || !supported || !configured || busy) return;
+			setBusy(true);
+			setResult(undefined);
+			try {
+				const response = await probeModelSystem(
+					deviceCall(workspace, deviceId, "poll"),
+					access.features,
+				);
+				if (response.kind === "unsupported")
+					throw new Error(
+						t(
+							"devices:models.hardware.checkUnsupported",
+							"Update the device agent to check for runtime updates.",
+						),
+					);
+				await queryClient.invalidateQueries({
+					queryKey: modelsKeys.root(workspace.scopeKey, deviceId),
+				});
+				setResult({ ok: true });
+			} catch (error) {
+				setResult({
+					ok: false,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				setBusy(false);
+			}
+		},
+	};
 }
 
 /** The hosted models after `after`, page by page, up to `MODEL_PAGES` pages. */

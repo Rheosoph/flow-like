@@ -55,7 +55,10 @@ function settledSeed(agentRelease = "0.9.4") {
 	invoice.observed_state = "running";
 	invoice.applied_revision = invoice.config_revision;
 	invoice.ready_replicas = 1;
-	if (inspection.agent) inspection.agent.release_version = agentRelease;
+	if (inspection.agent) {
+		inspection.agent.release_version = agentRelease;
+		inspection.agent.release_sequence = agentRelease === "0.9.4" ? 44 : null;
+	}
 	inspection.hostOperation = null;
 	return seed;
 }
@@ -110,7 +113,7 @@ describe("layers", () => {
 		expect(agent).toContain(
 			"Latest verified release0.9.4· release number 44 · signed by",
 		);
-		expect(agent).toContain("Remote updateLinux with systemd");
+		expect(agent).toContain("Remote updateAvailable on this device");
 		expect(agent).toContain("Background tasks1 running normally");
 		const isolation = text(layer(view, "isolation"));
 		expect(isolation).toContain("Sandbox required");
@@ -231,6 +234,35 @@ describe("host operations", () => {
 				.list()
 				.some((item) => item.kind === "agent_update"),
 		).toBe(true);
+	});
+
+	test("a new release number with the same version can update both bundled engines", async () => {
+		const view = await openWithRelease("0.9.4", { sequence: 45 });
+		const agent = layer(view, "agent");
+		expect(text(agent)).toContain(
+			"The agent binary contains the orchestrator and workflow runtime. Updating the agent replaces both.",
+		);
+		const update = byRole("button", "Update agent…", agent);
+		expect(update.getAttribute("aria-disabled")).toBeNull();
+		await click(update);
+		const sheet = inPortal("alertdialog");
+		expect(text(sheet)).toContain("release number 45");
+		await click(byRole("checkbox", undefined, sheet));
+		await click(sheet.querySelector("[data-confirm]") as HTMLElement);
+		await view.settle();
+		expect(commandTypes(view)).toContain("update_agent");
+	});
+
+	test("a newer version label cannot offer an older signed release number", async () => {
+		const view = await openWithRelease("0.9.4", {
+			version: "0.10.0",
+			sequence: 43,
+		});
+		const update = byRole("button", "Update agent…", layer(view, "agent"));
+		expect(update.getAttribute("aria-disabled")).toBe("true");
+		await click(update);
+		expect(queryByRole("alertdialog")).toBeNull();
+		expect(commandTypes(view)).not.toContain("update_agent");
 	});
 
 	test("no verified release in hand: Update agent… is disabled with the reason, never a click into nothing", async () => {
@@ -366,7 +398,7 @@ describe("host operations", () => {
 		const host = layer(view, "host");
 		expect(queryByRole("button", "Reboot device…", host)).toBeNull();
 		expect(text(host)).toContain(
-			"Remote update and reboot need Linux with systemd. Update and restart this macOS device from the device itself.",
+			"Remote reboot needs Linux with systemd. Restart this macOS device from the device itself.",
 		);
 		const agent = layer(view, "agent");
 		expect(queryByRole("button", "Update agent…", agent)).toBeNull();
@@ -374,6 +406,29 @@ describe("host operations", () => {
 		expect(text(layer(view, "isolation"))).toContain(
 			"Sandboxing needs Linux. Services here run as the agent with full device access, so use a dedicated account.",
 		);
+	});
+
+	test("macOS with launchd can update the agent while remote reboot stays unavailable", async () => {
+		const seed = settledSeed();
+		const inspection = seed.live[IDS.studio].inspection?.value;
+		if (!inspection?.agent || !inspection.hostOperations)
+			throw new Error("the sample has no studio agent");
+		inspection.agent.release_sequence = 43;
+		inspection.hostOperations.update_agent = true;
+		const view = await open(IDS.studio, { seed });
+		const agent = layer(view, "agent");
+		expect(text(agent)).toContain("Remote updatemacOS with launchd");
+		expect(
+			queryByRole("button", "Reboot device…", layer(view, "host")),
+		).toBeNull();
+		await click(byRole("button", "Update agent…", agent));
+		const sheet = inPortal("alertdialog");
+		expect(text(sheet)).toContain("The agent restarts on studio-mac-mini.");
+		expect(text(sheet)).not.toContain("studio-mac-mini restarts.");
+		await click(byRole("checkbox", undefined, sheet));
+		await click(sheet.querySelector("[data-confirm]") as HTMLElement);
+		await view.settle();
+		expect(commandTypes(view)).toContain("update_agent");
 	});
 });
 

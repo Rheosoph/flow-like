@@ -14,14 +14,15 @@ use text_splitter::{Characters, ChunkConfig, MarkdownSplitter, TextSplitter};
 use crate::authorization::ScopedRequestAuthorizer;
 use crate::provider::EmbeddingModelProvider;
 
+use super::hosted_input::HostedEmbeddingInput;
 use super::{EmbeddingModelLogic, GeneralTextSplitter};
 
 /// Proxy embedding model that calls the internal API
 /// Used in executor (AWS Lambda, Kubernetes) where secrets are not available
 #[derive(Clone)]
 pub struct ProxyEmbeddingModel {
-    provider: EmbeddingModelProvider,
-    bit_id: String,
+    pub(super) provider: EmbeddingModelProvider,
+    pub(super) bit_id: String,
     access_token: String,
     usage_headers: Vec<(String, String)>,
     api_base_url: String,
@@ -43,20 +44,25 @@ impl Cacheable for ProxyEmbeddingModel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EmbedRequest {
     model: String,
-    input: Vec<String>,
+    input: Vec<HostedEmbeddingInput>,
     embed_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct EmbedResponse {
-    embeddings: Vec<Vec<f32>>,
+pub(super) struct EmbedResponse {
+    pub(super) embeddings: Vec<Vec<f32>>,
     model: String,
-    usage: EmbedUsage,
+    pub(super) usage: EmbedUsage,
+    #[serde(default)]
+    pub(super) usage_estimated: bool,
+    // An older response does not establish whether the gateway measured usage.
+    #[serde(default)]
+    pub(super) usage_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct EmbedUsage {
-    prompt_tokens: i64,
+pub(super) struct EmbedUsage {
+    pub(super) prompt_tokens: i64,
     total_tokens: i64,
 }
 
@@ -112,6 +118,19 @@ impl ProxyEmbeddingModel {
     }
 
     async fn build_request(&self, texts: &[String], embed_type: &str) -> Result<reqwest::Request> {
+        let inputs: Vec<_> = texts
+            .iter()
+            .cloned()
+            .map(HostedEmbeddingInput::Text)
+            .collect();
+        self.build_hosted_request(&inputs, embed_type).await
+    }
+
+    pub(super) async fn build_hosted_request(
+        &self,
+        inputs: &[HostedEmbeddingInput],
+        embed_type: &str,
+    ) -> Result<reqwest::Request> {
         let resource_base = self
             .exact_resource_base
             .clone()
@@ -120,7 +139,7 @@ impl ProxyEmbeddingModel {
 
         let request = EmbedRequest {
             model: self.bit_id.clone(),
-            input: texts.to_vec(),
+            input: inputs.to_vec(),
             embed_type: embed_type.to_string(),
         };
 
@@ -148,6 +167,19 @@ impl ProxyEmbeddingModel {
 
     async fn call_api(&self, texts: &[String], embed_type: &str) -> Result<Vec<Vec<f32>>> {
         let request = self.build_request(texts, embed_type).await?;
+        Ok(self.execute_request(request).await?.embeddings)
+    }
+
+    pub(super) async fn call_hosted_api(
+        &self,
+        inputs: &[HostedEmbeddingInput],
+        embed_type: &str,
+    ) -> Result<EmbedResponse> {
+        let request = self.build_hosted_request(inputs, embed_type).await?;
+        self.execute_request(request).await
+    }
+
+    async fn execute_request(&self, request: reqwest::Request) -> Result<EmbedResponse> {
         let response = self
             .client
             .execute(request)
@@ -172,7 +204,7 @@ impl ProxyEmbeddingModel {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to parse embedding response: {}", e))?;
 
-        Ok(embed_response.embeddings)
+        Ok(embed_response)
     }
 }
 

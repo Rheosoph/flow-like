@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+use flow_like::flow_like_model_provider::embedding::hosted_input::{
+    HostedEmbeddingInput, HostedEmbeddingStructuredInput,
+};
 use flow_like::flow_like_model_provider::provider::{
     EmbeddingModelProvider, RemoteEmbeddingProvider, RemoteExecutionConfig,
 };
@@ -12,6 +15,9 @@ use crate::{error::ApiError, state::AppState};
 
 const MAX_BATCH_SIZE: usize = 2048;
 const MAX_INPUT_BYTES: usize = 100_000;
+const MAX_MEDIA_BYTES: usize = 100 * 1024 * 1024;
+const MAX_ENCODED_MEDIA_BYTES: usize = MAX_MEDIA_BYTES.div_ceil(3) * 4;
+const MAX_TOTAL_ENCODED_MEDIA_BYTES: usize = (256_usize * 1024 * 1024).div_ceil(3) * 4;
 const MAX_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 
 pub(crate) struct HostedEmbeddingResult {
@@ -95,13 +101,43 @@ pub(crate) fn validate_request(
         ));
     }
     let prefix = prefix(provider, payload);
-    if payload
-        .input
-        .iter()
-        .any(|text| text.is_empty() || text.len().saturating_add(prefix.len()) > MAX_INPUT_BYTES)
-    {
+    let supports_media = supports_media(config);
+    let mut media_bytes = 0_usize;
+    for input in &payload.input {
+        if !supports_media
+            && matches!(
+                input,
+                HostedEmbeddingInput::Structured(HostedEmbeddingStructuredInput::Multimodal { .. })
+            )
+        {
+            return Err(ApiError::bad_request(
+                "Multimodal embeddings require the Internal embeddinggemma-2 model",
+            ));
+        }
+        let (text, media) = input_parts(input);
+        if text.is_none() && media.iter().all(Option::is_none) {
+            return Err(ApiError::bad_request("Embedding input is empty"));
+        }
+        if let Some(text) = text
+            && ((text.is_empty() && media.iter().all(Option::is_none))
+                || text.len().saturating_add(prefix.len()) > MAX_INPUT_BYTES)
+        {
+            return Err(ApiError::bad_request(
+                "Embedding text must be nonempty and at most 100,000 bytes including the model prefix",
+            ));
+        }
+        for media in media.into_iter().flatten() {
+            if !supports_media {
+                return Err(ApiError::bad_request(
+                    "Media embeddings require the Internal embeddinggemma-2 model",
+                ));
+            }
+            media_bytes = media_bytes.saturating_add(validate_media(media)?);
+        }
+    }
+    if media_bytes > MAX_TOTAL_ENCODED_MEDIA_BYTES {
         return Err(ApiError::bad_request(
-            "Embedding inputs must be nonempty and at most 100,000 bytes including the model prefix",
+            "Embedding batch exceeds the 256 MiB inline media limit",
         ));
     }
     if endpoint_secret(implementation(config)).is_none()
@@ -112,6 +148,146 @@ pub(crate) fn validate_request(
         ));
     }
     Ok(())
+}
+
+fn supports_media(config: &RemoteExecutionConfig) -> bool {
+    implementation(config) == &RemoteEmbeddingProvider::Internal
+        && nonempty(config.model_id.as_deref()) == Some("embeddinggemma-2")
+}
+
+fn input_parts(input: &HostedEmbeddingInput) -> (Option<&str>, [Option<&str>; 3]) {
+    use HostedEmbeddingStructuredInput as Structured;
+    match input {
+        HostedEmbeddingInput::Text(text)
+        | HostedEmbeddingInput::Structured(Structured::Text { text }) => {
+            (Some(text), [None, None, None])
+        }
+        HostedEmbeddingInput::Structured(Structured::Image { image }) => {
+            (None, [Some(image), None, None])
+        }
+        HostedEmbeddingInput::Structured(Structured::Audio { audio }) => {
+            (None, [None, Some(audio), None])
+        }
+        HostedEmbeddingInput::Structured(Structured::Video { video }) => {
+            (None, [None, None, Some(video)])
+        }
+        HostedEmbeddingInput::Structured(Structured::Multimodal {
+            text,
+            image,
+            audio,
+            video,
+        }) => (
+            text.as_deref(),
+            [image.as_deref(), audio.as_deref(), video.as_deref()],
+        ),
+    }
+}
+
+fn is_media_url(media: &str) -> bool {
+    media
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+        || media
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+}
+
+// Media stays opaque here. The gateway validates and downloads URLs; preserving
+// the supplied string also preserves signatures and query parameter ordering.
+fn validate_media(media: &str) -> Result<usize, ApiError> {
+    if media.trim().is_empty() {
+        return Err(ApiError::bad_request("Embedding media must be nonempty"));
+    }
+    if is_media_url(media) {
+        if media.len() > MAX_INPUT_BYTES
+            || Url::parse(media)
+                .ok()
+                .is_none_or(|url| url.host_str().is_none())
+        {
+            return Err(ApiError::bad_request(
+                "Embedding media URL is invalid or too long",
+            ));
+        }
+        return Ok(0);
+    }
+    let encoded = if media.starts_with("data:") {
+        let (header, encoded) = media.split_once(',').ok_or_else(|| {
+            ApiError::bad_request("Embedding media data URL must contain base64 data")
+        })?;
+        if !header.ends_with(";base64") || header.len() > 1024 {
+            return Err(ApiError::bad_request(
+                "Embedding media data URL must contain base64 data",
+            ));
+        }
+        encoded
+    } else {
+        media
+    };
+    if encoded.is_empty() || encoded.len() > MAX_ENCODED_MEDIA_BYTES {
+        return Err(ApiError::bad_request(
+            "Embedding media exceeds the 100 MiB inline limit or is empty",
+        ));
+    }
+    if !encoded
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+    {
+        return Err(ApiError::bad_request(
+            "Embedding media must be an HTTP(S) URL, base64 data URL, or raw base64",
+        ));
+    }
+    Ok(encoded.len())
+}
+
+pub(super) fn input_metered_bytes(input: &HostedEmbeddingInput, prefix: &str) -> i64 {
+    let (text, media) = input_parts(input);
+    let text_bytes = text.map_or(0, |text| text.len().saturating_add(prefix.len()));
+    media
+        .into_iter()
+        .flatten()
+        .fold(text_bytes as i64, |total, media| {
+            total.saturating_add(media.len() as i64)
+        })
+}
+
+pub(super) fn reservation_input_bytes(input: &[HostedEmbeddingInput], prefix: &str) -> i64 {
+    let mut text_bytes = 0_i64;
+    let mut media_bytes = 0_i64;
+    for input in input {
+        let (text, media) = input_parts(input);
+        text_bytes = text_bytes
+            .saturating_add(text.map_or(0, |text| text.len().saturating_add(prefix.len())) as i64);
+        for media in media.into_iter().flatten() {
+            // The API cannot know the downloaded size. Reserve the gateway's
+            // file limit and release the excess when supplied-byte usage settles.
+            media_bytes = media_bytes.saturating_add(if is_media_url(media) {
+                MAX_ENCODED_MEDIA_BYTES as i64
+            } else {
+                media.len() as i64
+            });
+        }
+    }
+    text_bytes.saturating_add(media_bytes.min(MAX_TOTAL_ENCODED_MEDIA_BYTES as i64))
+}
+
+pub(super) fn media_metering_details(input: &[HostedEmbeddingInput]) -> serde_json::Value {
+    let mut inline_media = 0;
+    let mut media_urls = 0;
+    for input in input {
+        for media in input_parts(input).1.into_iter().flatten() {
+            if is_media_url(media) {
+                media_urls += 1;
+            } else {
+                inline_media += 1;
+            }
+        }
+    }
+    serde_json::json!({
+        "inlineMediaCount": inline_media,
+        "mediaUrlCount": media_urls,
+        "mediaByteBasis": "supplied_encoded_bytes_and_url_strings",
+        "downloadedMediaBytesAvailable": false,
+    })
 }
 
 fn nonempty(value: Option<&str>) -> Option<&str> {
@@ -226,7 +402,27 @@ fn request_body(
     let input: Vec<_> = payload
         .input
         .iter()
-        .map(|text| format!("{prefix}{text}"))
+        .map(|input| {
+            let mut value = serde_json::to_value(input).expect("Embedding input is serializable");
+            match input {
+                HostedEmbeddingInput::Text(text) => value = format!("{prefix}{text}").into(),
+                HostedEmbeddingInput::Structured(HostedEmbeddingStructuredInput::Text { text }) => {
+                    if supports_media(config) {
+                        value["text"] = format!("{prefix}{text}").into();
+                    } else {
+                        value = format!("{prefix}{text}").into();
+                    }
+                }
+                HostedEmbeddingInput::Structured(HostedEmbeddingStructuredInput::Multimodal {
+                    text: Some(text),
+                    ..
+                }) => {
+                    value["text"] = format!("{prefix}{text}").into();
+                }
+                _ => {}
+            }
+            value
+        })
         .collect();
     let model = nonempty(config.model_id.as_deref());
     let mut body = match implementation(config) {
@@ -296,6 +492,7 @@ fn validate_dimensions(
     dimensions: u32,
 ) -> Result<(), ApiError> {
     let allowed: Option<&[u32]> = match (provider, model) {
+        (RemoteEmbeddingProvider::Internal, "embeddinggemma-2") => Some(&[768]),
         (RemoteEmbeddingProvider::Cohere, "embed-v4.0") => Some(&[256, 512, 1024, 1536]),
         (RemoteEmbeddingProvider::Cohere, "embed-v5.0-fast" | "embed-v5.0-pro") => {
             Some(&[256, 512, 768, 1024, 1536, 2048])

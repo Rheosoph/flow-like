@@ -7,7 +7,7 @@ database access, model inference results, and board execution.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 
 @dataclass
@@ -228,6 +228,57 @@ class ChatCompletionResult:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+class EmbeddingTextInput(TypedDict):
+    """A structured text input for an embedding request."""
+
+    type: Literal["text"]
+    text: str
+
+
+class EmbeddingImageInput(TypedDict):
+    """An image as an HTTP(S) URL, base64 data URL, or raw base64."""
+
+    type: Literal["image"]
+    image: str
+
+
+class EmbeddingAudioInput(TypedDict):
+    """Audio as an HTTP(S) URL, base64 data URL, or raw base64."""
+
+    type: Literal["audio"]
+    audio: str
+
+
+class EmbeddingVideoInput(TypedDict):
+    """Video as an HTTP(S) URL, base64 data URL, or raw base64."""
+
+    type: Literal["video"]
+    video: str
+
+
+class _EmbeddingMultimodalFields(TypedDict, total=False):
+    text: str
+    image: str
+    audio: str
+    video: str
+
+
+class EmbeddingMultimodalInput(_EmbeddingMultimodalFields):
+    """Combine text and up to one file per modality into one embedding."""
+
+    type: Literal["multimodal"]
+
+
+EmbeddingInput = (
+    str
+    | EmbeddingTextInput
+    | EmbeddingImageInput
+    | EmbeddingAudioInput
+    | EmbeddingVideoInput
+    | EmbeddingMultimodalInput
+)
+
+
 @dataclass
 class EmbeddingResult:
     """Result of an embedding request, containing vectors and token usage."""
@@ -310,6 +361,12 @@ __all__ = [
     "ChatChoice",
     "ChatMessage",
     "ChatCompletionResult",
+    "EmbeddingInput",
+    "EmbeddingTextInput",
+    "EmbeddingImageInput",
+    "EmbeddingAudioInput",
+    "EmbeddingVideoInput",
+    "EmbeddingMultimodalInput",
     "EmbeddingResult",
     "ModelInfo",
     "Board",

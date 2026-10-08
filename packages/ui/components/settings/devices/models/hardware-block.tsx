@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Cpu, Download, Trash2 } from "lucide-react";
+import { Cpu, Download, RefreshCw, Trash2 } from "lucide-react";
 import type {
 	ModelsOverview,
 	RuntimeInfo,
@@ -23,6 +23,7 @@ import { Meter, type MeterTone } from "../primitives/meter";
 import { StatusChip } from "../primitives/status-chip";
 import { useInlineResults } from "../workspace";
 import { backendLabel, runtimeName } from "./models-copy";
+import { useRuntimeUpdateCheck } from "./use-models";
 import { modelsResultKey, useModelsAction } from "./use-models-action";
 
 const SHOWN_FEATURES = 6;
@@ -131,18 +132,27 @@ function Gpus({ gpus }: Readonly<{ gpus: SystemFacts["gpus"] }>) {
 function RuntimeRow({
 	deviceId,
 	runtime,
-}: Readonly<{ deviceId: string; runtime: RuntimeInfo }>) {
+	replacesInstalled,
+}: Readonly<{
+	deviceId: string;
+	runtime: RuntimeInfo;
+	replacesInstalled: boolean;
+}>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const actions = useModelsAction(deviceId);
 	const results = useInlineResults(modelsResultKey.runtime(deviceId, runtime));
 	const command = runtime.installed
 		? actions.removeRuntime(runtime)
-		: actions.installRuntime(runtime);
+		: actions.installRuntime({
+				...runtime,
+				installed: replacesInstalled,
+			});
 	const view = gateView(t, time, command.gate);
 	return (
 		<li
 			data-runtime={`${runtime.runtime}-${runtime.backend}`}
+			data-runtime-build={runtime.build}
 			className="flex flex-col gap-1.5 border-t border-hairline py-2 first:border-t-0 first:pt-0"
 		>
 			<span className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
@@ -174,7 +184,9 @@ function RuntimeRow({
 					>
 						{runtime.installed
 							? t("devices:models.actions.removeRuntimeButton", "Remove…")
-							: t("devices:models.actions.installRuntimeButton", "Install…")}
+							: replacesInstalled
+								? t("devices:models.actions.updateRuntimeButton", "Update…")
+								: t("devices:models.actions.installRuntimeButton", "Install…")}
 					</DvButton>
 				</GatedAction>
 			</span>
@@ -202,6 +214,29 @@ export function HardwareBlock({
 	stamp: FreshnessStampProps;
 }>) {
 	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const check = useRuntimeUpdateCheck(deviceId, overview.runtime_manifest_url);
+	const checkGate = check.supported
+		? check.configured
+			? gateView(t, time, check.gate)
+			: {
+					gate: {
+						kind: "unsupported" as const,
+						reason: t(
+							"devices:models.hardware.checkUnconfigured",
+							"This device has no trusted runtime release source configured.",
+						),
+					},
+				}
+		: {
+				gate: {
+					kind: "unsupported" as const,
+					reason: t(
+						"devices:models.hardware.checkUnsupported",
+						"Update the device agent to check for runtime updates.",
+					),
+				},
+			};
 	const { system, summary, runtimes } = overview;
 	const volume = system.model_volume;
 	return (
@@ -210,7 +245,33 @@ export function HardwareBlock({
 			icon={Cpu}
 			title={t("devices:models.hardware.title", "Hardware and runtimes")}
 			stamp={<FreshnessStamp {...stamp} />}
+			tools={
+				<GatedAction gate={checkGate?.gate}>
+					<DvButton
+						size="sm"
+						variant="ghost"
+						icon={RefreshCw}
+						busy={check.busy}
+						onClick={() => void check.run()}
+					>
+						{t(
+							"devices:models.hardware.checkUpdates",
+							"Check for runtime updates",
+						)}
+					</DvButton>
+				</GatedAction>
+			}
 		>
+			{check.result && (
+				<InlineResult tone={check.result.ok ? "good" : "critical"}>
+					{check.result.ok
+						? t(
+								"devices:models.hardware.checkedUpdates",
+								"Runtime releases checked. Available updates appear below.",
+							)
+						: check.result.error}
+				</InlineResult>
+			)}
 			<KeyValueList>
 				<KvRow label={t("devices:models.hardware.cpu", "Processor")}>
 					<Processor cpu={system.cpu} />
@@ -245,9 +306,15 @@ export function HardwareBlock({
 						<ul className="flex flex-col">
 							{runtimes.map((runtime) => (
 								<RuntimeRow
-									key={`${runtime.runtime}-${runtime.backend}`}
+									key={`${runtime.runtime}-${runtime.backend}-${runtime.build}-${runtime.installed}`}
 									deviceId={deviceId}
 									runtime={runtime}
+									replacesInstalled={runtimes.some(
+										(installed) =>
+											installed.installed &&
+											installed.runtime === runtime.runtime &&
+											installed.backend === runtime.backend,
+									)}
 								/>
 							))}
 						</ul>

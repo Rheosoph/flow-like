@@ -315,10 +315,12 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=Accelerate");
 
         // Cargo also builds the cdylib crate type before Xcode links the final
-        // static library into the app. The MLX C bridge lives in a SwiftPM
-        // product that Xcode links later, so allow only those bridge symbols
+        // static library into the app. Xcode supplies the Swift bridges from
+        // its SwiftPM products and AppDelegate, so allow only those symbols
         // to remain undefined in this intermediate artifact.
         for symbol in [
+            "_flow_like_request_remote_push_token",
+            "_flow_like_cancel_remote_push_token",
             "_flow_like_mlx_cancel",
             "_flow_like_mlx_clear_cache",
             "_flow_like_mlx_generate",

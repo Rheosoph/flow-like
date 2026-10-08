@@ -13,7 +13,10 @@ import {
 	Undo2,
 } from "lucide-react";
 import { useState } from "react";
-import { compareVersions } from "../../../../lib/device-management/model/device-view";
+import {
+	compareVersions,
+	isNewerAgentRelease,
+} from "../../../../lib/device-management/model/device-view";
 import type {
 	GateResult,
 	HostOperationView,
@@ -210,34 +213,49 @@ function runningServices(page: DevicePage) {
 }
 
 /** SPEC §6.5 "Reboot device" rows; the agent update adds what gets installed. */
-function useHostRows(page: DevicePage): (first?: string) => ConsequenceRows {
+function useHostRows(
+	page: DevicePage,
+	agent = false,
+): (first?: string) => ConsequenceRows {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const list = (values: readonly string[]) =>
 		new Intl.ListFormat(time.locale, { type: "conjunction" }).format(values);
 	return (first) => {
 		const { running, stopped } = runningServices(page);
-		const restart = running.length
-			? t("device.host.rows.whatServices", {
-					count: running.length,
-					device: page.name,
-					services: list(running),
-					defaultValue_one:
-						"{{device}} restarts. {{services}} stops, then starts again as requested.",
-					defaultValue_other:
-						"{{device}} restarts. {{services}} stop, then start again as requested.",
-				})
-			: t("device.host.rows.what", "{{device}} restarts.", {
-					device: page.name,
-				});
+		const restart = agent
+			? t(
+					"device.agent.rows.restart",
+					"The agent restarts on {{device}}. Running services stop and start again; stopped services stay stopped.",
+					{ device: page.name },
+				)
+			: running.length
+				? t("device.host.rows.whatServices", {
+						count: running.length,
+						device: page.name,
+						services: list(running),
+						defaultValue_one:
+							"{{device}} restarts. {{services}} stops, then starts again as requested.",
+						defaultValue_other:
+							"{{device}} restarts. {{services}} stop, then start again as requested.",
+					})
+				: t("device.host.rows.what", "{{device}} restarts.", {
+						device: page.name,
+					});
 		return {
 			what: first ? `${first} ${restart}` : restart,
-			who: running.length
-				? t(
-						"device.host.rows.who",
-						"Everything these services serve is down for about 1–2 minutes.",
-					)
-				: t("device.host.rows.whoNone", "Nobody: no service is running."),
+			who:
+				running.length && agent
+					? t(
+							"device.agent.rows.downtime",
+							"Running services are unavailable until the new agent starts.",
+						)
+					: running.length
+						? t(
+								"device.host.rows.who",
+								"Everything these services serve is down for about 1–2 minutes.",
+							)
+						: t("device.host.rows.whoNone", "Nobody: no service is running."),
 			...(stopped.length
 				? {
 						stays: t("device.host.rows.stays", {
@@ -292,7 +310,7 @@ function Results({ scopeKey }: Readonly<{ scopeKey: string }>) {
 	);
 }
 
-/** "Remote update and reboot need Linux with systemd": shown instead of controls that can't apply (R7). */
+/** Explain why remote reboot is unavailable on this device. */
 function NotOnThisSystem({ page }: Readonly<{ page: DevicePage }>) {
 	const { t } = useTranslation("devices");
 	const platform = page.inspection?.isolation?.platform;
@@ -300,13 +318,13 @@ function NotOnThisSystem({ page }: Readonly<{ page: DevicePage }>) {
 		<p className="text-xs text-muted-foreground">
 			{platform
 				? t(
-						"device.host.needsLinuxOn",
-						"Remote update and reboot need Linux with systemd. Update and restart this {{platform}} device from the device itself.",
+						"device.host.rebootNeedsLinuxOn",
+						"Remote reboot needs Linux with systemd. Restart this {{platform}} device from the device itself.",
 						{ platform: platformLabel(t, platform) },
 					)
 				: t(
-						"device.host.needsLinux",
-						"Remote update and reboot need Linux with systemd. Update and restart this device from the device itself.",
+						"device.host.rebootNeedsLinux",
+						"Remote reboot needs Linux with systemd. Restart this device from the device itself.",
 					)}
 		</p>
 	);
@@ -388,7 +406,7 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const actions = useDeviceAction();
-	const rows = useHostRows(page);
+	const rows = useHostRows(page, true);
 	const release = useReleaseTrust();
 	// The one verdict about the hub's release: a list that failed a check or ran out is never sent to a device.
 	const verdict = useAgentReleaseVerdict();
@@ -402,8 +420,11 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 	const current = page.view.agent?.version;
 	const upToDate =
 		!!latest &&
-		!!current &&
-		compareVersions(current, latest.release_version) >= 0;
+		!!page.view.agent &&
+		!isNewerAgentRelease(
+			{ version: latest.release_version, sequence: latest.sequence },
+			page.view.agent,
+		);
 	const bootId = page.inspection?.boot_id ?? null;
 	const view: GateView | null =
 		blockedByIdentity(t, page) ??

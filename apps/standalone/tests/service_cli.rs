@@ -101,6 +101,42 @@ fn installation_requires_existing_state_before_any_service_operation() -> Result
 }
 
 #[test]
+fn update_commands_require_existing_state_without_creating_an_identity() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let state = directory.path().join("not-created");
+    for operation in ["check-update", "update", "update-status"] {
+        let output = command(directory.path())
+            .args(["--state-dir", state.to_str().unwrap(), operation])
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("existing installation"));
+        assert!(!state.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn local_update_status_reports_an_empty_history() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let state = directory.path().join("state");
+    let initialized = command(directory.path())
+        .args(["--state-dir", state.to_str().unwrap(), "init"])
+        .output()?;
+    assert!(initialized.status.success());
+    let output = command(directory.path())
+        .args(["--state-dir", state.to_str().unwrap(), "update-status"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(status["state"], "none");
+    Ok(())
+}
+
+#[test]
 fn service_help_describes_login_boundary_and_read_only_inspection() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let output = command(directory.path()).arg("--help").output()?;

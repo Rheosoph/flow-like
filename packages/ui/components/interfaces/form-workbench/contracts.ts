@@ -452,7 +452,8 @@ export type PayloadResult =
 
 /**
  * Switches are always sent. An empty optional field is left out (the server fills its default).
- * A FlowPath field sends FlowPath objects and never a URL; a slot without one is a problem.
+ * A FlowPath field carries its upload URL alongside the path for handover to the run's store.
+ * A slot without a FlowPath is a problem.
  */
 export type BuildPayload = (
 	fields: readonly WorkbenchField[],

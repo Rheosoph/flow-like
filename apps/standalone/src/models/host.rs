@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 static CURRENT: RwLock<Option<Weak<ModelHost>>> = RwLock::new(None);
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
+const RUNTIME_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Clone, Debug, Default)]
 pub struct HostConfig {
@@ -135,6 +136,9 @@ impl ModelHost {
         *CURRENT
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::downgrade(&host));
+        if host.runtimes.manifest_url().is_some() {
+            refresh_runtimes(Arc::clone(&host.runtimes), host.cancel.child_token());
+        }
         Ok(host)
     }
 
@@ -175,8 +179,12 @@ impl ModelHost {
         &self.gateway
     }
 
-    /// Runs the hardware probe again; installed runtimes report GPUs with their memory.
+    /// Checks runtime updates and runs the hardware probe again. Installed runtimes
+    /// report GPUs with their memory.
     pub async fn probe(&self) -> Result<SystemFacts> {
+        if self.runtimes.manifest_url().is_some() {
+            self.runtimes.refresh().await?;
+        }
         let facts = probe(&self.runtimes, self.store().root()).await?;
         self.supervisor.set_facts(facts.clone());
         Ok(facts)
@@ -254,6 +262,29 @@ impl Drop for ModelHost {
 
 #[cfg(test)]
 mod tests;
+
+fn refresh_runtimes(runtimes: Arc<RuntimeInstaller>, cancel: CancellationToken) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(RUNTIME_REFRESH_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                _ = interval.tick() => {}
+            }
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                result = runtimes.refresh() => {
+                    if let Err(error) = result {
+                        tracing::warn!("Check runtime updates: {error:#}");
+                    }
+                }
+            }
+        }
+    });
+}
 
 /// The store, its acquisition engine and the runtime installer on top of it.
 fn storage(

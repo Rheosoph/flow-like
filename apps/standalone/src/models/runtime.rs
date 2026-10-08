@@ -30,6 +30,7 @@ use tokio::sync::watch;
 const MANIFEST_FLOOR_KEY: &str = "runtime_manifest_floor";
 const MANIFEST_KEY: &str = "runtime_manifest";
 const MANIFEST_JWS_KEY: &str = "runtime_manifest_jws";
+const RETIRED_BUILDS_KEY: &str = "runtime_retired_builds";
 const MANIFEST_FLOOR_FILE: &str = "runtime-manifest-floor.json";
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(60);
 const LISTING_MAX_BYTES: u64 = 1024 * 1024;
@@ -223,7 +224,7 @@ impl RuntimeInstaller {
     ) -> Result<Arc<Self>> {
         let root = state_dir.join("runtimes");
         private_directory(&root)?;
-        Ok(Arc::new(Self {
+        let installer = Arc::new(Self {
             root,
             acquisition,
             source,
@@ -231,7 +232,9 @@ impl RuntimeInstaller {
             installs: Mutex::default(),
             install_lock: tokio::sync::Mutex::new(()),
             manifest_lock: tokio::sync::Mutex::new(()),
-        }))
+        });
+        installer.collect_retired()?;
+        Ok(installer)
     }
 
     fn slot_dir(&self, runtime: ModelRuntime) -> PathBuf {
@@ -298,10 +301,11 @@ impl RuntimeInstaller {
             .map(|installed| installed.info())
             .collect();
         for pack in self.available()? {
-            if !infos
-                .iter()
-                .any(|info| info.runtime == pack.runtime && info.backend == pack.backend)
-            {
+            if !infos.iter().any(|info| {
+                info.runtime == pack.runtime
+                    && info.backend == pack.backend
+                    && info.build == pack.build
+            }) {
                 infos.push(RuntimeInfo {
                     runtime: pack.runtime,
                     backend: pack.backend,
@@ -313,6 +317,18 @@ impl RuntimeInstaller {
         }
         infos.truncate(MODEL_MAX_RUNTIMES);
         Ok(infos)
+    }
+
+    /// Checks the release source now. Unlike installation, an explicit update check
+    /// reports a failed fetch instead of answering from the cached manifest.
+    pub async fn refresh(&self) -> Result<Vec<RuntimeInfo>> {
+        let source = self
+            .source
+            .as_ref()
+            .context("Check runtime updates: this agent has no release trust")?;
+        let compact = source.fetch().await?;
+        self.manifest(Some(&compact)).await?;
+        self.infos()
     }
 
     /// Packs of this target in the last verified manifest, while it is valid.
@@ -499,6 +515,7 @@ impl RuntimeInstaller {
         if let Some(current) = self.current(&pack, &descriptor)? {
             return Ok(current);
         }
+        self.require_retention_room(&pack)?;
         let owner = AssetOwner::new(OwnerKind::Runtime, slot_name((runtime, backend)))?;
         self.acquisition
             .store()
@@ -525,6 +542,30 @@ impl RuntimeInstaller {
             self.start_install(pack, descriptor, owner);
         }
         Ok(RuntimeInstalled { runtime, asset })
+    }
+
+    /// One previous build per slot keeps updates from accumulating runtime copies while
+    /// this host's engines may still need their files.
+    fn require_retention_room(&self, pack: &RuntimePack) -> Result<()> {
+        let store = self.acquisition.store();
+        let Some(current) = store.with_db(|db| db.runtime(pack.runtime, pack.backend))? else {
+            return Ok(());
+        };
+        let retired: Vec<RuntimeInfo> = store
+            .with_db(|db| db.setting(RETIRED_BUILDS_KEY))?
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        ensure!(
+            !retired.iter().any(|previous| {
+                previous.runtime == pack.runtime
+                    && previous.backend == pack.backend
+                    && previous.build != current.build
+            }),
+            "Install runtime {}: restart the agent to release the previous build before updating this runtime again",
+            slot_name((pack.runtime, pack.backend))
+        );
+        Ok(())
     }
 
     fn start_install(
@@ -622,10 +663,11 @@ impl RuntimeInstaller {
         Ok(())
     }
 
-    /// Records the installed build and removes the build it replaced.
+    /// Records the installed build. Existing engines keep their previous build's files
+    /// until the next host start; newly loaded models use the replacement immediately.
     fn record(&self, pack: &RuntimePack, size: u64, needs_fallback: bool) -> Result<()> {
         let store = self.acquisition.store();
-        let previous = store.with_db(|db| db.runtime(pack.runtime, pack.backend))?;
+        let now = unix_time()?;
         let record = RuntimeRecord {
             runtime: pack.runtime,
             backend: pack.backend,
@@ -633,13 +675,64 @@ impl RuntimeInstaller {
             entrypoint: pack.entrypoint.clone(),
             size,
             needs_fallback,
-            installed_at: unix_time()?,
+            installed_at: now,
         };
-        store.with_db(|db| db.put_runtime(&record))?;
-        if let Some(previous) = previous.filter(|previous| previous.build != pack.build) {
-            self.discard(pack.runtime, &previous.build, pack.backend);
+        store.with_db(|db| {
+            if let Some(previous) = db
+                .runtime(pack.runtime, pack.backend)?
+                .filter(|previous| previous.build != pack.build)
+            {
+                let mut retired: Vec<RuntimeInfo> = db
+                    .setting(RETIRED_BUILDS_KEY)?
+                    .map(serde_json::from_value)
+                    .transpose()?
+                    .unwrap_or_default();
+                retired.push(RuntimeInfo {
+                    runtime: previous.runtime,
+                    backend: previous.backend,
+                    build: previous.build,
+                    installed: false,
+                    size: previous.size,
+                });
+                db.set_setting(RETIRED_BUILDS_KEY, &serde_json::to_value(retired)?, now)?;
+            }
+            db.put_runtime(&record)
+        })
+    }
+
+    /// Runs before this host launches engines, so no process still needs a retired build.
+    fn collect_retired(&self) -> Result<()> {
+        let store = self.acquisition.store();
+        let retired: Vec<RuntimeInfo> = store
+            .with_db(|db| db.setting(RETIRED_BUILDS_KEY))?
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        if retired.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let mut remaining = Vec::new();
+        for retired in retired {
+            retired.validate()?;
+            let current = store.with_db(|db| db.runtime(retired.runtime, retired.backend))?;
+            if current.is_some_and(|current| current.build == retired.build) {
+                continue;
+            }
+            let path = self.install_dir(retired.runtime, &retired.build, retired.backend);
+            if let Err(error) = std::fs::remove_dir_all(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!("Remove retired runtime {}: {error}", path.display());
+                remaining.push(retired);
+            }
+        }
+        store.with_db(|db| {
+            db.set_setting(
+                RETIRED_BUILDS_KEY,
+                &serde_json::to_value(remaining)?,
+                unix_time()?,
+            )
+        })
     }
 
     /// Renames the verified staging directory into the slot, replacing a broken copy.
@@ -656,13 +749,6 @@ impl RuntimeInstaller {
         File::open(self.slot_dir(pack.runtime))?
             .sync_all()
             .context("Sync the runtime directory")
-    }
-
-    fn discard(&self, runtime: ModelRuntime, build: &str, backend: ModelBackend) {
-        let old = self.install_dir(runtime, build, backend);
-        if let Err(error) = std::fs::remove_dir_all(&old) {
-            tracing::warn!("Remove the replaced runtime {}: {error}", old.display());
-        }
     }
 
     /// Follows a running or finished install of the slot to its end.
@@ -1169,6 +1255,103 @@ pub(crate) mod tests {
                 .wait(ModelRuntime::Llamacpp, ModelBackend::Cpu)
                 .await
         }
+    }
+
+    #[tokio::test]
+    async fn refresh_discovers_a_new_build_without_installing_or_hiding_the_current_one()
+    -> Result<()> {
+        let pack = pack_archive(&[], false);
+        let fixture = fixture(&pack).await;
+        let manifest = manifest_for(&fixture.origin.url("/pack.tar.gz"), &pack, 3);
+        let mut previous = manifest.packs[0].clone();
+        previous.build = "b0".into();
+        let previous_dir =
+            fixture
+                .installer
+                .install_dir(previous.runtime, &previous.build, previous.backend);
+        std::fs::create_dir_all(&previous_dir)?;
+        std::fs::write(previous_dir.join(ENTRYPOINT), b"previous build")?;
+        fixture.installer.record(&previous, 14, false)?;
+        fixture.publish(&manifest);
+
+        let infos = fixture.installer.refresh().await?;
+        assert_eq!(infos.len(), 2);
+        assert_eq!((&*infos[0].build, infos[0].installed), ("b0", true));
+        assert_eq!((&*infos[1].build, infos[1].installed), ("b1", false));
+        assert!(fixture.installer.acquisition.jobs().is_empty());
+
+        let installed = fixture.install().await?;
+        assert_eq!(installed.record.build, "b1");
+        assert_eq!(
+            std::fs::read(previous_dir.join(ENTRYPOINT))?,
+            b"previous build"
+        );
+        assert_eq!(fixture.installer.infos()?.len(), 1);
+        assert!(
+            fixture
+                .installer
+                .install(ModelRuntime::Llamacpp, ModelBackend::Cpu)
+                .await?
+                .runtime
+                .installed
+        );
+
+        let mut next = manifest.clone();
+        next.sequence += 1;
+        next.packs[0].build = "b2".into();
+        fixture.publish(&next);
+        let refused = fixture
+            .installer
+            .install(ModelRuntime::Llamacpp, ModelBackend::Cpu)
+            .await
+            .unwrap_err();
+        assert!(format!("{refused:#}").contains("restart the agent to release the previous build"));
+        assert!(previous_dir.exists());
+
+        let restarted = RuntimeInstaller::open(
+            fixture._directory.path(),
+            fixture.installer.acquisition.clone(),
+            None,
+            ReleaseTarget::current()?,
+        )?;
+        assert!(!previous_dir.exists());
+        assert!(installed.entrypoint().is_file());
+        restarted.require_retention_room(&next.packs[0])?;
+        assert_eq!(
+            restarted
+                .installed(ModelRuntime::Llamacpp, ModelBackend::Cpu)?
+                .unwrap()
+                .record
+                .build,
+            "b1"
+        );
+        fixture.installer.acquisition.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_explicit_refresh_reports_failure_even_with_a_valid_cached_manifest() -> Result<()> {
+        let pack = pack_archive(&[], false);
+        let mut fixture = fixture(&pack).await;
+        let manifest = manifest_for(&fixture.origin.url("/pack.tar.gz"), &pack, 3);
+        fixture.publish(&manifest);
+        assert_eq!(fixture.installer.refresh().await?[0].build, "b1");
+        *lock!(fixture.manifest) = sign_runtime_manifest(&manifest, &SigningKey::generate())?;
+        assert!(fixture.installer.refresh().await.is_err());
+        assert_eq!(fixture.installer.available()?, manifest.packs);
+
+        Arc::get_mut(&mut fixture.installer)
+            .unwrap()
+            .source
+            .as_mut()
+            .unwrap()
+            .manifest_url = fixture.origin.url("/unavailable.jws");
+        assert!(fixture.installer.refresh().await.is_err());
+        assert_eq!(fixture.installer.available()?, manifest.packs);
+        assert_eq!(fixture.installer.manifest(None).await?.sequence, 3);
+        assert!(fixture.installer.acquisition.jobs().is_empty());
+        fixture.installer.acquisition.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test]

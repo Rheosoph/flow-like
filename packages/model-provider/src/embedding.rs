@@ -9,6 +9,7 @@ use tiktoken_rs::CoreBPE;
 
 pub mod adapters;
 pub mod endpoint;
+pub mod hosted_input;
 pub mod interface;
 pub mod openai;
 pub mod proxy_config;
@@ -21,6 +22,9 @@ pub mod gemma2;
 
 #[cfg(feature = "remote-ml")]
 pub mod proxy;
+
+#[cfg(feature = "remote-ml")]
+pub mod proxy_multimodal;
 
 #[derive(Clone)]
 pub enum GeneralTextSplitter {

@@ -406,7 +406,7 @@ export function installRuntimeCopy(
 	};
 }
 
-/** An installed pack in a newer build: the overview knows neither its build nor its size. */
+/** Replace an installed pack with the latest verified build. */
 export function updateRuntimeCopy(
 	t: DevicesT,
 	names: { runtime: string; device: string },
@@ -424,15 +424,15 @@ export function updateRuntimeCopy(
 				names,
 			),
 			who: t(
-				"devices:models.actions.installRuntime.who",
-				"Models on this engine use it the next time they load.",
+				"devices:models.actions.updateRuntime.who",
+				"Loaded models keep using their current build. Reload them to use the update; newly loaded models use it immediately.",
 			),
 			when: background(t),
 			undo: {
 				reversible: false,
 				text: t(
-					"devices:models.actions.updateRuntime.undo",
-					"The build it replaces is deleted.",
+					"devices:models.actions.updateRuntime.retiredBuild",
+					"The previous build is kept for running models until the agent restarts, then removed.",
 				),
 			},
 		},

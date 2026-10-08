@@ -52,10 +52,19 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/embeddings/embed",
-            post(crate::routes::embeddings::embed::embed_instance_text),
+            post(crate::routes::embeddings::embed::embed_instance_text)
+                .layer(DefaultBodyLimit::max(
+                    crate::routes::embeddings::MAX_EMBEDDING_BODY_BYTES,
+                ))
+                .layer(from_fn(embedding_headers)),
         )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(from_fn(no_store))
+}
+
+async fn embedding_headers(request: Request, next: Next) -> Result<Response, ApiError> {
+    instances::validate_model_request_headers(request.headers())?;
+    Ok(next.run(request).await)
 }
 
 /// Takes the raw request so the device proof is verified before the body is buffered.
@@ -143,4 +152,36 @@ async fn receipt(
     Ok(Json(
         instances::receipt(&devices::context(&state), &id, request).await?,
     ))
+}
+
+#[cfg(test)]
+mod embedding_media_tests {
+    use super::*;
+    use axum::{body::Body, http::StatusCode};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn invalid_instance_credentials_reject_media_before_reading_the_body() {
+        for authorization in [None, Some("DPoP invalid-token")] {
+            let app = Router::new().route(
+                "/embeddings/embed",
+                post(|| async { StatusCode::NO_CONTENT }).layer(from_fn(embedding_headers)),
+            );
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/embeddings/embed");
+            if let Some(authorization) = authorization {
+                request = request
+                    .header("authorization", authorization)
+                    .header("dpop", "invalid-proof");
+            }
+            let body = Body::from_stream(futures_util::stream::poll_fn(
+                |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+                    panic!("invalid credentials must be rejected before media is buffered")
+                },
+            ));
+            let response = app.oneshot(request.body(body).unwrap()).await.unwrap();
+            assert!(response.status().is_client_error());
+        }
+    }
 }
