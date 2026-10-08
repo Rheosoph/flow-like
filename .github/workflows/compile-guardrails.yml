@@ -108,6 +108,9 @@ jobs:
           catalog-data-linkedin
           catalog-llm-execute
           catalog-embedding
+          industrial-adapters
+          catalog-industrial
+          catalog-industrial-execute
 
   lightweight-boundaries:
     name: Compile lightweight Rust boundaries

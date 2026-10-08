@@ -1,0 +1,55 @@
+[package]
+name = "flow-like-industrial"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+execute = ["opcua", "dep:tokio-modbus", "dep:tokio-serial", "dep:async-nats", "dep:redis", "dep:lapin", "dep:rdkafka", "dep:ads", "dep:rust-ethernet-ip", "dep:zenoh", "dep:iroh", "dep:hart-link", "dep:profirust", "dep:ethercrab", "dep:libloading", "dep:reqwest"]
+opcua = ["dep:opcua"]
+genicam = ["dep:telegenic"]
+genicam-emulator = ["genicam", "telegenic/emulator"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1"
+schemars.workspace = true
+thiserror.workspace = true
+anyhow = "1"
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
+tokio-util = { version = "0.7", features = ["rt", "codec"] }
+futures = "0.3"
+futures-util = "0.3"
+bytes = "1"
+tracing.workspace = true
+sparkplug-rs = "0.5.1"
+protobuf-json-mapping = "3.7"
+opcua = { package = "async-opcua", version = "0.19", default-features = false, features = ["client"], optional = true }
+telegenic = { version = "=1.0.3", default-features = false, optional = true }
+tokio-modbus = { version = "0.17", default-features = false, features = ["tcp", "rtu"], optional = true }
+tokio-serial = { version = "5.5", default-features = false, optional = true }
+async-nats = { version = "0.50", optional = true }
+redis = { version = "0.27", default-features = false, features = ["tokio-rustls-comp", "streams"], optional = true }
+lapin = { version = "4.12", optional = true }
+rdkafka = { version = "0.39", default-features = false, features = ["cmake-build", "tokio", "ssl-vendored"], optional = true }
+ads = { version = "0.4.4", optional = true }
+rust-ethernet-ip = { version = "1.2.1", optional = true }
+zenoh = { version = "1.10.1", default-features = false, features = ["transport_tcp", "transport_udp", "transport_tls"], optional = true }
+iroh = { version = "1.3.0", optional = true }
+hart-link = { version = "0.3", features = ["serial", "hart-ip"], optional = true }
+
+profirust = { version = "0.6", default-features = false, features = ["std"], optional = true }
+libloading = { version = "0.8", optional = true }
+reqwest = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+ethercrab = { version = "0.7.1", default-features = false, features = ["std"], optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# librdkafka 2.12.1 includes curl headers even with OIDC disabled.
+# Supply curl until https://github.com/confluentinc/librdkafka/pull/5309 is released.
+rdkafka = { version = "0.39", default-features = false, features = ["curl-static"], optional = true }
+
+[dev-dependencies]
+opcua = { package = "async-opcua", version = "0.19", default-features = false, features = ["server"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }

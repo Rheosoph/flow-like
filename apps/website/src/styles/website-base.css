@@ -34,6 +34,32 @@ html {
 	overscroll-behavior-x: none;
 }
 
+@media (forced-colors: none) {
+	html {
+		--website-scrollbar-surface: var(--background);
+	}
+
+	html,
+	body {
+		--fl-scrollbar-accent: var(--website-scrollbar-accent, var(--primary));
+		--fl-scrollbar-track: var(--website-scrollbar-surface);
+		--fl-scrollbar-thumb: color-mix(
+			in oklab,
+			var(--fl-scrollbar-accent) 80%,
+			var(--website-scrollbar-surface)
+		);
+		--fl-scrollbar-tip: var(--fl-scrollbar-accent);
+	}
+
+	/* Paint beneath the inset thumb too, so the page canvas cannot show through. */
+	html::-webkit-scrollbar,
+	html::-webkit-scrollbar-corner,
+	body::-webkit-scrollbar,
+	body::-webkit-scrollbar-corner {
+		background: var(--website-scrollbar-surface);
+	}
+}
+
 body {
 	height: auto;
 	min-height: 100%;

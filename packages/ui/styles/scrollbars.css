@@ -1,0 +1,188 @@
+/* Import into a host layer so local scrolling utilities can override defaults. */
+* {
+	--fl-scrollbar-accent: var(--primary, var(--sl-color-accent));
+	--fl-scrollbar-foreground: var(--foreground, var(--sl-color-white));
+	--fl-scrollbar-muted: var(--muted-foreground, var(--sl-color-gray-3));
+	/* Resolve colors locally so nested chat themes keep their own palette. */
+	--fl-scrollbar-track: color-mix(
+		in oklch,
+		var(--fl-scrollbar-foreground) 4%,
+		transparent
+	);
+	--fl-scrollbar-thumb: color-mix(
+		in oklab,
+		var(--fl-scrollbar-accent) 35%,
+		var(--fl-scrollbar-muted)
+	);
+	--fl-scrollbar-tip: color-mix(
+		in oklab,
+		var(--fl-scrollbar-accent) 65%,
+		var(--fl-scrollbar-muted)
+	);
+}
+
+/* Keep gradients available when a host sets standard scrollbar colors. */
+@supports selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: auto;
+		scrollbar-color: auto;
+	}
+}
+
+/* Standard scrollbar colors override WebKit gradients when both are set. */
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--fl-scrollbar-thumb) var(--fl-scrollbar-track);
+	}
+
+	*:where(:hover) {
+		scrollbar-color: var(--fl-scrollbar-tip) var(--fl-scrollbar-track);
+	}
+
+	.invisible-scroll {
+		scrollbar-width: none;
+	}
+}
+
+/* Explicit thin-scrollbar utilities use the browser's standard rendering. */
+:where([class~="[scrollbar-width:thin]"]) {
+	scrollbar-color: var(--fl-scrollbar-thumb) var(--fl-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+	border: 2px solid transparent;
+	border-radius: 999px;
+	background: var(--fl-scrollbar-track);
+	background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb {
+	min-width: 28px;
+	min-height: 28px;
+	border: 2px solid transparent;
+	border-radius: 999px;
+	background: linear-gradient(
+		var(--fl-scrollbar-direction, 180deg),
+		var(--fl-scrollbar-tip),
+		var(--fl-scrollbar-thumb)
+	);
+	background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:horizontal {
+	--fl-scrollbar-direction: 90deg;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+	border-radius: 999px;
+	background: linear-gradient(
+		var(--fl-scrollbar-direction, 180deg),
+		var(--fl-scrollbar-accent),
+		var(--fl-scrollbar-tip)
+	);
+	background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:active {
+	background: var(--fl-scrollbar-accent);
+	background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+	background: transparent;
+}
+
+/* Radix keeps its existing drag target and native viewport hiding. */
+[data-slot="scroll-area-scrollbar"] {
+	border-radius: 999px;
+	background-color: var(--fl-scrollbar-track);
+}
+
+[data-slot="scroll-area-thumb"] {
+	background-image: linear-gradient(
+		var(--fl-scrollbar-direction, 180deg),
+		var(--fl-scrollbar-tip),
+		var(--fl-scrollbar-thumb)
+	);
+}
+
+[data-slot="scroll-area-scrollbar"][data-orientation="horizontal"]
+	> [data-slot="scroll-area-thumb"] {
+	--fl-scrollbar-direction: 90deg;
+}
+
+[data-slot="scroll-area-scrollbar"]:where(:hover)
+	> [data-slot="scroll-area-thumb"] {
+	background-image: linear-gradient(
+		var(--fl-scrollbar-direction, 180deg),
+		var(--fl-scrollbar-accent),
+		var(--fl-scrollbar-tip)
+	);
+}
+
+[data-slot="scroll-area-scrollbar"]:where(:active)
+	> [data-slot="scroll-area-thumb"] {
+	background-image: linear-gradient(
+		var(--fl-scrollbar-accent),
+		var(--fl-scrollbar-accent)
+	);
+}
+
+/* Monaco injects important backgrounds; retain its slider sizing and input. */
+.monaco-scrollable-element > .scrollbar > .slider {
+	border-radius: 999px !important;
+	background: linear-gradient(
+		var(--fl-scrollbar-direction, 180deg),
+		var(--fl-scrollbar-tip),
+		var(--fl-scrollbar-thumb)
+	) !important;
+}
+
+.monaco-scrollable-element > .scrollbar.horizontal > .slider {
+	--fl-scrollbar-direction: 90deg;
+}
+
+.monaco-scrollable-element > .scrollbar > .slider:where(:hover) {
+	background: linear-gradient(
+		var(--fl-scrollbar-direction, 180deg),
+		var(--fl-scrollbar-accent),
+		var(--fl-scrollbar-tip)
+	) !important;
+}
+
+.monaco-scrollable-element > .scrollbar > .slider:where(:active, .active) {
+	background: var(--fl-scrollbar-accent) !important;
+}
+
+@media (forced-colors: active) {
+	* {
+		scrollbar-color: auto;
+	}
+
+	*::-webkit-scrollbar-track {
+		background: Canvas;
+	}
+
+	*::-webkit-scrollbar-thumb,
+	*::-webkit-scrollbar-thumb:hover,
+	*::-webkit-scrollbar-thumb:active {
+		background: CanvasText;
+		background-clip: padding-box;
+	}
+
+	[data-slot="scroll-area-scrollbar"] > [data-slot="scroll-area-thumb"] {
+		background-image: none;
+		border: 1px solid ButtonText;
+	}
+
+	.monaco-scrollable-element > .scrollbar > .slider {
+		background: CanvasText !important;
+		border: 1px solid ButtonText;
+	}
+}

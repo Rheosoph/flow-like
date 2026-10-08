@@ -3,9 +3,9 @@
 
 int main(int argc, char * argv[]) {
         // Bootstrap push-notification bridge before Tauri's event loop starts.
-        // PushNotificationBridge (AppDelegate.swift) installs an observer for
-        // UIApplicationDidFinishLaunchingNotification that injects remote-
-        // notification methods into the runtime-created AppDelegate.
+        // PushNotificationBridge (AppDelegate.swift) prepares native runtimes
+        // and configures notifications after launch. Rust installs the delegate
+        // callbacks between building and running Tauri's event loop.
         Class bridge = NSClassFromString(@"PushNotificationBridge");
         if (bridge) {
                 SEL sel = NSSelectorFromString(@"prepareForLaunch");

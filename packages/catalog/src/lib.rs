@@ -77,6 +77,9 @@ pub use flow_like_catalog_web::telegram;
 #[cfg(feature = "package-media")]
 pub use flow_like_catalog_media::{bit, image};
 
+#[cfg(feature = "package-industrial")]
+pub use flow_like_catalog_industrial as industrial;
+
 // Re-export ML module
 #[cfg(feature = "package-ml")]
 pub use flow_like_catalog_ml::ml;
@@ -127,6 +130,7 @@ pub enum CatalogPackage {
     Web,
     Media,
     Ml,
+    Industrial,
     Onnx,
     Llm,
     Processing,
@@ -143,6 +147,7 @@ impl CatalogPackage {
             CatalogPackage::Web,
             CatalogPackage::Media,
             CatalogPackage::Ml,
+            CatalogPackage::Industrial,
             CatalogPackage::Onnx,
             CatalogPackage::Llm,
             CatalogPackage::Processing,
@@ -165,6 +170,12 @@ impl CatalogPackage {
             }
             CatalogPackage::Media => {
                 package_nodes!("package-media", flow_like_catalog_media::get_catalog)
+            }
+            CatalogPackage::Industrial => {
+                package_nodes!(
+                    "package-industrial",
+                    flow_like_catalog_industrial::get_catalog
+                )
             }
             CatalogPackage::Ml => {
                 package_nodes!("package-ml", flow_like_catalog_ml::get_catalog)
@@ -199,6 +210,7 @@ impl CatalogPackage {
             CatalogPackage::Web => "web",
             CatalogPackage::Media => "media",
             CatalogPackage::Ml => "ml",
+            CatalogPackage::Industrial => "industrial",
             CatalogPackage::Onnx => "onnx",
             CatalogPackage::Llm => "llm",
             CatalogPackage::Processing => "processing",
@@ -251,6 +263,7 @@ impl std::str::FromStr for CatalogPackage {
             "llm" | "genai" | "generative" => Ok(CatalogPackage::Llm),
             "processing" => Ok(CatalogPackage::Processing),
             "geo" | "geolocation" => Ok(CatalogPackage::Geo),
+            "industrial" => Ok(CatalogPackage::Industrial),
             "automation" | "rpa" | "browser" | "computer" => Ok(CatalogPackage::Automation),
             _ => Err(format!("Unknown catalog package: {}", s)),
         }
@@ -407,8 +420,14 @@ fn runtime_implementation_available(node: &dyn NodeLogic) -> bool {
         return false;
     }
     match definition.name.as_str() {
+        name if name.starts_with("industrial_ethercat_") => {
+            cfg!(any(target_os = "linux", target_os = "macos"))
+        }
+        name if name.starts_with("industrial_cifx_") => {
+            cfg!(any(target_os = "linux", target_os = "windows"))
+        }
         "ml_export_student_onnx" => cfg!(feature = "training-onnx-export"),
-        "ml_read_opcua_sensor" => cfg!(feature = "sensor-opcua"),
+        "ml_read_opcua_sensor" => cfg!(feature = "package-industrial"),
         "ml_capture_genicam_frame" => cfg!(feature = "sensor-genicam"),
         "ai_audio_local_text_to_speech" => cfg!(feature = "local-tts"),
         "ai_audio_local_speech_to_text" => cfg!(feature = "local-stt"),
@@ -423,7 +442,7 @@ mod inspection_catalog_tests {
 
     #[test]
     fn inspection_nodes_follow_runtime_features() {
-        let catalog = get_catalog_from(&[CatalogPackage::Ml]);
+        let catalog = get_catalog_from(&[CatalogPackage::Ml, CatalogPackage::Industrial]);
         let has = |name: &str| catalog.iter().any(|node| node.get_node().name == name);
         for name in [
             "ml_train_burn_model",
@@ -447,7 +466,10 @@ mod inspection_catalog_tests {
             has("ml_export_student_onnx"),
             cfg!(feature = "training-onnx-export")
         );
-        assert_eq!(has("ml_read_opcua_sensor"), cfg!(feature = "sensor-opcua"));
+        assert_eq!(
+            has("ml_read_opcua_sensor"),
+            cfg!(feature = "package-industrial")
+        );
         assert_eq!(
             has("ml_capture_genicam_frame"),
             cfg!(feature = "sensor-genicam")

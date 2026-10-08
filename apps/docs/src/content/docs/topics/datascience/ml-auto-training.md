@@ -313,7 +313,7 @@ The inspection's sample shape is `[window_length, 6]`. The trainer supplies the 
 
 ### Camera, sensor and teacher adapters
 
-**Read Modbus Sensor** supports Modbus TCP registers and discrete values. **Decode Sensor Registers** makes byte order, word order and numeric representation explicit. **Read OPC UA Sensor** requires the `sensor-opcua` feature and a trusted PKI store in the executor's app storage. The node reads anonymously; the Rust adapter also supports credentials on encrypted channels. **Capture GenICam Frame** requires `sensor-genicam` and captures GigE Vision frames. Its image conversion supports Mono8, RGB8 and BGR8. Other transport and pixel formats require an adapter.
+**Read Modbus Sensor** supports Modbus TCP registers and discrete values. **Decode Sensor Registers** makes byte order, word order and numeric representation explicit. **Read OPC UA Sensor** ships in standard execution builds and requires a trusted PKI store in the executor's app storage. The node reads anonymously; the persistent OPC UA client also supports credentials on encrypted channels. These nodes belong to the [industrial catalog](/topics/api-integrations/industrial-protocols/) and retain their existing node IDs. **Capture GenICam Frame** requires `sensor-genicam` and captures GigE Vision frames. Its image conversion supports Mono8, RGB8 and BGR8. Other transport and pixel formats require an adapter.
 
 FFT, STFT, band energy, signal statistics and timestamped resampling run in Rust. Resampling has an explicit maximum gap. **Align Modalities** uses only sensor readings available at the image timestamp.
 

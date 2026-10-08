@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'packages/ml/**'
+      - 'packages/industrial/**'
+      - 'packages/catalog/industrial/**'
       - 'packages/catalog/ml/**'
       - 'packages/catalog/llm/**'
       - 'packages/catalog/onnx/**'
@@ -35,7 +37,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: ./.github/actions/setup-rust
       - name: CPU learning, durable lifecycle, and protocol tests
-        run: cargo test --locked -p flow-like-ml-core -p flow-like-ml-native -p flow-like-ml-burn -p flow-like-ml-runtime -p flow-like-ml-sensors --features flow-like-ml-runtime/native,flow-like-ml-runtime/burn,flow-like-ml-sensors/opcua,flow-like-ml-sensors/genicam-emulator
+        run: cargo test --locked -p flow-like-ml-core -p flow-like-ml-native -p flow-like-ml-burn -p flow-like-ml-runtime -p flow-like-ml-sensors -p flow-like-industrial --features flow-like-ml-runtime/native,flow-like-ml-runtime/burn,flow-like-ml-sensors/opcua,flow-like-ml-sensors/genicam-emulator
       - name: Automatic platform backends and ONNX export compile
         run: cargo check --locked -p flow-like-ml-burn --features training-auto,onnx-export
       - name: Automatic backend fallback tests

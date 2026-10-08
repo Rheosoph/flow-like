@@ -8,6 +8,12 @@ git-fetch-with-cli = true
 # repository behave consistently with older Cargo installations and builders.
 protocol = "sparse"
 
+[env]
+# Let iOS CMake builds find dependencies compiled by Cargo outside the SDK.
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_ios = { value = ".cargo/ios-toolchain.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_ios_sim = { value = ".cargo/ios-toolchain.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_x86_64_apple_ios = { value = ".cargo/ios-toolchain.cmake", relative = true }
+
 [alias]
 # Stable, memorable entry points for the common developer loops. Explicit
 # package selection avoids accidentally compiling every backend and platform.

@@ -16,6 +16,7 @@ package-data = ["dep:flow-like-catalog-data"]
 package-web = ["dep:flow-like-catalog-web"]
 package-media = ["dep:flow-like-catalog-media"]
 package-ml = ["dep:flow-like-catalog-ml"]
+package-industrial = ["dep:flow-like-catalog-industrial"]
 package-onnx = ["dep:flow-like-catalog-onnx"]
 package-llm = ["dep:flow-like-catalog-llm"]
 package-processing = ["dep:flow-like-catalog-processing"]
@@ -37,6 +38,7 @@ portable-metadata = [
     "package-std",
     "package-data",
     "package-web",
+    "package-industrial",
     "package-media",
     "package-ml",
     "package-onnx",
@@ -52,6 +54,7 @@ remote-metadata = [
     "package-std",
     "package-data",
     "package-web",
+    "package-industrial",
     "package-media",
     "package-ml",
     "package-llm",
@@ -166,8 +169,8 @@ training-wgpu = ["training-cpu", "flow-like-catalog-ml/training-wgpu"]
 training-cuda = ["training-cpu", "flow-like-catalog-ml/training-cuda"]
 training-rocm = ["training-cpu", "flow-like-catalog-ml/training-rocm"]
 training-onnx-export = ["training-cpu", "flow-like-catalog-ml/onnx-export"]
-sensor-opcua = ["package-ml", "flow-like-catalog-ml/opcua"]
-sensor-genicam = ["package-ml", "flow-like-catalog-ml/genicam"]
+sensor-opcua = ["package-industrial", "flow-like-catalog-industrial/execute"]
+sensor-genicam = ["package-industrial", "flow-like-catalog-industrial/genicam"]
 local-tts = ["package-media", "flow-like-catalog-media/local-tts"]
 local-tts-metal = ["local-tts", "flow-like-catalog-media/local-tts-metal"]
 local-tts-cuda = ["local-tts", "flow-like-catalog-media/local-tts-cuda"]
@@ -194,6 +197,8 @@ mimalloc = ["dep:mimalloc"]
 # `local-ml` enables it only for products that opt in, leaving the base `server`
 # bundle remote-only.
 portable-execute = [
+    "package-industrial",
+    "flow-like-catalog-industrial/execute",
     "runtime-catalog",
     "remote-ml",
     "flow-like-catalog-core/execute",
@@ -279,6 +284,7 @@ flow-like-catalog-data = { workspace = true, optional = true }
 flow-like-catalog-web = { workspace = true, optional = true }
 flow-like-catalog-media = { workspace = true, optional = true }
 flow-like-catalog-ml = { workspace = true, optional = true }
+flow-like-catalog-industrial = { workspace = true, optional = true }
 flow-like-catalog-onnx = { workspace = true, optional = true }
 flow-like-catalog-llm = { workspace = true, optional = true }
 flow-like-catalog-processing = { workspace = true, optional = true }

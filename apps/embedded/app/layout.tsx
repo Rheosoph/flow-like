@@ -1,5 +1,5 @@
 "use client";
-import "@flow-like/flow-like-ui/globals.css";
+import "@flow-like/flow-like-ui/global.css";
 import type { Viewport } from "next";
 
 import {

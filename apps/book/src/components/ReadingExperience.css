@@ -573,9 +573,6 @@ button.is-active .flowbook-bookmark-glyph,
 	min-height: 12rem;
 	overflow-y: auto;
 	padding: 1rem;
-	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 42%, transparent)
-		transparent;
-	scrollbar-width: thin;
 }
 
 .flowbook-reader-overview__score {

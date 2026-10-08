@@ -85,7 +85,7 @@ const websiteLd = {
 ---
 
 <!doctype html>
-<html lang={lang} class="scroll-smooth light" style="color-scheme: light;">
+<html lang={lang} class="scroll-smooth light" style="color-scheme: light; --website-scrollbar-surface: oklch(0.164 0.0111 268.0057);">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -164,3 +164,51 @@ const websiteLd = {
     <NotesFooterV4 lang={lang} />
   </body>
 </html>
+
+<script>
+  // Match the viewport scrollbar to the section in view without changing page tokens.
+  const surfaces = Array.from(document.querySelectorAll<HTMLElement>(
+    "#content > section, body > section, body > footer",
+  ));
+  const forcedColors = window.matchMedia("(forced-colors: active)");
+  let currentSurface = "";
+  let currentAccent = "";
+  let pendingFrame = 0;
+
+  function updateScrollbarSurface() {
+    pendingFrame = 0;
+    if (forcedColors.matches) return;
+    const midpoint = window.innerHeight / 2;
+    const surface = surfaces.find((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top <= midpoint && bounds.bottom > midpoint;
+    });
+    if (!surface) return;
+
+    const style = getComputedStyle(surface);
+    const color = surface.dataset.scrollbarSurface
+      ? style.getPropertyValue(surface.dataset.scrollbarSurface)
+      : style.backgroundColor === "rgba(0, 0, 0, 0)"
+        ? style.getPropertyValue("--background")
+        : style.backgroundColor;
+    const accent = style.getPropertyValue(surface.dataset.scrollbarAccent ?? "--primary");
+    if (color !== currentSurface) {
+      document.documentElement.style.setProperty("--website-scrollbar-surface", color);
+      currentSurface = color;
+    }
+    if (accent !== currentAccent) {
+      document.documentElement.style.setProperty("--website-scrollbar-accent", accent);
+      currentAccent = accent;
+    }
+  }
+
+  function scheduleScrollbarUpdate() {
+    if (!pendingFrame) pendingFrame = requestAnimationFrame(updateScrollbarSurface);
+  }
+
+  updateScrollbarSurface();
+  window.addEventListener("scroll", scheduleScrollbarUpdate, { passive: true });
+  window.addEventListener("resize", scheduleScrollbarUpdate);
+  window.addEventListener("pageshow", scheduleScrollbarUpdate);
+  forcedColors.addEventListener("change", scheduleScrollbarUpdate);
+</script>

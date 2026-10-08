@@ -12,8 +12,8 @@ import FirebaseMessaging
 ///
 /// Tao (Tauri's windowing layer) creates the ``AppDelegate`` Obj-C class at
 /// runtime via `ClassDecl::new`.  We cannot subclass it from Swift, so we
-/// inject the missing delegate methods using `class_addMethod` after
-/// UIApplication finishes launching.
+/// inject the missing delegate methods after Tauri builds its event loop,
+/// before `UIApplicationMain` assigns the delegate and caches its callbacks.
 @objc(PushNotificationBridge)
 final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     @objc static let shared = PushNotificationBridge()
@@ -29,8 +29,8 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
     static let pendingTapTimestampKey = "FlowLike.PendingNotificationTap.Timestamp"
 
     /// Call from `main()` **before** `ffi::start_app()`.
-    /// Registers a one-shot observer that fires once the app has launched and
-    /// Tao's AppDelegate class exists.
+    /// Prepares the native runtimes and configures notifications after launch.
+    /// App-delegate callbacks are installed separately, before the event loop runs.
     @objc static func prepareForLaunch() {
         // Touch the static Swift package product so its C ABI symbols are
         // retained for Rust, and install MLX's iOS memory policy early.
@@ -53,11 +53,16 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
     // MARK: - Installation
 
     @MainActor private static func install() {
-        let application = UIApplication.shared
-        guard let delegate = application.delegate,
-              let delegateClass = object_getClass(delegate) else {
-            NSLog("[FlowLikePush] Cannot install push callbacks: application delegate is unavailable")
-            return
+        installNotificationDelegate()
+        callPlugin("configureFirebaseAppIfAvailable")
+    }
+
+    @MainActor static func installAppDelegateCallbacks() {
+        // Tao creates this class in EventLoop::new. Install before UIKit starts;
+        // clearing its delegate during launch can deallocate UIApplicationMain's
+        // delegate while UIKit still holds references to it.
+        guard let delegateClass = NSClassFromString("AppDelegate") else {
+            preconditionFailure("Tauri must build its event loop before installing push callbacks")
         }
 
         // application:didRegisterForRemoteNotificationsWithDeviceToken:
@@ -114,13 +119,6 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
                 delegateClass, sel,
                 imp_implementationWithBlock(block), "v@:@@@")
         }
-
-        // UIKit caches optional delegate methods when the delegate is assigned.
-        // Refresh that cache after adding Tao's missing push callbacks.
-        application.delegate = nil
-        application.delegate = delegate
-        installNotificationDelegate()
-        callPlugin("configureFirebaseAppIfAvailable")
     }
 
     @MainActor static func installNotificationDelegate() {
@@ -221,6 +219,15 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         defaults.set(json, forKey: pendingTapDefaultsKey)
         defaults.set(Date().timeIntervalSince1970, forKey: pendingTapTimestampKey)
         NSLog("[FlowLikePush] persistPendingTap: stored \(json.count) bytes under \(pendingTapDefaultsKey)")
+    }
+}
+
+@_cdecl("flow_like_install_ios_app_delegate_callbacks")
+func flowLikeInstallIOSAppDelegateCallbacks() {
+    // Tauri builds and runs its iOS event loop on the main thread. Dispatching
+    // asynchronously would install these methods after UIKit caches them.
+    MainActor.assumeIsolated {
+        PushNotificationBridge.installAppDelegateCallbacks()
     }
 }
 
