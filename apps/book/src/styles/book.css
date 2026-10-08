@@ -1,9 +1,12 @@
+@layer starlight, scrollbars;
+
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/inter/wght-italic.css";
 @import "@fontsource-variable/source-serif-4";
 @import "@fontsource-variable/source-serif-4/wght-italic.css";
 @import "@fontsource-variable/jetbrains-mono";
 @import "@fontsource-variable/jetbrains-mono/wght-italic.css";
+@import "../../../../packages/ui/styles/scrollbars.css" layer(scrollbars);
 
 :root {
 	--flowbook-sans: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
@@ -263,6 +266,13 @@ header.header .social-icons::after {
 	font-family: var(--flowbook-sans);
 }
 
+@media (min-width: 72rem) {
+	.right-sidebar {
+		/* Keep Starlight's table of contents scrollbar hidden. */
+		scrollbar-width: none;
+	}
+}
+
 .right-sidebar h2 {
 	font: 750 0.58rem/1 var(--flowbook-mono);
 	letter-spacing: 0.13em;
@@ -439,8 +449,6 @@ body:not(.flowbook-print) .sl-markdown-content pre {
 	font-weight: 460;
 	line-height: 1.65;
 	overscroll-behavior-inline: contain;
-	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 48%, transparent) transparent;
-	scrollbar-width: thin;
 	tab-size: 4;
 }
 
@@ -568,8 +576,6 @@ body:not(.flowbook-print) .sl-markdown-content .flowbook-table-scroll {
 	background: var(--flowbook-card);
 	overflow-x: auto;
 	overscroll-behavior-inline: contain;
-	scrollbar-color: color-mix(in srgb, var(--flowbook-muted) 48%, transparent) transparent;
-	scrollbar-width: thin;
 	-webkit-overflow-scrolling: touch;
 }
 

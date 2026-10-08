@@ -117,7 +117,7 @@ pub async fn trigger_message_handler(
             apply_incoming_payload_to_handler(&mut ctx, &payload, handler, client).await;
 
         for (name, value) in metadata {
-            set_named_output_pin(&ctx, name, value.clone()).await;
+            set_named_output_pin(&mut ctx, name, value.clone()).await;
         }
 
         if !matched_message {
@@ -145,6 +145,87 @@ pub async fn trigger_message_handler(
             tracing::warn!("{} handler error: {:?}", log_name, e);
         }
     }
+}
+
+/// Dispatch one delivery and report failure to transports that stop on handler errors.
+#[cfg(feature = "execute")]
+pub async fn trigger_message_handler_checked(
+    handler: &MessageHandlerContext,
+    payload: IncomingPayload,
+    metadata: &[(&str, Value)],
+    log_name: &'static str,
+) -> flow_like_types::Result<()> {
+    if handler.connected_nodes.is_empty() {
+        return Err(flow_like_types::anyhow!("Message handler is unavailable"));
+    }
+    for entry in handler.connected_nodes.iter() {
+        // Serialize deliveries to this handler while keeping dependency state and traces per call.
+        let template = entry.value().lock().await;
+        let mut context = template.create_sub_context(&template.node).await;
+        context.delegated = true;
+        context.context_pin_overrides = Some(Default::default());
+        if context.is_cancelled() {
+            return Err(flow_like_types::anyhow!("Message handler was cancelled"));
+        }
+        let client = metadata
+            .iter()
+            .find(|(name, _)| normalize_pin_key(name) == "client")
+            .map(|(_, value)| value.clone());
+        let mut matched =
+            apply_incoming_payload_to_handler(&mut context, &payload, handler, client).await;
+        for (name, value) in metadata {
+            matched |= set_named_output_pin(&mut context, name, value.clone()).await;
+        }
+        if !matched {
+            return Err(flow_like_types::anyhow!(
+                "Incoming message did not match any output pin on the referenced handler"
+            ));
+        }
+        let pins: Vec<_> = context
+            .node
+            .pins
+            .iter()
+            .filter(|pin| {
+                pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
+            })
+            .map(|pin| (*pin).clone())
+            .collect();
+        for pin in pins {
+            let value = context
+                .context_pin_overrides
+                .as_ref()
+                .and_then(|values| values.get(pin.id()))
+                .cloned();
+            if let Some(value) = &value {
+                pin.validate_value(value.as_ref())?;
+            }
+            // Never reread shared pins: another listener may be invoking the same referenced node.
+            context.override_pin_value_shared(
+                pin.id(),
+                value.unwrap_or_else(|| Arc::new(Value::Null)),
+            );
+        }
+        let mut guard = Some(AHashSet::from_iter([handler.parent_node_id.clone()]));
+        let cancellation = context.get_cancellation_token();
+        let mut log_message = LogMessage::new(log_name, LogLevel::Debug, None);
+        let result = tokio::select! {
+            _ = crate::web::wait_for_cancel(cancellation) => Err(flow_like_types::anyhow!("Message handler was cancelled")),
+            result = InternalNode::trigger(&mut context, &mut guard, true) => result.map_err(|error| flow_like_types::anyhow!("{log_name} handler failed: {error:?}")),
+        };
+        log_message.end();
+        context.log(log_message);
+        context.end_trace();
+        if context.try_get_run().is_ok() {
+            if let Err(error) = context.flush_logs().await {
+                tracing::warn!("Failed to flush {} logs: {:?}", log_name, error);
+            }
+        }
+        result?;
+        if context.is_cancelled() {
+            return Err(flow_like_types::anyhow!("Message handler was cancelled"));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "execute")]
@@ -198,7 +279,7 @@ fn inject_client(value: &mut Value, client: Option<Value>) {
 }
 
 #[cfg(feature = "execute")]
-async fn reset_handler_output_pins(context: &ExecutionContext) {
+async fn reset_handler_output_pins(context: &mut ExecutionContext) {
     let pins: Vec<_> = context
         .node
         .pins
@@ -208,12 +289,15 @@ async fn reset_handler_output_pins(context: &ExecutionContext) {
         .collect();
 
     for pin in pins {
+        if let Some(overrides) = &mut context.context_pin_overrides {
+            overrides.remove(pin.id());
+        }
         pin.reset().await;
     }
 }
 
 #[cfg(feature = "execute")]
-async fn set_named_output_pin(context: &ExecutionContext, name: &str, value: Value) -> bool {
+async fn set_named_output_pin(context: &mut ExecutionContext, name: &str, value: Value) -> bool {
     let pins: Vec<_> = context
         .node
         .pins
@@ -224,6 +308,7 @@ async fn set_named_output_pin(context: &ExecutionContext, name: &str, value: Val
 
     let matched = !pins.is_empty();
     for pin in pins {
+        context.override_pin_value_shared(pin.id(), Arc::new(value.clone()));
         pin.set_value(value.clone()).await;
     }
 
@@ -232,7 +317,7 @@ async fn set_named_output_pin(context: &ExecutionContext, name: &str, value: Val
 
 #[cfg(feature = "execute")]
 async fn set_first_typed_output_pin(
-    context: &ExecutionContext,
+    context: &mut ExecutionContext,
     data_type: VariableType,
     value: Value,
     metadata_pin_names: &AHashSet<String>,
@@ -250,6 +335,7 @@ async fn set_first_typed_output_pin(
         .map(|pin| (*pin).clone());
 
     if let Some(pin) = pin {
+        context.override_pin_value_shared(pin.id(), Arc::new(value.clone()));
         pin.set_value(value).await;
         return true;
     }
@@ -259,7 +345,7 @@ async fn set_first_typed_output_pin(
 
 #[cfg(feature = "execute")]
 async fn map_object_to_output_pins(
-    context: &ExecutionContext,
+    context: &mut ExecutionContext,
     remaining: &mut json::Map<String, Value>,
     metadata_pin_names: &AHashSet<String>,
 ) -> bool {
@@ -279,6 +365,7 @@ async fn map_object_to_output_pins(
     let mut matched = false;
     for (name, pin) in pins {
         if let Some(val) = remaining.remove(&name) {
+            context.override_pin_value_shared(pin.id(), Arc::new(val.clone()));
             pin.set_value(val).await;
             matched = true;
             continue;
@@ -292,6 +379,7 @@ async fn map_object_to_output_pins(
         if let Some(key) = key
             && let Some(val) = remaining.remove(&key)
         {
+            context.override_pin_value_shared(pin.id(), Arc::new(val.clone()));
             pin.set_value(val).await;
             matched = true;
         }
@@ -430,6 +518,10 @@ mod tests {
     }
 
     fn internal_node(node: Node) -> Arc<InternalNode> {
+        internal_node_with_logic(node, Arc::new(NoopLogic))
+    }
+
+    fn internal_node_with_logic(node: Node, logic: Arc<dyn NodeLogic>) -> Arc<InternalNode> {
         let mut pins = AHashMap::new();
         let mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
 
@@ -442,12 +534,7 @@ mod tests {
             pins.insert(pin.id.clone(), internal_pin);
         }
 
-        let internal = Arc::new(InternalNode::new(
-            node,
-            pins,
-            Arc::new(NoopLogic),
-            name_cache,
-        ));
+        let internal = Arc::new(InternalNode::new(node, pins, logic, name_cache));
 
         for pin in internal.pins.iter() {
             pin.init_node(Arc::downgrade(&internal));
@@ -728,7 +815,7 @@ mod tests {
             Some(client.clone()),
         )
         .await;
-        set_named_output_pin(&context, "_client", client.clone()).await;
+        set_named_output_pin(&mut context, "_client", client.clone()).await;
 
         assert!(matched);
         assert_eq!(
@@ -736,5 +823,150 @@ mod tests {
             Some(json!({"payload": "hello", "_client": client}))
         );
         assert_eq!(output_value(&context, "_client").await, Some(client));
+    }
+
+    struct CheckedProbe {
+        fail: bool,
+        cancel: bool,
+        observed: Arc<std::sync::Mutex<Vec<Value>>>,
+    }
+    #[async_trait]
+    impl NodeLogic for CheckedProbe {
+        fn get_node(&self) -> Node {
+            Node::new("checked_probe", "Probe", "Checked dispatch test", "Tests")
+        }
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            assert!(
+                context.context_state.is_empty(),
+                "Each delivery starts with fresh dependency state"
+            );
+            context.context_state.insert("visited".into(), json!(true));
+            let value = context.evaluate_pin::<Value>("message").await?;
+            self.observed.lock().unwrap().push(value);
+            if self.cancel {
+                context.get_cancellation_token().unwrap().cancel();
+            }
+            if self.fail {
+                return Err(flow_like_types::anyhow!("deliberate handler failure"));
+            }
+            Ok(())
+        }
+    }
+    async fn checked_probe(
+        fail: bool,
+        cancel: bool,
+    ) -> (MessageHandlerContext, Arc<std::sync::Mutex<Vec<Value>>>) {
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut node = Node::new("checked_handler", "Handler", "Test", "Tests");
+        node.add_output_pin("message", "Message", "Text", VariableType::String);
+        node.add_output_pin("exec_out", "Done", "Done", VariableType::Execution);
+        let node = internal_node_with_logic(
+            node,
+            Arc::new(CheckedProbe {
+                fail,
+                cancel,
+                observed: observed.clone(),
+            }),
+        );
+        let mut parent = test_context(node.clone()).await;
+        parent.set_cancellation_token(flow_like_types::tokio_util::sync::CancellationToken::new());
+        let mut handler = create_message_handler_context(&parent, node, &[]).await;
+        handler.parent_node_id = "listener".into();
+        (handler, observed)
+    }
+
+    #[tokio::test]
+    async fn checked_dispatch_propagates_failure_and_cancellation() {
+        for (fail, cancel) in [(false, false), (true, false), (false, true)] {
+            let (handler, observed) = checked_probe(fail, cancel).await;
+            let result = trigger_message_handler_checked(
+                &handler,
+                IncomingPayload::Text("value".into()),
+                &[],
+                "test",
+            )
+            .await;
+            assert_eq!(result.is_err(), fail || cancel);
+            assert_eq!(observed.lock().unwrap().as_slice(), &[json!("value")]);
+        }
+    }
+
+    #[tokio::test]
+    async fn checked_dispatch_uses_fresh_values_and_state_for_each_delivery() {
+        let (handler, observed) = checked_probe(false, false).await;
+        for message in ["first", "second"] {
+            trigger_message_handler_checked(
+                &handler,
+                IncomingPayload::Text(message.into()),
+                &[],
+                "test",
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            observed.lock().unwrap().as_slice(),
+            &[json!("first"), json!("second")]
+        );
+    }
+    #[tokio::test]
+    async fn checked_dispatch_clears_a_previous_field_when_next_payload_omits_it() {
+        let (handler, observed) = checked_probe(false, false).await;
+        trigger_message_handler_checked(
+            &handler,
+            IncomingPayload::Text(r#"{"message":"present"}"#.into()),
+            &[],
+            "test",
+        )
+        .await
+        .unwrap();
+        assert!(
+            trigger_message_handler_checked(
+                &handler,
+                IncomingPayload::Text("{}".into()),
+                &[],
+                "test"
+            )
+            .await
+            .is_err()
+        );
+        let entry = handler.connected_nodes.iter().next().unwrap();
+        let context = entry.value().lock().await;
+        assert_eq!(output_value(&context, "message").await, None);
+        assert_eq!(observed.lock().unwrap().as_slice(), &[json!("present")]);
+    }
+    #[tokio::test]
+    async fn handler_pin_overrides_isolate_two_contexts_sharing_one_node() {
+        let node = node_with_outputs(&[("message", VariableType::String)]);
+        let parent = test_context(node.clone()).await;
+        let handler = create_message_handler_context(&parent, node.clone(), &[]).await;
+        let mut first = parent.create_sub_context(&node).await;
+        let mut second = parent.create_sub_context(&node).await;
+        assert!(
+            apply_incoming_payload_to_handler(
+                &mut first,
+                &IncomingPayload::Text("first".into()),
+                &handler,
+                None
+            )
+            .await
+        );
+        assert!(
+            apply_incoming_payload_to_handler(
+                &mut second,
+                &IncomingPayload::Text("second".into()),
+                &handler,
+                None
+            )
+            .await
+        );
+        assert_eq!(
+            first.evaluate_pin::<String>("message").await.unwrap(),
+            "first"
+        );
+        assert_eq!(
+            second.evaluate_pin::<String>("message").await.unwrap(),
+            "second"
+        );
     }
 }

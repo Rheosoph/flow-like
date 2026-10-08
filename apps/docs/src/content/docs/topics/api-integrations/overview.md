@@ -15,6 +15,7 @@ Flow-Like can call raw HTTP APIs, receive event-driven input, and use provider-s
 |------|------------------|
 | Call a REST or GraphQL endpoint | Build an HTTP request and run **API Call** |
 | Reuse a supported service operation | Use the provider's typed nodes |
+| Connect devices, controllers, or message brokers | Use [industrial protocols](/topics/api-integrations/industrial-protocols/) |
 | Receive an external event | Expose an app event or webhook entry point |
 | Run a workflow from Microsoft Teams | Connect a [Teams bot](/topics/api-integrations/teams/) to a Chat Event |
 | Stream a long response | Use **Streaming API Call** |

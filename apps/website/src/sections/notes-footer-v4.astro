@@ -20,7 +20,7 @@ const dateFor = (date: Date) => date.toLocaleDateString("en-US", { month: "short
 const year = new Date().getFullYear();
 ---
 
-<section id="notes" class="border-y border-border/50 bg-muted/15 py-16 md:py-20">
+<section id="notes" class="border-y border-border/50 bg-muted/15 py-16 md:py-20" data-scrollbar-surface="--background">
   <div class="mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(22rem,.85fr)] lg:px-8">
     <div>
       <div class="flex items-end justify-between gap-4">
@@ -47,7 +47,7 @@ const year = new Date().getFullYear();
   </div>
 </section>
 
-<footer class="border-t border-border/50 bg-background/80">
+<footer class="border-t border-border/50 bg-background/80" data-scrollbar-surface="--background">
   <div class="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
     <div class="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.4fr_repeat(4,1fr)]">
       <div class="max-w-xs">

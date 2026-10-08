@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../../../packages/ui/styles/scrollbars.css" layer(base);
 
 /*
  * Flow-Like design tokens. Mirrors the `:root` / `.dark` block that

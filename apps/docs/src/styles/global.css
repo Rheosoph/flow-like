@@ -1,9 +1,10 @@
 /* src/styles/global.css */
-@layer base, starlight, theme, components, utilities;
+@layer base, starlight, scrollbars, theme, components, utilities;
 
 @import "@astrojs/starlight-tailwind";
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
+@import "../../../../packages/ui/styles/scrollbars.css" layer(scrollbars);
 
 /* The menu button has an inverted surface, so its icon follows button text. */
 starlight-menu-button button {
@@ -240,6 +241,8 @@ site-search button > kbd {
 	/* A backdrop filter creates a containing block for the mobile TOC's fixed nav. */
 	.right-sidebar {
 		backdrop-filter: blur(14px);
+		/* Keep Starlight's table of contents scrollbar hidden. */
+		scrollbar-width: none;
 	}
 }
 

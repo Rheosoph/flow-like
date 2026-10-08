@@ -11,6 +11,7 @@ default-members = [
 ]
 members = [
     "packages/vendor/matchgen",
+    "packages/vendor/num_threads",
     "apps/standalone",
     "packages/device-crypto",
     "packages/device-protocol",
@@ -75,6 +76,8 @@ members = [
     "packages/catalog/web",
     "packages/catalog/media",
     "packages/catalog/ml",
+    "packages/catalog/industrial",
+    "packages/industrial",
     "packages/ml/core",
     "packages/ml/native",
     "packages/ml/burn",
@@ -187,6 +190,8 @@ flow-like-catalog-data = { path = "packages/catalog/data" }
 flow-like-catalog-web = { path = "packages/catalog/web" }
 flow-like-catalog-media = { path = "packages/catalog/media" }
 flow-like-catalog-ml = { path = "packages/catalog/ml" }
+flow-like-catalog-industrial = { path = "packages/catalog/industrial", default-features = false }
+flow-like-industrial = { path = "packages/industrial", default-features = false }
 flow-like-ml-core = { path = "packages/ml/core" }
 flow-like-ml-native = { path = "packages/ml/native" }
 flow-like-ml-burn = { path = "packages/ml/burn", default-features = false }
@@ -338,6 +343,9 @@ wasmtime-wasi-http = "=48.0.3"
 [patch.crates-io]
 # Stabilize htmlize's generated entity matcher across clean release builds.
 matchgen = { path = "packages/vendor/matchgen" }
+# num_threads 0.1.7 uses a libc Mach wrapper removed from iOS in libc 0.2.190.
+# Keep the native SDK binding until https://github.com/jhpratt/num_threads/issues/24 is fixed.
+num_threads = { path = "packages/vendor/num_threads" }
 # swift-rs requires SwiftPM's native build engine for iOS targets and artifact paths.
 swift-rs = { path = "packages/vendor/swift-rs" }
 # Pin the complete Lance workspace to the create-only commit fix. Its crates

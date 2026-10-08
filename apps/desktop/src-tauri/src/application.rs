@@ -1520,18 +1520,30 @@ pub fn run() {
         .join()
         .expect("context thread");
 
-    frontend_assets::register(builder, &context)
+    let app = frontend_assets::register(builder, &context)
         .build(context)
-        .expect("error while building tauri application")
-        .run(|_app, _event| {
-            if matches!(_event, tauri::RunEvent::Exit) {
-                device_tunnels::close_all();
-                #[cfg(desktop)]
-                device_models::lock_all();
-            }
+        .expect("error while building tauri application");
+
+    #[cfg(target_os = "ios")]
+    unsafe {
+        unsafe extern "C" {
+            fn flow_like_install_ios_app_delegate_callbacks();
+        }
+        // SAFETY: Tao has created AppDelegate and this is still the main thread.
+        // Install push methods before run() enters UIApplicationMain, so UIKit
+        // sees them without resetting and releasing its delegate during launch.
+        flow_like_install_ios_app_delegate_callbacks();
+    }
+
+    app.run(|_app, _event| {
+        if matches!(_event, tauri::RunEvent::Exit) {
+            device_tunnels::close_all();
             #[cfg(desktop)]
-            window_layout::on_event(_app, &_event);
-        });
+            device_models::lock_all();
+        }
+        #[cfg(desktop)]
+        window_layout::on_event(_app, &_event);
+    });
 }
 
 pub(crate) fn application_context() -> tauri::Context<tauri::Wry> {

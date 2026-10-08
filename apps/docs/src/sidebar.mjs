@@ -352,6 +352,10 @@ export const sidebar = [
 						label: "Microsoft Teams",
 						slug: "topics/api-integrations/teams",
 					},
+					{
+						label: "Industrial Protocols",
+						slug: "topics/api-integrations/industrial-protocols",
+					},
 				],
 			},
 			{

@@ -1,7 +1,7 @@
 #[cfg(not(feature = "execute"))]
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
-use flow_like::flow::execution::{LogLevel, context::ExecutionContext};
+use flow_like::flow::execution::context::ExecutionContext;
 
 use flow_like::flow::{
     node::{Node, NodeLogic},
@@ -74,6 +74,14 @@ impl NodeLogic for MqttPublishNode {
             VariableType::String,
         );
         node.add_input_pin(
+            "payload_bytes",
+            "Payload Bytes",
+            "Optional raw message bytes. When connected, these take precedence over Payload.",
+            VariableType::Byte,
+        )
+        .set_options(PinOptions::new().set_optional(true).build())
+        .set_default_value(Some(json!(null)));
+        node.add_input_pin(
             "qos",
             "QoS",
             "Quality of Service level",
@@ -100,7 +108,7 @@ impl NodeLogic for MqttPublishNode {
         node.add_output_pin(
             "exec_out",
             "Done",
-            "Fires after the message is published",
+            "Fires after the message is written at QoS 0 or acknowledged by the broker at QoS 1 or 2",
             VariableType::Execution,
         );
 
@@ -113,7 +121,19 @@ impl NodeLogic for MqttPublishNode {
 
         let session: MqttSession = context.evaluate_pin("session").await?;
         let topic: String = context.evaluate_pin("topic").await?;
-        let payload: String = context.evaluate_pin("payload").await?;
+        let payload_bytes: Option<Vec<u8>> =
+            if context.get_pin_by_name("payload_bytes").await.is_ok() {
+                context.evaluate_pin("payload_bytes").await?
+            } else {
+                None
+            };
+        let payload = match payload_bytes {
+            Some(bytes) => bytes,
+            None => context
+                .evaluate_pin::<String>("payload")
+                .await?
+                .into_bytes(),
+        };
         let qos_str: String = context.evaluate_pin("qos").await?;
         let retain: bool = context.evaluate_pin("retain").await?;
 
@@ -124,20 +144,8 @@ impl NodeLogic for MqttPublishNode {
         };
 
         let conn = super::get_mqtt_connection(context, &session.ref_id).await?;
-        let client = conn.client.lock().await;
-
-        client
-            .publish(
-                &topic,
-                super::to_rumqttc_qos(&qos),
-                retain,
-                payload.as_bytes(),
-            )
-            .await
-            .map_err(|e| {
-                context.log_message(&format!("MQTT publish error: {}", e), LogLevel::Error);
-                flow_like_types::anyhow!("MQTT publish failed: {}", e)
-            })?;
+        conn.publish(topic, payload, super::to_rumqttc_qos(&qos), retain)
+            .await?;
 
         context.activate_exec_pin("exec_out").await?;
 
@@ -149,5 +157,110 @@ impl NodeLogic for MqttPublishNode {
         Err(flow_like_types::anyhow!(
             "MQTT requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use crate::web::{
+        mqtt::{CachedMqttConnection, MqttConfig, MqttConnection},
+        test_support::{internal_node, test_context},
+    };
+    use bytes::BytesMut;
+    use flow_like::flow::execution::ExecutionEnvironment;
+    use rumqttc::{Packet, QoS};
+    use std::{sync::Arc, time::Duration};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn binary_input_and_existing_text_graphs_publish_the_exact_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config: MqttConfig = flow_like_types::json::from_value(json!({"host":"127.0.0.1","port":listener.local_addr().unwrap().port(),"client_id":"node-test"})).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = BytesMut::new();
+            let mut expected = [
+                vec![0, 255, 42],
+                Vec::new(),
+                b"text".to_vec(),
+                b"legacy".to_vec(),
+            ]
+            .into_iter();
+            loop {
+                match Packet::read(&mut bytes, 2 * 1024 * 1024) {
+                    Ok(Packet::Connect(_)) => {
+                        stream.write_all(&[0x20, 2, 0, 0]).await.unwrap();
+                    }
+                    Ok(Packet::Publish(message)) => {
+                        assert_eq!(message.qos, QoS::AtMostOnce);
+                        assert_eq!(
+                            message.payload.to_vec(),
+                            expected.next().expect("Unexpected publish")
+                        );
+                    }
+                    Ok(Packet::Disconnect) => {
+                        assert!(expected.next().is_none());
+                        break;
+                    }
+                    Ok(packet) => panic!("Unexpected MQTT packet: {packet:?}"),
+                    Err(rumqttc::Error::InsufficientBytes(_)) => {
+                        assert_ne!(stream.read_buf(&mut bytes).await.unwrap(), 0);
+                    }
+                    Err(error) => panic!("Invalid MQTT packet: {error}"),
+                }
+            }
+        });
+        let connection = MqttConnection::connect(&config, ExecutionEnvironment::Local, None)
+            .await
+            .unwrap();
+        for (payload_bytes, text, legacy) in [
+            (Some(vec![0_u8, 255, 42]), "ignored", false),
+            (Some(Vec::new()), "ignored", false),
+            (None, "text", false),
+            (None, "legacy", true),
+        ] {
+            let logic = MqttPublishNode::new();
+            let mut node = logic.get_node();
+            if legacy {
+                node.pins.retain(|_, pin| pin.name != "payload_bytes");
+            }
+            let mut context = test_context(internal_node(node), vec![]).await;
+            context
+                .set_cache(
+                    "mqtt-test",
+                    Arc::new(CachedMqttConnection {
+                        connection: connection.clone(),
+                    }),
+                )
+                .await;
+            context
+                .set_pin_value(
+                    "session",
+                    json!({"ref_id":"mqtt-test","client_id":"node-test"}),
+                )
+                .await
+                .unwrap();
+            context
+                .set_pin_value("topic", json!("spBv1.0/group/NDATA/node"))
+                .await
+                .unwrap();
+            context.set_pin_value("payload", json!(text)).await.unwrap();
+            if let Some(bytes) = payload_bytes {
+                context
+                    .set_pin_value("payload_bytes", json!(bytes))
+                    .await
+                    .unwrap();
+            }
+            logic.run(&mut context).await.unwrap();
+        }
+        connection.disconnect().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

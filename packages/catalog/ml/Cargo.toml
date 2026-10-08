@@ -12,8 +12,8 @@ training-auto = ["training-cpu", "flow-like-ml-runtime/training-auto"]
 training-wgpu = ["training-cpu", "flow-like-ml-burn/wgpu"]
 training-cuda = ["training-cpu", "flow-like-ml-burn/cuda"]
 training-rocm = ["training-cpu", "flow-like-ml-burn/rocm"]
-opcua = ["execute", "flow-like-ml-sensors/opcua"]
-genicam = ["execute", "flow-like-ml-sensors/genicam"]
+opcua = ["flow-like-catalog-industrial/opcua"]
+genicam = ["flow-like-catalog-industrial/genicam"]
 onnx-export = ["training-cpu", "flow-like-ml-runtime/onnx-export"]
 # Execution feature - enables heavy ML dependencies for node execution
 execute = [
@@ -42,7 +42,7 @@ execute = [
 [dependencies]
 flow-like-ml-core.workspace = true
 flow-like-ml-native.workspace = true
-flow-like-ml-sensors.workspace = true
+flow-like-catalog-industrial.workspace = true
 flow-like-ml-runtime = { workspace = true, default-features = false }
 flow-like-ml-burn = { workspace = true, default-features = false }
 flow-like-catalog-core.workspace = true

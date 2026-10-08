@@ -9,6 +9,7 @@
 @source "./app/**/*.{ts,tsx}";
 
 @import "tw-animate-css";
+@import "./styles/scrollbars.css" layer(base);
 
 @custom-variant dark (&:is(.dark *));
 
@@ -1264,26 +1265,6 @@
 		[data-wrapper] {
 			@apply min-[1800px]:border-t;
 		}
-	}
-
-	*::-webkit-scrollbar {
-		width: 6px;
-		height: 6px;
-	}
-
-	*::-webkit-scrollbar-track {
-		background: color-mix(in oklch, var(--foreground) 5%, transparent);
-		border-radius: 0.5rem;
-	}
-
-	*::-webkit-scrollbar-thumb {
-		background: var(--foreground);
-		border-radius: 0.5rem;
-	}
-
-	*::-webkit-scrollbar-thumb:hover {
-		background: var(--primary);
-		border-radius: 0.5rem;
 	}
 
 	.scrollbar-hide {

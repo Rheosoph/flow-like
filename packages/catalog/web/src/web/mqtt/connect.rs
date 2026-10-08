@@ -96,41 +96,17 @@ impl NodeLogic for MqttConnectNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use rumqttc::MqttOptions;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.activate_exec_pin("exec_error").await?;
-
         let config: MqttConfig = context.evaluate_pin("config").await?;
-
-        let mut options = MqttOptions::new(&config.client_id, &config.host, config.port);
-        options.set_keep_alive(std::time::Duration::from_secs(config.keep_alive_seconds));
-
-        if let (Some(user), Some(pass)) = (&config.username, &config.password) {
-            options.set_credentials(user, pass);
-        }
-
-        if config.tls.secure {
-            let tls_config = crate::web::tls::client_config(&config.tls)?
-                .ok_or_else(|| flow_like_types::anyhow!("TLS client configuration is required"))?;
-            let transport = rumqttc::Transport::tls_with_config(tls_config.into());
-            options.set_transport(transport);
-        } else if config.use_tls {
-            let transport = rumqttc::Transport::tls_with_default_config();
-            options.set_transport(transport);
-        }
-
-        let (client, eventloop) = rumqttc::AsyncClient::new(options, 100);
-
+        let connection = super::MqttConnection::connect(
+            &config,
+            context.execution_environment(),
+            context.get_cancellation_token(),
+        )
+        .await?;
         let ref_id = format!("mqtt_{}", flow_like_types::create_id());
-        let close_notify = Arc::new(tokio::sync::Notify::new());
-
-        let cached = CachedMqttConnection {
-            client: Arc::new(tokio::sync::Mutex::new(client)),
-            event_loop: Arc::new(tokio::sync::Mutex::new(eventloop)),
-            close_notify: close_notify.clone(),
-        };
-        let cacheable: Arc<dyn Cacheable> = Arc::new(cached);
+        let cacheable: Arc<dyn Cacheable> = Arc::new(CachedMqttConnection { connection });
         context.set_cache(&ref_id, cacheable).await;
 
         let session = MqttSession {
