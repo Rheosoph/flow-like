@@ -649,13 +649,8 @@ impl RegistryClient {
         &self,
         package_id: &str,
         version: &str,
-        maximum_bytes: usize,
         app_id: Option<&str>,
     ) -> Result<(PackageManifest, Vec<u8>)> {
-        anyhow::ensure!(
-            maximum_bytes > 0 && maximum_bytes <= 64 * 1024 * 1024,
-            "Deployment package byte limit is invalid"
-        );
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(120))
@@ -673,9 +668,8 @@ impl RegistryClient {
             request = request.bearer_auth(token);
         }
         let response = request.send().await.map_err(reqwest::Error::without_url)?;
-        let bytes =
-            Self::bounded_export_response(response, maximum_bytes.div_ceil(3) * 4 + 1024 * 1024)
-                .await?;
+        // Registries may return the portable binary inline, so this response is a payload.
+        let bytes = Self::export_response(response).await?;
         let download: DownloadResponse = serde_json::from_slice(&bytes)
             .map_err(|_| anyhow!("Registry returned invalid deployment package metadata"))?;
         anyhow::ensure!(
@@ -710,15 +704,10 @@ impl RegistryClient {
                 .send()
                 .await
                 .map_err(reqwest::Error::without_url)?;
-            Self::bounded_export_response(response, maximum_bytes).await?
+            Self::export_response(response).await?
         } else {
-            let bytes = base64_decode(&download.wasm_base64)
-                .map_err(|_| anyhow!("Registry returned invalid portable WASM bytes"))?;
-            anyhow::ensure!(
-                bytes.len() <= maximum_bytes,
-                "Deployment package exceeds its byte limit"
-            );
-            bytes
+            base64_decode(&download.wasm_base64)
+                .map_err(|_| anyhow!("Registry returned invalid portable WASM bytes"))?
         };
         anyhow::ensure!(
             wasm.starts_with(b"\0asm"),
@@ -727,20 +716,11 @@ impl RegistryClient {
         Ok((download.manifest, wasm))
     }
 
-    async fn bounded_export_response(
-        mut response: reqwest::Response,
-        maximum: usize,
-    ) -> Result<Vec<u8>> {
+    async fn export_response(mut response: reqwest::Response) -> Result<Vec<u8>> {
         anyhow::ensure!(
             response.status().is_success(),
             "Deployment dependency request failed ({})",
             response.status()
-        );
-        anyhow::ensure!(
-            response
-                .content_length()
-                .is_none_or(|size| size <= maximum as u64),
-            "Deployment package exceeds its byte limit"
         );
         let mut bytes = Vec::new();
         while let Some(chunk) = response
@@ -748,10 +728,7 @@ impl RegistryClient {
             .await
             .map_err(reqwest::Error::without_url)?
         {
-            anyhow::ensure!(
-                chunk.len() <= maximum.saturating_sub(bytes.len()),
-                "Deployment package exceeds its byte limit"
-            );
+            bytes.try_reserve(chunk.len())?;
             bytes.extend_from_slice(&chunk);
         }
         Ok(bytes)
@@ -2261,12 +2238,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deployment_export_authenticates_exact_pins_and_bounds_portable_bytes() {
+    async fn deployment_export_reads_payloads_above_the_former_file_limit() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for (returned_version, wasm, limit, accepted) in [
-            ("1.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], 16, true),
-            ("2.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], 16, false),
-            ("1.0.0", vec![0; 32], 16, false),
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let size = 64 * 1024 * 1024 + 1;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let mut chunk = [0; 4096];
+                let length = stream.read(&mut chunk).await.unwrap();
+                assert!(length > 0);
+                request.extend_from_slice(&chunk[..length]);
+            }
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let chunk = vec![7; 64 * 1024];
+            let mut remaining = size;
+            while remaining > 0 {
+                let length = remaining.min(chunk.len());
+                stream.write_all(&chunk[..length]).await.unwrap();
+                remaining -= length;
+            }
+        });
+        let response = reqwest::get(address).await.unwrap();
+        let bytes = RegistryClient::export_response(response).await.unwrap();
+        assert_eq!(bytes.len(), size);
+        assert!(bytes.iter().all(|byte| *byte == 7));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn deployment_export_authenticates_exact_pins_and_checks_portable_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (returned_version, wasm, accepted) in [
+            ("1.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], true),
+            ("2.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], false),
+            ("1.0.0", vec![0; 32], false),
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
@@ -2337,7 +2353,7 @@ mod tests {
             let mut client = registry_client(temporary.path(), &base);
             client.set_auth_token(Some("selected-account".into()));
             let result = client
-                .export_package_version(package_id, "1.0.0", limit, None)
+                .export_package_version(package_id, "1.0.0", None)
                 .await;
             assert_eq!(result.is_ok(), accepted, "{result:?}");
             server.await.unwrap();
@@ -3328,7 +3344,7 @@ mod tests {
 
         let client = registry_client(&temp.path().join("cache"), &registry);
         let error = client
-            .export_package_version(package_id, "1.0.0", 1024, Some("app-1"))
+            .export_package_version(package_id, "1.0.0", Some("app-1"))
             .await
             .unwrap_err();
         assert!(error.to_string().contains("kept the nodes"), "{error}");

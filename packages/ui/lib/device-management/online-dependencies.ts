@@ -10,6 +10,7 @@ import {
 	type PackagedBitAsset,
 	type ProjectArtifactAssets,
 	type ProjectArtifactFile,
+	hashBlob,
 	prepareProjectArtifact,
 } from "./artifacts";
 
@@ -18,9 +19,6 @@ import {
 	prepareOnlineMetadata,
 } from "./online-metadata";
 
-const MAX_FILE = 64 * 1024 * 1024;
-const MAX_TOTAL = 256 * 1024 * 1024;
-const MAX_MODEL_ASSET = 64 * 1024 ** 3;
 function check(value: unknown, message: string): asserts value {
 	if (!value) throw new Error(message);
 }
@@ -99,11 +97,7 @@ export function publicDependencyMetadata<T>(input: T): T {
 	return visit(input) as T;
 }
 
-async function download(
-	url: string,
-	limit: number,
-	signal?: AbortSignal,
-): Promise<Uint8Array> {
+async function download(url: string, signal?: AbortSignal): Promise<Blob> {
 	const address = new URL(url);
 	check(
 		address.protocol === "https:" &&
@@ -130,37 +124,19 @@ async function download(
 		);
 		const declared = response.headers.get("content-length");
 		check(
-			!declared || Number(declared) <= limit,
-			"A dependency exceeds the browser export limit. Prepare it from the desktop app.",
+			declared === null ||
+				(/^\d+$/.test(declared) && Number.isSafeInteger(Number(declared))),
+			"A dependency has an invalid content length.",
 		);
-		const reader = response.body.getReader();
-		const chunks: Uint8Array[] = [];
-		let size = 0;
-		try {
-			while (true) {
-				const next = await reader.read();
-				if (next.done) break;
-				size += next.value.length;
-				check(
-					size <= limit,
-					"A dependency exceeds the browser export limit. Prepare it from the desktop app.",
-				);
-				chunks.push(next.value);
-			}
-		} finally {
-			await reader.cancel().catch(() => {});
-			reader.releaseLock();
-		}
-		const bytes = new Uint8Array(size);
-		let offset = 0;
-		for (const chunk of chunks) {
-			bytes.set(chunk, offset);
-			offset += chunk.length;
-		}
-		return bytes;
+		const file = await response.blob();
+		check(
+			Number.isSafeInteger(file.size) && file.size >= 0,
+			"A dependency has an invalid size.",
+		);
+		return file;
 	} catch {
 		throw new Error(
-			"A dependency download failed or exceeded its limit. Check access, or prepare it from the desktop app.",
+			"A dependency download failed. Check access and try again.",
 		);
 	} finally {
 		clearTimeout(timer);
@@ -168,41 +144,27 @@ async function download(
 	}
 }
 
-const NO_DIGEST =
-	"A model file has no content digest, and this browser fingerprints files of up to 64 MiB only. Deploy it from the desktop app.";
-const TOO_LARGE =
-	"A model asset exceeds the 64 MiB browser export limit. Use the desktop app.";
-
 interface Packaging {
 	files: Map<string, Blob>;
-	add(path: string, bytes: Uint8Array): void;
-	remaining(): number;
-	modelStore: boolean;
+	add(path: string, file: Blob | Uint8Array): void;
 	signal?: AbortSignal;
 }
 
 /**
  * A Bit file with a digest known up front: the device fetches it from its
- * sources, no byte is downloaded here. A file of up to 64 MiB without a public
- * source (a hub that signs its links) travels in the artifact instead.
+ * sources, no byte is downloaded here. A file without a public source
+ * (a hub that signs its links) travels in the artifact instead.
  */
 function storedAsset(item: IBit, root: IBit): PackagedBitAsset | undefined {
 	const digest = bitContentDigest(item, root);
 	if (!digest) return undefined;
 	const { size, file_name: fileName } = item;
 	check(
-		typeof size === "number" &&
-			Number.isSafeInteger(size) &&
-			size > 0 &&
-			size <= MAX_MODEL_ASSET,
+		typeof size === "number" && Number.isSafeInteger(size) && size > 0,
 		`Model file ${fileName} has no valid size. Refresh the model's metadata and prepare again.`,
 	);
 	const sources = bitSources(item, root);
-	if (!sources.length && size <= MAX_FILE) return undefined;
-	check(
-		sources.length > 0,
-		`Model file ${fileName} has no public download source the device or this browser could use. Deploy it from the desktop app.`,
-	);
+	if (!sources.length) return undefined;
 	return {
 		bit_id: item.id,
 		descriptor: { digest, size, file_name: fileName as string, sources },
@@ -215,10 +177,8 @@ async function artifactOf(
 	packaging: Packaging,
 ): Promise<ProjectArtifactFile> {
 	check(
-		Number.isSafeInteger(item.size) &&
-			(item.size ?? 0) > 0 &&
-			(item.size ?? 0) <= MAX_FILE,
-		packaging.modelStore ? NO_DIGEST : TOO_LARGE,
+		Number.isSafeInteger(item.size) && (item.size ?? 0) > 0,
+		"A model asset has an invalid size. Refresh its metadata and prepare again.",
 	);
 	const path = `bits/${item.hash}/${item.file_name}`;
 	if (!packaging.files.has(path)) {
@@ -226,16 +186,12 @@ async function artifactOf(
 			item.download_link,
 			"A model asset is unavailable for export. Download it in the desktop app first.",
 		);
-		const bytes = await download(
-			item.download_link,
-			Math.min(item.size as number, packaging.remaining()),
-			packaging.signal,
-		);
+		const file = await download(item.download_link, packaging.signal);
 		check(
-			bytes.length === item.size,
+			file.size === item.size,
 			"Model asset size differs from its metadata.",
 		);
-		packaging.add(path, bytes);
+		packaging.add(path, file);
 	}
 	const blob = packaging.files.get(path);
 	check(
@@ -245,7 +201,7 @@ async function artifactOf(
 	return {
 		path,
 		size: blob.size,
-		sha256: hash(new Uint8Array(await blob.arrayBuffer())),
+		sha256: await hashBlob(blob, packaging.signal),
 	};
 }
 
@@ -293,20 +249,15 @@ export async function prepareOnlineDependencies(
 	);
 	const assets: ProjectArtifactAssets = { bit_pins: [], package_pins: [] };
 	const files = new Map<string, Blob>();
-	let total = 0;
-	function add(path: string, bytes: Uint8Array) {
-		total += bytes.length;
-		check(
-			total <= MAX_TOTAL,
-			"Project dependencies exceed the 256 MiB browser export limit. Use the desktop app.",
+	function add(path: string, file: Blob | Uint8Array) {
+		files.set(
+			path,
+			file instanceof Blob ? file : new Blob([new Uint8Array(file)]),
 		);
-		files.set(path, new Blob([new Uint8Array(bytes)]));
 	}
 	const packaging: Packaging = {
 		files,
 		add,
-		remaining: () => MAX_TOTAL - total,
-		modelStore,
 		...(signal ? { signal } : {}),
 	};
 	const encoder = new TextEncoder();
@@ -435,41 +386,30 @@ export async function prepareOnlineDependencies(
 				selected.manifest.version === version,
 			"A package differs from this project's pinned version.",
 		);
-		let wasm: Uint8Array;
+		let wasm: Blob;
 		if (selected.download_url)
-			wasm = await download(
-				selected.download_url,
-				Math.min(MAX_FILE, MAX_TOTAL - total),
-				signal,
-			);
+			wasm = await download(selected.download_url, signal);
 		else {
-			check(
-				selected.wasm_base64 &&
-					selected.wasm_base64.length <= Math.ceil(MAX_FILE / 3) * 4,
-				"Package bytes are missing or exceed the browser export limit.",
-			);
+			check(selected.wasm_base64, "Package bytes are missing.");
 			try {
-				wasm = Uint8Array.from(atob(selected.wasm_base64), (value) =>
-					value.charCodeAt(0),
-				);
+				wasm = new Blob([
+					Uint8Array.from(atob(selected.wasm_base64), (value) =>
+						value.charCodeAt(0),
+					),
+				]);
 			} catch {
 				throw new Error("Invalid package bytes.");
 			}
 		}
+		const magic = new Uint8Array(await wasm.slice(0, 4).arrayBuffer());
 		check(
-			wasm.length <= MAX_FILE &&
-				wasm[0] === 0 &&
-				wasm[1] === 97 &&
-				wasm[2] === 115 &&
-				wasm[3] === 109,
+			magic[0] === 0 && magic[1] === 97 && magic[2] === 115 && magic[3] === 109,
 			"Packages must contain portable WASM bytes.",
 		);
 		if (selected.manifest.wasm_hash)
 			check(
 				selected.manifest.wasm_hash ===
-					Array.from(blake3(wasm), (byte) =>
-						byte.toString(16).padStart(2, "0"),
-					).join(""),
+					(await hashBlob(wasm, signal, blake3.create)),
 				"Package bytes differ from their manifest digest.",
 			);
 		const manifest = encoder.encode(
@@ -481,7 +421,7 @@ export async function prepareOnlineDependencies(
 		assets.package_pins.push({
 			package_id: id,
 			version,
-			wasm_sha256: hash(wasm),
+			wasm_sha256: await hashBlob(wasm, signal),
 			manifest_sha256: hash(manifest),
 		});
 	}

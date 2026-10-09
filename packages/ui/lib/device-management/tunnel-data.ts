@@ -5,11 +5,7 @@ import {
 	DeviceServiceTunnel,
 	type TunnelServiceOptions,
 } from "./tunnel";
-import {
-	TUNNEL_MODEL_ASSET_MAX_BYTES,
-	TUNNEL_WINDOW,
-	type TunnelDataOpen,
-} from "./tunnel-protocol";
+import { TUNNEL_WINDOW, type TunnelDataOpen } from "./tunnel-protocol";
 import type { TunnelConnectOptions } from "./tunnel-transport";
 import type { ManagementResponse } from "./types";
 
@@ -25,6 +21,7 @@ export const TUNNEL_READ_COMMANDS: ReadonlySet<string> = new Set([
 	"archive_roster_read",
 ]);
 export const TUNNEL_RESPONSE_LIMIT = 1024 * 1024;
+const CONNECT_TIMEOUT_MS = 60_000;
 const VERIFY_MIN_MS = 15 * 60_000;
 /** The device reads the whole file back to verify it: 10 MB/s, a slow disk's pace. */
 const VERIFY_BYTES_PER_MS = 10_000;
@@ -257,7 +254,6 @@ export class DeviceTunnelDataClient {
 		if (
 			!Number.isSafeInteger(input.file.size) ||
 			input.file.size < 0 ||
-			input.file.size > 4 * 1024 ** 3 ||
 			!Number.isSafeInteger(input.offset) ||
 			input.offset < 0 ||
 			input.offset > input.file.size
@@ -327,22 +323,42 @@ export class DeviceTunnelDataClient {
 			return Promise.reject(this.abort.signal.reason);
 		if (this.tunnel?.connected) return Promise.resolve(this.tunnel);
 		if (this.connecting) return this.connecting;
-		this.connecting = this.connect({
-			...this.options,
-			signal: this.abort.signal,
-		})
-			.then((tunnel) => {
-				if (this.abort.signal.aborted) {
-					tunnel.close();
-					throw this.abort.signal.reason;
-				}
-				this.tunnel = tunnel;
-				return tunnel;
-			})
-			.finally(() => {
-				this.connecting = undefined;
+		// Setup is shared, so its deadline must outlive any one reader's cancellation.
+		const abort = new AbortController();
+		const cancelled = new Promise<never>((_, reject) => {
+			abort.signal.addEventListener(
+				"abort",
+				() => reject(abort.signal.reason),
+				{
+					once: true,
+				},
+			);
+		});
+		const cancel = () => abort.abort(this.abort.signal.reason);
+		this.abort.signal.addEventListener("abort", cancel, { once: true });
+		const timer = setTimeout(
+			() => abort.abort(new Error("The device data connection timed out.")),
+			CONNECT_TIMEOUT_MS,
+		);
+		const opening = (async () => {
+			const tunnel = await this.connect({
+				...this.options,
+				signal: abort.signal,
 			});
-		return this.connecting;
+			if (abort.signal.aborted) {
+				tunnel.close();
+				throw abort.signal.reason;
+			}
+			this.tunnel = tunnel;
+			return tunnel;
+		})();
+		const attempt = Promise.race([opening, cancelled]).finally(() => {
+			clearTimeout(timer);
+			this.abort.signal.removeEventListener("abort", cancel);
+			if (this.connecting === attempt) this.connecting = undefined;
+		});
+		this.connecting = attempt;
+		return attempt;
 	}
 	private async run<T>(
 		signal: AbortSignal | undefined,
@@ -464,13 +480,12 @@ async function writeSlices(
 	}
 }
 
-/** A canonical job and an offset within a file of at most 64 GiB. */
+/** A canonical job and an offset within the file. */
 function pushRange(jobId: string, offset: number, size: number) {
 	return (
 		JOB_ID.test(jobId) &&
 		Number.isSafeInteger(size) &&
 		size >= 0 &&
-		size <= TUNNEL_MODEL_ASSET_MAX_BYTES &&
 		Number.isSafeInteger(offset) &&
 		offset >= 0 &&
 		offset <= size

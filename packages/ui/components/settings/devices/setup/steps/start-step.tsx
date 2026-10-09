@@ -470,7 +470,7 @@ export function StartStep({
 					<KvRow label={t("setup.start.defaults.storage", "Storage")}>
 						{t(
 							"setup.start.defaults.storageText",
-							"64 GiB and 262,144 files for the device · 16 GiB per app",
+							"No default byte limit · 262,144 filesystem entries for the device",
 						)}
 					</KvRow>
 				</KeyValueList>

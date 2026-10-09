@@ -211,21 +211,106 @@ describe("production tunnel data adapter", () => {
 	test("closing a service owner cancels a late connection without opening the service", async () => {
 		const tunnel = new Tunnel();
 		let resolve!: (tunnel: Tunnel) => void;
-		const data = new DeviceTunnelDataClient(
-			options,
-			() =>
-				new Promise((done) => {
-					resolve = done;
-				}),
-		);
+		let connectingSignal: AbortSignal | undefined;
+		const data = new DeviceTunnelDataClient(options, (input) => {
+			connectingSignal = input.signal;
+			return new Promise((done) => {
+				resolve = done;
+			});
+		});
 		clients.push(data);
 		const opening = data.openService("placement", "hosting");
 		data.close();
 		await expect(opening).rejects.toThrow("cancelled");
+		expect(connectingSignal?.aborted).toBe(true);
 		resolve(tunnel);
 		await wait();
 		expect(tunnel.connected).toBe(false);
 		expect(tunnel.serviceInputs).toHaveLength(0);
+	});
+
+	test("a stalled shared connection expires and a late result cannot replace its successor", async () => {
+		const deadlines: { delay: number; fire: () => void }[] = [];
+		const original = globalThis.setTimeout;
+		globalThis.setTimeout = ((callback: () => void, delay: number) => {
+			deadlines.push({ delay, fire: callback });
+			return original(callback, delay);
+		}) as typeof setTimeout;
+		try {
+			let resolve!: (tunnel: Tunnel) => void;
+			let connectingSignal: AbortSignal | undefined;
+			let connects = 0;
+			const current = new Tunnel();
+			const data = new DeviceTunnelDataClient(options, (input) => {
+				connects++;
+				if (connects > 1) return Promise.resolve(current);
+				connectingSignal = input.signal;
+				return new Promise((done) => {
+					resolve = done;
+				});
+			});
+			clients.push(data);
+			const opening = data
+				.openService("placement", "hosting")
+				.catch((error) => error);
+			const reading = data
+				.request({ type: "inspect_page" }, "first")
+				.catch((error) => error);
+			expect(connects).toBe(1);
+			expect(deadlines[0].delay).toBe(60_000);
+			deadlines[0].fire();
+			expect((await opening).message).toBe(
+				"The device data connection timed out.",
+			);
+			expect(await reading).toMatchObject({ sent: false });
+			expect(connectingSignal?.aborted).toBe(true);
+
+			expect(
+				(await data.request({ type: "inspect_page" }, "second")).state,
+			).toBe("completed");
+			expect(connects).toBe(2);
+			const late = new Tunnel();
+			resolve(late);
+			await wait();
+			expect(late.connected).toBe(false);
+			expect(late.serviceInputs).toHaveLength(0);
+			expect(late.inputs).toHaveLength(0);
+			await data.request({ type: "inspect_page" }, "third");
+			expect(current.inputs).toHaveLength(2);
+			expect(current.connected).toBe(true);
+			expect(connects).toBe(2);
+		} finally {
+			globalThis.setTimeout = original;
+		}
+	});
+
+	test("cancelling a reader leaves shared connection setup available to other callers", async () => {
+		const tunnel = new Tunnel();
+		let resolve!: (tunnel: Tunnel) => void;
+		let connectingSignal: AbortSignal | undefined;
+		let connects = 0;
+		const data = new DeviceTunnelDataClient(options, (input) => {
+			connects++;
+			connectingSignal = input.signal;
+			return new Promise((done) => {
+				resolve = done;
+			});
+		});
+		clients.push(data);
+		const abort = new AbortController();
+		const reading = data
+			.request({ type: "inspect_page" }, "first", abort.signal)
+			.catch((error) => error);
+		const opening = data.openService("placement", "hosting");
+		abort.abort();
+		expect((await reading).message).toContain("cancelled");
+		expect(connectingSignal?.aborted).toBe(false);
+		resolve(tunnel);
+		await opening;
+		await data.request({ type: "inspect_page" }, "second");
+		expect(connects).toBe(1);
+		expect(tunnel.serviceInputs).toHaveLength(1);
+		expect(tunnel.inputs).toHaveLength(1);
 	});
 
 	test("a tunnel owner cannot move to another grant, device identity or auth epoch", () => {
@@ -297,6 +382,39 @@ describe("production tunnel data adapter", () => {
 			"management connection",
 		);
 		expect(tunnel.inputs).toHaveLength(2);
+	});
+	test("resumes an artifact above 4 GiB and a model above 64 GiB with only the missing byte", async () => {
+		for (const kind of ["artifact", "model"] as const) {
+			const { data, tunnel } = client();
+			const size = (kind === "artifact" ? 5 : 65) * 1024 ** 3;
+			const ranges: [number, number][] = [];
+			const file = {
+				size,
+				slice(start: number, end: number) {
+					ranges.push([start, end]);
+					return new Blob([new Uint8Array(end - start)]);
+				},
+			};
+			if (kind === "artifact") {
+				tunnel.make = () => {
+					const stream = new Stream();
+					stream.chunks.push(encoder.encode(JSON.stringify(receipt(size))));
+					return stream;
+				};
+				await data.uploadArtifact({
+					projectId: "project",
+					transferId,
+					fileIndex: 0,
+					offset: size - 1,
+					file,
+				});
+			} else {
+				await data.pushModelAsset({ jobId, offset: size - 1, file });
+			}
+			expect(ranges).toEqual([[size - 1, size]]);
+			expect(tunnel.streams[0].writes).toHaveLength(1);
+			expect(tunnel.streams[0].writes[0]).toHaveLength(1);
+		}
 	});
 	test("streams only the unconfirmed artifact suffix in bounded slices", async () => {
 		const { data, tunnel } = client();

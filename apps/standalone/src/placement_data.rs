@@ -3,9 +3,7 @@ use crate::{
     supervisor, vault,
 };
 use anyhow::{Context, Result, ensure};
-use flow_like_device_protocol::{
-    PROJECT_ARTIFACT_MAX_BYTES, PROJECT_ARTIFACT_MAX_FILE_BYTES, PROJECT_ARTIFACT_MAX_FILES,
-};
+use flow_like_device_protocol::PROJECT_ARTIFACT_MAX_FILES;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
@@ -206,10 +204,8 @@ fn copy_tree(
             continue;
         }
         ensure!(
-            metadata.is_file()
-                && metadata.nlink() == 1
-                && metadata.len() <= PROJECT_ARTIFACT_MAX_FILE_BYTES,
-            "Initial data must contain bounded regular files without hardlinks"
+            metadata.is_file() && metadata.nlink() == 1,
+            "Initial data must contain regular files without hardlinks"
         );
         bounds.files += 1;
         bounds.bytes = bounds
@@ -217,9 +213,8 @@ fn copy_tree(
             .checked_add(metadata.len())
             .context("Initial data size overflow")?;
         ensure!(
-            bounds.files <= PROJECT_ARTIFACT_MAX_FILES
-                && bounds.bytes <= PROJECT_ARTIFACT_MAX_BYTES,
-            "Initial placement data exceeds its file or size limit"
+            bounds.files <= PROJECT_ARTIFACT_MAX_FILES,
+            "Initial placement data exceeds its file limit"
         );
         let mut input = OpenOptions::new()
             .read(true)
@@ -246,7 +241,9 @@ fn copy_tree(
             if count == 0 {
                 break;
             }
-            copied += count as u64;
+            copied = copied
+                .checked_add(count as u64)
+                .context("Initial data size overflow")?;
             ensure!(
                 copied <= metadata.len(),
                 "Initial data changed during initialization"

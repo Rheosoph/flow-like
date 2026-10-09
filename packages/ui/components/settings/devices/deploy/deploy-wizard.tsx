@@ -101,7 +101,7 @@ import { useDeployRunState } from "./use-deploy-run";
 
 /* The deploy wizard's frame (APP §3.2, §3.4): header, planning headline, stepper, summary and foot around one of eight steps. */
 
-/** Steps that hand the prepared bundle on; What has nothing to prepare yet and Rollout prepares by itself when it has to. */
+/** Steps that start preparation. Rollout retains an existing snapshot; a reopened run prepares its own. */
 const PREPARING: readonly DeployStepId[] = [
 	"how",
 	"where",
@@ -1116,8 +1116,14 @@ function Wizard({
 	const steps = useMemo(() => deploySteps(mode), [mode]);
 	const step = currentStep(route, steps, state);
 	const index = steps.indexOf(step);
+	const preparationId = useRef<string | null>(null);
+	// Keep the wizard's snapshot through Rollout; a reopened run prepares its own.
+	const preparing =
+		PREPARING.includes(step) ||
+		(step === "rollout" && preparationId.current === state.draft.deploymentId);
+	preparationId.current = preparing ? state.draft.deploymentId : null;
 	const prepare = useDeployPrepare(plan, {
-		enabled: PREPARING.includes(step),
+		enabled: preparing,
 		hubTypes: state.facts.hub?.hubTypes,
 		modelStore: targetsHaveModelStore(
 			plan.targets,

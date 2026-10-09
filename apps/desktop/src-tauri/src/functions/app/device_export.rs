@@ -487,26 +487,18 @@ fn carried_pack(pack: &BitPack, stored: &[PackagedBitAsset]) -> BitPack {
     }
 }
 
-/// The artifact's model bytes stay within the per-file and per-project caps.
+/// Carried model files need a known, nonzero size for transfer verification.
 fn check_carried_sizes(carried: &BitPack) -> Result<()> {
-    let selected_bytes = carried
-        .bits
-        .iter()
-        .filter(|item| item.file_name.is_some())
-        .try_fold(0_u64, |total, item| {
-            let size = item.size.context(
-                "Model artifact size is unknown; refresh its metadata before deployment",
-            )?;
-            ensure!(
-                size > 0 && size <= 4 * 1024 * 1024 * 1024,
-                "Model artifact exceeds 4 GiB"
-            );
-            total.checked_add(size).context("Model asset size overflow")
-        })?;
-    ensure!(
-        selected_bytes <= 8 * 1024 * 1024 * 1024,
-        "Selected model assets exceed 8 GiB"
-    );
+    let mut total = 0u64;
+    for item in carried.bits.iter().filter(|item| item.file_name.is_some()) {
+        let size = item
+            .size
+            .context("Model artifact size is unknown; refresh its metadata before deployment")?;
+        ensure!(size > 0, "Model artifact is empty");
+        total = total
+            .checked_add(size)
+            .context("Model asset size overflow")?;
+    }
     Ok(())
 }
 
@@ -665,7 +657,6 @@ async fn package_pins(
     snapshot: &mut DeviceProjectSnapshot,
 ) -> Result<Vec<PackagePin>> {
     let mut pins = Vec::new();
-    let mut total_wasm = 0usize;
     if !app.packages.is_empty() {
         let registry = crate::functions::registry::registry_client(handle).await?;
         let project = (!matches!(app.visibility, flow_like::app::AppVisibility::Offline))
@@ -688,16 +679,9 @@ async fn package_pins(
                         && selected.manifest.validate().is_ok(),
                     "Installed package manifest differs from the project's pin"
                 );
-                let metadata = tokio::fs::metadata(&selected.wasm_path).await?;
-                ensure!(metadata.len() <= 64 * 1024 * 1024, "Package exceeds 64 MiB");
-                use tokio::io::AsyncReadExt;
-                let file = tokio::fs::File::open(&selected.wasm_path).await?;
-                let mut wasm = Vec::new();
-                file.take(64 * 1024 * 1024 + 1)
-                    .read_to_end(&mut wasm)
-                    .await?;
+                let wasm = tokio::fs::read(&selected.wasm_path).await?;
                 ensure!(
-                    wasm.len() <= 64 * 1024 * 1024 && wasm.starts_with(b"\0asm"),
+                    wasm.starts_with(b"\0asm"),
                     "Package must contain portable WASM bytes"
                 );
                 if let Some(expected) = &selected.wasm_hash {
@@ -709,14 +693,9 @@ async fn package_pins(
                 (selected.manifest.clone(), wasm)
             } else {
                 registry
-                    .export_package_version(id, version, 64 * 1024 * 1024, project)
+                    .export_package_version(id, version, project)
                     .await?
             };
-            total_wasm += wasm.len();
-            ensure!(
-                total_wasm <= 256 * 1024 * 1024,
-                "Selected WASM packages exceed 256 MiB"
-            );
             let wasm_sha256 = digest(&wasm);
             let manifest = serde_json::to_vec(&manifest)?;
             ensure!(
@@ -1032,6 +1011,22 @@ mod tests {
                 "model_id":"Qwen/Qwen3-8B-GGUF","version":"03e404fd168941cfed98f46654680130dd85968b"}}),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn carried_model_assets_accept_large_files_and_totals() {
+        let mut bit = hub_model();
+        bit.size = Some(5 * 1024 * 1024 * 1024);
+        let mut pack = BitPack {
+            bits: vec![bit.clone(), bit],
+        };
+        check_carried_sizes(&pack).unwrap();
+        pack.bits[0].size = Some(0);
+        assert!(check_carried_sizes(&pack).is_err());
+        pack.bits[0].size = None;
+        assert!(check_carried_sizes(&pack).is_err());
+        pack.bits[0].size = Some(u64::MAX);
+        assert!(check_carried_sizes(&pack).is_err());
     }
 
     #[test]

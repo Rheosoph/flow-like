@@ -19,8 +19,6 @@ import { LiveCallError } from "./workspace/errors";
 export const ARTIFACT_CHUNK_BYTES = 8192;
 const ARTIFACT_TRANSFER_TTL_SECONDS = 86_400;
 const MAX_FILES = 8192;
-const MAX_FILE_BYTES = 4 * 1024 ** 3;
-const MAX_BYTES = 8 * 1024 ** 3;
 const MAX_MANIFEST_BYTES = 2 * 1024 ** 2;
 // Placement configurations accept at most these pins; larger selections could never deploy.
 const MAX_BIT_PINS = 256;
@@ -28,7 +26,6 @@ const MAX_PACKAGE_PINS = 64;
 const MAX_PACKAGED_DEPENDENCIES = 2048;
 /** Artifact files and model-store assets of one packaged Bit together. */
 const MAX_PACKAGED_FILES = 2048;
-const MAX_MODEL_ASSET_BYTES = 64 * 1024 ** 3;
 const MAX_MODEL_ASSET_SOURCES = 8;
 const MAX_MODEL_ASSET_SOURCE_LENGTH = 2048;
 const METADATA_V1_FIELDS = ["bit", "dependencies", "artifacts"];
@@ -395,19 +392,24 @@ function byteCompare(left: string, right: string): number {
 	}
 	return a.length - b.length;
 }
-async function hashBlob(
+export async function hashBlob(
 	file: ArtifactBlob,
 	signal?: AbortSignal,
+	createHash: () => {
+		update(bytes: Uint8Array): void;
+		digest(): Uint8Array;
+		destroy(): void;
+	} = sha256.create,
 ): Promise<string> {
-	const hash = sha256.create();
+	const hash = createHash();
 	try {
-		for (let offset = 0; offset < file.size; offset += 1024 * 1024) {
+		for (let offset = 0; offset < file.size; ) {
 			cancelled(signal);
-			const bytes = new Uint8Array(
-				await file.slice(offset, offset + 1024 * 1024).arrayBuffer(),
-			);
+			const end = Math.min(file.size, offset + 1024 * 1024);
+			const bytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
 			hash.update(bytes);
 			bytes.fill(0);
+			offset = end;
 		}
 		cancelled(signal);
 		return hex(hash.digest());
@@ -602,7 +604,7 @@ function modelAssetSource(source: unknown): boolean {
 		return false;
 	}
 }
-/** `ModelAssetDescriptor::validate`: a pinned digest, a bounded size, a safe file name, public HTTPS sources. */
+/** `ModelAssetDescriptor::validate`: a pinned digest, a valid size, a safe file name, public HTTPS sources. */
 function modelAssetDescriptor(value: unknown): ModelAssetDescriptor {
 	const descriptor = isRecord(value) ? value : {};
 	const digest = isRecord(descriptor.digest) ? descriptor.digest : {};
@@ -617,7 +619,6 @@ function modelAssetDescriptor(value: unknown): ModelAssetDescriptor {
 			typeof size === "number" &&
 			Number.isSafeInteger(size) &&
 			size > 0 &&
-			size <= MAX_MODEL_ASSET_BYTES &&
 			typeof fileName === "string" &&
 			Array.isArray(sources) &&
 			sources.length <= MAX_MODEL_ASSET_SOURCES &&
@@ -781,7 +782,6 @@ async function selectedAssets(
 					!seen.has(artifact.path) &&
 					Number.isSafeInteger(artifact.size) &&
 					artifact.size >= 0 &&
-					artifact.size <= MAX_FILE_BYTES &&
 					typeof artifact.sha256 === "string" &&
 					/^[a-f0-9]{64}$/.test(artifact.sha256),
 				"Invalid selected Bit artifact digest.",
@@ -900,12 +900,14 @@ export async function prepareProjectArtifact(
 		check(!seen.has(folded), "Project has colliding file names.");
 		seen.add(folded);
 		check(
-			Number.isSafeInteger(input.file.size) &&
-				input.file.size >= 0 &&
-				input.file.size <= MAX_FILE_BYTES,
-			"Project file exceeds its size limit.",
+			Number.isSafeInteger(input.file.size) && input.file.size >= 0,
+			"Project file has an invalid size.",
 		);
 		total += input.file.size;
+		check(
+			Number.isSafeInteger(total),
+			"Project size cannot be represented exactly.",
+		);
 	}
 	for (const path of seen) {
 		const parts = path.split("/");
@@ -918,7 +920,6 @@ export async function prepareProjectArtifact(
 			parts.pop();
 		}
 	}
-	check(total <= MAX_BYTES, "Project exceeds its upload size limit.");
 	check(
 		files.some(
 			(file) =>

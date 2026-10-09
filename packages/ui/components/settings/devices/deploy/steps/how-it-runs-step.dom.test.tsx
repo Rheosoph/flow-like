@@ -678,10 +678,10 @@ describe("How it runs · offline copy", () => {
 			NO_FLOWS,
 			"pass: Reading the app on this computer",
 			"pass: No saved secret values in flows",
-			"pass: No flow needs table history or search indexes",
+			"pass: No flow needs table history or references",
 			"pass: Nothing else is writing to the app",
 			expect.stringMatching(
-				/^pass: Under the limits: [\d.]+ KiB of 8 GiB, 3 of 8,192 files/,
+				/^pass: Ready to transfer: [\d.]+ KiB, 3 of 8,192 files/,
 			),
 		]);
 		const list = view.container.querySelector("[data-ship-list]");
@@ -715,9 +715,9 @@ describe("How it runs · offline copy", () => {
 				NO_FLOWS,
 				"pass: Reading the app on this computer",
 				`fail: ${reason}`,
-				"skip: No flow needs table history or search indexes · not checked",
+				"skip: No flow needs table history or references · not checked",
 				"skip: Nothing else is writing to the app · not checked",
-				"skip: Under the limits: 8 GiB and 8,192 files · not checked",
+				"skip: Up to 8,192 files; no fixed byte limit · not checked",
 			]);
 			expect(kit.footBlocking(view.container)).toBe(reason);
 			expect(byRole("button", "Prepare again", view.container)).toBeTruthy();

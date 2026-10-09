@@ -195,7 +195,7 @@ const BLOCKS: Record<InstallBlock, (t: DevicesT, c: BlockContext) => string> = {
 	no_fingerprint: (t) =>
 		t(
 			"devices:models.fit.block.noFingerprint",
-			"Its files carry no fingerprint the device could check them against. Add it from Hugging Face, where every large file has one.",
+			"A file has neither a fingerprint nor a download source to verify. Choose a source that provides one.",
 		),
 	split_incomplete: (t) =>
 		t(
@@ -207,10 +207,10 @@ const BLOCKS: Record<InstallBlock, (t: DevicesT, c: BlockContext) => string> = {
 			"devices:models.fit.block.tooManyFiles",
 			"It has more files than a device takes for one model (32).",
 		),
-	file_too_large: (t) =>
+	invalid_file_size: (t) =>
 		t(
-			"devices:models.fit.block.fileTooLarge",
-			"One of its files is larger than a device stores (64 GiB).",
+			"devices:models.fit.block.invalidFileSize",
+			"One of its files has an invalid size.",
 		),
 	projector_missing: (t) =>
 		t(

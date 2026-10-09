@@ -63,6 +63,28 @@ function serve(bytes: Uint8Array<ArrayBuffer>) {
 	return asked;
 }
 
+function serveLargeFile(size: number) {
+	const file = new Blob([]);
+	Object.defineProperty(file, "size", { value: size });
+	file.arrayBuffer = async () => {
+		throw new Error("Read model files in chunks.");
+	};
+	file.slice = (start = 0, end = size) => {
+		expect(end - start).toBeLessThanOrEqual(1024 * 1024);
+		return new Blob([]);
+	};
+	const asked: string[] = [];
+	globalThis.fetch = (async (input: RequestInfo | URL) => {
+		asked.push(String(input));
+		const response = new Response(new Uint8Array(), {
+			headers: { "content-length": String(size) },
+		});
+		response.blob = async () => file;
+		return response;
+	}) as typeof fetch;
+	return asked;
+}
+
 async function metadataOf(
 	exported: Awaited<ReturnType<typeof prepareOnlineDependencies>>,
 	bitId: string,
@@ -75,6 +97,21 @@ async function metadataOf(
 }
 
 describe("online export for devices with a model store", () => {
+	test("model-store assets above 64 GiB keep their exact size without downloading", async () => {
+		const size = 65 * 1024 ** 3;
+		const asked = serve(new Uint8Array());
+		const { app, backend } = backendWith(hubModel({ size }));
+		const exported = await prepareOnlineDependencies(
+			app,
+			backend,
+			profile,
+			undefined,
+			undefined,
+			true,
+		);
+		expect(asked).toEqual([]);
+		expect(exported.artifact.models?.assets[0]?.descriptor.size).toBe(size);
+	});
 	test("a file with a digest becomes an asset with its sources and is never downloaded", async () => {
 		const asked = serve(new Uint8Array());
 		const { app, backend } = backendWith(hubModel());
@@ -152,41 +189,51 @@ describe("online export for devices with a model store", () => {
 		]);
 	});
 
-	test("a large file without a digest asks for the desktop app", async () => {
-		serve(new Uint8Array());
+	test("a large file without a digest is downloaded and fingerprinted in chunks", async () => {
+		const size = 257 * 1024 ** 2;
+		const asked = serveLargeFile(size);
 		const { app, backend } = backendWith(
-			hubModel({ hash: "user-source-abc", id: "my-model" }),
+			hubModel({ hash: "user-source-abc", id: "my-model", size }),
 		);
-		await expect(
-			prepareOnlineDependencies(
-				app,
-				backend,
-				profile,
-				undefined,
-				undefined,
-				true,
-			),
-		).rejects.toThrow("no content digest");
+		const exported = await prepareOnlineDependencies(
+			app,
+			backend,
+			profile,
+			undefined,
+			undefined,
+			true,
+		);
+		expect(asked).toHaveLength(1);
+		expect(exported.artifact.descriptor.total_bytes).toBeGreaterThan(size);
+		expect((await metadataOf(exported, "my-model")).artifacts[0].size).toBe(
+			size,
+		);
 	});
 
-	test("an asset without a public source asks for the desktop app", async () => {
-		serve(new Uint8Array());
+	test("an asset above 4 GiB whose only source is signed travels in the artifact", async () => {
+		const size = 5 * 1024 ** 3;
+		const asked = serveLargeFile(size);
 		const { app, backend } = backendWith(
 			hubModel({
+				size,
 				download_link: "https://cdn.flow-like.com/bits/q4?Signature=private",
 				parameters: { provider: { provider_name: "Local" } },
 			}),
 		);
-		await expect(
-			prepareOnlineDependencies(
-				app,
-				backend,
-				profile,
-				undefined,
-				undefined,
-				true,
-			),
-		).rejects.toThrow("no public download source");
+		const exported = await prepareOnlineDependencies(
+			app,
+			backend,
+			profile,
+			undefined,
+			undefined,
+			true,
+		);
+		expect(asked).toEqual([
+			"https://cdn.flow-like.com/bits/q4?Signature=private",
+		]);
+		const metadata = await metadataOf(exported, "qwen3-8b");
+		expect(metadata.artifacts[0].size).toBe(size);
+		expect(JSON.stringify(metadata)).not.toContain("Signature");
 	});
 
 	test("a small file whose only link is signed travels in the artifact, as without a model store", async () => {

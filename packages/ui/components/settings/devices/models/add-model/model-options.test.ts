@@ -286,9 +286,11 @@ describe("blocks", () => {
 			"split_incomplete",
 		],
 		[
-			"a big file without a digest",
+			"a file without a digest or source",
 			choice({
-				option: option({ files: [file("model.gguf", 5 * GIB, false)] }),
+				option: option({
+					files: [{ ...file("model.gguf", 5 * GIB, false), sources: [] }],
+				}),
 			}),
 			"no_fingerprint",
 		],
@@ -304,12 +306,27 @@ describe("blocks", () => {
 			"too_many_files",
 		],
 		[
-			"a file over 64 GiB",
-			choice({ option: option({ files: [file("model.gguf", 65 * GIB)] }) }),
-			"file_too_large",
+			"a file whose size loses integer precision",
+			choice({
+				option: option({
+					files: [file("model.gguf", Number.MAX_SAFE_INTEGER + 1)],
+				}),
+			}),
+			"invalid_file_size",
 		],
 	] as const)("%s", (_, blocked, reason) => {
 		expect(choiceBlock(blocked)).toBe(reason);
+	});
+
+	test("files above 64 GiB and files without a digest can be installed", () => {
+		for (const digest of [true, false])
+			expect(
+				choiceBlock(
+					choice({
+						option: option({ files: [file("model.gguf", 65 * GIB, digest)] }),
+					}),
+				),
+			).toBeUndefined();
 	});
 
 	test("a small file without a digest is fingerprinted, not blocked", () => {
