@@ -51,6 +51,7 @@ fn reconcile_locked_job(repository: &TrainingRepository, job_id: &str) -> Result
 
 #[derive(Clone, Debug)]
 pub struct TrainingWork {
+    pub repository: TrainingRepository,
     pub job: TrainingJob,
     pub snapshot: DatasetSnapshot,
     pub resume_checkpoint: Option<Vec<u8>>,
@@ -80,6 +81,7 @@ pub trait TrainingEngine: Send + Sync {
     fn train(&self, work: &TrainingWork, control: &WorkerControl) -> Result<EngineOutput>;
 }
 
+#[derive(Clone)]
 pub struct WorkerControl {
     repository: TrainingRepository,
     lease: JobLease,
@@ -252,6 +254,7 @@ impl TrainingWorker {
             })
             .transpose()?;
         let work = TrainingWork {
+            repository: self.repository.clone(),
             snapshot,
             job,
             resume_checkpoint,
@@ -432,6 +435,91 @@ mod lock_tests {
             )
             .unwrap()
             .unwrap()
+    }
+
+    #[cfg(feature = "burn")]
+    fn monitor_control(repository: &TrainingRepository, job: &TrainingJob) -> WorkerControl {
+        WorkerControl {
+            repository: repository.clone(),
+            lease: repository
+                .claim_job(&job.id, "monitor-test", 30_000, now_ms())
+                .unwrap(),
+            limits: WorkerLimits::default(),
+            started: Instant::now(),
+            lease_lost: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[cfg(feature = "burn")]
+    #[test]
+    fn cancellation_monitor_stops_backend_wait_without_progress_and_preserves_reason() {
+        use crate::engines::BurnCancellationMonitor;
+        for cause in ["requested", "deadline", "lease"] {
+            let directory = tempfile::tempdir().unwrap();
+            let repository =
+                TrainingRepository::open(directory.path().join("training.sqlite")).unwrap();
+            let job = job(&repository);
+            let control = monitor_control(&repository, &job);
+            let cancellation = flow_like_ml_burn::CancellationToken::new();
+            let monitor = BurnCancellationMonitor::start(&control, &cancellation).unwrap();
+            match cause {
+                "requested" => {
+                    repository.request_cancel(&job.id, now_ms()).unwrap();
+                }
+                "deadline" => {
+                    let mut running = repository.get_job(&job.id).unwrap();
+                    running.request.recipe["experiment_deadline_ms"] = json!(now_ms() - 1);
+                    repository
+                        .connection()
+                        .unwrap()
+                        .execute(
+                            "UPDATE jobs SET body=? WHERE id=?",
+                            rusqlite::params![serde_json::to_string(&running).unwrap(), job.id],
+                        )
+                        .unwrap();
+                }
+                "lease" => control.lease_lost.store(true, Ordering::Release),
+                _ => unreachable!(),
+            }
+            // The backend emits no callback while waiting for another job's RNG phase.
+            let timeout = Instant::now() + Duration::from_secs(2);
+            while !cancellation.is_cancelled() && Instant::now() < timeout {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                cancellation.is_cancelled(),
+                "monitor did not propagate {cause}"
+            );
+            match (cause, monitor.finish().unwrap()) {
+                ("requested", Error::Cancelled) | ("lease", Error::LeaseLost) => {}
+                ("deadline", Error::Engine(message)) => {
+                    assert_eq!(message, "experiment wall time budget exhausted")
+                }
+                (_, error) => panic!("Monitor lost original {cause} reason: {error}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "burn")]
+    #[test]
+    fn cancellation_monitor_drop_joins_before_later_job_cancellation() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository =
+            TrainingRepository::open(directory.path().join("training.sqlite")).unwrap();
+        let job = job(&repository);
+        let control = monitor_control(&repository, &job);
+        let cancellation = flow_like_ml_burn::CancellationToken::new();
+        let monitor =
+            crate::engines::BurnCancellationMonitor::start(&control, &cancellation).unwrap();
+        let started = Instant::now();
+        drop(monitor);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        repository.request_cancel(&job.id, now_ms()).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(
+            !cancellation.is_cancelled(),
+            "dropped monitor remained active"
+        );
     }
 
     #[test]

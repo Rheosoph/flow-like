@@ -179,7 +179,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libclang-dev libdbus-1-dev libasound2-dev libudev-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libvulkan-dev ocl-icd-opencl-dev
+          # librdkafka 2.12.1 needs curl headers even with WITH_CURL=0.
+          # Upstream fix: https://github.com/confluentinc/librdkafka/pull/5309
+          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libcurl4-openssl-dev libclang-dev libdbus-1-dev libasound2-dev libudev-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libvulkan-dev ocl-icd-opencl-dev
       - name: Install macOS native dependencies
         if: runner.os == 'macOS'
         run: brew install cmake pkg-config protobuf

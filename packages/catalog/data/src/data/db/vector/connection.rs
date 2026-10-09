@@ -91,7 +91,6 @@ pub(crate) async fn open_shared(
         return Ok(cached.0.clone());
     }
 
-    let builder = database_builder(context, user_scoped, path.clone()).await?;
     let connection = if let Some((authority, expires_at)) = identity {
         let execution = execution_cache(context)?;
         let key = connection_key(
@@ -111,7 +110,8 @@ pub(crate) async fn open_shared(
                     4 * 1024 * 1024,
                     Arc::default(),
                 ));
-                builder.session(session).execute().await
+                let builder = database_builder(context, user_scoped, path, session).await?;
+                Ok::<_, flow_like_types::Error>(builder.execute().await?)
             })
             .await?;
         if expires_at <= std::time::SystemTime::now() {
@@ -121,11 +121,15 @@ pub(crate) async fn open_shared(
         }
         connection.as_ref().clone()
     } else {
-        context
-            .app_state
-            .with_lance_session(builder)
-            .execute()
-            .await?
+        database_builder(
+            context,
+            user_scoped,
+            path,
+            context.app_state.lance_session.clone(),
+        )
+        .await?
+        .execute()
+        .await?
     };
     let cacheable: Arc<dyn Cacheable> = Arc::new(CachedConnection(connection.clone()));
     context.cache.write().await.insert(cache_key, cacheable);
@@ -136,15 +140,18 @@ async fn database_builder(
     context: &ExecutionContext,
     user_scoped: bool,
     path: Path,
+    session: Arc<Session>,
 ) -> flow_like_types::Result<ConnectBuilder> {
     let execution = execution_cache(context)?;
     if let Some(credentials) = &context.credentials {
         return if user_scoped {
             credentials
-                .to_db_scoped(&execution.sub, &execution.app_id)
+                .to_db_scoped_with_session(&execution.sub, &execution.app_id, session)
                 .await
         } else {
-            credentials.to_db(&execution.app_id).await
+            credentials
+                .to_db_with_session(&execution.app_id, session)
+                .await
         };
     }
     let callbacks = context.app_state.config.read().await.callbacks.clone();
@@ -160,7 +167,7 @@ async fn database_builder(
         )
     };
     let build = build.ok_or_else(|| flow_like_types::anyhow!(missing))?;
-    Ok(build(path))
+    Ok(build(path).session(session))
 }
 
 #[cfg(test)]

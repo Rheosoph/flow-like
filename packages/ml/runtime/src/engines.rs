@@ -10,11 +10,40 @@ pub use inference::LoadedArtifactPredictor;
 #[cfg(feature = "burn")]
 mod burn_adapter;
 #[cfg(feature = "burn")]
+mod cancellation_monitor;
+#[cfg(feature = "burn")]
+pub(crate) use cancellation_monitor::BurnCancellationMonitor;
+#[cfg(feature = "burn")]
 mod efficient_ad_adapter;
 #[cfg(feature = "burn")]
-pub use burn_adapter::{BurnEngineRecipe, register_burn_engine};
+mod sam2_adapter;
+#[cfg(feature = "burn")]
+pub use burn_adapter::{
+    BurnEngineRecipe, pretrained_source_features, publish_burn_pretrained_source,
+    register_burn_engine, validate_burn_pretrained_source,
+};
 #[cfg(feature = "burn")]
 pub use efficient_ad_adapter::{EfficientAdEngineRecipe, register_efficient_ad_engine};
+#[cfg(feature = "burn")]
+pub use sam2_adapter::{fine_tune_sam2_source, predict_sam2_source, publish_sam2_source};
+
+#[cfg(feature = "burn")]
+fn image_batch_shape(shape: &[usize], expected: &[usize]) -> Result<Vec<usize>> {
+    if expected.len() == 3 && !expected.contains(&0) {
+        if shape == expected {
+            // Image preprocessing produces CHW; native inference consumes NCHW.
+            let mut batch = vec![1];
+            batch.extend_from_slice(shape);
+            return Ok(batch);
+        }
+        if shape.len() == 4 && shape[0] > 0 && &shape[1..] == expected {
+            return Ok(shape.to_vec());
+        }
+    }
+    Err(invalid(
+        "image input contract requires matching CHW or NCHW dimensions",
+    ))
+}
 
 #[cfg(feature = "burn")]
 pub fn artifact_features(

@@ -6,7 +6,11 @@ pub mod graph;
 pub mod lance_dml;
 pub mod lance_filter_params;
 #[cfg(feature = "database-runtime")]
+mod sql_functions;
+#[cfg(feature = "database-runtime")]
 pub mod sql_guard;
+#[cfg(feature = "database-runtime")]
+pub use sql_functions::register_sql_functions;
 pub mod sql_params;
 #[cfg(all(feature = "database-runtime", feature = "graph"))]
 pub mod table_cascade;

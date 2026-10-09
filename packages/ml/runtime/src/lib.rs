@@ -230,6 +230,46 @@ pub struct ModelArtifact {
     pub created_at_ms: i64,
 }
 
+/// Initialize a new training run from an immutable model in this project's registry.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PretrainedSourceRef {
+    pub source_id: String,
+    #[serde(default = "replace_pretrained_head")]
+    pub replace_head: bool,
+    #[serde(default)]
+    pub freeze_backbone: bool,
+}
+
+fn replace_pretrained_head() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PretrainedSourceKind {
+    Imported,
+    TrainingArtifact,
+}
+
+/// Imported weights are initialization sources, without training or evaluation evidence.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct PretrainedSource {
+    pub id: String,
+    pub project_id: String,
+    pub source_kind: PretrainedSourceKind,
+    pub blob: BlobRef,
+    pub manifest: Value,
+    pub origin: Value,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Sam2FineTuneResult {
+    pub source: PretrainedSource,
+    /// The native training report, including completed epochs, losses and progress history.
+    pub report: Value,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct PredictionRecord {
     pub sample_id: String,

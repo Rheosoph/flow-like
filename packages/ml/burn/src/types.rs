@@ -128,6 +128,18 @@ pub enum Recipe {
         classes: usize,
         base_channels: usize,
     },
+    DinoV2 {
+        config: crate::DinoV2Config,
+    },
+    RtdetrV2 {
+        config: crate::RtdetrV2Config,
+    },
+    RfDetr {
+        config: crate::RfDetrConfig,
+    },
+    DfineNano {
+        config: crate::DfineConfig,
+    },
     MobileNetV2 {
         input_channels: usize,
         classes: usize,
@@ -165,6 +177,10 @@ impl Recipe {
             | Self::CnnLstm { objective, .. }
             | Self::ImageSensorFusion { objective, .. } => Some(*objective),
             Self::ResNet18 { .. }
+            | Self::DinoV2 { .. }
+            | Self::RtdetrV2 { .. }
+            | Self::RfDetr { .. }
+            | Self::DfineNano { .. }
             | Self::MaskRcnn { .. }
             | Self::YoloX { .. }
             | Self::MobileNetV2 { .. }
@@ -188,13 +204,24 @@ impl Recipe {
             | Self::EfficientNet { classes, .. }
             | Self::UNet { classes, .. } => *classes,
             Self::MaskRcnn { config } => config.classes,
+            Self::DinoV2 { config } => config.classes,
+            Self::RtdetrV2 { config } => config.classes,
+            Self::RfDetr { config } => config.classes,
+            Self::DfineNano { config } => config.classes,
             Self::DenseAutoencoder { input_features, .. }
             | Self::Conv1dAutoencoder { input_features, .. }
             | Self::LstmAutoencoder { input_features, .. } => *input_features,
         }
     }
     pub fn is_detection(&self) -> bool {
-        matches!(self, Self::YoloX { .. } | Self::MaskRcnn { .. })
+        matches!(
+            self,
+            Self::YoloX { .. }
+                | Self::MaskRcnn { .. }
+                | Self::RtdetrV2 { .. }
+                | Self::RfDetr { .. }
+                | Self::DfineNano { .. }
+        )
     }
     pub fn is_instance_segmentation(&self) -> bool {
         matches!(self, Self::MaskRcnn { .. })
@@ -204,6 +231,22 @@ impl Recipe {
     }
     pub fn validate(&self) -> Result<()> {
         let (input, hidden, extra) = match self {
+            Self::DfineNano { config } => {
+                config.validate()?;
+                (3, 128, 1)
+            }
+            Self::RfDetr { config } => {
+                config.validate()?;
+                (3, 384, 1)
+            }
+            Self::RtdetrV2 { config } => {
+                config.validate()?;
+                (3, 256, 1)
+            }
+            Self::DinoV2 { config } => {
+                config.validate()?;
+                (3, config.variant.embedding_dim(), 1)
+            }
             Self::MaskRcnn { config } => {
                 config.validate()?;
                 (config.input_channels, config.base_channels, 1)
@@ -377,6 +420,10 @@ impl Recipe {
             ));
         }
         let valid = match self {
+            Self::DinoV2 { config } => config.validate_input_shape(shape).is_ok(),
+            Self::RtdetrV2 { config } => config.validate_input_shape(shape).is_ok(),
+            Self::RfDetr { config } => config.validate_input_shape(shape).is_ok(),
+            Self::DfineNano { config } => config.validate_input_shape(shape).is_ok(),
             Self::MaskRcnn { config } => {
                 shape.len() == 4
                     && shape[1] == config.input_channels

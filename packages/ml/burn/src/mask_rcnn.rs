@@ -11,7 +11,7 @@ use burn::{
     },
     tensor::{
         Device, Distribution, Int, Tensor, TensorData as BurnData,
-        activation::{relu, softmax},
+        activation::{log_sigmoid, relu, softmax},
     },
 };
 
@@ -580,7 +580,7 @@ fn indices(values: Vec<i64>, device: &Device) -> Tensor<1, Int> {
     Tensor::from_data(BurnData::new(values, [n]), device)
 }
 fn bce<const D: usize>(logits: Tensor<D>, targets: Tensor<D>) -> Tensor<D> {
-    logits.clone().clamp_min(0.0) - logits.clone() * targets + (-logits.abs()).exp().log1p()
+    -log_sigmoid(logits.clone()) * targets.clone() - log_sigmoid(-logits) * (-targets + 1.0)
 }
 fn coords(b: &crate::BoundingBox) -> BoxCoords {
     [b.x_min, b.y_min, b.x_max, b.y_max]
@@ -783,6 +783,41 @@ fn paste_mask(
 mod tests {
     use super::*;
     use burn::optim::{AdamConfig, GradientsParams};
+    #[test]
+    fn bce_handles_zero_and_extreme_logits_with_correct_gradients() {
+        let _lock = crate::tests::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let device = Device::flex().autodiff();
+        let logits = Tensor::<1>::from_data([0.0f32, 0.0, -100.0, 100.0, -100.0, 100.0], &device)
+            .require_grad();
+        let targets = Tensor::<1>::from_data([0.0f32, 1.0, 0.0, 1.0, 1.0, 0.0], &device);
+        let loss = bce(logits.clone(), targets);
+        let values = loss.clone().into_data().try_to_vec::<f32>().unwrap();
+        let expected = [
+            std::f32::consts::LN_2,
+            std::f32::consts::LN_2,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        ];
+        for (actual, expected) in values.into_iter().zip(expected) {
+            assert!(actual.is_finite() && (actual - expected).abs() < 1e-6);
+        }
+        let gradients = logits
+            .grad(&loss.sum().backward())
+            .unwrap()
+            .into_data()
+            .try_to_vec::<f32>()
+            .unwrap();
+        for (actual, expected) in gradients.into_iter().zip([0.5, -0.5, 0.0, 0.0, -1.0, 1.0]) {
+            assert!(
+                actual.is_finite() && (actual - expected).abs() < 1e-6,
+                "gradient {actual} != {expected}"
+            );
+        }
+    }
     #[test]
     fn roi_align_has_known_geometry_and_gradients() {
         let _lock = crate::tests::TEST_LOCK

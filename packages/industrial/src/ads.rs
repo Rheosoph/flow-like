@@ -99,16 +99,44 @@ mod runtime {
     use super::*;
     use crate::Error;
     use std::{
-        sync::{Arc, Mutex},
+        collections::HashMap,
+        sync::{Arc, Mutex, mpsc as commands},
         time::Duration,
     };
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
     use tokio_util::sync::CancellationToken;
+
+    type Command = Box<dyn FnOnce(&mut Session) + Send>;
+
+    struct NotificationSink {
+        sender: mpsc::Sender<Result<AdsNotification>>,
+        cancel: CancellationToken,
+    }
+
+    struct Session {
+        client: Option<ads::Client>,
+        subscriptions: HashMap<u32, NotificationSink>,
+        failure: Arc<Mutex<Option<String>>>,
+    }
+
+    impl Session {
+        fn fail(&mut self, error: impl std::fmt::Display) {
+            let message = error.to_string();
+            if let Ok(mut failure) = self.failure.lock() {
+                *failure = Some(message.clone());
+            }
+            for (_, sink) in self.subscriptions.drain() {
+                let _ = sink.sender.try_send(Err(failure(&message)));
+            }
+            self.client.take();
+        }
+    }
 
     #[derive(Clone)]
     pub struct AdsClient {
-        config: AdsConfig,
-        client: Arc<Mutex<Option<ads::Client>>>,
+        address: ads::AmsAddr,
+        commands: commands::SyncSender<Command>,
+        failure: Arc<Mutex<Option<String>>>,
     }
     fn failure(error: impl std::fmt::Display) -> Error {
         Error::Other(anyhow::anyhow!(error.to_string()))
@@ -132,47 +160,144 @@ mod runtime {
     impl AdsClient {
         pub async fn connect(config: AdsConfig) -> Result<Self> {
             config.validate()?;
-            let cfg = config.clone();
-            let client = tokio::task::spawn_blocking(move || open(&cfg))
-                .await
-                .map_err(failure)??;
-            Ok(Self {
-                config,
-                client: Arc::new(Mutex::new(Some(client))),
-            })
-        }
-        async fn with_client<T: Send + 'static>(
-            &self,
-            f: impl FnOnce(&ads::Client, ads::AmsAddr) -> Result<T> + Send + 'static,
-        ) -> Result<T> {
-            let client = self.client.clone();
-            let address = target(&self.config);
+            let address = target(&config);
+            let (sender, receiver) = commands::sync_channel::<Command>(128);
+            let failure_state = Arc::new(Mutex::new(None));
+            let worker_failure = failure_state.clone();
+            let (ready_tx, ready_rx) = oneshot::channel();
+            // One worker owns the SDK client because replies share a single channel.
+            // It also routes all notifications, which must use the same TCP connection.
             tokio::task::spawn_blocking(move || {
-                let mut lock = client.lock().map_err(failure)?;
-                let client = lock
-                    .as_ref()
-                    .ok_or_else(|| failure("ADS connection is closed"))?;
-                let result = f(client, address);
-                if result.is_err() {
-                    // A timed-out request can leave a late reply in the SDK channel.
-                    lock.take();
+                let client = match open(&config) {
+                    Ok(client) => client,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
+                        return;
+                    }
+                };
+                let notifications = client.get_notification_channel();
+                let mut session = Session {
+                    client: Some(client),
+                    subscriptions: HashMap::new(),
+                    failure: worker_failure,
+                };
+                if ready_tx.send(Ok(())).is_err() {
+                    return;
                 }
-                result
+                loop {
+                    match receiver.recv_timeout(Duration::from_millis(10)) {
+                        Ok(command) => command(&mut session),
+                        Err(commands::RecvTimeoutError::Timeout) => {}
+                        Err(commands::RecvTimeoutError::Disconnected) => break,
+                    }
+                    let Some(client) = session.client.as_ref() else {
+                        break;
+                    };
+                    // Bound each batch so a busy source cannot starve requests or cleanup.
+                    for _ in 0..128 {
+                        let notification = match notifications.try_recv() {
+                            Ok(notification) => notification,
+                            Err(error) if error.is_empty() => break,
+                            Err(error) => {
+                                session.fail(error);
+                                return;
+                            }
+                        };
+                        for sample in notification.samples() {
+                            if let Some(sink) = session.subscriptions.get(&sample.handle) {
+                                if sink.cancel.is_cancelled() {
+                                    continue;
+                                }
+                                let item = AdsNotification {
+                                    handle: sample.handle,
+                                    timestamp: sample.timestamp,
+                                    data: sample.data.to_vec(),
+                                };
+                                if sink.sender.try_send(Ok(item)).is_err() {
+                                    sink.cancel.cancel();
+                                }
+                            }
+                        }
+                    }
+                    let stale: Vec<_> = session
+                        .subscriptions
+                        .iter()
+                        .filter(|(_, sink)| sink.cancel.is_cancelled() || sink.sender.is_closed())
+                        .map(|(handle, _)| *handle)
+                        .collect();
+                    for handle in stale {
+                        session.subscriptions.remove(&handle);
+                        if let Err(error) = client.device(address).delete_notification(handle) {
+                            // A failed exchange can leave a stale reply in the SDK channel.
+                            session.fail(format!("ADS notification cleanup failed: {error}"));
+                            return;
+                        }
+                    }
+                }
+            });
+            ready_rx.await.map_err(failure)??;
+            Ok(Self {
+                address,
+                commands: sender,
+                failure: failure_state,
             })
-            .await
-            .map_err(failure)?
         }
+
+        async fn with_session<T: Send + 'static>(
+            &self,
+            f: impl FnOnce(&mut Session, ads::AmsAddr, &CancellationToken) -> Result<T> + Send + 'static,
+        ) -> Result<T> {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            let cancel = CancellationToken::new();
+            let _cancel_on_drop = cancel.clone().drop_guard();
+            let address = self.address;
+            self.commands
+                .try_send(Box::new(move |session| {
+                    // Dropping a queued operation must prevent it from reaching the PLC.
+                    if reply_tx.is_closed() || cancel.is_cancelled() {
+                        return;
+                    }
+                    let result = f(session, address, &cancel);
+                    if let Err(error) = &result {
+                        session.fail(error);
+                    }
+                    let _ = reply_tx.send(result);
+                }))
+                .map_err(|error| match error {
+                    commands::TrySendError::Full(_) => failure("ADS request queue is full"),
+                    commands::TrySendError::Disconnected(_) => self.closed_error(),
+                })?;
+            reply_rx.await.map_err(|_| self.closed_error())?
+        }
+
+        fn closed_error(&self) -> Error {
+            self.failure
+                .lock()
+                .ok()
+                .and_then(|error| error.clone())
+                .map(failure)
+                .unwrap_or_else(|| failure("ADS connection is closed"))
+        }
+
         pub async fn read(&self, address: AdsAddress, length: u32) -> Result<Vec<u8>> {
             address.validate()?;
             validate_length(length as usize)?;
-            self.with_client(move |client, target| {
+            self.with_session(move |session, target, cancel| {
+                let client = session
+                    .client
+                    .as_ref()
+                    .ok_or_else(|| failure("ADS connection is closed"))?;
                 let device = client.device(target);
                 let mut data = vec![0; length as usize];
                 match address {
-                    AdsAddress::Symbol { name } => ads::Handle::new(device, &name)
-                        .map_err(failure)?
-                        .read(&mut data)
-                        .map_err(failure)?,
+                    AdsAddress::Symbol { name } => {
+                        let handle = ads::Handle::new(device, &name).map_err(failure)?;
+                        require(
+                            !cancel.is_cancelled(),
+                            "ADS read cancelled before execution",
+                        )?;
+                        handle.read(&mut data).map_err(failure)?;
+                    }
                     AdsAddress::Index { group, offset } => device
                         .read_exact(group, offset, &mut data)
                         .map_err(failure)?,
@@ -184,13 +309,21 @@ mod runtime {
         pub async fn write(&self, address: AdsAddress, data: Vec<u8>) -> Result<()> {
             address.validate()?;
             validate_length(data.len())?;
-            self.with_client(move |client, target| {
+            self.with_session(move |session, target, cancel| {
+                let client = session
+                    .client
+                    .as_ref()
+                    .ok_or_else(|| failure("ADS connection is closed"))?;
                 let device = client.device(target);
                 match address {
-                    AdsAddress::Symbol { name } => ads::Handle::new(device, &name)
-                        .map_err(failure)?
-                        .write(&data)
-                        .map_err(failure),
+                    AdsAddress::Symbol { name } => {
+                        let handle = ads::Handle::new(device, &name).map_err(failure)?;
+                        require(
+                            !cancel.is_cancelled(),
+                            "ADS write cancelled before execution",
+                        )?;
+                        handle.write(&data).map_err(failure)
+                    }
                     AdsAddress::Index { group, offset } => {
                         device.write(group, offset, &data).map_err(failure)
                     }
@@ -199,98 +332,98 @@ mod runtime {
             .await
         }
         pub async fn close(&self) -> Result<()> {
-            let client = self.client.clone();
-            tokio::task::spawn_blocking(move || {
-                drop(client.lock().map_err(failure)?.take());
-                Ok(())
-            })
-            .await
-            .map_err(failure)?
+            let (done_tx, done_rx) = oneshot::channel();
+            let address = self.address;
+            let command: Command = Box::new(move |session| {
+                let result = (|| {
+                    if let Some(client) = session.client.as_ref() {
+                        for handle in session.subscriptions.keys() {
+                            client
+                                .device(address)
+                                .delete_notification(*handle)
+                                .map_err(failure)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = &result {
+                    session.fail(format!("ADS notification cleanup failed: {error}"));
+                }
+                session.subscriptions.clear();
+                drop(session.client.take());
+                let _ = done_tx.send(result);
+            });
+            match self.commands.try_send(command) {
+                Ok(()) => done_rx.await.map_err(|_| self.closed_error())?,
+                Err(commands::TrySendError::Full(_)) => Err(failure("ADS request queue is full")),
+                Err(commands::TrySendError::Disconnected(_)) => {
+                    match self.failure.lock().map_err(failure)?.as_ref() {
+                        Some(error) => Err(failure(error)),
+                        None => Ok(()),
+                    }
+                }
+            }
         }
         pub async fn subscribe(&self, config: AdsNotificationConfig) -> Result<AdsSubscription> {
             config.validate()?;
-            self.with_client(|_, _| Ok(())).await?;
-            let connection = self.config.clone();
             let cancel = CancellationToken::new();
             let stop = cancel.clone();
             let (sender, receiver) = mpsc::channel(128);
-            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-            // A dedicated connection gives each subscription its own SDK notification channel.
-            // SDK channel clones compete for messages, so sharing one would lose notifications.
-            tokio::task::spawn_blocking(move || {
-                let setup = (|| -> Result<_> {
-                    let client = open(&connection)?;
-                    let device = client.device(target(&connection));
-                    let (group, offset) = match &config.address {
-                        AdsAddress::Symbol { name } => {
-                            ads::symbol::get_location(device, name).map_err(failure)?
-                        }
-                        AdsAddress::Index { group, offset } => (*group, *offset),
-                    };
-                    let mode = if config.on_change {
-                        ads::notif::TransmissionMode::ServerOnChange
-                    } else {
-                        ads::notif::TransmissionMode::ServerCycle
-                    };
-                    let attributes = ads::notif::Attributes::new(
-                        config.length as usize,
-                        mode,
-                        Duration::ZERO,
-                        Duration::from_millis(config.cycle_ms),
-                    );
-                    let handle = device
-                        .add_notification(group, offset, &attributes)
-                        .map_err(failure)?;
-                    let notifications = client.get_notification_channel();
-                    Ok((client, handle, notifications))
-                })();
-                let (client, handle, notifications) = match setup {
-                    Ok(value) => {
-                        let _ = ready_tx.send(Ok(()));
-                        value
+            // Keep the guard alive while setup runs so cancellation also cleans up a
+            // notification whose registration was already in flight.
+            let subscription = AdsSubscription {
+                receiver,
+                cancel,
+                _commands: self.commands.clone(),
+            };
+            self.with_session(move |session, target, request_cancel| {
+                let client = session
+                    .client
+                    .as_ref()
+                    .ok_or_else(|| failure("ADS connection is closed"))?;
+                let device = client.device(target);
+                let (group, offset) = match &config.address {
+                    AdsAddress::Symbol { name } => {
+                        ads::symbol::get_location(device, name).map_err(failure)?
                     }
-                    Err(error) => {
-                        let _ = ready_tx.send(Err(error));
-                        return;
-                    }
+                    AdsAddress::Index { group, offset } => (*group, *offset),
                 };
-                'receive: while !stop.is_cancelled() && !sender.is_closed() {
-                    match notifications.recv_timeout(Duration::from_millis(100)) {
-                        Ok(notification) => {
-                            for sample in notification
-                                .samples()
-                                .filter(|sample| sample.handle == handle)
-                            {
-                                let item = AdsNotification {
-                                    handle,
-                                    timestamp: sample.timestamp,
-                                    data: sample.data.to_vec(),
-                                };
-                                // Never block the worker indefinitely behind a slow handler.
-                                if sender.try_send(Ok(item)).is_err() {
-                                    break 'receive;
-                                }
-                            }
-                        }
-                        Err(error) if error.is_timeout() => continue,
-                        Err(error) => {
-                            let _ = sender.try_send(Err(failure(error)));
-                            break;
-                        }
-                    }
-                }
-                let _ = client
-                    .device(target(&connection))
-                    .delete_notification(handle);
-            });
-            let subscription = AdsSubscription { receiver, cancel };
-            ready_rx.await.map_err(failure)??;
+                require(
+                    !request_cancel.is_cancelled(),
+                    "ADS subscription cancelled before execution",
+                )?;
+                let mode = if config.on_change {
+                    ads::notif::TransmissionMode::ServerOnChange
+                } else {
+                    ads::notif::TransmissionMode::ServerCycle
+                };
+                let attributes = ads::notif::Attributes::new(
+                    config.length as usize,
+                    mode,
+                    Duration::ZERO,
+                    Duration::from_millis(config.cycle_ms),
+                );
+                let handle = device
+                    .add_notification(group, offset, &attributes)
+                    .map_err(failure)?;
+                session.subscriptions.insert(
+                    handle,
+                    NotificationSink {
+                        sender,
+                        cancel: stop,
+                    },
+                );
+                Ok(())
+            })
+            .await?;
             Ok(subscription)
         }
     }
     pub struct AdsSubscription {
         receiver: mpsc::Receiver<Result<AdsNotification>>,
         cancel: CancellationToken,
+        // Keep the shared connection alive until the subscription is dropped or closed.
+        _commands: commands::SyncSender<Command>,
     }
     impl AdsSubscription {
         pub async fn receive(&mut self) -> Result<AdsNotification> {
@@ -377,6 +510,302 @@ mod tests {
             .unwrap()
             .unwrap();
     }
+    #[cfg(feature = "execute")]
+    async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+        let mut prefix = [0; 6];
+        socket.read_exact(&mut prefix).await.unwrap();
+        let mut request = vec![0; u32::from_le_bytes(prefix[2..6].try_into().unwrap()) as usize];
+        socket.read_exact(&mut request).await.unwrap();
+        request
+    }
+
+    #[cfg(feature = "execute")]
+    async fn send_frame(
+        socket: &mut tokio::net::TcpStream,
+        request: &[u8],
+        command: u16,
+        payload: &[u8],
+    ) {
+        use tokio::io::AsyncWriteExt;
+        let mut response = request[..32].to_vec();
+        response[..8].copy_from_slice(&request[8..16]);
+        response[8..16].copy_from_slice(&request[..8]);
+        response[16..18].copy_from_slice(&command.to_le_bytes());
+        let flags = if command == 8 { 4u16 } else { 5u16 };
+        response[18..20].copy_from_slice(&flags.to_le_bytes());
+        response[20..24].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        response.extend_from_slice(payload);
+        let mut prefix = vec![0, 0];
+        prefix.extend_from_slice(&(response.len() as u32).to_le_bytes());
+        socket.write_all(&prefix).await.unwrap();
+        socket.write_all(&response).await.unwrap();
+    }
+
+    #[cfg(feature = "execute")]
+    async fn send_samples(
+        socket: &mut tokio::net::TcpStream,
+        request: &[u8],
+        samples: &[(u32, u8)],
+    ) {
+        let mut payload = vec![0; 4];
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&123u64.to_le_bytes());
+        payload.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+        for (handle, value) in samples {
+            payload.extend_from_slice(&handle.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.push(*value);
+        }
+        let length = payload.len() as u32 - 4;
+        payload[..4].copy_from_slice(&length.to_le_bytes());
+        send_frame(socket, request, 8, &payload).await;
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn cancelled_queued_write_never_reaches_the_plc() {
+        use std::{future::Future, task::Poll};
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 2);
+            seen_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            send_frame(&mut socket, &request, 2, &[0, 0, 0, 0, 1, 0, 0, 0, 42]).await;
+            let request = read_request(&mut socket).await;
+            assert_eq!(
+                u16::from_le_bytes(request[16..18].try_into().unwrap()),
+                2,
+                "the cancelled write must not precede the next read"
+            );
+            send_frame(&mut socket, &request, 2, &[0, 0, 0, 0, 1, 0, 0, 0, 43]).await;
+            assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
+        });
+        let client = AdsClient::connect(AdsConfig {
+            tcp_port: port,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let address = AdsAddress::Index {
+            group: 0x4020,
+            offset: 7,
+        };
+        let reader = tokio::spawn({
+            let client = client.clone();
+            let address = address.clone();
+            async move { client.read(address, 1).await }
+        });
+        seen_rx.await.unwrap();
+        let mut write = Box::pin(client.write(address.clone(), vec![99]));
+        std::future::poll_fn(|cx| {
+            assert!(write.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(write);
+        release_tx.send(()).unwrap();
+        assert_eq!(reader.await.unwrap().unwrap(), vec![42]);
+        assert_eq!(client.read(address, 1).await.unwrap(), vec![43]);
+        client.close().await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn full_request_queue_rejects_writes_and_close_without_reporting_success() {
+        use std::{future::Future, task::Poll};
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            seen_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            send_frame(&mut socket, &request, 2, &[0, 0, 0, 0, 1, 0, 0, 0, 42]).await;
+            // Every pending write is cancelled before the read completes.
+            assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
+        });
+        let client = AdsClient::connect(AdsConfig {
+            tcp_port: port,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let address = AdsAddress::Index {
+            group: 0x4020,
+            offset: 7,
+        };
+        let reader = tokio::spawn({
+            let client = client.clone();
+            let address = address.clone();
+            async move { client.read(address, 1).await }
+        });
+        seen_rx.await.unwrap();
+        let mut pending = Vec::new();
+        for _ in 0..128 {
+            let mut write = Box::pin(client.write(address.clone(), vec![99]));
+            std::future::poll_fn(|cx| {
+                assert!(write.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            pending.push(write);
+        }
+        assert!(
+            client
+                .write(address, vec![99])
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("queue is full")
+        );
+        assert!(
+            client
+                .close()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("queue is full")
+        );
+        drop(pending);
+        release_tx.send(()).unwrap();
+        reader.await.unwrap().unwrap();
+        drop(client);
+        tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn subscriptions_share_the_session_and_route_each_handle() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            for handle in [11u32, 22] {
+                let request = tokio::select! {
+                    request = read_request(&mut socket) => request,
+                    _ = listener.accept() => panic!("subscriptions must not open another connection"),
+                };
+                assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 6);
+                let mut payload = vec![0; 4];
+                payload.extend_from_slice(&handle.to_le_bytes());
+                send_frame(&mut socket, &request, 6, &payload).await;
+                if handle == 22 {
+                    send_samples(&mut socket, &request, &[(11, 17), (22, 29)]).await;
+                }
+            }
+            let request = read_request(&mut socket).await;
+            assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 3);
+            send_frame(&mut socket, &request, 3, &[0; 4]).await;
+            let request = read_request(&mut socket).await;
+            assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 7);
+            assert_eq!(&request[32..], &11u32.to_le_bytes());
+            send_frame(&mut socket, &request, 7, &[0; 4]).await;
+            send_samples(&mut socket, &request, &[(22, 31)]).await;
+            let request = read_request(&mut socket).await;
+            assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 7);
+            assert_eq!(&request[32..], &22u32.to_le_bytes());
+            send_frame(&mut socket, &request, 7, &[0; 4]).await;
+            assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
+        });
+        let client = AdsClient::connect(AdsConfig {
+            tcp_port: port,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let config = AdsNotificationConfig {
+            address: AdsAddress::Index {
+                group: 0x4020,
+                offset: 7,
+            },
+            length: 1,
+            cycle_ms: 10,
+            on_change: true,
+        };
+        let mut first = client.subscribe(config.clone()).await.unwrap();
+        let mut second = client.subscribe(config.clone()).await.unwrap();
+        let sample = first.receive().await.unwrap();
+        assert_eq!(
+            (sample.handle, sample.timestamp, sample.data),
+            (11, 123, vec![17])
+        );
+        let sample = second.receive().await.unwrap();
+        assert_eq!((sample.handle, sample.data), (22, vec![29]));
+        client.write(config.address, vec![33]).await.unwrap();
+        drop(first);
+        let sample = tokio::time::timeout(std::time::Duration::from_secs(2), second.receive())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((sample.handle, sample.data), (22, vec![31]));
+        client.close().await.unwrap();
+        assert!(second.receive().await.is_err());
+        server.await.unwrap();
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn close_reports_notification_cleanup_failure() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut socket).await;
+            send_frame(&mut socket, &request, 6, &[0, 0, 0, 0, 11, 0, 0, 0]).await;
+            // The SDK retries its outstanding handles on Drop after explicit cleanup fails.
+            for _ in 0..2 {
+                let request = read_request(&mut socket).await;
+                assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 7);
+                send_frame(&mut socket, &request, 7, &[1, 0, 0, 0]).await;
+            }
+            assert_eq!(socket.read(&mut [0]).await.unwrap(), 0);
+        });
+        let client = AdsClient::connect(AdsConfig {
+            tcp_port: port,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut subscription = client
+            .subscribe(AdsNotificationConfig {
+                address: AdsAddress::Index {
+                    group: 0x4020,
+                    offset: 7,
+                },
+                length: 1,
+                cycle_ms: 10,
+                on_change: true,
+            })
+            .await
+            .unwrap();
+        assert!(client.close().await.is_err());
+        assert!(
+            subscription
+                .receive()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("cleanup failed")
+        );
+        server.await.unwrap();
+    }
+
     #[test]
     fn rejects_invalid_ads_payloads_and_symbols() {
         assert!(validate_length(0).is_err());

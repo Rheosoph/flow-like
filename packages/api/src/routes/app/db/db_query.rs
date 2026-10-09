@@ -167,8 +167,12 @@ async fn run_sql_query(
     // permissions only — reject anything but a single SELECT before planning.
     flow_like_storage::databases::sql_guard::validate_readonly_sql(sql)
         .map_err(|error| ApiError::bad_request(format!("Invalid query SQL: {error}")))?;
-    let context = SessionContext::new();
-    flow_like_storage::geometry::register_geo_functions(&context);
+    let context = SessionContext::new_with_state(
+        flow_like_storage::databases::df_provider::with_lance_order_pushdown(
+            SessionContext::new().state(),
+        ),
+    );
+    flow_like_storage::databases::register_sql_functions(&context);
     let fusion = db.to_datafusion().await?;
     context.register_table(table, fusion)?;
     let param_values = flow_like_storage::databases::sql_params::bind_params(sql_params)

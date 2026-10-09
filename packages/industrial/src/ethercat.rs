@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_DEVICES: usize = 64;
 pub const MAX_PROCESS_DATA: usize = 16_384;
+// A 1500-byte Ethernet payload includes the EtherCAT header, LRW header and working counter.
+const LRW_DATA_BYTES: usize = 1500 - 2 - 10 - 2;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum SdoValue {
@@ -134,6 +136,25 @@ fn apply_output(output: &mut [u8], offset: usize, data: &[u8]) -> Result<()> {
     )?;
     output[offset..end].copy_from_slice(data);
     Ok(())
+}
+fn expected_working_counter(devices: &[EthercatDevice]) -> u16 {
+    // EtherCrab maps all input ranges first, then all output ranges, in device order. tx_rx
+    // starts each frame with one LRW filling its available data capacity. Count a direction
+    // again whenever its mapped range crosses into another LRW datagram.
+    let mut offset = 0;
+    let mut counter = 0;
+    for (length, weight) in devices
+        .iter()
+        .map(|device| (device.input_bytes, 1))
+        .chain(devices.iter().map(|device| (device.output_bytes, 2)))
+    {
+        if length > 0 {
+            let datagrams = (offset + length - 1) / LRW_DATA_BYTES - offset / LRW_DATA_BYTES + 1;
+            counter += datagrams as u16 * weight;
+            offset += length;
+        }
+    }
+    counter
 }
 fn validate_inventory(expected: &[ExpectedDevice], actual: &[EthercatDevice]) -> Result<()> {
     if expected.is_empty() {
@@ -326,6 +347,117 @@ mod runtime {
         }
     }
 
+    async fn startup_step<T, E: std::fmt::Display>(
+        stop: &CancellationToken,
+        operation: impl std::future::Future<Output = std::result::Result<T, E>>,
+    ) -> Result<T> {
+        // Prefer cancellation even when the next phase is immediately ready. Dropping an
+        // EtherCrab request also releases its pending PDU, so it cannot be retried afterward.
+        tokio::select! {
+            biased;
+            _ = stop.cancelled() => Err(failure("EtherCAT startup cancelled")),
+            result = operation => result.map_err(failure),
+        }
+    }
+    async fn with_bus_shutdown<T>(
+        operation: impl std::future::Future<Output = Result<T>>,
+        shutdown: impl std::future::Future<Output = Result<()>>,
+    ) -> Result<T> {
+        let result = operation.await;
+        match (result, shutdown.await) {
+            (result, Ok(())) => result,
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(shutdown)) => Err(failure(format!(
+                "{error}; EtherCAT shutdown failed: {shutdown}"
+            ))),
+        }
+    }
+    #[cfg(test)]
+    mod cancellation_tests {
+        use super::*;
+        use std::cell::RefCell;
+
+        #[tokio::test]
+        async fn cancellation_drops_the_active_phase_skips_later_writes_and_runs_shutdown() {
+            // Two SDO writes, mapping, and the OP request share the same cancellation boundary.
+            for cancel_at in 0..4 {
+                let stop = CancellationToken::new();
+                let issued = RefCell::new(Vec::new());
+                let result = with_bus_shutdown(
+                    async {
+                        for phase in 0..4 {
+                            startup_step(&stop, async {
+                                issued.borrow_mut().push(phase);
+                                if phase == cancel_at {
+                                    stop.cancel();
+                                    std::future::pending::<()>().await;
+                                }
+                                Ok::<_, Error>(())
+                            })
+                            .await?;
+                        }
+                        Ok(())
+                    },
+                    async {
+                        issued.borrow_mut().push(4);
+                        Ok(())
+                    },
+                )
+                .await;
+                assert!(result.unwrap_err().to_string().contains("cancelled"));
+                assert_eq!(
+                    *issued.borrow(),
+                    (0..=cancel_at).chain([4]).collect::<Vec<_>>()
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn an_already_cancelled_phase_never_starts() {
+            let stop = CancellationToken::new();
+            stop.cancel();
+            assert!(
+                startup_step(&stop, async {
+                    panic!("Cancelled startup issued another device operation");
+                    #[allow(unreachable_code)]
+                    Ok::<_, Error>(())
+                })
+                .await
+                .is_err()
+            );
+        }
+
+        #[tokio::test]
+        async fn startup_and_shutdown_errors_are_both_reported() {
+            let error =
+                with_bus_shutdown(async { Err::<(), _>(failure("mapping failed")) }, async {
+                    Err(failure("INIT failed"))
+                })
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("mapping failed"));
+            assert!(error.contains("INIT failed"));
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    async fn return_to_init(device: &ethercrab::MainDevice<'_>) -> Result<()> {
+        // State-transition methods consume the group. A cancelled mapping or OP transition
+        // may have dropped it, so reset all devices through the dedicated bus instead.
+        ethercrab::Command::bwr(ethercrab::RegisterAddress::AlControl.into())
+            .ignore_wkc()
+            // INIT plus error acknowledgement, as used by EtherCrab's discovery reset.
+            .send(device, 0x0011u16)
+            .await
+            .map_err(failure)?;
+        if device.num_subdevices() > 0 {
+            device
+                .wait_for_state(ethercrab::SubDeviceState::Init)
+                .await
+                .map_err(failure)?;
+        }
+        Ok(())
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn run_bus(
         config: EthercatConfig,
@@ -338,7 +470,7 @@ mod runtime {
             MainDevice, MainDeviceConfig, PduStorage, Timeouts,
             std::{ethercat_now, tx_rx_task},
         };
-        let storage = PduStorage::<16, { PduStorage::element_size(1500) }>::new();
+        let storage = PduStorage::<16, { PduStorage::element_size(LRW_DATA_BYTES) }>::new();
         let (tx, rx, pdu) = storage
             .try_split()
             .map_err(|_| failure("EtherCAT PDU storage is already in use"))?;
@@ -353,142 +485,173 @@ mod runtime {
             MainDeviceConfig::default(),
         );
         let io = tx_rx_task(&config.interface, tx, rx)?;
-        let control = async {
-            let group = tokio::select! {
-                _ = stop.cancelled() => return Err(failure("EtherCAT startup cancelled")),
-                result = device.init_single_group::<MAX_DEVICES, MAX_PROCESS_DATA>(ethercat_now) => result.map_err(failure)?,
-            };
-            require(
-                !group.is_empty(),
-                "No EtherCAT devices found on this interface",
-            )?;
-            let mut inventory: Vec<_> = group
-                .iter(&device)
-                .enumerate()
-                .map(|(position, subdevice)| {
-                    let identity = subdevice.identity();
-                    EthercatDevice {
-                        position,
-                        station_address: subdevice.configured_address(),
-                        name: subdevice.name().to_string(),
-                        vendor_id: identity.vendor_id,
-                        product_id: identity.product_id,
-                        revision: identity.revision,
-                        serial: identity.serial,
-                        input_bytes: 0,
-                        output_bytes: 0,
-                    }
-                })
-                .collect();
-            validate_inventory(&config.expected_devices, &inventory)?;
-            for startup in &config.startup_sdos {
-                let subdevice = group.subdevice(&device, startup.device).map_err(failure)?;
-                match startup.value {
-                    SdoValue::U8(v) => {
-                        subdevice
-                            .sdo_write(startup.index, startup.sub_index, v)
-                            .await
-                    }
-                    SdoValue::U16(v) => {
-                        subdevice
-                            .sdo_write(startup.index, startup.sub_index, v)
-                            .await
-                    }
-                    SdoValue::U32(v) => {
-                        subdevice
-                            .sdo_write(startup.index, startup.sub_index, v)
-                            .await
-                    }
-                    SdoValue::I8(v) => {
-                        subdevice
-                            .sdo_write(startup.index, startup.sub_index, v)
-                            .await
-                    }
-                    SdoValue::I16(v) => {
-                        subdevice
-                            .sdo_write(startup.index, startup.sub_index, v)
-                            .await
-                    }
-                    SdoValue::I32(v) => {
-                        subdevice
-                            .sdo_write(startup.index, startup.sub_index, v)
-                            .await
-                    }
+        let control = with_bus_shutdown(
+            async {
+                let group = startup_step(
+                    &stop,
+                    device.init_single_group::<MAX_DEVICES, MAX_PROCESS_DATA>(ethercat_now),
+                )
+                .await?;
+                require(
+                    !group.is_empty(),
+                    "No EtherCAT devices found on this interface",
+                )?;
+                let mut inventory: Vec<_> = group
+                    .iter(&device)
+                    .enumerate()
+                    .map(|(position, subdevice)| {
+                        let identity = subdevice.identity();
+                        EthercatDevice {
+                            position,
+                            station_address: subdevice.configured_address(),
+                            name: subdevice.name().to_string(),
+                            vendor_id: identity.vendor_id,
+                            product_id: identity.product_id,
+                            revision: identity.revision,
+                            serial: identity.serial,
+                            input_bytes: 0,
+                            output_bytes: 0,
+                        }
+                    })
+                    .collect();
+                validate_inventory(&config.expected_devices, &inventory)?;
+                for startup in &config.startup_sdos {
+                    let subdevice = group.subdevice(&device, startup.device).map_err(failure)?;
+                    startup_step(&stop, async {
+                        match startup.value {
+                            SdoValue::U8(v) => {
+                                subdevice
+                                    .sdo_write(startup.index, startup.sub_index, v)
+                                    .await
+                            }
+                            SdoValue::U16(v) => {
+                                subdevice
+                                    .sdo_write(startup.index, startup.sub_index, v)
+                                    .await
+                            }
+                            SdoValue::U32(v) => {
+                                subdevice
+                                    .sdo_write(startup.index, startup.sub_index, v)
+                                    .await
+                            }
+                            SdoValue::I8(v) => {
+                                subdevice
+                                    .sdo_write(startup.index, startup.sub_index, v)
+                                    .await
+                            }
+                            SdoValue::I16(v) => {
+                                subdevice
+                                    .sdo_write(startup.index, startup.sub_index, v)
+                                    .await
+                            }
+                            SdoValue::I32(v) => {
+                                subdevice
+                                    .sdo_write(startup.index, startup.sub_index, v)
+                                    .await
+                            }
+                        }
+                    })
+                    .await?;
                 }
-                .map_err(failure)?;
-            }
-            let group = group.into_pre_op_pdi(&device).await.map_err(failure)?;
-            let mut expected_wkc = 0;
-            for (entry, subdevice) in inventory.iter_mut().zip(group.iter(&device)) {
-                let io = subdevice.io_raw();
-                entry.input_bytes = io.inputs().len();
-                entry.output_bytes = io.outputs().len();
-                expected_wkc +=
-                    u16::from(entry.input_bytes > 0) + 2 * u16::from(entry.output_bytes > 0);
-            }
-            let group = group.request_into_op(&device).await.map_err(failure)?;
-            let period = Duration::from_micros(config.cycle_us);
-            let mut interval = tokio::time::interval(period);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let op_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            let mut active = false;
-            let mut snapshot = EthercatSnapshot {
-                expected_working_counter: expected_wkc,
-                ..Default::default()
-            };
-            let result = async {
+                let group = startup_step(&stop, group.into_pre_op_pdi(&device)).await?;
+                for (entry, subdevice) in inventory.iter_mut().zip(group.iter(&device)) {
+                    let io = subdevice.io_raw();
+                    entry.input_bytes = io.inputs().len();
+                    entry.output_bytes = io.outputs().len();
+                }
+                let expected_wkc = expected_working_counter(&inventory);
+                let group = startup_step(&stop, group.request_into_op(&device)).await?;
+                let period = Duration::from_micros(config.cycle_us);
+                let mut interval = tokio::time::interval(period);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let op_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                let mut active = false;
+                let mut snapshot = EthercatSnapshot {
+                    expected_working_counter: expected_wkc,
+                    ..Default::default()
+                };
                 loop {
                     tokio::select! {
+                        biased;
                         _ = stop.cancelled() => break,
                         _ = interval.tick() => {}
                     }
                     let began = std::time::Instant::now();
                     let mut acknowledgements = Vec::new();
                     for _ in 0..64 {
-                        let Ok(command) = commands.try_recv() else { break; };
+                        let Ok(command) = commands.try_recv() else {
+                            break;
+                        };
+                        if command.result.is_closed() || stop.is_cancelled() {
+                            continue;
+                        }
                         let result = (|| {
-                            let subdevice = group.subdevice(&device, command.update.device).map_err(failure)?;
-                            apply_output(&mut subdevice.outputs_raw_mut(), command.update.offset, &command.update.data)
+                            let subdevice = group
+                                .subdevice(&device, command.update.device)
+                                .map_err(failure)?;
+                            apply_output(
+                                &mut subdevice.outputs_raw_mut(),
+                                command.update.offset,
+                                &command.update.data,
+                            )
                         })();
                         match result {
                             Ok(()) => acknowledgements.push(command.result),
-                            Err(error) => { let _ = command.result.send(Err(error)); }
+                            Err(error) => {
+                                let _ = command.result.send(Err(error));
+                            }
                         }
                     }
-                    let response = group.tx_rx(&device).await.map_err(failure)?;
+                    let response = tokio::select! {
+                        biased;
+                        _ = stop.cancelled() => break,
+                        response = group.tx_rx(&device) => response.map_err(failure)?,
+                    };
                     let operational = response.all_op() && response.working_counter == expected_wkc;
                     if !operational && (active || tokio::time::Instant::now() >= op_deadline) {
-                        return Err(failure(format!("EtherCAT process data invalid: working counter {}/{}, all devices OP: {}", response.working_counter, expected_wkc, response.all_op())));
+                        return Err(failure(format!(
+                            "EtherCAT process data invalid: working counter {}/{}, all devices OP: {}",
+                            response.working_counter,
+                            expected_wkc,
+                            response.all_op()
+                        )));
                     }
                     let newly_active = operational && !active;
-                    if newly_active { active = true; }
-                    for result in acknowledgements { let _ = result.send(Ok(())); }
+                    if newly_active {
+                        active = true;
+                    }
+                    for result in acknowledgements {
+                        let _ = result.send(Ok(()));
+                    }
                     snapshot.cycle += 1;
                     snapshot.working_counter = response.working_counter;
                     snapshot.operational = operational;
-                    snapshot.cycle_elapsed_us = began.elapsed().as_micros().min(u64::MAX as u128) as u64;
-                    if began.elapsed() > period { snapshot.overruns += 1; }
-                    snapshot.devices = group.iter(&device).enumerate().map(|(position, subdevice)| {
-                        let io = subdevice.io_raw();
-                        DeviceProcessData { position, inputs: io.inputs().to_vec(), outputs: io.outputs().to_vec() }
-                    }).collect();
+                    snapshot.cycle_elapsed_us =
+                        began.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                    if began.elapsed() > period {
+                        snapshot.overruns += 1;
+                    }
+                    snapshot.devices = group
+                        .iter(&device)
+                        .enumerate()
+                        .map(|(position, subdevice)| {
+                            let io = subdevice.io_raw();
+                            DeviceProcessData {
+                                position,
+                                inputs: io.inputs().to_vec(),
+                                outputs: io.outputs().to_vec(),
+                            }
+                        })
+                        .collect();
                     state.send_replace(snapshot.clone());
                     if newly_active && let Some(ready) = ready.take() {
                         let _ = ready.send(Ok(inventory.clone()));
                     }
                 }
                 Ok(())
-            }.await;
-            // Move the bus out of OP while the raw frame driver is still running.
-            let shutdown = async {
-                let group = group.into_safe_op(&device).await.map_err(failure)?;
-                let group = group.into_pre_op(&device).await.map_err(failure)?;
-                group.into_init(&device).await.map_err(failure)?;
-                Ok(())
-            }
-            .await;
-            result.and(shutdown)
-        };
+            },
+            return_to_init(&device),
+        );
         tokio::pin!(io);
         tokio::pin!(control);
         tokio::select! {
@@ -511,6 +674,44 @@ mod tests {
         assert!(apply_output(&mut bytes, usize::MAX, &[9]).is_err());
         assert!(apply_output(&mut bytes, 4, &[9]).is_err());
         assert_eq!(bytes, [1, 7, 8, 4]);
+    }
+    fn mapped_device(input_bytes: usize, output_bytes: usize) -> EthercatDevice {
+        EthercatDevice {
+            position: 0,
+            station_address: 0x1000,
+            name: String::new(),
+            vendor_id: 0,
+            product_id: 0,
+            revision: 0,
+            serial: 0,
+            input_bytes,
+            output_bytes,
+        }
+    }
+    #[test]
+    fn working_counters_include_each_datagram_overlapping_a_device_direction() {
+        assert_eq!(expected_working_counter(&[mapped_device(1, 1)]), 3);
+        assert_eq!(expected_working_counter(&[mapped_device(0, 0)]), 0);
+        // A direction ending exactly at the frame boundary does not count in the next frame.
+        assert_eq!(
+            expected_working_counter(&[mapped_device(LRW_DATA_BYTES, LRW_DATA_BYTES)]),
+            3
+        );
+        // Both directions of one device cross a datagram boundary: two reads plus two writes.
+        assert_eq!(
+            expected_working_counter(&[mapped_device(LRW_DATA_BYTES + 1, LRW_DATA_BYTES + 1)]),
+            6
+        );
+        // The second device begins one byte before a boundary and spans both LRWs.
+        assert_eq!(
+            expected_working_counter(&[mapped_device(LRW_DATA_BYTES - 1, 0), mapped_device(2, 0),]),
+            3
+        );
+        // All input ranges precede all output ranges, even across different devices.
+        assert_eq!(
+            expected_working_counter(&[mapped_device(LRW_DATA_BYTES - 1, 2), mapped_device(0, 1),]),
+            7
+        );
     }
     #[test]
     fn topology_check_rejects_swapped_or_missing_devices() {

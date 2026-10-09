@@ -24,6 +24,7 @@ RUN set -eu && \
         lld \
         pkgconf-pkg-config \
         openssl-devel \
+        libcurl-devel \
         glib2-devel \
         gtk3-devel \
         tar \

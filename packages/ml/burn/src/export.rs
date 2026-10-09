@@ -26,6 +26,10 @@ impl Model {
         let classify = recipe.objective() == Some(Objective::Classification);
         let probabilities = |x: Tensor<2>| if classify { softmax(x, 1) } else { x };
         let result = match self {
+            Self::DinoV2(_) => return Err(Error::Record("DINOv2 attention is not supported by the ONNX exporter".into())),
+            Self::RtdetrV2(_) => return Err(Error::Record("RT-DETRv2 deformable attention is not supported by the ONNX exporter".into())),
+            Self::RfDetr(_) => return Err(Error::Record("RF-DETR windowed attention is not supported by the ONNX exporter".into())),
+            Self::DfineNano(_) => return Err(Error::Record("D-FINE distribution refinement is not supported by the ONNX exporter".into())),
             Self::MaskRcnn(_) => return Err(Error::Record("Native Mask R-CNN proposal selection and ROIAlign are not supported by the ONNX exporter".into())),
             Self::Mlp(m) => exporter.export(m, tensor::<2>(input, device), |m, x| {
                 probabilities(m.forward(x))

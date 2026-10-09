@@ -359,6 +359,7 @@ fn run(
     )?;
     let config = &resolved_config;
     let device = backend::device(&config.backend, true)?;
+    let initialization_guard = crate::execution::lock(Some(cancellation))?;
     device.seed(config.seed);
     let architecture = Architecture::from(config);
     let mut model = EfficientAdModel::new(&architecture, &device);
@@ -424,6 +425,7 @@ fn run(
     state.report.backend = Some(config.backend.clone());
     state.calibration = None;
     checkpoint(dir, &model, &optimizer, &mut state)?;
+    drop(initialization_guard);
     let batches = data.images.shape[0].div_ceil(config.batch_size);
     let penalty_sampler = PenaltySampler::new(data, config.seed);
     for epoch in state.next_epoch..config.epochs {
@@ -449,6 +451,13 @@ fn run(
                 &indices[start..end],
                 &penalty_sampler.indices(offset, end - start),
             );
+            let batch_guard = match crate::execution::lock(Some(cancellation)) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    checkpoint(dir, &model, &optimizer, &mut state)?;
+                    return Err(error);
+                }
+            };
             device.seed(
                 config
                     .seed
@@ -459,6 +468,7 @@ fn run(
             let value = scalar(loss.clone())?;
             let gradients = GradientsParams::from_grads(loss.backward(), &model);
             model = optimizer.step(config.learning_rate, model, gradients);
+            drop(batch_guard);
             state.report.steps += 1;
             state.next_epoch = epoch;
             state.next_batch = batch_index + 1;
@@ -469,6 +479,10 @@ fn run(
                 training_loss: value,
                 validation_loss: None,
             });
+            if cancellation.is_cancelled() {
+                checkpoint(dir, &model, &optimizer, &mut state)?;
+                return Err(Error::Cancelled);
+            }
         }
         let final_loss = evaluate(
             &model,
@@ -530,6 +544,9 @@ fn run(
         cancellation,
     )?);
     checkpoint(dir, &model, &optimizer, &mut state)?;
+    if cancellation.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
     Ok(state.report)
 }
 
@@ -805,6 +822,7 @@ impl EfficientAdPredictor {
         let state = read_state(dir)?;
         let backend = backend::resolve_backend(&backend)?;
         let device = backend::device(&backend, false)?;
+        let _rng = crate::execution::lock(None)?;
         let calibration = state.calibration.ok_or_else(|| {
             Error::Invalid("EfficientAD training has not completed validation calibration".into())
         })?;
@@ -814,6 +832,7 @@ impl EfficientAdPredictor {
             )
             .map_err(record)?
             .valid();
+        crate::execution::materialize(&model);
         Ok(Self {
             model,
             device,
@@ -1084,7 +1103,12 @@ mod tests {
         .unwrap();
         assert_eq!(resumed.steps, report.steps);
         assert_eq!(resumed.backend, Some(BackendChoice::Cpu));
-        assert!((resumed.final_loss - report.final_loss).abs() < 1e-6);
+        assert!(
+            (resumed.final_loss - report.final_loss).abs() < 1e-6,
+            "Resumed loss {} differs from uninterrupted loss {}",
+            resumed.final_loss,
+            report.final_loss
+        );
         let resumed_predictor =
             EfficientAdPredictor::load(partial.path(), BackendChoice::Cpu).unwrap();
         let layers = |model: &EfficientAdModel| {

@@ -129,6 +129,13 @@ cleanup. Get Database Reference and Flush Database expose the committed version.
 reference with the app, storage scope, selected columns, filter, and split definition when
 recording training provenance.
 
+For a long-running workflow that needs another writer's latest changes, run Checkout
+Database with Revision set to Latest and select the intended branch. Use its output for
+subsequent reads. To refresh SQL, pass that output to Register Lance Table with the same
+session and table name before the next query. This also updates the registered schema.
+Existing handles and Version or Tag snapshots keep their selected data. Offline-buffered
+tables use their local synchronization path and do not support reference checkout.
+
 | Task | Nodes |
 |------|-------|
 | Inspect history | List Database Versions, List Database Branches, List Database Tags |

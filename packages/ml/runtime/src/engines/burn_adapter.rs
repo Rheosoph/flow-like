@@ -9,6 +9,245 @@ pub struct BurnEngineRecipe {
     pub labels: Vec<String>,
     #[serde(default)]
     pub preprocessing: Vec<flow_like_ml_core::PreprocessingStep>,
+    #[serde(default)]
+    pub pretrained: Option<PretrainedSourceRef>,
+}
+
+fn fine_tune_options(source: &PretrainedSourceRef) -> burn::FineTuneOptions {
+    burn::FineTuneOptions {
+        replace_head: source.replace_head,
+        freeze_backbone: source.freeze_backbone,
+    }
+}
+
+fn authorized_source(
+    repository: &TrainingRepository,
+    project_id: &str,
+    source_id: &str,
+    maximum_bytes: u64,
+) -> Result<PretrainedSource> {
+    if project_id.trim().is_empty() || source_id.trim().is_empty() {
+        return Err(invalid(
+            "pretrained source requires a project and source ID",
+        ));
+    }
+    let source = repository.get_pretrained_source(source_id)?;
+    if source.project_id != project_id {
+        return Err(invalid("pretrained source belongs to a different project"));
+    }
+    if source.manifest["engine"] != "burn"
+        || source.manifest["format_version"].as_u64() != Some(1)
+        || source.blob.bytes == 0
+        || source.blob.bytes > maximum_bytes
+    {
+        return Err(invalid(
+            "pretrained source format or byte budget is incompatible",
+        ));
+    }
+    Ok(source)
+}
+
+fn unpack_source(
+    repository: &TrainingRepository,
+    source: &PretrainedSource,
+    maximum_bytes: u64,
+) -> Result<tempfile::TempDir> {
+    let directory = tempfile::tempdir()?;
+    let bytes = repository.read_blob_limited(&source.blob, maximum_bytes)?;
+    unpack(&bytes, directory.path(), maximum_bytes)?;
+    let state: Value =
+        serde_json::from_slice(&fs::read(directory.path().join(burn::MANIFEST_FILE))?)?;
+    if state["config"] != source.manifest["config"]
+        || state["input_shape"] != source.manifest["input_shape"]
+        || state.get("imported").filter(|value| !value.is_null())
+            != source
+                .manifest
+                .get("imported")
+                .filter(|value| !value.is_null())
+    {
+        return Err(invalid(
+            "pretrained manifest differs from its packed model state",
+        ));
+    }
+    Ok(directory)
+}
+
+/// Extract spatial features from project-owned weights without creating training evidence.
+pub fn pretrained_source_features(
+    repository: &TrainingRepository,
+    project_id: &str,
+    source_id: &str,
+    input: &TensorData,
+    compute: &ComputeConfig,
+) -> Result<TensorData> {
+    compute.validate().map_err(engine_error)?;
+    let source = authorized_source(repository, project_id, source_id, source_limit(compute))?;
+    let config: burn::TrainingConfig = serde_json::from_value(source.manifest["config"].clone())?;
+    config.validate().map_err(engine_error)?;
+    if !matches!(
+        config.recipe,
+        burn::Recipe::ResNet18 { .. }
+            | burn::Recipe::MobileNetV2 { .. }
+            | burn::Recipe::EfficientNet { .. }
+            | burn::Recipe::DinoV2 { .. }
+    ) {
+        return Err(invalid(
+            "Spatial features require ResNet18, MobileNetV2, EfficientNet or DINOv2",
+        ));
+    }
+    let input_limit = (compute.memory_limit_bytes / 64).min(64 * 1024 * 1024) as usize;
+    input.validate(input_limit).map_err(engine_error)?;
+    let expected: Vec<usize> = serde_json::from_value(source.manifest["input_shape"].clone())?;
+    let batch_shape = image_batch_shape(&input.shape, &expected)?;
+    config
+        .recipe
+        .validate_shape(&batch_shape)
+        .map_err(engine_error)?;
+    let workspace = match &config.recipe {
+        burn::Recipe::DinoV2 { config } => {
+            // Inference retains one transformer block at a time. Reserve attention
+            // matrices, projected tokens, normalization and input/output copies.
+            let batch = batch_shape[0] as u128;
+            let tokens = (batch_shape[2] as u128 / 14) * (batch_shape[3] as u128 / 14) + 1;
+            let bytes = batch
+                * (tokens * tokens * config.variant.heads() as u128 * 16
+                    + tokens * config.variant.embedding_dim() as u128 * 128)
+                + input.values.len() as u128 * 16;
+            u64::try_from(bytes).map_err(|_| invalid("feature workspace estimate overflows"))?
+        }
+        _ => config
+            .recipe
+            .estimated_training_bytes(&expected, batch_shape[0])
+            .map_err(engine_error)?,
+    };
+    let estimate = source
+        .blob
+        .bytes
+        .checked_mul(4)
+        .and_then(|bytes| bytes.checked_add(workspace))
+        .ok_or_else(|| invalid("feature memory estimate overflows"))?;
+    if estimate > compute.memory_limit_bytes {
+        return Err(invalid(format!(
+            "Feature extraction needs an estimated {estimate} bytes, exceeding the configured {} byte memory limit",
+            compute.memory_limit_bytes
+        )));
+    }
+    let directory = unpack_source(repository, &source, source_limit(compute))?;
+    let predictor =
+        burn::Predictor::load(directory.path(), backend(compute)?).map_err(engine_error)?;
+    let output = predictor
+        .features(&burn::TensorData {
+            shape: batch_shape,
+            values: input.values.clone(),
+        })
+        .map_err(engine_error)?;
+    let output = TensorData {
+        shape: output.shape,
+        values: output.values,
+    };
+    output.validate(input_limit).map_err(engine_error)?;
+    Ok(output)
+}
+
+/// Resolve an initialization model within the owning project before admitting training.
+pub fn validate_burn_pretrained_source(
+    repository: &TrainingRepository,
+    project_id: &str,
+    reference: &PretrainedSourceRef,
+    config: &burn::TrainingConfig,
+    labels: &[String],
+    maximum_bytes: u64,
+) -> Result<PretrainedSource> {
+    let source = authorized_source(repository, project_id, &reference.source_id, maximum_bytes)?;
+    let source_config: burn::TrainingConfig =
+        serde_json::from_value(source.manifest["config"].clone())?;
+    source_config.validate().map_err(engine_error)?;
+    burn::validate_fine_tune(
+        &source_config.recipe,
+        &config.recipe,
+        &fine_tune_options(reference),
+    )
+    .map_err(engine_error)?;
+    let source_labels: Vec<String> = serde_json::from_value(
+        source
+            .manifest
+            .get("labels")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )?;
+    flow_like_ml_core::validate_labels(&source_labels).map_err(engine_error)?;
+    if !reference.replace_head && source_labels != labels {
+        return Err(invalid(
+            "retaining a pretrained head requires the same label order",
+        ));
+    }
+    if !reference.replace_head
+        && source
+            .manifest
+            .pointer("/imported/classification_head_pretrained")
+            .and_then(Value::as_bool)
+            == Some(false)
+    {
+        return Err(invalid(
+            "imported backbone requires a new classification head",
+        ));
+    }
+    Ok(source)
+}
+
+/// Register a converted Burn model as initialization weights without inventing training evidence.
+pub fn publish_burn_pretrained_source(
+    repository: &TrainingRepository,
+    project_id: &str,
+    directory: &Path,
+    labels: Vec<String>,
+    origin: Value,
+    maximum_bytes: u64,
+    at_ms: i64,
+) -> Result<PretrainedSource> {
+    flow_like_ml_core::validate_labels(&labels).map_err(engine_error)?;
+    let model_bytes = pack(directory, false, maximum_bytes)?;
+    let state: Value = serde_json::from_slice(&fs::read(directory.join(burn::MANIFEST_FILE))?)?;
+    let config: burn::TrainingConfig = serde_json::from_value(state["config"].clone())?;
+    config.validate().map_err(engine_error)?;
+    let input_shape: Vec<usize> = serde_json::from_value(state["input_shape"].clone())?;
+    let mut batch_shape = vec![1];
+    batch_shape.extend(&input_shape);
+    config
+        .recipe
+        .validate_shape(&batch_shape)
+        .map_err(engine_error)?;
+    if !labels.is_empty() && labels.len() != config.recipe.outputs() {
+        return Err(invalid(
+            "pretrained labels must match the model output count",
+        ));
+    }
+    let recommended_preprocessing = match state.get("imported").filter(|value| !value.is_null()) {
+        Some(provenance) => burn::ImportedModelInfo {
+            recipe: config.recipe.clone(),
+            input_shape: input_shape.clone(),
+            provenance: serde_json::from_value(provenance.clone())?,
+        }
+        .recommended_preprocessing(),
+        None => Vec::new(),
+    };
+    repository.register_pretrained_source(
+        project_id,
+        &model_bytes,
+        serde_json::json!({
+            "engine":"burn", "format_version":1, "config":config,
+            "input_shape":input_shape, "labels":labels,
+            "imported":state["imported"], "pretrained":state["pretrained"],
+            "recommended_preprocessing":recommended_preprocessing,
+        }),
+        origin,
+        maximum_bytes,
+        at_ms,
+    )
+}
+
+fn source_limit(compute: &ComputeConfig) -> u64 {
+    (compute.memory_limit_bytes / 4).min(512 * 1024 * 1024)
 }
 
 pub fn register_burn_engine(worker: &mut TrainingWorker) -> Result<()> {
@@ -46,7 +285,36 @@ impl TrainingEngine for BurnEngine {
             .estimated_training_bytes(&sample.input.shape, recipe.config.batch_size)
             .map_err(engine_error)?;
         let dataset = serialized_size(&work.snapshot)?;
-        Ok(model.saturating_add(dataset.saturating_mul(12)))
+        let source_memory = if let Some(reference) = &recipe.pretrained {
+            let compute = compute_config(&work.job.request.compute)?;
+            let source = validate_burn_pretrained_source(
+                &work.repository,
+                &work.job.stream.project_id,
+                reference,
+                &recipe.config,
+                &recipe.labels,
+                source_limit(&compute),
+            )?;
+            if work.resume_checkpoint.is_some() {
+                0
+            } else {
+                let config: burn::TrainingConfig =
+                    serde_json::from_value(source.manifest["config"].clone())?;
+                let shape: Vec<usize> =
+                    serde_json::from_value(source.manifest["input_shape"].clone())?;
+                source.blob.bytes.saturating_mul(4).saturating_add(
+                    config
+                        .recipe
+                        .estimated_training_bytes(&shape, 1)
+                        .map_err(engine_error)?,
+                )
+            }
+        } else {
+            0
+        };
+        Ok(model
+            .saturating_add(dataset.saturating_mul(12))
+            .saturating_add(source_memory))
     }
     fn train(&self, work: &TrainingWork, control: &WorkerControl) -> Result<EngineOutput> {
         let mut recipe: BurnEngineRecipe = serde_json::from_value(work.job.request.recipe.clone())?;
@@ -78,7 +346,30 @@ impl TrainingEngine for BurnEngine {
                 control.limits().maximum_checkpoint_bytes,
             )?;
         }
+        let pretrained = recipe
+            .pretrained
+            .as_ref()
+            .map(|reference| {
+                validate_burn_pretrained_source(
+                    &work.repository,
+                    &work.job.stream.project_id,
+                    reference,
+                    &recipe.config,
+                    &recipe.labels,
+                    source_limit(&compute),
+                )
+            })
+            .transpose()?;
+        let source_directory = if work.resume_checkpoint.is_none() {
+            pretrained
+                .as_ref()
+                .map(|source| unpack_source(&work.repository, source, source_limit(&compute)))
+                .transpose()?
+        } else {
+            None
+        };
         let cancellation = burn::CancellationToken::new();
+        let cancellation_monitor = BurnCancellationMonitor::start(control, &cancellation)?;
         let mut interruption = None;
         let mut checkpoint_error = None;
         let mut latest_published = 0;
@@ -111,6 +402,17 @@ impl TrainingEngine for BurnEngine {
                 &cancellation,
                 &mut callback,
             )
+        } else if let Some(source_directory) = &source_directory {
+            burn::train_from_pretrained(
+                &recipe.config,
+                &training,
+                Some(&validation),
+                source_directory.path(),
+                &fine_tune_options(recipe.pretrained.as_ref().unwrap()),
+                directory.path(),
+                &cancellation,
+                &mut callback,
+            )
         } else {
             burn::train(
                 &recipe.config,
@@ -121,6 +423,7 @@ impl TrainingEngine for BurnEngine {
                 &mut callback,
             )
         };
+        let cancellation_reason = cancellation_monitor.finish();
         if trained.is_err() && directory.path().join(burn::MANIFEST_FILE).exists() {
             // Burn checkpoints the last completed batch on cooperative cancellation.
             let state: Value =
@@ -140,7 +443,7 @@ impl TrainingEngine for BurnEngine {
                 serde_json::json!({"engine":"burn","format_version":1,"steps":step}),
             );
         }
-        if let Some(error) = interruption.or(checkpoint_error) {
+        if let Some(error) = interruption.or(checkpoint_error).or(cancellation_reason) {
             return Err(error);
         }
         let report = trained.map_err(|error| {
@@ -166,9 +469,18 @@ impl TrainingEngine for BurnEngine {
             false,
             control.limits().maximum_artifact_bytes,
         )?;
+        let state: Value =
+            serde_json::from_slice(&fs::read(directory.path().join(burn::MANIFEST_FILE))?)?;
+        let initialization = pretrained.map(|source| {
+            serde_json::json!({
+                "source_id":source.id, "source_kind":source.source_kind,
+                "source_blob":source.blob, "source_origin":source.origin,
+                "options":recipe.pretrained, "training":state["pretrained"],
+            })
+        });
         Ok(EngineOutput {
             model_bytes,
-            manifest: serde_json::json!({"engine":"burn","format_version":1,"config":recipe.config,"labels":recipe.labels,"input_shape":training.inputs.shape[1..],"preprocessing":recipe.preprocessing,"report":report}),
+            manifest: serde_json::json!({"engine":"burn","format_version":1,"config":recipe.config,"labels":recipe.labels,"input_shape":training.inputs.shape[1..],"preprocessing":recipe.preprocessing,"report":report,"pretrained":initialization}),
         })
     }
 }
@@ -457,7 +769,12 @@ pub(super) fn pack_named(
     let checkpoint = state["checkpoint"]
         .as_str()
         .ok_or_else(|| invalid("checkpoint pointer is missing"))?;
-    if !checkpoint.starts_with("checkpoint-")
+    let checkpoint_prefix = if manifest == burn::SAM2_MANIFEST_FILE {
+        "sam2-checkpoint-"
+    } else {
+        "checkpoint-"
+    };
+    if !checkpoint.starts_with(checkpoint_prefix)
         || checkpoint.contains('/')
         || checkpoint.contains('\\')
         || checkpoint.contains("..")
@@ -473,7 +790,7 @@ pub(super) fn pack_named(
     } else {
         0
     };
-    state["checkpoint"] = Value::String("checkpoint-runtime".into());
+    state["checkpoint"] = Value::String(format!("{checkpoint_prefix}runtime"));
     let state = serde_json::to_vec(&state)?;
     let total = 32u64
         .checked_add(state.len() as u64)
@@ -520,8 +837,13 @@ pub(super) fn unpack_named(
     let state_end = 32 + lengths[0] as usize;
     let model_end = state_end + lengths[1] as usize;
     let mut state: Value = serde_json::from_slice(&bytes[32..state_end])?;
-    state["checkpoint"] = Value::String("checkpoint-runtime".into());
-    let checkpoint = directory.join("checkpoint-runtime");
+    let checkpoint_name = if manifest == burn::SAM2_MANIFEST_FILE {
+        "sam2-checkpoint-runtime"
+    } else {
+        "checkpoint-runtime"
+    };
+    state["checkpoint"] = Value::String(checkpoint_name.into());
+    let checkpoint = directory.join(checkpoint_name);
     fs::create_dir_all(&checkpoint)?;
     fs::write(checkpoint.join("model.bpk"), &bytes[state_end..model_end])?;
     if lengths[2] > 0 {

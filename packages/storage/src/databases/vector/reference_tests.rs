@@ -88,6 +88,64 @@ async fn references_fail_closed_for_missing_or_conflicting_selectors() -> Result
 }
 
 #[tokio::test]
+async fn checkout_latest_refreshes_external_rows_and_schema_without_moving_snapshots() -> Result<()>
+{
+    let (guard, original) = database().await?;
+    let snapshot = original
+        .checkout(version("main", original.reference().await?.version))
+        .await?;
+    let readonly = original
+        .checkout(DatabaseSelector {
+            read_only: true,
+            ..Default::default()
+        })
+        .await?;
+    let session = datafusion::prelude::SessionContext::new();
+    crate::databases::register_sql_functions(&session);
+    session.register_table("records", readonly.to_datafusion().await?)?;
+
+    let mut writer = LanceDBVectorStore::new(guard.0.clone(), "records".into()).await?;
+    writer
+        .insert(vec![json!({"id": 2, "value": "external"})])
+        .await?;
+    writer.add_column("revision", "7").await?;
+
+    let refreshed = readonly.checkout(DatabaseSelector::default()).await?;
+    assert!(refreshed.ensure_writable().is_err());
+    session.deregister_table("records")?;
+    session.register_table("records", refreshed.to_datafusion().await?)?;
+    let batches = session
+        .sql("SELECT id, revision FROM records ORDER BY id")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        2
+    );
+    assert_eq!(batches[0].schema().field(1).name(), "revision");
+    assert_eq!(snapshot.count(None).await?, 1);
+    assert_eq!(original.count(None).await?, 1);
+    assert!(
+        snapshot
+            .to_datafusion()
+            .await?
+            .schema()
+            .field_with_name("revision")
+            .is_err()
+    );
+    assert!(
+        original
+            .to_datafusion()
+            .await?
+            .schema()
+            .field_with_name("revision")
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn references_keep_snapshots_and_branch_writes_independent() -> Result<()> {
     let (_guard, mut main) = database().await?;
     let first = main.reference().await?;

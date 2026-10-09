@@ -39,7 +39,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake pkg-config protobuf-compiler libssl-dev
+          sudo apt-get install -y cmake pkg-config protobuf-compiler libssl-dev libcurl4-openssl-dev
       - name: Protocol codecs, lifecycle, and loopback interoperability
         run: cargo test --locked -p flow-like-industrial --features execute --lib
       - name: Legacy sensor API compatibility
@@ -68,7 +68,7 @@ jobs:
       - name: Install catalog build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libclang-dev
+          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libcurl4-openssl-dev libclang-dev
       - name: Industrial dependency boundaries and default product features
         run: >-
           bash tools/check-feature-boundaries.sh --mode deps --no-rustc-wrapper

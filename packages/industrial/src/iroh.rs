@@ -4,8 +4,9 @@ use crate::{Result, require};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Each unidirectional QUIC stream contains one big-endian u32 length and that many bytes.
-pub const ALPN: &[u8] = b"flow-like/messages/1";
+/// Each bidirectional QUIC stream carries a big-endian u32 length and payload, then EOF.
+/// The receiver replies with byte 1 and EOF after validating the complete frame.
+pub const ALPN: &[u8] = b"flow-like/messages/2";
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -214,17 +215,41 @@ mod runtime {
                 "Iroh message exceeds 16 MiB",
             )?;
             tokio::time::timeout(self.timeout, async {
-                let mut stream = self.connection.open_uni().await.map_err(failure)?;
-                write_frame(&mut stream, payload).await
+                let (mut writer, mut acknowledgement) =
+                    self.connection.open_bi().await.map_err(failure)?;
+                write_frame(&mut writer, payload).await?;
+                require(
+                    acknowledgement.read_u8().await? == 1,
+                    "Iroh peer returned an invalid message acknowledgement",
+                )?;
+                let mut extra = [0];
+                require(
+                    acknowledgement
+                        .read(&mut extra)
+                        .await
+                        .map_err(failure)?
+                        .is_none(),
+                    "Iroh acknowledgement contains trailing bytes",
+                )
             })
             .await
             .map_err(|_| Error::Timeout)?
         }
         pub async fn receive(&self) -> Result<IrohMessage> {
-            let mut stream = self.connection.accept_uni().await.map_err(failure)?;
-            let payload = tokio::time::timeout(self.timeout, read_frame(&mut stream))
-                .await
-                .map_err(|_| Error::Timeout)??;
+            let (mut acknowledgement, mut stream) =
+                self.connection.accept_bi().await.map_err(failure)?;
+            let deadline = tokio::time::Instant::now() + self.timeout;
+            let payload = tokio::time::timeout_at(deadline, async {
+                let payload = read_frame(&mut stream).await?;
+                acknowledgement.write_u8(1).await?;
+                acknowledgement.finish().map_err(failure)?;
+                Ok::<_, Error>(payload)
+            })
+            .await
+            .map_err(|_| Error::Timeout)??;
+            // Give the acknowledgement time to arrive before receiver cleanup. The message is
+            // already received; an ACK drain timeout or the sender closing cannot undo receipt.
+            let _ = tokio::time::timeout_at(deadline, acknowledgement.stopped()).await;
             Ok(IrohMessage {
                 peer_id: self.peer_id(),
                 payload,
@@ -273,6 +298,74 @@ mod tests {
             .await
             .unwrap()
             .unwrap_err();
+        client.close().await;
+        server.close().await;
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn successful_large_send_survives_immediate_disconnect_and_handler_cleanup() {
+        let config = IrohConfig {
+            bind_address: "127.0.0.1:0".into(),
+            ..Default::default()
+        };
+        let server = IrohEndpoint::bind(config.clone()).await.unwrap();
+        let client = IrohEndpoint::bind(config).await.unwrap();
+        let allowlist = allowed_peers(&[client.peer().endpoint_id.clone()]).unwrap();
+        for explicit_disconnect in [true, false] {
+            let (outbound, inbound) =
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    tokio::join!(client.connect(server.peer()), server.accept(&allowlist))
+                })
+                .await
+                .unwrap();
+            let outbound = outbound.unwrap();
+            let inbound = inbound.unwrap();
+            let payload = vec![42; 1024 * 1024];
+            let expected = payload.clone();
+            let sent = async move {
+                outbound.send(&payload).await.unwrap();
+                if explicit_disconnect {
+                    outbound.close();
+                }
+                // Listener handlers drop their connection as soon as the handler returns.
+                drop(outbound);
+            };
+            let (_, received) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::join!(sent, inbound.receive())
+            })
+            .await
+            .unwrap();
+            assert_eq!(received.unwrap().payload, expected);
+        }
+        client.close().await;
+        server.close().await;
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_waits_for_peer_to_receive_the_complete_frame() {
+        let config = IrohConfig {
+            bind_address: "127.0.0.1:0".into(),
+            ..Default::default()
+        };
+        let server = IrohEndpoint::bind(config.clone()).await.unwrap();
+        let client = IrohEndpoint::bind(config).await.unwrap();
+        let allowlist = allowed_peers(&[client.peer().endpoint_id.clone()]).unwrap();
+        let (outbound, inbound) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(client.connect(server.peer()), server.accept(&allowlist))
+        })
+        .await
+        .unwrap();
+        let outbound = outbound.unwrap();
+        let inbound = inbound.unwrap();
+        let sent = outbound.send(&[42]);
+        tokio::pin!(sent);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut sent)
+                .await
+                .is_err(),
+            "send must wait until the receiving application reads the frame"
+        );
+        let (sent, received) = tokio::join!(sent, inbound.receive());
+        sent.unwrap();
+        assert_eq!(received.unwrap().payload, vec![42]);
         client.close().await;
         server.close().await;
     }
