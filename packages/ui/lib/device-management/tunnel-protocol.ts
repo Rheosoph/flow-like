@@ -9,8 +9,6 @@ export const TUNNEL_MAX_STREAMS = 16;
 export const TUNNEL_HEADER = 20;
 export const TUNNEL_MAX_DATA = 16 * 1024 - TUNNEL_HEADER;
 export const TUNNEL_MAX_BUFFER = TUNNEL_WINDOW * TUNNEL_MAX_STREAMS + 65_536;
-/** Largest model asset a device stores (`MODEL_ASSET_MAX_BYTES`). */
-export const TUNNEL_MODEL_ASSET_MAX_BYTES = 64 * 1024 ** 3;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export enum TunnelKind {
@@ -231,8 +229,7 @@ function validateDataOpen(value: Record<string, unknown>): void {
 					value.file_index > 0xffff_ffff)) ||
 			typeof value.offset !== "number" ||
 			!Number.isSafeInteger(value.offset) ||
-			value.offset < 0 ||
-			value.offset > 4 * 1024 * 1024 * 1024
+			value.offset < 0
 		)
 			throw new Error("Invalid device tunnel artifact.");
 		return;
@@ -249,8 +246,7 @@ function validateModelAssetOpen(value: Record<string, unknown>) {
 		!JOB_ID.test(value.job_id) ||
 		typeof value.offset !== "number" ||
 		!Number.isSafeInteger(value.offset) ||
-		value.offset < 0 ||
-		value.offset > TUNNEL_MODEL_ASSET_MAX_BYTES
+		value.offset < 0
 	)
 		throw new Error("Invalid device tunnel model asset.");
 }

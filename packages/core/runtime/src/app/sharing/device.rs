@@ -9,7 +9,10 @@ use crate::flow::{
 };
 use flow_like_storage::{
     Path,
-    databases::vector::offline_replay::{budgeted_local_connection, materialize, revision},
+    databases::vector::{
+        lancedb::connect_lance,
+        offline_replay::{materialize_with_fts_indexes, revision},
+    },
     files::store::FlowLikeStore,
     object_store::{GetOptions, ObjectMeta, ObjectStore},
 };
@@ -24,7 +27,6 @@ use std::{
     sync::Arc,
 };
 
-pub const MAX_DEVICE_EXPORT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const MAX_DEVICE_EXPORT_FILES: usize = 8192;
 pub const MAX_DEVICE_EXPORT_CHUNK: usize = 1024 * 1024;
 const MAX_VALIDATED_COMPRESSED: u64 = 16 * 1024 * 1024;
@@ -254,11 +256,8 @@ impl DeviceProjectSnapshot {
             .bytes
             .checked_add(size)
             .ok_or_else(|| anyhow!("Export size overflow"))?;
-        if size > 4 * 1024 * 1024 * 1024
-            || total > MAX_DEVICE_EXPORT_BYTES
-            || self.files.len() >= MAX_DEVICE_EXPORT_FILES
-        {
-            bail!("Deployment export exceeds 8192 files, 4 GiB per file or 8 GiB total");
+        if self.files.len() >= MAX_DEVICE_EXPORT_FILES {
+            bail!("Deployment export exceeds 8192 files");
         }
         self.files.insert(path.to_owned(), size);
         self.bytes = total;
@@ -356,14 +355,9 @@ fn device_event(mut event: Event) -> Result<Event> {
 }
 
 fn snapshot_node_ready(node: &Node) -> Result<()> {
-    if node.name.starts_with("database_")
-        || matches!(
-            node.name.as_str(),
-            "fts_search_local_db" | "hybrid_search_local_db" | "drop_index_db"
-        )
-    {
+    if node.name.starts_with("database_") || node.name == "drop_index_db" {
         bail!(
-            "Node {} requires database history, references or indexes that a current-data deployment snapshot does not retain. Use an online deployment or remove that requirement.",
+            "Node {} requires database history, version references or index management that a current-data deployment snapshot does not retain. Use an online deployment or remove that requirement.",
             node.name
         );
     }
@@ -790,12 +784,18 @@ impl App {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700))?;
             }
-            let budget = MAX_DEVICE_EXPORT_BYTES.saturating_sub(snapshot.bytes);
-            let local = budgeted_local_connection(&destination, budget).await?;
+            let local = connect_lance(
+                destination
+                    .to_str()
+                    .ok_or_else(|| anyhow!("Invalid snapshot database path"))?,
+            )
+            .execute()
+            .await?;
             let mut versions = BTreeMap::new();
             for name in &names {
                 let table = connection.open_table(name).execute().await?;
-                let snapshot_version = materialize(&table, &local, name, budget).await?;
+                let snapshot_version =
+                    materialize_with_fts_indexes(&table, &local, name, None).await?;
                 let target = if user {
                     &mut user_table_snapshots
                 } else {
@@ -851,7 +851,7 @@ impl App {
         if serde_json::to_value(&current)? != serde_json::to_value(self)? {
             bail!("Project manifest changed during export. Try again.");
         }
-        snapshot.add_bytes(&format!("{base}/deployment-snapshot.json"), &serde_json::to_vec(&serde_json::json!({"version":1,"database_mode":"current_data","preserves_history":false,"preserves_indexes":false,"readiness":"validated","tables":table_snapshots,"user_data":{"source_subject":user_sub,"target_subject":"local","tables":user_table_snapshots}}))?).await?;
+        snapshot.add_bytes(&format!("{base}/deployment-snapshot.json"), &serde_json::to_vec(&serde_json::json!({"version":1,"database_mode":"current_data","preserves_history":false,"preserves_indexes":false,"rebuilds_fts_indexes":true,"readiness":"validated","tables":table_snapshots,"user_data":{"source_subject":user_sub,"target_subject":"local","tables":user_table_snapshots}}))?).await?;
         Ok(snapshot)
     }
 }
@@ -860,6 +860,24 @@ impl App {
 mod tests {
     use super::*;
     use flow_like_storage::object_store::{ObjectStoreExt, memory::InMemory};
+
+    #[test]
+    fn snapshot_sizes_have_no_file_or_total_byte_ceiling() -> Result<()> {
+        let mut snapshot = DeviceProjectSnapshot::empty()?;
+        let size = 5 * 1024 * 1024 * 1024;
+        snapshot.reserve("apps/project/storage/first.bin", size)?;
+        snapshot.reserve("apps/project/storage/second.bin", size)?;
+        assert_eq!(snapshot.bytes, 2 * size);
+        assert_eq!(snapshot.files().len(), 2);
+        assert!(
+            snapshot
+                .reserve("apps/project/storage/overflow.bin", u64::MAX)
+                .is_err()
+        );
+        assert_eq!(snapshot.bytes, 2 * size);
+        assert_eq!(snapshot.files().len(), 2);
+        Ok(())
+    }
 
     fn load_bit(reference: serde_json::Value) -> Node {
         let mut node = Node::new("bit_from_string", "Load Bit", "", "Bit");
@@ -972,10 +990,14 @@ mod tests {
     async fn exported_lance_table_is_a_complete_independent_version() -> Result<()> {
         use crate::{bit::Metadata, state::FlowLikeConfig, utils::http::HTTPClient};
         use flow_like_storage::{
-            arrow_array::{Int64Array, RecordBatch},
+            arrow_array::{Int64Array, RecordBatch, StringArray},
             arrow_schema::{DataType, Field, Schema},
             files::store::{FlowLikeStore, local_store::LocalObjectStore},
             lancedb,
+        };
+        use lancedb::{
+            index::{Index, scalar::FtsIndexBuilder},
+            query::{ExecutableQuery, QueryBase},
         };
         let source = tempfile::tempdir()?;
         let root = source.path().to_path_buf();
@@ -994,9 +1016,17 @@ mod tests {
         ));
         let app = App::new(Some("project".into()), Metadata::default(), vec![], state).await?;
         app.save().await?;
-        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-        let batch =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![1, 2]))])?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("text", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["searchable record", "other record"])),
+            ],
+        )?;
         let database = source.path().join("apps/project/storage/db");
         let connection = lancedb::connect(database.to_str().unwrap())
             .execute()
@@ -1005,6 +1035,11 @@ mod tests {
             .create_table("records", batch.clone())
             .execute()
             .await?;
+        table
+            .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+            .execute()
+            .await?;
+        let source_version = table.version().await?;
         let user_base = Path::from("users")
             .join("auth0|selected")
             .join("apps")
@@ -1013,8 +1048,12 @@ mod tests {
         let user_connection = lancedb::connect(user_database.to_str().unwrap())
             .execute()
             .await?;
-        user_connection
+        let user_table = user_connection
             .create_table("private_records", batch.clone())
+            .execute()
+            .await?;
+        user_table
+            .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
             .execute()
             .await?;
         let snapshot = app.export_device_snapshot("auth0|selected").await?;
@@ -1042,6 +1081,22 @@ mod tests {
             .await?;
         assert_eq!(exported.count_rows(None).await?, 2);
         assert_eq!(table.count_rows(None).await?, 4);
+        for copied in [&exported, &user_exported] {
+            let matches = copied
+                .query()
+                .full_text_search(lancedb::index::scalar::FullTextSearchQuery::new(
+                    "searchable".into(),
+                ))
+                .execute()
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(
+                matches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+                1
+            );
+            assert_eq!(copied.list_indices().await?.len(), 1);
+        }
         let metadata = std::fs::read(
             snapshot
                 .directory
@@ -1049,21 +1104,28 @@ mod tests {
                 .join("apps/project/deployment-snapshot.json"),
         )?;
         let metadata: serde_json::Value = serde_json::from_slice(&metadata)?;
-        assert_eq!(metadata["tables"]["records"]["source_version"], 1);
+        assert_eq!(
+            metadata["tables"]["records"]["source_version"],
+            source_version
+        );
         assert_eq!(metadata["preserves_history"], false);
+        assert_eq!(metadata["rebuilds_fts_indexes"], true);
         Ok(())
     }
 
     #[test]
-    fn current_data_snapshot_rejects_history_dynamic_selectors_and_fts() -> Result<()> {
+    fn current_data_snapshot_allows_search_but_rejects_history_and_dynamic_selectors() -> Result<()>
+    {
         use crate::flow::variable::VariableType;
+        for name in ["database_checkout", "database_tags", "drop_index_db"] {
+            assert!(snapshot_node_ready(&Node::new(name, name, "", "Data/Database")).is_err());
+        }
         for name in [
-            "database_checkout",
-            "database_tags",
             "fts_search_local_db",
             "hybrid_search_local_db",
+            "vector_search_local_db",
         ] {
-            assert!(snapshot_node_ready(&Node::new(name, name, "", "Data/Database")).is_err());
+            snapshot_node_ready(&Node::new(name, name, "", "Data/Database"))?;
         }
         let mut open = Node::new("open_local_db", "Open", "", "Data/Database");
         open.add_input_pin("branch", "Branch", "", VariableType::String)

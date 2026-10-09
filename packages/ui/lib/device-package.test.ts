@@ -148,6 +148,9 @@ describe("verified standalone release packages", () => {
 		expect(archive.readAsText("state/agent.env")).toContain(
 			"FLOW_LIKE_DEVICE_ISOLATION_POLICY=compatible",
 		);
+		expect(archive.readAsText("state/agent.env")).not.toMatch(
+			/^FLOW_LIKE_(?:DEVICE|PROJECT)_ARTIFACT_BYTES=/m,
+		);
 		expect((archive.getEntry("state/agent.env")?.attr ?? 0) >>> 16).toBe(
 			0o100600,
 		);

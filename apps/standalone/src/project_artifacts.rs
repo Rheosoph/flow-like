@@ -30,7 +30,6 @@ use std::{
 const ARTIFACT_LOCK_WAIT: Duration = Duration::from_secs(10);
 const MAX_RECEIVING_PER_PRINCIPAL: u64 = 4;
 const MAX_TRANSFERS_PER_PRINCIPAL: u64 = 256;
-const MAX_RECEIVING_BYTES_PER_PRINCIPAL: u64 = 16 * 1024 * 1024 * 1024;
 const MAX_RECEIVING: u64 = 64;
 const MAX_TRANSFERS: u64 = 4096;
 pub const RAW_ARTIFACT_CHUNK_BYTES: usize = 256 * 1024;
@@ -153,28 +152,44 @@ impl ArtifactUsage {
 
     fn enforce(&self, limit: crate::isolation::ArtifactLimits, scope: &str) -> Result<()> {
         ensure!(
-            self.bytes <= limit.bytes
+            limit.bytes.is_none_or(|bytes| self.bytes <= bytes)
                 && self.files <= limit.files
                 && self.revisions <= limit.revisions,
             ArtifactLimitExceeded(format!(
                 "Artifact storage budget exceeded for {scope}: {} / {} charged bytes, {} / {} file/directory entries, {} / {} revisions. Each in-flight file reserves 34 entries for maximum path depth until commit. An operator must remove unused revisions or increase the limit in agent.env",
-                self.bytes, limit.bytes, self.files, limit.files, self.revisions, limit.revisions
+                self.bytes,
+                limit
+                    .bytes
+                    .map_or_else(|| "unlimited".into(), |bytes| bytes.to_string()),
+                self.files,
+                limit.files,
+                self.revisions,
+                limit.revisions
             ))
         );
         Ok(())
     }
 
-    fn reservation(descriptor: &ProjectArtifactDescriptor) -> Self {
+    fn reservation(descriptor: &ProjectArtifactDescriptor) -> Result<Self> {
         // Before receiving the manifest, reserve the protocol's maximum path
         // depth for every file, verification markers, and both manifest copies.
         // Directory entries cost 4 KiB each; this is an admission budget, not a
         // claim about the backing filesystem's allocation or journal overhead.
         let files = u64::from(descriptor.file_count);
-        Self {
-            bytes: descriptor.total_bytes + descriptor.manifest_size * 2 + (files * 34 + 8) * 4096,
-            files: files * 34 + 8,
+        let files = files * 34 + 8;
+        let metadata_bytes = descriptor
+            .manifest_size
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(files * 4096))
+            .context("Artifact byte accounting overflow")?;
+        Ok(Self {
+            bytes: descriptor
+                .total_bytes
+                .checked_add(metadata_bytes)
+                .context("Artifact byte accounting overflow")?,
+            files,
             revisions: 1,
-        }
+        })
     }
 }
 
@@ -377,7 +392,10 @@ fn admit_artifact(
     let (mut accounting, resumed) = charged(store, root, recovered, None)?;
     accounting.add(
         &descriptor.project_id,
-        resumed.unwrap_or_else(|| ArtifactUsage::reservation(descriptor)),
+        match resumed {
+            Some(usage) => usage,
+            None => ArtifactUsage::reservation(descriptor)?,
+        },
     )?;
     accounting.device.enforce(budgets.device, "device")?;
     accounting.projects[&descriptor.project_id].enforce(budgets.project, "project")
@@ -527,7 +545,7 @@ impl ArtifactAccounting {
             };
             let usage = match state.as_str() {
                 "receiving" => {
-                    let reserved = ArtifactUsage::reservation(&descriptor);
+                    let reserved = ArtifactUsage::reservation(&descriptor)?;
                     ArtifactUsage {
                         bytes: actual.bytes.max(reserved.bytes),
                         files: actual.files.max(reserved.files),
@@ -587,7 +605,7 @@ impl ArtifactAccounting {
                 File::open(&staging)?.sync_all()?;
                 continue;
             }
-            let reserved = ArtifactUsage::reservation(&pending.descriptor);
+            let reserved = ArtifactUsage::reservation(&pending.descriptor)?;
             let usage = ArtifactUsage {
                 bytes: actual.bytes.max(reserved.bytes),
                 files: actual.files.max(reserved.files),
@@ -899,6 +917,11 @@ impl Prune {
         self.refuse_while_busy(store, now)?;
         let revisions = home.join("revisions");
         self.refuse_in_use(store, &revisions)?;
+        let removed_bytes = self.retained.iter().try_fold(0u64, |total, (_, bytes)| {
+            total
+                .checked_add(*bytes)
+                .context("Artifact byte accounting overflow")
+        })?;
         self.set_aside(home, &revisions)?;
         self.remove_receipts(&revisions)?;
         Ok((
@@ -906,7 +929,7 @@ impl Prune {
                 .iter()
                 .map(|(revision, _)| revision.clone())
                 .collect(),
-            self.retained.iter().map(|(_, bytes)| bytes).sum(),
+            removed_bytes,
         ))
     }
 
@@ -1284,17 +1307,12 @@ fn status_inner(
 /// bookkeeping, and the device owner is exempt from them so grantees can never
 /// lock it out; its own per-principal bounds still apply. Storage is charged by
 /// admission.
-fn enforce_staging_limits(
-    store: &StateStore,
-    owner: &str,
-    descriptor: &ProjectArtifactDescriptor,
-    device_owner: bool,
-) -> Result<()> {
-    let (receiving, transfers, own_receiving, own_transfers, own_bytes): (u64, u64, u64, u64, u64) =
+fn enforce_staging_limits(store: &StateStore, owner: &str, device_owner: bool) -> Result<()> {
+    let (receiving, transfers, own_receiving, own_transfers): (u64, u64, u64, u64) =
         store.connection.query_row(
-            "SELECT COALESCE(SUM(state='receiving'),0),COUNT(*),COALESCE(SUM(state='receiving' AND principal=?1),0),COALESCE(SUM(principal=?1),0),COALESCE(SUM(CASE WHEN state='receiving' AND principal=?1 THEN json_extract(descriptor_json,'$.total_bytes')+json_extract(descriptor_json,'$.manifest_size') ELSE 0 END),0) FROM project_artifact_transfers",
+            "SELECT COALESCE(SUM(state='receiving'),0),COUNT(*),COALESCE(SUM(state='receiving' AND principal=?1),0),COALESCE(SUM(principal=?1),0) FROM project_artifact_transfers",
             [owner],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
     ensure!(
         own_receiving < MAX_RECEIVING_PER_PRINCIPAL,
@@ -1306,15 +1324,6 @@ fn enforce_staging_limits(
         own_transfers < MAX_TRANSFERS_PER_PRINCIPAL,
         ArtifactLimitExceeded(format!(
             "This controller started {own_transfers} of {MAX_TRANSFERS_PER_PRINCIPAL} artifact transfers allowed per day; older transfers expire after 24 hours"
-        ))
-    );
-    ensure!(
-        own_bytes
-            .checked_add(descriptor.total_bytes + descriptor.manifest_size)
-            .is_some_and(|bytes| bytes <= MAX_RECEIVING_BYTES_PER_PRINCIPAL),
-        ArtifactLimitExceeded(format!(
-            "This controller's in-progress artifact uploads would exceed {} GiB of staging",
-            MAX_RECEIVING_BYTES_PER_PRINCIPAL / 1024 / 1024 / 1024
         ))
     );
     ensure!(
@@ -1392,7 +1401,7 @@ fn begin_transfer(
         None
     };
     drop_expired_transfers(store, root, now)?;
-    enforce_staging_limits(store, owner, descriptor, device_owner)?;
+    enforce_staging_limits(store, owner, device_owner)?;
     admit_artifact(
         store,
         root,
@@ -1466,7 +1475,9 @@ fn file_sha256(file: &mut File, size: u64) -> Result<Option<String>> {
         if count == 0 {
             break;
         }
-        received += count as u64;
+        received = received
+            .checked_add(count as u64)
+            .context("Artifact size overflow during verification")?;
         ensure!(received <= size, "Artifact changed during verification");
         hash.update(&buffer[..count]);
     }
@@ -1570,7 +1581,7 @@ pub fn chunk_bytes(
             dir,
         }
     };
-    // Hashing up to 4 GiB must not stall other controllers' transfers.
+    // Hashing a large file must not stall other controllers' transfers.
     let matches =
         file_sha256(&mut pending.file, pending.size)?.as_deref() == Some(pending.digest.as_str());
     let _lock = artifact_lock(root)?;
@@ -2219,9 +2230,7 @@ pub fn import_local_selected(
     source: &Path,
     assets: &ProjectArtifactAssets,
 ) -> Result<ArtifactTransferStatus> {
-    use flow_like_device_protocol::{
-        PROJECT_ARTIFACT_MAX_FILE_BYTES, PROJECT_ARTIFACT_MAX_FILES, ProjectArtifactFile,
-    };
+    use flow_like_device_protocol::{PROJECT_ARTIFACT_MAX_FILES, ProjectArtifactFile};
     validate_artifact_project_id(project)?;
     let source_meta = std::fs::symlink_metadata(source)?;
     ensure!(
@@ -2311,19 +2320,18 @@ pub fn import_local_selected(
         }
         let mut input = options.open(path)?;
         let meta = input.metadata()?;
-        ensure!(
-            meta.is_file() && meta.len() <= PROJECT_ARTIFACT_MAX_FILE_BYTES,
-            "Project file exceeds its bound"
-        );
+        ensure!(meta.is_file(), "Project artifact must be a regular file");
         let mut hash = Sha256::new();
         let mut bytes = [0u8; 64 * 1024];
-        let mut count = 0;
+        let mut count = 0u64;
         loop {
             let size = input.read(&mut bytes)?;
             if size == 0 {
                 break;
             }
-            count += size as u64;
+            count = count
+                .checked_add(size as u64)
+                .context("Project artifact size overflow")?;
             ensure!(count <= meta.len(), "Project changed during import");
             hash.update(&bytes[..size]);
         }
@@ -2400,7 +2408,9 @@ pub fn import_local_selected(
             if length == 0 {
                 break;
             }
-            count += length as u64;
+            count = count
+                .checked_add(length as u64)
+                .context("Project artifact size overflow")?;
             ensure!(count <= size, "Project changed during import");
             output.write_all(&bytes[..length])?;
             hash.update(&bytes[..length]);
@@ -2570,10 +2580,65 @@ mod tests {
     }
 
     #[test]
+    fn large_artifacts_have_no_default_byte_or_controller_staging_cap() {
+        let (dir, store, mut manifest) = setup();
+        manifest.files[0].size = 65 * 1024_u64.pow(3);
+        let descriptor = manifest.descriptor().unwrap();
+        for _ in 0..2 {
+            begin(
+                &store,
+                dir.path(),
+                &uuid::Uuid::new_v4().to_string(),
+                "controller",
+                &descriptor,
+            )
+            .unwrap();
+        }
+        let usage = usage(&store, dir.path(), Some("project")).unwrap();
+        assert!(usage.device["bytes"]["max"].is_null());
+        assert!(usage.device["bytes"]["used"].as_u64().unwrap() > 130 * 1024_u64.pow(3));
+        let (project, _) = usage.project.unwrap();
+        assert!(project["bytes"]["max"].is_null());
+    }
+
+    #[test]
+    fn artifact_upload_resumes_beyond_previous_file_size_limit() {
+        let (dir, store, mut manifest) = setup();
+        manifest.files[0].size = 9 * 1024_u64.pow(3);
+        let id = start(&store, dir.path(), &manifest);
+        let staging = transfer_dir(dir.path(), &id).unwrap();
+        let path = data_path(&staging, &manifest.files[0].path).unwrap();
+        let offset = 5 * 1024_u64.pow(3);
+        open(&path, true, true).unwrap().set_len(offset).unwrap();
+        let progress = chunk_bytes(
+            &store,
+            dir.path(),
+            "project",
+            &id,
+            "controller",
+            Some(0),
+            offset,
+            b"x",
+        )
+        .unwrap();
+        assert_eq!(progress.offset, offset + 1);
+        assert!(!progress.complete);
+        assert_eq!(std::fs::metadata(path).unwrap().len(), offset + 1);
+    }
+
+    #[test]
+    fn artifact_reservations_reject_accounting_overflow() {
+        let (_, _, manifest) = setup();
+        let mut descriptor = manifest.descriptor().unwrap();
+        descriptor.total_bytes = u64::MAX;
+        assert!(ArtifactUsage::reservation(&descriptor).is_err());
+    }
+
+    #[test]
     fn file_and_byte_budgets_include_receiving_reservations_and_metadata() {
         let (dir, store, m) = setup();
         let descriptor = m.descriptor().unwrap();
-        let charge = ArtifactUsage::reservation(&descriptor);
+        let charge = ArtifactUsage::reservation(&descriptor).unwrap();
         configure_budget(
             dir.path(),
             &format!("FLOW_LIKE_DEVICE_ARTIFACT_BYTES={}\n", charge.bytes - 1),
@@ -2787,7 +2852,7 @@ mod tests {
         let actual = accounting
             .tree(Path::new(uploaded.project_path.as_deref().unwrap()), 0)
             .unwrap();
-        let reserved = ArtifactUsage::reservation(&descriptor);
+        let reserved = ArtifactUsage::reservation(&descriptor).unwrap();
         assert!(actual.files <= reserved.files && actual.bytes <= reserved.bytes);
     }
 
@@ -3527,12 +3592,12 @@ mod tests {
         }
         assert_eq!(project["revisions"], json!({"used":3,"max":128}));
         assert_eq!(used.device["revisions"], json!({"used":4,"max":1024}));
-        assert_eq!(used.device["bytes"]["max"], 64 * 1024_u64.pow(3));
+        assert!(used.device["bytes"]["max"].is_null());
         assert!(used.device["entries"]["used"].as_u64() > project["entries"]["used"].as_u64());
 
         let next = variant(&m, "project", b"fourth").descriptor().unwrap();
-        let charged =
-            project["bytes"]["used"].as_u64().unwrap() + ArtifactUsage::reservation(&next).bytes;
+        let charged = project["bytes"]["used"].as_u64().unwrap()
+            + ArtifactUsage::reservation(&next).unwrap().bytes;
         let attempt = |limit: u64| {
             configure_budget(root, &format!("FLOW_LIKE_PROJECT_ARTIFACT_BYTES={limit}\n"));
             let id = uuid::Uuid::new_v4().to_string();

@@ -189,12 +189,14 @@ support. macOS cannot provide this sandbox. Read
 [Device security](/devices/security/) before selecting a policy for code
 written by other people.
 
-The generated file also sets artifact admission budgets. Defaults are 64 GiB,
-262,144 filesystem entries, and 1,024 revisions per device, with 16 GiB,
-65,536 entries, and 128 revisions per app. These budgets cover stored app
-artifacts and uploads; they are separate from each service's runtime memory,
-CPU, and disk limits. Lowering a budget does not delete old revisions. It can
-block further uploads until usage fits.
+The generated file also sets artifact admission budgets. Defaults are
+262,144 filesystem entries and 1,024 revisions per device, with 65,536 entries
+and 128 revisions per app. Artifact storage has no default byte limit. Operators
+can set `FLOW_LIKE_DEVICE_ARTIFACT_BYTES` or `FLOW_LIKE_PROJECT_ARTIFACT_BYTES`
+to add byte quotas. These budgets cover stored app artifacts and uploads;
+they are separate from each service's runtime memory, CPU, and disk limits.
+Lowering a budget does not delete old revisions. It can block further uploads
+until usage fits.
 
 CLI examples use `--state-dir ./state` explicitly. Without an override, the CLI
 reads `FLOW_LIKE_STANDALONE_STATE_DIR` from `.env` in the current directory;

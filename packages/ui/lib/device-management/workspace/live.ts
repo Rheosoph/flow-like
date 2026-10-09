@@ -65,6 +65,8 @@ export const LIVE_TIMING = {
 	unreachableRetryS: 60,
 	presenceCheckMs: 5_000,
 	inspectionEveryMs: 20_000,
+	/** Bounds a page including queue wait and one transport retry. */
+	inspectionPageMs: 180_000,
 	lingerMs: 60_000,
 } as const;
 
@@ -281,6 +283,7 @@ interface Entry {
 	timers: Partial<Record<TimerName, () => void>>;
 	inspection?: LiveInspection;
 	inspecting?: Promise<void>;
+	inspectionAbort?: AbortController;
 	inspectAgain: boolean;
 	writer?: InventoryWriter;
 	writerController?: BrowserController;
@@ -1333,8 +1336,32 @@ class LiveManager implements LiveSessionManagerImpl {
 		lane: CallLane,
 	): Promise<void> {
 		const generation = entry.generation;
+		const abort = new AbortController();
+		entry.inspectionAbort = abort;
+		const interrupted = deferred<never>();
+		const onAbort = () => interrupted.reject(abortError(abort.signal));
+		abort.signal.addEventListener("abort", onAbort, { once: true });
+		let cancelDeadline: (() => void) | undefined;
+		const resetDeadline = () => {
+			cancelDeadline?.();
+			cancelDeadline = this.schedule(
+				() =>
+					abort.abort(
+						new LiveCallError(
+							"timeout",
+							"The device services did not respond in time.",
+						),
+					),
+				LIVE_TIMING.inspectionPageMs,
+			);
+		};
+		resetDeadline();
 		let rejection: ManagementRejection | undefined;
-		const call = this.call(entry.id, { lane, idempotent: true });
+		const call = this.call(entry.id, {
+			lane,
+			idempotent: true,
+			signal: abort.signal,
+		});
 		const tracked: ManagementCall = async (command, operationId) => {
 			const response = await call(command, operationId);
 			rejection = managementRejection(response) ?? rejection;
@@ -1342,16 +1369,18 @@ class LiveManager implements LiveSessionManagerImpl {
 		};
 		const previous = entry.inspection;
 		try {
-			const value = await this.readInspection(tracked, entry.id, {
+			const reading = this.readInspection(tracked, entry.id, {
 				expectedPlacements: previous?.value.placements.length,
 				now: () => Math.round(this.ports.clock.now()),
 				onPage: (pages) => {
-					if (entry.generation !== generation) return;
+					if (entry.generation !== generation || abort.signal.aborted) return;
+					resetDeadline();
 					if (entry.inspection)
 						entry.inspection = { ...entry.inspection, progress: { pages } };
 					this.notify();
 				},
 			});
+			const value = await Promise.race([reading, interrupted.promise]);
 			if (entry.generation !== generation) return;
 			const inspection: LiveInspection = {
 				value,
@@ -1363,7 +1392,12 @@ class LiveManager implements LiveSessionManagerImpl {
 			this.options.onInspection?.(entry.id, inspection);
 		} catch (error) {
 			if (entry.generation !== generation) return;
+			if (abort.signal.aborted) entry.inspectAgain = false;
 			this.inspectionFailed(entry, error, rejection);
+		} finally {
+			cancelDeadline?.();
+			abort.signal.removeEventListener("abort", onAbort);
+			if (entry.inspectionAbort === abort) entry.inspectionAbort = undefined;
 		}
 	}
 
@@ -1435,6 +1469,7 @@ class LiveManager implements LiveSessionManagerImpl {
 	private shutdown(entry: Entry, error: LiveCallError): void {
 		entry.generation++;
 		entry.inspectAgain = false;
+		entry.inspectionAbort?.abort(error);
 		entry.abort?.abort();
 		entry.dataTunnel?.close();
 		entry.dataTunnel = undefined;

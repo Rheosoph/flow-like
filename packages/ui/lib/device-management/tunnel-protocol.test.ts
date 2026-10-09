@@ -84,7 +84,7 @@ describe("tunnel data stream wire contract", () => {
 		expect(() => encode(valid)).not.toThrow();
 	});
 
-	test("binds artifact project, transfer, file and bounded offset", () => {
+	test("binds artifact project, transfer, file and valid offset", () => {
 		const valid = fixture.open_data_artifact.body;
 		for (const fields of [
 			{ project_id: ".." },
@@ -95,13 +95,14 @@ describe("tunnel data stream wire contract", () => {
 			{ file_index: 0x1_0000_0000 },
 			{ file_index: 1.5 },
 			{ offset: -1 },
-			{ offset: 4 * 1024 * 1024 * 1024 + 1 },
+			{ offset: Number.MAX_SAFE_INTEGER + 1 },
 			{ host: "127.0.0.1" },
 		])
 			expect(() => encode({ ...valid, ...fields })).toThrow();
 		const { file_index: _, ...manifest } = valid;
 		expect(() => encode(manifest)).not.toThrow();
 		expect(() => encode({ ...valid, file_index: 0, offset: 0 })).not.toThrow();
+		expect(() => encode({ ...valid, offset: 5 * 1024 ** 3 })).not.toThrow();
 		expect(() => encode({ ...valid, kind: "unknown" })).toThrow();
 	});
 
@@ -135,7 +136,7 @@ describe("tunnel data stream wire contract", () => {
 			expect(() => open(value)).toThrow();
 	});
 
-	test("model asset pushes name a canonical job and a bounded offset", () => {
+	test("model asset pushes name a canonical job and a valid offset", () => {
 		const valid = {
 			kind: "model_asset",
 			job_id: "12345678-1234-1234-1234-123456789abc",
@@ -145,14 +146,14 @@ describe("tunnel data stream wire contract", () => {
 			valid,
 		);
 		expect(() =>
-			encode({ ...valid, offset: 64 * 1024 * 1024 * 1024 }),
+			encode({ ...valid, offset: 65 * 1024 * 1024 * 1024 }),
 		).not.toThrow();
 		for (const fields of [
 			{ job_id: valid.job_id.toUpperCase() },
 			{ job_id: "job" },
 			{ offset: -1 },
 			{ offset: 1.5 },
-			{ offset: 64 * 1024 * 1024 * 1024 + 1 },
+			{ offset: Number.MAX_SAFE_INTEGER + 1 },
 			{ project_id: "project" },
 		])
 			expect(() => encode({ ...valid, ...fields })).toThrow();

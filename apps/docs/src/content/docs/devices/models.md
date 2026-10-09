@@ -89,12 +89,11 @@ the runtime's overhead against the free GPU memory, unified memory, or RAM.
 The device reports a GPU's memory only after a runtime for that GPU is
 installed. Until then, the check counts the processor only.
 
-The wizard refuses a version that the device can't take: a file larger than
-64 GiB, more than 32 files, a split model with missing parts, a vision model
-without a projector, an engine the device can't run, or a download larger
-than the space left on the model disk. A model whose files carry no
-fingerprint is refused too; add it from Hugging Face, where every large file
-has one.
+The wizard refuses a version that the device can't take: more than 32 files,
+a split model with missing parts, a vision model without a projector, an
+engine the device can't run, or a download larger than the space left on the
+model disk. A file without a fingerprint needs a download source so
+preparation can read it and compute one. Files with neither are refused.
 
 Once you add it, the device downloads the files in the background. The model
 loads when you load it or when its first request arrives. Adding files that
@@ -153,22 +152,20 @@ Deploy the app again from the desktop app instead.
 
 When you deploy an app that uses a local model and every target device hosts
 models, the deployment carries each model file's fingerprint, size, and
-sources instead of the file itself. Only small files without a fingerprint
-still travel inside it. The transfer limits of an offline copy in
-[Deploy and operate services](/devices/deployments/#local-only-apps) therefore
-don't apply to model files; each file can be up to 64 GiB.
+sources instead of the file itself. Files that preparation cannot describe
+with a public source can travel inside the deployment artifact. Neither path
+has a fixed byte limit.
 
 After the upload, the rollout lists each file under **Model files**. The
 device downloads what it doesn't have yet. For a file it can't download, your
 computer sends it automatically, with its progress and **Stop sending** in
 view. The update is applied only once every file is on the device.
 
-The web app can't fingerprint a large file itself. A model file larger than
-64 MiB that has no fingerprint from the hub or Hugging Face must be deployed
-from the desktop app.
+The web app can download and fingerprint model files without a fixed byte
+limit. Downloads and hashing still need browser storage and processing time.
 
 If a target device's agent doesn't host models, the deployment carries the
-model files inside it as before, within the offline copy's limits.
+model files inside the offline copy, with no fixed byte limit.
 
 If a model file of a deployed service is missing when the service starts, for
 example after a reset of the device, the device downloads it again first. If

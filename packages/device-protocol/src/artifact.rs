@@ -8,8 +8,6 @@ use unicode_normalization::UnicodeNormalization;
 pub const PROJECT_ARTIFACT_CHUNK_BYTES: usize = 8192;
 pub const PROJECT_ARTIFACT_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 pub const PROJECT_ARTIFACT_MAX_FILES: usize = 8192;
-pub const PROJECT_ARTIFACT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-pub const PROJECT_ARTIFACT_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const PROJECT_ARTIFACT_TTL_SECONDS: i64 = 86_400;
 pub const PROJECT_ARTIFACT_PRUNE_REVISIONS: usize = 64;
 
@@ -281,7 +279,6 @@ impl ProjectArtifactDescriptor {
             || self.manifest_size > PROJECT_ARTIFACT_MANIFEST_BYTES
             || self.file_count == 0
             || self.file_count as usize > PROJECT_ARTIFACT_MAX_FILES
-            || self.total_bytes > PROJECT_ARTIFACT_MAX_BYTES
         {
             return Err(ProtocolError::Invalid("artifact transfer bounds"));
         }
@@ -381,8 +378,8 @@ impl ProjectArtifactManifest {
                 ));
             }
             validate_artifact_digest(&file.sha256)?;
-            if file.path.as_str() <= previous || file.size > PROJECT_ARTIFACT_MAX_FILE_BYTES {
-                return Err(ProtocolError::Invalid("artifact file order or size"));
+            if file.path.as_str() <= previous {
+                return Err(ProtocolError::Invalid("artifact file order"));
             }
             let lower = file.path.to_lowercase().nfc().collect::<String>();
             if !paths.insert(lower) {
@@ -429,9 +426,6 @@ impl ProjectArtifactManifest {
                     ));
                 }
             }
-        }
-        if total > PROJECT_ARTIFACT_MAX_BYTES {
-            return Err(ProtocolError::Invalid("artifact total size"));
         }
         if !self.files.iter().any(|f| {
             f.path
@@ -587,9 +581,27 @@ mod tests {
             value.canonical_bytes().unwrap().len() as u64
         );
         assert_eq!(descriptor.total_bytes, 1);
-        let mut changed = value;
-        changed.files[0].size = PROJECT_ARTIFACT_MAX_FILE_BYTES + 1;
-        assert!(changed.descriptor().is_err());
+    }
+
+    #[test]
+    fn artifact_payload_sizes_are_unrestricted_with_checked_totals() {
+        let mut value = manifest();
+        value.files[0].size = 9 * 1024_u64.pow(3);
+        let descriptor = value.descriptor().unwrap();
+        descriptor.validate().unwrap();
+        assert_eq!(descriptor.total_bytes, value.files[0].size);
+
+        value.files[0].size = u64::MAX;
+        value.descriptor().unwrap().validate().unwrap();
+        value.files.push(ProjectArtifactFile {
+            path: "apps/project/storage/database.sqlite".into(),
+            size: 1,
+            sha256: artifact_sha256(b"database"),
+        });
+        assert!(matches!(
+            value.descriptor(),
+            Err(ProtocolError::Invalid("artifact size overflow"))
+        ));
     }
 
     #[test]
@@ -884,10 +896,7 @@ fn validate_packaged_artifacts(
             .get(&file.path)
             .ok_or(ProtocolError::Invalid("unselected packaged Bit artifact"))?;
         validate_artifact_digest(&file.sha256)?;
-        if size.is_some_and(|size| size != file.size)
-            || file.size > PROJECT_ARTIFACT_MAX_FILE_BYTES
-            || !seen.insert(file.path.as_str())
-        {
+        if size.is_some_and(|size| size != file.size) || !seen.insert(file.path.as_str()) {
             return Err(ProtocolError::Invalid(
                 "packaged Bit artifact size or identity",
             ));
@@ -996,6 +1005,15 @@ mod packaged_bit_tests {
 
     fn checked(metadata: PackagedBitMetadataV2) -> Result<()> {
         PackagedBitMetadata::V2(metadata).validate("model")
+    }
+
+    #[test]
+    fn packaged_bit_files_can_exceed_previous_artifact_size_bounds() {
+        let mut metadata = v2();
+        let size = 65 * 1024_u64.pow(3);
+        metadata.dependencies[0]["size"] = json!(size);
+        metadata.artifacts[0].size = size;
+        checked(metadata).unwrap();
     }
 
     #[test]

@@ -244,7 +244,7 @@ describe("versions on a device", () => {
 			},
 		};
 		const view = optionView(candidate([big]), big, { kind: "chat" }, tight);
-		expect(view.block).toBe("file_too_large");
+		expect(view.block).toBe("disk");
 		const fits = option({ files: [file("mid.gguf", 60 * GIB, fresh)] });
 		expect(
 			optionView(candidate([fits]), fits, { kind: "chat" }, tight).block,

@@ -120,7 +120,6 @@ export function Shortcuts() {
 					nextShortcuts,
 				);
 			}}
-			bits={bits.data}
 		/>
 	);
 }

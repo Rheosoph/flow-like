@@ -122,7 +122,6 @@ interface ShortcutsProps<TBackend, TAppMetadata> {
 		profileId: string,
 		shortcuts: IShortcut[],
 	) => Promise<void>;
-	bits?: Array<{ id: string }>;
 }
 
 export function Shortcuts<TBackend, TAppMetadata>({
@@ -140,7 +139,6 @@ export function Shortcuts<TBackend, TAppMetadata>({
 	auth,
 	onCreateProject,
 	onShortcutsChanged,
-	bits,
 }: ShortcutsProps<TBackend, TAppMetadata>) {
 	const { t } = useTranslation("common");
 	const { state: sidebarState } = useSidebar();

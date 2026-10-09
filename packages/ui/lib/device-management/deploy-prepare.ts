@@ -67,7 +67,7 @@ export class DeployPrepareDesktopOnlyError extends Error {
 	}
 }
 
-/** Bits and packages are exported natively on desktop; the browser downloads them within its size limits. */
+/** Bits and packages are exported natively on desktop or downloaded by the browser. */
 function needsNativeExport(approved: ApprovedOnlineMetadata): boolean {
 	const { app } = approved;
 	return app.bits.length > 0 || Object.keys(app.packages ?? {}).length > 0;
