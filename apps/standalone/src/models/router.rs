@@ -29,14 +29,13 @@ use flow_like_types::async_trait;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    io::Read,
+    io::{Read, Write},
     path::Path,
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
 
-const IMPORT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// How long a placement uses the agent's answer for one of its Bits before it asks again.
 const ROUTE_TTL: Duration = Duration::from_secs(30);
 const TOKENIZER_ROLES: [(BitTypes, &str); 4] = [
@@ -373,41 +372,48 @@ fn read_metadata(config: &PlacementConfig, bit_id: &str) -> Result<Option<BitMet
     BitMetadata::typed(packaged).map(Some)
 }
 
-/// A small artifact file of the committed revision, checked against its pinned size and sha256.
-fn read_pinned_file(root: &Path, asset: &ModelAssetDescriptor, path: &str) -> Result<Vec<u8>> {
-    validate_artifact_relative_path(path)?;
-    ensure!(
-        asset.size <= IMPORT_MAX_BYTES,
-        "Artifact file {path} is too large to import into the model store"
-    );
-    let mut bytes = Vec::new();
-    std::fs::File::open(root.join(path))
-        .with_context(|| format!("Open artifact file {path}"))?
-        .take(asset.size + 1)
-        .read_to_end(&mut bytes)?;
-    let sha256 = format!("{:x}", Sha256::digest(&bytes));
-    ensure!(
-        bytes.len() as u64 == asset.size && sha256 == asset.digest.hex,
-        "Artifact file {path} differs from its pinned size or sha256"
-    );
-    Ok(bytes)
-}
-
-fn store_bytes(store: &ModelStore, asset: &ModelAssetDescriptor, bytes: &[u8]) -> Result<()> {
-    let _reservation = store.reserve(&asset.digest, asset.size)?;
-    let mut partial = store.open_partial(&asset.digest)?;
-    partial.set_len(0)?;
-    std::io::Write::write_all(&mut partial, bytes)?;
-    partial.sync_all()?;
-    store.publish(asset)
-}
-
-/// Copies a small artifact file of the committed revision into the store, verified.
+/// Streams a committed artifact into the model store and verifies its pinned bytes.
 fn import(store: &ModelStore, root: &Path, asset: &ModelAssetDescriptor, path: &str) -> Result<()> {
+    validate_artifact_relative_path(path)?;
     if store.contains(&asset.digest, asset.size)? {
         return Ok(());
     }
-    store_bytes(store, asset, &read_pinned_file(root, asset, path)?)
+    let mut source = std::fs::File::open(root.join(path))
+        .with_context(|| format!("Open artifact file {path}"))?;
+    ensure!(
+        source.metadata()?.len() == asset.size,
+        "Artifact file {path} differs from its pinned size"
+    );
+    let _reservation = store.reserve(&asset.digest, asset.size)?;
+    let mut partial = store.open_partial(&asset.digest)?;
+    let copied = (|| -> Result<()> {
+        partial.set_len(0)?;
+        let mut hash = Sha256::new();
+        let mut remaining = asset.size;
+        let mut buffer = [0u8; 128 * 1024];
+        while remaining > 0 {
+            let length = remaining.min(buffer.len() as u64) as usize;
+            source.read_exact(&mut buffer[..length])?;
+            hash.update(&buffer[..length]);
+            partial.write_all(&buffer[..length])?;
+            remaining -= length as u64;
+        }
+        ensure!(
+            source.read(&mut buffer[..1])? == 0
+                && format!("{:x}", hash.finalize()) == asset.digest.hex,
+            "Artifact file {path} differs from its pinned size or sha256"
+        );
+        partial.sync_all()?;
+        Ok(())
+    })();
+    drop(partial);
+    if let Err(error) = copied {
+        store.remove_partial(&asset.digest).with_context(|| {
+            format!("Clean up partial model file after importing {path} failed: {error:#}")
+        })?;
+        return Err(error);
+    }
+    store.publish(asset)
 }
 
 async fn import_all(
@@ -1019,7 +1025,38 @@ mod tests {
         assert!(store.contains(&asset.digest, 3)?);
         asset.digest.hex = "e".repeat(64);
         assert!(import(&store, &root, &asset, "bits/tok-hash/tokenizer.json").is_err());
+        assert_eq!(store.partial_len(&asset.digest)?, 0);
         assert!(import(&store, &root, &asset, "../escape").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn imports_stream_files_above_the_former_size_limit() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = ModelStore::open(
+            directory.path(),
+            super::super::store::ModelStoreConfig::default(),
+        )?;
+        let root = directory.path().join("project");
+        std::fs::create_dir_all(root.join("bits/large"))?;
+        let size = 65 * 1024 * 1024;
+        std::fs::File::create(root.join("bits/large/model.bin"))?.set_len(size)?;
+        let mut hash = Sha256::new();
+        let chunk = vec![0u8; 1024 * 1024];
+        for _ in 0..65 {
+            hash.update(&chunk);
+        }
+        let asset = ModelAssetDescriptor {
+            digest: ModelAssetDigest {
+                algorithm: DigestAlgorithm::Sha256,
+                hex: format!("{:x}", hash.finalize()),
+            },
+            size,
+            file_name: "model.bin".into(),
+            sources: vec![],
+        };
+        import(&store, &root, &asset, "bits/large/model.bin")?;
+        assert!(store.contains(&asset.digest, size)?);
         Ok(())
     }
 }

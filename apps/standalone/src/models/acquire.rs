@@ -449,7 +449,9 @@ fn store_error(error: &anyhow::Error) -> FetchError {
 /// bytes already received exactly. Returns the staged length.
 fn write_chunk(mut file: File, offset: u64, bytes: &[u8]) -> Result<u64> {
     let length = file.metadata()?.len();
-    let end = offset + bytes.len() as u64;
+    let end = offset
+        .checked_add(bytes.len() as u64)
+        .context("Model asset chunk offset overflow")?;
     ensure!(
         offset <= length,
         "the chunk at offset {offset} does not continue the {length} bytes received"
@@ -1730,6 +1732,15 @@ mod tests {
         let opened = manager.begin_push(&pushed.digest, false).await?;
         assert_eq!(opened, awaiting(0));
         Ok(pushed)
+    }
+
+    #[test]
+    fn pushed_chunks_reject_offset_overflow() -> Result<()> {
+        let file = tempfile::tempfile()?;
+        let error = write_chunk(file.try_clone()?, u64::MAX, b"x").unwrap_err();
+        assert!(error.to_string().contains("chunk offset overflow"));
+        assert_eq!(file.metadata()?.len(), 0);
+        Ok(())
     }
 
     #[tokio::test]

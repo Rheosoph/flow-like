@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { sha256 as streamingSha256 } from "@noble/hashes/sha2";
 import { type IBit, IBitTypes } from "../../../../../lib/schema";
 import {
 	LFS,
@@ -306,7 +307,7 @@ describe("fingerprints", () => {
 		});
 	});
 
-	test("wrong sizes, errors and large files say what failed", async () => {
+	test("wrong sizes and errors say what failed", async () => {
 		const hub = fakeHuggingFace();
 		await expect(
 			fingerprint(
@@ -334,11 +335,44 @@ describe("fingerprints", () => {
 			"Downloading config.json from huggingface.co to fingerprint it failed with HTTP 404.",
 		);
 		await expect(
-			fingerprint({ ...config, size: 65 * 1024 * 1024 }, hub.fetch),
-		).rejects.toThrow("fingerprints files up to 67108864 bytes only");
+			fingerprint({ ...config, size: Number.MAX_SAFE_INTEGER + 1 }, hub.fetch),
+		).rejects.toThrow("invalid size");
 		await expect(
 			fingerprint({ ...config, sources: [] }, hub.fetch),
 		).rejects.toThrow("config.json has no source to fingerprint it from.");
+	});
+
+	test("fingerprints files above 64 MiB as a stream without buffering the whole file", async () => {
+		const chunk = new Uint8Array(1024 * 1024).fill(17);
+		const expected = streamingSha256.create();
+		let chunks = 0;
+		const fetcher: Fetcher = async () => {
+			const response = new Response(
+				new ReadableStream({
+					pull(controller) {
+						if (chunks === 65) return controller.close();
+						chunks += 1;
+						expected.update(chunk);
+						controller.enqueue(chunk);
+					},
+				}),
+			);
+			response.arrayBuffer = async () => {
+				throw new Error("Do not buffer the entire model file.");
+			};
+			return response;
+		};
+		const result = await fingerprint(
+			{ ...config, size: 65 * chunk.length },
+			fetcher,
+		);
+		expect(result).toEqual({
+			algorithm: "sha256",
+			hex: Array.from(expected.digest(), (byte) =>
+				byte.toString(16).padStart(2, "0"),
+			).join(""),
+		});
+		expect(chunks).toBe(65);
 	});
 
 	test("a stopped run tries no other source or file and returns no digests", async () => {

@@ -117,7 +117,6 @@ impl TunnelDataOpen {
             Self::Artifact {
                 project_id,
                 transfer_id,
-                offset,
                 ..
             } => {
                 crate::validate_artifact_project_id(project_id)?;
@@ -129,16 +128,12 @@ impl TunnelDataOpen {
                             byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
                         }
                     })
-                    || *offset > crate::PROJECT_ARTIFACT_MAX_FILE_BYTES
                 {
-                    return Err(ProtocolError::Invalid("tunnel artifact identity or offset"));
+                    return Err(ProtocolError::Invalid("tunnel artifact identity"));
                 }
             }
-            Self::ModelAsset { job_id, offset } => {
+            Self::ModelAsset { job_id, .. } => {
                 crate::validate_model_job_id(job_id)?;
-                if *offset > crate::MODEL_ASSET_MAX_BYTES {
-                    return Err(ProtocolError::Invalid("tunnel model asset offset"));
-                }
             }
         }
         Ok(())
@@ -693,7 +688,7 @@ mod tests {
             }),
             TunnelFrameBody::OpenData(TunnelDataOpen::ModelAsset {
                 job_id: "12345678-1234-1234-1234-123456789abc".into(),
-                offset: crate::MODEL_ASSET_MAX_BYTES,
+                offset: u64::MAX,
             }),
         ] {
             let frame = frame(body);
@@ -780,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn model_asset_streams_name_a_job_and_a_bounded_offset() {
+    fn model_asset_streams_name_a_job_and_accept_large_offsets() {
         let open = |value: serde_json::Value| {
             let mut bytes = frame(TunnelFrameBody::Opened).encode().unwrap();
             bytes[5] = 13;
@@ -788,6 +783,9 @@ mod tests {
             TunnelFrame::decode(&bytes)
         };
         let valid = serde_json::json!({"kind":"model_asset","job_id":"12345678-1234-1234-1234-123456789abc","offset":0});
+        let mut large_offset = valid.clone();
+        large_offset["offset"] = serde_json::json!(u64::MAX);
+        assert!(open(large_offset).is_ok());
         let TunnelFrameBody::OpenData(decoded) = open(valid.clone()).unwrap().body else {
             panic!("data open did not decode")
         };
@@ -801,10 +799,7 @@ mod tests {
                 serde_json::json!("12345678-1234-1234-1234-123456789ABC"),
             ),
             ("job_id", serde_json::json!("job")),
-            (
-                "offset",
-                serde_json::json!(crate::MODEL_ASSET_MAX_BYTES + 1),
-            ),
+            ("offset", serde_json::json!(-1)),
             ("project_id", serde_json::json!("project")),
         ] {
             let mut changed = valid.clone();
@@ -879,6 +874,9 @@ mod tests {
         };
         assert!(encode(&request, 1).is_ok());
         assert!(encode(&artifact, 1).is_ok());
+        let mut large_offset = artifact.clone();
+        large_offset["offset"] = serde_json::json!(u64::MAX);
+        assert!(encode(&large_offset, 1).is_ok());
         assert!(encode(&request, 0).is_err());
         assert!(encode(&artifact, 2).is_err());
         for (field, value) in [
@@ -896,10 +894,6 @@ mod tests {
         for (field, value) in [
             ("project_id", serde_json::json!("..")),
             ("transfer_id", serde_json::json!("not-a-transfer")),
-            (
-                "offset",
-                serde_json::json!(crate::PROJECT_ARTIFACT_MAX_FILE_BYTES + 1),
-            ),
             ("file_index", serde_json::json!(-1)),
             ("host", serde_json::json!("127.0.0.1")),
         ] {

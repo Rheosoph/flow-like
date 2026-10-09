@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use flow_like_types::Value;
 use futures::{StreamExt, TryStreamExt};
 use lance::{
@@ -16,7 +16,9 @@ use lance::{
             update::UpdateBuilder,
         },
     },
+    index::{DatasetIndexExt, DatasetIndexInternalExt},
 };
+use lance_index::{metrics::NoOpMetricsCollector, scalar::ScalarIndexParams};
 use lance_io::object_store::{ObjectStore, ObjectStoreParams, uri_to_url};
 use lance_table::{
     format::{IndexMetadata, Manifest, Transaction},
@@ -1617,13 +1619,122 @@ pub async fn materialize(
     name: &str,
     maximum_bytes: u64,
 ) -> Result<MaterializedTable> {
+    materialize_snapshot(source, destination, name, Some(maximum_bytes), false).await
+}
+
+/// Materialize current rows and rebuild the source's full-text indexes with
+/// their saved tokenizer settings. Rows and index settings come from the same
+/// pinned revision; source history and other index types are not copied.
+/// With no byte budget, a native local destination can grow with available disk space.
+pub async fn materialize_with_fts_indexes(
+    source: &Table,
+    destination: &Connection,
+    name: &str,
+    maximum_bytes: impl Into<Option<u64>>,
+) -> Result<MaterializedTable> {
+    materialize_snapshot(source, destination, name, maximum_bytes.into(), true).await
+}
+
+#[derive(Debug, PartialEq)]
+struct SnapshotFtsIndex {
+    name: String,
+    column: String,
+    params: ScalarIndexParams,
+}
+
+async fn snapshot_fts_indexes(dataset: &Dataset) -> Result<Vec<SnapshotFtsIndex>> {
+    let mut indexes = std::collections::BTreeMap::new();
+    for metadata in dataset.load_indices().await?.iter() {
+        if lance_index::infer_system_index_type(metadata).is_some()
+            || indexes.contains_key(&metadata.name)
+        {
+            continue;
+        }
+        let Some(field) = metadata.fields.first() else {
+            continue;
+        };
+        let column = dataset.schema().field_path(*field)?;
+        let is_fts = match &metadata.index_details {
+            Some(details) => lance::index::scalar::IndexDetails(details.clone()).supports_fts(),
+            // Legacy manifests can omit index details. Read the physical type
+            // without index_statistics(), which can migrate the source manifest.
+            None => {
+                dataset
+                    .open_generic_index(&column, &metadata.uuid, &NoOpMetricsCollector)
+                    .await?
+                    .index_type()
+                    == lance_index::IndexType::Inverted
+            }
+        };
+        if !is_fts {
+            continue;
+        }
+        ensure!(
+            metadata.fields.len() == 1,
+            "cannot snapshot full-text index {} with multiple columns",
+            metadata.name
+        );
+        let index = dataset
+            .open_scalar_index(&column, &metadata.uuid, &NoOpMetricsCollector)
+            .await?;
+        indexes.insert(
+            metadata.name.clone(),
+            SnapshotFtsIndex {
+                name: metadata.name.clone(),
+                column,
+                params: index.derive_index_params()?,
+            },
+        );
+    }
+    Ok(indexes.into_values().collect())
+}
+
+async fn rebuild_snapshot_fts_indexes(table: &Table, indexes: &[SnapshotFtsIndex]) -> Result<()> {
+    if indexes.is_empty() {
+        return Ok(());
+    }
+    let wrapper = table
+        .dataset()
+        .ok_or_else(|| anyhow!("full-text snapshot requires a native Lance table"))?;
+    let mut dataset = wrapper.get().await?.as_ref().clone();
+    for index in indexes {
+        dataset
+            .create_index_builder(
+                &[&index.column],
+                lance_index::IndexType::Scalar,
+                &index.params,
+            )
+            .name(index.name.clone())
+            .replace(false)
+            .await
+            .with_context(|| {
+                format!(
+                    "cannot rebuild full-text index {} for deployment",
+                    index.name
+                )
+            })?;
+        wrapper.update(dataset.clone());
+    }
+    Ok(())
+}
+
+async fn materialize_snapshot(
+    source: &Table,
+    destination: &Connection,
+    name: &str,
+    maximum_bytes: Option<u64>,
+    rebuild_fts: bool,
+) -> Result<MaterializedTable> {
     ensure!(
-        maximum_bytes >= 1024 * 1024,
+        maximum_bytes.is_none_or(|maximum| maximum >= 1024 * 1024),
         "offline snapshot budget must be at least 1 MiB"
     );
     ensure!(
-        uri_to_url(destination.uri())?.scheme() == "file-object-store",
-        "offline snapshots require a budgeted_local_connection destination"
+        matches!(
+            (uri_to_url(destination.uri())?.scheme(), maximum_bytes),
+            ("file-object-store", _) | ("file", None)
+        ),
+        "offline snapshots require a local destination with any requested budget enforced"
     );
     super::lancedb::LanceDBVectorStore::validate_table_name(name)?;
     match destination.open_table(name).execute().await {
@@ -1640,6 +1751,11 @@ pub async fn materialize(
     let dataset = Arc::new(dataset.checkout_version(dataset.manifest().version).await?);
     let source_version = dataset.manifest().version;
     let source_fingerprint = fingerprint(&dataset).await?;
+    let fts_indexes = if rebuild_fts {
+        snapshot_fts_indexes(&dataset).await?
+    } else {
+        Vec::new()
+    };
     let mut scan = dataset.scan();
     scan.batch_size(1024)
         .batch_size_bytes(1024 * 1024)
@@ -1654,20 +1770,20 @@ pub async fn materialize(
         let failure = |message: &str| lancedb::Error::InvalidInput {
             message: message.into(),
         };
-        if size > maximum_bytes.min(8 * 1024 * 1024) {
+        if maximum_bytes.is_some_and(|maximum| size > maximum.min(8 * 1024 * 1024)) {
             return Err(failure(
                 "offline snapshot Arrow batch exceeds its memory budget",
             ));
         }
         arrow_bytes = arrow_bytes
             .checked_add(size)
-            .filter(|size| *size <= maximum_bytes)
+            .filter(|size| maximum_bytes.is_none_or(|maximum| *size <= maximum))
             .ok_or_else(|| failure("offline snapshot exceeds Arrow byte budget"))?;
-        let mut counter = ByteCounter {
-            bytes: 0,
-            maximum: maximum_bytes - serialized_bytes,
-        };
-        {
+        if let Some(maximum) = maximum_bytes {
+            let mut counter = ByteCounter {
+                bytes: 0,
+                maximum: maximum - serialized_bytes,
+            };
             let mut writer =
                 arrow::ipc::writer::StreamWriter::try_new(&mut counter, &batch.schema())
                     .map_err(|error| failure(&error.to_string()))?;
@@ -1677,20 +1793,23 @@ pub async fn materialize(
             writer
                 .finish()
                 .map_err(|error| failure(&error.to_string()))?;
+            serialized_bytes += counter.bytes;
         }
-        serialized_bytes += counter.bytes;
         Ok(batch)
     });
     let stream: lancedb::arrow::SendableRecordBatchStream =
         Box::pin(lancedb::arrow::SimpleRecordBatchStream { schema, stream });
-    let budget = Arc::new(WriteBudget::new(maximum_bytes, 0));
     let params = WriteParams {
         mode: WriteMode::Create,
         max_rows_per_file: 64 * 1024,
         max_rows_per_group: 1024,
-        max_bytes_per_file: maximum_bytes.min(16 * 1024 * 1024) as usize,
-        store_params: Some(ObjectStoreParams {
-            object_store_wrapper: Some(Arc::new(BudgetWrapper(budget))),
+        max_bytes_per_file: maximum_bytes
+            .map_or(16 * 1024 * 1024, |maximum| maximum.min(16 * 1024 * 1024))
+            as usize,
+        store_params: maximum_bytes.map(|maximum| ObjectStoreParams {
+            object_store_wrapper: Some(Arc::new(BudgetWrapper(Arc::new(WriteBudget::new(
+                maximum, 0,
+            ))))),
             ..Default::default()
         }),
         skip_auto_cleanup: true,
@@ -1703,9 +1822,15 @@ pub async fn materialize(
         })
         .execute()
         .await;
+    let result = match result {
+        Ok(table) => rebuild_snapshot_fts_indexes(&table, &fts_indexes)
+            .await
+            .map(|_| table),
+        Err(error @ lancedb::Error::TableAlreadyExists { .. }) => return Err(error.into()),
+        Err(error) => Err(error.into()),
+    };
     let table = match result {
         Ok(table) => table,
-        Err(error @ lancedb::Error::TableAlreadyExists { .. }) => return Err(error.into()),
         Err(error) => {
             // The private destination is exclusively owned by this writer. A
             // missing manifest can still leave fragments, and drop_table removes
@@ -1718,7 +1843,7 @@ pub async fn materialize(
                     ));
                 }
             }
-            return Err(error.into());
+            return Err(error);
         }
     };
     // Do not retain the one-shot writer budget on future local overlay commits.
@@ -2093,6 +2218,10 @@ mod tests {
             revision(&source).await?
         );
         assert_eq!(result.table.count_rows(None).await?, 1);
+        let unindexed =
+            materialize_with_fts_indexes(&source, &destination, "unindexed", 1024 * 1024).await?;
+        assert_eq!(unindexed.table.count_rows(None).await?, 1);
+        assert!(unindexed.table.list_indices().await?.is_empty());
         let large = source_connection
             .create_table(
                 "large",
@@ -2109,6 +2238,172 @@ mod tests {
         );
         assert!(matches!(
             destination.open_table("too_large").execute().await,
+            Err(lancedb::Error::TableNotFound { .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn materialization_rebuilds_full_text_search_without_source_files() -> Result<()> {
+        use crate::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
+        use lancedb::index::{Index, scalar::FtsIndexBuilder};
+
+        let (source_directory, source_connection) = connection().await?;
+        let source = source_connection
+            .create_table(
+                "records",
+                crate::arrow_utils::value_to_batch_reader_with_utc_timestamp_inference(vec![
+                    json!({"id": 1, "text": "LaunchCode alpha", "vector": [1.0, 0.0]}),
+                    json!({"id": 2, "text": "unrelated beta", "vector": [0.0, 1.0]}),
+                    json!({"id": 3, "text": "removed secret", "vector": [1.0, 1.0]}),
+                ])?,
+            )
+            .execute()
+            .await?;
+        source
+            .create_index(&["id"], Index::BTree(Default::default()))
+            .execute()
+            .await?;
+        source
+            .create_index(
+                &["text"],
+                Index::FTS(
+                    FtsIndexBuilder::default()
+                        .lower_case(false)
+                        .with_position(true),
+                ),
+            )
+            .name("case_sensitive_search".into())
+            .execute()
+            .await?;
+        source.delete("id = 3").await?;
+        let expected_revision = revision(&source).await?;
+        let expected_indexes =
+            snapshot_fts_indexes(source.dataset().unwrap().get().await?.as_ref()).await?;
+        let (destination_directory, destination, _) = private_connection().await?;
+        let rows_only = materialize(&source, &destination, "rows_only", 8 * 1024 * 1024).await?;
+        assert!(rows_only.table.list_indices().await?.is_empty());
+        let snapshot =
+            materialize_with_fts_indexes(&source, &destination, "snapshot", 8 * 1024 * 1024)
+                .await?;
+        assert_eq!(
+            (snapshot.source_version, snapshot.source_fingerprint.clone()),
+            expected_revision
+        );
+        assert_eq!(snapshot.table.count_rows(None).await?, 2);
+        assert_eq!(revision(&source).await?, expected_revision);
+
+        // A fresh native connection cannot use source files or cached indexes.
+        drop(snapshot);
+        drop(source);
+        drop(source_connection);
+        drop(source_directory);
+        let reopened = connect_lance(destination_directory.0.to_str().unwrap())
+            .execute()
+            .await?;
+        let table = reopened.open_table("snapshot").execute().await?;
+        assert_eq!(
+            snapshot_fts_indexes(table.dataset().unwrap().get().await?.as_ref()).await?,
+            expected_indexes
+        );
+        let indexes = table.list_indices().await?;
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].name, "case_sensitive_search");
+        let store = LanceDBVectorStore::from_connection(reopened, "snapshot".into()).await;
+        let hits = store
+            .fts_search("LaunchCode", None, None, None, 10, 0)
+            .await?;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["id"], 1);
+        assert!(
+            store
+                .fts_search("launchcode", None, None, None, 10, 0)
+                .await?
+                .is_empty()
+        );
+        assert!(
+            store
+                .fts_search("secret", None, None, None, 10, 0)
+                .await?
+                .is_empty()
+        );
+        let hybrid = store
+            .hybrid_search(vec![1.0, 0.0], "LaunchCode", None, None, None, 10, 0, true)
+            .await?;
+        assert!(hybrid.iter().any(|row| row["id"] == 1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn deployment_snapshot_accepts_large_rows_without_a_byte_budget() -> Result<()> {
+        use lancedb::query::ExecutableQuery;
+
+        let (_source_directory, source_connection) = connection().await?;
+        let value = "x".repeat(9 * 1024 * 1024);
+        let source = source_connection
+            .create_table(
+                "large_rows",
+                crate::arrow_utils::value_to_batch_reader_with_utc_timestamp_inference(vec![
+                    json!({"id": 1, "value": value}),
+                ])?,
+            )
+            .execute()
+            .await?;
+        let (_destination_directory, destination) = connection().await?;
+        let snapshot =
+            materialize_with_fts_indexes(&source, &destination, "snapshot", None).await?;
+        assert_eq!(snapshot.table.count_rows(None).await?, 1);
+        assert_eq!(
+            (snapshot.source_version, snapshot.source_fingerprint),
+            revision(&source).await?
+        );
+        let batches = snapshot
+            .table
+            .query()
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let column = batches[0].column_by_name("value").unwrap();
+        assert_eq!(
+            arrow::util::display::array_value_to_string(column.as_ref(), 0)?,
+            value
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn materialization_cleans_up_when_full_text_index_exceeds_budget() -> Result<()> {
+        use lancedb::index::{Index, scalar::FtsIndexBuilder};
+
+        let (_source_directory, source_connection) = connection().await?;
+        let source = source_connection
+            .create_table(
+                "records",
+                crate::arrow_utils::value_to_batch_reader_with_utc_timestamp_inference(vec![
+                    json!({"id": 1, "text": "searchable document"}),
+                ])?,
+            )
+            .execute()
+            .await?;
+        source
+            .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+            .execute()
+            .await?;
+        let (_destination_directory, destination, budget) = private_connection().await?;
+        let baseline = materialize(&source, &destination, "snapshot", 8 * 1024 * 1024).await?;
+        let row_bytes = budget.used();
+        drop(baseline);
+        destination.drop_table("snapshot", &[]).await?;
+        budget.set_maximum(row_bytes + 128);
+        let error =
+            materialize_with_fts_indexes(&source, &destination, "snapshot", 8 * 1024 * 1024)
+                .await
+                .err()
+                .expect("the full-text index must exceed the row-only budget");
+        assert!(error.to_string().contains("cannot rebuild full-text index"));
+        assert!(matches!(
+            destination.open_table("snapshot").execute().await,
             Err(lancedb::Error::TableNotFound { .. })
         ));
         Ok(())

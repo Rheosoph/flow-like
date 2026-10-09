@@ -39,7 +39,7 @@ use tokio_util::sync::CancellationToken;
 /// again; the deployer then offers to send it from the user's computer.
 pub const MODEL_ASSET_MISSING: &str = "model_asset_missing";
 
-fn open_bounded(root: &Path, components: &[&str], limit: u64) -> Result<File> {
+fn open_dependency(root: &Path, components: &[&str]) -> Result<File> {
     ensure!(
         !components.is_empty() && components.iter().all(|part| !part.contains(['/', '\\'])),
         "Invalid dependency path components"
@@ -67,8 +67,14 @@ fn open_bounded(root: &Path, components: &[&str], limit: u64) -> Result<File> {
     }
     let file = options.open(path)?;
     let metadata = file.metadata()?;
+    ensure!(metadata.is_file(), "Dependency must be a regular file");
+    Ok(file)
+}
+
+fn open_bounded(root: &Path, components: &[&str], limit: u64) -> Result<File> {
+    let file = open_dependency(root, components)?;
     ensure!(
-        metadata.is_file() && metadata.len() <= limit,
+        file.metadata()?.len() <= limit,
         "Dependency exceeds its file limit"
     );
     Ok(file)
@@ -165,11 +171,8 @@ fn bit_location(bit: &Bit) -> Result<Option<String>> {
 fn bit_asset_path(bit: &Bit) -> Result<Option<String>> {
     let path = bit_location(bit)?;
     ensure!(
-        path.is_none()
-            || bit
-                .size
-                .is_some_and(|size| size > 0 && size <= 4 * 1024 * 1024 * 1024),
-        "Bit artifact size is missing or exceeds its limit"
+        path.is_none() || bit.size.is_some_and(|size| size > 0),
+        "Bit artifact size is missing or empty"
     );
     Ok(path)
 }
@@ -613,11 +616,14 @@ pub(crate) async fn hydrate_bits(
             }
         }
         ensure!(
-            assets.len() <= flow_like_device_protocol::PROJECT_ARTIFACT_MAX_FILES
-                && assets.values().map(|asset| asset.size).sum::<u64>()
-                    <= flow_like_device_protocol::PROJECT_ARTIFACT_MAX_BYTES,
-            "Selected Bit assets exceed their aggregate file or byte bound"
+            assets.len() <= flow_like_device_protocol::PROJECT_ARTIFACT_MAX_FILES,
+            "Too many selected Bit asset files"
         );
+        assets.values().try_fold(0u64, |total, asset| {
+            total
+                .checked_add(asset.size)
+                .context("Bit asset size overflow")
+        })?;
         root_dependencies.insert(
             pin.bit_id.clone(),
             pack.dependencies
@@ -1177,7 +1183,6 @@ pub(crate) async fn register_packages(
         .map(|node| node.name)
         .collect();
     let mut prepared: Vec<Arc<dyn NodeLogic>> = Vec::new();
-    let mut total_bytes = 0usize;
     for pin in &config.package_pins {
         pin.validate()?;
         ensure!(
@@ -1204,18 +1209,12 @@ pub(crate) async fn register_packages(
             manifest.id == pin.package_id && manifest.version == pin.version,
             "Package manifest identity differs"
         );
-        let bytes = read_bounded(
+        let mut file = open_dependency(
             &config.project_path,
             &["packages", &pin.package_id, &pin.version, "module.wasm"],
-            64 * 1024 * 1024,
         )?;
-        total_bytes = total_bytes
-            .checked_add(bytes.len())
-            .context("Package size overflow")?;
-        ensure!(
-            total_bytes <= 256 * 1024 * 1024,
-            "Packaged WASM exceeds 256 MiB"
-        );
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
         ensure!(
             artifact_sha256(&bytes) == pin.wasm_sha256,
             "Package WASM digest differs"
@@ -1378,6 +1377,26 @@ mod tests {
     }
 
     #[test]
+    fn dependency_payloads_accept_large_files_and_model_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let size = 5 * 1024 * 1024 * 1024;
+        let file = File::create(directory.path().join("payload")).unwrap();
+        file.set_len(size).unwrap();
+        let payload = open_dependency(directory.path(), &["payload"]).unwrap();
+        assert_eq!(payload.metadata().unwrap().len(), size);
+        let bit = Bit {
+            hash: "model-hash".into(),
+            file_name: Some("model.gguf".into()),
+            size: Some(size),
+            ..Default::default()
+        };
+        assert_eq!(
+            bit_asset_path(&bit).unwrap().as_deref(),
+            Some("bits/model-hash/model.gguf")
+        );
+    }
+
+    #[test]
     #[cfg(unix)]
     fn dependency_paths_reject_links_and_oversized_files() {
         let directory = tempfile::tempdir().unwrap();
@@ -1386,6 +1405,7 @@ mod tests {
         assert!(read_bounded(directory.path(), &["..", "data"], 10).is_err());
         std::os::unix::fs::symlink("data", directory.path().join("link")).unwrap();
         assert!(read_bounded(directory.path(), &["link"], 10).is_err());
+        assert!(open_dependency(directory.path(), &["link"]).is_err());
     }
 
     #[test]

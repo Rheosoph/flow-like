@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { blake3 } from "@noble/hashes/blake3";
 import type { IBackendState } from "../../state/backend-state";
 import type { IProfile } from "../../types";
 import type { IApp } from "../schema/app/app";
@@ -9,6 +10,10 @@ import {
 } from "./online-dependencies";
 
 const profile = { id: "profile" } as IProfile;
+const originalFetch = globalThis.fetch;
+afterEach(() => {
+	globalThis.fetch = originalFetch;
+});
 function fixture(wrapDependencies = false) {
 	const app = {
 		id: "project",
@@ -257,6 +262,61 @@ test("a package response must retain the project's exact pinned identity", async
 	await expect(
 		prepareOnlineDependencies(f.app, f.backend, profile),
 	).rejects.toThrow("pinned version");
+});
+
+test("browser exports packages above 64 MiB and dependency totals above 256 MiB", async () => {
+	const f = fixture();
+	const size = 257 * 1024 ** 2;
+	const wasm = new Blob([]);
+	Object.defineProperty(wasm, "size", { value: size });
+	wasm.arrayBuffer = async () => {
+		throw new Error("Read packages in chunks.");
+	};
+	wasm.slice = (start = 0, end = size) => {
+		expect(end - start).toBeLessThanOrEqual(1024 * 1024);
+		return new Blob([start === 0 ? "\0asm" : ""]);
+	};
+	f.backend.apiState.post = (async () => ({
+		package_id: "nodes",
+		version: "1.0.0",
+		manifest: { id: "nodes", version: "1.0.0" },
+		download_url: "https://registry.test/nodes.wasm",
+	})) as IBackendState["apiState"]["post"];
+	globalThis.fetch = (async () => {
+		const response = new Response(new Uint8Array(), {
+			headers: { "content-length": String(size) },
+		});
+		response.blob = async () => wasm;
+		return response;
+	}) as typeof fetch;
+	const exported = await prepareOnlineDependencies(f.app, f.backend, profile);
+	expect(exported.artifact.descriptor.total_bytes).toBeGreaterThan(size);
+	expect(exported.assets.package_pins).toHaveLength(1);
+	expect(
+		exported.artifact.files.find((entry) => entry.path.endsWith("module.wasm"))
+			?.file,
+	).toBe(wasm);
+});
+
+test("package manifest digests remain verified across Blob chunks", async () => {
+	const f = fixture();
+	const bytes = new Uint8Array(1024 ** 2 + 4).fill(17);
+	bytes.set([0, 97, 115, 109]);
+	let digest = Array.from(blake3(bytes), (byte) =>
+		byte.toString(16).padStart(2, "0"),
+	).join("");
+	f.backend.apiState.post = (async () => ({
+		package_id: "nodes",
+		version: "1.0.0",
+		manifest: { id: "nodes", version: "1.0.0", wasm_hash: digest },
+		download_url: "https://registry.test/nodes.wasm",
+	})) as IBackendState["apiState"]["post"];
+	globalThis.fetch = (async () => new Response(bytes)) as typeof fetch;
+	await prepareOnlineDependencies(f.app, f.backend, profile);
+	digest = "0".repeat(64);
+	await expect(
+		prepareOnlineDependencies(f.app, f.backend, profile),
+	).rejects.toThrow("manifest digest");
 });
 
 test("browser export directs inline projector and case-insensitive MLX sources to native resolution", async () => {

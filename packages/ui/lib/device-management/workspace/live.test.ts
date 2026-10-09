@@ -1365,6 +1365,145 @@ describe("delivery guarantees", () => {
 });
 
 describe("inspection cache and demand", () => {
+	test("a stalled service read times out, cancels its request and can be refreshed", async () => {
+		let blocked = true;
+		let readSignal: AbortSignal | undefined;
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.requestData = async (_command, _operationId, signal) => {
+					if (!blocked) return inspectPage();
+					readSignal = signal;
+					return new Promise((_, reject) => {
+						signal?.addEventListener("abort", () => reject(signal.reason), {
+							once: true,
+						});
+					});
+				};
+			};
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		expect(manager.steps(DEVICE).at(-1)?.state).toBe("active");
+		await env.advance(LIVE_TIMING.inspectionPageMs);
+		expect(manager.steps(DEVICE).at(-1)).toEqual({
+			id: "reading_services",
+			state: "failed",
+			detail: { code: "timeout" },
+		});
+		expect(readSignal?.aborted).toBe(true);
+		expect(manager.inspection(DEVICE)).toBeUndefined();
+		blocked = false;
+		await manager.refreshInspection(DEVICE);
+		expect(manager.steps(DEVICE).at(-1)?.state).toBe("done");
+		expect(manager.inspection(DEVICE)?.value.device_id).toBe(DEVICE);
+		manager.dispose();
+	});
+
+	test("the service-read deadline includes waiting behind an exclusive operation", async () => {
+		const { env, manager } = setup();
+		let finish!: () => void;
+		const exclusive = manager.exclusive(
+			DEVICE,
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		manager.acquire(DEVICE, "stream");
+		await env.advance(LIVE_TIMING.inspectionPageMs);
+		expect(manager.steps(DEVICE).at(-1)).toEqual({
+			id: "reading_services",
+			state: "failed",
+			detail: { code: "timeout" },
+		});
+		expect(types(env)).toEqual([]);
+		finish();
+		await exclusive;
+		await flush();
+		await manager.refreshInspection(DEVICE);
+		expect(types(env)).toEqual(["inspect_page"]);
+		expect(manager.steps(DEVICE).at(-1)?.state).toBe("done");
+		manager.dispose();
+	});
+
+	test("each completed service page renews the inspection deadline", async () => {
+		const row = {
+			id: "placement-1",
+			project_id: "project-1",
+			deployment_id: "deployment-1",
+			revision: "r1",
+			desired_state: "running",
+			observed_state: "running",
+			config_revision: 1,
+			intent_revision: 1,
+			applied_revision: 1,
+			desired_replicas: 1,
+			running_replicas: 1,
+			ready_replicas: 1,
+			max_replicas: 1,
+			replicas: [],
+		};
+		const { env, manager } = setup((env) => {
+			env.handler = (command) =>
+				new Promise((resolve) => {
+					env.schedule(
+						() =>
+							resolve(
+								command.after === null
+									? completed({
+											device_id: DEVICE,
+											boot_id: "boot-1",
+											placements: [row],
+											next: row.id,
+										})
+									: inspectPage(),
+							),
+						100_000,
+					);
+				});
+		});
+		manager.acquire(DEVICE, "stream");
+		await env.advance(LIVE_TIMING.inspectionPageMs);
+		expect(manager.steps(DEVICE).at(-1)?.state).toBe("active");
+		await env.advance(200_000 - LIVE_TIMING.inspectionPageMs);
+		expect(manager.steps(DEVICE).at(-1)?.state).toBe("done");
+		expect(manager.inspection(DEVICE)?.value.placements).toEqual([row]);
+		manager.dispose();
+		expect(env.pendingTimers).toBe(0);
+	});
+
+	test("closing a stalled inspection releases refresh and ignores its late reply", async () => {
+		let reply!: (response: ManagementResponse) => void;
+		const { env, manager } = setup((env) => {
+			env.configureConnection = (conn) => {
+				conn.requestData = async () =>
+					conn.serial === 1
+						? new Promise((resolve) => {
+								reply = resolve;
+							})
+						: inspectPage();
+			};
+		});
+		manager.acquire(DEVICE, "view");
+		await env.advance(0);
+		let settled = false;
+		const refreshing = manager.refreshInspection(DEVICE).then(() => {
+			settled = true;
+		});
+		manager.close(DEVICE);
+		await flush();
+		expect(settled).toBe(true);
+		await refreshing;
+		await manager.refreshInspection(DEVICE);
+		expect(manager.inspection(DEVICE)?.value.device_id).toBe(DEVICE);
+		const inspection = manager.inspection(DEVICE);
+		reply(inspectPage());
+		await flush();
+		expect(manager.inspection(DEVICE)).toBe(inspection);
+		expect(manager.steps(DEVICE).at(-1)?.state).toBe("done");
+		manager.dispose();
+	});
+
 	test("a reply completing in the lock turn cannot repopulate the cleared inspection", async () => {
 		let waiting = false;
 		let reply: (value: ManagementResponse) => void = () => {};

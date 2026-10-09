@@ -1,3 +1,4 @@
+import { sha256 } from "@noble/hashes/sha2";
 import {
 	type HuggingFaceMlxFetch,
 	huggingFacePinnedDownloadUrl,
@@ -11,7 +12,6 @@ import type { IBit } from "../../../../../lib/schema";
 import type { IBitState } from "../../../../../state/backend-state/bit-state";
 import {
 	type OptionFile,
-	SMALL_FILE_MAX,
 	type SourceFacts,
 	fromHubPack,
 	fromHuggingFace,
@@ -24,7 +24,7 @@ import {
  * The add-model wizard's reads outside the device: a Hugging Face repository
  * and the facts the fit check uses (its `config.json`, else its base model's;
  * GGUF parameters), Git LFS digests at a pinned commit, and sha256
- * fingerprints of small files this computer downloads (plan §3.1).
+ * fingerprints of files without published digests.
  */
 
 export type Fetcher = HuggingFaceMlxFetch;
@@ -286,10 +286,8 @@ export async function lfsDigests(
 
 /* Fingerprints. */
 
-const hex = (buffer: ArrayBuffer) =>
-	[...new Uint8Array(buffer)]
-		.map((byte) => byte.toString(16).padStart(2, "0"))
-		.join("");
+const hex = (bytes: Uint8Array) =>
+	[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const hostOf = (source: string) => {
 	try {
@@ -310,28 +308,44 @@ async function digestFrom(
 		throw new Error(
 			`Downloading ${file.file_name} from ${hostOf(source)} to fingerprint it failed with HTTP ${response.status}.`,
 		);
-	const bytes = await response.arrayBuffer();
-	if (bytes.byteLength !== file.size)
-		throw new Error(
-			`${file.file_name} from ${hostOf(source)} has ${bytes.byteLength} bytes; ${file.size} were expected.`,
-		);
-	const digest: ModelAssetDigest = {
-		algorithm: "sha256",
-		hex: hex(await crypto.subtle.digest("SHA-256", bytes)),
-	};
-	return digest;
+	if (!response.body)
+		throw new Error("The model download has no response body.");
+	const reader = response.body.getReader();
+	const hash = sha256.create();
+	let size = 0;
+	try {
+		while (true) {
+			signal?.throwIfAborted();
+			const next = await reader.read();
+			if (next.done) break;
+			size += next.value.byteLength;
+			if (!Number.isSafeInteger(size) || size > file.size) break;
+			hash.update(next.value);
+		}
+		if (size !== file.size)
+			throw new Error(
+				`${file.file_name} from ${hostOf(source)} has ${size} bytes; ${file.size} were expected.`,
+			);
+		signal?.throwIfAborted();
+		return {
+			algorithm: "sha256",
+			hex: hex(hash.digest()),
+		} satisfies ModelAssetDigest;
+	} finally {
+		hash.destroy();
+		await reader.cancel().catch(() => {});
+		reader.releaseLock();
+	}
 }
 
-/** The sha256 of a small file, from the first of its sources that answers with the expected bytes; `signal` stops at once. */
+/** The sha256 from the first source that answers with the expected bytes; `signal` stops the download. */
 export async function fingerprint(
 	file: OptionFile,
 	fetcher: Fetcher = fetch,
 	signal?: AbortSignal,
 ) {
-	if (file.size > SMALL_FILE_MAX)
-		throw new Error(
-			`${file.file_name} has ${file.size} bytes; this computer fingerprints files up to ${SMALL_FILE_MAX} bytes only.`,
-		);
+	if (!Number.isSafeInteger(file.size) || file.size <= 0)
+		throw new Error(`${file.file_name} has an invalid size.`);
 	let failure: unknown = new Error(
 		`${file.file_name} has no source to fingerprint it from.`,
 	);

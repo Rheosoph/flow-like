@@ -114,11 +114,15 @@ definitions and dependencies before uploading the same verified copy to each
 target.
 
 The copy includes tables with their current rows, required local files,
-and selected user data. It does not reproduce table history or search
-indexes. Flows depending on that history or those indexes need adjustment
-before export. Prepare a consistent copy while nothing else is writing to
-the app. The transfer has limits of 8,192 files, 4 GiB per file, and 8 GiB in
-total; the device's remaining artifact budget can impose a lower limit.
+and selected user data. Preparation rebuilds existing full-text search indexes
+with their original settings so full-text and hybrid searches can run on the
+device. Table history, references and other indexes are not copied. Flows
+that depend on table history or references need adjustment before export.
+
+Prepare a consistent copy while nothing else is writing to the app. The
+transfer supports up to 8,192 files with no fixed per-file, database, or total
+byte limit. Available disk space and any operator-configured artifact quotas
+still apply.
 
 On first start, each service initializes its own mutable local data from the
 copy. Later app updates replace executable content and keep the service's

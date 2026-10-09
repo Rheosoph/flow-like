@@ -3,7 +3,6 @@
 use crate::{ProtocolError, Result, validate_artifact_relative_path};
 use serde::{Deserialize, Serialize};
 
-pub const MODEL_ASSET_MAX_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 pub const MODEL_ASSET_MAX_SOURCES: usize = 8;
 pub const MODEL_ASSET_SOURCE_MAX_LEN: usize = 2048;
 
@@ -65,7 +64,7 @@ pub struct ModelAssetDescriptor {
 impl ModelAssetDescriptor {
     pub fn validate(&self) -> Result<()> {
         self.digest.validate()?;
-        if self.size == 0 || self.size > MODEL_ASSET_MAX_BYTES {
+        if self.size == 0 {
             return Err(ProtocolError::Invalid("model asset size"));
         }
         validate_artifact_relative_path(&self.file_name)?;
@@ -821,7 +820,7 @@ impl ModelJob {
     pub fn validate(&self) -> Result<()> {
         validate_model_job_id(&self.job_id)?;
         self.digest.validate()?;
-        if self.size == 0 || self.size > MODEL_ASSET_MAX_BYTES {
+        if self.size == 0 {
             return Err(ProtocolError::Invalid("model asset size"));
         }
         validate_artifact_relative_path(&self.file_name)?;
@@ -1313,6 +1312,10 @@ mod tests {
         let mut upper = descriptor();
         upper.digest.hex = "A".repeat(64);
         assert!(upper.validate().is_err());
+
+        let mut large = descriptor();
+        large.size = u64::MAX;
+        assert!(large.validate().is_ok());
 
         let mut empty = descriptor();
         empty.size = 0;
@@ -2092,7 +2095,7 @@ mod tests {
         let job = ModelJob {
             job_id: JOB.into(),
             digest: digest(usize::MAX),
-            size: MODEL_ASSET_MAX_BYTES,
+            size: u64::MAX,
             file_name: format!("{}/{}", "d".repeat(255), "f".repeat(255)),
             source_host: Some("h".repeat(MODEL_HOST_MAX_BYTES)),
             bytes_per_second: Some(u64::MAX),

@@ -40,13 +40,8 @@ import { type IBit, IBitTypes, IPooling } from "../../../../../lib/schema";
  * Bits, and the `ModelSpec` an `install` sends for one choice. A file the
  * device fetches carries a digest pinned before the first byte (plan §3.1):
  * the hub's blake3, Hugging Face's Git LFS sha256, or a sha256 this computer
- * computes for a small file.
+ * computes for a file without a published digest.
  */
-
-/** Bytes this computer downloads to fingerprint a file that has no digest (plan §3.1). */
-export const SMALL_FILE_MAX = 64 * 1024 * 1024;
-/** Per-file limit of the device's model store. */
-export const MODEL_FILE_MAX = 64 * 1024 ** 3;
 
 export type ModelSource = "hub" | "huggingface" | "bits";
 
@@ -64,11 +59,11 @@ export interface OptionFile {
 }
 
 export type OptionBlock =
-	/** A file over `SMALL_FILE_MAX` without a content digest. */
+	/** A file without a digest or a source from which to compute one. */
 	| "no_fingerprint"
 	| "split_incomplete"
 	| "too_many_files"
-	| "file_too_large"
+	| "invalid_file_size"
 	/** A vision model on llama.cpp without a projector to load. */
 	| "projector_missing";
 
@@ -552,7 +547,7 @@ export function choiceFacts(choice: ModelChoice) {
 }
 
 const unfingerprinted = (file: OptionFile) =>
-	!file.digest && file.size > SMALL_FILE_MAX;
+	!file.digest && file.sources.length === 0;
 
 /** Why a choice can't be installed; undefined when it can. */
 export function choiceBlock(choice: ModelChoice) {
@@ -561,8 +556,8 @@ export function choiceBlock(choice: ModelChoice) {
 		return "projector_missing" as OptionBlock;
 	const files = choiceFiles(choice);
 	if (files.length > MODEL_MAX_ASSETS) return "too_many_files" as OptionBlock;
-	if (files.some((file) => file.size > MODEL_FILE_MAX))
-		return "file_too_large" as OptionBlock;
+	if (files.some((file) => !Number.isSafeInteger(file.size) || file.size <= 0))
+		return "invalid_file_size" as OptionBlock;
 	return files.some(unfingerprinted)
 		? ("no_fingerprint" as OptionBlock)
 		: undefined;

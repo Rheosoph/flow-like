@@ -548,7 +548,7 @@ impl ModelStore {
         self.expire_leases(&db, now)?;
         let mut report = self.remove_unreferenced(&db, &reserved, now.saturating_sub(grace))?;
         self.forget_missing(&db)?;
-        report.partials_removed = self.sweep_incoming(&db)?;
+        report.partials_removed = self.sweep_incoming(&db, &reserved)?;
         Ok(report)
     }
 
@@ -581,11 +581,11 @@ impl ModelStore {
         Ok(())
     }
 
-    fn sweep_incoming(&self, db: &ModelsDb) -> Result<usize> {
+    fn sweep_incoming(&self, db: &ModelsDb, reserved: &Reserved) -> Result<usize> {
         let mut removed = 0;
         for entry in std::fs::read_dir(self.root.join("incoming"))? {
             let entry = entry?;
-            if stray_staging(db, &entry)? {
+            if stray_staging(db, reserved, &entry)? {
                 remove_if_present(&entry.path())?;
                 removed += 1;
             }
@@ -594,10 +594,10 @@ impl ModelStore {
     }
 }
 
-/// A staging entry that belongs to no job; directories are left for an operator.
-fn stray_staging(db: &ModelsDb, entry: &std::fs::DirEntry) -> Result<bool> {
+/// A staging entry with no job or active import; directories are left for an operator.
+fn stray_staging(db: &ModelsDb, reserved: &Reserved, entry: &std::fs::DirEntry) -> Result<bool> {
     if let Some(digest) = entry.file_name().to_str().and_then(partial_digest)
-        && db.job(&digest)?.is_some()
+        && (reserved.contains_key(&digest) || db.job(&digest)?.is_some())
     {
         return Ok(false);
     }
@@ -847,6 +847,25 @@ mod tests {
         std::fs::remove_dir_all(&incoming).expect("a removed staging directory");
         link(directory.path(), &incoming);
         assert!(open(directory.path(), None).is_err());
+    }
+
+    #[test]
+    fn active_import_reservations_protect_staged_files_from_collection() -> Result<()> {
+        let (_directory, store) = open_store(None);
+        let asset = descriptor(b"complete model");
+        let reservation = store.reserve(&asset.digest, asset.size)?;
+        let mut partial = store.open_partial(&asset.digest)?;
+        partial.write_all(b"complete")?;
+        assert_eq!(store.collect_garbage()?.partials_removed, 0);
+        assert_eq!(store.partial_len(&asset.digest)?, 8);
+        partial.write_all(b" model")?;
+        assert_eq!(store.partial_len(&asset.digest)?, asset.size);
+
+        drop(partial);
+        drop(reservation);
+        assert_eq!(store.collect_garbage()?.partials_removed, 1);
+        assert_eq!(store.partial_len(&asset.digest)?, 0);
+        Ok(())
     }
 
     #[test]

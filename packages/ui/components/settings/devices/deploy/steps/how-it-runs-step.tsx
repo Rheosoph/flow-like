@@ -195,7 +195,7 @@ function checkLabel(
 		case "no_history":
 			return t(
 				"devices:deploy.prepare.noHistory",
-				"No flow needs table history or search indexes",
+				"No flow needs table history or references",
 			);
 		case "no_writers":
 			return t(
@@ -206,7 +206,7 @@ function checkLabel(
 			return descriptor
 				? t(
 						"devices:deploy.prepare.limitsOf",
-						"Under the limits: {{bytes}} of 8 GiB, {{files, number}} of 8,192 files",
+						"Ready to transfer: {{bytes}}, {{files, number}} of 8,192 files",
 						{
 							bytes: humanFileSize(descriptor.total_bytes),
 							files: descriptor.file_count,
@@ -214,7 +214,7 @@ function checkLabel(
 					)
 				: t(
 						"devices:deploy.prepare.limits",
-						"Under the limits: 8 GiB and 8,192 files",
+						"Up to 8,192 files; no fixed byte limit",
 					);
 	}
 }
@@ -598,7 +598,7 @@ function ShipBlock(props: Readonly<PlanStepProps>) {
 					? undefined
 					: t(
 							"deploy.how.shipFoot",
-							"Tables are copied with their current rows only: no history and no search indexes. Your files in this app go too; they become the device's local user.",
+							"Tables are copied with their current rows. Existing full-text search indexes are rebuilt with the same settings; history, references and other indexes aren't copied. Your files in this app go too; they become the device's local user.",
 						)
 			}
 		>
@@ -790,7 +790,7 @@ function ImportCopy({ prepare }: Readonly<PlanStepProps>) {
 					title={t("deploy.import.folder", "Choose an offline app folder")}
 					hint={t(
 						"deploy.import.folderHint",
-						"1 to 8,192 files with manifest.app at the top · up to 4 GiB per file, 8 GiB in total",
+						"1 to 8,192 files with manifest.app at the top · no fixed byte limit",
 					)}
 					chosen={count(copy.files)}
 					onFiles={(files) => apply({ ...copy, files })}

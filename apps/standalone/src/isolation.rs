@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const OPERATOR_ENV_TEMPLATE: &str = "# Operator-owned agent configuration. Restart the agent after changes.\n# Use required when project owners must not access the agent or sibling projects.\nFLOW_LIKE_DEVICE_ISOLATION_POLICY=compatible\n# Strict Linux placements also need delegated CPU/memory/PID budgets and ext4 project quotas.\n# FLOW_LIKE_DEVICE_CGROUP_ROOT=/sys/fs/cgroup/flow-like-workloads\n# Artifact admission includes committed revisions and in-flight uploads, plus metadata.\n# FILES counts files and directories; each in-flight file reserves 34 entries until commit.\n# Default per-project FILES admits about 1900 files per upload with no retained revisions.\n# Limits do not remove revisions; lowering them blocks new uploads until usage fits.\nFLOW_LIKE_DEVICE_ARTIFACT_BYTES=68719476736\nFLOW_LIKE_DEVICE_ARTIFACT_FILES=262144\nFLOW_LIKE_DEVICE_ARTIFACT_REVISIONS=1024\nFLOW_LIKE_PROJECT_ARTIFACT_BYTES=17179869184\nFLOW_LIKE_PROJECT_ARTIFACT_FILES=65536\nFLOW_LIKE_PROJECT_ARTIFACT_REVISIONS=128\n# Optional model storage limit, including staged and reserved files (bytes).\n# FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=68719476736\n";
+pub const OPERATOR_ENV_TEMPLATE: &str = "# Operator-owned agent configuration. Restart the agent after changes.\n# Use required when project owners must not access the agent or sibling projects.\nFLOW_LIKE_DEVICE_ISOLATION_POLICY=compatible\n# Strict Linux placements also need delegated CPU/memory/PID budgets and ext4 project quotas.\n# FLOW_LIKE_DEVICE_CGROUP_ROOT=/sys/fs/cgroup/flow-like-workloads\n# Artifact admission includes committed revisions and in-flight uploads, plus metadata.\n# FILES counts files and directories; each in-flight file reserves 34 entries until commit.\n# Default per-project FILES admits about 1900 files per upload with no retained revisions.\n# Limits do not remove revisions; lowering them blocks new uploads until usage fits.\n# Optional byte budgets; omit them to use available storage.\n# FLOW_LIKE_DEVICE_ARTIFACT_BYTES=68719476736\nFLOW_LIKE_DEVICE_ARTIFACT_FILES=262144\nFLOW_LIKE_DEVICE_ARTIFACT_REVISIONS=1024\n# FLOW_LIKE_PROJECT_ARTIFACT_BYTES=17179869184\nFLOW_LIKE_PROJECT_ARTIFACT_FILES=65536\nFLOW_LIKE_PROJECT_ARTIFACT_REVISIONS=128\n# Optional model storage limit, including staged and reserved files (bytes).\n# FLOW_LIKE_DEVICE_MODELS_MAX_BYTES=68719476736\n";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -110,7 +110,7 @@ fn parse_host_policy(value: Option<&std::ffi::OsStr>) -> Result<bool> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ArtifactLimits {
-    pub bytes: u64,
+    pub bytes: Option<u64>,
     /// Files and directories, including reserved upload path components.
     pub files: u64,
     pub revisions: u64,
@@ -126,12 +126,12 @@ impl Default for ArtifactBudgets {
     fn default() -> Self {
         Self {
             device: ArtifactLimits {
-                bytes: 64 * 1024_u64.pow(3),
+                bytes: None,
                 files: 262144,
                 revisions: 1024,
             },
             project: ArtifactLimits {
-                bytes: 16 * 1024_u64.pow(3),
+                bytes: None,
                 files: 65536,
                 revisions: 128,
             },
@@ -209,8 +209,12 @@ fn host_configuration(state_dir: &Path) -> Result<HostConfiguration> {
                         let number: u64 = value.parse().map_err(|_| {
                             anyhow::anyhow!("Artifact storage limits must be positive integers")
                         })?;
+                        if suffix == "BYTES" {
+                            ensure!(number > 0, "Artifact storage limit {key} must be positive");
+                            limits.bytes = Some(number);
+                            continue;
+                        }
                         let (target, maximum) = match suffix {
-                            "BYTES" => (&mut limits.bytes, 1024_u64.pow(5)),
                             "FILES" => (&mut limits.files, 1_000_000),
                             "REVISIONS" => (&mut limits.revisions, 16_384),
                             _ => anyhow::bail!("Unknown artifact storage limit {key}"),
@@ -457,14 +461,24 @@ mod tests {
         assert!(parse_host_policy(Some(std::ffi::OsStr::new("false"))).is_err());
     }
     #[test]
-    fn artifact_limits_are_private_positive_bounded_and_reject_duplicates() {
+    fn artifact_byte_limits_are_opt_in_and_reject_invalid_settings() {
         let root = tempfile::tempdir().unwrap();
         let defaults = artifact_budgets(root.path()).unwrap();
-        assert_eq!(defaults.device.bytes, 64 * 1024_u64.pow(3));
+        assert_eq!(defaults.device.bytes, None);
+        assert_eq!(defaults.project.bytes, None);
         let path = root.path().join("agent.env");
         crate::vault::write_new_private(&path, b"FLOW_LIKE_PROJECT_ARTIFACT_REVISIONS=7\n")
             .unwrap();
         assert_eq!(artifact_budgets(root.path()).unwrap().project.revisions, 7);
+        std::fs::write(
+            &path,
+            format!("FLOW_LIKE_DEVICE_ARTIFACT_BYTES={}\n", u64::MAX),
+        )
+        .unwrap();
+        assert_eq!(
+            artifact_budgets(root.path()).unwrap().device.bytes,
+            Some(u64::MAX)
+        );
         for invalid in [
             "FLOW_LIKE_DEVICE_ARTIFACT_BYTES=0\n",
             "FLOW_LIKE_DEVICE_ARTIFACT_FILES=1000001\n",

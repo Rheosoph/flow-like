@@ -18,11 +18,15 @@ const { sampleFleet } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
 const { deployExitHref } = await import("../routing/devices-href");
+const { deployPrepareSeams } = await import("./use-deploy-prepare");
+const { deployRunExtras } = await import("./use-deploy-run");
 const kit = await import("./deploy-test-kit");
 const { EDGE, STUDIO, LAB, VISITOR, CRM, INVOICE, text } = kit;
 await preloadDevices();
+const nativeExport = deployPrepareSeams.exportCommands;
 
 afterEach(async () => {
+	deployPrepareSeams.exportCommands = nativeExport;
 	await cleanupDevices();
 	await dom.cleanup();
 	globalThis.sessionStorage.clear();
@@ -402,6 +406,31 @@ describe("frame", () => {
 		expect(text(view.container)).not.toContain("Discard…");
 	});
 
+	test("opening Rollout directly leaves native preparation to the run", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.on("GET", `apps/${VISITOR}/device-metadata`, () => {
+			const metadata = fake.hub.deviceMetadata(VISITOR);
+			metadata.documents.app = {
+				...(metadata.documents.app as object),
+				bits: ["badge-model"],
+			};
+			return metadata;
+		});
+		let preparations = 0;
+		deployPrepareSeams.exportCommands = async () => {
+			preparations += 1;
+			throw new Error("Rollout should not prepare a second native snapshot");
+		};
+		const view = await kit.mountApp(
+			mountDevices,
+			VISITOR,
+			{ device: EDGE, step: "rollout" },
+			{ fake, platform: "desktop" },
+		);
+		expect(text(view.container)).toContain("Nothing has been deployed yet");
+		expect(preparations).toBe(0);
+	});
+
 	test("the headline place exists on Rollout only", async () => {
 		const view = await kit.mountApp(mountDevices, VISITOR, {
 			device: EDGE,
@@ -424,6 +453,91 @@ describe("frame", () => {
 		const slot = foot?.querySelector("[data-deploy-foot-slot]");
 		expect(slot?.previousElementSibling?.textContent).toBe("Back");
 		expect(kit.primaries(view.container)).toBeLessThanOrEqual(1);
+	});
+
+	test("Review keeps its native snapshot readable through Rollout and releases it when the wizard closes", async () => {
+		const fake = await createFakeWorkspace();
+		const key = kit.seedDraft(fake, {
+			appId: VISITOR,
+			scope: { kind: "app", appId: VISITOR },
+			route: { deviceIds: [EDGE], eventId: "evt_visitor_page", mode: "new" },
+			reached: 6,
+			change: (draft) => ({
+				...draft,
+				approval: { ...draft.approval, ownerConsent: true },
+				targets: draft.targets.map((target) => ({
+					...target,
+					over: { ...target.over, trustAgent: true },
+				})),
+			}),
+		});
+		const deploymentId = JSON.parse(
+			globalThis.sessionStorage.getItem(key) ?? "{}",
+		).draft.deploymentId as string;
+		fake.api.on("GET", `apps/${VISITOR}/device-metadata`, () => {
+			const metadata = fake.hub.deviceMetadata(VISITOR);
+			metadata.documents.app = {
+				...(metadata.documents.app as object),
+				bits: ["badge-model"],
+			};
+			return metadata;
+		});
+		const source = new TextEncoder().encode(
+			JSON.stringify({ version: 1, project_id: VISITOR }),
+		);
+		let preparations = 0;
+		let releases = 0;
+		deployPrepareSeams.exportCommands = async () => ({
+			prepare: async (project) => {
+				preparations += 1;
+				return {
+					export_id: "a0000000-0000-4000-8000-000000000000",
+					project_id: project,
+					source: "online",
+					files: [
+						{ path: `apps/${project}/online-source.json`, size: source.length },
+					],
+					assets: { bit_pins: [], package_pins: [] },
+				};
+			},
+			read: async (_, _path, offset, length) => {
+				if (releases) throw new Error("Prepared export expired");
+				return source.slice(offset, offset + length).buffer;
+			},
+			release: async () => {
+				releases += 1;
+			},
+		});
+		const finishBegin = fake.agent(EDGE).hold("artifact");
+		const view = await kit.mountApp(
+			mountDevices,
+			VISITOR,
+			{ device: EDGE, event: "evt_visitor_page", step: "review" },
+			{ fake, platform: "desktop" },
+		);
+		expect(preparations).toBe(1);
+		await click(
+			byRole(
+				"button",
+				"Deploy Check-in page to edge-berlin-01",
+				view.container,
+			),
+		);
+		await view.settle();
+		expect(lastHref(view)).toContain("step=rollout");
+		expect(releases).toBe(0);
+		expect(preparations).toBe(1);
+		const file = deployRunExtras(deploymentId).prepared?.artifact.files.find(
+			(entry) => entry.path.endsWith("online-source.json"),
+		)?.file;
+		expect(file).toBeDefined();
+		if (!file) throw new Error("Missing native snapshot file");
+		expect(new Uint8Array(await file.arrayBuffer())).toEqual(source);
+		await view.unmount();
+		finishBegin();
+		expect(releases).toBe(1);
+		expect(deployRunExtras(deploymentId).prepared).toBeNull();
+		await expect(file.arrayBuffer()).rejects.toThrow();
 	});
 
 	test("Review waits for an earlier step the plan's own checks can't see", async () => {

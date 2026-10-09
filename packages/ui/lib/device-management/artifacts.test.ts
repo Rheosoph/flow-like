@@ -3,6 +3,7 @@ import { sha256 } from "@noble/hashes/sha2";
 import {
 	ARTIFACT_CHUNK_BYTES,
 	ArtifactAbortError,
+	type ArtifactBlob,
 	type ArtifactManagementCall,
 	type ArtifactTransferStatus,
 	ArtifactUploadError,
@@ -31,6 +32,58 @@ import { DeviceTunnelError, type TunnelArtifactUpload } from "./tunnel";
 import { LiveCallError } from "./workspace/errors";
 const hex = (v: Uint8Array) =>
 	Array.from(v, (b) => b.toString(16).padStart(2, "0")).join("");
+
+test("project preparation accepts files above 4 GiB and totals above 8 GiB", async () => {
+	const size = 5 * 1024 ** 3;
+	let slices = 0;
+	const file: ArtifactBlob = {
+		size,
+		async arrayBuffer() {
+			throw new Error("The entire file must not be read into memory.");
+		},
+		slice(start = 0, end = size) {
+			expect(end - start).toBeLessThanOrEqual(1024 * 1024);
+			slices += 1;
+			// Only the reported size is large; empty slices exercise bounded reads.
+			return new Blob([]);
+		},
+	};
+	const artifact = await prepareProjectArtifact("project", [
+		{ path: "apps/project/manifest.app", file: new Blob(["app"]) },
+		{ path: "apps/project/storage/files/data.bin", file },
+		{ path: "apps/project/storage/db/table.lance/data", file },
+	]);
+	expect(artifact.descriptor.total_bytes).toBe(size * 2 + 3);
+	expect(slices).toBe((size * 2) / (1024 * 1024));
+});
+
+test("project preparation rejects invalid sizes and totals that lose integer precision", async () => {
+	for (const size of [
+		-1,
+		0.5,
+		Number.MAX_SAFE_INTEGER + 1,
+		Number.MAX_SAFE_INTEGER,
+	]) {
+		const file: ArtifactBlob = {
+			size,
+			async arrayBuffer() {
+				throw new Error("Invalid sizes must fail before reading bytes.");
+			},
+			slice() {
+				throw new Error("Invalid sizes must fail before reading bytes.");
+			},
+		};
+		await expect(
+			prepareProjectArtifact("project", [
+				{ path: "apps/project/manifest.app", file: new Blob(["app"]) },
+				{ path: "apps/project/storage/files/data.bin", file },
+			]),
+		).rejects.toThrow(
+			size === Number.MAX_SAFE_INTEGER ? "represented exactly" : "invalid size",
+		);
+	}
+});
+
 async function prepared() {
 	return prepareProjectArtifact("project", [
 		{

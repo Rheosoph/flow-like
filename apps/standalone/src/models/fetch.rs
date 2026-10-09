@@ -640,13 +640,16 @@ impl Download {
     }
 
     async fn write(&mut self, chunk: &[u8]) -> Result<(), FetchError> {
-        let written = self.written + chunk.len() as u64;
-        if written > self.size {
-            return Err(FetchError::SizeMismatch(format!(
-                "Fetch {}: the source sends more than the {} bytes declared",
-                self.label, self.size
-            )));
-        }
+        let written = self
+            .written
+            .checked_add(chunk.len() as u64)
+            .filter(|written| *written <= self.size)
+            .ok_or_else(|| {
+                FetchError::SizeMismatch(format!(
+                    "Fetch {}: the source sends more than the {} bytes declared",
+                    self.label, self.size
+                ))
+            })?;
         let context = format!("Write {}", self.label);
         self.writer
             .write_all(chunk)
@@ -938,7 +941,6 @@ mod tests {
         response::{IntoResponse, Response},
         routing::get,
     };
-    use flow_like_device_protocol::MODEL_ASSET_MAX_BYTES;
     use std::{io::Write, path::Path};
 
     fn staged(directory: &Path, bytes: &[u8]) -> Result<File> {
@@ -1022,12 +1024,34 @@ mod tests {
         assert_eq!(deadline_for(64 * 1024 * 1024).as_secs(), 300 + 2048);
     }
 
+    #[tokio::test]
+    async fn downloads_reject_offset_overflow_before_writing() -> Result<()> {
+        let mut download = Download {
+            response: axum::http::Response::new("").into(),
+            writer: tokio::fs::File::from_std(tempfile::tempfile()?),
+            digest: StreamDigest::new(DigestAlgorithm::Sha256),
+            resumed: true,
+            offset: u64::MAX,
+            written: u64::MAX,
+            unsynced: 0,
+            size: u64::MAX,
+            label: "model asset".into(),
+        };
+        assert!(matches!(
+            download.write(b"x").await,
+            Err(FetchError::SizeMismatch(_))
+        ));
+        assert_eq!(download.writer.metadata().await?.len(), 0);
+        Ok(())
+    }
+
     #[test]
     fn an_attempt_lasts_a_day_at_most_and_a_slow_source_gets_no_other() {
-        assert_eq!(deadline_for(MODEL_ASSET_MAX_BYTES), MAX_DEADLINE);
+        let large_asset = 64 * 1024_u64.pow(3);
+        assert_eq!(deadline_for(large_asset), MAX_DEADLINE);
         let kept_rate = MINIMUM_BYTES_PER_SECOND * MAX_DEADLINE.as_secs();
-        assert!(expired("asset", MODEL_ASSET_MAX_BYTES, kept_rate).is_retryable());
-        let slower = expired("asset", MODEL_ASSET_MAX_BYTES, kept_rate - 1);
+        assert!(expired("asset", large_asset, kept_rate).is_retryable());
+        let slower = expired("asset", large_asset, kept_rate - 1);
         assert!(matches!(slower, FetchError::TooSlow(_)) && !slower.is_retryable());
         let gibibyte = 1 << 30;
         assert!(!expired("asset", gibibyte, gibibyte - 1).is_retryable());
