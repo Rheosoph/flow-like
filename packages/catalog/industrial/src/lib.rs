@@ -1,3 +1,6 @@
+// Listener futures include Lance log writes, which need deeper Send trait evaluation.
+#![recursion_limit = "256"]
+
 pub mod ads;
 pub mod amqp;
 pub mod cifx;
