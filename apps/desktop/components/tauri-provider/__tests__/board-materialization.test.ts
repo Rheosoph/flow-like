@@ -1,4 +1,8 @@
-import type { IBoardSyncResponse } from "@flow-like/flow-like-ui/lib/board-sync";
+import { type IBoard, ICommentType } from "@flow-like/flow-like-ui";
+import type {
+	IBoardSyncRequest,
+	IBoardSyncResponse,
+} from "@flow-like/flow-like-ui/lib/board-sync";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -93,16 +97,21 @@ function fakeBackend(
 	};
 }
 
-function nativeInvoke(disk: FakeDisk) {
+function nativeInvoke(disk: FakeDisk, response = syncResponse()) {
 	return async (command: string, args?: unknown) => {
 		switch (command) {
 			case "get_app":
 				return { visibility: "Private" };
 			case "flowpilot_list_board_edit_jobs":
 				return [];
-			case "sync_board":
+			case "sync_board": {
 				if (!disk.present) throw new Error("Board not found");
-				return syncResponse();
+				const request = (args as { request: IBoardSyncRequest }).request;
+				if (request.meta === response.manifest?.meta) {
+					return { manifest: structuredClone(response.manifest) };
+				}
+				return structuredClone(response);
+			}
 			case "upsert_board":
 				if (disk.writeFails) throw new Error("invalid args `boardData`");
 				if (!disk.writeIsALie) disk.present = true;
@@ -118,6 +127,190 @@ function nativeInvoke(disk: FakeDisk) {
 beforeEach(() => {
 	mocks.invoke.mockReset();
 	mocks.fetcher.mockReset();
+});
+
+function mediaSyncResponse(): IBoardSyncResponse {
+	const response = syncResponse();
+	if (!response.meta || !response.manifest)
+		throw new Error("Missing fixture metadata");
+	response.meta.updated_at = { secs_since_epoch: 20, nanos_since_epoch: 0 };
+	response.manifest.comments = "comments-with-media";
+	response.manifest.layers = { "layer-1": "layer-with-media" };
+	const media = (id: string, commentType: ICommentType) => ({
+		id,
+		comment_type: commentType,
+		content: `${id}.${commentType === ICommentType.Video ? "mp4" : "png"}`,
+		coordinates: [0, 0, 0],
+		width: 100,
+		height: 100,
+		timestamp: { secs_since_epoch: 20, nanos_since_epoch: 0 },
+		hash: 1,
+	});
+	response.comments = {
+		image: media("image", ICommentType.Image),
+	} as IBoard["comments"];
+	response.layers = {
+		"layer-1": {
+			id: "layer-1",
+			name: "Layer",
+			type: "Collapsed",
+			nodes: {},
+			variables: {},
+			pins: {},
+			coordinates: [0, 0, 0],
+			comments: { video: media("video", ICommentType.Video) },
+		},
+	} as unknown as IBoard["layers"];
+	return response;
+}
+
+function serveRemoteMedia(signature = "valid") {
+	mocks.fetcher.mockImplementation(
+		async (_profile: unknown, path: string, options?: { body?: string }) => {
+			if (path.endsWith("/data/download")) {
+				if (!options?.body) throw new Error("Missing download request body");
+				const { prefixes } = JSON.parse(options.body) as {
+					prefixes: string[];
+				};
+				return prefixes.map((prefix) => ({
+					prefix,
+					url: `https://storage.example/${prefix}?signature=${signature}`,
+				}));
+			}
+			return mediaSyncResponse();
+		},
+	);
+}
+
+function expectMediaUrls(board: IBoard | undefined, signature = "valid") {
+	if (!board) throw new Error("Missing display board");
+	for (const comment of [
+		board.comments.image,
+		board.layers["layer-1"].comments.video,
+	]) {
+		expect(comment).toHaveProperty(
+			"presigned_url",
+			`https://storage.example/boards/${BOARD}/${comment.content}?signature=${signature}`,
+		);
+	}
+}
+
+describe("media from remote boards", () => {
+	test("a newly materialized board resolves media even before app visibility is known", async () => {
+		mocks.invoke.mockImplementation(
+			nativeInvoke({ present: false }, mediaSyncResponse()),
+		);
+		serveRemoteMedia();
+		const state = new BoardState(fakeBackend({ offline: true }) as never);
+
+		expectMediaUrls(await state.getBoard(APP, BOARD));
+	});
+
+	test("a remotely fetched pinned version resolves media without writing the board", async () => {
+		mocks.invoke.mockImplementation(nativeInvoke({ present: false }));
+		serveRemoteMedia();
+		const state = new BoardState(fakeBackend() as never);
+
+		expectMediaUrls(await state.getBoard(APP, BOARD, [0, 0, 1]));
+		expect(
+			mocks.invoke.mock.calls.some(([name]) => name === "upsert_board"),
+		).toBe(false);
+	});
+
+	test("a forced refresh publishes the new media with resolved URLs", async () => {
+		mocks.invoke.mockImplementation(nativeInvoke({ present: true }));
+		serveRemoteMedia();
+		const backend = fakeBackend({ offline: false });
+		const state = new BoardState(backend as never);
+
+		expectMediaUrls(await state.getBoard(APP, BOARD, undefined, true));
+		expectMediaUrls(backend.queryClient.setQueryData.mock.calls.at(-1)?.[1]);
+	});
+
+	test("background sync publishes the new media with resolved URLs", async () => {
+		mocks.invoke.mockImplementation(nativeInvoke({ present: true }));
+		serveRemoteMedia();
+		const backend = fakeBackend({ offline: false });
+		const state = new BoardState(backend as never);
+
+		const local = await state.getBoard(APP, BOARD);
+		expect(local.comments).toEqual({});
+		await backend.backgroundTaskHandler.mock.calls[0][0];
+
+		expectMediaUrls(backend.queryClient.setQueryData.mock.calls.at(-1)?.[1]);
+	});
+
+	test("refreshed URLs replace display records without changing earlier results or the sync baseline", async () => {
+		mocks.invoke.mockImplementation(
+			nativeInvoke({ present: true }, mediaSyncResponse()),
+		);
+		serveRemoteMedia();
+		const backend = fakeBackend({ offline: false });
+		const state = new BoardState(backend as never);
+
+		const first = await state.getBoard(APP, BOARD);
+		await backend.backgroundTaskHandler.mock.calls[0][0];
+		serveRemoteMedia("refreshed");
+		const refreshed = await state.getBoard(APP, BOARD);
+		await backend.backgroundTaskHandler.mock.calls[1][0];
+
+		expectMediaUrls(first);
+		expectMediaUrls(refreshed, "refreshed");
+		expect(refreshed).not.toBe(first);
+		expect(refreshed.comments.image).not.toBe(first.comments.image);
+		expect(refreshed.layers["layer-1"].comments.video).not.toBe(
+			first.layers["layer-1"].comments.video,
+		);
+		expect(refreshed.nodes).toBe(first.nodes);
+		// Display URLs must not make identical local and remote workflow data differ.
+		expect(
+			mocks.invoke.mock.calls.some(([name]) => name === "upsert_board"),
+		).toBe(false);
+	});
+
+	test("offline boards still resolve media through local storage", async () => {
+		const readBoard = nativeInvoke({ present: true }, mediaSyncResponse());
+		mocks.invoke.mockImplementation(async (command: string, args: unknown) => {
+			if (command === "storage_get") {
+				return (args as { prefixes: string[] }).prefixes.map((prefix) => ({
+					prefix,
+					url: `asset://localhost/${prefix}`,
+				}));
+			}
+			return readBoard(command, args);
+		});
+		const state = new BoardState(fakeBackend({ offline: true }) as never);
+
+		const board = await state.getBoard(APP, BOARD);
+
+		expect(board.comments.image.presigned_url).toBe(
+			`asset://localhost/boards/${BOARD}/image.png`,
+		);
+		expect(board.layers["layer-1"].comments.video.presigned_url).toBe(
+			`asset://localhost/boards/${BOARD}/video.mp4`,
+		);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("a failed media refresh preserves the last display URLs until a later retry succeeds", async () => {
+		mocks.invoke.mockImplementation(
+			nativeInvoke({ present: true }, mediaSyncResponse()),
+		);
+		serveRemoteMedia();
+		const state = new BoardState(fakeBackend({ offline: false }) as never);
+		const version: [number, number, number] = [0, 0, 1];
+		const first = await state.getBoard(APP, BOARD, version);
+
+		mocks.fetcher.mockRejectedValue(new Error("Temporary download failure"));
+		const failedRefresh = await state.getBoard(APP, BOARD, version);
+		expect(failedRefresh).toBe(first);
+		expectMediaUrls(failedRefresh);
+
+		serveRemoteMedia("retried");
+		const recovered = await state.getBoard(APP, BOARD, version);
+		expectMediaUrls(recovered, "retried");
+		expectMediaUrls(first);
+	});
 });
 
 /**

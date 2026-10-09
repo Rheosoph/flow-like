@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::{
-    app::{App, AppVisibility},
+    app::{App, AppVisibility, sharing::device::board_bit_references},
     flow::{board::Board, event::Event},
 };
 use flow_like_types::Context;
@@ -66,11 +66,23 @@ fn key(kind: &str, id: &str, version: (u32, u32, u32)) -> Result<String, ApiErro
     ))
 }
 
+#[derive(Default)]
 struct Documents {
     values: BTreeMap<String, serde_json::Value>,
     bytes: usize,
+    bit_references: BTreeSet<String>,
 }
 impl Documents {
+    fn include_bit_references(&self, app: &mut App) {
+        let discovered: Vec<_> = self
+            .bit_references
+            .iter()
+            .filter(|reference| !app.bits.contains(reference))
+            .cloned()
+            .collect();
+        app.bits.extend(discovered);
+    }
+
     fn add(&mut self, path: String, value: impl serde::Serialize) -> Result<(), ApiError> {
         let value = serde_json::to_value(value)?;
         let size = serde_json::to_vec(&value)?.len() + path.len();
@@ -146,6 +158,9 @@ async fn append_current_template(
         documents.add(format!("{path}/pages/{page_id}"), page)?;
     }
     super::board::secrets::filter_board_secrets(&mut template);
+    documents
+        .bit_references
+        .extend(board_bit_references(&template));
     documents.add(path, template)?;
     Ok(())
 }
@@ -335,6 +350,9 @@ async fn append_board(
         documents.add(format!("{path}/pages/{page_id}"), page)?;
     }
     super::board::secrets::filter_board_secrets(&mut board);
+    documents
+        .bit_references
+        .extend(board_bit_references(&board));
     documents.add(path, board)
 }
 
@@ -453,10 +471,7 @@ pub async fn export(
         app.events.len() <= 512 && app.templates.len() <= 256 && app.widget_ids.len() <= 256,
         "Executable metadata inventory exceeds its limit"
     );
-    let mut documents = Documents {
-        values: BTreeMap::new(),
-        bytes: 0,
-    };
+    let mut documents = Documents::default();
 
     let boards = PublishedBoards::Hub {
         state: &state,
@@ -489,6 +504,7 @@ pub async fn export(
             .keys()
             .any(|path| path.ends_with(&format!("/pages/{id}")))
     });
+    documents.include_bit_references(&mut app);
     documents.add("app".into(), &app)?;
     // Membership may change during a large export.
     crate::ensure_fresh_permission!(user, &app_id, &state, required);
@@ -547,10 +563,7 @@ mod tests {
         edited.name = "Unpublished edit".into();
         app.save_widget(&edited).await.unwrap();
 
-        let mut documents = Documents {
-            values: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut documents = Documents::default();
         for id in ["drafted", "forked", "published"] {
             append_widget(&mut documents, &app, id).await.unwrap();
         }
@@ -590,10 +603,7 @@ mod tests {
             .await
             .unwrap();
         assert!(app.get_template("template", Some((3, 2, 1))).await.is_err());
-        let mut documents = Documents {
-            values: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut documents = Documents::default();
         append_current_template(&mut documents, &app, "template")
             .await
             .unwrap();
@@ -607,10 +617,7 @@ mod tests {
         );
         assert!(app.get_template("template", Some((3, 2, 1))).await.is_err());
         store.delete(&page_path).await.unwrap();
-        let mut incomplete = Documents {
-            values: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut incomplete = Documents::default();
         assert!(
             append_current_template(&mut incomplete, &app, "template")
                 .await
@@ -698,10 +705,7 @@ mod tests {
 
     #[test]
     fn metadata_export_rejects_ambiguous_or_unbounded_documents() {
-        let mut documents = Documents {
-            values: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut documents = Documents::default();
         documents
             .add("app".into(), serde_json::json!({"id":"project"}))
             .unwrap();
@@ -775,10 +779,7 @@ mod tests {
         latest: &[&str],
         types: &[&str],
     ) -> BTreeMap<String, serde_json::Value> {
-        let mut documents = Documents {
-            values: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut documents = Documents::default();
         let named = latest.iter().map(|id| (*id).to_owned()).collect();
         let types = types.iter().map(|name| (*name).to_owned()).collect();
         let boards = PublishedBoards::Stored(state.clone());
@@ -786,6 +787,45 @@ mod tests {
             .await
             .unwrap();
         documents.values
+    }
+
+    #[tokio::test]
+    async fn deployment_bits_follow_the_exported_version_and_keep_dynamic_dependencies() {
+        use flow_like::flow::{node::Node, variable::VariableType};
+        let (_, state, mut app) = memory_project().await;
+        app.bits = vec!["dynamic-model".into()];
+        let (mut flow, start) = stored_flow(&state, "flow").await;
+        let mut loader = Node::new("bit_from_string", "Load Bit", "", "Bit");
+        loader
+            .add_input_pin("bit_id", "Bit ID", "", VariableType::String)
+            .set_default_value(Some(serde_json::json!("hub:published-model")));
+        let loader_id = loader.id.clone();
+        flow.nodes.insert(loader_id.clone(), loader);
+        flow.mark_changed();
+        flow.save(None).await.unwrap();
+        let (version, _) = flow.publish_if_changed(None).await.unwrap();
+        stored_event(&mut app, "event", "http", "flow", &start, Some(version)).await;
+        flow.nodes
+            .get_mut(&loader_id)
+            .unwrap()
+            .get_pin_mut_by_name("bit_id")
+            .unwrap()
+            .set_default_value(Some(serde_json::json!("unpublished-model")));
+        flow.mark_changed();
+        flow.save(None).await.unwrap();
+
+        let mut documents = Documents::default();
+        append_events(
+            &mut documents,
+            &app,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &PublishedBoards::Stored(state),
+        )
+        .await
+        .unwrap();
+        documents.include_bit_references(&mut app);
+        assert_eq!(app.bits, ["dynamic-model", "hub:published-model"]);
     }
 
     /// Ids of the exported events, sorted.

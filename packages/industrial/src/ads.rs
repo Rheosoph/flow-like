@@ -111,9 +111,11 @@ mod runtime {
     struct NotificationSink {
         sender: mpsc::Sender<Result<AdsNotification>>,
         cancel: CancellationToken,
+        symbol_handle: Option<u32>,
     }
 
     struct Session {
+        address: ads::AmsAddr,
         client: Option<ads::Client>,
         subscriptions: HashMap<u32, NotificationSink>,
         failure: Arc<Mutex<Option<String>>>,
@@ -146,15 +148,46 @@ mod runtime {
             .source_net_id
             .map(|id| ads::Source::Addr(ads::AmsAddr::new(id.into(), config.source_port)))
             .unwrap_or(ads::Source::Auto);
-        ads::Client::new(
+        // Limit incoming packets, including aggregated notifications, to 16 MiB.
+        // Individual adapter reads/writes remain limited to 1 MiB.
+        ads::Client::new_with_packet_limit(
             (config.host.as_str(), config.tcp_port),
             ads::Timeouts::new(Duration::from_millis(config.timeout_ms)),
             source,
+            16 * 1024 * 1024,
         )
         .map_err(failure)
     }
     fn target(config: &AdsConfig) -> ads::AmsAddr {
         ads::AmsAddr::new(config.target_net_id.into(), config.target_port)
+    }
+
+    fn release_subscription(
+        device: ads::Device<'_>,
+        notification: u32,
+        symbol: Option<u32>,
+    ) -> Result<()> {
+        device.delete_notification(notification).map_err(failure)?;
+        if let Some(symbol) = symbol {
+            device
+                .write(ads::index::RELEASE_SYMHANDLE, 0, &symbol.to_le_bytes())
+                .map_err(failure)?;
+        }
+        Ok(())
+    }
+
+    impl Drop for Session {
+        fn drop(&mut self) {
+            if let Some(client) = self.client.as_ref() {
+                for (handle, sink) in self.subscriptions.drain() {
+                    let _ = release_subscription(
+                        client.device(self.address),
+                        handle,
+                        sink.symbol_handle,
+                    );
+                }
+            }
+        }
     }
 
     impl AdsClient {
@@ -177,6 +210,7 @@ mod runtime {
                 };
                 let notifications = client.get_notification_channel();
                 let mut session = Session {
+                    address,
                     client: Some(client),
                     subscriptions: HashMap::new(),
                     failure: worker_failure,
@@ -226,8 +260,10 @@ mod runtime {
                         .map(|(handle, _)| *handle)
                         .collect();
                     for handle in stale {
-                        session.subscriptions.remove(&handle);
-                        if let Err(error) = client.device(address).delete_notification(handle) {
+                        let sink = session.subscriptions.remove(&handle).unwrap();
+                        if let Err(error) =
+                            release_subscription(client.device(address), handle, sink.symbol_handle)
+                        {
                             // A failed exchange can leave a stale reply in the SDK channel.
                             session.fail(format!("ADS notification cleanup failed: {error}"));
                             return;
@@ -337,11 +373,12 @@ mod runtime {
             let command: Command = Box::new(move |session| {
                 let result = (|| {
                     if let Some(client) = session.client.as_ref() {
-                        for handle in session.subscriptions.keys() {
-                            client
-                                .device(address)
-                                .delete_notification(*handle)
-                                .map_err(failure)?;
+                        for (handle, sink) in &session.subscriptions {
+                            release_subscription(
+                                client.device(address),
+                                *handle,
+                                sink.symbol_handle,
+                            )?;
                         }
                     }
                     Ok(())
@@ -382,11 +419,18 @@ mod runtime {
                     .as_ref()
                     .ok_or_else(|| failure("ADS connection is closed"))?;
                 let device = client.device(target);
-                let (group, offset) = match &config.address {
+                // Symbolic ADS servers register notifications through a symbol handle.
+                // Keep that handle until after the notification is deleted.
+                let symbol = match &config.address {
                     AdsAddress::Symbol { name } => {
-                        ads::symbol::get_location(device, name).map_err(failure)?
+                        Some(ads::Handle::new(device, name).map_err(failure)?)
                     }
-                    AdsAddress::Index { group, offset } => (*group, *offset),
+                    AdsAddress::Index { .. } => None,
+                };
+                let (group, offset) = match (&config.address, &symbol) {
+                    (_, Some(symbol)) => (ads::index::RW_SYMVAL_BYHANDLE, symbol.raw()),
+                    (AdsAddress::Index { group, offset }, None) => (*group, *offset),
+                    _ => unreachable!(),
                 };
                 require(
                     !request_cancel.is_cancelled(),
@@ -406,11 +450,18 @@ mod runtime {
                 let handle = device
                     .add_notification(group, offset, &attributes)
                     .map_err(failure)?;
+                let symbol_handle = symbol.map(|symbol| {
+                    let raw = symbol.raw();
+                    // Transfer the server resource to Session's explicit cleanup.
+                    std::mem::forget(symbol);
+                    raw
+                });
                 session.subscriptions.insert(
                     handle,
                     NotificationSink {
                         sender,
                         cancel: stop,
+                        symbol_handle,
                     },
                 );
                 Ok(())
@@ -700,6 +751,25 @@ mod tests {
                     request = read_request(&mut socket) => request,
                     _ = listener.accept() => panic!("subscriptions must not open another connection"),
                 };
+                let request = if handle == 11 {
+                    assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 9);
+                    assert_eq!(
+                        &request[32..36],
+                        &ads::index::GET_SYMHANDLE_BYNAME.to_le_bytes()
+                    );
+                    let mut reply = vec![0, 0, 0, 0, 4, 0, 0, 0];
+                    reply.extend_from_slice(&777u32.to_le_bytes());
+                    send_frame(&mut socket, &request, 9, &reply).await;
+                    let registration = read_request(&mut socket).await;
+                    assert_eq!(
+                        &registration[32..36],
+                        &ads::index::RW_SYMVAL_BYHANDLE.to_le_bytes()
+                    );
+                    assert_eq!(&registration[36..40], &777u32.to_le_bytes());
+                    registration
+                } else {
+                    request
+                };
                 assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 6);
                 let mut payload = vec![0; 4];
                 payload.extend_from_slice(&handle.to_le_bytes());
@@ -715,6 +785,14 @@ mod tests {
             assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 7);
             assert_eq!(&request[32..], &11u32.to_le_bytes());
             send_frame(&mut socket, &request, 7, &[0; 4]).await;
+            let release = read_request(&mut socket).await;
+            assert_eq!(u16::from_le_bytes(release[16..18].try_into().unwrap()), 3);
+            assert_eq!(
+                &release[32..36],
+                &ads::index::RELEASE_SYMHANDLE.to_le_bytes()
+            );
+            assert_eq!(&release[44..], &777u32.to_le_bytes());
+            send_frame(&mut socket, &release, 3, &[0; 4]).await;
             send_samples(&mut socket, &request, &[(22, 31)]).await;
             let request = read_request(&mut socket).await;
             assert_eq!(u16::from_le_bytes(request[16..18].try_into().unwrap()), 7);
@@ -737,7 +815,15 @@ mod tests {
             cycle_ms: 10,
             on_change: true,
         };
-        let mut first = client.subscribe(config.clone()).await.unwrap();
+        let mut first = client
+            .subscribe(AdsNotificationConfig {
+                address: AdsAddress::Symbol {
+                    name: "MAIN.value".into(),
+                },
+                ..config.clone()
+            })
+            .await
+            .unwrap();
         let mut second = client.subscribe(config.clone()).await.unwrap();
         let sample = first.receive().await.unwrap();
         assert_eq!(

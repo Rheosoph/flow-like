@@ -1,0 +1,40 @@
+[package]
+name = "flow-like-genicam-container"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+name = "flow_like_industrial"
+path = "lib.rs"
+
+[features]
+default = ["genicam"]
+genicam = []
+genicam-emulator = ["telegenic/emulator"]
+
+[dependencies]
+schemars = "=1.2.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+telegenic = { version = "=1.0.3", path = "../../../../packages/vendor/telegenic", default-features = false }
+thiserror = "=2.0.18"
+
+[dev-dependencies]
+parking_lot = "=0.12.5"
+
+[[test]]
+name = "genicam_e2e"
+path = "../../../../packages/industrial/tests/genicam_e2e.rs"
+
+[[test]]
+name = "telegenic_control"
+path = "../../../../packages/vendor/telegenic/tests/control.rs"
+
+[[test]]
+name = "telegenic_stream"
+path = "../../../../packages/vendor/telegenic/tests/stream.rs"
+
+[profile.test]
+debug = 0

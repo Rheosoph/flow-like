@@ -187,7 +187,6 @@ wheels = [
 
 [[package]]
 name = "flow-like"
-version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

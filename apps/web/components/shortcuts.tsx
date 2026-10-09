@@ -7,7 +7,6 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
-import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 import { useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -29,11 +28,6 @@ export function Shortcuts() {
 		backend.userState,
 		[],
 	);
-	const bits = useInvoke(backend.bitState.searchBits, backend.bitState, [
-		{
-			bit_types: [IBitTypes.Embedding, IBitTypes.ImageEmbedding],
-		},
-	]);
 
 	const shortcuts = useLiveQuery(async () => {
 		if (!currentProfile.data?.hub_profile.id) return [];
@@ -62,14 +56,7 @@ export function Shortcuts() {
 				preview_media: [],
 			};
 
-			const filter = new Set(currentProfile.data?.hub_profile.bits ?? []);
-			const allBits = bits.data?.filter((bit) => filter.has(bit.id)) ?? [];
-
-			const app = await backend.appState.createApp(
-				meta,
-				allBits.map((bit) => bit.id),
-				isOnline,
-			);
+			const app = await backend.appState.createApp(meta, [], isOnline);
 
 			if (currentProfile.data) {
 				await backend.userState.updateProfileApp(
@@ -99,9 +86,9 @@ export function Shortcuts() {
 			backend.appState,
 			backend.userState,
 			backend.boardState,
-			bits.data,
 			invalidate,
 			router,
+			t,
 		],
 	);
 

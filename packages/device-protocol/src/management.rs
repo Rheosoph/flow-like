@@ -532,6 +532,23 @@ pub enum ManagementCommand {
         after: u64,
         limit: u32,
     },
+    /// Finished workflow executions of one placement, newest first.
+    ExecutionRuns {
+        placement_id: String,
+        offset: u32,
+        limit: u16,
+    },
+    /// Structured node logs of a finished execution, oldest first. Levels are 0..=4.
+    ExecutionLogs {
+        placement_id: String,
+        run_id: String,
+        offset: u32,
+        limit: u16,
+        #[serde(default)]
+        node_id: Option<String>,
+        #[serde(default)]
+        min_level: Option<u8>,
+    },
     Reboot {
         expected_boot_id: String,
     },
@@ -903,6 +920,22 @@ pub fn verify_controller_certificate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn execution_log_commands_preserve_scope_and_filters() {
+        for value in [
+            serde_json::json!({"type":"execution_runs","placement_id":"api","offset":20,"limit":20}),
+            serde_json::json!({"type":"execution_logs","placement_id":"api","run_id":"run","offset":50,"limit":50,"node_id":"node","min_level":3}),
+        ] {
+            let command: ManagementCommand = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(command).unwrap(), value);
+        }
+        assert!(
+            serde_json::from_value::<ManagementCommand>(
+                serde_json::json!({"type":"execution_logs","run_id":"run","offset":0,"limit":50})
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn placement_configuration_uses_the_current_wire_name_and_accepts_its_legacy_alias() {
         let command = ManagementCommand::PlacementConfiguration {

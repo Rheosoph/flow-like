@@ -1,0 +1,23 @@
+[package]
+name = "flow-like-platform"
+version = "0.1.0"
+edition = "2024"
+description = "Async Rust client for the Flow-Like platform API"
+license = "MIT"
+repository = "https://github.com/Rheosoph/flow-like"
+homepage = "https://docs.flow-like.com/dev/sdks/rust/"
+documentation = "https://docs.rs/flow-like-platform"
+keywords = ["flow-like", "workflow", "automation", "sdk"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+reqwest = { workspace = true, features = ["stream", "multipart"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "sync"] }

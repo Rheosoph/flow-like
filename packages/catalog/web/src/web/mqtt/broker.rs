@@ -31,6 +31,8 @@ use tokio::{
 };
 
 use super::MqttBrokerConfig;
+#[cfg(feature = "execute")]
+use super::topic::{topic_matches, valid_filter};
 
 #[cfg(feature = "execute")]
 use crate::web::message_handler::{
@@ -46,6 +48,8 @@ type Broker = Arc<Mutex<BrokerState>>;
 
 #[cfg(feature = "execute")]
 const CLIENT_QUEUE: usize = 64;
+#[cfg(feature = "execute")]
+const HANDLER_QUEUE: usize = 32;
 #[cfg(feature = "execute")]
 const MAX_PACKET: usize = 1024 * 1024;
 #[cfg(feature = "execute")]
@@ -531,36 +535,6 @@ fn valid_topic(topic: &str) -> bool {
 }
 
 #[cfg(feature = "execute")]
-fn valid_filter(filter: &str) -> bool {
-    if filter.is_empty() || filter.len() > u16::MAX as usize || filter.contains('\0') {
-        return false;
-    }
-    let parts = filter.split('/').collect::<Vec<_>>();
-    parts.iter().enumerate().all(|(index, part)| {
-        (!part.contains('+') || *part == "+")
-            && (!part.contains('#') || (*part == "#" && index + 1 == parts.len()))
-    })
-}
-
-#[cfg(feature = "execute")]
-fn topic_matches(filter: &str, topic: &str) -> bool {
-    if topic.starts_with('$') && !filter.starts_with('$') {
-        return false;
-    }
-    let mut levels = topic.split('/');
-    for part in filter.split('/') {
-        if part == "#" {
-            return true;
-        }
-        match levels.next() {
-            Some(level) if part == "+" || part == level => {}
-            _ => return false,
-        }
-    }
-    levels.next().is_none()
-}
-
-#[cfg(feature = "execute")]
 impl BrokerClient {
     fn send(&self, packet: Packet) -> bool {
         if *self.close.borrow() {
@@ -758,6 +732,15 @@ async fn handle_mqtt_client<R>(
     R: AsyncRead + Unpin + Send + 'static,
 {
     let mut closed = close.subscribe();
+    let (workflow_tx, mut workflow_rx) = mpsc::channel::<Publish>(HANDLER_QUEUE);
+    // Poll the ordered workflow queue alongside socket reads, including keep-alive packets.
+    // The future belongs to this client task, so aborting the client also cancels its handler.
+    let workflow = async {
+        while let Some(publish) = workflow_rx.recv().await {
+            dispatch_publish(handler_context.as_ref(), &publish, &client_id, &remote_addr).await;
+        }
+    };
+    tokio::pin!(workflow);
     let mut graceful = false;
     loop {
         if *closed.borrow() {
@@ -766,6 +749,7 @@ async fn handle_mqtt_client<R>(
         let packet = tokio::select! {
             biased;
             _ = closed.changed() => break,
+            _ = &mut workflow => break,
             result = async {
                 if keep_alive == 0 { read_mqtt_packet(&mut reader).await }
                 else { tokio::time::timeout(std::time::Duration::from_millis(u64::from(keep_alive) * 1500), read_mqtt_packet(&mut reader))
@@ -805,6 +789,12 @@ async fn handle_mqtt_client<R>(
                 if !broker.lock().await.publish(&publish) {
                     break;
                 }
+                if handler_context.is_some() && workflow_tx.try_send(publish.clone()).is_err() {
+                    tracing::warn!(
+                        "MQTT workflow queue full; closing publisher before acknowledging delivery"
+                    );
+                    break;
+                }
                 // The PUBACK confirms broker acceptance; workflow handlers are a separate subscriber.
                 if publish.qos == QoS::AtLeastOnce
                     && tx
@@ -812,10 +802,6 @@ async fn handle_mqtt_client<R>(
                         .is_err()
                 {
                     break;
-                }
-                tokio::select! {
-                    _ = closed.changed() => break,
-                    _ = dispatch_publish(handler_context.as_ref(), &publish, &client_id, &remote_addr) => {}
                 }
             }
             Packet::PubAck(ack) => {
@@ -845,12 +831,19 @@ async fn handle_mqtt_client<R>(
         !graceful && !state.stopping
     };
     close.send_replace(true);
-    if send_will && let Some(will) = will {
+    let pending_will = if send_will && let Some(will) = will {
         let mut publish = Publish::new(will.topic, will.qos, will.message.to_vec());
         publish.retain = will.retain;
-        if broker.lock().await.publish(&publish) {
-            dispatch_publish(handler_context.as_ref(), &publish, &client_id, &remote_addr).await;
-        }
+        broker.lock().await.publish(&publish).then_some(publish)
+    } else {
+        None
+    };
+    drop(workflow_tx);
+    // Each accepted delivery keeps its own handler deadline. Broker shutdown can still
+    // abort this client task, but a normal disconnect drains every accepted publication.
+    workflow.await;
+    if let Some(publish) = pending_will {
+        dispatch_publish(handler_context.as_ref(), &publish, &client_id, &remote_addr).await;
     }
     active_connections.fetch_sub(1, Ordering::Relaxed);
 }
@@ -952,7 +945,8 @@ where
 mod tests {
     use super::*;
     use crate::web::test_support::{
-        free_tcp_port, internal_node, node_with_outputs, output_value, test_context,
+        free_tcp_port, internal_node, internal_node_with_logic, node_with_outputs, output_value,
+        test_context,
     };
     use flow_like::flow::{node::NodeLogic, variable::VariableType};
     use flow_like_types::json::json;
@@ -963,6 +957,15 @@ mod tests {
         broker: &Broker,
         will: Option<rumqttc::LastWill>,
         keep_alive: u16,
+    ) -> (tokio::io::DuplexStream, MqttClientTask) {
+        wire_client_with_handler(broker, will, keep_alive, None).await
+    }
+
+    async fn wire_client_with_handler(
+        broker: &Broker,
+        will: Option<rumqttc::LastWill>,
+        keep_alive: u16,
+        handler: Option<MessageHandlerContext>,
     ) -> (tokio::io::DuplexStream, MqttClientTask) {
         let (peer, server) = tokio::io::duplex(MAX_PACKET * 2);
         let (reader, writer) = tokio::io::split(server);
@@ -998,7 +1001,7 @@ mod tests {
             reader,
             tx,
             broker.clone(),
-            None,
+            handler,
             id.to_string(),
             "loopback".into(),
             close.clone(),
@@ -1032,6 +1035,195 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(receive(peer).await, Packet::SubAck(_)));
+    }
+
+    struct BlockedHandler {
+        entered: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl NodeLogic for BlockedHandler {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("blocked", "Blocked", "Blocked handler", "Tests");
+            node.add_output_pin("payload", "Payload", "Payload", VariableType::Struct);
+            node
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            self.entered.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn blocked_workflow_keeps_ping_responsive_and_bounds_pending_publications() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let logic = Arc::new(BlockedHandler {
+            entered: entered.clone(),
+        });
+        let handler = internal_node_with_logic(logic.get_node(), logic);
+        let parent = internal_node(MqttBrokerNode::new().get_node());
+        let context = test_context(parent, vec![handler.clone()]).await;
+        let handler = create_message_handler_context(&context, handler, &["topic"]).await;
+        let broker = Arc::new(Mutex::new(BrokerState::default()));
+        let (mut publisher, task) = wire_client_with_handler(&broker, None, 1, Some(handler)).await;
+        let mut publish = Publish::new("workflow/slow", QoS::AtLeastOnce, vec![1]);
+        publish.pkid = 1;
+        write_mqtt_packet(&mut publisher, Packet::Publish(publish.clone()))
+            .await
+            .unwrap();
+        assert!(matches!(receive(&mut publisher).await, Packet::PubAck(_)));
+        tokio::time::timeout(Duration::from_secs(1), entered.notified())
+            .await
+            .unwrap();
+        for _ in 0..4 {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            write_mqtt_packet(&mut publisher, Packet::PingReq)
+                .await
+                .unwrap();
+            let packet =
+                tokio::time::timeout(Duration::from_millis(300), read_mqtt_packet(&mut publisher))
+                    .await
+                    .expect("workflow must not block PINGRESP")
+                    .unwrap()
+                    .unwrap();
+            assert!(matches!(packet, Packet::PingResp));
+        }
+        // One workflow is running and at most HANDLER_QUEUE more may wait.
+        for id in 2..=HANDLER_QUEUE + 1 {
+            publish.pkid = id as u16;
+            write_mqtt_packet(&mut publisher, Packet::Publish(publish.clone()))
+                .await
+                .unwrap();
+            assert!(
+                matches!(receive(&mut publisher).await, Packet::PubAck(ack) if ack.pkid == id as u16)
+            );
+        }
+        publish.pkid = (HANDLER_QUEUE + 2) as u16;
+        write_mqtt_packet(&mut publisher, Packet::Publish(publish))
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), read_mqtt_packet(&mut publisher))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none(),
+            "overflow must close without PUBACK"
+        );
+        broker.lock().await.stopping = true;
+        shutdown_mqtt_clients(vec![task]).await;
+    }
+
+    struct GatedHandler {
+        started: mpsc::UnboundedSender<String>,
+        permits: Arc<tokio::sync::Semaphore>,
+    }
+
+    #[async_trait]
+    impl NodeLogic for GatedHandler {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("gated", "Gated", "Gated handler", "Tests");
+            node.add_output_pin("topic", "Topic", "Topic", VariableType::String);
+            node.add_output_pin("payload", "Payload", "Payload", VariableType::Struct);
+            node
+        }
+
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            self.started
+                .send(context.evaluate_pin("topic").await?)
+                .unwrap();
+            self.permits.acquire().await.unwrap().forget();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnect_drains_accepted_workflows_and_full_queue_preserves_last_will() {
+        for graceful in [true, false] {
+            let (started, mut observed) = mpsc::unbounded_channel();
+            let permits = Arc::new(tokio::sync::Semaphore::new(0));
+            let logic = Arc::new(GatedHandler {
+                started,
+                permits: permits.clone(),
+            });
+            let handler = internal_node_with_logic(logic.get_node(), logic);
+            let parent = internal_node(MqttBrokerNode::new().get_node());
+            let context = test_context(parent, vec![handler.clone()]).await;
+            let handler = create_message_handler_context(&context, handler, &["topic"]).await;
+            let broker = Arc::new(Mutex::new(BrokerState::default()));
+            let will = rumqttc::LastWill::new("workflow/will", vec![255], QoS::AtLeastOnce, false);
+            let (mut publisher, task) =
+                wire_client_with_handler(&broker, Some(will), 0, Some(handler)).await;
+            for index in 0..=HANDLER_QUEUE {
+                let mut publish =
+                    Publish::new(format!("workflow/{index}"), QoS::AtLeastOnce, vec![1]);
+                publish.pkid = index as u16 + 1;
+                write_mqtt_packet(&mut publisher, Packet::Publish(publish))
+                    .await
+                    .unwrap();
+                assert!(
+                    matches!(receive(&mut publisher).await, Packet::PubAck(ack) if ack.pkid == index as u16 + 1)
+                );
+                if index == 0 {
+                    assert_eq!(
+                        tokio::time::timeout(Duration::from_secs(1), observed.recv())
+                            .await
+                            .unwrap()
+                            .unwrap(),
+                        "workflow/0"
+                    );
+                }
+            }
+            if graceful {
+                write_mqtt_packet(&mut publisher, Packet::Disconnect)
+                    .await
+                    .unwrap();
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(1), read_mqtt_packet(&mut publisher))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            drop(publisher);
+            assert!(
+                !task.reader_handle.is_finished(),
+                "accepted workflows must survive socket closure"
+            );
+            for index in 1..=HANDLER_QUEUE {
+                permits.add_permits(1);
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), observed.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    format!("workflow/{index}")
+                );
+            }
+            permits.add_permits(1);
+            if !graceful {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), observed.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    "workflow/will"
+                );
+                permits.add_permits(1);
+            }
+            tokio::time::timeout(Duration::from_secs(1), task.reader_handle)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), task.writer_handle)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(observed.try_recv().is_err());
+            assert!(broker.lock().await.clients.is_empty());
+        }
     }
 
     #[tokio::test]

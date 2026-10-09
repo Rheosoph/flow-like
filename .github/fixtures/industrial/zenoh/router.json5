@@ -1,0 +1,15 @@
+{
+  mode: "router",
+  listen: { endpoints: ["tcp/0.0.0.0:7447"] },
+  scouting: { multicast: { enabled: false } },
+  timestamping: { enabled: true },
+  plugins: {
+    rest: { __required__: true, http_port: 8000 },
+    storage_manager: {
+      __required__: true,
+      storages: {
+        e2e: { key_expr: "flow-like/e2e/storage/**", volume: "memory" },
+      },
+    },
+  },
+}

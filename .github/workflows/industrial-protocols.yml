@@ -8,6 +8,7 @@ on:
       - 'packages/catalog/web/src/web/mqtt/**'
       - 'packages/catalog/web/src/web/mqtt.rs'
       - 'packages/catalog/web/src/web/message_handler.rs'
+      - 'packages/catalog/web/Cargo.toml'
       - 'packages/ml/sensors/**'
       - 'packages/catalog/Cargo.toml'
       - 'packages/catalog/src/lib.rs'
@@ -16,6 +17,11 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/industrial-protocols.yml'
       - '.github/fixtures/industrial-brokers.yml'
+      - '.github/fixtures/industrial/**'
+      - 'tools/test-industrial-e2e.sh'
+      - 'packages/vendor/profirust/**'
+      - 'packages/vendor/telegenic/**'
+      - 'packages/vendor/ads/**'
   workflow_dispatch:
 
 permissions:
@@ -31,7 +37,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: ./.github/actions/setup-rust
@@ -42,22 +48,38 @@ jobs:
           sudo apt-get install -y cmake pkg-config protobuf-compiler libssl-dev libcurl4-openssl-dev
       - name: Protocol codecs, lifecycle, and loopback interoperability
         run: cargo test --locked -p flow-like-industrial --features execute --lib
+      - name: GenICam adapter with SDK camera emulator
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p flow-like-industrial --features genicam-emulator --lib genicam::tests
       - name: Legacy sensor API compatibility
         run: cargo check --locked -p flow-like-ml-sensors --features opcua
-      - name: Start test brokers
+      - name: Docker protocol interoperability and IO-Link API contract
         if: runner.os == 'Linux'
-        run: docker compose -p industrial-ci -f .github/fixtures/industrial-brokers.yml up -d --wait --wait-timeout 180
-      - name: Broker delivery, replay, acknowledgements, and close
+        run: bash tools/test-industrial-e2e.sh --adapters
+      - name: Vendored PROFIBUS native suite
         if: runner.os == 'Linux'
-        env:
-          FLOW_LIKE_NATS_URL: nats://127.0.0.1:18422
-          FLOW_LIKE_REDIS_URL: redis://127.0.0.1:16379
-          FLOW_LIKE_AMQP_URL: amqp://flowtest:flowtest-tests-only@127.0.0.1:15672/%2f
-          FLOW_LIKE_KAFKA_BROKERS: 127.0.0.1:19093
-        run: cargo test --locked -p flow-like-industrial --lib --features execute broker_ -- --include-ignored --test-threads=1
-      - name: Stop test brokers
-        if: always() && runner.os == 'Linux'
-        run: docker compose -p industrial-ci -f .github/fixtures/industrial-brokers.yml down --volumes
+        shell: bash
+        run: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TEST_DIR"' EXIT
+          cp -R packages/vendor/profirust "$TEST_DIR/profirust"
+          cargo test --manifest-path "$TEST_DIR/profirust/Cargo.toml" --no-default-features --features std,phy-simulator --lib
+      - name: Vendored ADS native suite
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TEST_DIR"' EXIT
+          cp -R packages/vendor/ads "$TEST_DIR/ads"
+          cargo test --locked --manifest-path "$TEST_DIR/ads/Cargo.toml" --lib
+
+  docker-devices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: GigE Vision, Iroh, EtherCAT, and Modbus RTU interoperability
+        run: bash tools/test-industrial-e2e.sh --devices
 
   catalog:
     runs-on: ubuntu-latest
@@ -84,3 +106,5 @@ jobs:
         run: |
           cargo test --locked -p flow-like-catalog-web --features execute --lib web::mqtt
           cargo test --locked -p flow-like-catalog-web --features execute --lib web::message_handler
+      - name: MQTT interoperability with Mosquitto
+        run: bash tools/test-industrial-e2e.sh --mqtt

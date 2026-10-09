@@ -60,7 +60,7 @@ import {
 	useDeviceRows,
 } from "../../workspace";
 import type { DeployStepProps } from "../step-props";
-import { deployWhat } from "../use-deploy-run";
+import { deployRunExtras, deployWhat } from "../use-deploy-run";
 import { WriteBufferingFields } from "./write-buffering-fields";
 
 /* Step 6 online · Access & cost (APP §3.10): every new service on every device gets its own approval. */
@@ -358,7 +358,8 @@ export const defaultSpending = (approval: ApprovalDraft): SpendingDraft => ({
 	consent: false,
 });
 
-interface FormProps extends Pick<DeployStepProps, "draft" | "update"> {
+interface FormProps
+	extends Pick<DeployStepProps, "draft" | "update" | "prepared"> {
 	plan: DeployPlan;
 	fresh: readonly NewService[];
 	blocked: boolean;
@@ -482,6 +483,7 @@ function CloudBlock(form: Readonly<FormProps>) {
 			<CloudApprovalFields
 				deviceId={deviceId}
 				appId={appId}
+				modelBits={form.prepared?.artifact.bits}
 				value={draft.approval}
 				onChange={setApproval}
 				modelOnly={false}
@@ -947,7 +949,17 @@ export function AccessCostStep(props: Readonly<DeployStepProps>) {
 	useSpendingDefault({ draft, update });
 	const blocked = fresh.length > 0 && approver.blocked;
 	const notOwner = approver.known && !approver.owner;
-	const form: FormProps = { plan, draft, update, fresh, blocked, notOwner };
+	const prepared =
+		props.prepared ?? deployRunExtras(draft.deploymentId).prepared;
+	const form: FormProps = {
+		plan,
+		draft,
+		update,
+		fresh,
+		blocked,
+		notOwner,
+		prepared,
+	};
 	const editable = fresh.length > 0 || plan.targets.length === 0;
 	return (
 		<div className="flex min-w-0 flex-col gap-4">

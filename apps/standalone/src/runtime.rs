@@ -425,6 +425,9 @@ fn local_config_with_data(root: &Path, data_root: &Path) -> Result<FlowLikeConfi
     config.register_user_store(local_store(&data_root.join("user"))?);
     config.register_temporary_store(local_store(&data_root.join("tmp"))?);
     config.register_log_store(local_store(&data_root.join("logs"))?);
+    config.register_run_index(Arc::new(crate::execution_logs::ExecutionIndex::open(
+        &data_root.join("logs"),
+    )?));
 
     let project_root = data_root.to_path_buf();
     config.register_build_project_database(Arc::new(move |path: StorePath| {

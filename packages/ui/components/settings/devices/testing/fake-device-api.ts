@@ -601,6 +601,7 @@ const ALL_FEATURES: AgentFeatures = {
 	rollout_history: 1,
 	operations: 1,
 	metrics_history: 1,
+	execution_logs: 1,
 	offline_lookup: 1,
 	reader_bindings: 1,
 	acme_failure_detail: 1,
@@ -625,6 +626,8 @@ const COMMAND_FEATURE: Record<string, AgentFeature> = {
 	rollout_history: "rollout_history",
 	operations: "operations",
 	metrics_history: "metrics_history",
+	execution_runs: "execution_logs",
+	execution_logs: "execution_logs",
 	offline_queue_operations: "offline_lookup",
 	offline_queue_lookup: "offline_lookup",
 	run_event: "on_demand_events",
@@ -2390,6 +2393,19 @@ const DEFAULT_HANDLERS: Record<string, CommandHandler> = {
 	metrics,
 	project_metrics: metrics,
 	logs: telemetry("logs"),
+	execution_runs: (command) =>
+		completed({
+			placement_id: command.placement_id,
+			runs: [],
+			next_offset: null,
+		}),
+	execution_logs: (command) =>
+		completed({
+			placement_id: command.placement_id,
+			run_id: command.run_id,
+			logs: [],
+			next_offset: null,
+		}),
 	messages: telemetry("messages"),
 	placement_configuration: placementConfiguration,
 	service_listeners: serviceListeners,

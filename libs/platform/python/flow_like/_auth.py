@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 from ._errors import AuthenticationError, ConfigurationError
 
@@ -50,6 +51,11 @@ def resolve_base_url(base_url: str | None = None) -> str:
             "No base URL provided. Set FLOW_LIKE_BASE_URL environment variable "
             "or pass base_url= to the client."
         )
+    parts = urlsplit(url)
+    if (parts.scheme not in ("http", "https") or not parts.hostname
+            or parts.username is not None or parts.password is not None
+            or parts.query or parts.fragment):
+        raise ConfigurationError("Base URL must be HTTP(S), without credentials, query, or fragment.")
     return url.rstrip("/")
 
 

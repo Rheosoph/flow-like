@@ -14,11 +14,15 @@ from .embeddings import EmbeddingsMixin
 from .events import EventsMixin
 from .execution import ExecutionMixin
 from .files import FilesMixin
+from .resources import ResourcesMixin
+from .management import ManagementMixin
 from .sinks import SinksMixin
 from .workflows import WorkflowsMixin
 
 
 class FlowLikeClient(
+    ResourcesMixin,
+    ManagementMixin,
     WorkflowsMixin,
     EventsMixin,
     FilesMixin,

@@ -40,6 +40,17 @@ test("image embeddings and local completion models have no hosted fallback", () 
 	}
 });
 
+test("decision models distinguish local execution from hosted approval", () => {
+	expect(
+		modelAccess(model(IBitTypes.SystemOne, { provider_name: "Local" })),
+	).toBe("local");
+	expect(
+		modelAccess(
+			model(IBitTypes.SystemOne, { provider_name: "hosted:typesafe" }),
+		),
+	).toBe("hosted");
+});
+
 test("hosted aliases and embedding proxy configuration are recognized", () => {
 	for (const provider_name of [
 		"Hosted",

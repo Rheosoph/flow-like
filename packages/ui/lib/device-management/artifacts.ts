@@ -1,4 +1,5 @@
 import { sha256 } from "@noble/hashes/sha2";
+import type { IBit } from "../schema/bit/bit";
 import type { ModelAssetDescriptor } from "./models";
 import {
 	type NativeArtifactUploadCode,
@@ -117,6 +118,8 @@ export type PreparedProjectArtifact = {
 	descriptor: ProjectArtifactDescriptor;
 	manifest: Uint8Array<ArrayBuffer>;
 	files: readonly ArtifactInput[];
+	/** Root Bit metadata verified against the deployment pins, including workflow references. */
+	bits?: readonly IBit[];
 	/** Model-store assets of v2 Bit metadata, one per digest, and the pins that name them; absent for v1. */
 	models?: { pins: ProjectBitPin[]; assets: PreparedModelAsset[] };
 };
@@ -717,6 +720,7 @@ function artifactLocations(
 }
 type SelectedFiles = {
 	selected: Map<string, SelectedAsset>;
+	bits: IBit[];
 	models: PreparedModelAsset[];
 	modelPins: ProjectBitPin[];
 };
@@ -726,6 +730,7 @@ async function selectedAssets(
 	signal?: AbortSignal,
 ): Promise<SelectedFiles> {
 	const selected = new Map<string, SelectedAsset>();
+	const bits: IBit[] = [];
 	const models: PreparedModelAsset[] = [];
 	const modelPins: ProjectBitPin[] = [];
 	for (const pin of assets.bit_pins) {
@@ -745,6 +750,7 @@ async function selectedAssets(
 			parseAssetJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
 			pin.bit_id,
 		);
+		bits.push(wrapper.bit as unknown as IBit);
 		const bitFiles = [wrapper.bit, ...wrapper.dependencies].flatMap(
 			(bit) => bitFile(bit) ?? [],
 		);
@@ -809,7 +815,7 @@ async function selectedAssets(
 			selected.set(path, { size: null, sha256: digest });
 		}
 	}
-	return { selected, models: uniqueAssets(models), modelPins };
+	return { selected, bits, models: uniqueAssets(models), modelPins };
 }
 /** One entry per digest: Bits that share a file share its download. */
 function uniqueAssets(models: readonly PreparedModelAsset[]) {
@@ -856,7 +862,7 @@ export async function prepareProjectArtifact(
 ): Promise<PreparedProjectArtifact> {
 	projectId(project);
 	const selection = parseProjectArtifactAssets(JSON.stringify(assets));
-	const { selected, models, modelPins } = await selectedAssets(
+	const { selected, bits, models, modelPins } = await selectedAssets(
 		inputs,
 		selection,
 		signal,
@@ -991,6 +997,7 @@ export async function prepareProjectArtifact(
 		},
 		manifest: bytes,
 		files,
+		bits,
 		...(models.length ? { models: { pins: modelPins, assets: models } } : {}),
 	};
 }

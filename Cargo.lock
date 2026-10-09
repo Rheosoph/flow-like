@@ -51,8 +51,6 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "ads"
 version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4959a41a182e57ce11b83058b6c7838ca65ea648d3142d86928431f26896738"
 dependencies = [
  "byteorder",
  "crossbeam-channel",
@@ -11917,6 +11915,7 @@ dependencies = [
  "rdkafka",
  "redis",
  "reqwest 0.12.28",
+ "rumqttc",
  "rust-ethernet-ip",
  "schemars 1.2.1",
  "serde",
@@ -12109,6 +12108,19 @@ dependencies = [
  "linfa",
  "ndarray 0.16.1",
  "serde",
+]
+
+[[package]]
+name = "flow-like-platform"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -31039,8 +31051,6 @@ dependencies = [
 [[package]]
 name = "telegenic"
 version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ecb6a9b0745079af79487633a838dfb3b3e951b36f5f2750f16b5a600fcca9"
 dependencies = [
  "atomic-waker",
  "event-listener 5.4.1",

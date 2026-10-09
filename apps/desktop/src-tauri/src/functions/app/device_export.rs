@@ -605,8 +605,16 @@ async fn dependencies(
     snapshot: &mut DeviceProjectSnapshot,
     model_store: bool,
 ) -> Result<Assets> {
+    let mut seen = HashSet::new();
+    let references: Vec<String> = app
+        .bits
+        .iter()
+        .chain(snapshot.bit_references())
+        .filter(|reference| seen.insert(reference.as_str()))
+        .cloned()
+        .collect();
     ensure!(
-        app.bits.len() <= 256 && app.packages.len() <= 64,
+        references.len() <= 256 && app.packages.len() <= 64,
         "Too many selected dependencies"
     );
     let state = TauriFlowLikeState::construct(handle).await?;
@@ -619,7 +627,8 @@ async fn dependencies(
     };
     let mut assets = Assets::default();
     let mut files = BTreeMap::<String, (u64, String)>::new();
-    for reference in &app.bits {
+    let mut resolved = BTreeMap::new();
+    for reference in &references {
         let (hub, id) = reference
             .rsplit_once(':')
             .map_or((None, reference.as_str()), |(hub, id)| {
@@ -628,8 +637,20 @@ async fn dependencies(
         identifier(id)?;
         let bit = profile
             .hub_profile
-            .get_bit(id.to_owned(), hub, http.clone())
+            .get_bit(id.to_owned(), hub.clone(), http.clone())
             .await?;
+        ensure!(
+            bit.id == id && hub.as_ref().is_none_or(|hub| *hub == bit.hub),
+            "Selected Bit identity differs"
+        );
+        let metadata = public_bit_metadata(&bit)?;
+        if let Some(previous) = resolved.insert(id.to_owned(), metadata.clone()) {
+            ensure!(
+                previous == metadata,
+                "Selected references disagree about Bit {id}"
+            );
+            continue;
+        }
         let pin = bit_pin(&sources, id, &bit, snapshot, &mut files).await?;
         assets.bit_pins.push(pin);
     }

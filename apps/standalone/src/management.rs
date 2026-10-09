@@ -16,6 +16,7 @@ use std::{
     },
 };
 
+mod execution_logs;
 mod model_access;
 mod models;
 pub mod run_queue;
@@ -650,6 +651,12 @@ impl ManagementConnection {
             .await
             .map_err(anyhow::Error::from)
             .and_then(|result| result)
+        } else if matches!(
+            request.command,
+            ManagementCommand::ExecutionRuns { .. } | ManagementCommand::ExecutionLogs { .. }
+        ) {
+            drop(store);
+            execution_logs::execute_async(&self.service, &authority, &request, now).await
         } else if matches!(request.command, ManagementCommand::Models { .. }) {
             drop(store);
             models::execute_async(&self.service, &authority, &request, now).await
@@ -3868,6 +3875,180 @@ fn execute_transaction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "runtime", unix))]
+    #[tokio::test]
+    async fn execution_logs_are_scoped_paginated_and_filter_structured_node_messages() -> Result<()>
+    {
+        use flow_like_runtime::flow::execution::{
+            LogLevel, LogMeta, log::LogMessage, run_index::RunIndex,
+        };
+        use flow_like_storage::databases::vector::lancedb::connect_lance;
+        use std::os::unix::fs::DirBuilderExt;
+        let mut device = Device::new()?;
+        let run_id = uuid::Uuid::new_v4().to_string();
+        for id in ["api", "other"] {
+            let config = device.placement(id)?;
+            let current = device.root.join("placement-data").join(id).join("current");
+            let logs = current.join("store/logs");
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&logs)?;
+            crate::vault::write_new_private(
+                &current.join("binding.json"),
+                &serde_json::to_vec(&json!({
+                    "version":1,"placement_id":id,"project_id":config.project_id,"deployment_id":config.deployment_id,
+                    "source":config.source,"initial_snapshot":config.project_path
+                }))?,
+            )?;
+            let database = logs.join("runs/project/board");
+            std::fs::create_dir_all(&database)?;
+            let mut messages = Vec::new();
+            for (at, node, level, text) in [
+                (1, "node-a", LogLevel::Info, format!("{id} info")),
+                (2, "node-b", LogLevel::Error, format!("{id} error")),
+                (3, "node-b", LogLevel::Error, "ü".repeat(9000)),
+            ] {
+                let mut message = LogMessage::new(&text, level, None);
+                message.node_id = Some(node.into());
+                message.start = std::time::UNIX_EPOCH + std::time::Duration::from_micros(at);
+                message.end = message.start;
+                messages.push(message);
+            }
+            let batch = LogMessage::into_arrow(messages)?;
+            connect_lance(database.to_string_lossy().as_ref())
+                .execute()
+                .await?
+                .create_table(&run_id, batch)
+                .execute()
+                .await?;
+            let index = crate::execution_logs::ExecutionIndex::open(&logs)?;
+            for (start, run) in [(1, run_id.clone()), (2, uuid::Uuid::new_v4().to_string())] {
+                index
+                    .record(&LogMeta {
+                        app_id: "project".into(),
+                        run_id: run,
+                        board_id: "board".into(),
+                        start,
+                        end: start + 1,
+                        log_level: 3,
+                        version: "1.0.0".into(),
+                        nodes: None,
+                        logs: Some(3),
+                        node_id: "node-a".into(),
+                        event_version: Some("1.0.0".into()),
+                        event_id: "event".into(),
+                        payload: b"secret input".to_vec(),
+                        is_remote: false,
+                    })
+                    .await?;
+            }
+        }
+        let mut reader = project_grant("logs", vec![ManagementCapability::Logs], 1000);
+        reader.grant.as_mut().unwrap().scope = ManagementScope::Placement {
+            project_id: "project".into(),
+            placement_id: "api".into(),
+        };
+        let status = project_grant("status", vec![ManagementCapability::Status], 1000);
+        device.share(&[&reader, &status])?;
+        let list = |placement: &str, offset, limit| ManagementCommand::ExecutionRuns {
+            placement_id: placement.into(),
+            offset,
+            limit,
+        };
+        let logs =
+            |placement: &str, run: &str, offset, limit, node_id: Option<String>, min_level| {
+                ManagementCommand::ExecutionLogs {
+                    placement_id: placement.into(),
+                    run_id: run.into(),
+                    offset,
+                    limit,
+                    node_id,
+                    min_level,
+                }
+            };
+        async fn read(
+            device: &Device,
+            authority: &Authority,
+            command: ManagementCommand,
+        ) -> Result<Value> {
+            Ok(execution_logs::read(
+                &device.root,
+                &device.manifest,
+                authority,
+                &request("logs-read", command),
+                101,
+            )
+            .await?
+            .result)
+        }
+        let first = read(&device, &reader, list("api", 0, 1)).await?;
+        assert_eq!(first["next_offset"], 1);
+        assert_eq!(first["runs"][0]["start"], 2);
+        assert!(first["runs"][0].get("payload").is_none());
+        let last = read(&device, &reader, list("api", 1, 1)).await?;
+        assert_eq!(last["runs"][0]["run_id"], run_id);
+        assert!(last["next_offset"].is_null());
+        let page = read(&device, &reader, logs("api", &run_id, 0, 1, None, None)).await?;
+        assert_eq!(page["logs"][0]["message"], "api info");
+        assert_eq!(page["logs"][0]["log_level"], 1);
+        assert_eq!(page["next_offset"], 1);
+        let filtered = read(
+            &device,
+            &reader,
+            logs("api", &run_id, 0, 50, Some("node-b".into()), Some(3)),
+        )
+        .await?;
+        assert_eq!(filtered["logs"].as_array().unwrap().len(), 2);
+        assert_eq!(filtered["logs"][0]["message"], "api error");
+        assert_eq!(filtered["logs"][1]["truncated"], true);
+        assert!(filtered["logs"][1]["message"].as_str().unwrap().len() <= 8192);
+        assert!(filtered["next_offset"].is_null());
+        for (authority, command, expected) in [
+            (&status, list("api", 0, 20), RejectionCode::Unauthorized),
+            (&reader, list("other", 0, 20), RejectionCode::Unauthorized),
+            (
+                &reader,
+                logs("other", &run_id, 0, 20, None, None),
+                RejectionCode::Unauthorized,
+            ),
+            (&reader, list("api", 0, 21), RejectionCode::Invalid),
+            (
+                &reader,
+                logs("api", "../escape", 0, 20, None, None),
+                RejectionCode::Invalid,
+            ),
+            (
+                &reader,
+                logs("api", &run_id, 0, 20, None, Some(5)),
+                RejectionCode::Invalid,
+            ),
+            (
+                &reader,
+                logs("api", "unknown", 0, 20, None, None),
+                RejectionCode::Invalid,
+            ),
+        ] {
+            assert_eq!(
+                rejection_code(&read(&device, authority, command).await.unwrap_err()),
+                expected
+            );
+        }
+        // Identical run IDs in another placement resolve only inside that placement's store.
+        let other = read(
+            &device,
+            &device.owner,
+            logs("other", &run_id, 0, 1, None, None),
+        )
+        .await?;
+        assert_eq!(other["logs"][0]["message"], "other info");
+        let missing = device.placement("never-started")?;
+        let empty = read(&device, &device.owner, list(&missing.id, 0, 20)).await?;
+        assert_eq!(empty["runs"], json!([]));
+        assert!(!device.root.join("placement-data/never-started").exists());
+        Ok(())
+    }
 
     fn manifest(owner_key: &SigningKey) -> OnboardingManifest {
         OnboardingManifest {

@@ -159,6 +159,7 @@ pub fn flags() -> impl Iterator<Item = &'static str> {
         ("api_events", API_EVENTS),
         ("scheduled_once", SCHEDULED_ONCE),
         ("on_demand_events", ON_DEMAND_EVENTS),
+        ("execution_logs", cfg!(feature = "runtime")),
         ("telegram_bots", TELEGRAM_BOTS),
         ("discord_bots", DISCORD_BOTS),
     ]

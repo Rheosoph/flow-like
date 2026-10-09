@@ -395,6 +395,7 @@ export const AGENT_FEATURES = [
 	"rollout_history",
 	"operations",
 	"metrics_history",
+	"execution_logs",
 	"offline_lookup",
 	"reader_bindings",
 	"acme_failure_detail",

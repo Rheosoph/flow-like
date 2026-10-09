@@ -51,5 +51,6 @@ ethercrab = { version = "0.7.1", default-features = false, features = ["std"], o
 rdkafka = { version = "0.39", default-features = false, features = ["curl-static"], optional = true }
 
 [dev-dependencies]
+rumqttc.workspace = true
 opcua = { package = "async-opcua", version = "0.19", default-features = false, features = ["server"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
