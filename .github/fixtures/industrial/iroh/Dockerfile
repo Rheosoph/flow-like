@@ -1,4 +1,6 @@
 FROM rust:1.94.0-slim-bookworm@sha256:a86cada82e36ebd7a9bffed7548792c55a952fdb20718eea9278a936bcb76e62 AS build
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 WORKDIR /work/.github/fixtures/industrial/iroh
 COPY .github/fixtures/industrial/iroh/Cargo.toml .github/fixtures/industrial/iroh/Cargo.lock .github/fixtures/industrial/iroh/lib.rs .github/fixtures/industrial/iroh/reference.rs ./
 COPY packages/industrial/src/iroh.rs /work/packages/industrial/src/iroh.rs

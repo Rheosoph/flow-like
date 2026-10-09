@@ -1,4 +1,6 @@
 FROM rust:1.94.0-slim-bookworm@sha256:a86cada82e36ebd7a9bffed7548792c55a952fdb20718eea9278a936bcb76e62 AS build
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 WORKDIR /work/.github/fixtures/industrial/genicam
 COPY .github/fixtures/industrial/genicam/Cargo.toml .github/fixtures/industrial/genicam/Cargo.lock .github/fixtures/industrial/genicam/lib.rs ./
 COPY packages/industrial/src/genicam.rs /work/packages/industrial/src/genicam.rs
