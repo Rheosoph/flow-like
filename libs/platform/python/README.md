@@ -6,7 +6,7 @@
 <h1 align="center">flow-like</h1>
 <p align="center">
   <strong>Python SDK for the Flow-Like API</strong><br/>
-  Trigger workflows, manage files, query LanceDB, run chat completions & embeddings — all from Python.
+  Trigger workflows, manage files, query LanceDB, run chat completions, embeddings, and device management from Python.
 </p>
 <p align="center">
   <a href="https://pypi.org/project/flow-like/"><img src="https://img.shields.io/pypi/v/flow-like?color=0a7cff" alt="PyPI version" /></a>
@@ -23,7 +23,7 @@
 
 ---
 
-> **Part of the [Flow-Like](https://github.com/Rheosoph/flow-like) ecosystem** — a Rust-powered visual workflow engine that runs on your device. See the [main repository](https://github.com/Rheosoph/flow-like) for the full platform.
+> **Part of the [Flow-Like](https://github.com/Rheosoph/flow-like) ecosystem**. A Rust-powered visual workflow engine that runs on your device. See the [main repository](https://github.com/Rheosoph/flow-like) for the full platform.
 
 ---
 
@@ -68,7 +68,7 @@ client = FlowLikeClient(
 ### Trigger Workflow
 
 ```python
-# Synchronous (SSE streaming) — node_id specifies the start node
+# Synchronous (SSE streaming); node_id specifies the start node
 for event in client.trigger_workflow("app-id", "board-id", "start-node-id", {"key": "value"}):
     print(event.data)
 
@@ -93,7 +93,8 @@ result = client.trigger_event_async("app-id", "event-id")
 files = client.list_files("app-id")
 
 # Upload
-client.upload_file("app-id", open("data.csv", "rb"))
+with open("data.csv", "rb") as file:
+    client.upload_file("app-id", file, key="imports/data.csv")
 
 # Download
 content = client.download_file("app-id", "path/to/file.csv")
@@ -102,11 +103,16 @@ content = client.download_file("app-id", "path/to/file.csv")
 client.delete_file("app-id", "path/to/file.csv")
 ```
 
+Uploads and downloads first request signed storage URLs, then transfer bytes without
+platform credentials. Use `user=True` for user files. `presign_data` returns scoped
+storage credentials and a path; `get_upload_urls` and `get_download_urls` return
+transfer URLs.
+
 ### Database / LanceDB
 
 ```python
 # Get presigned credentials (resolved to uri + storage_options)
-info = client.get_db_credentials("app-id", access_mode="read")
+info = client.get_db_credentials("app-id", access_mode="read", scope="project")
 print(info.uri, info.storage_options)
 
 # List tables
@@ -116,7 +122,7 @@ tables = client.list_tables("app-id")
 result = client.query_table("app-id", "my-table", {"filter": "col > 5"})
 
 # Get a LanceDB connection (requires flow-like[lance])
-db = client.create_lance_connection("app-id", access_mode="write")
+db = client.create_lance_connection("app-id", access_mode="write", scope="project")
 ```
 
 ### Execution Monitoring
@@ -125,15 +131,20 @@ db = client.create_lance_connection("app-id", access_mode="write")
 status = client.get_run_status("run-id")
 print(status.status)
 
-poll = client.poll_execution("poll-token", after_sequence=0, timeout=30)
+poll = client.poll_execution("poll-token", after_sequence=-1, timeout=30)
 for event in poll.events:
     print(event)
+# Pass poll.next_sequence as after_sequence on the next poll.
+
+runs = client.list_runs("app-id", "board-id", limit=20)
+logs = client.get_run_logs("app-id", "board-id", "run-id", query={"levels": [2, 3, 4]})
+summary = client.get_run_summary("app-id", "board-id", "run-id")
 ```
 
 ### Chat Completions
 
 ```python
-# bit_id identifies the model — use list_llms() to discover available ones
+# bit_id identifies the model; use list_llms() to discover available ones
 result = client.chat_completions(
     messages=[{"role": "user", "content": "Hello!"}],
     bit_id="bit-id-for-gpt4",
@@ -177,7 +188,7 @@ for event in client.responses(
 ### Embeddings
 
 ```python
-# bit_id identifies the embedding model — use list_embedding_models() to discover
+# bit_id identifies the embedding model; use list_embedding_models() to discover
 result = client.embed(bit_id="bit-id-for-embedding", input="Hello world")
 print(result.embeddings)
 ```
@@ -220,6 +231,16 @@ client.delete_board("app-id", "board-id")
 prerun = client.prerun_board("app-id", "board-id")
 print(prerun.runtime_variables)
 ```
+
+Publish the stored board with `publish_board_if_changed(app_id, board_id)`. The
+returned version identifies the deployed workflow snapshot. Lifecycle methods such
+as `upsert_event`, `apply_flowscript`, and `table_reference_action` accept a backend
+JSON `body`; their optional `params` argument holds query parameters.
+
+The client also exposes pages, routes, widgets, connections, packages, roles, team
+membership, API keys, and device hub management. Device REST methods manage hub
+records and encrypted envelopes. Live device execution still requires the encrypted
+management protocol and a controller identity.
 
 ### HTTP Sink
 

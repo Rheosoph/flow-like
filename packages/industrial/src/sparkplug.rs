@@ -239,8 +239,8 @@ fn metric_datatype(metric: &Value, datatype: u64) -> Result<()> {
         10 => "doubleValue",
         11 => "booleanValue",
         12 | 14 | 15 => "stringValue",
-        16 | 17 | 22..=34 => "bytesValue",
-        18 => "datasetValue",
+        16 => "datasetValue",
+        17 | 18 | 22..=34 => "bytesValue",
         19 => "templateValue",
         _ => {
             return Err(Error::Invalid(
@@ -962,9 +962,9 @@ mod tests {
             (13, "longValue", json!("123")),
             (14, "stringValue", json!("text")),
             (15, "stringValue", json!("uuid")),
-            (16, "bytesValue", json!("AQ==")),
+            (16, "datasetValue", json!({})),
             (17, "bytesValue", json!("AQ==")),
-            (18, "datasetValue", json!({})),
+            (18, "bytesValue", json!("AQ==")),
             (19, "templateValue", json!({})),
         ]
         .into_iter()
@@ -985,6 +985,12 @@ mod tests {
             );
             metric_definitions(&mut [json!({"name":"value","datatype":datatype,"isNull":true})])
                 .unwrap();
+        }
+        for metric in [
+            json!({"name":"dataset","datatype":16,"bytesValue":"AQ=="}),
+            json!({"name":"file","datatype":18,"datasetValue":{}}),
+        ] {
+            assert!(metric_definitions(&mut [metric]).is_err());
         }
     }
 

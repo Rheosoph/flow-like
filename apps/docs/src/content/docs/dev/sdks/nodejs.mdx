@@ -120,17 +120,58 @@ const result = await client.triggerEventAsync("app-id", "event-id", { key: "valu
 ```typescript
 // Check run status
 const status = await client.getRunStatus("run-id");
-console.log(status.status); // "running" | "completed" | "failed"
+console.log(status.status); // For example, "Running", "Completed", or "Failed"
 
 // Poll for execution events
 const poll = await client.pollExecution("poll-token", {
-  afterSequence: 0,
+  afterSequence: -1,
   timeout: 30,
 });
 for (const event of poll.events) {
   console.log(event);
 }
 ```
+
+The poll token comes from an async invocation. The SDK sends it as Bearer
+authorization without the client's PAT or API key. Start with cursor `-1` so
+the first event, sequence `0`, is included; pass `poll.lastSequence` on the
+next call. A completed run can still have additional event pages to read.
+
+For stored run history and node logs:
+
+```typescript
+const runs = await client.listRuns("app-id", "board-id", { limit: 20 });
+const logs = await client.getRunLogs("app-id", "board-id", "run-id", {
+  query: { levels: [2, 3, 4] },
+  offset: 0,
+  limit: 50,
+});
+const summary = await client.getRunSummary("app-id", "board-id", "run-id");
+await client.cancelRun("running-run-id");
+```
+
+`getRunPayload()` reads the captured input for a stored run when available.
+These methods read the hub's execution history. Device-local structured logs
+use the encrypted [device log viewer](/devices/deployments/#read-workflow-execution-logs).
+
+## Publish and release a workflow
+
+Publishing creates a board version only when the saved workflow has changed.
+Set the Event's `board_version` to the returned tuple to make its next invocation
+use that version.
+
+```typescript
+const published = await client.publishBoardIfChanged("app-id", "board-id");
+const event = await client.getEvent("app-id", "event-id");
+await client.upsertEvent("app-id", "event-id", {
+  ...event,
+  board_version: published.version,
+});
+```
+
+Use `getBoardVersionCurrent()` to inspect the saved board's publication state.
+Event management also includes listing, deletion, versions, validation, setup,
+and restore. Complex management payloads follow the backend JSON contract.
 
 ## File Management
 
@@ -143,10 +184,18 @@ await client.uploadFile("app-id", myFile);
 
 // Download a file
 const response = await client.downloadFile("app-id", "path/to/file.pdf");
+const content = await response.arrayBuffer();
 
 // Delete a file
 await client.deleteFile("app-id", "path/to/file.pdf");
 ```
+
+For a `Buffer` or unnamed `Blob`, pass `{ key: "uploads/file.pdf" }` to
+`uploadFile()`. Upload and download helpers obtain a signed URL, then transfer
+the bytes without forwarding platform credentials. Use `getUploadUrls()` or
+`getDownloadUrls()` when another process should perform the transfer. Set
+`scope: "user"` for user storage. `presignData()` returns scoped storage
+credentials rather than a file download URL.
 
 ## Database / LanceDB
 
@@ -188,6 +237,10 @@ const db = await client.createLanceConnection("app-id", "write");
 const table = await db.openTable("my-embeddings");
 const results = await table.search([0.1, 0.2, 0.3]).limit(10).toArray();
 ```
+
+For LanceDB's full connection and table types, import the factory from
+`@flow-like/sdk/lancedb` and call `createLanceConnection(client, appId, accessMode, scope)`.
+The core client exposes common operations without requiring optional peer types.
 
 The `accessMode` parameter controls whether you get read-only or read-write credentials:
 - `"read"` (default): read-only access
@@ -402,6 +455,9 @@ const chatModel = await client.asLangChainChat("your-model-bit-id", {
 const embeddings = await client.asLangChainEmbeddings("your-embedding-bit-id");
 ```
 
+The core factories expose common model operations. For LangChain's full Runnable
+types, including chain composition, use the factories from `@flow-like/sdk/langchain`.
+
 ### Standalone usage
 
 ```typescript
@@ -426,8 +482,9 @@ const embeddings = new FlowLikeEmbeddings({
 ```typescript
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
+import { asLangChainChat } from "@flow-like/sdk/langchain";
 
-const chatModel = await client.asLangChainChat("your-model-bit-id");
+const chatModel = await asLangChainChat(client, "your-model-bit-id");
 
 const chain = ChatPromptTemplate
   .fromMessages([

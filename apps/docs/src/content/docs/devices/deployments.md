@@ -91,6 +91,21 @@ The app determines how it runs: local-only apps receive an offline copy;
 online apps use approved cloud data. **How it runs** prepares the content
 and reports the models, packages, files, and hashes involved.
 
+Preparation includes the project's declared Bit dependencies and literal Bit
+IDs on **Load Bit** nodes in the exported Flow versions and templates. A Bit
+is a model or asset's catalog entry. IDs supplied by another node or computed
+at runtime still need declared dependencies. The current profile's model list
+does not determine what a deployed service can load. Local model assets use
+the device's shared cache, so services using the same content reuse its files.
+
+New blank projects start without model dependencies. Existing projects keep
+their declared dependencies, including models added by earlier project creation
+defaults.
+
+**Hosted model access** approves cloud calls for these dependencies. Leave
+those boxes unchecked for local execution only. Installing or running a
+local embedding model needs no hosted-model spending limit.
+
 ### Local-only apps
 
 Prepare an offline copy in Desktop on the computer that holds the app. A
@@ -190,6 +205,25 @@ the installed version, requested state, and ready instance count. Use
 **Activity & logs** for reported errors, **Metrics** for resource use, and
 **Endpoint** to test the intended access path. Test an actual request or
 automation outcome after readiness succeeds.
+
+## Read workflow execution logs
+
+Open the service's **Activity & logs → Workflow executions** with the device
+unlocked and connected live. You need **Read logs** permission for the service.
+Choose a finished execution to read its node messages, including **Print Info**
+output. Filter by node ID or minimum severity, load more entries, or select
+**Download loaded logs** to save the entries currently loaded by the viewer.
+
+This history is stored on the device and survives agent restarts. It starts
+with executions recorded by an agent that supports execution logs; upgrading
+does not reconstruct summaries for earlier runs. Running workflows appear
+after they finish. Refresh to read newly finished runs. Messages are limited
+to 8 KiB and shortened further when needed to fit an encrypted reply. The
+viewer marks shortened messages; their stored originals are unchanged.
+
+The separate service log viewer shows process output and errors. Retained
+cloud log archives cover that console output, not the structured execution
+history. Reading workflow executions requires the device to be reachable.
 
 ## Start, stop, and update
 

@@ -60,7 +60,7 @@ function limitWithin(
 	return limit;
 }
 
-async function agentRead<T>(
+export async function agentRead<T>(
 	call: ManagementCall,
 	features: AgentFeatures | undefined,
 	feature: AgentFeature,

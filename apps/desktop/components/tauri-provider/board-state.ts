@@ -571,6 +571,11 @@ export class BoardState implements IBoardState {
 	 * from `remoteBoardSync` because the two sides hold different revisions of the same board.
 	 */
 	private readonly localBoardSync = new BoardSyncClient();
+	/** Preserve resolved media across retries without adding URLs to sync snapshots. */
+	private readonly mediaDisplayBoards = new WeakMap<
+		IBoard,
+		{ appId: string; boardId: string; isOffline: boolean; display: IBoard }
+	>();
 	/**
 	 * `appId:boardId` -> the remote `updatedAt` nanos this session already pulled
 	 * through `getBoard`.
@@ -1242,7 +1247,7 @@ export class BoardState implements IBoardState {
 		}
 
 		if (typeof version !== "undefined") {
-			return remoteData;
+			return this.presignMediaComments(appId, boardId, remoteData, false);
 		}
 
 		try {
@@ -1273,7 +1278,7 @@ export class BoardState implements IBoardState {
 		await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
 		dispatchRemoteBoardApplied(appId, boardId, "reset");
 
-		return materialized;
+		return this.presignMediaComments(appId, boardId, materialized, false);
 	}
 
 	/**
@@ -1326,8 +1331,12 @@ export class BoardState implements IBoardState {
 						mergeBoardOffThread(remoteData, board),
 					);
 					if (!changed) return board;
-					await this.storeMergedRemoteBoard(appId, boardId, remoteData, merged);
-					return merged;
+					return await this.storeMergedRemoteBoard(
+						appId,
+						boardId,
+						remoteData,
+						merged,
+					);
 				}
 			} catch (e) {
 				console.warn(
@@ -1345,7 +1354,7 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		remoteData: IBoard,
 		merged: IBoard,
-	): Promise<void> {
+	): Promise<IBoard> {
 		console.log("[BoardState] forceFresh: updating local board:", { boardId });
 		await timeRunStep("get_board.upsert", () =>
 			invoke("upsert_board", {
@@ -1362,11 +1371,18 @@ export class BoardState implements IBoardState {
 		await timeRunStep("get_board.record_lineage", () =>
 			this.recordAppliedRemoteLineage(appId, boardId, remoteData),
 		);
+		const displayBoard = await this.presignMediaComments(
+			appId,
+			boardId,
+			merged,
+			false,
+		);
 		dispatchRemoteBoardApplied(appId, boardId, "sync");
 		this.backend.queryClient?.setQueryData(
 			[this.getBoard.name || "backendFn", appId, boardId],
-			merged,
+			displayBoard,
 		);
+		return displayBoard;
 	}
 
 	/**
@@ -1440,13 +1456,13 @@ export class BoardState implements IBoardState {
 			this.backend.isOffline(appId),
 		);
 
-		// Presign media comments for display
-		await timeRunStep("get_board.presign_media", () =>
+		// Keep presentation URLs separate from the sync baseline used by remote merges.
+		const displayBoard = await timeRunStep("get_board.presign_media", () =>
 			this.presignMediaComments(appId, boardId, board, isOffline),
 		);
 
 		if (typeof version !== "undefined") {
-			return board;
+			return displayBoard;
 		}
 
 		if (
@@ -1455,14 +1471,19 @@ export class BoardState implements IBoardState {
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
-			return board;
+			return displayBoard;
 		}
 
 		// When forceFresh is set, synchronously fetch from remote and persist
 		// before returning. This ensures the board in local storage is up-to-date
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
-			return this.refreshLocalBoardFromHub(appId, boardId, board);
+			const refreshed = await this.refreshLocalBoardFromHub(
+				appId,
+				boardId,
+				board,
+			);
+			return refreshed === board ? displayBoard : refreshed;
 		}
 
 		const promise = injectDataFunction(
@@ -1474,7 +1495,7 @@ export class BoardState implements IBoardState {
 					// Local edits are not on the server yet. Applying the remote snapshot
 					// now would clobber them with a board that predates the queued batch.
 					this.notifyEditsQueued(appId, boardId, drainFailure);
-					return board;
+					return displayBoard;
 				}
 
 				const remoteData = await this.fetchRemoteBoard(appId, boardId);
@@ -1497,13 +1518,13 @@ export class BoardState implements IBoardState {
 							remoteElementRefs: summarizeBoardElementRefs(remoteData),
 						},
 					);
-					return board;
+					return displayBoard;
 				}
 
 				if (
 					!(await this.lineageAllowsRemoteApply(appId, boardId, remoteData))
 				) {
-					return board;
+					return displayBoard;
 				}
 
 				const { merged, changed } = await mergeBoardOffThread(
@@ -1527,26 +1548,32 @@ export class BoardState implements IBoardState {
 						boardData: merged,
 					});
 					await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
+					const mergedDisplayBoard = await this.presignMediaComments(
+						appId,
+						boardId,
+						merged,
+						false,
+					);
 					dispatchRemoteBoardApplied(appId, boardId, "sync");
-					return merged;
+					return mergedDisplayBoard;
 				}
 
 				console.log("Board data is up to date, no update needed.");
 				// Same reference → the caller's deep-equality check short-circuits and
 				// the query cache keeps identity, so the board is not re-parsed.
-				return board;
+				return displayBoard;
 			},
 			this,
 			this.backend.queryClient,
 			this.getBoard,
 			[appId, boardId, version],
 			[],
-			board,
+			displayBoard,
 		);
 
 		this.backend.backgroundTaskHandler(promise);
 
-		return board;
+		return displayBoard;
 	}
 
 	async getBoardAuthoritative(
@@ -1645,76 +1672,35 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		board: IBoard,
 		isOffline: boolean,
-	): Promise<void> {
-		const mediaComments = Object.values(board.comments).filter(
+	): Promise<IBoard> {
+		const mediaComments = [
+			...Object.values(board.comments),
+			...Object.values(board.layers).flatMap((layer) =>
+				Object.values(layer.comments),
+			),
+		].filter(
 			(comment) =>
 				comment.comment_type === ICommentType.Image ||
 				comment.comment_type === ICommentType.Video,
 		);
+		if (mediaComments.length === 0) return board;
+		const cached = this.mediaDisplayBoards.get(board);
+		const previousDisplay =
+			cached?.appId === appId &&
+			cached.boardId === boardId &&
+			cached.isOffline === isOffline
+				? cached.display
+				: board;
 
-		// Collect layer media comments as well
-		const layerMediaComments: { comment: any; layer: any }[] = [];
-		for (const layer of Object.values(board.layers)) {
-			for (const comment of Object.values(layer.comments)) {
-				if (
-					comment.comment_type === ICommentType.Image ||
-					comment.comment_type === ICommentType.Video
-				) {
-					layerMediaComments.push({ comment, layer });
-				}
-			}
-		}
-
-		if (mediaComments.length === 0 && layerMediaComments.length === 0) return;
-
-		if (isOffline) {
-			// For offline mode, use Tauri's storage_get to get file URLs
-			try {
-				const prefixes = [
-					...mediaComments.map((c) => `boards/${boardId}/${c.content}`),
-					...layerMediaComments.map(
-						({ comment }) => `boards/${boardId}/${comment.content}`,
-					),
-				];
-
-				const results = await invoke<{ prefix: string; url?: string }[]>(
-					"storage_get",
-					{ appId, prefixes },
-				);
-
-				const urlMap = new Map(
-					results.filter((r) => r.url).map((r) => [r.prefix, r.url as string]),
-				);
-
-				for (const comment of mediaComments) {
-					const prefix = `boards/${boardId}/${comment.content}`;
-					const url = urlMap.get(prefix);
-					if (url) {
-						(comment as any).presigned_url = url;
-					}
-				}
-
-				for (const { comment } of layerMediaComments) {
-					const prefix = `boards/${boardId}/${comment.content}`;
-					const url = urlMap.get(prefix);
-					if (url) {
-						(comment as any).presigned_url = url;
-					}
-				}
-			} catch (error) {
-				console.warn("Failed to presign media comments (offline):", error);
-			}
-		} else if (this.backend.profile && this.backend.auth) {
-			// For online mode, use the API to get presigned URLs
-			try {
-				const prefixes = [
-					...mediaComments.map((c) => `boards/${boardId}/${c.content}`),
-					...layerMediaComments.map(
-						({ comment }) => `boards/${boardId}/${comment.content}`,
-					),
-				];
-
-				const results = await fetcher<{ prefix: string; url?: string }[]>(
+		try {
+			const prefixes = mediaComments.map(
+				(comment) => `boards/${boardId}/${comment.content}`,
+			);
+			let results: { prefix: string; url?: string }[];
+			if (isOffline) {
+				results = await invoke("storage_get", { appId, prefixes });
+			} else if (this.backend.profile && this.backend.auth) {
+				results = await fetcher(
 					this.backend.profile,
 					`apps/${appId}/data/download`,
 					{
@@ -1724,29 +1710,53 @@ export class BoardState implements IBoardState {
 					},
 					this.backend.auth,
 				);
-
-				const urlMap = new Map(
-					results.filter((r) => r.url).map((r) => [r.prefix, r.url as string]),
-				);
-
-				for (const comment of mediaComments) {
-					const prefix = `boards/${boardId}/${comment.content}`;
-					const url = urlMap.get(prefix);
-					if (url) {
-						(comment as any).presigned_url = url;
-					}
-				}
-
-				for (const { comment } of layerMediaComments) {
-					const prefix = `boards/${boardId}/${comment.content}`;
-					const url = urlMap.get(prefix);
-					if (url) {
-						(comment as any).presigned_url = url;
-					}
-				}
-			} catch (error) {
-				console.warn("Failed to presign media comments (online):", error);
+			} else {
+				return previousDisplay;
 			}
+			const urlMap = new Map(
+				results.filter((r) => r.url).map((r) => [r.prefix, r.url as string]),
+			);
+			// The sync client and query cache may still hold this board. Copy changed
+			// comments so a URL arriving later triggers a render without editing either.
+			const withUrls = (comments: IBoard["comments"]) => {
+				let updated = comments;
+				for (const [id, comment] of Object.entries(comments)) {
+					if (
+						comment.comment_type !== ICommentType.Image &&
+						comment.comment_type !== ICommentType.Video
+					)
+						continue;
+					const url = urlMap.get(`boards/${boardId}/${comment.content}`);
+					if (!url || url === comment.presigned_url) continue;
+					if (updated === comments) updated = { ...comments };
+					updated[id] = { ...comment, presigned_url: url };
+				}
+				return updated;
+			};
+			const comments = withUrls(previousDisplay.comments);
+			let layers = previousDisplay.layers;
+			for (const [id, layer] of Object.entries(previousDisplay.layers)) {
+				const comments = withUrls(layer.comments);
+				if (comments === layer.comments) continue;
+				if (layers === previousDisplay.layers)
+					layers = { ...previousDisplay.layers };
+				layers[id] = { ...layer, comments };
+			}
+			const displayBoard =
+				comments === previousDisplay.comments &&
+				layers === previousDisplay.layers
+					? previousDisplay
+					: { ...board, comments, layers };
+			this.mediaDisplayBoards.set(board, {
+				appId,
+				boardId,
+				isOffline,
+				display: displayBoard,
+			});
+			return displayBoard;
+		} catch (error) {
+			console.warn("Failed to presign media comments:", error);
+			return previousDisplay;
 		}
 	}
 
@@ -2552,8 +2562,9 @@ export class BoardState implements IBoardState {
 			result.sync,
 		);
 		if (!board) return;
-		await this.presignMediaComments(appId, boardId, board, true);
-		options.onBoard(board);
+		options.onBoard(
+			await this.presignMediaComments(appId, boardId, board, true),
+		);
 	}
 
 	/**
@@ -3717,13 +3728,14 @@ export class BoardState implements IBoardState {
 					result.sync,
 				);
 				if (board) {
-					await this.presignMediaComments(
-						appId,
-						boardId,
-						board,
-						!remoteIdentity,
+					options.onBoard(
+						await this.presignMediaComments(
+							appId,
+							boardId,
+							board,
+							!remoteIdentity,
+						),
 					);
-					options.onBoard(board);
 				}
 			}
 

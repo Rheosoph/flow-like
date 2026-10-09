@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
+import time
 
-from ._http import HTTPClient
+from ._http import HTTPClient, segment
 from ._types import App, HealthStatus
 
 
@@ -55,17 +56,17 @@ class AppsMixin(HTTPClient):
         Returns:
             The matching App.
         """
-        resp = self._request("GET", f"/apps/{app_id}")
+        resp = self._request("GET", f"/apps/{segment(app_id)}")
         data = resp.json()
         return App(id=data.get("id", app_id), name=data.get("name"), raw=data)
 
     async def aget_app(self, app_id: str) -> App:
         """Async version of get_app."""
-        resp = await self._arequest("GET", f"/apps/{app_id}")
+        resp = await self._arequest("GET", f"/apps/{segment(app_id)}")
         data = resp.json()
         return App(id=data.get("id", app_id), name=data.get("name"), raw=data)
 
-    def create_app(self, name: str, description: str | None = None) -> App:
+    def create_app(self, name: str, description: str | None = None, *, bits: list[str] | None = None, language: str | None = None) -> App:
         """Create a new app.
 
         Args:
@@ -75,19 +76,23 @@ class AppsMixin(HTTPClient):
         Returns:
             The newly created App.
         """
-        body: dict[str, Any] = {"name": name}
-        if description is not None:
-            body["description"] = description
-        resp = self._request("POST", "/apps", json=body)
+        timestamp = {"secs_since_epoch": int(time.time()), "nanos_since_epoch": 0}
+        body: dict[str, Any] = {"meta": {
+            "name": name, "description": description or "", "tags": [],
+            "preview_media": [], "created_at": timestamp, "updated_at": timestamp,
+        }, "bits": bits or []}
+        resp = self._request("PUT", "/apps/new", json=body, params={"language": language} if language else None)
         data = resp.json()
         return App(id=data.get("id", ""), name=data.get("name", name), raw=data)
 
-    async def acreate_app(self, name: str, description: str | None = None) -> App:
+    async def acreate_app(self, name: str, description: str | None = None, *, bits: list[str] | None = None, language: str | None = None) -> App:
         """Async version of create_app."""
-        body: dict[str, Any] = {"name": name}
-        if description is not None:
-            body["description"] = description
-        resp = await self._arequest("POST", "/apps", json=body)
+        timestamp = {"secs_since_epoch": int(time.time()), "nanos_since_epoch": 0}
+        body: dict[str, Any] = {"meta": {
+            "name": name, "description": description or "", "tags": [],
+            "preview_media": [], "created_at": timestamp, "updated_at": timestamp,
+        }, "bits": bits or []}
+        resp = await self._arequest("PUT", "/apps/new", json=body, params={"language": language} if language else None)
         data = resp.json()
         return App(id=data.get("id", ""), name=data.get("name", name), raw=data)
 
@@ -106,6 +111,110 @@ class AppsMixin(HTTPClient):
         resp = await self._arequest("GET", "/health")
         data = resp.json()
         return HealthStatus(healthy=data.get("healthy", True), raw=data)
+
+    def update_app(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PUT /apps/{app_id}. Bodies and query keys follow the REST API."""
+        return self._json("PUT", f"/apps/{segment(app_id)}", json=body, params=params)
+
+    async def aupdate_app(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PUT /apps/{app_id}. Bodies and query keys follow the REST API."""
+        return await self._ajson("PUT", f"/apps/{segment(app_id)}", json=body, params=params)
+
+    def delete_app(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """DELETE /apps/{app_id}. Bodies and query keys follow the REST API."""
+        return self._json("DELETE", f"/apps/{segment(app_id)}", params=params)
+
+    async def adelete_app(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """DELETE /apps/{app_id}. Bodies and query keys follow the REST API."""
+        return await self._ajson("DELETE", f"/apps/{segment(app_id)}", params=params)
+
+    def get_app_detail(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/detail. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/detail", params=params)
+
+    async def aget_app_detail(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/detail. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/detail", params=params)
+
+    def get_app_meta(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/meta. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/meta", params=params)
+
+    async def aget_app_meta(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/meta. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/meta", params=params)
+
+    def update_app_meta(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PUT /apps/{app_id}/meta. Bodies and query keys follow the REST API."""
+        return self._json("PUT", f"/apps/{segment(app_id)}/meta", json=body, params=params)
+
+    async def aupdate_app_meta(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PUT /apps/{app_id}/meta. Bodies and query keys follow the REST API."""
+        return await self._ajson("PUT", f"/apps/{segment(app_id)}/meta", json=body, params=params)
+
+    def set_app_visibility(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/visibility. Bodies and query keys follow the REST API."""
+        return self._json("PATCH", f"/apps/{segment(app_id)}/visibility", json=body, params=params)
+
+    async def aset_app_visibility(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/visibility. Bodies and query keys follow the REST API."""
+        return await self._ajson("PATCH", f"/apps/{segment(app_id)}/visibility", json=body, params=params)
+
+    def fork_app(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/fork. Bodies and query keys follow the REST API."""
+        return self._json("POST", f"/apps/{segment(app_id)}/fork", json=body, params=params)
+
+    async def afork_app(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/fork. Bodies and query keys follow the REST API."""
+        return await self._ajson("POST", f"/apps/{segment(app_id)}/fork", json=body, params=params)
+
+    def list_publication_requests(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/publication. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/publication", params=params)
+
+    async def alist_publication_requests(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/publication. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/publication", params=params)
+
+    def publish_app(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/publication/request. Bodies and query keys follow the REST API."""
+        return self._json("POST", f"/apps/{segment(app_id)}/publication/request", json=body, params=params)
+
+    async def apublish_app(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/publication/request. Bodies and query keys follow the REST API."""
+        return await self._ajson("POST", f"/apps/{segment(app_id)}/publication/request", json=body, params=params)
+
+    def get_app_appearance(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/settings/appearance. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/settings/appearance", params=params)
+
+    async def aget_app_appearance(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/settings/appearance. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/settings/appearance", params=params)
+
+    def update_app_appearance(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/settings/appearance. Bodies and query keys follow the REST API."""
+        return self._json("PATCH", f"/apps/{segment(app_id)}/settings/appearance", json=body, params=params)
+
+    async def aupdate_app_appearance(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/settings/appearance. Bodies and query keys follow the REST API."""
+        return await self._ajson("PATCH", f"/apps/{segment(app_id)}/settings/appearance", json=body, params=params)
+
+    def get_app_forking(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/settings/forking. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/settings/forking", params=params)
+
+    async def aget_app_forking(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/settings/forking. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/settings/forking", params=params)
+
+    def update_app_forking(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/settings/forking. Bodies and query keys follow the REST API."""
+        return self._json("PATCH", f"/apps/{segment(app_id)}/settings/forking", json=body, params=params)
+
+    async def aupdate_app_forking(self, app_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/settings/forking. Bodies and query keys follow the REST API."""
+        return await self._ajson("PATCH", f"/apps/{segment(app_id)}/settings/forking", json=body, params=params)
 
 
 __all__ = ["AppsMixin"]

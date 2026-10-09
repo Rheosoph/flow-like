@@ -196,9 +196,6 @@ impl NodeLogic for MqttSubscribeNode {
                     Err(_) => break Err(flow_like_types::anyhow!("MQTT message stream closed")),
                 },
             };
-            if !rumqttc::matches(&message.topic, &topic) {
-                continue;
-            }
             let bytes = message.payload.to_vec();
             let payload = match String::from_utf8(bytes.clone()) {
                 Ok(text) => IncomingPayload::Text(text),

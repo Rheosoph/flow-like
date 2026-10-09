@@ -37,6 +37,12 @@ class PollResult:
     events: list[dict[str, Any]] = field(default_factory=list)
     done: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""
+    status: str = "unknown"
+    progress: int = 0
+    current_step: str | None = None
+    error: str | None = None
+    next_sequence: int = -1
 
 
 @dataclass
@@ -61,11 +67,16 @@ class FileInfo:
 
 @dataclass
 class PresignResult:
-    """A presigned URL for direct file upload or download, with optional headers."""
+    """Scoped storage credentials, path, and expiration returned by presign_data."""
 
-    url: str
+    url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+
+    shared_credentials: dict[str, Any] = field(default_factory=dict)
+    path: str = ""
+    access_mode: str = "read"
+    expiration: str | None = None
 
 
 @dataclass

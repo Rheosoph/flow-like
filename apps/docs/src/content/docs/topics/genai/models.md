@@ -180,7 +180,14 @@ Local Bits require a native decision-model GGUF supported by the bundled llama.c
 
 Hosted Bits support OpenRouter, Cloudflare Workers AI, TypeSafe, and operator-configured SystemOne services through the Flow-Like API. Hosted calls use the same account authorization, usage tracking, and billing controls as hosted chat. Administrators configure service credentials on the server; Bits identify the provider and model. For an independently managed endpoint, a custom SystemOne Bit uses its own endpoint and credential.
 
-For a device deployment, the SystemOne Bit must be listed in the project's `bits` manifest field so export includes its pinned metadata and local model assets. Adding a model to a profile or selecting it on a node does not update this list. The current project settings have no dependency editor, so deployment requires a prepared project manifest. Hosted Bits also need their metadata packaged and hosted-model access approved for the service.
+For a device deployment, export includes the pinned metadata and local assets
+of Bits named by literal IDs on **Load Bit** nodes in the exported Flows and
+templates. It also includes the project's `bits` manifest dependencies. Use
+that manifest for IDs computed at runtime and models selected by **Find Decision
+Model**; the current project settings have no dependency editor. Adding a model
+to a profile alone does not include it in a deployment. Hosted Bits also need
+hosted-model access approved for the service. Local model files are shared
+through the device's central asset cache.
 
 ## Model configuration
 

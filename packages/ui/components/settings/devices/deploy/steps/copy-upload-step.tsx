@@ -902,6 +902,8 @@ interface ModelAccessProps {
 function ModelAccessBlock({ props, fresh }: Readonly<ModelAccessProps>) {
 	const { t } = useTranslation("devices");
 	const { draft, update, plan } = props;
+	const prepared =
+		props.prepared ?? deployRunExtras(draft.deploymentId).prepared;
 	const { freshness } = useDeviceRows();
 	const [on, setOn] = useState(draft.approval.models.length > 0);
 	function toggle(next: boolean) {
@@ -933,6 +935,7 @@ function ModelAccessBlock({ props, fresh }: Readonly<ModelAccessProps>) {
 						deviceId={plan.targets[0]?.deviceId ?? ""}
 						appId={null}
 						modelsAppId={plan.app?.id}
+						modelBits={prepared?.artifact.bits}
 						serviceMaxInstances={draft.maxInstances}
 						value={draft.approval}
 						onChange={setApproval}

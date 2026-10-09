@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import type { DevicesScope } from "../../../../lib/device-management/model/types";
 import { StateView } from "../primitives/state-view";
 import { CommandLookup } from "./command-lookup";
+import { ExecutionLogsBlock } from "./execution-logs-block";
 import { HistoryAccess } from "./history-access";
 import { HistorySettings } from "./history-settings";
 import { LogsBlock } from "./logs-block";
@@ -60,6 +61,7 @@ export function ActivityView({
 	);
 	return (
 		<div className={OBSERVE_STACK} data-observe="activity">
+			{serviceId ? <ExecutionLogsBlock target={target} /> : null}
 			<div className={OBSERVE_COLS}>
 				<TimelineBlock target={target} />
 				<div className={OBSERVE_STACK}>

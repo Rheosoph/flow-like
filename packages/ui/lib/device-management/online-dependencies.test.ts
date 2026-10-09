@@ -66,6 +66,34 @@ test("online export resolves and pins dependencies without exporting offline dat
 		).not.toContain("token=private");
 });
 
+test("online export shares one pin for matching plain and qualified workflow references", async () => {
+	const f = fixture();
+	f.app.bits = ["model", "models.test:model"];
+	let reads = 0;
+	f.backend.bitState.getBit = async () => {
+		reads += 1;
+		return {
+			...f.bit,
+			download_link: `https://cloud.test/model?token=${reads}`,
+		} as never;
+	};
+	const exported = await prepareOnlineDependencies(f.app, f.backend, profile);
+	expect(exported.assets.bit_pins).toHaveLength(1);
+	expect(exported.artifact.bits).toMatchObject([
+		{ id: "model", hub: "models.test" },
+	]);
+});
+
+test("online export rejects conflicting workflow references with the same Bit ID", async () => {
+	const f = fixture();
+	f.app.bits = ["model", "other.test:model"];
+	f.backend.bitState.getBit = async (_id, hub) =>
+		({ ...f.bit, hub: hub ?? f.bit.hub }) as never;
+	await expect(
+		prepareOnlineDependencies(f.app, f.backend, profile),
+	).rejects.toThrow('Selected references disagree about model "model".');
+});
+
 for (const wrapDependencies of [false, true]) {
 	test(`online export resolves qualified transitive dependencies from ${wrapDependencies ? "wrapped" : "array"} inventories`, async () => {
 		const f = fixture(wrapDependencies);

@@ -1,3 +1,4 @@
+import { segment } from "./paths.js";
 import type { HttpClient } from "./client.js";
 import type {
 	Bit,
@@ -34,7 +35,7 @@ export function createBitMethods(http: HttpClient) {
 		},
 
 		async getBit(bitId: string): Promise<Bit> {
-			return http.request<Bit>("GET", `/bit/${bitId}`);
+			return http.request<Bit>("GET", `/bit/${segment(bitId)}`);
 		},
 
 		async listLlms(search?: string, limit = 50): Promise<ModelInfo[]> {

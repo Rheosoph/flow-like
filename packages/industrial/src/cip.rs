@@ -60,6 +60,15 @@ fn validate_tag(tag: &str) -> Result<()> {
         "Logix tag must contain 1 to 1024 bytes without NUL",
     )
 }
+
+#[cfg(any(feature = "execute", test))]
+fn needs_indexed_write_workaround(tag: &str) -> bool {
+    let Some((base, index)) = tag.strip_suffix(']').and_then(|tag| tag.rsplit_once('[')) else {
+        return false;
+    };
+    !base.contains('[') && !base.contains(']') && index.parse::<u32>().is_ok()
+}
+
 impl CipValue {
     pub fn validate(&self) -> Result<()> {
         match self {
@@ -191,8 +200,23 @@ mod runtime {
             let mut client = slot
                 .take()
                 .ok_or_else(|| failure("EtherNet/IP session closed; reconnect before retrying"))?;
-            let result =
-                tokio::time::timeout(self.timeout, client.write_tag(tag, value.into())).await;
+            let result = tokio::time::timeout(self.timeout, async {
+                if needs_indexed_write_workaround(tag) {
+                    // The SDK's single indexed-write path substitutes the target's
+                    // type for the supplied value and omits structure handles. Its
+                    // batch encoder preserves both, including for STRING arrays.
+                    // Nested paths retain the SDK's packed BOOL and custom STRING handling.
+                    let mut results = client
+                        .write_tags_batch(&[(tag, value.into())])
+                        .await
+                        .map_err(failure)?;
+                    require(results.len() == 1, "EtherNet/IP write returned no result")?;
+                    results.pop().unwrap().1.map_err(failure)
+                } else {
+                    client.write_tag(tag, value.into()).await.map_err(failure)
+                }
+            })
+            .await;
             match result {
                 Ok(Ok(())) => {
                     *slot = Some(client);
@@ -213,6 +237,30 @@ pub use runtime::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_write_workaround_preserves_nested_and_multidimensional_paths() {
+        for tag in [
+            "Values[0]",
+            "Program:Main.Values[1]",
+            "Motor.Values[4294967295]",
+        ] {
+            assert!(needs_indexed_write_workaround(tag), "{tag}");
+        }
+        for tag in [
+            "Value",
+            "Devices[0].Flags[1]",
+            "Devices[0].CustomStrings[1]",
+            "Devices[0].Member",
+            "Matrix[1,2]",
+            "Matrix[1][2]",
+            "Values[-1]",
+            "Values[4294967296]",
+        ] {
+            assert!(!needs_indexed_write_workaround(tag), "{tag}");
+        }
+    }
+
     #[test]
     fn validates_logix_write_values() {
         assert!(CipValue::Real(f32::NAN).validate().is_err());

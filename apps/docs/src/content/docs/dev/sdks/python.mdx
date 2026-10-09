@@ -112,13 +112,52 @@ result = client.trigger_event_async("app-id", "event-id")
 ```python
 # Check run status
 status = client.get_run_status("run-id")
-print(status.status)  # "running" | "completed" | "failed"
+print(status.status)  # For example, "Running", "Completed", or "Failed"
 
 # Poll for execution events
-poll = client.poll_execution("poll-token", after_sequence=0, timeout=30)
+poll = client.poll_execution("poll-token", after_sequence=-1, timeout=30)
 for event in poll.events:
     print(event)
 ```
+
+The poll token comes from an async invocation. The SDK sends it as Bearer
+authorization without the client's PAT or API key. Start with cursor `-1` so
+the first event, sequence `0`, is included. Advance the cursor to the highest
+sequence received before the next call. A completed run can still have
+additional event pages to read.
+
+For stored run history and node logs:
+
+```python
+runs = client.list_runs("app-id", "board-id", limit=20)
+logs = client.get_run_logs(
+    "app-id", "board-id", "run-id",
+    query={"levels": [2, 3, 4]}, offset=0, limit=50,
+)
+summary = client.get_run_summary("app-id", "board-id", "run-id")
+client.cancel_run("running-run-id")
+```
+
+`get_run_payload()` reads the captured input for a stored run when available.
+These methods read the hub's execution history. Device-local structured logs
+use the encrypted [device log viewer](/devices/deployments/#read-workflow-execution-logs).
+
+## Publish and release a workflow
+
+Publishing creates a board version only when the saved workflow has changed.
+Set the Event's `board_version` to the returned tuple to make its next invocation
+use that version.
+
+```python
+published = client.publish_board_if_changed("app-id", "board-id")
+event = client.get_event("app-id", "event-id")
+event["board_version"] = published["version"]
+client.upsert_event("app-id", "event-id", {"event": event})
+```
+
+Event management also includes listing, deletion, versions, validation, setup,
+and restore. Complex management methods accept backend JSON dictionaries;
+their async counterparts use the same arguments with an `a` prefix.
 
 ## File Management
 
@@ -135,6 +174,12 @@ content = client.download_file("app-id", "path/to/file.csv")
 # Delete
 client.delete_file("app-id", "path/to/file.csv")
 ```
+
+Pass `key="uploads/file.csv"` for bytes or a file without a name. Upload and
+download helpers obtain a signed URL, then transfer the bytes without forwarding
+platform credentials. Use `get_upload_urls()` or `get_download_urls()` when
+another process should perform the transfer. Pass `user=True` for user storage.
+`presign_data()` returns scoped storage credentials rather than a file download URL.
 
 ## Database / LanceDB
 

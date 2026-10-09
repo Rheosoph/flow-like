@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._http import HTTPClient
+from ._http import HTTPClient, segment
 from ._types import Board, PrerunBoardResponse, UpsertBoardResponse
 
 
@@ -20,14 +20,14 @@ class BoardsMixin(HTTPClient):
         Returns:
             List of Board objects.
         """
-        resp = self._request("GET", f"/apps/{app_id}/board")
+        resp = self._request("GET", f"/apps/{segment(app_id)}/board")
         data = resp.json()
         items = data if isinstance(data, list) else []
         return [Board(id=b.get("id", ""), raw=b) for b in items]
 
     async def alist_boards(self, app_id: str) -> list[Board]:
         """Async version of list_boards."""
-        resp = await self._arequest("GET", f"/apps/{app_id}/board")
+        resp = await self._arequest("GET", f"/apps/{segment(app_id)}/board")
         data = resp.json()
         items = data if isinstance(data, list) else []
         return [Board(id=b.get("id", ""), raw=b) for b in items]
@@ -46,7 +46,7 @@ class BoardsMixin(HTTPClient):
             The matching Board.
         """
         params = {"version": version} if version else None
-        resp = self._request("GET", f"/apps/{app_id}/board/{board_id}", params=params)
+        resp = self._request("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}", params=params)
         data = resp.json()
         return Board(id=data.get("id", board_id), raw=data)
 
@@ -56,7 +56,7 @@ class BoardsMixin(HTTPClient):
         """Async version of get_board."""
         params = {"version": version} if version else None
         resp = await self._arequest(
-            "GET", f"/apps/{app_id}/board/{board_id}", params=params
+            "GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}", params=params
         )
         data = resp.json()
         return Board(id=data.get("id", board_id), raw=data)
@@ -101,7 +101,7 @@ class BoardsMixin(HTTPClient):
             body["execution_mode"] = execution_mode
         if template is not None:
             body["template"] = template
-        resp = self._request("PUT", f"/apps/{app_id}/board/{board_id}", json=body)
+        resp = self._request("PUT", f"/apps/{segment(app_id)}/board/{segment(board_id)}", json=body)
         data = resp.json()
         return UpsertBoardResponse(id=data.get("id", board_id), raw=data)
 
@@ -132,7 +132,7 @@ class BoardsMixin(HTTPClient):
         if template is not None:
             body["template"] = template
         resp = await self._arequest(
-            "PUT", f"/apps/{app_id}/board/{board_id}", json=body
+            "PUT", f"/apps/{segment(app_id)}/board/{segment(board_id)}", json=body
         )
         data = resp.json()
         return UpsertBoardResponse(id=data.get("id", board_id), raw=data)
@@ -144,11 +144,11 @@ class BoardsMixin(HTTPClient):
             app_id: Parent app identifier.
             board_id: Board to delete.
         """
-        self._request("DELETE", f"/apps/{app_id}/board/{board_id}")
+        self._request("DELETE", f"/apps/{segment(app_id)}/board/{segment(board_id)}")
 
     async def adelete_board(self, app_id: str, board_id: str) -> None:
         """Async version of delete_board."""
-        await self._arequest("DELETE", f"/apps/{app_id}/board/{board_id}")
+        await self._arequest("DELETE", f"/apps/{segment(app_id)}/board/{segment(board_id)}")
 
     def prerun_board(
         self, app_id: str, board_id: str, version: str | None = None
@@ -165,7 +165,7 @@ class BoardsMixin(HTTPClient):
         """
         params = {"version": version} if version else None
         resp = self._request(
-            "GET", f"/apps/{app_id}/board/{board_id}/prerun", params=params
+            "GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/prerun", params=params
         )
         data = resp.json()
         return PrerunBoardResponse(
@@ -183,7 +183,7 @@ class BoardsMixin(HTTPClient):
         """Async version of prerun_board."""
         params = {"version": version} if version else None
         resp = await self._arequest(
-            "GET", f"/apps/{app_id}/board/{board_id}/prerun", params=params
+            "GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/prerun", params=params
         )
         data = resp.json()
         return PrerunBoardResponse(
@@ -205,7 +205,7 @@ class BoardsMixin(HTTPClient):
         Returns:
             List of version dicts.
         """
-        resp = self._request("GET", f"/apps/{app_id}/board/{board_id}/version")
+        resp = self._request("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version")
         data = resp.json()
         return data if isinstance(data, list) else []
 
@@ -214,7 +214,7 @@ class BoardsMixin(HTTPClient):
     ) -> list[dict[str, Any]]:
         """Async version of get_board_versions."""
         resp = await self._arequest(
-            "GET", f"/apps/{app_id}/board/{board_id}/version"
+            "GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version"
         )
         data = resp.json()
         return data if isinstance(data, list) else []
@@ -234,7 +234,7 @@ class BoardsMixin(HTTPClient):
         """
         resp = self._request(
             "POST",
-            f"/apps/{app_id}/board/{board_id}",
+            f"/apps/{segment(app_id)}/board/{segment(board_id)}",
             json={"commands": commands},
         )
         data = resp.json()
@@ -246,11 +246,147 @@ class BoardsMixin(HTTPClient):
         """Async version of execute_commands."""
         resp = await self._arequest(
             "POST",
-            f"/apps/{app_id}/board/{board_id}",
+            f"/apps/{segment(app_id)}/board/{segment(board_id)}",
             json={"commands": commands},
         )
         data = resp.json()
         return data if isinstance(data, list) else []
+
+    def version_board(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/board/{board_id}. Bodies and query keys follow the REST API."""
+        return self._json("PATCH", f"/apps/{segment(app_id)}/board/{segment(board_id)}", params=params)
+
+    async def aversion_board(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/board/{board_id}. Bodies and query keys follow the REST API."""
+        return await self._ajson("PATCH", f"/apps/{segment(app_id)}/board/{segment(board_id)}", params=params)
+
+    def get_board_version_info(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/version/info. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version/info", params=params)
+
+    async def aget_board_version_info(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/version/info. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version/info", params=params)
+
+    def get_board_version_current(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/version/current. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version/current", params=params)
+
+    async def aget_board_version_current(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/version/current. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version/current", params=params)
+
+    def publish_board_if_changed(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/version/current. Bodies and query keys follow the REST API."""
+        return self._json("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version/current", params=params)
+
+    async def apublish_board_if_changed(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/version/current. Bodies and query keys follow the REST API."""
+        return await self._ajson("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/version/current", params=params)
+
+    def get_flowscript(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/flowscript. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript", params=params)
+
+    async def aget_flowscript(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/flowscript. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript", params=params)
+
+    def render_flowscript(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/flowscript/render. Bodies and query keys follow the REST API."""
+        return self._json("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript/render", json=body, params=params)
+
+    async def arender_flowscript(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/flowscript/render. Bodies and query keys follow the REST API."""
+        return await self._ajson("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript/render", json=body, params=params)
+
+    def apply_flowscript(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/flowscript/apply. Bodies and query keys follow the REST API."""
+        return self._json("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript/apply", json=body, params=params)
+
+    async def aapply_flowscript(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/flowscript/apply. Bodies and query keys follow the REST API."""
+        return await self._ajson("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript/apply", json=body, params=params)
+
+    def format_flowscript(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/flowscript/format. Bodies and query keys follow the REST API."""
+        return self._json("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript/format", json=body, params=params)
+
+    async def aformat_flowscript(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/flowscript/format. Bodies and query keys follow the REST API."""
+        return await self._ajson("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/flowscript/format", json=body, params=params)
+
+    def sync_board(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/sync. Bodies and query keys follow the REST API."""
+        return self._json("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/sync", json=body, params=params)
+
+    async def async_board(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """POST /apps/{app_id}/board/{board_id}/sync. Bodies and query keys follow the REST API."""
+        return await self._ajson("POST", f"/apps/{segment(app_id)}/board/{segment(board_id)}/sync", json=body, params=params)
+
+    def undo_board(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/board/{board_id}/undo. Bodies and query keys follow the REST API."""
+        return self._json("PATCH", f"/apps/{segment(app_id)}/board/{segment(board_id)}/undo", json=body, params=params)
+
+    async def aundo_board(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/board/{board_id}/undo. Bodies and query keys follow the REST API."""
+        return await self._ajson("PATCH", f"/apps/{segment(app_id)}/board/{segment(board_id)}/undo", json=body, params=params)
+
+    def redo_board(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/board/{board_id}/redo. Bodies and query keys follow the REST API."""
+        return self._json("PATCH", f"/apps/{segment(app_id)}/board/{segment(board_id)}/redo", json=body, params=params)
+
+    async def aredo_board(self, app_id: str, board_id: str, body: dict[str, Any], *, params: dict[str, Any] | None = None) -> Any:
+        """PATCH /apps/{app_id}/board/{board_id}/redo. Bodies and query keys follow the REST API."""
+        return await self._ajson("PATCH", f"/apps/{segment(app_id)}/board/{segment(board_id)}/redo", json=body, params=params)
+
+    def get_board_capabilities(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/capabilities. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/board/capabilities", params=params)
+
+    async def aget_board_capabilities(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/capabilities. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/board/capabilities", params=params)
+
+    def get_board_summaries(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/summaries. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/board/summaries", params=params)
+
+    async def aget_board_summaries(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/summaries. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/board/summaries", params=params)
+
+    def get_board_variables(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/variables. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/board/variables", params=params)
+
+    async def aget_board_variables(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/variables. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/board/variables", params=params)
+
+    def get_board_workspace(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/workspace. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/workspace", params=params)
+
+    async def aget_board_workspace(self, app_id: str, board_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/board/{board_id}/workspace. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/board/{segment(board_id)}/workspace", params=params)
+
+    def list_nodes(self, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/nodes. Bodies and query keys follow the REST API."""
+        return self._json("GET", "/apps/nodes", params=params)
+
+    async def alist_nodes(self, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/nodes. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", "/apps/nodes", params=params)
+
+    def list_app_nodes(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/nodes. Bodies and query keys follow the REST API."""
+        return self._json("GET", f"/apps/{segment(app_id)}/nodes", params=params)
+
+    async def alist_app_nodes(self, app_id: str, *, params: dict[str, Any] | None = None) -> Any:
+        """GET /apps/{app_id}/nodes. Bodies and query keys follow the REST API."""
+        return await self._ajson("GET", f"/apps/{segment(app_id)}/nodes", params=params)
 
 
 __all__ = ["BoardsMixin"]

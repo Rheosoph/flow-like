@@ -465,10 +465,11 @@
     },
     "libs/platform/nodejs": {
       "name": "@flow-like/sdk",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "devDependencies": {
         "@lancedb/lancedb": "^0.26.2",
         "@langchain/core": "^1.1.24",
+        "@types/node": "^22.0.0",
         "typescript": "^5.5.0",
       },
       "peerDependencies": {

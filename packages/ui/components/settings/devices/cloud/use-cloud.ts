@@ -95,7 +95,8 @@ export interface AppRole {
 }
 
 type RoleReader = Pick<IBackendState["roleState"], "getOwnRole">;
-const noRole = async (_appId: string): Promise<IOwnRole | undefined> => undefined;
+const noRole = async (_appId: string): Promise<IOwnRole | undefined> =>
+	undefined;
 
 /** The viewer's role on an app, as the approval gates need it (Admin or Owner with Execute boards). */
 export function useAppRole(appId: string | null | undefined): AppRole {
@@ -134,6 +135,7 @@ export function useAppRole(appId: string | null | undefined): AppRole {
 const MODEL_TYPES: ReadonlySet<string> = new Set([
 	"Llm",
 	"Vlm",
+	"SystemOne",
 	"Embedding",
 	"ImageEmbedding",
 ]);
@@ -220,7 +222,10 @@ export interface AppModelsRead {
 }
 
 /** The models an app uses (its pinned model Bits), for the approval form. */
-export function useAppModels(appId: string | null | undefined): AppModelsRead {
+export function useAppModels(
+	appId: string | null | undefined,
+	preparedBits?: readonly IBit[],
+): AppModelsRead {
 	const backend = useBackend();
 	const { i18n } = useTranslation("devices");
 	const language = i18n?.language ?? "en";
@@ -229,25 +234,27 @@ export function useAppModels(appId: string | null | undefined): AppModelsRead {
 		backend.appState.getApp,
 		backend.appState,
 		[appId ?? ""],
-		!!appId,
+		!!appId && preparedBits === undefined,
 	);
 	const refs = useMemo(
 		() =>
-			[...new Set(app.data?.bits ?? [])].slice(0, MAX_APP_MODELS).map((ref) => {
-				const split = ref.lastIndexOf(":");
-				return {
-					id: ref.slice(split + 1),
-					...(split >= 0 ? { hub: ref.slice(0, split) } : {}),
-				};
-			}),
-		[app.data?.bits],
+			[...new Set(preparedBits === undefined ? (app.data?.bits ?? []) : [])]
+				.slice(0, MAX_APP_MODELS)
+				.map((ref) => {
+					const split = ref.lastIndexOf(":");
+					return {
+						id: ref.slice(split + 1),
+						...(split >= 0 ? { hub: ref.slice(0, split) } : {}),
+					};
+				}),
+		[app.data?.bits, preparedBits],
 	);
 	const { bits, loading } = useQueries({
 		queries: refs.map((ref) => bitQuery(reader, ref.id, ref.hub)),
 		combine: (results) => readBits(results),
 	});
 	return useMemo(() => {
-		const models = bits.flatMap((bit) =>
+		const models = (preparedBits ?? bits).flatMap((bit) =>
 			bit && MODEL_TYPES.has(bit.type)
 				? [
 						{
@@ -261,8 +268,11 @@ export function useAppModels(appId: string | null | undefined): AppModelsRead {
 		return {
 			models: models.filter((model) => model.access !== "local"),
 			localModels: models.filter((model) => model.access === "local"),
-			loading: !!appId && (app.isLoading || loading),
-			known: !!appId && !!reader && !!app.data && !app.error,
+			loading:
+				preparedBits === undefined && !!appId && (app.isLoading || loading),
+			known:
+				preparedBits !== undefined ||
+				(!!appId && !!reader && !!app.data && !app.error),
 		};
 	}, [
 		bits,
@@ -273,6 +283,7 @@ export function useAppModels(appId: string | null | undefined): AppModelsRead {
 		app.data,
 		app.error,
 		reader,
+		preparedBits,
 	]);
 }
 

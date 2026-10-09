@@ -1,10 +1,13 @@
-use super::{MqttConfig, MqttQoS};
+use super::{
+    MqttConfig, MqttQoS,
+    topic::{topic_matches, valid_filter},
+};
 use flow_like::flow::execution::{ExecutionEnvironment, context::ExecutionContext, egress};
 use flow_like_types::{Cacheable, Result, anyhow, tokio_util::sync::CancellationToken};
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Outgoing, Packet, Publish, QoS};
 use std::{
     any::Any,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
     time::Duration,
 };
@@ -55,11 +58,15 @@ impl Cacheable for CachedMqttConnection {
 }
 pub struct MqttSubscription {
     receiver: broadcast::Receiver<Publish>,
+    replay: VecDeque<Publish>,
     connection: std::sync::Weak<MqttConnection>,
     filter: Option<(String, u64)>,
 }
 impl MqttSubscription {
     pub async fn recv(&mut self) -> std::result::Result<Publish, broadcast::error::RecvError> {
+        if let Some(message) = self.replay.pop_front() {
+            return Ok(message);
+        }
         self.receiver.recv().await
     }
     pub async fn close(mut self) -> Result<()> {
@@ -68,12 +75,24 @@ impl MqttSubscription {
         {
             connection.unsubscribe(filter.clone(), *id).await?;
         }
+        self.unregister();
         self.filter = None;
         Ok(())
     }
 }
+impl MqttSubscription {
+    fn unregister(&self) {
+        if let Some(connection) = self.connection.upgrade()
+            && let Some((_, id)) = self.filter.as_ref()
+            && let Ok(mut messages) = connection.messages.lock()
+        {
+            messages.listeners.remove(id);
+        }
+    }
+}
 impl Drop for MqttSubscription {
     fn drop(&mut self) {
+        self.unregister();
         let Some((filter, id)) = self.filter.take() else {
             return;
         };
@@ -98,11 +117,64 @@ impl Drop for MqttSubscription {
         }
     }
 }
+// Persistent sessions can replay several filters before workflow listeners attach.
+// MQTT 3.1.1 exposes neither the restored filter set nor a replay-complete marker.
+// Keep unmatched deliveries until the first matching listener claims them. An overlapping
+// listener attached afterward starts with live messages; this queue is not a history log.
+struct MessageHub {
+    replay: VecDeque<Publish>,
+    listeners: HashMap<u64, (String, broadcast::Sender<Publish>)>,
+    buffer_unmatched: bool,
+}
+impl MessageHub {
+    fn new(buffer_unmatched: bool) -> Self {
+        Self {
+            replay: VecDeque::new(),
+            listeners: HashMap::new(),
+            buffer_unmatched,
+        }
+    }
+    fn attach(
+        &mut self,
+        filter: &str,
+        id: u64,
+    ) -> (broadcast::Receiver<Publish>, VecDeque<Publish>) {
+        let (sender, receiver) = broadcast::channel(CAPACITY);
+        let mut replay = VecDeque::new();
+        self.replay.retain(|message| {
+            if topic_matches(filter, &message.topic) {
+                replay.push_back(message.clone());
+                false
+            } else {
+                true
+            }
+        });
+        self.listeners.insert(id, (filter.to_owned(), sender));
+        (receiver, replay)
+    }
+    fn deliver(&mut self, message: Publish) -> Result<()> {
+        let mut matched = false;
+        for (filter, sender) in self.listeners.values() {
+            if topic_matches(filter, &message.topic) {
+                matched = true;
+                let _ = sender.send(message.clone());
+            }
+        }
+        if !matched && self.buffer_unmatched {
+            if self.replay.len() == CAPACITY {
+                return Err(anyhow!(
+                    "MQTT pending listener queue overflowed; attach all persistent-session listeners before replay exceeds {CAPACITY} messages"
+                ));
+            }
+            self.replay.push_back(message);
+        }
+        Ok(())
+    }
+}
 pub struct MqttConnection {
     commands: mpsc::Sender<Command>,
     next_subscription: std::sync::atomic::AtomicU64,
-    messages: broadcast::Sender<Publish>,
-    initial_messages: std::sync::Mutex<Option<broadcast::Receiver<Publish>>>,
+    messages: Arc<std::sync::Mutex<MessageHub>>,
     status: watch::Receiver<Option<CloseReason>>,
     stop: CancellationToken,
 }
@@ -212,23 +284,22 @@ impl MqttConnection {
         let mut network = rumqttc::NetworkOptions::new();
         network.set_connection_timeout(config.connect_timeout_seconds);
         events.set_network_options(network);
-        tokio::select! {
+        let session_present = tokio::select! {
             _ = crate::web::wait_for_cancel(cancellation.clone()) => return Err(anyhow!("MQTT connection cancelled")),
             result = tokio::time::timeout(Duration::from_secs(config.connect_timeout_seconds), events.poll()) => {
-                match result?? { Event::Incoming(Packet::ConnAck(_)) => {}, other => return Err(anyhow!("Expected MQTT CONNACK, received {other:?}")) }
+                match result?? { Event::Incoming(Packet::ConnAck(ack)) => ack.session_present, other => return Err(anyhow!("Expected MQTT CONNACK, received {other:?}")) }
             }
-        }
+        };
         let stop = cancellation
             .map(|token| token.child_token())
             .unwrap_or_default();
         let (commands, receiver) = mpsc::channel(CAPACITY);
-        let (messages, initial_messages) = broadcast::channel(CAPACITY);
+        let messages = Arc::new(std::sync::Mutex::new(MessageHub::new(session_present)));
         let (state, status) = watch::channel(None);
         let connection = Arc::new(Self {
             commands,
             next_subscription: std::sync::atomic::AtomicU64::new(1),
             messages: messages.clone(),
-            initial_messages: std::sync::Mutex::new(Some(initial_messages)),
             status,
             stop: stop.clone(),
         });
@@ -241,6 +312,16 @@ impl MqttConnection {
             stop.cancel();
         });
         Ok(connection)
+    }
+    #[cfg(test)]
+    pub(super) async fn wait_for_pending_replay(&self, count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self.messages.lock().unwrap().replay.len() < count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("persistent replay must arrive before attaching workflow listeners");
     }
     async fn command(&self, operation: Operation) -> Result<()> {
         if let Some(error) = self.status.borrow().as_ref() {
@@ -279,24 +360,21 @@ impl MqttConnection {
         .await
     }
     pub async fn subscribe(self: &Arc<Self>, filter: String, qos: QoS) -> Result<MqttSubscription> {
-        if filter.len() > u16::MAX as usize
-            || filter.contains('\0')
-            || !rumqttc::valid_filter(&filter)
-        {
+        if !valid_filter(&filter) {
             return Err(anyhow!("Invalid MQTT topic filter"));
         }
-        // A persistent broker session can send queued messages immediately after CONNACK.
-        let receiver = self
-            .initial_messages
-            .lock()
-            .map_err(|_| anyhow!("MQTT subscriber state poisoned"))?
-            .take()
-            .unwrap_or_else(|| self.messages.subscribe());
         let id = self
             .next_subscription
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Attach before SUBSCRIBE so deliveries preceding SUBACK are also captured.
+        let (receiver, replay) = self
+            .messages
+            .lock()
+            .map_err(|_| anyhow!("MQTT subscriber state poisoned"))?
+            .attach(&filter, id);
         let subscription = MqttSubscription {
             receiver,
+            replay,
             connection: Arc::downgrade(self),
             filter: Some((filter.clone(), id)),
         };
@@ -344,13 +422,16 @@ fn validate_topic(topic: &str) -> Result<()> {
     }
     Ok(())
 }
-fn deliver(event: &Event, messages: &broadcast::Sender<Publish>) -> Result<()> {
+fn deliver(event: &Event, messages: &std::sync::Mutex<MessageHub>) -> Result<()> {
     if let Event::Incoming(Packet::Publish(message)) = event {
         validate_topic(&message.topic)?;
         if message.payload.len() > MAX_PAYLOAD {
             return Err(anyhow!("MQTT incoming message exceeds 1 MiB"));
         }
-        let _ = messages.send(message.clone());
+        messages
+            .lock()
+            .map_err(|_| anyhow!("MQTT subscriber state poisoned"))?
+            .deliver(message.clone())?;
     }
     Ok(())
 }
@@ -358,7 +439,7 @@ async fn actor(
     client: AsyncClient,
     mut events: EventLoop,
     mut commands: mpsc::Receiver<Command>,
-    messages: broadcast::Sender<Publish>,
+    messages: Arc<std::sync::Mutex<MessageHub>>,
     stop: CancellationToken,
 ) -> Result<()> {
     let mut subscriptions = HashMap::<String, (HashSet<u64>, QoS)>::new();
@@ -386,7 +467,7 @@ async fn actor(
 async fn execute(
     client: &AsyncClient,
     events: &mut EventLoop,
-    messages: &broadcast::Sender<Publish>,
+    messages: &std::sync::Mutex<MessageHub>,
     subscriptions: &mut HashMap<String, (HashSet<u64>, QoS)>,
     operation: Operation,
 ) -> Result<()> {
@@ -793,6 +874,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_replay_waits_for_each_matching_listener_and_keeps_live_order() {
+        let mut hub = MessageHub::new(true);
+        hub.deliver(Publish::new("温度/one", QoS::AtLeastOnce, vec![1]))
+            .unwrap();
+        hub.deliver(Publish::new("pressure/one", QoS::AtLeastOnce, vec![2]))
+            .unwrap();
+        let (mut temperatures, replay) = hub.attach("温度/+", 1);
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].payload.as_ref(), &[1]);
+        assert_eq!(hub.replay.len(), 1);
+        hub.deliver(Publish::new("pressure/two", QoS::AtLeastOnce, vec![3]))
+            .unwrap();
+        let (mut pressures, replay) = hub.attach("pressure/#", 2);
+        assert_eq!(
+            replay
+                .iter()
+                .map(|value| value.payload[0])
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert!(hub.replay.is_empty());
+        hub.deliver(Publish::new("温度/two", QoS::AtLeastOnce, vec![4]))
+            .unwrap();
+        assert_eq!(temperatures.recv().await.unwrap().payload.as_ref(), &[4]);
+        assert!(matches!(
+            pressures.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn overlapping_late_listener_starts_live_after_pending_delivery_was_claimed() {
+        let mut hub = MessageHub::new(true);
+        hub.deliver(Publish::new("plant/temperature", QoS::AtLeastOnce, vec![1]))
+            .unwrap();
+        let (mut broad, replay) = hub.attach("plant/#", 1);
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].payload.as_ref(), &[1]);
+        let (mut specific, replay) = hub.attach("plant/temperature", 2);
+        assert!(
+            replay.is_empty(),
+            "a consumed pending delivery is not retained as history"
+        );
+        hub.deliver(Publish::new("plant/temperature", QoS::AtLeastOnce, vec![2]))
+            .unwrap();
+        assert_eq!(broad.recv().await.unwrap().payload.as_ref(), &[2]);
+        assert_eq!(specific.recv().await.unwrap().payload.as_ref(), &[2]);
+    }
+
+    #[tokio::test]
+    async fn busy_topics_do_not_overflow_unrelated_listener_queues() {
+        let mut hub = MessageHub::new(false);
+        let (mut quiet, _) = hub.attach("quiet/+", 1);
+        let (mut busy, _) = hub.attach("busy/+", 2);
+        for _ in 0..=CAPACITY {
+            hub.deliver(Publish::new("busy/value", QoS::AtLeastOnce, vec![1]))
+                .unwrap();
+        }
+        hub.deliver(Publish::new("quiet/温度", QoS::AtLeastOnce, vec![2]))
+            .unwrap();
+        assert_eq!(quiet.recv().await.unwrap().payload.as_ref(), &[2]);
+        assert!(matches!(
+            busy.recv().await,
+            Err(broadcast::error::RecvError::Lagged(1))
+        ));
+    }
+
+    #[test]
+    fn pending_replay_reports_overflow_instead_of_silently_dropping_messages() {
+        let mut hub = MessageHub::new(true);
+        for _ in 0..CAPACITY {
+            hub.deliver(Publish::new("offline/topic", QoS::AtLeastOnce, vec![1]))
+                .unwrap();
+        }
+        assert!(
+            hub.deliver(Publish::new("offline/topic", QoS::AtLeastOnce, vec![2]))
+                .unwrap_err()
+                .to_string()
+                .contains("pending listener queue overflowed")
+        );
+        assert_eq!(hub.replay.len(), CAPACITY);
+    }
+
+    #[tokio::test]
     async fn cancellation_stops_socket_and_bounded_queues_report_overflow() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = config(listener.local_addr().unwrap().port());
@@ -820,13 +985,13 @@ mod tests {
             .unwrap();
         server.await.unwrap();
         let (commands, _receiver) = mpsc::channel(CAPACITY);
-        let (messages, mut subscriber) = broadcast::channel(CAPACITY);
+        let messages = Arc::new(std::sync::Mutex::new(MessageHub::new(false)));
+        let (mut subscriber, _) = messages.lock().unwrap().attach("test", 1);
         let (_status, status) = watch::channel(None);
         let connection = MqttConnection {
             commands,
             next_subscription: std::sync::atomic::AtomicU64::new(1),
             messages,
-            initial_messages: std::sync::Mutex::new(None),
             status,
             stop: CancellationToken::new(),
         };
@@ -853,7 +1018,9 @@ mod tests {
         for _ in 0..=CAPACITY {
             connection
                 .messages
-                .send(Publish::new("test", QoS::AtMostOnce, vec![1]))
+                .lock()
+                .unwrap()
+                .deliver(Publish::new("test", QoS::AtMostOnce, vec![1]))
                 .unwrap();
         }
         assert!(matches!(

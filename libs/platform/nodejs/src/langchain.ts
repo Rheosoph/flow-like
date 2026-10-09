@@ -6,7 +6,24 @@ import {
 } from "@langchain/core/language_models/chat_models";
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ChatResult } from "@langchain/core/outputs";
-import { stripTrailingSlashes } from "./client.js";
+import { normalizeBaseUrl } from "./client.js";
+import type { FlowLikeClient } from "./index.js";
+
+/** Creates a model with LangChain's full Runnable type. */
+export async function asLangChainChat(
+	client: FlowLikeClient,
+	bitId: string,
+	options?: Parameters<FlowLikeClient["asLangChainChat"]>[1],
+): Promise<FlowLikeChatModel> {
+	return (await client.asLangChainChat(bitId, options)) as FlowLikeChatModel;
+}
+
+export async function asLangChainEmbeddings(
+	client: FlowLikeClient,
+	bitId: string,
+): Promise<FlowLikeEmbeddings> {
+	return (await client.asLangChainEmbeddings(bitId)) as FlowLikeEmbeddings;
+}
 
 export interface FlowLikeChatModelParams extends BaseChatModelParams {
 	baseUrl: string;
@@ -55,7 +72,7 @@ export class FlowLikeChatModel extends BaseChatModel {
 
 	constructor(params: FlowLikeChatModelParams) {
 		super(params);
-		this.baseUrl = stripTrailingSlashes(params.baseUrl);
+		this.baseUrl = normalizeBaseUrl(params.baseUrl);
 		this.token = params.token;
 		this.bitId = params.bitId;
 		this.temperature = params.temperature;
@@ -114,7 +131,7 @@ export class FlowLikeEmbeddings extends Embeddings {
 
 	constructor(params: FlowLikeEmbeddingsParams) {
 		super(params);
-		this.baseUrl = stripTrailingSlashes(params.baseUrl);
+		this.baseUrl = normalizeBaseUrl(params.baseUrl);
 		this.token = params.token;
 		this.bitId = params.bitId;
 	}

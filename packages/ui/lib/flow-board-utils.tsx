@@ -1150,8 +1150,20 @@ export function parseBoard(
 			hash === -1
 				? undefined
 				: oldNodesMap.get(renderedNodeCacheKey(comment.id, hash));
+		// Media URLs are resolved after sync and are not part of the comment hash.
 		if (oldNode) {
-			nodes.push(oldNode);
+			nodes.push(
+				oldNode.data?.presignedUrl === comment.presigned_url
+					? oldNode
+					: {
+							...oldNode,
+							data: {
+								...oldNode.data,
+								comment: { ...comment, is_locked: comment.is_locked ?? false },
+								presignedUrl: comment.presigned_url,
+							},
+						},
+			);
 			continue;
 		}
 

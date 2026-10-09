@@ -28,6 +28,10 @@ export function modelAccess(bit: IBit): ModelAccess {
 		if (local || normalized === "mlx") return "local";
 		return hosted ? "hosted" : "unknown";
 	}
+	if (bit.type === "SystemOne") {
+		if (local) return "local";
+		return hosted ? "hosted" : "unknown";
+	}
 	// The image embedding proxy accepts text inputs only, so remote metadata cannot enable image calls.
 	if (bit.type === "ImageEmbedding") return local ? "local" : "unknown";
 	if (bit.type !== "Embedding") return "unknown";
