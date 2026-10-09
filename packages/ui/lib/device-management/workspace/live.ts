@@ -80,6 +80,8 @@ export const READ_COMMANDS: ReadonlySet<string> = new Set([
 	"metrics",
 	"project_metrics",
 	"logs",
+	"execution_runs",
+	"execution_logs",
 	"messages",
 	"telemetry_read",
 	"telemetry_roster_read",

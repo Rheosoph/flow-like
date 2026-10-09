@@ -10,15 +10,15 @@ export class FlowLikeError extends Error {
 }
 
 export class AuthError extends FlowLikeError {
-	constructor(message: string) {
-		super(message, 401);
+	constructor(message: string, statusCode = 401, body?: unknown) {
+		super(message, statusCode, body);
 		this.name = "AuthError";
 	}
 }
 
 export class NotFoundError extends FlowLikeError {
-	constructor(message: string) {
-		super(message, 404);
+	constructor(message: string, body?: unknown) {
+		super(message, 404, body);
 		this.name = "NotFoundError";
 	}
 }

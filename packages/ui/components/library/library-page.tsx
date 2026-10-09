@@ -21,12 +21,7 @@ import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
 import { useSearch } from "../../hooks/use-search-index";
 import { useAppCategoryLabel } from "../../lib/app-category";
-import {
-	listableModels,
-	searchAllBitsOfType,
-} from "../../lib/bit/model-listing";
 import { asArray, isRecord } from "../../lib/response-shape";
-import { IBitTypes } from "../../lib/schema/hub/bit-search-query";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
 import { nowSystemTime } from "../../lib/time/now";
 import { useBackend } from "../../state/backend-state";
@@ -87,9 +82,6 @@ export function LibraryPage({
 		backend.appState,
 		[],
 	);
-	const bits = useInvoke(searchAllBitsOfType, backend.bitState, [
-		[IBitTypes.Embedding, IBitTypes.ImageEmbedding],
-	]);
 	const router = useRouter();
 	const [searchQuery, setSearchQuery] = useState("");
 	const [visibilityMode, setVisibilityMode] = useState(false);
@@ -327,15 +319,6 @@ export function LibraryPage({
 				throw new Error("Profile is not ready yet");
 			}
 
-			let embeddingBits = bits.data;
-			if (!embeddingBits) {
-				const refreshedBits = await bits.refetch();
-				if (!refreshedBits.data) {
-					throw new Error("Embedding models could not be loaded");
-				}
-				embeddingBits = refreshedBits.data;
-			}
-
 			const meta = {
 				name: projectName,
 				description: `Coding project: ${projectName}`,
@@ -346,20 +329,7 @@ export function LibraryPage({
 				preview_media: [],
 			};
 
-			const profileBits = new Set(
-				asArray(currentProfile.data.hub_profile?.bits),
-			);
-			// A retired model stays resolvable for the boards that already use it,
-			// but a project created today must not start out depending on one.
-			const allBits = listableModels(embeddingBits).filter((bit) =>
-				profileBits.has(bit.id),
-			);
-
-			const app = await backend.appState.createApp(
-				meta,
-				allBits.map((bit) => bit.id),
-				isOnline,
-			);
+			const app = await backend.appState.createApp(meta, [], isOnline);
 
 			if (currentProfile.data) {
 				await backend.userState.updateProfileApp(
@@ -390,7 +360,6 @@ export function LibraryPage({
 			backend.appState,
 			backend.boardState,
 			backend.userState,
-			bits,
 			currentProfile,
 			queryClient,
 			router,

@@ -662,6 +662,10 @@ export const sidebar = [
 						label: "Python",
 						slug: "dev/sdks/python",
 					},
+					{
+						label: "Rust",
+						slug: "dev/sdks/rust",
+					},
 				],
 			},
 			{

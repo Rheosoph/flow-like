@@ -447,7 +447,7 @@ impl OpcUaClient {
             references: references
                 .into_iter()
                 .map(|r| OpcUaReference {
-                    node_id: r.node_id.to_string(),
+                    node_id: browse_node_id(&r.node_id),
                     browse_name: r.browse_name.to_string(),
                     display_name: r.display_name.text.to_string(),
                     node_class: format!("{:?}", r.node_class),
@@ -621,6 +621,16 @@ fn opc_error(error: impl std::fmt::Display) -> Error {
     Error::Invalid(format!("OPC UA request failed: {error}"))
 }
 #[cfg(feature = "opcua")]
+fn browse_node_id(node: &::opcua::types::ExpandedNodeId) -> String {
+    if node.server_index == 0 && node.namespace_uri.is_empty() {
+        // Local browse results must also work as read, write and subscribe inputs.
+        node.node_id.to_string()
+    } else {
+        // Preserve remote server and URI addressing instead of treating it as local.
+        node.to_string()
+    }
+}
+#[cfg(feature = "opcua")]
 fn parse_node(node: &str) -> Result<::opcua::types::NodeId> {
     use std::str::FromStr;
     require(
@@ -767,6 +777,22 @@ mod tests {
             OpcUaValue::Unsigned(u64::MAX)
         );
         assert!(convert_value(&::opcua::types::Variant::Double(f64::NAN)).is_err());
+    }
+    #[cfg(feature = "opcua")]
+    #[test]
+    fn browse_ids_round_trip_locally_and_preserve_remote_addressing() {
+        use ::opcua::types::{ExpandedNodeId, NodeId};
+        let node = NodeId::new(2, "temperature");
+        let local = ExpandedNodeId::from(node.clone());
+        assert_eq!(parse_node(&browse_node_id(&local)).unwrap(), node);
+
+        let remote = ExpandedNodeId::from((node.clone(), 3));
+        assert_eq!(browse_node_id(&remote), remote.to_string());
+        assert!(parse_node(&browse_node_id(&remote)).is_err());
+
+        let uri = ExpandedNodeId::from((node, "urn:fixture:values"));
+        assert_eq!(browse_node_id(&uri), uri.to_string());
+        assert!(parse_node(&browse_node_id(&uri)).is_err());
     }
     #[cfg(feature = "opcua")]
     #[tokio::test]

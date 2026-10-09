@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._http import HTTPClient
+from ._http import HTTPClient, segment, response_json
+
+
+def _sink_path(path: str) -> str:
+    return "/".join(segment(part) for part in path.strip("/").split("/"))
 
 
 class SinksMixin(HTTPClient):
@@ -31,11 +35,11 @@ class SinksMixin(HTTPClient):
         """
         resp = self._request(
             method.upper(),
-            f"/sink/trigger/http/{app_id}/{path}",
+            f"/sink/trigger/http/{segment(app_id)}/{_sink_path(path)}",
             json=body,
             **kwargs,
         )
-        return resp.json()
+        return response_json(resp)
 
     async def atrigger_http_sink(
         self,
@@ -59,11 +63,11 @@ class SinksMixin(HTTPClient):
         """
         resp = await self._arequest(
             method.upper(),
-            f"/sink/trigger/http/{app_id}/{path}",
+            f"/sink/trigger/http/{segment(app_id)}/{_sink_path(path)}",
             json=body,
             **kwargs,
         )
-        return resp.json()
+        return response_json(resp)
 
 
 __all__ = ["SinksMixin"]

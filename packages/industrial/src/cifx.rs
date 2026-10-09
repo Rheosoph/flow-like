@@ -112,6 +112,7 @@ mod execution {
         path::Path,
     };
     use tokio::sync::{mpsc, oneshot};
+    use tokio_util::sync::CancellationToken;
 
     type Handle = *mut c_void;
     #[cfg(any(target_os = "linux", target_os = "windows", test))]
@@ -225,14 +226,18 @@ mod execution {
         restore_bus: Option<u32>,
     }
     impl NativeChannel {
-        fn open(config: &CifxConfig) -> Result<(Self, CifxInfo)> {
+        fn open(config: &CifxConfig, stop: &CancellationToken) -> Result<(Self, CifxInfo)> {
             config.validate()?;
+            require(!stop.is_cancelled(), "cifX connection cancelled")?;
             #[cfg(not(any(target_os = "linux", target_os = "windows", test)))]
             return Err(Error::Invalid(
                 "The installed cifX driver adapter requires Linux or Windows".into(),
             ));
             #[cfg(any(target_os = "linux", target_os = "windows", test))]
             {
+                // A native call already in progress must finish, but cancellation prevents
+                // starting another initialization phase or activating the controller afterward.
+                let check_startup = || require(!stop.is_cancelled(), "cifX connection cancelled");
                 #[cfg(all(not(test), target_os = "linux"))]
                 require(
                     matches!(config.driver_mode, CifxDriverMode::LinuxV3 { .. }),
@@ -250,6 +255,7 @@ mod execution {
                 let library = unsafe { Library::new(&path) }.map_err(|e| {
                     Error::Invalid(format!("Cannot load the installed cifX library: {e}"))
                 })?;
+                check_startup()?;
                 let api = unsafe { Api::load(&library) }?;
                 let mut native = Self {
                     _library: library,
@@ -310,12 +316,14 @@ mod execution {
                         poll_schedpolicy: 0,
                         logfd: ptr::null_mut(),
                     };
+                    check_startup()?;
                     check(unsafe { initialize(&options) }, "cifXDriverInit")?;
                     native.deinit = Some(deinitialize);
                     Some(version)
                 } else {
                     None
                 };
+                check_startup()?;
                 check(
                     unsafe { (native.api.driver_open)(&mut native.driver) },
                     "xDriverOpen",
@@ -325,6 +333,7 @@ mod execution {
                     "cifX returned a null driver handle",
                 )?;
                 let mut driver_info = [0u8; 36];
+                check_startup()?;
                 check(
                     unsafe {
                         (native.api.driver_info)(
@@ -349,6 +358,7 @@ mod execution {
                 let mut board = CString::new(config.board.as_str())
                     .map_err(|_| Error::Invalid("Invalid cifX board name".into()))?
                     .into_bytes_with_nul();
+                check_startup()?;
                 check(
                     unsafe {
                         (native.api.channel_open)(
@@ -366,6 +376,7 @@ mod execution {
                 )?;
                 // CHANNEL_INFORMATION is packed in cifXUser.h. Decode by offsets, never unaligned references.
                 let mut channel_info = [0u8; 164];
+                check_startup()?;
                 check(
                     unsafe {
                         (native.api.channel_info)(
@@ -394,13 +405,17 @@ mod execution {
                     input_areas: number(&channel_info, 136),
                     output_areas: number(&channel_info, 140),
                 };
+                check_startup()?;
                 let original = native.state()?;
+                check_startup()?;
                 native.restore_host = Some(u32::from(original.host_ready));
                 native.host_state(1)?;
                 if config.start_bus {
+                    check_startup()?;
                     native.restore_bus = Some(u32::from(original.bus_on));
                     native.bus_state(1)?;
                 }
+                check_startup()?;
                 Ok((native, info))
             }
         }
@@ -569,10 +584,12 @@ mod execution {
             let timeout = Duration::from_millis(u64::from(config.timeout_ms) * 4 + 5000);
             let (commands, mut receiver) = mpsc::channel(32);
             let (ready, result) = oneshot::channel();
+            let startup_stop = CancellationToken::new();
+            let _cancel_startup = startup_stop.clone().drop_guard();
             std::thread::Builder::new()
                 .name("flow-cifx".into())
                 .spawn(move || {
-                    let (mut native, info) = match NativeChannel::open(&config) {
+                    let (mut native, info) = match NativeChannel::open(&config, &startup_stop) {
                         Ok(result) => result,
                         Err(error) => {
                             let _ = ready.send(Err(error));
@@ -683,13 +700,16 @@ mod execution {
         }
         impl Fixture {
             fn build() -> Self {
+                static NEXT_FIXTURE: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(0);
                 let directory = std::env::temp_dir().join(format!(
-                    "flow-cifx-abi-{}-{}",
+                    "flow-cifx-abi-{}-{}-{}",
                     std::process::id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
-                        .as_nanos()
+                        .as_nanos(),
+                    NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
                 ));
                 std::fs::create_dir(&directory).unwrap();
                 let source = directory.join("driver.c");
@@ -728,6 +748,20 @@ mod execution {
                     self.library
                         .get::<unsafe extern "C" fn(i32) -> i32>(b"mock_count\0")
                         .unwrap()(field)
+                }
+            }
+            fn block(&self, stage: i32) {
+                unsafe {
+                    self.library
+                        .get::<unsafe extern "C" fn(i32)>(b"mock_block\0")
+                        .unwrap()(stage);
+                }
+            }
+            fn release(&self) {
+                unsafe {
+                    self.library
+                        .get::<unsafe extern "C" fn()>(b"mock_release\0")
+                        .unwrap()();
                 }
             }
             fn config(&self) -> CifxConfig {
@@ -855,19 +889,66 @@ mod execution {
             assert_eq!(fixture.count(10), 0);
         }
 
+        #[tokio::test]
+        async fn cancelled_initialization_never_starts_later_activation_phases() {
+            for stage in [1, 2] {
+                let fixture = Fixture::build();
+                fixture.block(stage);
+                let connecting = tokio::spawn(CifxClient::connect(fixture.config()));
+                let entered = tokio::time::timeout(Duration::from_secs(5), async {
+                    while fixture.count(13) != stage {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await;
+                connecting.abort();
+                let _ = connecting.await;
+                fixture.release();
+                entered.expect("Native initialization did not reach the blocked phase");
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while fixture.count(5) != 1 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await
+                .expect("Cancelled initialization did not release the driver");
+                assert_eq!(
+                    fixture.count(11),
+                    i32::from(stage == 2),
+                    "Host activation after cancellation"
+                );
+                assert_eq!(fixture.count(12), 0, "Bus activation after cancellation");
+                assert_eq!(fixture.count(8), 0, "Original host state restored");
+                assert_eq!(fixture.count(9), 0, "Original bus state restored");
+                assert_eq!(fixture.count(3), 1, "Channel closed");
+                assert_eq!(fixture.count(4), 1, "Driver closed");
+                assert_eq!(fixture.count(10), 0, "Native cleanup ordering");
+            }
+        }
+
         const MOCK_DRIVER: &str = r#"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
+#include <sched.h>
 typedef struct {
   int init_options; const char* base_dir; unsigned long poll_interval;
   int poll_priority; unsigned long trace_level; int user_card_cnt; void* user_cards;
   int iCardNumber; int fEnableCardLocking; int poll_StackSize; int poll_schedpolicy; FILE* logfd;
 } CIFX_LINUX_INIT;
-static int counts[24], driver_open, channel_open;
-static uint32_t host, bus;
+static _Atomic int counts[24], blocked_stage, released;
+static int driver_open, channel_open;
+static _Atomic uint32_t host, bus;
 static unsigned char image[64];
+void mock_block(int stage) { blocked_stage=stage; released=0; counts[13]=0; }
+void mock_release(void) { released=1; }
+static void wait_at(int stage) {
+  if (blocked_stage != stage) return;
+  counts[13]=stage;
+  while (!released) sched_yield();
+}
 static int32_t verify(int condition) { if (!condition) { counts[10]++; return -1; } return 0; }
 static void put32(unsigned char* data, size_t offset, uint32_t value) { memcpy(data+offset,&value,4); }
 int mock_count(int field) {
@@ -916,17 +997,20 @@ int32_t xChannelClose(void* handle) {
 }
 int32_t xChannelInfo(void* handle,uint32_t size,void* info) {
   if (verify(handle==(void*)0x22 && channel_open && size==164 && info)) return -1;
+  wait_at(1);
   unsigned char* bytes=info; uint16_t version[4]={1,2,3,4};
   memset(info,0,size); memcpy(bytes+40,version,8); bytes[48]=13;
   memcpy(bytes+49,"PN Controller",13); put32(bytes,136,1); put32(bytes,140,1); return 0;
 }
 int32_t xChannelHostState(void* handle,uint32_t command,uint32_t* value,uint32_t timeout) {
   if (verify(handle==(void*)0x22 && channel_open && command<=2 && value && timeout==1234)) return -1;
+  if (command==1) { counts[11]++; wait_at(2); }
   if (command<2) host=command;
   *value=host; return 0;
 }
 int32_t xChannelBusState(void* handle,uint32_t command,uint32_t* value,uint32_t timeout) {
   if (verify(handle==(void*)0x22 && channel_open && command<=2 && value && timeout==1234)) return -1;
+  if (command==1) counts[12]++;
   if (command<2) bus=command;
   *value=bus; return 0;
 }

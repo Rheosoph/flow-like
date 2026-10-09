@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from ._http import HTTPClient
+from ._http import HTTPClient, segment
 from ._types import AsyncInvokeResult, SSEEvent
 
 
@@ -51,7 +51,7 @@ class WorkflowsMixin(HTTPClient):
             body["profile_id"] = profile_id
         return self._stream_sse(
             "POST",
-            f"/apps/{app_id}/board/{board_id}/invoke",
+            f"/apps/{segment(app_id)}/board/{segment(board_id)}/invoke",
             json=body,
             **kwargs,
         )
@@ -96,7 +96,7 @@ class WorkflowsMixin(HTTPClient):
             body["profile_id"] = profile_id
         return self._astream_sse(
             "POST",
-            f"/apps/{app_id}/board/{board_id}/invoke",
+            f"/apps/{segment(app_id)}/board/{segment(board_id)}/invoke",
             json=body,
             **kwargs,
         )
@@ -139,7 +139,7 @@ class WorkflowsMixin(HTTPClient):
             body["profile_id"] = profile_id
         resp = self._request(
             "POST",
-            f"/apps/{app_id}/board/{board_id}/invoke/async",
+            f"/apps/{segment(app_id)}/board/{segment(board_id)}/invoke/async",
             json=body,
             **kwargs,
         )
@@ -188,7 +188,7 @@ class WorkflowsMixin(HTTPClient):
             body["profile_id"] = profile_id
         resp = await self._arequest(
             "POST",
-            f"/apps/{app_id}/board/{board_id}/invoke/async",
+            f"/apps/{segment(app_id)}/board/{segment(board_id)}/invoke/async",
             json=body,
             **kwargs,
         )

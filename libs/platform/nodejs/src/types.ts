@@ -26,6 +26,17 @@ export interface InvokeBoardRequest {
 	profile_id?: string;
 }
 
+export interface WorkflowTriggerOptions
+	extends TriggerOptions,
+		InvokeBoardQuery {
+	version?: Version;
+	token?: string;
+	oauth_tokens?: JsonObject;
+	runtime_variables?: JsonObject;
+	profile_id?: string;
+	stream_state?: boolean;
+}
+
 export interface InvokeBoardQuery {
 	local?: boolean;
 	isolated?: boolean;
@@ -44,43 +55,47 @@ export interface SSEEvent {
 	id?: string;
 }
 
-export interface ListFilesOptions {
+export type JsonObject = Record<string, unknown>;
+export type VersionType = "Major" | "Minor" | "Patch";
+export type Version = [number, number, number];
+export interface FileScope {
+	scope?: "project" | "user";
+	signal?: AbortSignal;
+}
+export interface ListFilesOptions extends FileScope {
 	prefix?: string;
-	cursor?: string;
-	limit?: number;
+	refresh?: boolean;
 }
-
 export interface FileEntry {
-	key: string;
+	location: string;
 	size: number;
-	lastModified: string;
-	contentType?: string;
+	last_modified: string;
+	e_tag: string | null;
+	version: string | null;
+	is_dir: boolean;
 }
-
-export interface ListFilesResult {
-	files: FileEntry[];
-	cursor?: string;
-	hasMore: boolean;
-}
-
-export interface UploadFileOptions {
+export type ListFilesResult = FileEntry[];
+export interface UploadFileOptions extends FileScope {
 	key?: string;
 	contentType?: string;
 }
-
-export interface DownloadFileOptions {
-	signal?: AbortSignal;
+export interface DownloadFileOptions extends FileScope {}
+export interface SignedFile {
+	prefix: string;
+	url?: string;
+	error?: string;
+	method?: "PUT" | "POST";
+	fields?: Record<string, string>;
 }
-
-export interface PresignOptions {
-	key: string;
-	method?: "GET" | "PUT";
-	expiresIn?: number;
+export interface PresignOptions extends FileScope {
+	prefix?: string;
+	access_mode?: "read" | "write";
 }
-
 export interface PresignResult {
-	url: string;
-	expiresAt: string;
+	shared_credentials: SharedCredentials;
+	path: string;
+	access_mode: string;
+	expiration?: string | null;
 }
 
 export interface BucketConfig {
@@ -135,7 +150,14 @@ export interface GcpSharedCredentials {
 export type SharedCredentials =
 	| { Aws: AwsSharedCredentials }
 	| { Azure: AzureSharedCredentials }
-	| { Gcp: GcpSharedCredentials };
+	| { Gcp: GcpSharedCredentials }
+	| {
+			Mixed: {
+				meta: SharedCredentials;
+				content: SharedCredentials;
+				logs: SharedCredentials;
+			};
+	  };
 
 export interface PresignDbAccessResponse {
 	shared_credentials: SharedCredentials;
@@ -150,52 +172,140 @@ export interface LanceConnectionInfo {
 	storageOptions: Record<string, string>;
 }
 
+/** Arrow's serialized schema. Field data types may be scalar names or nested type objects. */
 export interface TableSchema {
-	name: string;
 	fields: TableField[];
+	metadata?: Record<string, string>;
 }
-
 export interface TableField {
 	name: string;
-	type: string;
+	data_type: unknown;
 	nullable: boolean;
+	metadata?: Record<string, string>;
+	[key: string]: unknown;
+}
+export interface EventTriggerOptions extends TriggerOptions {
+	version?: string;
+	token?: string;
+	oauth_tokens?: JsonObject;
+	runtime_variables?: JsonObject;
+	profile_id?: string;
+	correlation?: Record<string, string>;
+	page_trigger?: JsonObject;
+	local?: boolean;
+	isolated?: boolean;
+	variant?: string;
 }
 
-export interface QueryOptions {
+export interface DatabaseOptions {
+	scope?: "project" | "user";
+	branch?: string;
+	version?: number;
+	tag?: string;
+	read_only?: boolean;
+}
+export interface QueryOptions extends DatabaseOptions {
 	filter?: string;
 	select?: string[];
 	limit?: number;
 	offset?: number;
+	sql?: string;
+	sql_params?: unknown;
+	vector_query?: { vector: number[] };
+	fts_term?: string;
+	rerank?: boolean;
 }
-
-export interface CountResult {
-	count: number;
-}
-
+export type CountResult = number;
 export interface RunStatus {
-	runId: string;
+	run_id: string;
+	board_id: string;
+	event_id: string | null;
 	status: string;
-	result?: unknown;
-	error?: string;
-	createdAt?: string;
-	updatedAt?: string;
+	mode: string;
+	progress: number;
+	current_step: string | null;
+	error: string | null;
+	input_payload_len: number;
+	output_payload_len: number;
+	started_at: string | null;
+	completed_at: string | null;
+	created_at: string;
 }
-
 export interface PollOptions {
 	afterSequence?: number;
 	timeout?: number;
 	signal?: AbortSignal;
 }
-
 export interface PollResult {
+	run_id: string;
+	status: string;
+	progress: number;
+	current_step: string | null;
+	error: string | null;
 	events: PollEvent[];
+	started_at: string | null;
+	completed_at: string | null;
+	/** Highest returned sequence, or the supplied cursor when this page is empty. */
 	lastSequence: number;
 }
-
 export interface PollEvent {
 	sequence: number;
-	type: string;
-	data: unknown;
+	event_type: string;
+	payload: unknown;
+	created_at: string;
+}
+export interface RunListOptions {
+	node_id?: string;
+	from?: number;
+	to?: number;
+	status?: number;
+	limit?: number;
+	offset?: number;
+	include_nodes?: boolean;
+}
+export interface LogQuery {
+	levels?: number[];
+	exclude_levels?: number[];
+	nodes?: string[];
+	exclude_nodes?: string[];
+	text?: string[];
+	exclude_text?: string[];
+	fingerprints?: string[];
+	exclude_fingerprints?: string[];
+	from?: number;
+	to?: number;
+	fold?: { fingerprint: string; first_start: number }[];
+}
+export interface RunLogOptions {
+	query?: LogQuery;
+	limit?: number;
+	offset?: number;
+}
+export type DatabaseAction =
+	| {
+			action:
+				| "create_branch"
+				| "delete_branch"
+				| "create_tag"
+				| "update_tag"
+				| "delete_tag"
+				| "clone";
+			name: string;
+	  }
+	| { action: "restore" }
+	| { action: "snapshot"; name?: string }
+	| { action: "cleanup"; older_than_days: number };
+export interface CreateAppOptions {
+	meta: JsonObject;
+	bits?: string[];
+	language?: string;
+}
+export interface EventUpsertOptions {
+	version_type?: VersionType;
+	pat?: string;
+	oauth_tokens?: JsonObject;
+	profile_id?: string;
+	register_source?: boolean;
 }
 
 export interface HttpSinkOptions {
@@ -237,12 +347,6 @@ export interface ResponsesOptions {
 
 export interface ResponsesResult {
 	[key: string]: unknown;
-}
-
-export interface ChatUsage {
-	promptTokens: number;
-	completionTokens: number;
-	totalTokens: number;
 }
 
 export interface EmbeddingTextInput {
@@ -368,6 +472,8 @@ export interface UpsertBoardRequest {
 
 export interface UpsertBoardResponse {
 	id: string;
+	updated_at: { secs_since_epoch: number; nanos_since_epoch: number };
+	board?: Board | null;
 }
 
 export interface Board {
@@ -385,7 +491,7 @@ export interface PrerunBoardResponse {
 
 export interface App {
 	id: string;
-	name: string;
+	name?: string;
 	[key: string]: unknown;
 }
 

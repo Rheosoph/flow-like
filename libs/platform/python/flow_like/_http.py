@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -17,6 +18,24 @@ from ._types import SSEEvent
 
 DEFAULT_TIMEOUT = 30.0
 SSE_TIMEOUT = 300.0
+
+
+def segment(value: str) -> str:
+    """Encode one identifier without allowing it to change the request path."""
+    if not value or value in (".", ".."):
+        raise ValueError("A path identifier cannot be empty, '.' or '..'")
+    return quote(str(value), safe="")
+
+
+def response_json(response: httpx.Response) -> Any:
+    """Return JSON, including null, or None for an empty successful response."""
+    return response.json() if response.content else None
+
+
+def _platform_path(path: str) -> None:
+    url = httpx.URL(path)
+    if url.is_absolute_url or url.host or path.startswith("//"):
+        raise ValueError("Platform requests must use a relative API path")
 
 
 class HTTPClient:
@@ -37,7 +56,10 @@ class HTTPClient:
             timeout: Default request timeout in seconds.
         """
         self._base_url = resolve_base_url(base_url)
-        self._api_base = f"{self._base_url}/api/v1"
+        self._api_base = (
+            self._base_url if self._base_url.endswith("/api/v1")
+            else f"{self._base_url}/api/v1"
+        )
         self._auth_headers = resolve_auth(pat=pat, api_key=api_key)
         self._token = self._auth_headers.get("Authorization") or self._auth_headers.get("X-API-Key", "")
         self._timeout = timeout
@@ -130,6 +152,8 @@ class HTTPClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
+        content: Any = None,
+        authenticated: bool = True,
     ) -> httpx.Response:
         """Send a synchronous HTTP request.
 
@@ -149,17 +173,26 @@ class HTTPClient:
         Raises:
             APIError: On any non-success status code.
         """
+        if authenticated:
+            _platform_path(path)
         client = self._get_client()
-        response = client.request(
+        request = client.build_request(
             method,
             path,
             json=json,
             data=data,
             files=files,
+            content=content,
             params=params,
-            headers=headers,
-            timeout=timeout or self._timeout,
+            headers={"x-flow-like-board-format": "2", **(headers or {})} if authenticated else headers,
+            timeout=timeout if timeout is not None else self._timeout,
         )
+        if not authenticated:
+            request.headers.pop("Authorization", None)
+            request.headers.pop("X-API-Key", None)
+            request.headers.pop("Cookie", None)
+            request.headers.update(headers or {})
+        response = client.send(request)
         self._raise_for_status(response)
         return response
 
@@ -174,6 +207,8 @@ class HTTPClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
+        content: Any = None,
+        authenticated: bool = True,
     ) -> httpx.Response:
         """Send an asynchronous HTTP request.
 
@@ -193,19 +228,34 @@ class HTTPClient:
         Raises:
             APIError: On any non-success status code.
         """
+        if authenticated:
+            _platform_path(path)
         client = self._get_async_client()
-        response = await client.request(
+        request = client.build_request(
             method,
             path,
             json=json,
             data=data,
             files=files,
+            content=content,
             params=params,
-            headers=headers,
-            timeout=timeout or self._timeout,
+            headers={"x-flow-like-board-format": "2", **(headers or {})} if authenticated else headers,
+            timeout=timeout if timeout is not None else self._timeout,
         )
+        if not authenticated:
+            request.headers.pop("Authorization", None)
+            request.headers.pop("X-API-Key", None)
+            request.headers.pop("Cookie", None)
+            request.headers.update(headers or {})
+        response = await client.send(request)
         self._raise_for_status(response)
         return response
+
+    def _json(self, method: str, path: str, **kwargs: Any) -> Any:
+        return response_json(self._request(method, path, **kwargs))
+
+    async def _ajson(self, method: str, path: str, **kwargs: Any) -> Any:
+        return response_json(await self._arequest(method, path, **kwargs))
 
     def _stream_sse(
         self,
@@ -231,16 +281,22 @@ class HTTPClient:
         Raises:
             APIError: On any non-success status code.
         """
+        _platform_path(path)
         client = self._get_client()
         with client.stream(
             method,
             path,
             json=json,
             params=params,
-            headers={**(headers or {}), "Accept": "text/event-stream"},
+            headers={"x-flow-like-board-format": "2", **(headers or {}), "Accept": "text/event-stream"},
             timeout=SSE_TIMEOUT,
         ) as response:
+            if not response.is_success:
+                response.read()
             self._raise_for_status(response)
+            if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "text/event-stream":
+                response.read()
+                raise APIError(response.status_code, "Expected a text/event-stream response", response.text)
             yield from _parse_sse_stream(response.iter_lines())
 
     async def _astream_sse(
@@ -267,65 +323,77 @@ class HTTPClient:
         Raises:
             APIError: On any non-success status code.
         """
+        _platform_path(path)
         client = self._get_async_client()
         async with client.stream(
             method,
             path,
             json=json,
             params=params,
-            headers={**(headers or {}), "Accept": "text/event-stream"},
+            headers={"x-flow-like-board-format": "2", **(headers or {}), "Accept": "text/event-stream"},
             timeout=SSE_TIMEOUT,
         ) as response:
+            if not response.is_success:
+                await response.aread()
             self._raise_for_status(response)
+            if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "text/event-stream":
+                await response.aread()
+                raise APIError(response.status_code, "Expected a text/event-stream response", response.text)
             async for event in _parse_sse_stream_async(response.aiter_lines()):
                 yield event
 
 
+class _SSEDecoder:
+    def __init__(self) -> None:
+        self.event = SSEEvent()
+        self.data: list[str] = []
+
+    def feed(self, line: str) -> SSEEvent | None:
+        if not line:
+            return self.finish()
+        if line.startswith(":"):
+            return None
+        field, _, value = line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+        if field == "data":
+            self.data.append(value)
+        elif field == "event":
+            self.event.event = value
+        elif field == "id" and "\x00" not in value:
+            self.event.id = value
+        elif field == "retry" and value.isascii() and value.isdigit():
+            self.event.retry = int(value)
+        return None
+
+    def finish(self) -> SSEEvent | None:
+        event = self.event
+        has_data = bool(self.data)
+        event.data = "\n".join(self.data)
+        self.event = SSEEvent(id=event.id)
+        self.data = []
+        return event if has_data else None
+
+
 def _parse_sse_stream(lines: Iterator[str]) -> Iterator[SSEEvent]:
-    """Parse a synchronous line iterator into SSE events."""
-    event = SSEEvent()
+    decoder = _SSEDecoder()
     for line in lines:
-        if line == "":
-            if event.data:
-                yield event
-            event = SSEEvent()
-            continue
-        if line.startswith("event:"):
-            event.event = line[len("event:"):].strip()
-        elif line.startswith("data:"):
-            event.data += line[len("data:"):].strip()
-        elif line.startswith("id:"):
-            event.id = line[len("id:"):].strip()
-        elif line.startswith("retry:"):
-            try:
-                event.retry = int(line[len("retry:"):].strip())
-            except ValueError:
-                pass
-    if event.data:
+        event = decoder.feed(line)
+        if event is not None:
+            yield event
+    event = decoder.finish()
+    if event is not None:
         yield event
 
 
 async def _parse_sse_stream_async(lines: AsyncIterator[str]) -> AsyncIterator[SSEEvent]:
-    """Parse an asynchronous line iterator into SSE events."""
-    event = SSEEvent()
+    decoder = _SSEDecoder()
     async for line in lines:
-        if line == "":
-            if event.data:
-                yield event
-            event = SSEEvent()
-            continue
-        if line.startswith("event:"):
-            event.event = line[len("event:"):].strip()
-        elif line.startswith("data:"):
-            event.data += line[len("data:"):].strip()
-        elif line.startswith("id:"):
-            event.id = line[len("id:"):].strip()
-        elif line.startswith("retry:"):
-            try:
-                event.retry = int(line[len("retry:"):].strip())
-            except ValueError:
-                pass
-    if event.data:
+        event = decoder.feed(line)
+        if event is not None:
+            yield event
+    event = decoder.finish()
+    if event is not None:
         yield event
 
 

@@ -37,6 +37,8 @@ Iroh Send waits for the receiving peer to read and acknowledge the complete fram
 
 IO-Link electrical master control requires a hardware-specific stack and is not implemented by the REST adapter. OPC UA PubSub and DDS remain outside the current catalog. These distinctions matter when selecting hardware: a protocol name alone does not identify the controller role or supported transport.
 
+ADS reads and writes are limited to 1 MiB. Incoming packets, including aggregated notifications, are limited to 16 MiB; an oversized packet closes the connection.
+
 ## Connect once, then use the session
 
 The industrial Connect nodes return a session reference. Pass that reference to read, write, publish, consume, or disconnect requests within the same workflow run. Saving its JSON does not preserve a connection across runs or executor restarts. Cancellation removes the cached session and signals active consumers; Disconnect performs the protocol's close operation.
@@ -98,3 +100,30 @@ The protobuf codec uses protobuf JSON field names. Represent 64-bit integer valu
 Serial ports, raw Ethernet, peer discovery, and native driver loading run on local or desktop executors. Kafka requires local execution because brokers can redirect clients to advertised addresses. In server execution, NATS, Redis, AMQP, and MQTT over TLS require IP-literal endpoints that pass the server's egress policy; TLS certificates must cover that address. MQTT over TLS currently accepts IPv4 literals and rejects IPv6 literals because of its SDK's hostname handling. Plain MQTT pins the approved resolved address. Local execution also supports TLS hostnames. HTTP-based IO-Link uses the guarded HTTP client.
 
 The Rust adapters live in `flow-like-industrial`; node registration and execution integration live in `flow-like-catalog-industrial`. Neither requires the ML training engines. Product execution bundles enable them by default; metadata-only builds avoid linking the optional protocol SDKs. Existing inspection sensor node IDs are preserved, and `flow-like-ml-sensors` forwards its Rust API to the industrial crate. GenICam remains a separate `sensor-genicam` opt-in.
+
+## Run protocol interoperability tests
+
+With Docker running and the repository's Rust build dependencies installed, run:
+
+```sh
+bash tools/test-industrial-e2e.sh --all
+```
+
+The runner builds dedicated fixtures, checks their readiness, runs the ignored integration tests, and removes its containers and volumes on exit. It binds test services to local ports; stop an earlier test run before starting another. Use `--adapters` for network adapter tests, `--mqtt` for MQTT node tests, or `--devices` for the Linux camera, Iroh peer, EtherCAT slave, and Modbus RTU harnesses. The EtherCAT container uses `NET_ADMIN` and `NET_RAW` capabilities to create its own virtual Ethernet pair; it does not use a host network interface.
+
+| Coverage | Reference peer or contract |
+|---|---|
+| Modbus TCP / RTU, OPC UA | PyModbus TCP and serial servers, plus asyncua; RTU uses a private virtual serial pair |
+| MQTT, NATS, Redis Streams, AMQP, Kafka | Mosquitto, NATS, Redis, RabbitMQ, and Redpanda |
+| Explicit Logix CIP, ADS | libplctag's `ab_server` and Beckhoff's ADS router/server samples |
+| Sparkplug B | Eclipse Tahu Python codec and helpers over Mosquitto, in both directions |
+| Zenoh | Official router, memory storage, and a separate Python peer |
+| HART-IP v1 | FieldComm Group's server with deterministic values supplied through its application interface |
+| GigE Vision / GenICam | Aravis fake camera, including actual image packets |
+| Iroh | Separate raw SDK peer implementing Flow-Like's framing and acknowledgements |
+| EtherCAT | KickCAT slave emulator over a private virtual Ethernet pair |
+| IO-Link JSON v2 | Official OpenAPI schema and examples, enforced by Prism |
+
+These tests exercise adapters over sockets, including errors and connection cleanup. They do not run every workflow graph or certify protocol conformance. Zenoh and Iroh peers share their upstream transport SDKs. IO-Link validation is stateless API contract coverage, so it cannot establish master behavior or physical device readback. The Sparkplug tests cover the implemented codec and state transitions, rather than the full Sparkplug certification suite.
+
+Physical serial links, EtherCAT, PROFIBUS, and cifX-backed buses still need suitable adapters, controllers, and devices. Docker results do not establish electrical behavior, bus timing, controller firmware compatibility, or vendor-specific device support. Serial HART and independent PROFIBUS slave behavior remain outside this Docker suite. Validate those properties on the target hardware before relying on an installation.

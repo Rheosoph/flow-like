@@ -1,0 +1,2 @@
+pymodbus==3.11.3
+pyserial==3.5

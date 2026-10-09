@@ -36,6 +36,19 @@ function hash(bytes: Uint8Array) {
 	).join("");
 }
 
+function metadataIdentity(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(metadataIdentity).join(",")}]`;
+	if (value && typeof value === "object")
+		return `{${Object.entries(value)
+			.filter(([, entry]) => entry !== undefined)
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(
+				([key, entry]) => `${JSON.stringify(key)}:${metadataIdentity(entry)}`,
+			)
+			.join(",")}}`;
+	return JSON.stringify(value) ?? "null";
+}
+
 /** Ephemeral download URLs and provider secrets must never enter an artifact. */
 export function publicDependencyMetadata<T>(input: T): T {
 	function privateUrl(value: unknown): boolean {
@@ -303,6 +316,7 @@ export async function prepareOnlineDependencies(
 			JSON.stringify({ version: 1, project_id: app.id, source: "online" }),
 		),
 	);
+	const resolvedBits = new Map<string, string>();
 	for (const reference of [...new Set(app.bits)].sort()) {
 		signal?.throwIfAborted();
 		const split = reference.lastIndexOf(":");
@@ -316,6 +330,14 @@ export async function prepareOnlineDependencies(
 			bit.id === id && (split < 0 || bit.hub === reference.slice(0, split)),
 			"A model identity differs from this project.",
 		);
+		const identity = metadataIdentity(publicDependencyMetadata(bit));
+		const previous = resolvedBits.get(id);
+		check(
+			previous === undefined || previous === identity,
+			`Selected references disagree about model "${id}".`,
+		);
+		if (previous !== undefined) continue;
+		resolvedBits.set(id, identity);
 		const resolved = bit.dependencies.length
 			? await backend.apiState.get<IBit[] | { bits: IBit[] }>(
 					profile,

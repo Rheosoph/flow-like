@@ -326,10 +326,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 	const actions = stringList(widget.config, "actions");
 	const toolbar = textConfig(widget.config, "layout") === "toolbar";
 	const create = async (name: string, online: boolean) => {
-		const [profile, bits] = await Promise.all([
-			backend.userState.getSettingsProfile(),
-			backend.bitState.getProfileBits(),
-		]);
+		const profile = await backend.userState.getSettingsProfile();
 		const app = await backend.appState.createApp(
 			{
 				name,
@@ -339,7 +336,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 				updated_at: nowSystemTime(),
 				preview_media: [],
 			},
-			bits.filter((bit) => bit.type === "Embedding").map((bit) => bit.id),
+			[],
 			online,
 		);
 		await backend.userState.updateProfileApp(

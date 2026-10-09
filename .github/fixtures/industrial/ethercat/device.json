@@ -1,0 +1,4 @@
+{
+  "esi": "../opt/kickcat/examples/slave/lan9252/freedom-k64f/nuttx/freedom-k64f.xml",
+  "device_type": "Board"
+}

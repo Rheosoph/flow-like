@@ -3,11 +3,16 @@ import { doPinsMatch, parseBoard } from "./flow-board-utils";
 import { GEOMETRY_KINDS, geometryMarker } from "./geometry";
 import type {
 	IBoard,
+	IComment,
 	ILayer,
 	ILayerCache,
 	IVariable,
 } from "./schema/flow/board";
-import { ILayerCacheScope, ILayerType } from "./schema/flow/board";
+import {
+	ICommentType,
+	ILayerCacheScope,
+	ILayerType,
+} from "./schema/flow/board";
 import type { INode } from "./schema/flow/node";
 import { IVariableType } from "./schema/flow/node";
 import type { IPin } from "./schema/flow/pin";
@@ -19,6 +24,8 @@ interface IRenderedNode {
 	id: string;
 	data: {
 		node: INode;
+		comment?: IComment;
+		presignedUrl?: string;
 		boardDataVersion?: string;
 		boardContentVersion?: string;
 		functionCache?: ILayerCache;
@@ -159,6 +166,77 @@ const callNode = (id: string, layerId: string): INode =>
 const edit = (previous: IBoard, change: Partial<IBoard>): IBoard => ({
 	...previous,
 	...change,
+});
+
+describe("media comment URLs", () => {
+	for (const commentType of [ICommentType.Image, ICommentType.Video]) {
+		const mediaBoard = (presignedUrl?: string) =>
+			board({
+				comments: {
+					media: {
+						id: "media",
+						comment_type: commentType,
+						content: "pasted-media.png",
+						coordinates: [100, 200, 0],
+						timestamp: { secs_since_epoch: 1, nanos_since_epoch: 0 },
+						hash: 42,
+						presigned_url: presignedUrl,
+					},
+				},
+			});
+
+		test.each([
+			["arrives after sync", undefined, "https://storage.example/media?sig=1"],
+			[
+				"is refreshed",
+				"https://storage.example/media?sig=1",
+				"https://storage.example/media?sig=2",
+			],
+			["is removed", "https://storage.example/media?sig=1", undefined],
+		])(
+			`${commentType} updates when its URL %s without moving`,
+			(_, before, after) => {
+				const first = parse(mediaBoard(before));
+				const second = parse(mediaBoard(after), first.nodes, first.edges);
+				const rendered = node(second, "media");
+
+				expect(rendered).not.toBe(node(first, "media"));
+				expect(rendered.data.presignedUrl).toBe(after);
+				expect(rendered.data.comment?.presigned_url).toBe(after);
+				expect(rendered.data.comment?.coordinates).toEqual([100, 200, 0]);
+			},
+		);
+
+		test(`${commentType} keeps its rendered node when its URL is unchanged`, () => {
+			const source = mediaBoard("https://storage.example/media?sig=1");
+			const first = parse(source);
+			const second = parse(source, first.nodes, first.edges);
+			expect(node(second, "media")).toBe(node(first, "media"));
+		});
+
+		test(`${commentType} keeps an active drag and resize when its URL arrives`, () => {
+			const first = parse(mediaBoard());
+			const interactionState = {
+				position: { x: 150, y: 250 },
+				dragging: true,
+				selected: true,
+				width: 500,
+				height: 350,
+				measured: { width: 500, height: 350 },
+			};
+			const previous = { ...node(first, "media"), ...interactionState };
+			const second = parse(
+				mediaBoard("https://storage.example/media?sig=1"),
+				[previous],
+				first.edges,
+			);
+
+			expect(node(second, "media")).toMatchObject(interactionState);
+			expect(node(second, "media").data.presignedUrl).toBe(
+				"https://storage.example/media?sig=1",
+			);
+		});
+	}
 });
 
 describe("boardContentVersion on rendered nodes", () => {

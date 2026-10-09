@@ -26,6 +26,7 @@ import {
 	eurosToMicros,
 	formatEuroMicros,
 } from "../../../../lib/device-resources";
+import type { IBit } from "../../../../lib/schema/bit/bit";
 import { enumExplain } from "../copy/enum-labels";
 import { gateCopy } from "../copy/gate-copy";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
@@ -172,6 +173,8 @@ export interface CloudApprovalFieldsProps {
 	serviceMaxInstances?: number;
 	/** The app whose models are offered when `appId` is null (a local-only app). */
 	modelsAppId?: string;
+	/** Exact dependencies of a prepared deployment, including literal Load Bit references. */
+	modelBits?: readonly IBit[];
 	/** False when the viewer isn't the app's owner (project files need the owner). */
 	isAppOwner?: boolean;
 }
@@ -297,6 +300,7 @@ export function CloudApprovalFields({
 	disabledReason,
 	serviceMaxInstances = 1,
 	modelsAppId,
+	modelBits,
 	isAppOwner,
 }: Readonly<CloudApprovalFieldsProps>) {
 	const { t } = useTranslation("devices");
@@ -307,7 +311,7 @@ export function CloudApprovalFields({
 	const app =
 		(sourceApp ? names(sourceApp) : undefined) ??
 		t("cloud.fields.thisApp", "this app");
-	const offered = useAppModels(sourceApp);
+	const offered = useAppModels(sourceApp, modelBits);
 	const nameOf = useModelNames(value.models);
 	const now = Math.floor(time.nowS);
 	const disabled = !!disabledReason;
@@ -412,7 +416,7 @@ export function CloudApprovalFields({
 				<p className="text-xs text-muted-foreground">
 					{t(
 						"cloud.fields.modelsHint",
-						"Optional cloud access for the app's declared model dependencies. Ticking a model requires a spending limit. Local execution stays preferred where the device supports it.",
+						"Optional cloud access for these models. Ticking a model requires a spending limit. Local execution stays preferred where the device supports it.",
 					)}
 				</p>
 				{options.map((model) => (

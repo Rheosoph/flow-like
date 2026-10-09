@@ -86,4 +86,9 @@ pub enum MqttQoS {
 #[cfg(feature = "execute")]
 mod runtime;
 #[cfg(feature = "execute")]
+mod topic;
+#[cfg(feature = "execute")]
 pub use runtime::*;
+
+#[cfg(all(test, feature = "execute"))]
+mod mosquitto_tests;

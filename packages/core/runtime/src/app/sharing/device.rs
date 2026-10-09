@@ -19,7 +19,7 @@ use flow_like_types::{
 use futures::TryStreamExt;
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Seek, SeekFrom},
     sync::Arc,
 };
@@ -119,6 +119,7 @@ pub struct DeviceProjectSnapshot {
     files: BTreeMap<String, u64>,
     bytes: u64,
     latest_events: Vec<DeviceLatestEvent>,
+    bit_references: BTreeSet<String>,
 }
 
 impl DeviceProjectSnapshot {
@@ -130,6 +131,7 @@ impl DeviceProjectSnapshot {
             files: BTreeMap::new(),
             bytes: 0,
             latest_events: Vec::new(),
+            bit_references: BTreeSet::new(),
         })
     }
 
@@ -163,6 +165,11 @@ impl DeviceProjectSnapshot {
     /// project, whose events are resolved by its hub.
     pub fn latest_events(&self) -> &[DeviceLatestEvent] {
         &self.latest_events
+    }
+
+    /// Constant Load Bit references in this copy's active event versions and current templates.
+    pub fn bit_references(&self) -> &BTreeSet<String> {
+        &self.bit_references
     }
 
     pub fn read_chunk(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>> {
@@ -416,6 +423,26 @@ fn snapshot_board_ready(board: &Board, has_tables: bool) -> Result<()> {
     Ok(())
 }
 
+/// Bit dependencies named directly by Load Bit, including nodes inside layers.
+/// Wired inputs are resolved at runtime and still need explicit project dependencies.
+pub fn board_bit_references(board: &Board) -> BTreeSet<String> {
+    board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+        .filter(|node| node.name == "bit_from_string")
+        .filter_map(|node| node.get_pin_by_name("bit_id"))
+        .filter(|pin| {
+            pin.pin_type == crate::flow::pin::PinType::Input
+                && !pin.is_sensitive()
+                && pin.depends_on.is_empty()
+                && pin.connected_to.is_empty()
+        })
+        .filter_map(|pin| serde_json::from_slice::<String>(pin.default_value.as_deref()?).ok())
+        .filter(|reference| !reference.trim().is_empty())
+        .collect()
+}
+
 impl DeviceProjectSnapshot {
     fn read_compressed(&self, path: &str) -> Result<Vec<u8>> {
         let size = *self
@@ -454,6 +481,43 @@ impl DeviceProjectSnapshot {
             let board = Board::from_proto(flow_like_types::proto::Board::decode(plain.as_slice())?);
             snapshot_board_ready(&board, has_tables)?;
         }
+        Ok(())
+    }
+
+    fn collect_bit_references(
+        &mut self,
+        base: &Path,
+        events: &[String],
+        templates: &[String],
+    ) -> Result<()> {
+        let mut paths = BTreeSet::new();
+        for id in events {
+            let path = format!("{base}/events/{id}.event");
+            if !self.files.contains_key(&path) {
+                continue;
+            }
+            let event = self.staged_event(&path)?;
+            if event.active
+                && event.canary.is_none()
+                && event.variants.is_empty()
+                && let Some(version) = event.board_version
+                && ![version.0, version.1, version.2].contains(&u32::MAX)
+            {
+                paths.insert(Board::proto_path(base, &event.board_id, Some(version)).to_string());
+            }
+        }
+        paths.extend(templates.iter().map(|id| format!("{base}/{id}.template")));
+        let mut references = BTreeSet::new();
+        for path in paths {
+            // Event readiness reports a missing flow; dependency discovery adds no target.
+            if !self.files.contains_key(&path) {
+                continue;
+            }
+            let plain = self.read_compressed(&path)?;
+            let board = Board::from_proto(flow_like_types::proto::Board::decode(plain.as_slice())?);
+            references.extend(board_bit_references(&board));
+        }
+        self.bit_references = references;
         Ok(())
     }
 
@@ -693,6 +757,7 @@ impl App {
             .is_some();
         let has_tables = stores[1].list(Some(&db_path)).try_next().await?.is_some();
         snapshot.validate_boards(has_tables || has_user_tables)?;
+        snapshot.collect_bit_references(&base, &self.events, &self.templates)?;
         let mut table_snapshots = BTreeMap::new();
         let mut checked_databases = Vec::new();
         let mut user_table_snapshots = BTreeMap::new();
@@ -795,6 +860,113 @@ impl App {
 mod tests {
     use super::*;
     use flow_like_storage::object_store::{ObjectStoreExt, memory::InMemory};
+
+    fn load_bit(reference: serde_json::Value) -> Node {
+        let mut node = Node::new("bit_from_string", "Load Bit", "", "Bit");
+        node.add_input_pin(
+            "bit_id",
+            "Bit ID",
+            "",
+            crate::flow::variable::VariableType::String,
+        )
+        .set_default_value(Some(reference));
+        node
+    }
+
+    #[test]
+    fn deployment_bit_references_include_layers_but_not_runtime_values() {
+        use crate::flow::board::{Layer, LayerType};
+        let mut board = Board::from_proto(flow_like_types::proto::Board::default());
+        let mut layer = Layer::new("layer".into(), "Layer".into(), LayerType::Module);
+        for node in [
+            load_bit(serde_json::json!("hub:model")),
+            load_bit(serde_json::json!("nested")),
+        ] {
+            layer.nodes.insert(node.id.clone(), node);
+        }
+        board.layers.insert(layer.id.clone(), layer);
+        let mut wired = load_bit(serde_json::json!("stale-default"));
+        wired
+            .get_pin_mut_by_name("bit_id")
+            .unwrap()
+            .depends_on
+            .insert("upstream".into());
+        let mut connected = load_bit(serde_json::json!("connected-default"));
+        connected
+            .get_pin_mut_by_name("bit_id")
+            .unwrap()
+            .connected_to
+            .insert("upstream".into());
+        let mut sensitive = load_bit(serde_json::json!("private"));
+        sensitive
+            .get_pin_mut_by_name("bit_id")
+            .unwrap()
+            .set_options(
+                crate::flow::pin::PinOptions::new()
+                    .set_sensitive(true)
+                    .build(),
+            );
+        let mut unrelated = load_bit(serde_json::json!("unrelated"));
+        unrelated.name = "other_node".into();
+        for node in [
+            load_bit(serde_json::json!("hub:model")),
+            load_bit(serde_json::json!(" ")),
+            load_bit(serde_json::json!(42)),
+            wired,
+            connected,
+            sensitive,
+            unrelated,
+        ] {
+            board.nodes.insert(node.id.clone(), node);
+        }
+        assert_eq!(
+            board_bit_references(&board),
+            BTreeSet::from(["hub:model".into(), "nested".into()])
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_snapshot_collects_references_from_staged_boards_and_templates() -> Result<()>
+    {
+        let mut snapshot = DeviceProjectSnapshot::empty()?;
+        for (path, reference) in [
+            ("versions/flow/1_0_0.board", "board-model"),
+            ("flow.template", "template-model"),
+            ("flow.board", "draft-model"),
+            ("versions/flow/0_0_1.board", "old-model"),
+        ] {
+            let mut board = Board::from_proto(flow_like_types::proto::Board::default());
+            let node = load_bit(serde_json::json!(reference));
+            board.nodes.insert(node.id.clone(), node);
+            snapshot
+                .add_bytes(
+                    &format!("apps/project/{path}"),
+                    &lz4_flex::compress_prepend_size(&board.to_proto().encode_to_vec()),
+                )
+                .await?;
+        }
+        let mut event = test_event("event");
+        event.active = true;
+        event.board_id = "flow".into();
+        event.board_version = Some((1, 0, 0));
+        snapshot
+            .add_bytes(
+                "apps/project/events/event.event",
+                &lz4_flex::compress_prepend_size(&event.to_proto().encode_to_vec()),
+            )
+            .await?;
+        snapshot.validate_boards(false)?;
+        snapshot.collect_bit_references(
+            &Path::from("apps/project"),
+            &["event".into()],
+            &["flow".into()],
+        )?;
+        assert_eq!(
+            snapshot.bit_references(),
+            &BTreeSet::from(["board-model".into(), "template-model".into()])
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn exported_lance_table_is_a_complete_independent_version() -> Result<()> {

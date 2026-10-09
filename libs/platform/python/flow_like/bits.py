@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._http import HTTPClient
+from ._http import HTTPClient, segment
 from ._types import ModelInfo
 
 
@@ -110,12 +110,12 @@ class BitsMixin(HTTPClient):
         Returns:
             Raw bit dict.
         """
-        resp = self._request("GET", f"/bit/{bit_id}")
+        resp = self._request("GET", f"/bit/{segment(bit_id)}")
         return resp.json()
 
     async def aget_bit(self, bit_id: str) -> dict[str, Any]:
         """Async version of get_bit."""
-        resp = await self._arequest("GET", f"/bit/{bit_id}")
+        resp = await self._arequest("GET", f"/bit/{segment(bit_id)}")
         return resp.json()
 
     def list_llms(self, search: str | None = None, limit: int = 50) -> list[ModelInfo]:

@@ -12,6 +12,8 @@ pub mod crypto;
 pub mod diagnostics;
 pub mod enrollment;
 pub mod event_kind;
+#[cfg(feature = "runtime")]
+pub(crate) mod execution_logs;
 pub mod fleet;
 pub mod host;
 #[cfg(unix)]

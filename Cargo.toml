@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 # Keep vendored upstream test suites out of workspace test runs.
-exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader"]
+exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader", "packages/vendor/telegenic", "packages/vendor/ads"]
 # Bare Cargo commands target the shared editing loop. Product crates remain one
 # short alias away, while CI always passes --workspace explicitly.
 default-members = [
@@ -139,9 +139,11 @@ members = [
     "packages/core/editor",
     "packages/browser",
     "packages/device-client",
+    "libs/platform/rust",
 ]
 
 [workspace.dependencies]
+flow-like-platform = { path = "libs/platform/rust" }
 flow-like-browser = { path = "packages/browser", default-features = false }
 flow-like-device-client = { path = "packages/device-client" }
 flow-like-editor = { path = "packages/core/editor", default-features = false }
@@ -341,6 +343,10 @@ wasmtime-wasi = "=48.0.3"
 wasmtime-wasi-http = "=48.0.3"
 
 [patch.crates-io]
+# Accept Beckhoff's notification stream lengths with complete payload validation.
+ads = { path = "packages/vendor/ads" }
+# Read bootstrap registers individually for cameras that reject batched reads.
+telegenic = { path = "packages/vendor/telegenic" }
 # profirust 0.6.0 panics in Clear/Stop and omits fail-safe Clear telegrams.
 profirust = { path = "packages/vendor/profirust" }
 # Stabilize htmlize's generated entity matcher across clean release builds.

@@ -372,10 +372,48 @@ mod runtime {
             ))),
         }
     }
+    fn protocol_timeouts(response: Duration) -> ethercrab::Timeouts {
+        let defaults = ethercrab::Timeouts::default();
+        // These operations await PDUs internally. A shorter outer deadline drops a
+        // permitted response and leaves its late frame referring to a released PDU.
+        ethercrab::Timeouts {
+            pdu: response,
+            eeprom: defaults.eeprom.max(response),
+            mailbox_echo: defaults.mailbox_echo.max(response),
+            mailbox_response: defaults.mailbox_response.max(response),
+            state_transition: defaults.state_transition.max(response),
+            wait_loop_delay: Duration::from_millis(1),
+        }
+    }
     #[cfg(test)]
     mod cancellation_tests {
         use super::*;
         use std::cell::RefCell;
+
+        #[test]
+        fn operation_deadlines_allow_configured_responses_and_preserve_longer_defaults() {
+            let short = protocol_timeouts(Duration::from_millis(1));
+            assert_eq!(short.pdu, Duration::from_millis(1));
+            assert_eq!(short.eeprom, Duration::from_millis(10));
+            assert_eq!(short.mailbox_echo, Duration::from_millis(100));
+            assert_eq!(short.mailbox_response, Duration::from_secs(1));
+            assert_eq!(short.state_transition, Duration::from_secs(5));
+
+            let delayed = protocol_timeouts(Duration::from_millis(250));
+            assert_eq!(delayed.eeprom, Duration::from_millis(250));
+            assert_eq!(delayed.mailbox_echo, Duration::from_millis(250));
+            assert_eq!(delayed.mailbox_response, Duration::from_secs(1));
+
+            let long = protocol_timeouts(Duration::from_secs(10));
+            for deadline in [
+                long.eeprom,
+                long.mailbox_echo,
+                long.mailbox_response,
+                long.state_transition,
+            ] {
+                assert_eq!(deadline, Duration::from_secs(10));
+            }
+        }
 
         #[tokio::test]
         async fn cancellation_drops_the_active_phase_skips_later_writes_and_runs_shutdown() {
@@ -467,7 +505,7 @@ mod runtime {
         stop: CancellationToken,
     ) -> Result<()> {
         use ethercrab::{
-            MainDevice, MainDeviceConfig, PduStorage, Timeouts,
+            MainDevice, MainDeviceConfig, PduStorage,
             std::{ethercat_now, tx_rx_task},
         };
         let storage = PduStorage::<16, { PduStorage::element_size(LRW_DATA_BYTES) }>::new();
@@ -476,12 +514,7 @@ mod runtime {
             .map_err(|_| failure("EtherCAT PDU storage is already in use"))?;
         let device = MainDevice::new(
             pdu,
-            Timeouts {
-                pdu: Duration::from_millis(config.response_timeout_ms),
-                state_transition: Duration::from_secs(5),
-                wait_loop_delay: Duration::from_millis(1),
-                ..Default::default()
-            },
+            protocol_timeouts(Duration::from_millis(config.response_timeout_ms)),
             MainDeviceConfig::default(),
         );
         let io = tx_rx_task(&config.interface, tx, rx)?;

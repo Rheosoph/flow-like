@@ -38,10 +38,13 @@ or **SystemOne Noul** to request a category, score, or yes/no probability. **Inv
 several named questions together. The gateway checks that the selected model
 is a decision model and returns its typed answers without streaming.
 
-A deployed service resolves only model Bits packaged for its project. Include
-the SystemOne Bit in the project's manifest dependencies before preparing the
-deployment. Adding it to a profile or selecting it on a node does not package
-it. See the current [deployment prerequisite](/topics/genai/models/#decision-models).
+A deployed service resolves model Bits pinned during deployment preparation.
+A literal ID on a **Load Bit** node in an exported Flow or template includes
+that Bit automatically. For IDs computed at runtime or candidates selected by
+**Find Decision Model**, declare the Bits in the project's manifest dependencies.
+Adding a model to a profile alone does not package it. Services using the same
+model assets share the device's cached files. See the
+[deployment prerequisites](/topics/genai/models/#decision-models).
 
 ## Open the Models tab
 

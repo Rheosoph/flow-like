@@ -1,9 +1,16 @@
+import { createProjectMethods } from "./projects.js";
+import { createDeviceMethods } from "./devices.js";
 import { createAppMethods } from "./apps.js";
 import { resolveAuth } from "./auth.js";
 import { createBitMethods } from "./bits.js";
 import { createBoardMethods } from "./boards.js";
 import { createChatMethods } from "./chat.js";
-import { type HttpClient, createHttpClient } from "./client.js";
+import {
+	type HttpClient,
+	type RequestOptions,
+	createHttpClient,
+	normalizeBaseUrl,
+} from "./client.js";
 import { createDatabaseMethods } from "./database.js";
 import { createEmbeddingMethods } from "./embeddings.js";
 import { FlowLikeError } from "./errors.js";
@@ -13,57 +20,14 @@ import { createFileMethods } from "./files.js";
 import { createSinkMethods } from "./sinks.js";
 import type { FlowLikeClientOptions } from "./types.js";
 import { createWorkflowMethods } from "./workflows.js";
+import type { FlowLikeChat, FlowLikeEmbeddingModel } from "./integrations.js";
 
-export type { Connection as LanceConnection } from "@lancedb/lancedb";
+export type * from "./integrations.js";
 
 export class FlowLikeClient {
 	private readonly http: HttpClient;
 	private readonly baseUrl: string;
 	private readonly token: string;
-
-	readonly triggerWorkflow;
-	readonly triggerWorkflowAsync;
-	readonly triggerEvent;
-	readonly triggerEventAsync;
-	readonly listFiles;
-	readonly uploadFile;
-	readonly downloadFile;
-	readonly deleteFile;
-	readonly presignData;
-	readonly getDbCredentials;
-	readonly getDbCredentialsRaw;
-	readonly createLanceConnection;
-	readonly listTables;
-	readonly getTableSchema;
-	readonly queryTable;
-	readonly addToTable;
-	readonly deleteFromTable;
-	readonly countItems;
-	readonly getRunStatus;
-	readonly pollExecution;
-	readonly triggerHttpSink;
-	readonly chatCompletions;
-	readonly chatCompletionsStream;
-	readonly responses;
-	readonly responsesStream;
-	readonly getUsage;
-	readonly embed;
-	readonly listApps;
-	readonly getApp;
-	readonly createApp;
-	readonly health;
-	readonly searchBits;
-	readonly getBit;
-	readonly listLlms;
-	readonly listEmbeddingModels;
-	readonly listBoards;
-	readonly getBoard;
-	readonly upsertBoard;
-	readonly deleteBoard;
-	readonly prerunBoard;
-	readonly getBoardVersions;
-	readonly versionBoard;
-	readonly executeCommands;
 
 	constructor(options?: FlowLikeClientOptions) {
 		const baseUrl = options?.baseUrl ?? process.env.FLOW_LIKE_BASE_URL;
@@ -75,74 +39,40 @@ export class FlowLikeClient {
 		}
 
 		const auth = resolveAuth(options?.pat, options?.apiKey);
-		this.baseUrl = baseUrl;
+		this.baseUrl = normalizeBaseUrl(baseUrl);
 		this.token = auth.token;
 		this.http = createHttpClient(baseUrl, auth);
 
-		const workflows = createWorkflowMethods(this.http);
-		this.triggerWorkflow = workflows.triggerWorkflow;
-		this.triggerWorkflowAsync = workflows.triggerWorkflowAsync;
+		for (const methods of [
+			createWorkflowMethods(this.http),
+			createEventMethods(this.http),
+			createFileMethods(this.http),
+			createDatabaseMethods(this.http),
+			createExecutionMethods(this.http),
+			createSinkMethods(this.http),
+			createChatMethods(this.http),
+			createEmbeddingMethods(this.http),
+			createAppMethods(this.http),
+			createBitMethods(this.http),
+			createBoardMethods(this.http),
+			createProjectMethods(this.http),
+			createDeviceMethods(this.http),
+		]) {
+			for (const [name, method] of Object.entries(methods))
+				Object.defineProperty(this, name, {
+					value: method.bind(methods),
+					enumerable: true,
+				});
+		}
+	}
 
-		const events = createEventMethods(this.http);
-		this.triggerEvent = events.triggerEvent;
-		this.triggerEventAsync = events.triggerEventAsync;
-
-		const files = createFileMethods(this.http);
-		this.listFiles = files.listFiles;
-		this.uploadFile = files.uploadFile;
-		this.downloadFile = files.downloadFile;
-		this.deleteFile = files.deleteFile;
-		this.presignData = files.presignData;
-
-		const database = createDatabaseMethods(this.http);
-		this.getDbCredentials = database.getDbCredentials;
-		this.getDbCredentialsRaw = database.getDbCredentialsRaw;
-		this.createLanceConnection = database.createLanceConnection.bind(database);
-		this.listTables = database.listTables;
-		this.getTableSchema = database.getTableSchema;
-		this.queryTable = database.queryTable;
-		this.addToTable = database.addToTable;
-		this.deleteFromTable = database.deleteFromTable;
-		this.countItems = database.countItems;
-
-		const execution = createExecutionMethods(this.http);
-		this.getRunStatus = execution.getRunStatus;
-		this.pollExecution = execution.pollExecution;
-
-		const sinks = createSinkMethods(this.http);
-		this.triggerHttpSink = sinks.triggerHttpSink;
-
-		const chat = createChatMethods(this.http);
-		this.chatCompletions = chat.chatCompletions;
-		this.chatCompletionsStream = chat.chatCompletionsStream;
-		this.responses = chat.responses;
-		this.responsesStream = chat.responsesStream;
-		this.getUsage = chat.getUsage;
-
-		const embeddings = createEmbeddingMethods(this.http);
-		this.embed = embeddings.embed;
-
-		const apps = createAppMethods(this.http);
-		this.listApps = apps.listApps;
-		this.getApp = apps.getApp;
-		this.createApp = apps.createApp;
-		this.health = apps.health;
-
-		const bits = createBitMethods(this.http);
-		this.searchBits = bits.searchBits;
-		this.getBit = bits.getBit;
-		this.listLlms = bits.listLlms;
-		this.listEmbeddingModels = bits.listEmbeddingModels;
-
-		const boards = createBoardMethods(this.http);
-		this.listBoards = boards.listBoards;
-		this.getBoard = boards.getBoard;
-		this.upsertBoard = boards.upsertBoard;
-		this.deleteBoard = boards.deleteBoard;
-		this.prerunBoard = boards.prerunBoard;
-		this.getBoardVersions = boards.getBoardVersions;
-		this.versionBoard = boards.versionBoard;
-		this.executeCommands = boards.executeCommands;
+	/** Access a newer public API route using backend JSON field names. Paths begin below /api/v1. */
+	request<T = unknown>(
+		method: string,
+		path: string,
+		options?: RequestOptions,
+	): Promise<T> {
+		return this.http.request<T>(method, path, options);
 	}
 
 	async asLangChainChat(
@@ -153,7 +83,7 @@ export class FlowLikeClient {
 			topP?: number;
 			stop?: string[];
 		},
-	) {
+	): Promise<FlowLikeChat> {
 		const { FlowLikeChatModel } = await import("./langchain.js");
 		return new FlowLikeChatModel({
 			baseUrl: this.baseUrl,
@@ -163,7 +93,7 @@ export class FlowLikeClient {
 		});
 	}
 
-	async asLangChainEmbeddings(bitId: string) {
+	async asLangChainEmbeddings(bitId: string): Promise<FlowLikeEmbeddingModel> {
 		const { FlowLikeEmbeddings } = await import("./langchain.js");
 		return new FlowLikeEmbeddings({
 			baseUrl: this.baseUrl,
@@ -173,10 +103,21 @@ export class FlowLikeClient {
 	}
 }
 
-export type { SSEChunk } from "./client.js";
+export interface FlowLikeClient
+	extends ReturnType<typeof createWorkflowMethods>,
+		ReturnType<typeof createEventMethods>,
+		ReturnType<typeof createFileMethods>,
+		ReturnType<typeof createDatabaseMethods>,
+		ReturnType<typeof createExecutionMethods>,
+		ReturnType<typeof createSinkMethods>,
+		ReturnType<typeof createChatMethods>,
+		ReturnType<typeof createEmbeddingMethods>,
+		ReturnType<typeof createAppMethods>,
+		ReturnType<typeof createBitMethods>,
+		ReturnType<typeof createBoardMethods>,
+		ReturnType<typeof createProjectMethods>,
+		ReturnType<typeof createDeviceMethods> {}
+
+export type { SSEChunk, RequestOptions, QueryParams } from "./client.js";
 export * from "./types.js";
 export * from "./errors.js";
-export type {
-	FlowLikeChatModelParams,
-	FlowLikeEmbeddingsParams,
-} from "./langchain.js";

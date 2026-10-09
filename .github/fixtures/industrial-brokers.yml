@@ -1,6 +1,97 @@
 services:
+  cip:
+    build: ./industrial/cip
+    ports: ["127.0.0.1:44819:44818"]
+  ads:
+    build: ./industrial/ads
+    ports: ["127.0.0.1:48899:48898"]
+  hart:
+    build: ./industrial/hart
+    ports: ["127.0.0.1:15094:5094"]
+  iolink-contract:
+    build: ./industrial/iolink
+    # Prism's pinned release currently publishes an amd64 image only.
+    platform: linux/amd64
+    ports: ["127.0.0.1:18082:4010"]
+  genicam:
+    profiles: [e2e]
+    build:
+      context: ../..
+      dockerfile: .github/fixtures/industrial/genicam/Dockerfile
+  iroh:
+    profiles: [e2e]
+    network_mode: none
+    build:
+      context: ../..
+      dockerfile: .github/fixtures/industrial/iroh/Dockerfile
+  ethercat:
+    profiles: [e2e]
+    network_mode: none
+    build:
+      context: ../..
+      dockerfile: .github/fixtures/industrial/ethercat/Dockerfile
+    cap_add: [NET_ADMIN, NET_RAW]
+  modbus-rtu:
+    profiles: [e2e]
+    network_mode: none
+    build:
+      context: ../..
+      dockerfile: .github/fixtures/industrial/modbus-rtu/Dockerfile
+  zenoh:
+    image: eclipse/zenoh:1.6.2@sha256:e82138674f7f653ecdd3cc4b0095eea98fcfcd50a88f915f0cad8bf5a73fe19c
+    command: ["-c", "/etc/zenoh.json5"]
+    volumes:
+      - ./industrial/zenoh/router.json5:/etc/zenoh.json5:ro
+    ports: ["127.0.0.1:17447:7447"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/@/local/router"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  zenoh-peer:
+    build: ./industrial/zenoh
+    environment:
+      ZENOH_ENDPOINT: tcp/zenoh:7447
+    depends_on:
+      zenoh:
+        condition: service_healthy
+    ports: ["127.0.0.1:18081:8080"]
+  sparkplug-peer:
+    build: ./industrial/sparkplug
+    environment:
+      SPARKPLUG_MQTT_HOST: mosquitto
+      SPARKPLUG_MQTT_PORT: 1883
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    ports: ["127.0.0.1:18089:8080"]
+  modbus:
+    build:
+      context: ./industrial
+      dockerfile: modbus.Dockerfile
+    ports: ["127.0.0.1:15020:5020"]
+  opcua:
+    build:
+      context: ./industrial/opcua
+    ports: ["127.0.0.1:14840:4840"]
+    healthcheck:
+      test: ["CMD", "python", "/fixture/server.py", "--healthcheck"]
+      interval: 5s
+      timeout: 10s
+      start_period: 15s
+      retries: 30
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
+    ports: ["127.0.0.1:18883:1883"]
+    volumes:
+      - ./industrial/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-h", "127.0.0.1", "-t", "health", "-m", "ready", "-q", "1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   nats:
-    image: nats:2-alpine
+    image: nats:2-alpine@sha256:ac8f88a6494bffc2c2a5289a0ca61cb28a9145c11ba5677cf24265d07f46d8d4
     command: ["-js", "-m", "8222"]
     ports: ["127.0.0.1:18422:4222"]
     healthcheck:
@@ -8,25 +99,26 @@ services:
       interval: 2s
       retries: 60
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     ports: ["127.0.0.1:16379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       retries: 60
   rabbitmq:
-    image: rabbitmq:4-alpine
+    image: rabbitmq:4-alpine@sha256:2cb43283d8bbd3caa6c0f0dc00e96c8de772df33df7fd8af6aee4d605aeb8ada
     environment:
       RABBITMQ_DEFAULT_USER: flowtest
       RABBITMQ_DEFAULT_PASS: flowtest-tests-only
       RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 1:1"
     ports: ["127.0.0.1:15672:5672"]
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # Root diagnostics can create an unreadable cookie before the broker boots.
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 2s
       retries: 60
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.4@sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89
     command:
       - redpanda
       - start

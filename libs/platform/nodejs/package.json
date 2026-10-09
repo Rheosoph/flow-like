@@ -1,6 +1,6 @@
 {
 	"name": "@flow-like/sdk",
-	"version": "0.1.1",
+	"version": "0.2.0",
 	"description": "Node.js/TypeScript SDK for the Flow-Like API",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -8,18 +8,24 @@
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
 		},
 		"./langchain": {
-			"import": "./dist/langchain.js",
-			"types": "./dist/langchain.d.ts"
+			"types": "./dist/langchain.d.ts",
+			"import": "./dist/langchain.js"
+		},
+		"./lancedb": {
+			"types": "./dist/lancedb.d.ts",
+			"import": "./dist/lancedb.js"
 		}
 	},
-	"files": ["dist", "README.md"],
+	"files": ["dist", "src", "README.md"],
 	"scripts": {
 		"build": "tsc",
-		"prepublishOnly": "tsc"
+		"prepack": "tsc",
+		"test": "bun test tests",
+		"check:package": "node scripts/check-package.mjs"
 	},
 	"keywords": ["flow-like", "sdk", "api", "workflow"],
 	"license": "MIT",
@@ -41,6 +47,7 @@
 	"devDependencies": {
 		"@lancedb/lancedb": "^0.26.2",
 		"@langchain/core": "^1.1.24",
-		"typescript": "^5.5.0"
+		"typescript": "^5.5.0",
+		"@types/node": "^22.0.0"
 	}
 }

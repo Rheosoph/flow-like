@@ -4,6 +4,7 @@ import type {
 	ApprovalDraft,
 	SpendingDraft,
 } from "../../../../lib/device-management/model/deploy-plan";
+import type { IBit } from "../../../../lib/schema/bit/bit";
 import type { IBackendState } from "../../../../state/backend-state";
 import {
 	byRole,
@@ -117,6 +118,43 @@ const online: FieldProps = {
 };
 
 describe("CloudApprovalFields", () => {
+	test("deployment approval uses pinned workflow models without reading ambient project models", async () => {
+		const modelBits = [
+			{
+				id: "workflow-hosted",
+				type: "Embedding",
+				meta: { en: { name: "Workflow model" } },
+				parameters: {
+					provider: { provider_name: "Hosted", model_id: "upstream" },
+				},
+			},
+			{
+				id: "workflow-local",
+				type: "Embedding",
+				meta: { en: { name: "Device embedding" } },
+				parameters: { provider: { provider_name: "Local" } },
+			},
+			{
+				id: "workflow-decision",
+				type: "SystemOne",
+				meta: { en: { name: "Hosted decision" } },
+				parameters: { provider: { provider_name: "hosted:typesafe" } },
+			},
+		] as unknown as IBit[];
+		const view = await mount(
+			<Approval {...online} modelBits={modelBits} initial={draft()} />,
+		);
+		expect(byRole("checkbox", "Workflow model", view.container)).toBeTruthy();
+		expect(textOf(view.container)).toContain("Device embedding");
+		expect(byRole("checkbox", "Hosted decision", view.container)).toBeTruthy();
+		expect(queryByRole("checkbox", "gpt-4.1-mini", view.container)).toBeNull();
+		expect(read<ApprovalDraft>(view.container).models).toEqual([]);
+		await click(byRole("checkbox", "Workflow model", view.container));
+		expect(read<ApprovalDraft>(view.container).models).toEqual([
+			"workflow-hosted",
+		]);
+	});
+
 	test("cloud approval distinguishes local dependencies from optional hosted fallback without selecting models", async () => {
 		const bits = {
 			"local-text": {

@@ -168,9 +168,13 @@ pub fn capture_genicam(config: &GenicamCaptureConfig) -> Result<GenicamFrame> {
             camera.set_enum("PixelFormat", format).map_err(map_error)?;
         }
         if let Some(exposure) = config.exposure_time_us {
-            camera
-                .set_float("ExposureTime", exposure)
-                .map_err(map_error)?;
+            // SFNC 1.x cameras expose ExposureTimeAbs; newer models use ExposureTime.
+            let feature = if camera.has_feature("ExposureTime") {
+                "ExposureTime"
+            } else {
+                "ExposureTimeAbs"
+            };
+            camera.set_float(feature, exposure).map_err(map_error)?;
         }
         let payload = camera.get_integer("PayloadSize").map_err(map_error)?;
         require(
@@ -181,9 +185,12 @@ pub fn capture_genicam(config: &GenicamCaptureConfig) -> Result<GenicamFrame> {
         stream.payload_size = Some(payload as usize);
         stream.n_buffers = 2;
         stream.packet_size = PacketSize::Fixed(1500);
-        let frame = camera
-            .snap(stream, Duration::from_millis(config.frame_timeout_ms))
-            .map_err(map_error)?;
+        let captured = camera.snap(stream, Duration::from_millis(config.frame_timeout_ms));
+        // Explicitly stop before releasing control even when SingleFrame was
+        // advertised. Some devices retain acquisition state after the frame.
+        // An already idle camera may reject Stop; preserve the capture result.
+        let _ = camera.execute("AcquisitionStop");
+        let frame = captured.map_err(map_error)?;
         require(
             frame.status == FrameStatus::Complete,
             "Camera frame is incomplete",
@@ -299,9 +306,11 @@ mod tests {
                     for packet in device.frame_packets(7, &(0..128).collect::<Vec<u8>>()) {
                         socket.send_to(&packet, destination).unwrap();
                     }
-                    device.clear_acquisition();
                 }
             }
+            // AcqReg in the emulator's device XML. Deliberately leave SingleFrame
+            // armed after transmission to verify the adapter's explicit cleanup.
+            device.read_reg(0x2008)
         });
         let config = GenicamCaptureConfig {
             device_address: address.to_string(),
@@ -311,11 +320,15 @@ mod tests {
             retries: 1,
             max_frame_bytes: 1024,
             pixel_format: None,
-            exposure_time_us: None,
+            exposure_time_us: Some(10_000.0),
         };
         let result = capture_genicam(&config);
         stopped.store(true, Ordering::Release);
-        worker.join().unwrap();
+        assert_eq!(
+            worker.join().unwrap(),
+            0,
+            "capture must stop acquisition before releasing control"
+        );
         let frame = result.unwrap();
         assert_eq!((frame.width, frame.height, frame.frame_id), (16, 8, 7));
         assert_eq!(frame.bytes, (0..128).collect::<Vec<u8>>());

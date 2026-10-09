@@ -137,9 +137,10 @@ mod execution {
             ByteChannel, ChannelError, ChannelFuture, SerialChannel, SerialOptions, TcpChannel,
             TcpOptions,
         },
-        ip::{IpPacketChannel, IpSession, IpTimeouts, MessageId, SessionOptions},
+        ip::{IpSession, IpTimeouts, MessageId, SessionOptions},
     };
     use std::{
+        collections::VecDeque,
         net::SocketAddr,
         sync::{Arc, Mutex as StdMutex},
         time::Duration,
@@ -153,7 +154,69 @@ mod execution {
     enum Channel {
         Serial(SerialChannel),
         Tcp(TcpChannel),
-        Ip(IpPacketChannel<TcpStream>),
+        Ip(IpChannel),
+    }
+
+    struct IpChannel {
+        session: IpSession<TcpStream>,
+        pending: VecDeque<u8>,
+    }
+
+    impl IpChannel {
+        fn queue_pdu(&mut self, body: &[u8]) {
+            // HART-IP carries delimiter through checksum. The serial link decoder
+            // still needs synchronization bytes, which exist only inside this adapter.
+            self.pending.extend([0xff; 5]);
+            self.pending.extend(body);
+        }
+    }
+
+    impl ByteChannel for IpChannel {
+        fn send<'a>(&'a mut self, bytes: &'a [u8]) -> ChannelFuture<'a, ()> {
+            Box::pin(async move {
+                if !self.pending.is_empty() {
+                    return Err(ChannelError::Configuration(
+                        "previous HART-IP response bytes were not drained",
+                    ));
+                }
+                let delimiter = bytes.iter().position(|byte| *byte != 0xff).ok_or(
+                    ChannelError::Configuration("HART-IP request contains no token-passing PDU"),
+                )?;
+                let packet = self
+                    .session
+                    .request(MessageId::TokenPassingPdu.into(), &bytes[delimiter..])
+                    .await
+                    .map_err(|error| ChannelError::Protocol(error.to_string()))?;
+                while let Some(published) = self.session.take_published() {
+                    self.queue_pdu(&published.body);
+                }
+                self.queue_pdu(&packet.body);
+                Ok(())
+            })
+        }
+
+        fn receive<'a>(&'a mut self, buffer: &'a mut [u8]) -> ChannelFuture<'a, usize> {
+            Box::pin(async move {
+                if buffer.is_empty() {
+                    return Err(ChannelError::Configuration(
+                        "HART-IP receive buffer cannot be empty",
+                    ));
+                }
+                if self.pending.is_empty() {
+                    // The request queue wakes the runner while the session is idle.
+                    return std::future::pending().await;
+                }
+                let count = buffer.len().min(self.pending.len());
+                for destination in &mut buffer[..count] {
+                    *destination = self.pending.pop_front().unwrap();
+                }
+                Ok(count)
+            })
+        }
+
+        fn flush(&mut self) -> ChannelFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
     }
 
     impl ByteChannel for Channel {
@@ -168,14 +231,7 @@ mod execution {
             match self {
                 Self::Serial(channel) => channel.receive(buffer),
                 Self::Tcp(channel) => channel.receive(buffer),
-                Self::Ip(channel) => Box::pin(async move {
-                    match channel.receive(buffer).await {
-                        // The packet adapter reports Closed when its response buffer is empty.
-                        // Keep the runner idle until its queue wakes it for the next request.
-                        Err(ChannelError::Closed) => std::future::pending().await,
-                        result => result,
-                    }
-                }),
+                Self::Ip(channel) => channel.receive(buffer),
             }
         }
         fn flush(&mut self) -> ChannelFuture<'_, ()> {
@@ -231,6 +287,7 @@ mod execution {
         channel: Arc<Mutex<Option<Channel>>>,
         timeout: Duration,
         preambles: u8,
+        hart_ip: bool,
     }
 
     impl Connection {
@@ -295,10 +352,10 @@ mod execution {
                         })
                         .await
                         .map_err(client_error)?;
-                    Channel::Ip(IpPacketChannel::new(
+                    Channel::Ip(IpChannel {
                         session,
-                        MessageId::TokenPassingPdu.into(),
-                    ))
+                        pending: VecDeque::new(),
+                    })
                 }
             };
             let shared = Arc::new(Mutex::new(Some(channel)));
@@ -318,6 +375,7 @@ mod execution {
                 channel: shared,
                 timeout,
                 preambles: config.preambles,
+                hart_ip: matches!(config.transport, HartTransport::HartIpV1 { .. }),
             })
         }
 
@@ -355,7 +413,11 @@ mod execution {
                 device_status: response.device_status,
                 data: response.data,
                 burst: response.burst,
-                response_preambles: response.response_preambles,
+                response_preambles: if self.hart_ip {
+                    0
+                } else {
+                    response.response_preambles
+                },
             })
         }
 
@@ -376,7 +438,7 @@ mod execution {
                 }
             }
             if let Some(Channel::Ip(channel)) = self.channel.lock().await.take() {
-                let mut session = channel.into_session().map_err(client_error)?;
+                let mut session = channel.session;
                 session.close().await.map_err(client_error)?;
             }
             Ok(())
@@ -516,7 +578,9 @@ mod tests {
                 packet.message_type = MessageType::Response;
                 let is_close = packet.message_id == u8::from(MessageId::SessionClose);
                 if packet.message_id == u8::from(MessageId::TokenPassingPdu) {
+                    assert_eq!(packet.body[0], 0x02, "HART-IP starts at the delimiter");
                     let mut decoder = FrameDecoder::new(DecodeLimits::default());
+                    decoder.push(&[0xff; 5]);
                     let mut frame = decoder
                         .push(&packet.body)
                         .into_iter()
@@ -527,7 +591,20 @@ mod tests {
                         .unwrap();
                     frame.kind = FrameKind::Response;
                     frame.payload = vec![0, 0, 42];
-                    packet.body = frame.encode().unwrap();
+                    let mut published_frame = frame.clone();
+                    published_frame.wire_command = 2;
+                    published_frame.payload = vec![0, 0, 99];
+                    let published_bytes = published_frame.encode().unwrap();
+                    let mut published = packet.clone();
+                    published.message_type = MessageType::Publish;
+                    published.body =
+                        published_bytes[usize::from(published_frame.preambles)..].to_vec();
+                    socket
+                        .write_all(&published.encode().unwrap())
+                        .await
+                        .unwrap();
+                    let encoded = frame.encode().unwrap();
+                    packet.body = encoded[usize::from(frame.preambles)..].to_vec();
                     commands += 1;
                 }
                 socket.write_all(&packet.encode().unwrap()).await.unwrap();
@@ -557,7 +634,9 @@ mod tests {
         };
         for _ in 0..2 {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            assert_eq!(connection.command(&command).await.unwrap().data, vec![42]);
+            let reply = connection.command(&command).await.unwrap();
+            assert_eq!(reply.data, vec![42]);
+            assert_eq!(reply.response_preambles, 0);
         }
         connection.close().await.unwrap();
         tokio::time::timeout(Duration::from_secs(3), peer)

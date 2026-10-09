@@ -80,6 +80,10 @@ async fn context_with_cancellation(
         calls: calls.clone(),
         cancel_during_run,
     });
+    (context_with_logic(logic).await, calls)
+}
+
+pub(super) async fn context_with_logic(logic: Arc<dyn NodeLogic>) -> ExecutionContext {
     let mut handler = Node::new("probe", "Probe", "Test handler", "Test");
     handler
         .add_output_pin("event", "Event", "Incoming event", VariableType::Struct)
@@ -128,7 +132,7 @@ async fn context_with_cancellation(
         None,
     )
     .await;
-    (context, calls)
+    context
 }
 
 #[tokio::test]
