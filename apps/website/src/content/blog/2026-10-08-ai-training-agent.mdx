@@ -1,0 +1,68 @@
+---
+title: "Meet the AI training agent: from data to a usable model"
+description: "Let Flow-Like's AI training agent compare models, improve features and evaluate the winner, with saved experiments and a direct path into your workflows."
+date: 2026-10-08
+tags: ["ai", "machine-learning", "agents", "automation"]
+cover: "/images/ai-training-agent-hero.webp"
+draft: false
+---
+
+import { TrainingAgentExplorer } from "../../components/blog/learning-launch-visuals";
+
+You have the measurements, the inspection results and a process that would benefit from a prediction. Turning those records into a useful model means choosing inputs, comparing algorithms, tuning the promising candidates and carrying the winning setup into your application.
+
+Flow-Like's new **AI training agent** takes on that experiment loop. Give it a task, a dataset, a quality goal and a resource budget. It trains candidates, compares their measured results, explores feature improvements and returns a saved model with the preprocessing it needs. You can connect that result to the workflow that already handles your data.
+
+The agent builds on our [deep learning and ML nodes](/blog/deep-learning-ml-nodes/), bringing model training and AI-guided experimentation together on the canvas.
+
+## Give the experiment a clear job
+
+**Auto Train Agent** starts from a training configuration. That configuration identifies the source table, the columns available as inputs, the outcome to predict and how rows are divided into training, validation and test partitions. Training rows teach the model; validation rows guide model selection; test rows measure the selected model independently.
+
+Consider a quality workflow that predicts whether a manufactured part needs further inspection. Its inputs might include pressure, temperature, cycle duration and material type. Reviewed inspection outcomes supply the target. Grouping records by production run keeps closely related measurements together when splitting the data.
+
+You choose the metric that matters and set explicit quality bounds. Classification can optimize accuracy; regression can minimize prediction error. Ordered outcomes, such as increasing defect severity, preserve their declared order and can use a metric that measures how far a prediction misses.
+
+The configuration also bounds the search: trial count, elapsed time, training time, dataset and artifact storage, and consultation usage. That makes the experiment a defined piece of work you can place inside a larger process.
+
+## An agent with an experiment controller
+
+The training agent combines a model search engine with an optional language-model consultant. The search engine runs the training jobs and measures predictions. The consultant receives training profiles, allowed inputs, candidate configurations and observed validation results, then proposes the next action.
+
+Those actions are concrete: run the next candidate, propose a supported deep learning configuration, select another feature set, build a feature pipeline or finish the search. Each proposal goes through the experiment controller before it changes the run. The controller keeps the task, labels, data partitions and resource limits fixed.
+
+<TrainingAgentExplorer client:visible />
+
+The search covers native machine learning baselines and deep learning recipes suited to the task. Tabular classification can compare decision trees, logistic regression and Gaussian Naive Bayes. Sequence tasks can explore LSTM, GRU, one-dimensional convolutional networks and temporal convolutional networks. Image and anomaly tasks have their own candidate families.
+
+For generated deep learning candidates, successive halving concentrates the budget on promising configurations: candidates start with smaller training allocations, and survivors continue from their saved weights and optimizer state at larger epoch budgets. You get a search that responds to measured progress while keeping its spending bounded.
+
+Connect a structured-output model to **Consultant Model** when you want AI-guided proposals. The same controller also runs deterministic search without consultation, so you can choose how much model-driven exploration belongs in each workflow.
+
+## Let the agent improve the inputs
+
+The most useful experiment may change how the data is represented. A temperature reading describes the present; a rolling average and rate of change describe how the process arrived there.
+
+The agent can propose feature pipelines that derive numeric columns, compute grouped windows and join authorized sources. For the inspection workflow, that could mean adding a pressure delta, summarizing recent vibration or joining the material properties available at the time of manufacture. You decide which source aliases and columns the experiment may use.
+
+Flow-Like fits missing-value handling, scaling, categorical encoding and optional dimensionality reduction on training rows. It saves those transformations with the candidate, preserving the connection between a model and the inputs that produced its result. Each feature variant retains the original row assignments, target and provenance.
+
+That saved recipe matters when the model leaves the experiment. Incoming production data must receive the same transformations as the training data. **Predict Auto Model** replays the selected pipeline on raw rows, including supported stateful window features when you carry their returned state into the next call.
+
+## A result you can inspect and use
+
+Model selection uses validation results. Once selection ends, the controller freezes the winner and evaluates it on the independent test partition. Training workers and the consultant's reports exclude those test rows; the final evaluation measures the decision already made.
+
+The result carries the model artifact ID, fitted preprocessing, pinned source versions, dataset snapshots, validation leaderboard, final-test metrics and budget usage. The agent also returns its decisions and consultation usage. These give a workflow builder the evidence needed to understand which experiment produced the model.
+
+Quality bounds become usable workflow data. The `goal_met` field reports whether the final result meets the requested criteria, and `unmet_constraints` identifies any remaining gap. Connect those outputs to your acceptance logic, then use **Predict Auto Model** for inference or **Export Auto Model** to write native weights and a separate JSON manifest.
+
+Experiments are saved in persistent app storage. **Get Auto Training Result** retrieves their current state, while cancellation and resumption retain saved work and the remaining budget. Supplying an existing experiment ID lets the agent continue that experiment with its original task and source versions.
+
+## Keep learning as the process changes
+
+For recurring work, **Create Learning Project** adds a review policy, an aggregate budget and a deployment identity around training. A workflow event or timer advances the project through **Step Learning Project** or **Learning Project Agent**.
+
+The project collects observations, prioritizes samples for review and uses new reviewed outcomes in later training cycles. Promotion compares candidates against explicit quality bounds and improvement requirements. With a configured canary rollout, fresh reviewed observations support the decision to replace the current model; rollback restores the previous deployment.
+
+This fits naturally with [industrial protocol workflows](/blog/industrial-protocols/): collect equipment data, record measured outcomes, train against that history and route predictions back into your operational process. Start with one well-defined prediction and one source table. The [Auto Training guide](https://docs.flow-like.com/topics/datascience/ml-auto-training/) walks through experiment configuration, feature engineering and continuous learning projects.
