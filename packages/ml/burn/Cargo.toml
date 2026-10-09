@@ -2,11 +2,11 @@
 name = "flow-like-ml-burn"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MIT AND Apache-2.0"
 
 [features]
 default = ["cpu"]
-engine = ["dep:burn", "dep:sha2"]
+engine = ["dep:burn", "dep:sha2", "dep:safetensors", "dep:pytorch-reader", "dep:zip", "dep:tempfile"]
 cpu = ["engine", "burn/flex"]
 wgpu = ["engine", "burn/wgpu"]
 cuda = ["engine", "burn/cuda", "dep:libloading"]
@@ -22,6 +22,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 sha2 = { version = "0.10", optional = true }
+safetensors = { version = "0.8", optional = true }
+pytorch-reader = { path = "../../vendor/pytorch-reader", optional = true }
+zip = { version = "=8.5.1", optional = true, default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tempfile = { version = "3", optional = true }
 burn-onnx = { version = "=0.22.0", optional = true, default-features = false, features = ["export"] }
 schemars = { version = "1", features = ["derive"] }
 libloading = { version = "0.8", optional = true }

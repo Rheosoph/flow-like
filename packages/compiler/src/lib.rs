@@ -32,4 +32,4 @@ pub use flow_like_types_contracts::dispatch::{
     CompilationJob, CompilationResult, CompilationStatus,
 };
 pub use metadata::extract_nodes;
-pub use router::{CompilerState, compiler_router, process_job};
+pub use router::{compiler_router, process_job, CompilerState};

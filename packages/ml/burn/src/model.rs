@@ -1,4 +1,5 @@
 use crate::DetectionOptions;
+use crate::DinoV2;
 use crate::fusion::{CnnLstm, ImageSensorFusion};
 use crate::mask_rcnn::{MaskRcnn, MaskRcnnOutput};
 use crate::mobile::{EfficientNet, MobileNetV2};
@@ -28,6 +29,10 @@ pub(crate) enum Model {
     CnnLstm(CnnLstm),
     ImageSensorFusion(ImageSensorFusion),
     ResNet18(ResNet18),
+    DinoV2(DinoV2),
+    RtdetrV2(crate::RtdetrV2),
+    RfDetr(crate::RfDetr),
+    DfineNano(crate::DfineNano),
     MobileNetV2(MobileNetV2),
     EfficientNet(EfficientNet),
     YoloX(YoloX),
@@ -35,8 +40,76 @@ pub(crate) enum Model {
     UNet(UNet),
 }
 impl Model {
+    pub(crate) fn initialize_fine_tuning(
+        self,
+        target: &Recipe,
+        options: &crate::FineTuneOptions,
+        device: &Device,
+    ) -> Result<Self> {
+        let model = if options.replace_head {
+            match self {
+                Self::DfineNano(model) => {
+                    Self::DfineNano(model.reset_classifier(target.outputs(), device))
+                }
+                Self::RfDetr(model) => {
+                    Self::RfDetr(model.reset_classifier(target.outputs(), device))
+                }
+                Self::RtdetrV2(model) => {
+                    Self::RtdetrV2(model.reset_classifier(target.outputs(), device))
+                }
+                Self::DinoV2(model) => {
+                    Self::DinoV2(model.reset_classifier(target.outputs(), device))
+                }
+                Self::ResNet18(model) => {
+                    Self::ResNet18(model.reset_classifier(target.outputs(), device))
+                }
+                Self::MobileNetV2(model) => {
+                    Self::MobileNetV2(model.reset_classifier(target.outputs(), device))
+                }
+                Self::EfficientNet(model) => {
+                    Self::EfficientNet(model.reset_classifier(target.outputs(), device))
+                }
+                _ => {
+                    return Err(Error::Invalid(
+                        "Head replacement is unsupported for this recipe".into(),
+                    ));
+                }
+            }
+        } else {
+            self
+        };
+        model.configure_fine_tuning(options.freeze_backbone)
+    }
+
+    pub(crate) fn configure_fine_tuning(self, freeze_backbone: bool) -> Result<Self> {
+        Ok(match self {
+            Self::DfineNano(model) => Self::DfineNano(model.configure_fine_tuning(freeze_backbone)),
+            Self::RfDetr(model) => Self::RfDetr(model.configure_fine_tuning(freeze_backbone)),
+            Self::RtdetrV2(model) => Self::RtdetrV2(model.configure_fine_tuning(freeze_backbone)),
+            Self::DinoV2(model) => Self::DinoV2(model.configure_fine_tuning(freeze_backbone)),
+            Self::ResNet18(model) => Self::ResNet18(model.configure_fine_tuning(freeze_backbone)),
+            Self::MobileNetV2(model) => {
+                Self::MobileNetV2(model.configure_fine_tuning(freeze_backbone))
+            }
+            Self::EfficientNet(model) => {
+                Self::EfficientNet(model.configure_fine_tuning(freeze_backbone))
+            }
+            model if !freeze_backbone => model.unfreeze(),
+            _ => {
+                return Err(Error::Invalid(
+                    "Backbone freezing is unsupported for this recipe".into(),
+                ));
+            }
+        }
+        .train())
+    }
+
     pub(crate) fn new(recipe: &Recipe, device: &Device) -> Result<Self> {
         Ok(match recipe {
+            Recipe::DfineNano { config } => Self::DfineNano(crate::DfineNano::new(config, device)?),
+            Recipe::RfDetr { config } => Self::RfDetr(crate::RfDetr::new(config, device)?),
+            Recipe::RtdetrV2 { config } => Self::RtdetrV2(crate::RtdetrV2::new(config, device)?),
+            Recipe::DinoV2 { config } => Self::DinoV2(DinoV2::new(config, device)?),
             Recipe::MaskRcnn { config } => Self::MaskRcnn(MaskRcnn::new(config, device)?),
             Recipe::Mlp {
                 input_features,
@@ -207,6 +280,19 @@ impl Model {
     }
     pub(crate) fn forward(&self, input: &TensorData, device: &Device) -> Result<Output> {
         Ok(match self {
+            Self::RfDetr(m) => {
+                let output = m.forward(tensor(input, device), false)?;
+                Output::Detr(crate::DetrOutput {
+                    prediction: crate::DetrPrediction {
+                        logits: output.logits,
+                        boxes: output.boxes,
+                    },
+                    auxiliary: Vec::new(),
+                })
+            }
+            Self::DinoV2(m) => Output::Matrix(m.forward(tensor(input, device))),
+            Self::RtdetrV2(m) => Output::Detr(m.forward(tensor(input, device))?),
+            Self::DfineNano(m) => Output::Detr(m.forward(tensor(input, device))?),
             Self::MaskRcnn(m) => Output::MaskRcnn(m.forward(tensor(input, device), None)?),
             Self::Mlp(m) => Output::Matrix(m.forward(tensor(input, device))),
             Self::Recurrent(m) => Output::Matrix(m.forward(tensor(input, device))),
@@ -225,6 +311,11 @@ impl Model {
         })
     }
     pub(crate) fn loss(&self, data: &TensorDataset, device: &Device) -> Result<Tensor<1>> {
+        if let (Self::RfDetr(model), Targets::Boxes { values }) = (self, &data.targets) {
+            return model
+                .forward(tensor(&data.inputs, device), true)?
+                .loss(values);
+        }
         if let (Self::MaskRcnn(model), Targets::Instances { values }) = (self, &data.targets) {
             return model
                 .forward(tensor(&data.inputs, device), Some(values))?
@@ -261,6 +352,7 @@ impl Model {
                 )
             }
             (Output::Detection(output), Targets::Boxes { values }) => output.loss(values),
+            (Output::Detr(output), Targets::Boxes { values }) => output.loss(values)?,
             _ => unreachable!("Dataset and recipe validated before training"),
         })
     }
@@ -276,6 +368,7 @@ pub(crate) enum Output {
     Sequence(Tensor<3>),
     Image(Tensor<4>),
     Detection(YoloOutput),
+    Detr(crate::DetrOutput),
     MaskRcnn(MaskRcnnOutput),
 }
 impl Output {
@@ -285,6 +378,9 @@ impl Output {
         input: &TensorData,
         options: &DetectionOptions,
     ) -> Result<PredictionBatch> {
+        if let Self::Detr(output) = self {
+            return output.prediction.prediction(options);
+        }
         if let Self::MaskRcnn(output) = self {
             let instances = output.prediction(options)?.instances;
             let scores = instances
@@ -347,6 +443,7 @@ impl Output {
             Self::Matrix(x) => (to_data(x)?, None),
             Self::Sequence(x) => (to_data(x)?, None),
             Self::Detection(_) => unreachable!("Detection handled above"),
+            Self::Detr(_) => unreachable!("DETR detection handled above"),
             Self::MaskRcnn(_) => unreachable!("Instance detection handled above"),
         };
         let reconstruction_error = if recipe.objective().is_none() {

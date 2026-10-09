@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, scope TEXT NOT NULL, status
 CREATE TABLE IF NOT EXISTS resource_reservations(job_id TEXT PRIMARY KEY, resource_key TEXT NOT NULL, bytes INTEGER NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_training ON jobs(scope) WHERE status IN ('queued','running','cancel_requested','paused','interrupted');
 CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, scope TEXT NOT NULL, body TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pretrained_sources(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS predictions(artifact_id TEXT NOT NULL, sample_id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(artifact_id,sample_id));
 CREATE TABLE IF NOT EXISTS evaluations(id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS deployments(id TEXT PRIMARY KEY, scope TEXT NOT NULL, generation INTEGER NOT NULL, body TEXT NOT NULL);
@@ -747,6 +748,114 @@ impl TrainingRepository {
             "SELECT body FROM artifacts WHERE id=?",
             artifact_id,
         )
+    }
+
+    pub fn register_pretrained_source(
+        &self,
+        project_id: &str,
+        bytes: &[u8],
+        manifest: Value,
+        origin: Value,
+        maximum_bytes: u64,
+        at_ms: i64,
+    ) -> Result<PretrainedSource> {
+        self.writable()?;
+        if project_id.trim().is_empty()
+            || bytes.is_empty()
+            || bytes.len() as u64 > maximum_bytes
+            || !matches!(manifest["engine"].as_str(), Some("burn" | "sam2"))
+            || manifest["format_version"].as_u64() != Some(1)
+            || !manifest["config"].is_object()
+            || !manifest["input_shape"].is_array()
+            || !origin.is_object()
+            || serde_json::to_vec(&(&manifest, &origin))?.len() > 1024 * 1024
+        {
+            return Err(invalid("invalid pretrained source metadata or byte budget"));
+        }
+        let source = PretrainedSource {
+            id: format!("pretrained:{}", id()),
+            project_id: project_id.into(),
+            source_kind: PretrainedSourceKind::Imported,
+            blob: self.put_blob(bytes)?,
+            manifest,
+            origin,
+            created_at_ms: at_ms,
+        };
+        self.connection()?.execute(
+            "INSERT INTO pretrained_sources(id,project_id,body) VALUES(?,?,?)",
+            params![
+                source.id,
+                source.project_id,
+                serde_json::to_string(&source)?
+            ],
+        )?;
+        Ok(source)
+    }
+
+    pub fn get_pretrained_source(&self, source_id: &str) -> Result<PretrainedSource> {
+        if source_id.starts_with("pretrained:") {
+            return read_json(
+                &self.connection()?,
+                "SELECT body FROM pretrained_sources WHERE id=?",
+                source_id,
+            );
+        }
+        Ok(pretrained_artifact(self.get_artifact(source_id)?))
+    }
+
+    pub fn list_pretrained_sources(
+        &self,
+        project_id: &str,
+        maximum: usize,
+    ) -> Result<Vec<PretrainedSource>> {
+        self.list_pretrained_sources_filtered(project_id, maximum, None)
+    }
+
+    /// Filter before limiting so other model families cannot hide compatible sources.
+    pub fn list_pretrained_sources_for_engine(
+        &self,
+        project_id: &str,
+        maximum: usize,
+        engine: &str,
+    ) -> Result<Vec<PretrainedSource>> {
+        if !matches!(engine, "burn" | "sam2") {
+            return Err(invalid("unsupported pretrained source engine"));
+        }
+        self.list_pretrained_sources_filtered(project_id, maximum, Some(engine))
+    }
+
+    fn list_pretrained_sources_filtered(
+        &self,
+        project_id: &str,
+        maximum: usize,
+        engine: Option<&str>,
+    ) -> Result<Vec<PretrainedSource>> {
+        if !(1..=128).contains(&maximum) {
+            return Err(invalid("pretrained source list limit must be 1..128"));
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT body FROM pretrained_sources WHERE project_id=?1 AND (?2 IS NULL OR json_extract(body,'$.manifest.engine')=?2) ORDER BY json_extract(body,'$.created_at_ms') DESC,id ASC LIMIT ?3",
+        )?;
+        let mut sources = statement
+            .query_map(params![project_id, engine, maximum], |row| {
+                row.get::<_, String>(0)
+            })?
+            .map(|row| Ok(serde_json::from_str::<PretrainedSource>(&row?)?))
+            .collect::<Result<Vec<_>>>()?;
+        if engine != Some("sam2") {
+            let mut statement = connection.prepare(
+                "SELECT body FROM artifacts WHERE json_extract(body,'$.stream.project_id')=? AND json_extract(body,'$.manifest.engine')='burn' ORDER BY json_extract(body,'$.created_at_ms') DESC,id ASC LIMIT ?",
+            )?;
+            for row in
+                statement.query_map(params![project_id, maximum], |row| row.get::<_, String>(0))?
+            {
+                sources.push(pretrained_artifact(serde_json::from_str(&row?)?));
+            }
+        }
+        sources.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms).then(a.id.cmp(&b.id)));
+        sources.truncate(maximum);
+        Ok(sources)
     }
 
     pub fn read_blob(&self, blob: &BlobRef) -> Result<Vec<u8>> {
@@ -1610,6 +1719,23 @@ fn status_name(status: JobStatus) -> &'static str {
         JobStatus::Cancelled => "cancelled",
         JobStatus::Failed => "failed",
         JobStatus::Succeeded => "succeeded",
+    }
+}
+
+fn pretrained_artifact(artifact: ModelArtifact) -> PretrainedSource {
+    PretrainedSource {
+        id: artifact.id,
+        project_id: artifact.stream.project_id.clone(),
+        source_kind: PretrainedSourceKind::TrainingArtifact,
+        blob: artifact.blob,
+        manifest: artifact.manifest,
+        origin: serde_json::json!({
+            "stream": artifact.stream,
+            "job_id": artifact.job_id,
+            "snapshot_id": artifact.snapshot_id,
+            "dataset_digest": artifact.dataset_digest,
+        }),
+        created_at_ms: artifact.created_at_ms,
     }
 }
 fn save_job(tx: &Connection, job: &TrainingJob) -> Result<()> {

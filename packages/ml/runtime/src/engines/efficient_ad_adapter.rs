@@ -52,6 +52,7 @@ impl TrainingEngine for EfficientAdEngine {
             )?;
         }
         let cancellation = burn::CancellationToken::new();
+        let cancellation_monitor = BurnCancellationMonitor::start(control, &cancellation)?;
         let mut error = None;
         let mut callback = |progress: burn::TrainingProgress| {
             let update = (|| -> Result<()> {
@@ -95,6 +96,7 @@ impl TrainingEngine for EfficientAdEngine {
                 &mut callback,
             )
         };
+        let cancellation_reason = cancellation_monitor.finish();
         if trained.is_err() && directory.path().join(MANIFEST).exists() {
             let state: Value = serde_json::from_slice(&fs::read(directory.path().join(MANIFEST))?)?;
             let step = state
@@ -113,7 +115,7 @@ impl TrainingEngine for EfficientAdEngine {
                 serde_json::json!({"engine":"efficient_ad","steps":step}),
             )?;
         }
-        if let Some(error) = error {
+        if let Some(error) = error.or(cancellation_reason) {
             return Err(error);
         }
         let report = trained.map_err(|e| {

@@ -3281,6 +3281,44 @@ async fn disconnected_run_config_decorates_active_tables_and_rejects_others_with
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_lance_cache_does_not_require_offline_configuration() {
+    let directory = TempDir::new("ordinary-lance-cache");
+    let live = lease(ALICE).await;
+    let token = jwt(ALICE);
+    let storage = RunStorage::from_prepared(
+        None,
+        None,
+        super::scope::CacheDirs {
+            project: directory.path().to_owned(),
+            user: directory.path().join("user"),
+        },
+        request(&token, "localhost:7777"),
+        Ok(SharedCredentials::Renewable(live.clone())),
+        |_| None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(storage.mode(), RunStorageMode::Hosted);
+    assert!(storage.scope().is_none());
+    let registry = live.lance_registry().unwrap();
+    let store = registry
+        .get_store(
+            format!("s3://content/apps/{APP}/storage/db/orders.lance")
+                .parse()
+                .unwrap(),
+            &flow_like::flow_like_storage::lance_io::object_store::ObjectStoreParams::default(),
+        )
+        .await
+        .unwrap();
+    assert!(store.inner.to_string().starts_with("CachedLanceStore("));
+    assert!(directory.path().join(".lance-read-cache").is_dir());
+    assert!(matches!(
+        live.to_store_type(StoreType::Content).await.unwrap(),
+        FlowLikeStore::AWS(_)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hosted_run_config_decorates_every_online_app() {
     let fixture = Fixture::new().await;
     fixture

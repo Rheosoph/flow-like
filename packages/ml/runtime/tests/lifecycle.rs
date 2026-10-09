@@ -46,6 +46,47 @@ fn repo() -> (tempfile::TempDir, TrainingRepository) {
     let repo = TrainingRepository::open(dir.path().join("training.sqlite")).unwrap();
     (dir, repo)
 }
+
+#[test]
+fn pretrained_source_engine_filter_precedes_limit_and_preserves_scope_and_time_order() {
+    let (_dir, repo) = repo();
+    let register = |project: &str, engine: &str, time: i64| {
+        repo.register_pretrained_source(
+            project,
+            b"source-list-fixture",
+            json!({"engine":engine,"format_version":1,"config":{},"input_shape":[3,32,32]}),
+            json!({"fixture":true}),
+            1024,
+            time,
+        )
+        .unwrap()
+    };
+    let newest_burn = register("factory", "burn", 100);
+    register("factory", "burn", 50);
+    for time in 200..220 {
+        register("factory", "sam2", time);
+    }
+    register("other-project", "burn", 1000);
+    // A late-arriving older source must not displace the newest timestamp.
+    register("factory", "burn", 10);
+    let filtered = repo
+        .list_pretrained_sources_for_engine("factory", 1, "burn")
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, newest_burn.id);
+    let all = repo.list_pretrained_sources("factory", 16).unwrap();
+    assert_eq!(all.len(), 16);
+    assert!(all.iter().all(|source| source.manifest["engine"] == "sam2"));
+    let sam = repo
+        .list_pretrained_sources_for_engine("factory", 1, "sam2")
+        .unwrap();
+    assert_eq!(sam[0].created_at_ms, 219);
+    assert!(
+        repo.list_pretrained_sources_for_engine("factory", 1, "unknown")
+            .is_err()
+    );
+}
+
 fn populate(repo: &TrainingRepository, range: std::ops::Range<usize>) {
     for i in range {
         repo.record_sample(&stream(), &sample(i)).unwrap();

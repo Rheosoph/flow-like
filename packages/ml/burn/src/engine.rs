@@ -28,6 +28,19 @@ struct State {
     next_epoch: usize,
     next_batch: usize,
     report: TrainingReport,
+    #[serde(default)]
+    pretrained: Option<FineTuneProvenance>,
+    #[serde(default)]
+    imported: Option<ImportedWeightsProvenance>,
+}
+
+enum Start<'a> {
+    New,
+    Resume,
+    Pretrained {
+        directory: &'a Path,
+        options: &'a FineTuneOptions,
+    },
 }
 
 pub(crate) struct DirectoryLock {
@@ -65,7 +78,33 @@ pub fn train(
         artifact_dir.as_ref(),
         cancellation,
         progress,
-        false,
+        Start::New,
+    )
+}
+
+/// Start a new optimizer and dataset from pretrained weights. Resume uses its own checkpoint API.
+#[allow(clippy::too_many_arguments)]
+pub fn train_from_pretrained(
+    config: &TrainingConfig,
+    data: &TensorDataset,
+    validation: Option<&TensorDataset>,
+    source_artifact_dir: impl AsRef<Path>,
+    options: &FineTuneOptions,
+    artifact_dir: impl AsRef<Path>,
+    cancellation: &CancellationToken,
+    progress: impl FnMut(TrainingProgress),
+) -> Result<TrainingReport> {
+    run(
+        config,
+        data,
+        validation,
+        artifact_dir.as_ref(),
+        cancellation,
+        progress,
+        Start::Pretrained {
+            directory: source_artifact_dir.as_ref(),
+            options,
+        },
     )
 }
 
@@ -86,7 +125,7 @@ pub fn resume(
         artifact_dir.as_ref(),
         cancellation,
         progress,
-        true,
+        Start::Resume,
     )
 }
 
@@ -97,7 +136,7 @@ fn run(
     dir: &Path,
     cancellation: &CancellationToken,
     mut progress: impl FnMut(TrainingProgress),
-    resuming: bool,
+    start: Start<'_>,
 ) -> Result<TrainingReport> {
     config.validate()?;
     data.validate(&config.recipe)?;
@@ -108,12 +147,12 @@ fn run(
         return Err(Error::Cancelled);
     }
     let _lock = DirectoryLock::acquire(dir)?;
-    if !resuming && dir.join(MANIFEST_FILE).exists() {
+    if !matches!(start, Start::Resume) && dir.join(MANIFEST_FILE).exists() {
         return Err(Error::Invalid(
             "Artifact directory already contains a model; use resume or a new directory".into(),
         ));
     }
-    let previous = if resuming {
+    let previous = if matches!(start, Start::Resume) {
         Some(read_state(dir)?)
     } else {
         None
@@ -126,8 +165,41 @@ fn run(
     )?;
     let config = &resolved_config;
     let device = backend::device(&config.backend, true)?;
+    let initialization_guard = crate::execution::lock(Some(cancellation))?;
     device.seed(config.seed);
-    let mut model = Model::new(&config.recipe, &device)?;
+    let (mut model, pretrained) = if let Start::Pretrained { directory, options } = start {
+        let source = read_state(directory)?;
+        validate_fine_tune(&source.config.recipe, &config.recipe, options)?;
+        if source
+            .imported
+            .as_ref()
+            .is_some_and(|origin| !origin.classification_head_pretrained)
+            && !options.replace_head
+        {
+            return Err(Error::Invalid(
+                "This pretrained source has no trained classification head; enable head replacement".into(),
+            ));
+        }
+        let path = checked_checkpoint(directory, &source.checkpoint)?.join("model.bpk");
+        let digest = crate::pretrained::file_sha256(&path)?;
+        let source_model = Model::new(&source.config.recipe, &device)?
+            .try_load_file(&path)
+            .map_err(record_error)?;
+        // Head initialization must depend on the new run's seed, not the source model's constructor.
+        device.seed(config.seed);
+        let model = source_model.initialize_fine_tuning(&config.recipe, options, &device)?;
+        let provenance = FineTuneProvenance {
+            source_model_sha256: digest,
+            source_recipe: source.config.recipe,
+            options: options.clone(),
+            imported: source
+                .imported
+                .or_else(|| source.pretrained.and_then(|origin| origin.imported)),
+        };
+        (model, Some(provenance))
+    } else {
+        (Model::new(&config.recipe, &device)?, None)
+    };
     let mut optimizer = AdamConfig::new()
         .init()
         .with_grad_clipping(GradientClippingConfig::Norm(config.gradient_clip).init());
@@ -156,6 +228,9 @@ fn run(
             .try_load_file(checkpoint.join("model.bpk"))
             .map_err(record_error)?
             .train();
+        if let Some(pretrained) = &previous.pretrained {
+            model = model.configure_fine_tuning(pretrained.options.freeze_backbone)?;
+        }
         optimizer = optimizer
             .load(checkpoint.join("optimizer.bpk"))
             .map_err(record_error)?;
@@ -180,6 +255,8 @@ fn run(
                 validation_loss: None,
                 history: Vec::new(),
             },
+            pretrained,
+            imported: None,
         }
     };
     // Establish a complete checkpoint before doing work so a cancellation always leaves a loadable model.
@@ -187,6 +264,7 @@ fn run(
     state.requested_backend = requested_backend;
     state.report.backend = Some(config.backend.clone());
     checkpoint(dir, &model, &optimizer, &mut state)?;
+    drop(initialization_guard);
     let batches = data.inputs.shape[0].div_ceil(config.batch_size);
     for epoch in state.next_epoch..config.epochs {
         let indices =
@@ -204,6 +282,13 @@ fn run(
             let start = batch_index * config.batch_size;
             let end = (start + config.batch_size).min(indices.len());
             let batch = data.batch(&indices[start..end]);
+            let batch_guard = match crate::execution::lock(Some(cancellation)) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    checkpoint(dir, &model, &optimizer, &mut state)?;
+                    return Err(error);
+                }
+            };
             device.seed(
                 config
                     .seed
@@ -219,6 +304,7 @@ fn run(
             }
             let gradients = GradientsParams::from_grads(loss.backward(), &model);
             model = optimizer.step(config.learning_rate, model, gradients);
+            drop(batch_guard);
             state.report.steps += 1;
             state.next_epoch = epoch;
             state.next_batch = batch_index + 1;
@@ -229,7 +315,20 @@ fn run(
                 training_loss: loss_value,
                 validation_loss: None,
             });
+            if cancellation.is_cancelled() {
+                checkpoint(dir, &model, &optimizer, &mut state)?;
+                return Err(Error::Cancelled);
+            }
         }
+        let evaluation_guard = match crate::execution::lock(Some(cancellation)) {
+            Ok(guard) => guard,
+            Err(error) => {
+                checkpoint(dir, &model, &optimizer, &mut state)?;
+                return Err(error);
+            }
+        };
+        // Mask R-CNN samples evaluation ROIs too. Give that phase its own stable seed.
+        device.seed(config.seed ^ 0xa076_1d64_78bd_642f ^ epoch as u64);
         state.next_epoch = epoch + 1;
         state.next_batch = 0;
         state.report.completed_epochs = epoch + 1;
@@ -237,6 +336,7 @@ fn run(
         state.report.validation_loss = validation
             .map(|v| evaluate_loss(&model, v, &device, config.batch_size))
             .transpose()?;
+        drop(evaluation_guard);
         let event = TrainingProgress {
             epoch: epoch + 1,
             batch: batches,
@@ -247,6 +347,9 @@ fn run(
         state.report.history.push(event.clone());
         checkpoint(dir, &model, &optimizer, &mut state)?;
         progress(event);
+    }
+    if cancellation.is_cancelled() {
+        return Err(Error::Cancelled);
     }
     Ok(state.report)
 }
@@ -359,7 +462,77 @@ fn read_state(dir: &Path) -> Result<State> {
         )));
     }
     state.config.validate()?;
+    if state.imported.is_some() && state.pretrained.is_some() {
+        return Err(Error::Invalid(
+            "A model cannot be both a direct import and a fine-tuned artifact".into(),
+        ));
+    }
+    if let Some(imported) = &state.imported {
+        imported.validate()?;
+    }
+    if let Some(pretrained) = &state.pretrained {
+        validate_fine_tune(
+            &pretrained.source_recipe,
+            &state.config.recipe,
+            &pretrained.options,
+        )?;
+        if pretrained.source_model_sha256.len() != 64
+            || !pretrained
+                .source_model_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(Error::Invalid("Invalid pretrained model digest".into()));
+        }
+        if let Some(imported) = &pretrained.imported {
+            imported.validate()?;
+        }
+    }
     Ok(state)
+}
+
+pub(crate) fn write_imported_model(
+    dir: &Path,
+    model: &Model,
+    info: &ImportedModelInfo,
+) -> Result<()> {
+    let _lock = DirectoryLock::acquire(dir)?;
+    if dir.join(MANIFEST_FILE).exists() {
+        return Err(Error::Invalid(
+            "Import destination already contains a model".into(),
+        ));
+    }
+    let mut state = State {
+        version: FORMAT_VERSION,
+        config: TrainingConfig {
+            recipe: info.recipe.clone(),
+            backend: BackendChoice::Cpu,
+            epochs: 1,
+            batch_size: 1,
+            learning_rate: 0.001,
+            seed: 0,
+            gradient_clip: 5.0,
+        },
+        requested_backend: BackendChoice::Cpu,
+        input_shape: info.input_shape.clone(),
+        dataset_fingerprint: format!("imported:{}", info.provenance.sha256),
+        checkpoint: String::new(),
+        next_epoch: 0,
+        next_batch: 0,
+        report: TrainingReport {
+            backend: Some(BackendChoice::Cpu),
+            completed_epochs: 0,
+            steps: 0,
+            initial_loss: 0.0,
+            final_loss: 0.0,
+            validation_loss: None,
+            history: Vec::new(),
+        },
+        pretrained: None,
+        imported: Some(info.provenance.clone()),
+    };
+    state.config.validate()?;
+    checkpoint(dir, model, &AdamConfig::new().init(), &mut state)
 }
 pub(crate) fn checked_checkpoint(dir: &Path, name: &str) -> Result<PathBuf> {
     if !name.starts_with("checkpoint-")
@@ -401,6 +574,8 @@ pub struct Predictor {
     recipe: Recipe,
     input_shape: Vec<usize>,
     backend: BackendChoice,
+    pretrained: Option<FineTuneProvenance>,
+    imported: Option<ImportedWeightsProvenance>,
 }
 impl Predictor {
     pub fn load(artifact_dir: impl AsRef<Path>, backend: BackendChoice) -> Result<Self> {
@@ -408,20 +583,30 @@ impl Predictor {
         let state = read_state(dir)?;
         let backend = backend::resolve_backend(&backend)?;
         let device = backend::device(&backend, false)?;
+        let _rng = crate::execution::lock(None)?;
         let model = Model::new(&state.config.recipe, &device)?
             .try_load_file(checked_checkpoint(dir, &state.checkpoint)?.join("model.bpk"))
             .map_err(record_error)?
             .valid();
+        crate::execution::materialize(&model);
         Ok(Self {
             model,
             device,
             recipe: state.config.recipe,
             input_shape: state.input_shape,
             backend,
+            pretrained: state.pretrained,
+            imported: state.imported,
         })
     }
     pub fn backend(&self) -> &BackendChoice {
         &self.backend
+    }
+    pub fn fine_tune_provenance(&self) -> Option<&FineTuneProvenance> {
+        self.pretrained.as_ref()
+    }
+    pub fn imported_weights(&self) -> Option<&ImportedWeightsProvenance> {
+        self.imported.as_ref()
     }
     /// Export the captured inference graph with fixed input dimensions.
     /// Unsupported operators return an error; the native model remains usable.
@@ -484,12 +669,13 @@ impl Predictor {
             )
         };
         let output = match &self.model {
+            Model::DinoV2(m) => m.features(tensor()).feature_map(),
             Model::ResNet18(m) => m.features(tensor()),
             Model::MobileNetV2(m) => m.features(tensor()),
             Model::EfficientNet(m) => m.features(tensor()),
             _ => {
                 return Err(Error::Invalid(
-                    "Spatial features require ResNet18, MobileNetV2 or EfficientNet".into(),
+                    "Spatial features require ResNet18, MobileNetV2, EfficientNet or DINOv2".into(),
                 ));
             }
         };
@@ -508,6 +694,15 @@ impl Predictor {
         input: &TensorData,
         options: &DetectionOptions,
     ) -> Result<PredictionBatch> {
+        if self
+            .imported
+            .as_ref()
+            .is_some_and(|origin| !origin.classification_head_pretrained)
+        {
+            return Err(Error::Invalid(
+                "This imported backbone has no trained classifier; extract features or fine-tune a new head".into(),
+            ));
+        }
         options.validate()?;
         self.recipe.validate_input(input)?;
         if input.shape[1..] != self.input_shape {

@@ -10,6 +10,8 @@
 //!
 //! [`zero_column_safe`] keeps one cheap column in the projection pushed into
 //! LanceDB and strips it again above the scan, carrying the row count across.
+//! [`lance_table_provider`] uses a native empty projection when the table exposes
+//! a Lance dataset, avoiding value-column reads for row-count-only scans.
 //!
 //! [`zero_column_safe_writable`] additionally carries the [`lancedb::Table`]
 //! handle so SQL `UPDATE`/`DELETE` route into Lance's own mutation API (see
@@ -43,6 +45,10 @@ use crate::databases::lance_dml::{
     LanceDmlExec, LanceDmlOp, assignments_to_lance_updates, filters_to_lance_predicate,
 };
 
+#[path = "lance_order.rs"]
+mod lance_order;
+pub use lance_order::with_lance_order_pushdown;
+
 /// Wraps a table provider so scans that project no columns still work.
 pub fn zero_column_safe(inner: Arc<dyn TableProvider>) -> Arc<dyn TableProvider> {
     let placeholder_column = cheapest_column(&inner.schema());
@@ -50,6 +56,7 @@ pub fn zero_column_safe(inner: Arc<dyn TableProvider>) -> Arc<dyn TableProvider>
         inner,
         placeholder_column,
         dml_table: None,
+        scan_table: None,
     })
 }
 
@@ -66,7 +73,44 @@ pub fn zero_column_safe_writable(
         inner,
         placeholder_column,
         dml_table: Some(table),
+        scan_table: None,
     })
+}
+
+/// A plain Lance table can defer payload columns until after an ordered limit.
+/// Construct its adapter here so hidden FTS or custom-provider filters cannot be
+/// lost when the ordered scan is rebuilt from its captured dataset.
+/// `enable_dml` enables UPDATE/DELETE. INSERT still forwards to LanceDB, so
+/// read-only entrypoints must keep their existing SQL validation or provider gate.
+pub async fn lance_table_provider(
+    table: lancedb::Table,
+    enable_dml: bool,
+) -> lancedb::Result<Arc<dyn TableProvider>> {
+    let inner = Arc::new(
+        lancedb::table::datafusion::BaseTableAdapter::try_new(table.base_table().clone()).await?,
+    );
+    Ok(Arc::new(ZeroColumnSafeProvider {
+        placeholder_column: cheapest_column(&inner.schema()),
+        inner,
+        dml_table: enable_dml.then(|| table.clone()),
+        scan_table: Some(table),
+    }))
+}
+
+/// Derive FTS only from an explicitly mounted, plain LanceDB adapter. The caller
+/// must retain its authorization checks and expose the result through a read-only
+/// provider. Generic wrapping keeps native scan rewrites from dropping the query.
+pub(crate) fn with_full_text_query(
+    provider: &Arc<dyn TableProvider>,
+    query: lancedb::index::scalar::FullTextSearchQuery,
+) -> Option<Arc<dyn TableProvider>> {
+    let provider = provider.as_any().downcast_ref::<ZeroColumnSafeProvider>()?;
+    provider.scan_table.as_ref()?;
+    let adapter = provider
+        .inner
+        .as_any()
+        .downcast_ref::<lancedb::table::datafusion::BaseTableAdapter>()?;
+    Some(zero_column_safe(Arc::new(adapter.with_fts_query(query))))
 }
 
 /// Spatial expressions stay above the Lance scan until exact pushdown is verified.
@@ -120,6 +164,8 @@ struct ZeroColumnSafeProvider {
     /// When present, UPDATE/DELETE are translated onto this handle instead of
     /// forwarding to the adapter (which cannot execute them).
     dml_table: Option<lancedb::Table>,
+    /// Only the constructor for plain LanceDB tables opts into native scan paths.
+    scan_table: Option<lancedb::Table>,
 }
 
 impl ZeroColumnSafeProvider {
@@ -190,12 +236,51 @@ impl TableProvider for ZeroColumnSafeProvider {
             limit
         };
         let filters = safe_filters.as_slice();
+        if projection.is_some_and(|projection| projection.is_empty())
+            && let Some(dataset) = self.scan_table.as_ref().and_then(|table| table.dataset())
+        {
+            if limit == Some(0) {
+                // Lance can omit a zero limit when filters or stable row IDs
+                // prevent scan-range pushdown. Keep the provider limit exact.
+                return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                    Arc::new(ArrowSchema::empty()),
+                )));
+            }
+            // Resolve through LanceDB's consistency wrapper once, preserving its
+            // freshness policy and pinning this plan to the selected snapshot.
+            let dataset = dataset
+                .get()
+                .await
+                .map_err(|error| DataFusionError::External(error.into()))?;
+            let mut scanner = dataset.scan();
+            scanner.empty_project()?;
+            if let Some(filter) = filters.iter().cloned().reduce(Expr::and) {
+                scanner.filter_expr(filter);
+            }
+            let limit = limit
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| DataFusionError::Plan("Lance scan limit exceeds i64::MAX".into()))?;
+            scanner.limit(limit, None)?;
+            scanner.batch_size(state.config().batch_size());
+            let plan = scanner.create_plan().await?;
+            return Ok(Arc::new(RowCountOnlyExec::new(plan)));
+        }
         let placeholder = self
             .placeholder_column
             .filter(|_| projection.is_some_and(|projection| projection.is_empty()));
 
         let Some(placeholder) = placeholder else {
-            return self.inner.scan(state, projection, filters, limit).await;
+            let plan = self.inner.scan(state, projection, filters, limit).await?;
+            if self.scan_table.is_none() {
+                return Ok(plan);
+            }
+            return Ok(lance_order::mark_scan(
+                plan,
+                filters.to_vec(),
+                limit,
+                state.config().batch_size(),
+            ));
         };
 
         let projection = vec![placeholder];
@@ -210,14 +295,8 @@ impl TableProvider for ZeroColumnSafeProvider {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        // The Lance adapter answers Exact, which makes the optimizer delete the
-        // Filter node above the scan — but UPDATE/DELETE planning harvests its
-        // WHERE clause from exactly that Filter node, so with Exact every DML
-        // statement would arrive with an empty (= refused) predicate. Inexact
-        // keeps Lance-side pruning for reads while preserving the Filter node.
-        if self.dml_table.is_some() {
-            return Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()]);
-        }
+        // DataFusion 53 also extracts UPDATE/DELETE predicates from TableScan.filters,
+        // so exact Lance filters can remove redundant filtering and push down limits.
         let mut supported = self.inner.supports_filters_pushdown(filters)?;
         for (expression, support) in filters.iter().zip(&mut supported) {
             if contains_spatial_function(expression) {
@@ -388,7 +467,11 @@ impl ExecutionPlan for RowCountOnlyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::{Int64Array, StringArray};
     use arrow_schema::Field;
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::physical_plan::{collect, displayable};
+    use datafusion::prelude::SessionContext;
 
     fn schema(fields: Vec<(&str, DataType)>) -> SchemaRef {
         Arc::new(ArrowSchema::new(
@@ -424,5 +507,233 @@ mod tests {
             Some(0)
         );
         assert_eq!(cheapest_column(&schema(vec![])), None);
+    }
+
+    struct EmptyProjectionFixture {
+        directory: std::path::PathBuf,
+        table: lancedb::Table,
+        provider: Arc<dyn TableProvider>,
+        native: SessionContext,
+        fallback: SessionContext,
+    }
+
+    impl Drop for EmptyProjectionFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    impl EmptyProjectionFixture {
+        async fn new() -> flow_like_types::Result<Self> {
+            let directory = std::env::temp_dir().join(format!(
+                "lance-empty-projection-{}",
+                flow_like_types::create_id()
+            ));
+            std::fs::create_dir_all(&directory)?;
+            let connection =
+                crate::databases::vector::lancedb::connect_lance(directory.to_str().unwrap())
+                    .execute()
+                    .await?;
+            let batch = RecordBatch::try_new(
+                Arc::new(ArrowSchema::new(vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("tag", DataType::Utf8, true),
+                    Field::new("payload", DataType::Utf8, false),
+                ])),
+                vec![
+                    Arc::new(Int64Array::from_iter_values(0..12)),
+                    Arc::new(StringArray::from_iter((0..12).map(|id| match id % 3 {
+                        0 => Some("new"),
+                        1 => Some("old"),
+                        _ => None,
+                    }))),
+                    Arc::new(StringArray::from_iter_values(
+                        (0..12).map(|_| "payload ".repeat(1024)),
+                    )),
+                ],
+            )?;
+            let table = connection
+                .create_table("items", vec![batch])
+                .execute()
+                .await?;
+            let provider = lance_table_provider(table.clone(), false).await?;
+            let native = SessionContext::new();
+            native.register_table("items", provider.clone())?;
+            let fallback = SessionContext::new();
+            fallback.register_table(
+                "items",
+                zero_column_safe(Arc::new(
+                    lancedb::table::datafusion::BaseTableAdapter::try_new(
+                        table.base_table().clone(),
+                    )
+                    .await?,
+                )),
+            )?;
+            Ok(Self {
+                directory,
+                table,
+                provider,
+                native,
+                fallback,
+            })
+        }
+    }
+
+    async fn query_rows(
+        context: &SessionContext,
+        query: &str,
+    ) -> flow_like_types::Result<Vec<flow_like_types::Value>> {
+        Ok(context
+            .sql(query)
+            .await?
+            .collect()
+            .await?
+            .iter()
+            .map(crate::arrow_utils::record_batch_to_value)
+            .collect::<flow_like_types::Result<Vec<_>>>()?
+            .concat())
+    }
+
+    #[tokio::test]
+    async fn native_empty_projection_avoids_value_columns_and_preserves_limits()
+    -> flow_like_types::Result<()> {
+        let fixture = EmptyProjectionFixture::new().await?;
+        for (limit, expected) in [(None, 12), (Some(0), 0), (Some(1), 1), (Some(7), 7)] {
+            let plan = fixture
+                .provider
+                .scan(&fixture.native.state(), Some(&vec![]), &[], limit)
+                .await?;
+            plan.apply(|node| {
+                assert!(
+                    node.schema()
+                        .fields()
+                        .iter()
+                        .all(|field| !matches!(field.name().as_str(), "id" | "tag" | "payload")),
+                    "empty projection must not read a placeholder value column: {}",
+                    displayable(plan.as_ref()).indent(true)
+                );
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            let batches = collect(plan, fixture.native.task_ctx()).await?;
+            assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+            assert_eq!(
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                expected
+            );
+        }
+        for query in [
+            "SELECT COUNT(*) AS n FROM items",
+            "SELECT 1 AS value FROM items LIMIT 7 OFFSET 3",
+            "SELECT 1 AS value FROM items LIMIT 0",
+            "SELECT 1 AS present WHERE EXISTS(SELECT 1 FROM items)",
+            "SELECT 1 AS present WHERE EXISTS(SELECT 1 FROM items WHERE id = 5)",
+            "SELECT 1 AS present WHERE EXISTS(SELECT 1 FROM items WHERE id > 100)",
+        ] {
+            assert_eq!(
+                query_rows(&fixture.native, query).await?,
+                query_rows(&fixture.fallback, query).await?,
+                "{query}"
+            );
+        }
+        assert_eq!(
+            query_rows(
+                &fixture.native,
+                "SELECT 1 AS present WHERE EXISTS(SELECT 1 FROM items)"
+            )
+            .await?
+            .len(),
+            1
+        );
+        let plan = fixture
+            .provider
+            .scan(
+                &fixture.native.state(),
+                Some(&vec![]),
+                &[datafusion::prelude::col("id").gt(datafusion::prelude::lit(5))],
+                Some(0),
+            )
+            .await?;
+        let batches = collect(plan, fixture.native.task_ctx()).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_empty_projection_keeps_indexed_filters_and_null_counts()
+    -> flow_like_types::Result<()> {
+        let fixture = EmptyProjectionFixture::new().await?;
+        fixture
+            .table
+            .create_index(&["tag"], lancedb::index::Index::Bitmap(Default::default()))
+            .execute()
+            .await?;
+        for query in [
+            "SELECT COUNT(*) AS n FROM items WHERE tag = 'new'",
+            "SELECT COUNT(*) AS n FROM items WHERE tag IS NULL",
+            "SELECT COUNT(*) AS n FROM items WHERE tag <> 'old' AND id > 3",
+            "SELECT COUNT(*) AS n FROM (SELECT 1 FROM items WHERE tag = 'new' LIMIT 2)",
+            "SELECT 1 AS present WHERE EXISTS(SELECT 1 FROM items WHERE tag = 'new' AND id > 10)",
+        ] {
+            assert_eq!(
+                query_rows(&fixture.native, query).await?,
+                query_rows(&fixture.fallback, query).await?,
+                "{query}"
+            );
+        }
+        assert_eq!(
+            query_rows(
+                &fixture.native,
+                "SELECT COUNT(*) AS n FROM items WHERE tag IS NULL"
+            )
+            .await?[0]["n"],
+            4
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_empty_projection_keeps_snapshot_deletions_and_empty_rows()
+    -> flow_like_types::Result<()> {
+        let fixture = EmptyProjectionFixture::new().await?;
+        let retained = fixture
+            .provider
+            .scan(&fixture.native.state(), Some(&vec![]), &[], None)
+            .await?;
+        fixture.table.delete("id >= 8").await?;
+        let batches = collect(retained, fixture.native.task_ctx()).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 12);
+        assert_eq!(
+            query_rows(&fixture.native, "SELECT COUNT(*) AS n FROM items").await?[0]["n"],
+            8
+        );
+        for query in [
+            "SELECT COUNT(*) AS n FROM items",
+            "SELECT COUNT(*) AS n FROM items WHERE id % 2 = 0",
+            "SELECT 1 AS value FROM items LIMIT 10",
+        ] {
+            assert_eq!(
+                query_rows(&fixture.native, query).await?,
+                query_rows(&fixture.fallback, query).await?
+            );
+        }
+        fixture.table.delete("true").await?;
+        assert_eq!(
+            query_rows(&fixture.native, "SELECT COUNT(*) AS n FROM items").await?[0]["n"],
+            0
+        );
+        assert!(
+            query_rows(
+                &fixture.native,
+                "SELECT 1 AS present WHERE EXISTS(SELECT 1 FROM items)"
+            )
+            .await?
+            .is_empty()
+        );
+        assert!(
+            query_rows(&fixture.native, "SELECT 1 FROM items LIMIT 5")
+                .await?
+                .is_empty()
+        );
+        Ok(())
     }
 }

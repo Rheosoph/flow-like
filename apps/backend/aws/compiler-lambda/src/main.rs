@@ -2,11 +2,11 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use aws_lambda_events::sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent};
-use flow_like_compiler::{CompilationJob, CompilerConfig, process_job};
-use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
+use flow_like_compiler::{process_job, CompilationJob, CompilerConfig};
+use lambda_runtime::{run, service_fn, tracing, Error, LambdaEvent};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
-use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 static CONFIG: OnceLock<CompilerConfig> = OnceLock::new();
 

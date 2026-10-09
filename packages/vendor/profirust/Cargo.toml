@@ -1,0 +1,131 @@
+[package]
+edition = "2021"
+name = "profirust"
+version = "0.6.0"
+authors = ["Rahix <rahix@rahix.de>"]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "PROFIBUS-DP compatible communication stack in pure Rust"
+keywords = [
+    "profibus",
+    "profibus-dp",
+    "fieldbus",
+    "siemens",
+]
+categories = [
+    "no-std",
+    "embedded",
+    "science::robotics",
+]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rahix/profirust"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+name = "profirust"
+path = "src/lib.rs"
+
+[dependencies.bitflags]
+version = "2.3.3"
+
+[dependencies.bitvec]
+version = "1.0.1"
+default-features = false
+
+[dependencies.cortex-m]
+version = "0.7.7"
+optional = true
+
+[dependencies.embedded-hal]
+version = "0.2.7"
+optional = true
+
+[dependencies.fugit]
+version = "0.3.7"
+optional = true
+
+[dependencies.libc]
+version = "0.2.139"
+optional = true
+
+[dependencies.log]
+version = "0.4.17"
+
+[dependencies.managed]
+version = "0.8.0"
+features = ["map"]
+default-features = false
+
+[dependencies.nb]
+version = "1.1.0"
+optional = true
+
+[dependencies.rp2040-hal]
+version = "0.10.0"
+optional = true
+
+[dependencies.rs485]
+version = "0.1.0"
+optional = true
+
+[dependencies.serialport]
+version = "4.6.0"
+optional = true
+
+[dev-dependencies.env_logger]
+version = "0.10.0"
+
+[dev-dependencies.process-image]
+version = "0.2.0"
+
+[dev-dependencies.proptest]
+version = "1.2.0"
+
+[dev-dependencies.proptest-derive]
+version = "0.3.0"
+
+[dev-dependencies.rstest]
+version = "0.18.2"
+default-features = false
+
+[dev-dependencies.rustyline]
+version = "14.0.0"
+
+[features]
+alloc = ["managed/alloc"]
+debug-measure-dp-cycle = []
+debug-measure-roundtrip = []
+default = [
+    "std",
+    "phy-simulator",
+    "phy-serial",
+]
+phy-linux = [
+    "rs485",
+    "libc",
+    "std",
+]
+phy-rp2040 = [
+    "rp2040-hal",
+    "fugit",
+    "embedded-hal",
+    "nb",
+    "cortex-m",
+]
+phy-serial = [
+    "serialport",
+    "std",
+    "serialport_low_latency",
+]
+phy-simulator = ["std"]
+std = ["managed/std"]
+
+[target.'cfg(target_os = "linux")'.dependencies.serialport_low_latency]
+version = "0.1.1"
+optional = true

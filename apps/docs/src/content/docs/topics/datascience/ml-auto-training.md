@@ -99,6 +99,8 @@ For a time split, optional `rolling_time_split` on project creation supplies `va
 
 Set explicit quality bounds before enabling `automatic_promotion`. **Promote Learning Model** checks those bounds, audited sample counts, and `minimum_improvement`. With a positive `canary_fraction` and an existing champion, **Route Learning Project** assigns deterministic candidate traffic. Full promotion then requires fresh reviewed canary samples and actual predictions from both models. Supplied observation labels do not substitute for those predictions.
 
+Revising a review after its canary predictions were recorded invalidates that audit evidence. On the next audit or promotion attempt, the project rejects the candidate, retains the champion, and records the reason. Later training cycles can continue with fresh evidence.
+
 **Get Learning Project** exposes state, blocking reasons, cycles, and spending. Reservations, experiments, and completed predictions survive executor restarts when local app storage persists; later ticks resume saved work. **Pause Learning Project** suspends training and routes decisions to the teacher, **Resume Learning Project** continues the saved project, and **Rollback Learning Model** restores the prior deployment. Aggregate cycle, training, consultation, storage, and observation budgets bound the loop.
 
 ## The four tuning nodes
@@ -277,8 +279,8 @@ The confidence cutoff for a single prediction, the number of new examples needed
 | Engineered sensor features | MLP, histogram gradient boosted trees, Isolation Forest |
 | Temporal classification or forecasting | LSTM, GRU, causal TCN, 1D CNN |
 | Reconstruction anomalies | Dense, convolutional sequence and LSTM autoencoders |
-| Image classification | ResNet-18, MobileNetV2, EfficientNet |
-| Object detection | YOLOX with SimOTA assignment and box, objectness and class losses |
+| Image classification | ResNet-18, MobileNetV2, EfficientNet, DINOv2 Small/Base with a trained classifier |
+| Object detection | YOLOX, RT-DETRv2 ResNet-18/50, RF-DETR, D-FINE Nano |
 | Semantic segmentation | U-Net |
 | Instance segmentation | Mask R-CNN with a compact residual backbone, region proposals, ROIAlign and mask loss |
 | Visual anomalies | PatchCore memory bank, PaDiM spatial Gaussians, EfficientAD |
@@ -310,6 +312,55 @@ A temporal classifier configuration for **Train LSTM** looks like this:
 ```
 
 The inspection's sample shape is `[window_length, 6]`. The trainer supplies the batch dimension. Keep preprocessing identical during training and inference, and save its steps with the recipe. The lifecycle node's compute configuration selects the execution backend.
+
+### Start vision training from pretrained weights
+
+**Import Pretrained Vision Weights** reads compatible float32 weights from SafeTensors or a supported PyTorch ZIP checkpoint entirely in Rust. Supply the file through an app-scoped `FlowPath`, select its architecture, and record its source, revision, code license and weight license. An optional `expected_sha256` verifies the downloaded file. The importer checks tensor names, shapes and data types; it does not execute Python or pickle code. It returns a project-scoped source ID. **List Pretrained Vision Weights** also lists compatible models trained earlier in that project.
+
+| Import model | Supported upstream architecture | RGB preparation |
+|---|---|---|
+| `torchvision_res_net18` | Canonical torchvision ResNet-18, 64 base channels | ImageNet normalization |
+| `dino_v2` | Standard DINOv2 Small/Base, patch size 14, without register tokens | ImageNet normalization; dimensions divisible by 14 |
+| `rtdetr_v2` | RT-DETRv2 ResNet-18/50-vd with bilinear deformable attention | Values in `[0, 1]`; dimensions divisible by 32 |
+| `rf_detr` | Nano, Small, Medium, Base and Large2026 detection variants | ImageNet normalization; use the selected variant's image dimensions |
+| `dfine_nano` | D-FINE Nano with HGNetv2-B0 | Values in `[0, 1]`; dimensions divisible by 32 |
+| `sam2` | SAM 2.1 Hiera Tiny, image prompts and masks | ImageNet normalization at 1024 × 1024 |
+
+**Preprocess Inspection Image** converts RGB bytes to `[0, 1]` before applying the supplied mean and standard deviation. For ImageNet normalization, use mean `[0.485, 0.456, 0.406]` and standard deviation `[0.229, 0.224, 0.225]`. For unnormalized `[0, 1]` input, use mean `[0, 0, 0]` and standard deviation `[1, 1, 1]`. Apply the same preparation before recording training samples and before inference. Imported source metadata includes the recommended preparation; importing weights does not transform existing tensors.
+
+Set the trainer's `pretrained` field to the returned source ID:
+
+```json
+{
+  "pretrained": {
+    "source_id": "pretrained:your-source-id",
+    "replace_head": true,
+    "freeze_backbone": true
+  }
+}
+```
+
+The target recipe must retain the source architecture. Head replacement allows a new class count or label order. Retaining a head requires the original label order. Fine-tuning starts a new optimizer and dataset history; resuming an interrupted job restores that job's optimizer and cursor. DINOv2 imports contain a feature backbone and require training a new classifier before classification. Existing native ResNet-18, MobileNetV2 and EfficientNet artifacts can also initialize a new classifier.
+
+**Extract Pretrained Image Features** accepts a project source ID and either a single CHW image tensor from **Preprocess Inspection Image** or an NCHW batch. Use it with DINOv2 or a supported classifier backbone, then pass the spatial feature maps through **Feature Map to Patches** for PatchCore or PaDiM. Feature extraction does not require training a classifier or create evaluation evidence.
+
+**Auto Train Vision** and **Auto Train Agent** accept the same `pretrained` field. The controller adds a compatible fine-tuning candidate alongside its baselines and retains the normal validation and final audit boundaries. The consultant sees only source IDs available to that project. Imported weights do not count as training results or evaluation evidence.
+
+RT-DETRv2 and D-FINE fine-tuning use matching, classification and box losses, including auxiliary decoder predictions. They omit upstream denoising augmentation; D-FINE also omits the upstream fine-grained localization and distribution-distillation losses. RF-DETR retains its grouped training queries and IoU-aware classification loss. Detector predictions rank query/class pairs without NMS.
+
+### Prompt and fine-tune SAM 2
+
+**Segment with SAM 2** takes an imported source ID, a prepared CHW image or NCHW batch, and one prompt per image. Prompts can contain foreground/background points, a bounding box or previous mask logits. Point and box coordinates refer to the resized 1024 × 1024 image. The result contains four 256 × 256 mask-logit maps, predicted IoU scores and an object score. Token 0 is the single-mask output; tokens 1 through 3 are alternative masks. Threshold logits at zero to obtain foreground masks, then resize masks to the original image coordinates.
+
+**Fine-tune SAM 2** accepts image/prompt pairs and reviewed binary masks shaped `[N, 1, 256, 256]`. It freezes the image encoder by default and trains the prompt and mask decoder with focal, Dice, IoU and object losses. It returns a new project source and training report. This is an image annotation workflow with an explicit training call. It does not provide video tracking or enter SAM into the unprompted classifier/detector experiment search.
+
+SAM checks its estimated model, data and working memory against `compute.memory_limit_bytes` before loading weights. Fine-tuning usually needs a higher limit than the default 2 GiB, particularly when the image encoder is unfrozen. A rejected request reports the required estimate.
+
+### Code and checkpoint licenses
+
+The upstream code for [RT-DETR](https://github.com/lyuwenyu/RT-DETR), [D-FINE](https://github.com/Peterande/D-FINE), [standard DINOv2](https://github.com/facebookresearch/dinov2) and [SAM 2](https://github.com/facebookresearch/sam2) uses Apache-2.0. RF-DETR support covers the [Apache-designated detection variants](https://github.com/roboflow/rf-detr); RF-DETR Plus variants and the deprecated original Large architecture are excluded. DINOv2 XRay and CELL models are also excluded.
+
+Record the terms for the exact checkpoint separately from its implementation license. D-FINE's Objects365-derived checkpoints have additional dataset restrictions; the COCO Nano checkpoint is the supported import architecture. The stored license fields retain the supplied provenance and do not establish rights to a dataset or third-party checkpoint.
 
 ### Camera, sensor and teacher adapters
 

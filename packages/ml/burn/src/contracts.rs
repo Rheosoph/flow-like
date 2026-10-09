@@ -24,9 +24,18 @@ pub fn validate_inspection_config(spec: &InspectionSpec, config: &TrainingConfig
     let compatible = match spec.task {
         TaskKind::ImageClassification => matches!(
             config.recipe,
-            Recipe::ResNet18 { .. } | Recipe::MobileNetV2 { .. } | Recipe::EfficientNet { .. }
+            Recipe::ResNet18 { .. }
+                | Recipe::MobileNetV2 { .. }
+                | Recipe::EfficientNet { .. }
+                | Recipe::DinoV2 { .. }
         ),
-        TaskKind::ObjectDetection => matches!(config.recipe, Recipe::YoloX { .. }),
+        TaskKind::ObjectDetection => matches!(
+            config.recipe,
+            Recipe::YoloX { .. }
+                | Recipe::RtdetrV2 { .. }
+                | Recipe::RfDetr { .. }
+                | Recipe::DfineNano { .. }
+        ),
         TaskKind::Segmentation => matches!(config.recipe, Recipe::UNet { .. }),
         TaskKind::InstanceSegmentation => matches!(config.recipe, Recipe::MaskRcnn { .. }),
         TaskKind::VisualAnomaly => matches!(config.recipe, Recipe::DenseAutoencoder { .. }),
@@ -80,6 +89,12 @@ impl TrainingConfig {
     pub fn validate_planning_budget(&self) -> Result<()> {
         self.validate()?;
         let bounded = match &self.recipe {
+            Recipe::DinoV2 { config } => config.variant == crate::DinoV2Variant::Small,
+            Recipe::RtdetrV2 { config } => {
+                config.backbone == crate::RtdetrV2Backbone::ResNet18 && config.queries <= 300
+            }
+            Recipe::RfDetr { config } => config.variant == crate::RfDetrVariant::Nano,
+            Recipe::DfineNano { config } => config.queries <= 300,
             Recipe::Mlp { hidden, .. }
             | Recipe::Lstm { hidden, .. }
             | Recipe::Gru { hidden, .. }
@@ -221,6 +236,72 @@ impl Recipe {
             }
         };
         let (parameters, activations) = match self {
+            Self::DfineNano { config } => {
+                let queries = config.queries as u128;
+                let locations = area_at(16) + area_at(32);
+                let parameters = 4_500_000 + 4 * linear(128, config.classes as u128);
+                let activations = b
+                    * (image_area * 512
+                        + locations * 128 * 48
+                        + area_at(32).pow(2) * 8 * 8
+                        + 3 * (queries * queries * 8
+                            + queries * (128 * 64 + config.classes as u128)
+                            + locations * 128 * 8))
+                    * 4;
+                (parameters, activations)
+            }
+            Self::RfDetr { config } => {
+                let patch = config.variant.patch_size() as u128;
+                let tokens = image_area / (patch * patch) + 1;
+                let layers = config.variant.decoder_layers() as u128;
+                let groups = crate::RfDetrConfig::TRAINING_GROUPS as u128;
+                let queries = crate::RfDetrConfig::QUERIES as u128;
+                let parameters = 32_000_000
+                    + layers * 2_000_000
+                    + (groups + 1) * linear(256, config.classes as u128);
+                let activations = b
+                    * (12 * (tokens * tokens * 6 + tokens * 384 * 24)
+                        + layers
+                            * groups
+                            * (queries * queries * 8
+                                + queries * (256 * 64 + config.classes as u128))
+                        + tokens * 256 * groups * 32)
+                    * 16;
+                (parameters, activations)
+            }
+            Self::RtdetrV2 { config } => {
+                let layers = config.layers() as u128;
+                let queries = config.queries as u128;
+                let locations = area_at(8) + area_at(16) + area_at(32);
+                let parameters = match config.backbone {
+                    crate::RtdetrV2Backbone::ResNet18 => 21_000_000,
+                    crate::RtdetrV2Backbone::ResNet50 => 44_000_000,
+                } + (layers + 1) * linear(256, config.classes as u128);
+                // Include retained pyramid, pairwise encoder attention and decoder activations.
+                let activations = b
+                    * (image_area * 1024
+                        + locations * 256 * 48
+                        + area_at(32).pow(2) * 8 * 8
+                        + layers
+                            * (queries * queries * 8
+                                + queries * (256 * 64 + config.classes as u128)
+                                + locations * 256 * 8))
+                    * 4;
+                (parameters, activations)
+            }
+            Self::DinoV2 { config } => {
+                let embedding = config.variant.embedding_dim() as u128;
+                let depth = config.variant.depth() as u128;
+                let tokens = image_area / (14 * 14) + 1;
+                let parameters = depth * (12 * embedding * embedding + 13 * embedding)
+                    + (3 * 14 * 14 + 37 * 37 + 5) * embedding
+                    + linear(embedding, config.classes as u128);
+                let activations = b
+                    * depth
+                    * (tokens * tokens * config.variant.heads() as u128 + tokens * embedding * 24)
+                    * 16;
+                (parameters, activations)
+            }
             Self::Mlp {
                 input_features,
                 hidden,

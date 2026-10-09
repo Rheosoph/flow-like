@@ -45,7 +45,7 @@ use crate::arrow_utils::{
     ValueBatchReader, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
-use crate::databases::df_provider::{zero_column_safe, zero_column_safe_writable};
+use crate::databases::df_provider::{lance_table_provider, with_lance_order_pushdown};
 use crate::databases::lance_filter_params::orient_spatial_relations;
 
 use super::VectorStore;
@@ -1379,16 +1379,13 @@ impl LanceDBVectorStore {
     /// ([`crate::databases::sql_guard::validate_readonly_sql`]).
     pub async fn to_datafusion(&self) -> Result<Arc<dyn TableProvider>> {
         let table = self.require_readable_table().await?;
-        let df_table = table.base_table();
-        let adapter =
-            lancedb::table::datafusion::BaseTableAdapter::try_new(df_table.clone()).await?;
         if self.selector.is_read_only() || self.is_durably_managed() {
             return Ok(Arc::new(ReadOnlyDatabaseProvider {
-                inner: zero_column_safe(Arc::new(adapter)),
+                inner: lance_table_provider(table, false).await?,
                 mutation_adapter: self.mutation_adapter.clone(),
             }));
         }
-        Ok(zero_column_safe_writable(Arc::new(adapter), table))
+        Ok(lance_table_provider(table, true).await?)
     }
 
     pub async fn raw(&self) -> Result<Table> {
@@ -1407,8 +1404,10 @@ impl LanceDBVectorStore {
     ) -> Result<datafusion::dataframe::DataFrame> {
         crate::databases::sql_guard::validate_lance_dml_sql(sql)?;
         let table = self.to_datafusion().await?;
-        let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        let ctx = SessionContext::new_with_state(with_lance_order_pushdown(
+            SessionContext::new().state(),
+        ));
+        crate::databases::register_sql_functions(&ctx);
         ctx.register_table(table_name, table)?;
         let results = ctx.sql(sql).await?;
 
@@ -1480,6 +1479,30 @@ impl LanceDBVectorStore {
 struct ReadOnlyDatabaseProvider {
     inner: Arc<dyn TableProvider>,
     mutation_adapter: Option<Arc<dyn LogicalTableMutationAdapter>>,
+}
+
+/// Apply FTS only to a mounted Lance provider and retain its read authorization.
+/// Every FTS result is read-only, including results from writable source tables.
+pub(crate) fn full_text_table_provider(
+    provider: &Arc<dyn TableProvider>,
+    query: FullTextSearchQuery,
+) -> Option<Arc<dyn TableProvider>> {
+    let (inner, mutation_adapter) =
+        if let Some(read_only) = provider.as_any().downcast_ref::<ReadOnlyDatabaseProvider>() {
+            (
+                crate::databases::df_provider::with_full_text_query(&read_only.inner, query)?,
+                read_only.mutation_adapter.clone(),
+            )
+        } else {
+            (
+                crate::databases::df_provider::with_full_text_query(provider, query)?,
+                None,
+            )
+        };
+    Some(Arc::new(ReadOnlyDatabaseProvider {
+        inner,
+        mutation_adapter,
+    }))
 }
 
 impl std::fmt::Debug for ReadOnlyDatabaseProvider {
@@ -2816,7 +2839,7 @@ mod tests {
                 "indexed {selection}"
             );
             let ctx = SessionContext::new();
-            crate::geometry::register_geo_functions(&ctx);
+            crate::databases::register_sql_functions(&ctx);
             ctx.register_table("scalar_indices", db.to_datafusion().await?)?;
             assert_eq!(
                 ctx.sql(&format!("SELECT id FROM scalar_indices WHERE {filter}"))
@@ -2920,7 +2943,7 @@ mod tests {
             .await?;
         assert_eq!(record_batches_to_vec(Some(stored))?, rows);
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         ctx.register_table("places", reopened.to_datafusion().await?)?;
         let result = ctx.sql("SELECT id FROM places WHERE ST_Intersects(geom, flow_geomfromtext($1)) ORDER BY id LIMIT 1")
             .await?.with_param_values(vec![ScalarValue::Utf8(Some(polygon.into()))])?
@@ -3496,7 +3519,7 @@ mod tests {
         );
 
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         ctx.register_table("entities", db.to_datafusion().await?)?;
         let bound = |sql: &'static str| {
             let ctx = ctx.clone();
@@ -3897,6 +3920,149 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn datafusion_pushes_exact_filters_projection_and_limit_into_lance() -> Result<()> {
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        use datafusion::logical_expr::LogicalPlan;
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "people".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": 1, "name": "a" }),
+            json!({ "id": 2, "name": "b" }),
+            json!({ "id": 3, "name": "c" }),
+        ])
+        .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("people", db.to_datafusion().await?)?;
+        let query = "SELECT name FROM people WHERE id >= 2 LIMIT 1";
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
+        let mut scans = 0;
+        plan.apply(|node| {
+            assert!(
+                !matches!(node, LogicalPlan::Filter(_)),
+                "exact Lance predicates must not leave a residual filter: {plan}"
+            );
+            if let LogicalPlan::TableScan(scan) = node {
+                scans += 1;
+                assert_eq!(scan.filters.len(), 1);
+                assert_eq!(scan.fetch, Some(1));
+                assert_eq!(
+                    scan.projection,
+                    Some(vec![scan.source.schema().index_of("name")?]),
+                    "the filter column must not be fetched just to recheck the predicate"
+                );
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(scans, 1);
+
+        let batches = ctx.sql(query).await?.collect().await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0]["name"] == json!("b") || rows[0]["name"] == json!("c"));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dml_predicates_survive_exact_filter_pushdown() -> Result<()> {
+        use datafusion::common::ScalarValue;
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        use datafusion::logical_expr::LogicalPlan;
+
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "people".to_string()).await?;
+        db.insert(vec![
+            json!({ "id": 1, "name": "a" }),
+            json!({ "id": 2, "name": "b" }),
+            json!({ "id": 3, "name": "c" }),
+            json!({ "id": 4, "name": "d" }),
+        ])
+        .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table("people", db.to_datafusion().await?)?;
+        for query in [
+            "UPDATE people SET name = 'changed' WHERE id >= $1 AND id <= $2",
+            "DELETE FROM people WHERE id < $1 OR id > $2",
+        ] {
+            let df = ctx.sql(query).await?.with_param_values(vec![
+                ScalarValue::Int64(Some(2)),
+                ScalarValue::Int64(Some(3)),
+            ])?;
+            let plan = df.clone().into_optimized_plan()?;
+            let mut filtered_scans = 0;
+            plan.apply(|node| {
+                assert!(
+                    !matches!(node, LogicalPlan::Filter(_)),
+                    "DML must work when its predicates live only in the scan: {plan}"
+                );
+                if let LogicalPlan::TableScan(scan) = node {
+                    assert!(!scan.filters.is_empty());
+                    filtered_scans += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            assert_eq!(filtered_scans, 1);
+            let batches = df.collect().await?;
+            let rows = record_batch_to_value(&batches[0])?;
+            assert_eq!(rows[0]["count"], json!(2));
+
+            if query.starts_with("UPDATE") {
+                let batches = ctx
+                    .sql("SELECT id, name FROM people ORDER BY id")
+                    .await?
+                    .collect()
+                    .await?;
+                let rows: Vec<Value> = batches
+                    .iter()
+                    .map(record_batch_to_value)
+                    .collect::<Result<Vec<_>>>()?
+                    .concat();
+                assert_eq!(
+                    rows,
+                    vec![
+                        json!({ "id": 1, "name": "a" }),
+                        json!({ "id": 2, "name": "changed" }),
+                        json!({ "id": 3, "name": "changed" }),
+                        json!({ "id": 4, "name": "d" }),
+                    ]
+                );
+            }
+        }
+        let batches = ctx
+            .sql("SELECT id, name FROM people ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        let rows: Vec<Value> = batches
+            .iter()
+            .map(record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat();
+        assert_eq!(
+            rows,
+            vec![
+                json!({ "id": 2, "name": "changed" }),
+                json!({ "id": 3, "name": "changed" }),
+            ]
+        );
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn dml_statements_flow_through_a_registered_datafusion_table() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;
@@ -3910,7 +4076,7 @@ mod tests {
         .await?;
 
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         ctx.register_table("people", db.to_datafusion().await?)?;
 
         let count = |ctx: SessionContext| async move {
@@ -3974,23 +4140,20 @@ mod tests {
 
         // No effective WHERE clause (missing, constant-true or constant-false —
         // indistinguishable after optimization) must refuse, not write the table.
+        for query in [
+            "DELETE FROM people",
+            "DELETE FROM people WHERE true",
+            "DELETE FROM people WHERE false",
+            "DELETE FROM people WHERE id = 1 OR true",
+            "UPDATE people SET name = 'q'",
+            "UPDATE people SET name = 'q' WHERE id = 1 AND false",
+        ] {
+            assert!(ctx.sql(query).await?.collect().await.is_err(), "{query}");
+        }
         assert!(
-            ctx.sql("DELETE FROM people")
+            ctx.sql("DELETE FROM people WHERE $1")
                 .await?
-                .collect()
-                .await
-                .is_err()
-        );
-        assert!(
-            ctx.sql("DELETE FROM people WHERE false")
-                .await?
-                .collect()
-                .await
-                .is_err()
-        );
-        assert!(
-            ctx.sql("UPDATE people SET name = 'q'")
-                .await?
+                .with_param_values(vec![datafusion::common::ScalarValue::Boolean(Some(false))])?
                 .collect()
                 .await
                 .is_err()
@@ -4048,7 +4211,7 @@ mod tests {
         db.insert_record_batch(batch).await?;
 
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         ctx.register_table("events", db.to_datafusion().await?)?;
 
         let batches = ctx

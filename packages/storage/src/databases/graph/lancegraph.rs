@@ -14,7 +14,7 @@ use super::{
     GraphSchemaResult, GraphStore, SubgraphEdge, SubgraphNode, SubgraphResult, TraversalDirection,
 };
 use crate::arrow_utils::record_batch_to_value;
-use crate::databases::df_provider::zero_column_safe;
+use crate::databases::df_provider::lance_table_provider;
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::SessionContext;
 use flow_like_types::{Result, Value, anyhow, async_trait};
@@ -22,7 +22,6 @@ use futures::TryStreamExt;
 use lance_graph::{CypherQuery, GraphConfig};
 use lancedb::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::table::datafusion::BaseTableAdapter;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -912,8 +911,10 @@ impl LanceGraphStore {
     }
 
     async fn build_cypher_context(&self) -> Result<SessionContext> {
-        let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        let ctx = SessionContext::new_with_state(
+            crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
+        );
+        crate::databases::register_sql_functions(&ctx);
         let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_labels = HashSet::new();
 
@@ -948,8 +949,10 @@ impl LanceGraphStore {
     }
 
     async fn build_query_context(&self, include_edges: bool) -> Result<SessionContext> {
-        let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        let ctx = SessionContext::new_with_state(
+            crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
+        );
+        crate::databases::register_sql_functions(&ctx);
         let mut adapters: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut registered_tables = HashSet::new();
 
@@ -1483,16 +1486,13 @@ pub(crate) async fn open_table_adapter(
         .await
         .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
 
-    let adapter = BaseTableAdapter::try_new(table.base_table().clone())
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "Failed to create DataFusion adapter for '{}': {}",
-                table_name,
-                e
-            )
-        })?;
-    Ok(zero_column_safe(Arc::new(adapter)))
+    lance_table_provider(table, false).await.map_err(|e| {
+        anyhow!(
+            "Failed to create DataFusion adapter for '{}': {}",
+            table_name,
+            e
+        )
+    })
 }
 
 pub(crate) use crate::databases::sql_guard::validate_readonly_sql;

@@ -7,8 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
 
-export const TAG = "master-841-6b3edaa";
-const COMMIT = "6b3edaaf32cc19e5bb2d819c788bd557eddc8eba";
+export const TAG = "master-948-228c707";
+const COMMIT = "228c707fde018221de74674f1c2f480a9d2b228e";
 const ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../src-tauri/runtimes/stablediffusion",
@@ -24,8 +24,8 @@ const WINDOWS_RUNTIME_DLLS = [
 const WINDOWS_RUNTIME_SOURCE = path.resolve(ROOT, "../../binaries/win/x64");
 const ASSETS = {
 	"win-x64": {
-		name: "sd-master-6b3edaa-bin-win-vulkan-x64.zip",
-		sha256: "b8640b12fd708a2d26a5e31d73861a50ede73f1b3d6132a4dbe037692b68c0f2",
+		name: "sd-master-228c707-bin-win-vulkan-x64.zip",
+		sha256: "6de279c833a47ca5ede5fe16415dcf8a2a718ca3ececfbe024fc2f86c7728e89",
 	},
 } as const;
 
@@ -126,7 +126,8 @@ function buildSourceRuntime(
 		throw new Error("Build Linux sd-server on Linux.");
 	// The upstream macOS archive requires macOS 26. Build the same revision for
 	// Flow-Like's macOS 14 minimum instead of shipping an incompatible binary.
-	const source = path.join(ROOT, ".source");
+	// Keep checkouts and CMake caches separate when the pinned revision changes.
+	const source = path.join(ROOT, `.source-${COMMIT}`);
 	if (!fs.existsSync(path.join(source, ".git"))) {
 		run("git", [
 			"clone",
@@ -162,7 +163,7 @@ function buildSourceRuntime(
 		],
 		source,
 	);
-	const build = path.join(ROOT, `.build-${platform}`);
+	const build = path.join(ROOT, `.build-${platform}-${COMMIT}`);
 	const targetFlags = mac
 		? [
 				`-DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_TARGET}`,

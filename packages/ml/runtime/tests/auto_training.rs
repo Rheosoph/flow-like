@@ -408,6 +408,207 @@ fn cancellation_during_validation_resumes_the_published_artifact() {
 }
 
 #[test]
+fn cancellation_after_controller_interruption_settles_the_completed_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = TrainingRepository::open(dir.path().join("training.sqlite")).unwrap();
+    let (request, _) = setup(&repo);
+    let limits = request.budget.worker_limits.clone();
+    let experiment = repo.create_experiment(request, now_ms()).unwrap();
+    let trial = repo
+        .submit_experiment_trial(&experiment.id, 0, "candidate-0", now_ms())
+        .unwrap();
+    let artifact = worker(&repo, &limits).run(&trial.job_id).unwrap();
+    let generation = repo.get_job(&trial.job_id).unwrap().generation;
+    drop(repo);
+
+    let reopened = TrainingRepository::open(dir.path().join("training.sqlite")).unwrap();
+    reopened
+        .cancel_experiment(&experiment.id, now_ms())
+        .unwrap();
+    let controller = AutoTrainingController::new(reopened.clone(), worker(&reopened, &limits));
+    let cancelled = controller.run(&experiment.id).unwrap();
+    assert_eq!(cancelled.status, ExperimentStatus::Cancelled);
+    assert_eq!(cancelled.usage.reserved_training_time_ms, 0);
+    assert_eq!(cancelled.usage.reserved_artifact_bytes, 0);
+    assert_eq!(cancelled.usage.training_time_ms, limits.maximum_duration_ms);
+    assert_eq!(cancelled.usage.artifact_bytes, artifact.blob.bytes);
+    assert_eq!(
+        reopened.get_experiment_trial(&trial.id).unwrap().status,
+        ExperimentTrialStatus::Cancelled
+    );
+
+    let repeated = reopened
+        .cancel_experiment(&experiment.id, now_ms())
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&repeated.usage).unwrap(),
+        serde_json::to_value(&cancelled.usage).unwrap()
+    );
+    reopened
+        .resume_experiment(&experiment.id, now_ms())
+        .unwrap();
+    controller.run_next(&experiment.id).unwrap();
+    let validated = reopened.get_experiment_trial(&trial.id).unwrap();
+    assert_eq!(validated.status, ExperimentTrialStatus::Validated);
+    assert_eq!(validated.artifact_id.as_deref(), Some(artifact.id.as_str()));
+    assert_eq!(
+        reopened.get_job(&trial.job_id).unwrap().generation,
+        generation
+    );
+    let resumed = reopened.get_experiment(&experiment.id).unwrap();
+    assert_eq!(resumed.usage.artifact_bytes, cancelled.usage.artifact_bytes);
+    assert_eq!(
+        resumed.usage.training_time_ms,
+        cancelled.usage.training_time_ms
+    );
+}
+
+#[test]
+fn forecast_search_checks_each_target_width_before_flattening() {
+    for ragged_partition in [Some(0), Some(1), None] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = TrainingRepository::open(dir.path().join("forecast.sqlite")).unwrap();
+        let stream = StreamKey {
+            project_id: "forecast".into(),
+            stream_id: "readings".into(),
+            inspection_version: "v1".into(),
+        };
+        let spec = InspectionSpec {
+            id: "forecast".into(),
+            description: "Forecast the next two readings".into(),
+            task: TaskKind::SequenceForecast,
+            labels: vec![],
+            input_shape: vec![1],
+            prediction_horizon_ms: Some(1),
+            minimum_examples: 1,
+            minimum_examples_per_class: 1,
+        };
+        let mut partitions: [Vec<TrainingSample>; 3] = Default::default();
+        for (partition, rows) in partitions.iter_mut().enumerate() {
+            for index in 0..2 {
+                let timestamp = (partition * 2 + index) as i64 * 10;
+                let targets = if ragged_partition == Some(partition) {
+                    if index == 0 {
+                        vec![10.]
+                    } else {
+                        vec![20., 30., 40.]
+                    }
+                } else {
+                    vec![10., 20.]
+                };
+                let sample = Sample {
+                    id: format!("{partition}-{index}"),
+                    group_id: format!("group-{partition}-{index}"),
+                    stream_id: stream.stream_id.clone(),
+                    timestamp_ms: timestamp,
+                    window_start_ms: timestamp,
+                    window_end_ms: timestamp,
+                    input: TensorData {
+                        shape: vec![1],
+                        values: vec![index as f32],
+                    },
+                    annotation: Annotation::Values { values: targets },
+                    provenance: LabelProvenance::Reviewed {
+                        reviewer: "fixture".into(),
+                        reviewed_at_ms: timestamp + 2,
+                    },
+                    outcome: Some(flow_like_ml_core::Outcome {
+                        target_start_ms: timestamp + 1,
+                        target_end_ms: timestamp + 1,
+                        available_at_ms: timestamp + 2,
+                    }),
+                };
+                spec.validate_sample_at(&sample, 100).unwrap();
+                let row = TrainingSample {
+                    id: sample.id.clone(),
+                    annotation_revision: 1,
+                    group_id: sample.group_id.clone(),
+                    captured_at_ms: timestamp,
+                    label_available_at_ms: timestamp + 2,
+                    content_digest: format!(
+                        "{:x}",
+                        Sha256::digest(serde_json::to_vec(&sample).unwrap())
+                    ),
+                    source: LabelSource::Reviewed,
+                    accepted: true,
+                    payload: serde_json::to_value(sample).unwrap(),
+                };
+                repo.record_sample(&stream, &row).unwrap();
+                rows.push(row);
+            }
+        }
+        let [train, validation, test] = partitions;
+        let snapshot = repo
+            .import_experiment_snapshot(DatasetSnapshot {
+                id: String::new(),
+                digest: String::new(),
+                stream: stream.clone(),
+                as_of_ms: 100,
+                cutoff_sequence: 6,
+                policy: SplitPolicy::Group {
+                    train_fraction: 0.4,
+                    validation_fraction: 0.3,
+                    seed: 42,
+                },
+                train,
+                validation,
+                test,
+                excluded: vec![],
+            })
+            .unwrap();
+        let mut goals = default_goals(&spec);
+        goals.bounds = vec![MetricBound {
+            name: "rmse".into(),
+            minimum: None,
+            maximum: Some(100.),
+        }];
+        let budget = ExperimentBudget::default();
+        let limits = budget.worker_limits.clone();
+        let experiment = repo.create_experiment(ExperimentRequest {
+            stream,
+            snapshot_id: snapshot.id,
+            spec: serde_json::to_value(spec).unwrap(),
+            candidates: vec![TrainingRequest {
+                engine: "burn".into(),
+                recipe: json!({"config":{"recipe":{"architecture":"mlp","input_features":1,"hidden":4,"outputs":2,"objective":"regression"},"backend":{"backend":"cpu"},"epochs":1,"batch_size":2,"learning_rate":0.01,"seed":42,"gradient_clip":5.},"labels":[],"inspection_task":"sequence_forecast"}),
+                compute: json!({"backend":"cpu"}),
+            }],
+            goals,
+            budget,
+            source_table_versions: vec![],
+            created_tables: vec![],
+            updated_table_versions: vec![],
+            preprocessing_manifest: json!({}),
+            context: json!({}),
+        }, now_ms()).unwrap();
+        let result = AutoTrainingController::new(repo.clone(), worker(&repo, &limits))
+            .run(&experiment.id)
+            .unwrap();
+        let trial = repo
+            .list_experiment_trials(&experiment.id)
+            .unwrap()
+            .remove(0);
+        if ragged_partition.is_some() {
+            assert_eq!(result.status, ExperimentStatus::Failed);
+            assert!(
+                trial
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("target width 1; model requires 2")
+            );
+            assert!(trial.artifact_id.is_none());
+            assert!(repo.get_job(&trial.job_id).unwrap().checkpoint.is_none());
+        } else {
+            assert_eq!(result.status, ExperimentStatus::Completed);
+            assert!(result.target_met);
+            assert!(trial.artifact_id.is_some());
+            assert!(result.final_evaluation_id.is_some());
+        }
+    }
+}
+
+#[test]
 fn controller_recovers_an_expired_worker_after_process_restart() {
     let dir = tempfile::tempdir().unwrap();
     let repo = TrainingRepository::open(dir.path().join("training.sqlite")).unwrap();

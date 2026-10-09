@@ -1,20 +1,20 @@
 //! Durable local training state. SQLite owns mutable coordination; immutable blobs hold data.
 #[cfg(any(feature = "native", feature = "burn"))]
 pub mod engines;
+pub mod experiment;
 #[cfg(feature = "execution")]
 mod repository;
 #[cfg(feature = "execution")]
 pub mod worker;
-pub mod experiment;
 pub use experiment::*;
 pub mod learning;
 pub use learning::*;
-#[cfg(feature = "execution")]
-mod learning_repository;
-#[cfg(feature = "execution")]
-mod experiment_repository;
 #[cfg(all(feature = "native", feature = "burn"))]
 pub mod auto_training;
+#[cfg(feature = "execution")]
+mod experiment_repository;
+#[cfg(feature = "execution")]
+mod learning_repository;
 
 #[cfg(feature = "execution")]
 pub use repository::*;
@@ -228,6 +228,46 @@ pub struct ModelArtifact {
     /// Native model manifest including architecture, labels and preprocessing.
     pub manifest: Value,
     pub created_at_ms: i64,
+}
+
+/// Initialize a new training run from an immutable model in this project's registry.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PretrainedSourceRef {
+    pub source_id: String,
+    #[serde(default = "replace_pretrained_head")]
+    pub replace_head: bool,
+    #[serde(default)]
+    pub freeze_backbone: bool,
+}
+
+fn replace_pretrained_head() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PretrainedSourceKind {
+    Imported,
+    TrainingArtifact,
+}
+
+/// Imported weights are initialization sources, without training or evaluation evidence.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct PretrainedSource {
+    pub id: String,
+    pub project_id: String,
+    pub source_kind: PretrainedSourceKind,
+    pub blob: BlobRef,
+    pub manifest: Value,
+    pub origin: Value,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Sam2FineTuneResult {
+    pub source: PretrainedSource,
+    /// The native training report, including completed epochs, losses and progress history.
+    pub report: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]

@@ -2,7 +2,7 @@ use crate::{Error, Result, require};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sparkplug_rs::protobuf::Message;
+use sparkplug_rs::protobuf::{Message, MessageFull};
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_PAYLOAD: usize = 1024 * 1024;
@@ -158,11 +158,34 @@ fn identifier(value: &str) -> Result<()> {
     )
 }
 
-fn metric_definitions(metrics: &[Value]) -> Result<()> {
+fn normalize_metrics(metrics: &mut [Value]) -> Result<()> {
+    // Protobuf accepts both spellings. Canonicalize before validation and state merging.
+    let descriptor = sparkplug_rs::payload::Metric::descriptor();
+    for metric in metrics {
+        let object = metric
+            .as_object_mut()
+            .ok_or_else(|| Error::Invalid("Expected metric object".into()))?;
+        for field in descriptor.fields() {
+            if field.name() != field.json_name()
+                && let Some(value) = object.remove(field.name())
+            {
+                require(
+                    !object.contains_key(field.json_name()),
+                    "Metric contains both protobuf and JSON spellings of a field",
+                )?;
+                object.insert(field.json_name().to_owned(), value);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn metric_definitions(metrics: &mut [Value]) -> Result<()> {
     require(
         metrics.len() <= 4096,
         "A birth can contain at most 4096 metrics",
     )?;
+    normalize_metrics(metrics)?;
     let mut names = BTreeSet::new();
     let mut aliases = BTreeSet::new();
     for metric in metrics {
@@ -177,10 +200,7 @@ fn metric_definitions(metrics: &[Value]) -> Result<()> {
         )?;
         let datatype = number(metric.get("datatype"))
             .ok_or_else(|| Error::Invalid("Birth metrics require datatypes".into()))?;
-        require(
-            (1..=34).contains(&datatype),
-            "Unsupported Sparkplug datatype",
-        )?;
+        metric_datatype(metric, datatype)?;
         if let Some(alias) = metric.get("alias") {
             let alias =
                 number(Some(alias)).ok_or_else(|| Error::Invalid("Invalid metric alias".into()))?;
@@ -206,6 +226,33 @@ fn metric_value(metric: &Value, required: bool) -> Result<()> {
     require(
         !required || null || count == 1,
         "Birth metrics require a current value or isNull=true",
+    )
+}
+
+fn metric_datatype(metric: &Value, datatype: u64) -> Result<()> {
+    // Sparkplug 3.0 section 6.4.17 maps metric datatypes to protobuf value fields.
+    // PropertySet (20) and PropertySetList (21) are only PropertyValue types.
+    let expected = match datatype {
+        1..=3 | 5..=7 => "intValue",
+        4 | 8 | 13 => "longValue",
+        9 => "floatValue",
+        10 => "doubleValue",
+        11 => "booleanValue",
+        12 | 14 | 15 => "stringValue",
+        16 | 17 | 22..=34 => "bytesValue",
+        18 => "datasetValue",
+        19 => "templateValue",
+        _ => {
+            return Err(Error::Invalid(
+                "Unsupported Sparkplug metric datatype".into(),
+            ));
+        }
+    };
+    require(
+        METRIC_VALUES
+            .iter()
+            .all(|key| *key == expected || metric.get(*key).is_none()),
+        "Metric value field does not match its birth datatype",
     )
 }
 
@@ -247,7 +294,7 @@ impl EdgeState {
     pub fn prepare(mut input: PrepareSession) -> Result<PreparedSession> {
         identifier(&input.group_id)?;
         identifier(&input.node_id)?;
-        metric_definitions(&input.metrics)?;
+        metric_definitions(&mut input.metrics)?;
         timestamp_metrics(&mut input.metrics, input.timestamp_ms);
         require(
             input.metrics.iter().all(|m| {
@@ -302,7 +349,7 @@ impl EdgeState {
     pub fn transition(mut self, action: EdgeAction, timestamp: u64) -> Result<Transition> {
         identifier(&self.group_id)?;
         identifier(&self.node_id)?;
-        metric_definitions(&self.node_metrics)?;
+        metric_definitions(&mut self.node_metrics)?;
         require(
             self.node_metrics.iter().all(|m| {
                 !matches!(
@@ -313,7 +360,7 @@ impl EdgeState {
             "bdSeq and Node Control/Rebirth are managed by the state layer",
         )?;
         require(self.devices.len() <= 1024, "Too many Sparkplug devices")?;
-        for (device, metrics) in &self.devices {
+        for (device, metrics) in &mut self.devices {
             identifier(device)?;
             metric_definitions(metrics)?;
         }
@@ -340,7 +387,7 @@ impl EdgeState {
             } => {
                 require(self.born, "Publish NBIRTH before DBIRTH")?;
                 identifier(&device_id)?;
-                metric_definitions(&metrics)?;
+                metric_definitions(&mut metrics)?;
                 require(
                     self.devices.len() < 1024 || self.devices.contains_key(&device_id),
                     "Too many Sparkplug devices",
@@ -364,6 +411,7 @@ impl EdgeState {
                     &mut self.node_metrics
                 };
                 require(metrics.len() <= 4096, "Too many metric updates")?;
+                normalize_metrics(&mut metrics)?;
                 for metric in &metrics {
                     metric_value(metric, false)?;
                     let definition = definitions
@@ -401,6 +449,11 @@ impl EdgeState {
                             "Metric datatype changed; publish a new birth",
                         )?;
                     }
+                    metric_datatype(
+                        metric,
+                        number(definition.get("datatype"))
+                            .ok_or_else(|| Error::Invalid("Birth metric has no datatype".into()))?,
+                    )?;
                     // Historical samples are published without replacing the current rebirth value.
                     if metric.get("isHistorical") == Some(&Value::Bool(true)) {
                         continue;
@@ -723,10 +776,11 @@ mod tests {
             json!({"name":"null","datatype":10,"isNull":true,"doubleValue":1.0}),
             json!({"name":"unknown","datatype":35,"longValue":"1"}),
         ] {
-            assert!(metric_definitions(&[metric]).is_err());
+            assert!(metric_definitions(&mut [metric]).is_err());
         }
         assert!(
-            metric_definitions(&[json!({"name":"counter","datatype":8,"longValue":"42"})]).is_ok()
+            metric_definitions(&mut [json!({"name":"counter","datatype":8,"longValue":"42"})])
+                .is_ok()
         );
         let state = prepared()
             .state
@@ -755,6 +809,183 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn birth_and_data_reject_value_fields_that_disagree_with_the_datatype() {
+        for metric in [
+            json!({"name":"temperature","datatype":10,"stringValue":"broken"}),
+            json!({"name":"temperature","datatype":10,"string_value":"broken"}),
+            json!({"name":"temperature","datatype":10,"doubleValue":1.0,"string_value":"broken"}),
+            json!({"name":"properties","datatype":20,"extensionValue":{}}),
+            json!({"name":"properties","datatype":21,"isNull":true}),
+        ] {
+            assert!(
+                EdgeState::prepare(PrepareSession {
+                    group_id: "factory".into(),
+                    node_id: "line1".into(),
+                    previous_bd_seq: 0,
+                    timestamp_ms: 1,
+                    metrics: vec![metric],
+                })
+                .is_err()
+            );
+        }
+        let state = prepared()
+            .state
+            .transition(EdgeAction::Birth, 1)
+            .unwrap()
+            .state;
+        for metric in [
+            json!({"name":"temperature","stringValue":"broken"}),
+            json!({"alias":"10","string_value":"broken"}),
+            json!({"alias":"10","datatype":10,"intValue":42}),
+            json!({"alias":"10","isHistorical":true,"stringValue":"broken"}),
+            json!({"alias":"10","is_historical":true,"string_value":"broken"}),
+            json!({"alias":"10","doubleValue":1.0,"double_value":2.0}),
+            json!({"alias":"10","isNull":false,"is_null":true}),
+        ] {
+            assert!(
+                state
+                    .clone()
+                    .transition(
+                        EdgeAction::Data {
+                            device_id: None,
+                            metrics: vec![metric],
+                        },
+                        2
+                    )
+                    .is_err()
+            );
+        }
+        let updated = state
+            .transition(
+                EdgeAction::Data {
+                    device_id: None,
+                    metrics: vec![json!({"alias":"10","doubleValue":42.5})],
+                },
+                2,
+            )
+            .unwrap();
+        let rebirth = updated.state.transition(EdgeAction::Birth, 3).unwrap();
+        assert_eq!(
+            decode(&rebirth.messages[0]).unwrap().payload["metrics"][0]["doubleValue"],
+            42.5
+        );
+    }
+
+    #[test]
+    fn protobuf_metric_spellings_preserve_null_and_historical_semantics() {
+        let prepared = EdgeState::prepare(PrepareSession {
+            group_id: "factory".into(),
+            node_id: "line1".into(),
+            previous_bd_seq: 0,
+            timestamp_ms: 1,
+            metrics: vec![
+                json!({"name":"temperature","alias":"10","datatype":10,"double_value":20.0}),
+            ],
+        })
+        .unwrap();
+        assert_eq!(prepared.state.node_metrics[0]["doubleValue"], 20.0);
+        assert!(prepared.state.node_metrics[0].get("double_value").is_none());
+        let birth = prepared.state.transition(EdgeAction::Birth, 2).unwrap();
+        let device = birth
+            .state
+            .transition(
+                EdgeAction::DeviceBirth {
+                    device_id: "sensor".into(),
+                    metrics: vec![json!({"name":"reading","datatype":10,"is_null":true})],
+                },
+                3,
+            )
+            .unwrap();
+        assert_eq!(device.state.devices["sensor"][0]["isNull"], true);
+        let historical = device
+            .state
+            .transition(
+                EdgeAction::Data {
+                    device_id: None,
+                    metrics: vec![json!({"alias":"10","double_value":-5.0,"is_historical":true})],
+                },
+                4,
+            )
+            .unwrap();
+        assert_eq!(historical.state.node_metrics[0]["doubleValue"], 20.0);
+        let metric = &decode(&historical.messages[0]).unwrap().payload["metrics"][0];
+        assert_eq!(metric["doubleValue"], -5.0);
+        assert_eq!(metric["isHistorical"], true);
+        let null = historical
+            .state
+            .transition(
+                EdgeAction::Data {
+                    device_id: None,
+                    metrics: vec![json!({"alias":"10","is_null":true})],
+                },
+                5,
+            )
+            .unwrap();
+        let rebirth = null.state.transition(EdgeAction::Birth, 6).unwrap();
+        let metric = &decode(&rebirth.messages[0]).unwrap().payload["metrics"][0];
+        assert_eq!(metric["isNull"], true);
+        assert!(metric.get("doubleValue").is_none());
+    }
+
+    #[test]
+    fn restored_state_cannot_bypass_datatype_validation_with_protobuf_spelling() {
+        for device in [false, true] {
+            let mut state = prepared().state;
+            let metrics = if device {
+                state.devices.entry("sensor".into()).or_default()
+            } else {
+                &mut state.node_metrics
+            };
+            *metrics = vec![json!({"name":"temperature","datatype":10,"string_value":"broken"})];
+            assert!(state.transition(EdgeAction::Birth, 1).is_err());
+        }
+    }
+
+    #[test]
+    fn metric_value_fields_cover_scalar_composite_and_array_types() {
+        for (datatype, key, value) in [
+            (1, "intValue", json!(u32::MAX)),
+            (2, "intValue", json!(u32::MAX)),
+            (3, "intValue", json!(u32::MAX)),
+            (4, "longValue", json!(u64::MAX.to_string())),
+            (5, "intValue", json!(255)),
+            (6, "intValue", json!(65535)),
+            (7, "intValue", json!(u32::MAX)),
+            (8, "longValue", json!(u64::MAX.to_string())),
+            (9, "floatValue", json!(1.25)),
+            (10, "doubleValue", json!(2.5)),
+            (11, "booleanValue", json!(false)),
+            (12, "stringValue", json!("value")),
+            (13, "longValue", json!("123")),
+            (14, "stringValue", json!("text")),
+            (15, "stringValue", json!("uuid")),
+            (16, "bytesValue", json!("AQ==")),
+            (17, "bytesValue", json!("AQ==")),
+            (18, "datasetValue", json!({})),
+            (19, "templateValue", json!({})),
+        ]
+        .into_iter()
+        .chain((22..=34).map(|datatype| (datatype, "bytesValue", json!(""))))
+        {
+            let mut metric = json!({"name":"value","datatype":datatype});
+            metric[key] = value;
+            metric_definitions(&mut [metric.clone()]).unwrap();
+            let wire = encode(&Payload {
+                topic: "spBv1.0/g/NBIRTH/n".into(),
+                payload: json!({"metrics":[metric]}),
+            })
+            .unwrap();
+            assert!(
+                decode(&wire).unwrap().payload["metrics"][0]
+                    .get(key)
+                    .is_some()
+            );
+            metric_definitions(&mut [json!({"name":"value","datatype":datatype,"isNull":true})])
+                .unwrap();
+        }
     }
 
     #[test]

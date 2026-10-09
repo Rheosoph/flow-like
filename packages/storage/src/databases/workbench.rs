@@ -85,8 +85,10 @@ async fn build_context(
     surface: &WorkbenchSurface,
     views: &[WorkbenchView],
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-    crate::geometry::register_geo_functions(&ctx);
+    let ctx = SessionContext::new_with_state(
+        crate::databases::df_provider::with_lance_order_pushdown(SessionContext::new().state()),
+    );
+    crate::databases::register_sql_functions(&ctx);
     let mut base_tables: HashSet<String> = HashSet::new();
 
     match surface {
@@ -359,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn register_views_keeps_resolvable_views_when_others_are_bad() -> Result<()> {
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         let base_tables = HashSet::from(["users".to_owned()]);
         let views = vec![
             // Put the dependent view first to exercise the fixpoint ordering.
@@ -420,7 +422,7 @@ mod tests {
     #[tokio::test]
     async fn register_views_skips_entries_beyond_the_cap() -> Result<()> {
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         let views: Vec<WorkbenchView> = (0..MAX_WORKBENCH_VIEWS + 2)
             .map(|index| WorkbenchView {
                 name: format!("view_{index}"),
@@ -447,7 +449,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_legacy_views_do_not_consume_the_registration_cap() -> Result<()> {
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         let mut views: Vec<WorkbenchView> = (0..MAX_WORKBENCH_VIEWS)
             .map(|index| WorkbenchView {
                 name: format!("invalid_{index}"),
@@ -468,7 +470,7 @@ mod tests {
     #[tokio::test]
     async fn register_views_rejects_case_insensitive_legacy_name_collisions() -> Result<()> {
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         let views = vec![
             WorkbenchView {
                 name: "USERS".to_string(),

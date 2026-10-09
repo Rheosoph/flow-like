@@ -554,7 +554,7 @@ mod tests {
         use datafusion::prelude::SessionContext;
 
         let ctx = SessionContext::new();
-        crate::geometry::register_geo_functions(&ctx);
+        crate::databases::register_sql_functions(&ctx);
         let params = json!({
             "area": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]]]},
             "inside": {"type": "Point", "coordinates": [2.0, 2.0]},

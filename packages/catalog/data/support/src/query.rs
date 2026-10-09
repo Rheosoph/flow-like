@@ -444,7 +444,7 @@ mod tests {
     #[tokio::test]
     async fn geometry_and_bytes_survive_row_and_csv_conversion() -> flow_like_types::Result<()> {
         let ctx = flow_like_storage::datafusion::prelude::SessionContext::new();
-        flow_like_storage::geometry::register_geo_functions(&ctx);
+        flow_like_storage::databases::register_sql_functions(&ctx);
         let batches = ctx.sql("SELECT ST_Centroid(flow_geomfromtext('LINESTRING(10 20,20 30)')) AS center, arrow_cast('abc', 'Binary') AS bytes")
             .await?.collect().await?;
         let rows = batches_to_rows(&batches)?;

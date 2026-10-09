@@ -1,5 +1,5 @@
 use crate::{CompilationJob, CompilerError};
-use flow_like_types_contracts::dispatch::{CompilationJobRef, split_claim_check_url};
+use flow_like_types_contracts::dispatch::{split_claim_check_url, CompilationJobRef};
 use std::time::Duration;
 
 /// Resolve the queue-worker format with its existing 64 MiB and 60 second limits.

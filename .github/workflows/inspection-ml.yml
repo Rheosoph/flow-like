@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'packages/ml/**'
+      - 'packages/vendor/pytorch-reader/**'
       - 'packages/industrial/**'
       - 'packages/catalog/industrial/**'
       - 'packages/catalog/ml/**'
@@ -59,7 +60,7 @@ jobs:
       - name: Install catalog build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libclang-dev
+          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libcurl4-openssl-dev libclang-dev
       - name: Catalog metadata and pin-schema tests
         run: |
           cargo test --locked -p flow-like-catalog-ml --lib

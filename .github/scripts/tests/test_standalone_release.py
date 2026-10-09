@@ -227,11 +227,50 @@ class StandalonePublisherTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "sequence 5 must be greater than the published sequence 5"):
                 release.preflight(base, 5, keys)
             release.preflight(base, 6, keys)
-        self.assertEqual(requests[-1], ("HEAD", f"{base}/releases/6/release.jws"))
-        self.assertEqual(len(requests), 1 + 1 + len(release.TARGETS) + 1)
+        self.assertEqual(requests, [
+            ("GET", STABLE_URL), ("GET", STABLE_URL),
+            *[("GET", runtime_url(target)) for target in release.TARGETS],
+            *[("HEAD", f"{base}/releases/6/flow-like-standalone-{target}") for target in release.TARGETS],
+            ("HEAD", f"{base}/releases/6/release.jws"),
+            *[("HEAD", f"{base}/releases/6/runtimes/{target}.jws") for target in release.TARGETS],
+        ])
         partial = f"{base}/releases/1/flow-like-standalone-x86_64-unknown-linux-gnu"
         with cdn({partial: b""}), self.assertRaisesRegex(ValueError, "already uploaded flow-like-standalone-x86_64-unknown-linux-gnu for sequence 1"):
             release.preflight(base, 1, keys)
+
+    def test_preflight_refuses_runtime_sequences_even_when_the_agent_release_did_not_publish(self):
+        agent = self.signed(4)
+        for target in release.TARGETS:
+            # Expiry does not free a sequence for reuse.
+            runtime = self.jws(runtime_list(target, 6, issued_at=100), RUNTIME)
+            for published_agent in ({}, {STABLE_URL: agent}):
+                with self.subTest(target=target, agent=bool(published_agent)), \
+                        self.cdn({**published_agent, runtime_url(target): runtime}):
+                    for sequence in (5, 6):
+                        with self.assertRaisesRegex(ValueError, f"Release sequence {sequence} must be greater than the {target} runtime manifest sequence 6") as error:
+                            release.preflight(BASE, sequence, self.keys, "1.2.4")
+                        self.assertIn("Dispatch a new run with an unused higher sequence", str(error.exception))
+                    release.preflight(BASE, 7, self.keys, "1.2.4")
+
+    def test_preflight_refuses_immutable_runtime_manifests_before_any_stable_head_advances(self):
+        agent = self.signed(5)
+        for target in release.TARGETS:
+            name = f"runtimes/{target}.jws"
+            url = f"{BASE}/releases/6/{name}"
+            with self.subTest(target=target), self.cdn({STABLE_URL: agent, url: b""}):
+                with self.assertRaisesRegex(ValueError, f"already uploaded {name} for sequence 6; dispatch with a higher sequence"):
+                    release.preflight(BASE, 6, self.keys, "1.2.4")
+                self.assertIn(("HEAD", url), self.requests)
+                release.preflight(BASE, 7, self.keys, "1.2.4")
+
+    def test_preflight_authenticates_published_runtime_heads(self):
+        target = "aarch64-apple-darwin"
+        value = runtime_list(target, 6)
+        valid = self.jws(value, RUNTIME)
+        for compact in (self.jws(value), valid[:-8] + b"AAAAAAAA"):
+            with self.subTest(compact=compact), self.cdn({runtime_url(target): compact}):
+                with self.assertRaises(ValueError):
+                    release.preflight(BASE, 7, self.keys)
 
     def test_preflight_refuses_a_release_whose_agent_version_was_not_bumped(self):
         with self.cdn({STABLE_URL: self.signed(3)}):

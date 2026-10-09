@@ -91,7 +91,7 @@ crate::operation!(
     EthercatStopNode,
     "industrial_ethercat_stop",
     "Stop EtherCAT Master",
-    "Stop process-data sampling and request SAFE-OP, PRE-OP, then INIT before closing the raw interface",
+    "Stop process-data sampling and return devices to INIT before closing the raw interface",
     "ethercat",
     "stop",
     "Industrial/EtherCAT",

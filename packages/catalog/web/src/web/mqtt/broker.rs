@@ -17,7 +17,7 @@ use flow_like_types::json::json;
 use bytes::BytesMut;
 #[cfg(feature = "execute")]
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -50,6 +50,8 @@ const CLIENT_QUEUE: usize = 64;
 const MAX_PACKET: usize = 1024 * 1024;
 #[cfg(feature = "execute")]
 const MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(feature = "execute")]
+const MAX_QUEUED_PUBLICATIONS: usize = 1024;
 
 #[cfg(feature = "execute")]
 #[derive(Default)]
@@ -69,6 +71,8 @@ struct BrokerClient {
     filters: HashMap<String, QoS>,
     pending: HashSet<u16>,
     next_pkid: u16,
+    publications: VecDeque<Publish>,
+    publication_bytes: usize,
 }
 
 #[cfg(feature = "execute")]
@@ -403,11 +407,19 @@ impl NodeLogic for MqttBrokerNode {
                         filters: HashMap::new(),
                         pending: HashSet::new(),
                         next_pkid: 0,
+                        publications: VecDeque::new(),
+                        publication_bytes: 0,
                     },
                 );
                 id
             };
-            let writer_handle = tokio::spawn(mqtt_client_writer(writer, rx, close.clone()));
+            let writer_handle = tokio::spawn(mqtt_client_writer(
+                writer,
+                rx,
+                close.clone(),
+                broker.clone(),
+                connection_id,
+            ));
             let reader_handle = tokio::spawn(handle_mqtt_client(
                 reader,
                 tx,
@@ -562,6 +574,9 @@ impl BrokerClient {
     }
 
     fn publish(&mut self, source: &Publish, qos: QoS, retained: bool) {
+        if *self.close.borrow() {
+            return;
+        }
         let mut publish = source.clone();
         publish.qos = if source.qos == QoS::AtMostOnce {
             QoS::AtMostOnce
@@ -571,20 +586,54 @@ impl BrokerClient {
         publish.retain = retained;
         publish.dup = false;
         publish.pkid = 0;
-        if publish.qos == QoS::AtLeastOnce {
-            if self.pending.len() >= CLIENT_QUEUE {
-                self.close.send_replace(true);
-                return;
+        let bytes = publish.topic.len() + publish.payload.len();
+        if self.publications.len() >= MAX_QUEUED_PUBLICATIONS
+            || self.publication_bytes + bytes > MAX_RETAINED_BYTES
+        {
+            self.close.send_replace(true);
+            return;
+        }
+        self.publication_bytes += bytes;
+        self.publications.push_back(publish);
+        self.flush_publications();
+    }
+
+    fn flush_publications(&mut self) {
+        // Leave room for control packets. Resume after socket writes and PUBACKs,
+        // without holding the broker lock while waiting for either one.
+        while self.tx.capacity() > 1 && !*self.close.borrow() {
+            let Some(mut publish) = self.publications.front().cloned() else {
+                break;
+            };
+            if publish.qos == QoS::AtLeastOnce {
+                if self.pending.len() >= CLIENT_QUEUE {
+                    break;
+                }
+                loop {
+                    self.next_pkid = self.next_pkid.wrapping_add(1).max(1);
+                    if !self.pending.contains(&self.next_pkid) {
+                        break;
+                    }
+                }
+                publish.pkid = self.next_pkid;
             }
-            loop {
-                self.next_pkid = self.next_pkid.wrapping_add(1).max(1);
-                if self.pending.insert(self.next_pkid) {
+            let pkid = publish.pkid;
+            let bytes = publish.topic.len() + publish.payload.len();
+            match self.tx.try_send(Packet::Publish(publish)) {
+                Ok(()) => {
+                    if pkid != 0 {
+                        self.pending.insert(pkid);
+                    }
+                    self.publications.pop_front();
+                    self.publication_bytes -= bytes;
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => break,
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    self.close.send_replace(true);
                     break;
                 }
             }
-            publish.pkid = self.next_pkid;
         }
-        self.send(Packet::Publish(publish));
     }
 }
 
@@ -775,6 +824,7 @@ async fn handle_mqtt_client<R>(
                 }
                 if let Some(client) = broker.lock().await.clients.get_mut(&connection_id) {
                     client.pending.remove(&ack.pkid);
+                    client.flush_publications();
                 }
             }
             Packet::PingReq => {
@@ -810,6 +860,8 @@ async fn mqtt_client_writer<W>(
     mut writer: W,
     mut rx: mpsc::Receiver<Packet>,
     close: watch::Sender<bool>,
+    broker: Broker,
+    connection_id: u64,
 ) where
     W: AsyncWrite + Unpin + Send + 'static,
 {
@@ -830,6 +882,9 @@ async fn mqtt_client_writer<W>(
         };
         if !matches!(result, Ok(Ok(()))) {
             break;
+        }
+        if let Some(client) = broker.lock().await.clients.get_mut(&connection_id) {
+            client.flush_publications();
         }
     }
     close.send_replace(true);
@@ -926,11 +981,19 @@ mod tests {
                     filters: HashMap::new(),
                     pending: HashSet::new(),
                     next_pkid: 0,
+                    publications: VecDeque::new(),
+                    publication_bytes: 0,
                 },
             );
             id
         };
-        let writer_handle = tokio::spawn(mqtt_client_writer(writer, rx, close.clone()));
+        let writer_handle = tokio::spawn(mqtt_client_writer(
+            writer,
+            rx,
+            close.clone(),
+            broker.clone(),
+            id,
+        ));
         let reader_handle = tokio::spawn(handle_mqtt_client(
             reader,
             tx,
@@ -1031,6 +1094,100 @@ mod tests {
         );
         broker.lock().await.stopping = true;
         shutdown_mqtt_clients(vec![ptask, stask, ltask]).await;
+    }
+
+    #[tokio::test]
+    async fn retained_replay_larger_than_the_inflight_window_finishes_without_disconnect() {
+        for qos in [QoS::AtMostOnce, QoS::AtLeastOnce] {
+            let broker = Arc::new(Mutex::new(BrokerState::default()));
+            for index in 0..MAX_QUEUED_PUBLICATIONS {
+                let mut publish = Publish::new(format!("plant/{index}"), qos, vec![1]);
+                publish.retain = true;
+                assert!(broker.lock().await.publish(&publish));
+            }
+            let (mut subscriber, task) = wire_client(&broker, None, 0).await;
+            subscribe(&mut subscriber, "plant/#").await;
+            let mut topics = HashSet::new();
+            for _ in 0..MAX_QUEUED_PUBLICATIONS {
+                let Packet::Publish(publish) = receive(&mut subscriber).await else {
+                    panic!("expected retained publication");
+                };
+                assert!(publish.retain);
+                assert_eq!(publish.qos, qos);
+                assert!(topics.insert(publish.topic));
+                if qos == QoS::AtLeastOnce {
+                    write_mqtt_packet(&mut subscriber, Packet::PubAck(PubAck::new(publish.pkid)))
+                        .await
+                        .unwrap();
+                }
+            }
+            write_mqtt_packet(&mut subscriber, Packet::PingReq)
+                .await
+                .unwrap();
+            assert!(matches!(receive(&mut subscriber).await, Packet::PingResp));
+            {
+                let state = broker.lock().await;
+                let client = state.clients.values().next().unwrap();
+                assert!(client.publications.is_empty());
+                assert!(client.pending.is_empty());
+                assert_eq!(client.publication_bytes, 0);
+            }
+            broker.lock().await.stopping = true;
+            shutdown_mqtt_clients(vec![task]).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn live_messages_follow_retained_replay_and_wait_for_acknowledgements() {
+        let broker = Arc::new(Mutex::new(BrokerState::default()));
+        for index in 0..CLIENT_QUEUE * 2 {
+            let mut publish = Publish::new(format!("plant/{index}"), QoS::AtLeastOnce, vec![0]);
+            publish.retain = true;
+            assert!(broker.lock().await.publish(&publish));
+        }
+        let (mut subscriber, task) = wire_client(&broker, None, 0).await;
+        subscribe(&mut subscriber, "plant/#").await;
+        assert!(
+            broker
+                .lock()
+                .await
+                .publish(&Publish::new("plant/0", QoS::AtLeastOnce, vec![1]))
+        );
+        let mut first_window = Vec::new();
+        for _ in 0..CLIENT_QUEUE {
+            let Packet::Publish(publish) = receive(&mut subscriber).await else {
+                panic!("expected publication");
+            };
+            first_window.push(publish.pkid);
+        }
+        // The wire stays open while the in-flight window is full.
+        write_mqtt_packet(&mut subscriber, Packet::PingReq)
+            .await
+            .unwrap();
+        assert!(matches!(receive(&mut subscriber).await, Packet::PingResp));
+        for pkid in first_window {
+            write_mqtt_packet(&mut subscriber, Packet::PubAck(PubAck::new(pkid)))
+                .await
+                .unwrap();
+        }
+        for index in 0..=CLIENT_QUEUE {
+            let Packet::Publish(publish) = receive(&mut subscriber).await else {
+                panic!("expected publication");
+            };
+            if index == CLIENT_QUEUE {
+                assert_eq!(publish.topic, "plant/0");
+                assert_eq!(publish.payload.as_ref(), &[1]);
+                assert!(!publish.retain);
+            } else {
+                assert!(publish.retain);
+                assert_eq!(publish.payload.as_ref(), &[0]);
+            }
+            write_mqtt_packet(&mut subscriber, Packet::PubAck(PubAck::new(publish.pkid)))
+                .await
+                .unwrap();
+        }
+        broker.lock().await.stopping = true;
+        shutdown_mqtt_clients(vec![task]).await;
     }
 
     #[tokio::test]
@@ -1136,11 +1293,14 @@ mod tests {
                 filters: HashMap::from([("#".into(), QoS::AtMostOnce)]),
                 pending: HashSet::new(),
                 next_pkid: 0,
+                publications: VecDeque::new(),
+                publication_bytes: 0,
             },
         );
         let publish = Publish::new("test", QoS::AtMostOnce, vec![1]);
-        assert!(state.publish(&publish));
-        assert!(state.publish(&publish));
+        for _ in 0..=MAX_QUEUED_PUBLICATIONS {
+            assert!(state.publish(&publish));
+        }
         assert!(*close.borrow());
         for index in 0..8 {
             let mut retained = Publish::new(

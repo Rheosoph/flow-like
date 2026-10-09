@@ -64,13 +64,16 @@ mod runtime {
     use super::*;
     use crate::Error;
     use std::time::Duration;
+    use tokio::sync::{Mutex, mpsc};
+    use tokio_util::sync::CancellationToken;
     use zenoh::{
-        handlers::{FifoChannel, FifoChannelHandler},
+        handlers::{Callback, IntoHandler},
         pubsub::Subscriber,
         sample::{Sample, SampleKind},
     };
 
     const MAX_PAYLOAD: usize = 16 * 1024 * 1024;
+    const RECEIVE_CAPACITY: usize = 128;
     fn failure(error: impl std::fmt::Display) -> Error {
         Error::Other(anyhow::anyhow!(error.to_string()))
     }
@@ -78,7 +81,54 @@ mod runtime {
         session: zenoh::Session,
     }
     pub struct ZenohSubscription {
-        subscriber: Subscriber<FifoChannelHandler<Sample>>,
+        subscriber: Subscriber<ReceiveQueue<Sample>>,
+    }
+    struct NonBlockingChannel;
+    struct ReceiveQueue<T> {
+        receiver: Mutex<mpsc::Receiver<T>>,
+        overflow: CancellationToken,
+    }
+    impl<T: Send + 'static> IntoHandler<T> for NonBlockingChannel {
+        type Handler = ReceiveQueue<T>;
+
+        fn into_handler(self) -> (Callback<T>, Self::Handler) {
+            let (sender, receiver) = mpsc::channel(RECEIVE_CAPACITY);
+            let overflow = CancellationToken::new();
+            let failed = overflow.clone();
+            (
+                Callback::from(move |value| {
+                    // Local publication invokes this callback synchronously. Waiting for space
+                    // would deadlock a handler that publishes to its own subscription.
+                    if !failed.is_cancelled()
+                        && matches!(
+                            sender.try_send(value),
+                            Err(mpsc::error::TrySendError::Full(_))
+                        )
+                    {
+                        failed.cancel();
+                    }
+                }),
+                ReceiveQueue {
+                    receiver: Mutex::new(receiver),
+                    overflow,
+                },
+            )
+        }
+    }
+    impl<T> ReceiveQueue<T> {
+        async fn receive(&self) -> Result<Option<T>> {
+            let mut receiver = self.receiver.lock().await;
+            let value = tokio::select! {
+                biased;
+                _ = self.overflow.cancelled() => None,
+                value = receiver.recv() => value,
+            };
+            require(
+                !self.overflow.is_cancelled(),
+                "Zenoh receive queue overflowed its 128-message capacity",
+            )?;
+            Ok(value)
+        }
     }
     fn sample(value: &Sample) -> Result<ZenohSample> {
         require(
@@ -132,7 +182,7 @@ mod runtime {
             let subscriber = self
                 .session
                 .declare_subscriber(key)
-                .with(FifoChannel::new(128))
+                .with(NonBlockingChannel)
                 .await
                 .map_err(failure)?;
             Ok(ZenohSubscription { subscriber })
@@ -155,12 +205,12 @@ mod runtime {
                 .session
                 .get(selector)
                 .timeout(Duration::from_millis(timeout_ms))
-                .with(FifoChannel::new(128))
+                .with(NonBlockingChannel)
                 .await
                 .map_err(failure)?;
             let mut values = Vec::new();
             let mut bytes = 0;
-            while let Ok(reply) = replies.recv_async().await {
+            while let Some(reply) = replies.receive().await? {
                 let value = reply.result().map_err(|error| {
                     failure(format!(
                         "Zenoh query returned an error: {}",
@@ -185,8 +235,46 @@ mod runtime {
     }
     impl ZenohSubscription {
         pub async fn receive(&self) -> Result<ZenohSample> {
-            let value = self.subscriber.recv_async().await.map_err(failure)?;
+            let value = self
+                .subscriber
+                .receive()
+                .await?
+                .ok_or_else(|| failure("Zenoh subscription closed"))?;
             sample(&value)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use zenoh::Wait;
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+        async fn query_burst_reports_overflow_without_blocking_local_replies() {
+            let client = ZenohClient::connect(ZenohConfig::default()).await.unwrap();
+            let queryable = client
+                .session
+                .declare_queryable("flow-like/burst/**")
+                .callback(|query| {
+                    for index in 0..=RECEIVE_CAPACITY {
+                        query
+                            .reply(format!("flow-like/burst/{index}"), vec![42])
+                            .wait()
+                            .unwrap();
+                    }
+                })
+                .await
+                .unwrap();
+            let error = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.query("flow-like/burst/**", 1000, 1000),
+            )
+            .await
+            .expect("a full reply queue must not block the local queryable")
+            .unwrap_err();
+            assert!(error.to_string().contains("queue overflowed"), "{error}");
+            drop(queryable);
+            client.close().await.unwrap();
         }
     }
 }
@@ -231,5 +319,27 @@ mod tests {
         assert!(subscriber.receive().await.unwrap().deleted);
         drop(subscriber);
         client.close().await.unwrap();
+    }
+    #[cfg(feature = "execute")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_subscription_reports_overflow_and_does_not_block_local_publication() {
+        let client = ZenohClient::connect(ZenohConfig::default()).await.unwrap();
+        let subscriber = client.subscribe("flow-like/full").await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for _ in 0..256 {
+                client
+                    .publish("flow-like/full", vec![42], "application/octet-stream")
+                    .await
+                    .unwrap();
+            }
+            let error = subscriber.receive().await.unwrap_err();
+            assert!(error.to_string().contains("queue overflowed"), "{error}");
+            // An overflow terminates this subscription instead of resuming with missing samples.
+            assert!(subscriber.receive().await.is_err());
+            drop(subscriber);
+            client.close().await.unwrap();
+        })
+        .await
+        .expect("publication and close must remain responsive with a full receive queue");
     }
 }

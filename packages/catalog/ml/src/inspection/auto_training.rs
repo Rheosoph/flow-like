@@ -28,6 +28,9 @@ pub struct AutoTrainRequest {
     /// Optional task-compatible recipes, including architectures requiring an explicit input layout.
     #[serde(default)]
     pub initial_candidates: Vec<flow_like_ml_runtime::TrainingRequest>,
+    /// Include a fine-tuning candidate initialized from an authorized registry source.
+    #[serde(default)]
+    pub pretrained: Option<flow_like_ml_runtime::PretrainedSourceRef>,
     #[serde(default)]
     pub feature_plan: Option<super::feature_engineering::FeaturePlan>,
     #[serde(default)]
@@ -555,6 +558,19 @@ pub async fn start_auto_training_scoped(
     }
     validate_search(&prepared.spec, &request.search, &request.compute)?;
     let mut candidates = request.initial_candidates.clone();
+    if let Some(pretrained) = &request.pretrained {
+        candidates.insert(
+            0,
+            pretrained_candidate(
+                &repo,
+                &stream.project_id,
+                &prepared.spec,
+                pretrained,
+                &request.search,
+                &request.compute,
+            )?,
+        );
+    }
     for candidate in &candidates {
         if candidate.engine == "burn" {
             let config: flow_like_ml_burn::TrainingConfig = flow_like_types::json::from_value(
@@ -566,6 +582,13 @@ pub async fn start_auto_training_scoped(
             )?;
             config.validate_planning_budget()?;
             flow_like_ml_burn::validate_inspection_config(&prepared.spec, &config)?;
+            validate_candidate_pretrained(
+                &repo,
+                &stream.project_id,
+                candidate,
+                &prepared.spec.labels,
+                request.budget.worker_limits.memory_budget_bytes,
+            )?;
         }
     }
     if prepared.spec.task == TaskKind::SensorClassification && prepared.spec.input_shape.len() == 1
@@ -599,7 +622,7 @@ pub async fn start_auto_training_scoped(
         candidates, goals, budget: request.budget.clone(),
         source_table_versions: std::iter::once(flow_like_types::json::json!(prepared.source.reference)).chain(prepared.feature_sources.iter().map(|source|flow_like_types::json::json!({"alias":source.alias,"reference":source.source.reference}))).collect(),
         created_tables: vec![], updated_table_versions: vec![], preprocessing_manifest: flow_like_types::json::json!(prepared.preprocessing),
-        context: flow_like_types::json::json!({"training_profile":prepared.profile,"search":request.search,"compute":request.compute,"dataset_request":request.dataset,"table_policy":request.tables,"pinned_source":prepared.source,"ordered_target":request.ordered_target,"feature_plan":request.feature_plan,"feature_sources":prepared.feature_sources,"learning_cycle_id":request.learning_cycle_id}),
+        context: flow_like_types::json::json!({"training_profile":prepared.profile,"search":request.search,"compute":request.compute,"pretrained":request.pretrained,"dataset_request":request.dataset,"table_policy":request.tables,"pinned_source":prepared.source,"ordered_target":request.ordered_target,"feature_plan":request.feature_plan,"feature_sources":prepared.feature_sources,"learning_cycle_id":request.learning_cycle_id}),
     }, flow_like_ml_runtime::now_ms())?;
     let tables = super::auto_training_tables::materialize_prepared_tables(
         context,
@@ -631,6 +654,78 @@ pub async fn start_auto_training_scoped(
         enqueue_experiment(repo.clone(), experiment.id.clone())?;
     }
     Ok(repo.experiment_result(&experiment.id)?.into())
+}
+
+#[cfg(feature = "training")]
+fn validate_candidate_pretrained(
+    repo: &flow_like_ml_runtime::TrainingRepository,
+    project_id: &str,
+    candidate: &flow_like_ml_runtime::TrainingRequest,
+    labels: &[String],
+    worker_memory_bytes: u64,
+) -> Result<()> {
+    let recipe: flow_like_ml_runtime::engines::BurnEngineRecipe =
+        flow_like_types::json::from_value(candidate.recipe.clone())?;
+    if let Some(pretrained) = &recipe.pretrained {
+        let compute: ComputeConfig = flow_like_types::json::from_value(candidate.compute.clone())?;
+        compute.validate()?;
+        flow_like_ml_runtime::engines::validate_burn_pretrained_source(
+            repo,
+            project_id,
+            pretrained,
+            &recipe.config,
+            labels,
+            (compute.memory_limit_bytes.min(worker_memory_bytes) / 4).min(512 * 1024 * 1024),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "training")]
+fn pretrained_candidate(
+    repo: &flow_like_ml_runtime::TrainingRepository,
+    project_id: &str,
+    spec: &flow_like_ml_core::InspectionSpec,
+    pretrained: &flow_like_ml_runtime::PretrainedSourceRef,
+    search: &AutoSearchConfig,
+    compute: &ComputeConfig,
+) -> Result<flow_like_ml_runtime::TrainingRequest> {
+    let source = repo.get_pretrained_source(&pretrained.source_id)?;
+    if source.project_id != project_id {
+        return Err(anyhow!("Pretrained source belongs to a different project"));
+    }
+    let mut config: flow_like_ml_burn::TrainingConfig =
+        flow_like_types::json::from_value(source.manifest["config"].clone())?;
+    if pretrained.replace_head && !spec.labels.is_empty() {
+        let mut recipe = flow_like_types::json::to_value(&config.recipe)?;
+        let classes = flow_like_types::json::json!(spec.labels.len());
+        if recipe.get("classes").is_some() {
+            recipe["classes"] = classes;
+        } else if recipe.pointer("/config/classes").is_some() {
+            recipe["config"]["classes"] = classes;
+        } else {
+            return Err(anyhow!(
+                "Automatic fine-tuning requires a replaceable class head"
+            ));
+        }
+        config.recipe = flow_like_types::json::from_value(recipe)?;
+    }
+    config.backend = flow_like_ml_burn::BackendChoice::Auto;
+    config.epochs = search.min_epochs;
+    config.batch_size = search.batch_size;
+    config.learning_rate = 0.0001;
+    config.seed = search.seed;
+    config.gradient_clip = 5.;
+    flow_like_ml_burn::validate_inspection_config(spec, &config)?;
+    Ok(flow_like_ml_runtime::TrainingRequest {
+        engine: "burn".into(),
+        recipe: flow_like_types::json::json!({
+            "config":config,"labels":spec.labels,"inspection_task":spec.task,
+            "pretrained":pretrained,
+            "search":{"rung":0,"min_epochs":search.min_epochs,"max_epochs":search.max_epochs,"reduction_factor":search.reduction_factor},
+        }),
+        compute: flow_like_types::json::to_value(compute)?,
+    })
 }
 
 #[cfg(feature = "training")]
@@ -683,6 +778,20 @@ pub fn consultation_context(
 ) -> Result<Value> {
     let state = repo.experiment_result(id)?;
     let experiment = state.experiment;
+    let pretrained_sources = repo.list_pretrained_sources_for_engine(&experiment.request.stream.project_id, 16, "burn")?
+        .into_iter()
+        .map(|source| flow_like_types::json::json!({
+            "source_id":source.id,"source_kind":source.source_kind,
+            "recipe":source.manifest.pointer("/config/recipe"),
+            "input_shape":source.manifest.get("input_shape"),
+            "label_count":source.manifest.get("labels").and_then(Value::as_array).map_or(0,Vec::len),
+            "head_pretrained":source.manifest.pointer("/imported/classification_head_pretrained"),
+            "recommended_preprocessing":source.manifest.get("recommended_preprocessing"),
+            "imported_provenance":source.manifest.get("imported").filter(|value| !value.is_null())
+                .or_else(|| source.manifest.pointer("/pretrained/training/imported"))
+                .or_else(|| source.manifest.pointer("/pretrained/imported")),
+            "bytes":source.blob.bytes,"sha256":source.blob.sha256,
+        })).collect::<Vec<_>>();
     let trials = state.trials.iter().map(|trial| -> Result<Value> {
         let job = repo.get_job(&trial.job_id)?;
         let config = if job.request.engine == "burn" {
@@ -699,7 +808,7 @@ pub fn consultation_context(
         };
         Ok(flow_like_types::json::json!({
             "trial_id":trial.id,"candidate_index":trial.candidate_index,"status":trial.status,
-            "engine":job.request.engine,"config":config,"dataset_snapshot_id":trial.dataset_snapshot_id,
+            "engine":job.request.engine,"config":config,"pretrained":job.request.recipe.get("pretrained"),"dataset_snapshot_id":trial.dataset_snapshot_id,
             "validation_metrics":trial.validation_metrics,"error":trial.error,
             "training_time_ms":trial.training_time_ms,"progress":job.progress,
         }))
@@ -736,6 +845,7 @@ pub fn consultation_context(
         "ordered_target": experiment.request.context.get("ordered_target"),
         "trials": trials,
         "registered_datasets":datasets
+        ,"pretrained_sources":pretrained_sources
     });
     if flow_like_types::json::to_vec(&result)?.len() > 128 * 1024 {
         return Err(anyhow!("Consultation report exceeds its 128 KiB limit"));
@@ -749,6 +859,17 @@ pub fn append_burn_candidate(
     id: &str,
     config: flow_like_ml_burn::TrainingConfig,
     dataset_snapshot_id: Option<String>,
+) -> Result<()> {
+    append_burn_candidate_with_pretrained(repo, id, config, dataset_snapshot_id, None)
+}
+
+#[cfg(feature = "training")]
+pub fn append_burn_candidate_with_pretrained(
+    repo: &flow_like_ml_runtime::TrainingRepository,
+    id: &str,
+    config: flow_like_ml_burn::TrainingConfig,
+    dataset_snapshot_id: Option<String>,
+    pretrained: Option<flow_like_ml_runtime::PretrainedSourceRef>,
 ) -> Result<()> {
     let state = repo.experiment_result(id)?;
     let experiment = state.experiment;
@@ -786,9 +907,16 @@ pub fn append_burn_candidate(
     )?;
     let candidate = flow_like_ml_runtime::TrainingRequest {
         engine: "burn".into(),
-        recipe: flow_like_types::json::json!({"config":config,"labels":spec.labels,"preprocessing":[],"inspection_task":spec.task,"minimum_examples":spec.minimum_examples,"minimum_examples_per_class":spec.minimum_examples_per_class,"dataset_snapshot_id":dataset_id}),
+        recipe: flow_like_types::json::json!({"config":config,"labels":spec.labels,"preprocessing":[],"pretrained":pretrained,"inspection_task":spec.task,"minimum_examples":spec.minimum_examples,"minimum_examples_per_class":spec.minimum_examples_per_class,"dataset_snapshot_id":dataset_id}),
         compute: flow_like_types::json::json!(compute),
     };
+    validate_candidate_pretrained(
+        repo,
+        &experiment.request.stream.project_id,
+        &candidate,
+        &spec.labels,
+        experiment.request.budget.worker_limits.memory_budget_bytes,
+    )?;
     repo.append_experiment_candidates(id, vec![candidate], flow_like_ml_runtime::now_ms())?;
     Ok(())
 }

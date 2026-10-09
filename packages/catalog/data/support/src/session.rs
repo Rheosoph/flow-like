@@ -290,8 +290,10 @@ pub fn create_session_context(
         .with_default_features()
         .build();
 
-    let context = SessionContext::new_with_state(state);
-    flow_like_storage::geometry::register_geo_functions(&context);
+    let context = SessionContext::new_with_state(
+        flow_like_storage::databases::df_provider::with_lance_order_pushdown(state),
+    );
+    flow_like_storage::databases::register_sql_functions(&context);
     context
 }
 
@@ -302,7 +304,10 @@ pub fn create_session_context(
     config: SessionConfig,
     environment: ExecutionEnvironment,
 ) -> SessionContext {
-    let context = SessionContext::new_with_config_rt(config, create_runtime_env(environment));
-    flow_like_storage::geometry::register_geo_functions(&context);
+    let state = SessionContext::new_with_config_rt(config, create_runtime_env(environment)).state();
+    let context = SessionContext::new_with_state(
+        flow_like_storage::databases::df_provider::with_lance_order_pushdown(state),
+    );
+    flow_like_storage::databases::register_sql_functions(&context);
     context
 }

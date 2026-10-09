@@ -2,7 +2,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use axum::routing::get;
-use flow_like_compiler::{CompilerState, compiler_router};
+use flow_like_compiler::{compiler_router, CompilerState};
 
 mod metrics;
 

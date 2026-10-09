@@ -1,14 +1,16 @@
 pub mod auto_training;
 pub mod auto_training_legacy;
 pub mod auto_training_tables;
-pub mod feature_engineering;
-pub mod learning;
 pub mod compute;
 pub mod data;
+pub mod feature_engineering;
 pub mod image;
+pub mod learning;
 pub mod lifecycle;
 pub mod metrics;
 pub mod models;
+pub mod pretrained;
+pub mod sam2;
 pub mod sensors;
 
 use flow_like::flow::{node::Node, pin::PinOptions, variable::VariableType};
@@ -159,6 +161,15 @@ mod tests {
             }
         }
         for required in [
+            "ml_import_pretrained_vision",
+            "ml_list_pretrained_vision",
+            "ml_extract_pretrained_features",
+            "ml_train_dino_v2",
+            "ml_train_rtdetr_v2",
+            "ml_train_rf_detr",
+            "ml_train_dfine_nano",
+            "ml_prompt_sam2",
+            "ml_fine_tune_sam2",
             "ml_auto_train_tabular",
             "ml_auto_train_forecast",
             "ml_auto_train_vision",

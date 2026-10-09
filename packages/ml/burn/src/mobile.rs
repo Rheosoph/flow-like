@@ -79,6 +79,21 @@ pub struct MobileNetV2 {
     head: Linear,
 }
 impl MobileNetV2 {
+    pub(crate) fn reset_classifier(mut self, classes: usize, device: &Device) -> Self {
+        let input = self.head.weight.val().dims()[0];
+        self.head = LinearConfig::new(input, classes).init(device);
+        self
+    }
+    pub(crate) fn configure_fine_tuning(self, freeze_backbone: bool) -> Self {
+        let mut model = if freeze_backbone {
+            self.freeze()
+        } else {
+            self.unfreeze()
+        };
+        model.head = model.head.unfreeze();
+        model.dropout = model.dropout.unfreeze();
+        model
+    }
     pub fn new(input: usize, classes: usize, width: f64, device: &Device) -> Self {
         let first = channels(32, width);
         let mut previous = first;
@@ -190,6 +205,21 @@ pub struct EfficientNet {
     head: Linear,
 }
 impl EfficientNet {
+    pub(crate) fn reset_classifier(mut self, classes: usize, device: &Device) -> Self {
+        let input = self.head.weight.val().dims()[0];
+        self.head = LinearConfig::new(input, classes).init(device);
+        self
+    }
+    pub(crate) fn configure_fine_tuning(self, freeze_backbone: bool) -> Self {
+        let mut model = if freeze_backbone {
+            self.freeze()
+        } else {
+            self.unfreeze()
+        };
+        model.head = model.head.unfreeze();
+        model.dropout = model.dropout.unfreeze();
+        model
+    }
     pub fn new(input: usize, classes: usize, width: f64, device: &Device) -> Self {
         let first = channels(32, width);
         let mut previous = first;

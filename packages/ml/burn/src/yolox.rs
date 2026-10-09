@@ -7,7 +7,10 @@ use burn::{
         interpolate::Interpolate2dConfig,
         pool::MaxPool2dConfig,
     },
-    tensor::{Device, Int, Tensor, TensorData as BurnData, activation::sigmoid},
+    tensor::{
+        Device, Int, Tensor, TensorData as BurnData,
+        activation::{log_sigmoid, sigmoid},
+    },
 };
 
 #[derive(Module, Debug)]
@@ -439,7 +442,7 @@ impl YoloOutput {
     }
 }
 fn bce<const D: usize>(logits: Tensor<D>, targets: Tensor<D>) -> Tensor<D> {
-    logits.clone().clamp_min(0.0) - logits.clone() * targets + (-logits.abs()).exp().log1p()
+    -log_sigmoid(logits.clone()) * targets.clone() - log_sigmoid(-logits) * (-targets + 1.0)
 }
 fn iou_tensor(a: Tensor<2>, b: Tensor<2>) -> Tensor<1> {
     let n = a.dims()[0];
@@ -554,4 +557,44 @@ fn nms(mut detections: Vec<Detection>, options: &DetectionOptions) -> Vec<Detect
         }
     }
     kept
+}
+
+#[cfg(all(test, feature = "cpu"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn bce_handles_zero_and_extreme_logits_with_correct_gradients() {
+        let _lock = crate::tests::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let device = Device::flex().autodiff();
+        let logits = Tensor::<1>::from_data([0.0f32, 0.0, -100.0, 100.0, -100.0, 100.0], &device)
+            .require_grad();
+        let targets = Tensor::<1>::from_data([0.0f32, 1.0, 0.0, 1.0, 1.0, 0.0], &device);
+        let loss = bce(logits.clone(), targets);
+        let values = loss.clone().into_data().try_to_vec::<f32>().unwrap();
+        let expected = [
+            std::f32::consts::LN_2,
+            std::f32::consts::LN_2,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        ];
+        for (actual, expected) in values.into_iter().zip(expected) {
+            assert!(actual.is_finite() && (actual - expected).abs() < 1e-6);
+        }
+        let gradients = logits
+            .grad(&loss.sum().backward())
+            .unwrap()
+            .into_data()
+            .try_to_vec::<f32>()
+            .unwrap();
+        for (actual, expected) in gradients.into_iter().zip([0.5, -0.5, 0.0, 0.0, -1.0, 1.0]) {
+            assert!(
+                actual.is_finite() && (actual - expected).abs() < 1e-6,
+                "gradient {actual} != {expected}"
+            );
+        }
+    }
 }

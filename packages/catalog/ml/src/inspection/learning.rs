@@ -704,6 +704,9 @@ pub async fn finish_learning_cycle(
         let work_project = fresh.clone();
         tokio::task::spawn_blocking(move || inference::audit_canary(&work_repo, &work_project))
             .await??;
+        if repo.get_learning_project(id)?.candidate_artifact_id != cycle.artifact_id {
+            return result(&repo, id);
+        }
     }
     let can_promote =
         fresh.state != LearningState::Canary || repo.learning_canary_ready(id, now_ms())?;
@@ -798,6 +801,13 @@ async fn promote(
         inference::audit_canary(&work_repo, &work_project)
     })
     .await??;
+    if repo
+        .get_learning_project(&request.project_id)?
+        .candidate_artifact_id
+        != cycle.artifact_id
+    {
+        return result(&repo, &request.project_id);
+    }
     repo.compare_learning_cycle(&cycle.id, flow_like_ml_runtime::now_ms())?;
     repo.promote_learning_cycle(
         &cycle.id,

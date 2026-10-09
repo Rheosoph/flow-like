@@ -151,7 +151,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils clang lld libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev
+          # librdkafka 2.12.1 includes curl headers even when curl support is disabled.
+          sudo apt-get install -y binutils clang lld libcurl4-openssl-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev
           # Ubuntu 22.04 defaults to GCC 11, but Lance's fp16 kernels require
           # Clang 6 or newer, or GCC 12 or newer.
           clang --version

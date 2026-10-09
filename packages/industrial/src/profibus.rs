@@ -276,11 +276,40 @@ mod execution {
                         .await
                         .map_err(|_| Error::Invalid("PROFIBUS worker status unavailable".into()))?;
                 }
-                Ok(())
+                self.state
+                    .borrow()
+                    .error
+                    .clone()
+                    .map_or(Ok(()), |error| Err(Error::Invalid(error)))
             })
             .await
             .map_err(|_| Error::Timeout)?
         }
+    }
+    #[cfg(test)]
+    #[tokio::test]
+    async fn disconnect_propagates_worker_failure() {
+        let (commands, _) = mpsc::channel(1);
+        let mut snapshot = empty_snapshot(ProfibusMode::Clear);
+        snapshot.stopped = true;
+        snapshot.error = Some("serial write failed".into());
+        let (_, state) = watch::channel(snapshot);
+        let (_, done) = watch::channel(true);
+        let master = ProfibusMaster {
+            commands,
+            state,
+            done,
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: std::thread::current(),
+        };
+        assert!(
+            master
+                .disconnect()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("serial write failed")
+        );
     }
     fn empty_snapshot(mode: ProfibusMode) -> ProfibusSnapshot {
         ProfibusSnapshot {
@@ -399,6 +428,45 @@ mod execution {
                 .collect();
         });
     }
+    pub(super) struct ClearShutdown {
+        started: std::time::Instant,
+        previous_cycle_completed: bool,
+        pending: std::collections::BTreeSet<u8>,
+    }
+    impl ClearShutdown {
+        pub(super) fn new(master: &dp::DpMaster<'_>, started: std::time::Instant) -> Self {
+            Self {
+                started,
+                previous_cycle_completed: false,
+                pending: master
+                    .iter()
+                    .map(|(_, peripheral)| peripheral.address())
+                    .collect(),
+            }
+        }
+        pub(super) fn advance(
+            &mut self,
+            events: &dp::DpEvents,
+            now: std::time::Instant,
+        ) -> Result<bool> {
+            if !self.previous_cycle_completed {
+                // A reply in this partial cycle may acknowledge an Operate request already sent.
+                self.previous_cycle_completed = events.cycle_completed;
+            } else if let Some((handle, dp::PeripheralEvent::DataExchanged)) = events.peripheral {
+                self.pending.remove(&handle.address());
+            }
+            if self.pending.is_empty() {
+                return Ok(true);
+            }
+            if now.duration_since(self.started) >= Duration::from_secs(1) {
+                return Err(Error::Invalid(format!(
+                    "PROFIBUS Clear was not acknowledged by stations {:?} before shutdown",
+                    self.pending,
+                )));
+            }
+            Ok(false)
+        }
+    }
     fn run(
         config: ProfibusConfig,
         mut commands: mpsc::Receiver<Command>,
@@ -422,7 +490,7 @@ mod execution {
         loop {
             if stop.load(Ordering::Acquire) && stopping.is_none() {
                 master.enter_clear();
-                stopping = Some(std::time::Instant::now());
+                stopping = Some(ClearShutdown::new(&master, std::time::Instant::now()));
             }
             if stopping.is_none() {
                 // Bound control work per poll so writers cannot starve fieldbus traffic.
@@ -458,10 +526,15 @@ mod execution {
             if events.cycle_completed || events.peripheral.is_some() {
                 update(state, &master, events.cycle_completed);
             }
-            if stopping.is_some_and(|start| {
-                events.cycle_completed || start.elapsed() >= Duration::from_secs(1)
-            }) {
-                break;
+            if let Some(shutdown) = &mut stopping {
+                match shutdown.advance(&events, std::time::Instant::now()) {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    Err(error) => {
+                        fdl.set_offline();
+                        return Err(error);
+                    }
+                }
             }
             std::thread::park_timeout(Duration::from_micros(config.poll_interval_us));
         }
@@ -642,11 +715,17 @@ mod tests {
     #[cfg(feature = "execute")]
     #[test]
     fn dp_master_parameterizes_then_exchanges_native_telegrams() {
+        exercise_modes(false);
+        exercise_modes(true);
+    }
+    #[cfg(feature = "execute")]
+    fn exercise_modes(fail_safe: bool) {
         use profirust::fdl::{
             DataTelegramHeader, FdlApplication, FunctionCode, ResponseState, ResponseStatus,
             ShortConfirmation, Telegram, TelegramTx,
         };
-        let config = config();
+        let mut config = config();
+        config.peripherals[0].fail_safe = fail_safe;
         let (mut master, fdl) = execution::stack(&config);
         let mut configured = false;
         let mut parameterized = false;
@@ -751,6 +830,169 @@ mod tests {
             .is_err()
         );
         assert_eq!(master.iter().next().unwrap().1.pi_q(), &[0x40]);
+
+        for (phase, clear) in [true, false].into_iter().enumerate() {
+            if clear {
+                master.enter_clear();
+            } else {
+                master.enter_operate();
+            }
+            let mut global_control = false;
+            let mut data_exchange = false;
+            for tick in 0..32 {
+                let now = profirust::time::Instant::from_millis(tick + 100 * (phase as i64 + 1));
+                // A reused transmit buffer must not leak the previous output image in Clear.
+                let mut bytes = [0xa5u8; 512];
+                let Some(sent) =
+                    master.transmit_telegram(now, &fdl, TelegramTx::new(&mut bytes), false)
+                else {
+                    continue;
+                };
+                let (Telegram::Data(request), _) =
+                    Telegram::deserialize(&bytes[..sent.bytes_sent()])
+                        .unwrap()
+                        .unwrap()
+                else {
+                    panic!("Expected DP data");
+                };
+                if request.h.da == 127 {
+                    assert_eq!(request.pdu, &[if clear { 2 } else { 0 }, 0]);
+                    global_control = true;
+                    continue;
+                }
+                assert!(global_control);
+                assert_eq!(request.h.dsap, None);
+                let expected: &[u8] = if !clear {
+                    &[0x40]
+                } else if fail_safe {
+                    &[]
+                } else {
+                    &[0]
+                };
+                assert_eq!(request.pdu, expected);
+                assert_eq!(master.iter().next().unwrap().1.pi_q(), &[0x40]);
+                let mut response = [0u8; 512];
+                let count = DataTelegramHeader {
+                    da: 2,
+                    sa: 7,
+                    dsap: None,
+                    ssap: None,
+                    fc: FunctionCode::Response {
+                        state: ResponseState::Slave,
+                        status: ResponseStatus::DataLow,
+                    },
+                }
+                .serialize(&mut response, 2, |data| data.copy_from_slice(&[0x12, 0x34]));
+                let (reply, _) = Telegram::deserialize(&response[..count]).unwrap().unwrap();
+                // STOP must also accept a reply already in flight without corrupting the cycle.
+                master.enter_stop();
+                master.receive_reply(now, &fdl, 7, reply);
+                assert!(
+                    master
+                        .transmit_telegram(now, &fdl, TelegramTx::new(&mut bytes), false,)
+                        .is_none()
+                );
+                data_exchange = true;
+                break;
+            }
+            assert!(data_exchange);
+        }
+    }
+    #[cfg(feature = "execute")]
+    #[test]
+    fn shutdown_does_not_accept_completed_sweeps_of_offline_peripherals() {
+        use profirust::fdl::{FdlApplication, TelegramTx};
+        let config = config();
+        let (mut master, fdl) = execution::stack(&config);
+        master.enter_clear();
+        let started = std::time::Instant::now();
+        let mut shutdown = execution::ClearShutdown::new(&master, started);
+        let mut completed = 0;
+        for tick in 0..32 {
+            let mut bytes = [0; 512];
+            let _ = master.transmit_telegram(
+                profirust::time::Instant::from_millis(tick),
+                &fdl,
+                TelegramTx::new(&mut bytes),
+                false,
+            );
+            // No station answers these telegrams. The SDK still completes polling sweeps.
+            let events = master.take_last_events();
+            completed += usize::from(events.cycle_completed);
+            assert!(!shutdown.advance(&events, started).unwrap());
+        }
+        assert!(completed >= 2);
+        let error = shutdown
+            .advance(
+                &profirust::dp::DpEvents::default(),
+                started + std::time::Duration::from_secs(1),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("stations {7}"));
+    }
+    #[cfg(feature = "execute")]
+    #[test]
+    fn shutdown_requires_fresh_data_acknowledgements_from_every_station() {
+        use profirust::dp::{DpEvents, PeripheralEvent};
+        let mut config = config();
+        let mut second = config.peripherals[0].clone();
+        second.address = 8;
+        config.peripherals.push(second);
+        let (master, _) = execution::stack(&config);
+        let handles: Vec<_> = master.iter().map(|(handle, _)| handle).collect();
+        let started = std::time::Instant::now();
+        let mut shutdown = execution::ClearShutdown::new(&master, started);
+        let event = |index, kind, cycle_completed| DpEvents {
+            cycle_completed,
+            peripheral: Some((handles[index], kind)),
+        };
+        // The last acknowledgement in the partial cycle may still refer to old Operate data.
+        assert!(
+            !shutdown
+                .advance(&event(0, PeripheralEvent::DataExchanged, true), started)
+                .unwrap()
+        );
+        for kind in [
+            PeripheralEvent::Diagnostics,
+            PeripheralEvent::Configured,
+            PeripheralEvent::Offline,
+        ] {
+            assert!(!shutdown.advance(&event(1, kind, true), started).unwrap());
+        }
+        assert!(
+            !shutdown
+                .advance(&event(1, PeripheralEvent::DataExchanged, true), started)
+                .unwrap()
+        );
+        // Repeated successful exchanges from station 8 do not clear the missing station 7.
+        assert!(
+            !shutdown
+                .advance(&event(1, PeripheralEvent::DataExchanged, true), started)
+                .unwrap()
+        );
+        assert!(
+            shutdown
+                .advance(&event(0, PeripheralEvent::DataExchanged, true), started)
+                .unwrap()
+        );
+    }
+    #[cfg(feature = "execute")]
+    #[test]
+    fn master_can_start_in_clear_or_stop() {
+        for mode in [ProfibusMode::Clear, ProfibusMode::Stop] {
+            let mut config = config();
+            config.mode = mode;
+            let (master, _) = execution::stack(&config);
+            assert_eq!(
+                master.operating_state().is_clear(),
+                matches!(mode, ProfibusMode::Clear)
+            );
+            assert_eq!(
+                master.operating_state().is_stop(),
+                matches!(mode, ProfibusMode::Stop)
+            );
+        }
     }
     #[cfg(feature = "execute")]
     #[tokio::test]

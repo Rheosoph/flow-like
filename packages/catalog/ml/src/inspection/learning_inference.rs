@@ -267,9 +267,6 @@ pub(super) fn audit_canary(repo: &TrainingRepository, project: &LearningProject)
             .into_iter()
             .map(|row| row.sample_id)
             .collect();
-        if cohort.is_subset(&recorded) {
-            continue;
-        }
         let windows = has_windows(&preprocessing);
         let mut history: Vec<_> = observations
             .iter()
@@ -305,11 +302,9 @@ pub(super) fn audit_canary(repo: &TrainingRepository, project: &LearningProject)
             rows.push(observation.sample.clone());
         }
         let inputs = transform_table_rows(&preprocessing, &rows, budget.maximum_tensor_elements)?;
-        let mut predictor =
-            CatalogSearchPredictorFactory.load(repo, artifact_id, &template.compute)?;
+        let mut predictor = None;
         for (observation, input) in history.iter().zip(inputs) {
-            if !cohort.contains(&observation.sample_id) || recorded.contains(&observation.sample_id)
-            {
+            if !cohort.contains(&observation.sample_id) {
                 continue;
             }
             check_time()?;
@@ -329,11 +324,21 @@ pub(super) fn audit_canary(repo: &TrainingRepository, project: &LearningProject)
                 at_ms,
             )?;
             repo.record_prepared_sample(&project.request.stream, &row)?;
+            if recorded.contains(&observation.sample_id) {
+                continue;
+            }
+            if predictor.is_none() {
+                predictor = Some(CatalogSearchPredictorFactory.load(
+                    repo,
+                    artifact_id,
+                    &template.compute,
+                )?);
+            }
             let mut batched = input;
             batched.shape.insert(0, 1);
             let inference = Instant::now();
-            let output = predictor.predict(&batched)?;
-            let record = prediction_record_from_output(
+            let output = predictor.as_mut().unwrap().predict(&batched)?;
+            let mut record = prediction_record_from_output(
                 &row,
                 &spec,
                 &project.request.goals.task,
@@ -342,9 +347,11 @@ pub(super) fn audit_canary(repo: &TrainingRepository, project: &LearningProject)
                 scales.get(artifact_id).copied().unwrap_or(1.),
                 inference.elapsed().as_secs_f64() * 1000.,
             )?;
+            record.details["learning_review_revision"] = json!(review.revision);
             repo.record_prediction(&record)?;
         }
     }
+    repo.reconcile_learning_canary_reviews(&project.id, at_ms)?;
     Ok(())
 }
 
