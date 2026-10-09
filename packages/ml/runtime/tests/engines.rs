@@ -106,18 +106,33 @@ fn burn_worker_resumes_optimizer_checkpoint_and_loads_prediction_artifact() {
         .trigger_after_n(&stream, 30, request, split(), 1000)
         .unwrap()
         .unwrap();
-    let mut worker = TrainingWorker::new(
-        repository.clone(),
-        WorkerLimits {
-            maximum_duration_ms: 1,
-            ..WorkerLimits::default()
-        },
-    )
-    .unwrap();
-    register_burn_engine(&mut worker).unwrap();
-    assert!(worker.run(&job.id).is_err());
+    let worker_repository = repository.clone();
+    let job_id = job.id.clone();
+    let running = std::thread::spawn(move || {
+        let mut worker = TrainingWorker::new(worker_repository, WorkerLimits::default()).unwrap();
+        register_burn_engine(&mut worker).unwrap();
+        worker.run(&job_id)
+    });
+    let timeout = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let current = repository.get_job(&job.id).unwrap();
+        assert!(matches!(
+            current.status,
+            JobStatus::Queued | JobStatus::Running
+        ));
+        if current.checkpoint.is_some() {
+            repository.request_cancel(&job.id, now_ms()).unwrap();
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < timeout,
+            "training did not publish a checkpoint"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(matches!(running.join().unwrap(), Err(Error::Cancelled)));
     let stopped = repository.get_job(&job.id).unwrap();
-    assert_eq!(stopped.status, JobStatus::Failed);
+    assert_eq!(stopped.status, JobStatus::Cancelled);
     assert!(
         stopped.checkpoint.is_some(),
         "last completed Burn batch must be retained"

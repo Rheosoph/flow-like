@@ -530,8 +530,10 @@ fn isolated_session_with_stores(stores: Option<Arc<dyn ObjectStoreRegistry>>) ->
         .with_table_functions(HashMap::new())
         .with_table_factories(HashMap::new())
         .build();
-    let session = SessionContext::new_with_state(state);
-    flow_like_storage::geometry::register_geo_functions(&session);
+    let session = SessionContext::new_with_state(
+        flow_like_storage::databases::df_provider::with_lance_order_pushdown(state),
+    );
+    flow_like_storage::databases::register_sql_functions(&session);
     session
 }
 

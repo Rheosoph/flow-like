@@ -634,8 +634,11 @@ def signed_manifests(artifacts, public_keys):
 def immutable_uploads(artifacts, base_url, prefix, manifests, sequence):
     """(key, local file, public URL, size, sha256) for every pack and per-sequence manifest."""
     folder = f"releases/{sequence}/runtimes"
-    uploads = []
-    for target, (path, compact, value) in manifests.items():
+    # Preflight can find these fixed names if publication stops before any stable list advances.
+    uploads = [(f"{prefix}/{folder}/{target}.jws", path, f"{base_url}/{folder}/{target}.jws",
+                len(compact), hashlib.sha256(compact).hexdigest())
+               for target, (path, compact, _) in manifests.items()]
+    for _, _, value in manifests.values():
         for pack in value["packs"]:
             name = pack_name(pack)
             local = artifacts / name
@@ -643,8 +646,6 @@ def immutable_uploads(artifacts, base_url, prefix, manifests, sequence):
                     or local.stat().st_size != pack.get("size") or sha256_file(local) != pack.get("sha256")):
                 raise ValueError(f"{name} differs from its signed size, digest or immutable URL")
             uploads.append((f"{prefix}/{folder}/{name}", local, pack["url"], pack["size"], pack["sha256"]))
-        uploads.append((f"{prefix}/{folder}/{target}.jws", path, f"{base_url}/{folder}/{target}.jws",
-                        len(compact), hashlib.sha256(compact).hexdigest()))
     return uploads
 
 
@@ -655,8 +656,14 @@ def stable_heads(store, prefix, manifests, sequence, public_keys):
         stable = store.read(f"{prefix}/runtimes/{target}.jws")
         if stable:
             old = verified_manifest(stable["body"], public_keys, current=False)["sequence"]
-            if old > sequence or (old == sequence and stable["body"] != compact):
-                raise ValueError(f"The {target} runtime manifest would roll back or replace signed sequence {old}")
+            if old > sequence:
+                raise ValueError(f"The {target} runtime manifest for requested sequence {sequence} would roll back "
+                                 f"published sequence {old}; dispatch with an unused sequence greater than {old}")
+            if old == sequence and stable["body"] != compact:
+                raise ValueError(f"The {target} runtime manifest for requested sequence {sequence} differs from the "
+                                 f"signed manifest already published at sequence {old}; rebuilding or re-signing can "
+                                 "change its bytes. Retry the publish job with the original signed artifacts, "
+                                 f"or dispatch with an unused sequence greater than {old}")
         heads[target] = stable
     return heads
 

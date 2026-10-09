@@ -472,35 +472,45 @@ impl ModbusClient {
         Ok(context)
     }
     pub async fn read(&mut self, request: &ModbusReadRequest) -> Result<ModbusValues> {
-        use tokio_modbus::client::Reader;
+        use tokio_modbus::{Request, Response, client::Client};
         request.validate()?;
         let mut context = self.begin(request.unit_id).await?;
+        let operation = match request.kind {
+            ModbusReadKind::Coils => Request::ReadCoils(request.start_address, request.count),
+            ModbusReadKind::DiscreteInputs => {
+                Request::ReadDiscreteInputs(request.start_address, request.count)
+            }
+            ModbusReadKind::HoldingRegisters => {
+                Request::ReadHoldingRegisters(request.start_address, request.count)
+            }
+            ModbusReadKind::InputRegisters => {
+                Request::ReadInputRegisters(request.start_address, request.count)
+            }
+        };
         let result = timeout(Duration::from_millis(request.timeout_ms), async {
-            match request.kind {
-                ModbusReadKind::Coils => flatten(
-                    context
-                        .read_coils(request.start_address, request.count)
-                        .await,
-                )
-                .map(ModbusValues::Bits),
-                ModbusReadKind::DiscreteInputs => flatten(
-                    context
-                        .read_discrete_inputs(request.start_address, request.count)
-                        .await,
-                )
-                .map(ModbusValues::Bits),
-                ModbusReadKind::HoldingRegisters => flatten(
-                    context
-                        .read_holding_registers(request.start_address, request.count)
-                        .await,
-                )
-                .map(ModbusValues::Registers),
-                ModbusReadKind::InputRegisters => flatten(
-                    context
-                        .read_input_registers(request.start_address, request.count)
-                        .await,
-                )
-                .map(ModbusValues::Registers),
+            // The SDK's Reader helpers only check quantities in debug builds.
+            let response = flatten(context.call(operation).await)?;
+            match (request.kind, response) {
+                (ModbusReadKind::Coils, Response::ReadCoils(mut values))
+                | (ModbusReadKind::DiscreteInputs, Response::ReadDiscreteInputs(mut values)) => {
+                    require(
+                        values.len() == usize::from(request.count).div_ceil(8) * 8,
+                        "Modbus response byte count differs from the requested bits",
+                    )?;
+                    values.truncate(usize::from(request.count));
+                    Ok(ModbusValues::Bits(values))
+                }
+                (ModbusReadKind::HoldingRegisters, Response::ReadHoldingRegisters(values))
+                | (ModbusReadKind::InputRegisters, Response::ReadInputRegisters(values)) => {
+                    require(
+                        values.len() == usize::from(request.count),
+                        "Modbus response register count differs from the request",
+                    )?;
+                    Ok(ModbusValues::Registers(values))
+                }
+                _ => Err(Error::Invalid(
+                    "Modbus response function differs from the request".into(),
+                )),
             }
         })
         .await
@@ -513,28 +523,33 @@ impl ModbusClient {
         result
     }
     pub async fn write(&mut self, request: &ModbusWriteRequest) -> Result<()> {
-        use tokio_modbus::client::Writer;
+        use tokio_modbus::{Request, Response, client::Client};
         request.validate()?;
         let mut context = self.begin(request.unit_id).await?;
+        let (operation, expected) = match &request.values {
+            ModbusValues::Registers(values) if values.len() == 1 => (
+                Request::WriteSingleRegister(request.start_address, values[0]),
+                Response::WriteSingleRegister(request.start_address, values[0]),
+            ),
+            ModbusValues::Registers(values) => (
+                Request::WriteMultipleRegisters(request.start_address, values.as_slice().into()),
+                Response::WriteMultipleRegisters(request.start_address, values.len() as u16),
+            ),
+            ModbusValues::Bits(values) if values.len() == 1 => (
+                Request::WriteSingleCoil(request.start_address, values[0]),
+                Response::WriteSingleCoil(request.start_address, values[0]),
+            ),
+            ModbusValues::Bits(values) => (
+                Request::WriteMultipleCoils(request.start_address, values.as_slice().into()),
+                Response::WriteMultipleCoils(request.start_address, values.len() as u16),
+            ),
+        };
         let result = timeout(Duration::from_millis(request.timeout_ms), async {
-            flatten(match &request.values {
-                ModbusValues::Registers(v) if v.len() == 1 => {
-                    context
-                        .write_single_register(request.start_address, v[0])
-                        .await
-                }
-                ModbusValues::Registers(v) => {
-                    context
-                        .write_multiple_registers(request.start_address, v)
-                        .await
-                }
-                ModbusValues::Bits(v) if v.len() == 1 => {
-                    context.write_single_coil(request.start_address, v[0]).await
-                }
-                ModbusValues::Bits(v) => {
-                    context.write_multiple_coils(request.start_address, v).await
-                }
-            })
+            let response = flatten(context.call(operation).await)?;
+            require(
+                response == expected,
+                "Modbus write response differs from the requested address, value, or count",
+            )
         })
         .await
         .map_err(|_| Error::Timeout)
@@ -700,6 +715,104 @@ mod tests {
         assert!(client.read(&request()).await.is_err());
         peer.await.unwrap();
     }
+    #[cfg(feature = "execute")]
+    fn client_with_response(response: Vec<u8>) -> (ModbusClient, tokio::task::JoinHandle<()>) {
+        let (transport, mut peer) = tokio::io::duplex(512);
+        let client = ModbusClient {
+            context: Some(tokio_modbus::client::tcp::attach_slave(
+                transport,
+                tokio_modbus::Slave(1),
+            )),
+            rtu_gap: None,
+            last_finished: None,
+        };
+        let task = tokio::spawn(async move {
+            let mut header = [0; 7];
+            peer.read_exact(&mut header).await.unwrap();
+            let mut body = vec![0; u16::from_be_bytes([header[4], header[5]]) as usize - 1];
+            peer.read_exact(&mut body).await.unwrap();
+            header[4..6].copy_from_slice(&((response.len() + 1) as u16).to_be_bytes());
+            peer.write_all(&header).await.unwrap();
+            peer.write_all(&response).await.unwrap();
+        });
+        (client, task)
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn sdk_reads_reject_short_and_excess_quantities_without_debug_assertions() {
+        for kind in [
+            ModbusReadKind::Coils,
+            ModbusReadKind::DiscreteInputs,
+            ModbusReadKind::HoldingRegisters,
+            ModbusReadKind::InputRegisters,
+        ] {
+            let count = if kind.registers() { 2 } else { 9 };
+            let invalid_sizes = if kind.registers() { [2, 6] } else { [1, 3] };
+            for size in invalid_sizes {
+                let mut response = vec![kind.function(), size];
+                response.resize(usize::from(size) + 2, 0);
+                let (mut client, peer) = client_with_response(response);
+                assert!(
+                    client
+                        .read(&ModbusReadRequest {
+                            kind,
+                            count,
+                            ..request()
+                        })
+                        .await
+                        .is_err()
+                );
+                assert!(client.context.is_none());
+                peer.await.unwrap();
+            }
+        }
+        // Bit responses include padding to the next byte, which is discarded.
+        let (mut client, peer) = client_with_response(vec![1, 2, 0xff, 0xff]);
+        assert_eq!(
+            client
+                .read(&ModbusReadRequest {
+                    kind: ModbusReadKind::Coils,
+                    count: 9,
+                    ..request()
+                })
+                .await
+                .unwrap(),
+            ModbusValues::Bits(vec![true; 9])
+        );
+        peer.await.unwrap();
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn sdk_writes_validate_address_value_and_quantity_echoes() {
+        for (values, function, echo) in [
+            (ModbusValues::Registers(vec![42]), 6, 42u16),
+            (ModbusValues::Registers(vec![42, 43]), 16, 2),
+            (ModbusValues::Bits(vec![true]), 5, 0xff00),
+            (ModbusValues::Bits(vec![true, false]), 15, 2),
+        ] {
+            for (address, echoed, valid) in [(99u16, echo, false), (10, 0, false), (10, echo, true)]
+            {
+                let mut response = vec![function];
+                response.extend_from_slice(&address.to_be_bytes());
+                response.extend_from_slice(&echoed.to_be_bytes());
+                let (mut client, peer) = client_with_response(response);
+                let result = client
+                    .write(&ModbusWriteRequest {
+                        unit_id: 2,
+                        start_address: 10,
+                        values: values.clone(),
+                        timeout_ms: 1000,
+                    })
+                    .await;
+                assert_eq!(result.is_ok(), valid, "{values:?}: {result:?}");
+                assert_eq!(client.context.is_some(), valid);
+                peer.await.unwrap();
+            }
+        }
+    }
+
     #[cfg(feature = "execute")]
     #[tokio::test]
     async fn cancelled_exchange_closes_session_instead_of_reusing_partial_reply() {

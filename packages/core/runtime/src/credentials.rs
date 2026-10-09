@@ -154,6 +154,26 @@ impl SharedCredentials {
         }
     }
 
+    /// Reuse the host's session without constructing a temporary scoped registry.
+    /// For renewable credentials, the session must belong to this credential lease.
+    #[cfg(feature = "flow-runtime")]
+    pub async fn to_db_with_session(
+        &self,
+        app_id: &str,
+        session: Arc<flow_like_storage::lance::session::Session>,
+    ) -> Result<ConnectBuilder> {
+        let mut credentials = self;
+        while let SharedCredentials::Mixed(mixed) = credentials {
+            credentials = &mixed.content;
+        }
+        match credentials {
+            SharedCredentials::Renewable(credentials) => {
+                credentials.to_db_with_session(app_id, session)
+            }
+            credentials => Ok(credentials.to_db(app_id).await?.session(session)),
+        }
+    }
+
     #[cfg(feature = "flow-runtime")]
     pub async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {
         match self {
@@ -164,6 +184,29 @@ impl SharedCredentials {
             SharedCredentials::Renewable(credentials) => {
                 credentials.to_db_scoped(sub, app_id).await
             }
+        }
+    }
+
+    /// Reuse a session from the same credential lease for the authorized user path.
+    #[cfg(feature = "flow-runtime")]
+    pub async fn to_db_scoped_with_session(
+        &self,
+        sub: &str,
+        app_id: &str,
+        session: Arc<flow_like_storage::lance::session::Session>,
+    ) -> Result<ConnectBuilder> {
+        let mut credentials = self;
+        while let SharedCredentials::Mixed(mixed) = credentials {
+            credentials = &mixed.content;
+        }
+        match credentials {
+            SharedCredentials::Renewable(credentials) => {
+                credentials.to_db_scoped_with_session(sub, app_id, session)
+            }
+            credentials => Ok(credentials
+                .to_db_scoped(sub, app_id)
+                .await?
+                .session(session)),
         }
     }
 

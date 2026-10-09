@@ -194,6 +194,8 @@ pub struct TrainBurnRequest {
     pub worker_limits: WorkerLimits,
     #[serde(default)]
     pub preprocessing: Vec<flow_like_ml_core::PreprocessingStep>,
+    #[serde(default)]
+    pub pretrained: Option<PretrainedSourceRef>,
 }
 #[cfg(any(feature = "training", test))]
 fn validate_native_schedule_compute(engine: &str, compute: &ComputeConfig) -> Result<()> {
@@ -227,6 +229,20 @@ fn schedule(
             let recipe: runtime::engines::BurnEngineRecipe =
                 flow_like_types::json::from_value(input.training.recipe.clone())?;
             flow_like_ml_burn::validate_inspection_config(&input.inspection.spec, &recipe.config)?;
+            if let Some(pretrained) = &recipe.pretrained {
+                runtime::engines::validate_burn_pretrained_source(
+                    &repo,
+                    &key.project_id,
+                    pretrained,
+                    &recipe.config,
+                    &recipe.labels,
+                    (compute
+                        .memory_limit_bytes
+                        .min(input.worker_limits.memory_budget_bytes)
+                        / 4)
+                    .min(512 * 1024 * 1024),
+                )?;
+            }
         }
         "efficient_ad" => {
             let recipe: runtime::engines::EfficientAdEngineRecipe =
@@ -339,7 +355,7 @@ fn train_burn(
     let labels = input.inspection.spec.labels.clone();
     let request = TrainingRequest {
         engine: "burn".into(),
-        recipe: json!({"config":input.config,"labels":labels,"preprocessing":input.preprocessing}),
+        recipe: json!({"config":input.config,"labels":labels,"preprocessing":input.preprocessing,"pretrained":input.pretrained}),
         compute: json!(input.compute),
     };
     schedule(
@@ -1530,6 +1546,118 @@ lifecycle_node!(
     TrainBurnRequest,
     Option<TrainingJob>,
     train_res_net18
+);
+
+#[cfg(feature = "training")]
+fn train_dino_v2(
+    repo: TrainingRepository,
+    project: String,
+    input: TrainBurnRequest,
+) -> Result<Option<TrainingJob>> {
+    if !matches!(
+        input.config.recipe,
+        flow_like_ml_burn::Recipe::DinoV2 { .. }
+    ) {
+        return Err(anyhow!("Select the DINOv2 recipe for this node"));
+    }
+    train_burn(repo, project, input)
+}
+#[crate::register_node]
+#[derive(Default)]
+pub struct TrainDinoV2Node;
+lifecycle_node!(
+    TrainDinoV2Node,
+    "ml_train_dino_v2",
+    "Train DINOv2",
+    "Train a DINOv2 image classifier from scratch or compatible pretrained weights",
+    "trainDinoV2",
+    TrainBurnRequest,
+    Option<TrainingJob>,
+    train_dino_v2
+);
+
+#[cfg(feature = "training")]
+fn train_rtdetr_v2(
+    repo: TrainingRepository,
+    project: String,
+    input: TrainBurnRequest,
+) -> Result<Option<TrainingJob>> {
+    if !matches!(
+        input.config.recipe,
+        flow_like_ml_burn::Recipe::RtdetrV2 { .. }
+    ) {
+        return Err(anyhow!("Select the RT-DETRv2 recipe for this node"));
+    }
+    train_burn(repo, project, input)
+}
+#[crate::register_node]
+#[derive(Default)]
+pub struct TrainRtdetrV2Node;
+lifecycle_node!(
+    TrainRtdetrV2Node,
+    "ml_train_rtdetr_v2",
+    "Train RT-DETRv2",
+    "Train a native RT-DETRv2 object detector from scratch or compatible pretrained weights",
+    "trainRtdetrV2",
+    TrainBurnRequest,
+    Option<TrainingJob>,
+    train_rtdetr_v2
+);
+
+#[cfg(feature = "training")]
+fn train_rf_detr(
+    repo: TrainingRepository,
+    project: String,
+    input: TrainBurnRequest,
+) -> Result<Option<TrainingJob>> {
+    if !matches!(
+        input.config.recipe,
+        flow_like_ml_burn::Recipe::RfDetr { .. }
+    ) {
+        return Err(anyhow!("Select the RF-DETR recipe for this node"));
+    }
+    train_burn(repo, project, input)
+}
+#[crate::register_node]
+#[derive(Default)]
+pub struct TrainRfDetrNode;
+lifecycle_node!(
+    TrainRfDetrNode,
+    "ml_train_rf_detr",
+    "Train RF-DETR",
+    "Train a native RF-DETR object detector with grouped queries and compatible pretrained weights",
+    "trainRfDetr",
+    TrainBurnRequest,
+    Option<TrainingJob>,
+    train_rf_detr
+);
+
+#[cfg(feature = "training")]
+fn train_dfine_nano(
+    repo: TrainingRepository,
+    project: String,
+    input: TrainBurnRequest,
+) -> Result<Option<TrainingJob>> {
+    if !matches!(
+        input.config.recipe,
+        flow_like_ml_burn::Recipe::DfineNano { .. }
+    ) {
+        return Err(anyhow!("Select the D-FINE Nano recipe for this node"));
+    }
+    train_burn(repo, project, input)
+}
+#[crate::register_node]
+#[derive(Default)]
+pub struct TrainDfineNanoNode;
+lifecycle_node!(
+    TrainDfineNanoNode,
+    "ml_train_dfine_nano",
+    "Train D-FINE Nano",
+    "Fine-tune a native D-FINE Nano detector with matching and auxiliary classification and box losses",
+    "trainDfineNano",
+    TrainBurnRequest,
+    Option<TrainingJob>,
+    train_dfine_nano
 );
 
 #[cfg(feature = "training")]

@@ -10,8 +10,8 @@ use burn::{
         loss::{CrossEntropyLossConfig, Reduction, SmoothL1LossConfig},
     },
     tensor::{
-        Device, Int, Tensor, TensorData as BurnData,
-        activation::{relu, softmax},
+        Device, Distribution, Int, Tensor, TensorData as BurnData,
+        activation::{log_sigmoid, relu, softmax},
     },
 };
 
@@ -127,6 +127,14 @@ impl MaskRcnn {
         if let Some(targets) = targets {
             validate_targets(targets, batch, self.config.classes, height, width)?;
         }
+        let sampling_seed = targets.map(|_| {
+            values(Tensor::<1>::random(
+                [1],
+                Distribution::Uniform(0.0, 1.0),
+                &input.device(),
+            ))[0]
+                .to_bits() as u64
+        });
         let mut features = input;
         for block in &self.backbone {
             features = block.forward(features);
@@ -179,7 +187,12 @@ impl MaskRcnn {
             )?;
             if let Some(targets) = targets {
                 proposals.extend(targets[image].iter().map(|target| coords(&target.bbox)));
-                proposals = sample_rois(proposals, &targets[image], self.config.training_samples);
+                proposals = sample_rois(
+                    proposals,
+                    &targets[image],
+                    self.config.training_samples,
+                    sampling_seed.unwrap().wrapping_add(image as u64),
+                );
             }
             if proposals.is_empty() {
                 proposals.push([0.0, 0.0, 1.0, 1.0]);
@@ -567,7 +580,7 @@ fn indices(values: Vec<i64>, device: &Device) -> Tensor<1, Int> {
     Tensor::from_data(BurnData::new(values, [n]), device)
 }
 fn bce<const D: usize>(logits: Tensor<D>, targets: Tensor<D>) -> Tensor<D> {
-    logits.clone().clamp_min(0.0) - logits.clone() * targets + (-logits.abs()).exp().log1p()
+    -log_sigmoid(logits.clone()) * targets.clone() - log_sigmoid(-logits) * (-targets + 1.0)
 }
 fn coords(b: &crate::BoundingBox) -> BoxCoords {
     [b.x_min, b.y_min, b.x_max, b.y_max]
@@ -689,20 +702,24 @@ fn sample_rois(
     proposals: Vec<BoxCoords>,
     targets: &[InstanceTarget],
     limit: usize,
+    seed: u64,
 ) -> Vec<BoxCoords> {
     let mut positive = Vec::new();
     let mut negative = Vec::new();
     for bounds in proposals {
         let score = best_match(bounds, targets).map_or(0.0, |(_, q)| q);
         if score >= 0.5 {
-            positive.push((bounds, score));
+            positive.push(bounds);
         } else {
             negative.push(bounds);
         }
     }
-    positive.sort_by(|a, b| b.1.total_cmp(&a.1));
-    positive.truncate(limit / 4);
-    let mut result = positive.into_iter().map(|(b, _)| b).collect::<Vec<_>>();
+    // Ground-truth boxes have perfect IoU; ranking by IoU would exclude useful regression examples.
+    let mut result = crate::engine::shuffled_indices(positive.len(), seed)
+        .into_iter()
+        .take(limit / 4)
+        .map(|index| positive[index])
+        .collect::<Vec<_>>();
     negative.truncate(limit - result.len());
     result.extend(negative);
     result
@@ -767,6 +784,41 @@ mod tests {
     use super::*;
     use burn::optim::{AdamConfig, GradientsParams};
     #[test]
+    fn bce_handles_zero_and_extreme_logits_with_correct_gradients() {
+        let _lock = crate::tests::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let device = Device::flex().autodiff();
+        let logits = Tensor::<1>::from_data([0.0f32, 0.0, -100.0, 100.0, -100.0, 100.0], &device)
+            .require_grad();
+        let targets = Tensor::<1>::from_data([0.0f32, 1.0, 0.0, 1.0, 1.0, 0.0], &device);
+        let loss = bce(logits.clone(), targets);
+        let values = loss.clone().into_data().try_to_vec::<f32>().unwrap();
+        let expected = [
+            std::f32::consts::LN_2,
+            std::f32::consts::LN_2,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        ];
+        for (actual, expected) in values.into_iter().zip(expected) {
+            assert!(actual.is_finite() && (actual - expected).abs() < 1e-6);
+        }
+        let gradients = logits
+            .grad(&loss.sum().backward())
+            .unwrap()
+            .into_data()
+            .try_to_vec::<f32>()
+            .unwrap();
+        for (actual, expected) in gradients.into_iter().zip([0.5, -0.5, 0.0, 0.0, -1.0, 1.0]) {
+            assert!(
+                actual.is_finite() && (actual - expected).abs() < 1e-6,
+                "gradient {actual} != {expected}"
+            );
+        }
+    }
+    #[test]
     fn roi_align_has_known_geometry_and_gradients() {
         let _lock = crate::tests::TEST_LOCK
             .lock()
@@ -816,6 +868,47 @@ mod tests {
         assert!(
             assigned[1]
                 .is_some_and(|(index, quality, forced)| index == 0 && quality < 0.3 && forced)
+        );
+    }
+    #[test]
+    fn positive_roi_sampling_keeps_imperfect_regression_examples() {
+        let truth = InstanceTarget {
+            bbox: crate::BoundingBox {
+                class_id: 0,
+                x_min: 0.2,
+                y_min: 0.2,
+                x_max: 0.8,
+                y_max: 0.8,
+            },
+            mask: TensorData {
+                shape: vec![1, 1],
+                values: vec![1.0],
+            },
+        };
+        let exact = coords(&truth.bbox);
+        let imperfect = [0.15, 0.2, 0.75, 0.8];
+        assert!(iou(imperfect, exact) > 0.5);
+        let mut selected_imperfect = false;
+        let mut selected_exact = false;
+        for seed in 0..32 {
+            let proposals = vec![imperfect, exact];
+            let selected = sample_rois(proposals.clone(), std::slice::from_ref(&truth), 4, seed);
+            assert_eq!(selected.len(), 1);
+            assert_eq!(
+                selected,
+                sample_rois(proposals, std::slice::from_ref(&truth), 4, seed),
+                "Restoring the sampling seed must reproduce the same proposals"
+            );
+            selected_imperfect |= encode_box(selected[0], exact) != [0.0; 4];
+            selected_exact |= selected[0] == exact;
+        }
+        assert!(
+            selected_imperfect,
+            "Box refinement needs nonzero regression targets"
+        );
+        assert!(
+            selected_exact,
+            "Ground-truth proposals must remain eligible"
         );
     }
     #[test]
@@ -891,8 +984,8 @@ mod tests {
             .unwrap()
             .try_load_file(&path)
             .unwrap();
-        let first = values(model.forward(input(), Some(&truth)).unwrap().class_logits);
-        let second = values(loaded.forward(input(), Some(&truth)).unwrap().class_logits);
+        let first = values(model.forward(input(), None).unwrap().class_logits);
+        let second = values(loaded.forward(input(), None).unwrap().class_logits);
         assert_eq!(first, second);
         let prediction = model
             .forward(input(), None)

@@ -11,7 +11,7 @@ RUN apt-get update -qq && apt-get install -y -qq \
     libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev \
     libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev \
     libgtk-3-dev libglib2.0-dev libsoup-3.0-dev \
-    libjavascriptcoregtk-4.1-dev libssl-dev \
+    libjavascriptcoregtk-4.1-dev libssl-dev libcurl4-openssl-dev \
     libxdo-dev libinput-dev libxkbcommon-dev \
     gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*

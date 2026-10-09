@@ -242,6 +242,28 @@ impl RunStorage {
         let subject = request
             .token
             .and_then(|token| hosted_subject(token, live.initial(), request.app_id));
+        if let (Some(hub), Some(subject)) = (&hub, &subject) {
+            let namespace = blake3::hash(&flow_like_types::json::to_vec(&(
+                hub,
+                subject,
+                request.app_id,
+            ))?)
+            .to_hex()
+            .to_string();
+            let directory = dirs.project.join(".lance-read-cache");
+            let cache = flow_like_types::tokio::task::spawn_blocking(move || {
+                flow_like_offline_writes::fs::private_directory(&directory)?;
+                Ok::<_, anyhow::Error>(
+                    flow_like::flow_like_storage::files::immutable_lance_cache::LanceRangeCache::open(directory)?,
+                )
+            }).await;
+            match cache {
+                Ok(Ok(cache)) => {
+                    live.install_lance_read_cache(cache, namespace);
+                }
+                error => tracing::debug!(?error, "Lance disk read cache is unavailable"),
+            }
+        }
         let (Some(registry), Some(hub)) = (registry, hub) else {
             return Ok(storage);
         };

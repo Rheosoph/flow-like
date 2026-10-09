@@ -20,7 +20,7 @@ Industrial nodes connect a workflow to a device or broker, keep the connection f
 | RabbitMQ / AMQP 0-9-1 | Publish with broker confirmations, consume with manual acknowledgements | Existing broker, exchange, and queue routing |
 | Redis Streams | XADD, consumer-group reads, acknowledgements | Standalone Redis; use a stable consumer name to replay its pending entries |
 | Zenoh | Publish, subscribe, get, and query replies | Local executor with access to configured or discovered peers |
-| Iroh | Authenticated peer connections, listen, send, receive | Local executor; peers must use Flow-Like's `flow-like/messages/1` ALPN and framing |
+| Iroh | Authenticated peer connections, listen, send, receive | Local executor; both peers must use Flow-Like's `flow-like/messages/2` ALPN and framing |
 | ADS / TwinCAT | Read/write and native notifications | Configured ADS route and AMS Net IDs |
 | EtherNet/IP / CIP | Explicit Logix tag read/write and polling | Compatible Rockwell Logix controller; implicit Class 1 cyclic I/O is not implemented |
 | EtherCAT | Native master, topology inspection, cyclic process data, output updates, startup CoE SDO writes | Linux or macOS, a dedicated Ethernet interface, and raw-interface permissions |
@@ -32,6 +32,8 @@ Industrial nodes connect a workflow to a device or broker, keep the connection f
 The cifX nodes call the installed controller's native driver. The card firmware runs the fieldbus. They do not provide a portable software PROFINET controller or configure an arbitrary vendor's stack. Linux uses the supported LinuxCIFXDrv 3.x ABI; Windows uses the installed system driver. Supply absolute driver and firmware paths. The driver and protocol firmware are not bundled.
 
 The embedded MQTT broker keeps retained messages in memory for its current run. It does not provide durable sessions or a broker account/ACL system. Use an existing MQTT broker when the deployment needs those features. The MQTT client also supports QoS 2 when connected to a broker that implements it. MQTT acknowledgements confirm transport receipt, independently of workflow handler completion.
+
+Iroh Send waits for the receiving peer to read and acknowledge the complete frame. The acknowledgement precedes workflow handler completion. Protocol version 2 uses bidirectional streams for this exchange and cannot connect to version 1 peers; update both ends together.
 
 IO-Link electrical master control requires a hardware-specific stack and is not implemented by the REST adapter. OPC UA PubSub and DDS remain outside the current catalog. These distinctions matter when selecting hardware: a protocol name alone does not identify the controller role or supported transport.
 
@@ -76,6 +78,8 @@ Use consumer timeouts and bounded queues to match processing capacity. Core pub/
 
 EtherCAT and PROFIBUS run their bus cycles on dedicated workers. Workflow handlers receive snapshots; slow workflow execution does not set the bus-cycle frequency. EtherCAT validates working counters and slave state. The executor does not promise hard real-time scheduling, and successful software tests do not establish timing or device interoperability for a physical installation.
 
+EtherCAT Stop and failed startup request INIT and report cleanup failures. PROFIBUS Disconnect enters Clear and waits up to one second for a fresh data-exchange acknowledgement from every configured station. If stations do not acknowledge, Disconnect reports their addresses instead of claiming that Clear delivery completed.
+
 ## Publish Sparkplug B over MQTT
 
 Sparkplug nodes build messages and state explicitly. The workflow owns publication order and durable state:
@@ -87,7 +91,7 @@ Sparkplug nodes build messages and state explicitly. The workflow owns publicati
 5. Subscribe to commands and apply `birth` when a valid rebirth command is received. **Observe Sparkplug State** tracks an individual edge node and reports sequence gaps that require rebirth; it does not send the rebirth command itself.
 6. For an orderly shutdown, publish the `death` transition before disconnecting MQTT. The broker sends the installed Last Will on an unexpected connection loss.
 
-The protobuf codec uses protobuf JSON field names. Represent 64-bit integer values as decimal strings, for example `{"name":"count","datatype":8,"longValue":"123"}`. Host STATE messages use JSON on `spBv1.0/STATE/<host-id>` with `online` and `timestamp`, QoS 1, and retention.
+The protobuf codec uses protobuf JSON field names. Represent 64-bit integer values as decimal strings, for example `{"name":"count","datatype":8,"longValue":"123"}`. Birth and data transitions require each value field to match the birth datatype, including updates that omit `datatype`. For example, a Double metric uses `doubleValue`; array metrics use packed bytes in `bytesValue`. Host STATE messages use JSON on `spBv1.0/STATE/<host-id>` with `online` and `timestamp`, QoS 1, and retention.
 
 ## Executor access and builds
 

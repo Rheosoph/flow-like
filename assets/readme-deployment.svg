@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like Docker Compose deployment on one Linux host</title>
+  <desc id="desc">A high-level overview of the per-run execution profile. Browser and desktop Studio clients connect to the web application and API gateway with API replicas. The execution manager starts disposable gVisor sandboxes. Supporting services include queue bridges, the WASM compiler, Events, realtime signaling, and the audit worker. PostgreSQL stores metadata, Redis stores queues and state, and bundled RustFS provides S3 object storage. Supporting connections and optional monitoring are omitted.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 9 5 1 9" fill="none" stroke="#ff7956" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
+      .title { font-size: 40px; font-weight: 700; fill: #f2f5f8; letter-spacing: -1px; }
+      .subtitle { font-size: 26px; fill: #aebdcd; }
+      .label { font-size: 30px; font-weight: 600; fill: #f2f5f8; }
+      .detail { font-size: 24px; fill: #aebdcd; }
+      .line { fill: none; stroke: #ff7956; stroke-width: 2.5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="800" rx="24" fill="#0c121c"/>
+  <path d="M48 48h48" stroke="#ff7956" stroke-width="4" stroke-linecap="round"/>
+  <text x="48" y="106" class="title">The platform, on your infrastructure.</text>
+
+  <rect x="80" y="146" width="436" height="66" rx="12" fill="#101a26" stroke="#506073" stroke-width="1.5"/>
+  <g fill="none" stroke="#aebdcd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(101 165)">
+    <rect width="32" height="23" rx="3"/>
+    <path d="M11 29h10m-5-6v6"/>
+  </g>
+  <text x="153" y="188" font-size="28" font-weight="500" fill="#e8edf3">Browser / Desktop Studio</text>
+
+  <rect x="48" y="240" width="1104" height="492" rx="18" fill="#0f1823" stroke="#334456" stroke-width="1.5"/>
+  <text x="1120" y="279" text-anchor="end" font-size="24" font-weight="600" fill="#aebdcd" letter-spacing="1">LINUX · DOCKER COMPOSE</text>
+  <path d="M228 212v87" class="line"/>
+
+  <rect x="80" y="310" width="296" height="144" rx="12" fill="#17222f" stroke="#45586b" stroke-width="1.5"/>
+  <text x="104" y="356" class="label">Web app &amp; API</text>
+  <text x="104" y="397" class="detail">API gateway</text>
+  <text x="104" y="430" class="detail">API replicas</text>
+
+  <path d="M384 382h53" class="line"/>
+  <rect x="448" y="310" width="296" height="144" rx="12" fill="#17222f" stroke="#ff7956" stroke-width="1.5"/>
+  <text x="472" y="351" class="label">Execution</text>
+  <text x="472" y="387" class="label">manager</text>
+  <text x="472" y="430" class="detail">HTTP + queued runs</text>
+
+  <path d="M752 382h53" class="line"/>
+  <rect x="828" y="300" width="292" height="144" rx="12" fill="#17222f" stroke="#45586b" stroke-width="1.5"/>
+  <rect x="816" y="310" width="292" height="144" rx="12" fill="#17222f" stroke="#7696a1" stroke-width="1.5"/>
+  <text x="840" y="351" class="label">gVisor</text>
+  <text x="840" y="387" class="label">sandboxes</text>
+  <text x="840" y="430" class="detail">Disposable per run</text>
+
+  <path d="M80 485h1040" stroke="#334456"/>
+  <text x="80" y="529" class="label">Supporting services</text>
+  <text x="80" y="569" class="detail">Queue bridges · WASM compiler · Events · Realtime · Audit worker</text>
+
+  <rect x="80" y="602" width="320" height="100" rx="10" fill="#17222f"/>
+  <text x="104" y="644" class="label">PostgreSQL</text>
+  <text x="104" y="680" class="detail">App metadata</text>
+
+  <rect x="440" y="602" width="320" height="100" rx="10" fill="#17222f"/>
+  <text x="464" y="644" class="label">Redis</text>
+  <text x="464" y="680" class="detail">Queues &amp; state</text>
+
+  <rect x="800" y="602" width="320" height="100" rx="10" fill="#17222f"/>
+  <text x="824" y="644" class="label">RustFS</text>
+  <text x="824" y="680" class="detail">Bundled S3 storage</text>
+
+  <text x="48" y="774" class="detail">Per-run execution profile · Supporting connections simplified</text>
+</svg>

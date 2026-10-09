@@ -476,8 +476,12 @@ pub async fn db_query(
         // surface — reject anything but a single SELECT before planning.
         flow_like::flow_like_storage::databases::sql_guard::validate_readonly_sql(&sql)
             .map_err(|e| anyhow!("Invalid query SQL: {e}"))?;
-        let context = SessionContext::new();
-        flow_like::flow_like_storage::geometry::register_geo_functions(&context);
+        let context = SessionContext::new_with_state(
+            flow_like::flow_like_storage::databases::df_provider::with_lance_order_pushdown(
+                SessionContext::new().state(),
+            ),
+        );
+        flow_like::flow_like_storage::databases::register_sql_functions(&context);
         let fusion = db.to_datafusion().await?;
         context
             .register_table(table_name, fusion)

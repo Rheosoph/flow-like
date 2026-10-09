@@ -122,14 +122,14 @@ impl EfficientAdDataset {
         Ok(())
     }
     #[cfg(feature = "engine")]
-    pub(crate) fn batch(&self, indices: &[usize]) -> Self {
+    pub(crate) fn batch(&self, indices: &[usize], penalty_indices: &[usize]) -> Self {
         Self {
             images: self.images.batch(indices),
             autoencoder_images: self.autoencoder_images.as_ref().map(|x| x.batch(indices)),
             penalty_images: self
                 .penalty_images
                 .as_ref()
-                .map(|x| x.batch(&indices.iter().map(|i| i % x.shape[0]).collect::<Vec<_>>())),
+                .map(|x| x.batch(penalty_indices)),
         }
     }
 }

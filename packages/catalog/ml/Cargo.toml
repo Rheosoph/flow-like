@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
-training = ["execute", "flow-like-ml-runtime/execution", "flow-like-ml-runtime/native", "flow-like-ml-runtime/burn", "flow-like-ml-burn/engine"]
+training = ["execute", "flow-like-ml-runtime/execution", "flow-like-ml-runtime/native", "flow-like-ml-runtime/burn", "flow-like-ml-burn/engine", "dep:tempfile"]
 training-cpu = ["training", "flow-like-ml-burn/cpu"]
 training-auto = ["training-cpu", "flow-like-ml-runtime/training-auto"]
 training-wgpu = ["training-cpu", "flow-like-ml-burn/wgpu"]
@@ -60,6 +60,7 @@ serde = { workspace = true, features = ["derive", "rc"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 uuid.workspace = true
 async-trait.workspace = true
+tempfile = { version = "3", optional = true }
 # linfa 0.8 is built against ndarray 0.16, so this catalog stays on 0.16 while the ort-backed
 # catalogs (onnx, model-provider) track the workspace ndarray 0.17 required by ort rc.12.
 ndarray = "0.16"

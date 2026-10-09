@@ -73,6 +73,10 @@ pub struct RenewableSharedCredentials {
     scope_id: String,
     this: Weak<Self>,
     content_decorator: std::sync::OnceLock<Arc<dyn ContentStoreDecorator>>,
+    lance_read_cache: std::sync::OnceLock<(
+        Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,
+        String,
+    )>,
 }
 impl fmt::Debug for RenewableSharedCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -277,6 +281,7 @@ impl RenewableSharedCredentials {
             scope_id: flow_like_types::create_id(),
             this: this.clone(),
             content_decorator: std::sync::OnceLock::new(),
+            lance_read_cache: std::sync::OnceLock::new(),
         });
         let weak = Arc::downgrade(&value);
         tokio::spawn(async move {
@@ -497,6 +502,15 @@ impl RenewableSharedCredentials {
         self.content_decorator.set(decorator).is_ok()
     }
 
+    /// Hosts may persist immutable Lance ranges without enabling offline writes.
+    pub fn install_lance_read_cache(
+        &self,
+        cache: Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,
+        namespace: String,
+    ) -> bool {
+        self.lance_read_cache.set((cache, namespace)).is_ok()
+    }
+
     pub async fn to_store_type(&self, kind: StoreType) -> Result<FlowLikeStore> {
         let store = self.to_store_type_undecorated(kind).await?;
         match self.content_decorator.get() {
@@ -657,6 +671,23 @@ impl RenewableSharedCredentials {
             _ => return Err(AuthorizationError::InvalidResponse.into()),
         };
         let uri = format!("{scheme}://{bucket}/{prefix}");
+        let mut store = self.native_store(purpose)?.as_generic();
+        if purpose != Purpose::Logs
+            && let Some((cache, namespace)) = self.lance_read_cache.get()
+        {
+            store = Arc::new(
+                flow_like_storage::files::immutable_lance_cache::CachedLanceStore::new(
+                    store,
+                    cache.clone(),
+                    serde_json::to_string(&(
+                        namespace,
+                        &uri,
+                        options.iter().collect::<std::collections::BTreeMap<_, _>>(),
+                    ))?,
+                    self.provider(purpose)?,
+                ),
+            );
+        }
         Ok(
             flow_like_storage::renewable_lance::LanceStorageBinding::new(
                 &uri,
@@ -664,7 +695,7 @@ impl RenewableSharedCredentials {
                 self.provider(purpose)?,
             )?
             .with_object_prefix(prefix.as_ref())?
-            .with_store(self.native_store(purpose)?.as_generic()),
+            .with_store(store),
         )
     }
 
@@ -749,9 +780,27 @@ impl RenewableSharedCredentials {
         &self,
         app_id: &str,
     ) -> Result<flow_like_storage::lancedb::connection::ConnectBuilder> {
+        Ok(self
+            .project_database_builder(app_id)?
+            .session(self.session()?))
+    }
+
+    pub(super) fn to_db_with_session(
+        &self,
+        app_id: &str,
+        session: Arc<flow_like_storage::lance::session::Session>,
+    ) -> Result<flow_like_storage::lancedb::connection::ConnectBuilder> {
+        Ok(self.project_database_builder(app_id)?.session(session))
+    }
+
+    fn project_database_builder(
+        &self,
+        app_id: &str,
+    ) -> Result<flow_like_storage::lancedb::connection::ConnectBuilder> {
         if app_id != self.project {
             return Err(AuthorizationError::Denied.into());
         }
+        self.check()?;
         let prefix = self
             .content_prefix(false)?
             .unwrap_or_else(|| format!("apps/{}", self.project));
@@ -761,7 +810,7 @@ impl RenewableSharedCredentials {
         } else {
             root.join("storage").join("db")
         };
-        Ok(connect_lance(&self.database_uri(Purpose::Content, &path)?).session(self.session()?))
+        Ok(connect_lance(&self.database_uri(Purpose::Content, &path)?))
     }
 
     pub async fn to_db_scoped(
@@ -769,9 +818,29 @@ impl RenewableSharedCredentials {
         sub: &str,
         app_id: &str,
     ) -> Result<flow_like_storage::lancedb::connection::ConnectBuilder> {
+        Ok(self
+            .user_database_builder(sub, app_id)?
+            .session(self.session()?))
+    }
+
+    pub(super) fn to_db_scoped_with_session(
+        &self,
+        sub: &str,
+        app_id: &str,
+        session: Arc<flow_like_storage::lance::session::Session>,
+    ) -> Result<flow_like_storage::lancedb::connection::ConnectBuilder> {
+        Ok(self.user_database_builder(sub, app_id)?.session(session))
+    }
+
+    fn user_database_builder(
+        &self,
+        sub: &str,
+        app_id: &str,
+    ) -> Result<flow_like_storage::lancedb::connection::ConnectBuilder> {
         if app_id != self.project {
             return Err(AuthorizationError::Denied.into());
         }
+        self.check()?;
         let expected = self
             .content_prefix(true)?
             .ok_or(AuthorizationError::Denied)?;
@@ -779,10 +848,9 @@ impl RenewableSharedCredentials {
         if requested != prefix_path(&expected)? {
             return Err(AuthorizationError::Denied.into());
         }
-        Ok(
-            connect_lance(&self.database_uri(Purpose::User, &requested.join("db"))?)
-                .session(self.session()?),
-        )
+        Ok(connect_lance(
+            &self.database_uri(Purpose::User, &requested.join("db"))?,
+        ))
     }
 
     pub fn to_logs_db_builder(&self) -> Result<super::LogsDbBuilder> {
@@ -1607,6 +1675,86 @@ mod tests {
         ] {
             assert!(prefix_path(prefix).is_err());
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    #[tokio::test]
+    async fn database_builders_reuse_the_host_session_and_keep_scope_checks() -> Result<()> {
+        use flow_like_storage::arrow_schema::{DataType, Field, Schema};
+        use flow_like_storage::lance::session::Session;
+
+        let source = source_fixture(aws(1));
+        let owner =
+            RenewableSharedCredentials::new(aws(0), "project".into(), source.clone()).await?;
+        let memory = Arc::new(object_store::memory::InMemory::new());
+        let registry = flow_like_storage::renewable_lance::scoped_registry(vec![
+            owner
+                .binding(Purpose::Content, &Path::from("apps/project"))?
+                .with_store(memory.clone()),
+            owner
+                .binding(Purpose::User, &Path::from("users/user/apps/project"))?
+                .with_store(memory),
+        ])?;
+        let session = Arc::new(Session::new(1024 * 1024, 1024 * 1024, registry));
+        let direct = SharedCredentials::Renewable(owner.clone());
+        let mixed = SharedCredentials::Mixed(MixedSharedCredentials {
+            meta: Box::new(aws(0)),
+            content: Box::new(direct.clone()),
+            logs: Box::new(aws(0)),
+        });
+
+        for (index, credentials) in [direct, mixed].iter().enumerate() {
+            for builder in [
+                credentials
+                    .to_db_with_session("project", session.clone())
+                    .await?,
+                credentials
+                    .to_db_scoped_with_session("user", "project", session.clone())
+                    .await?,
+            ] {
+                let connection = builder.execute().await?;
+                let table = connection
+                    .create_empty_table(
+                        format!("session_{index}"),
+                        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+                    )
+                    .execute()
+                    .await?;
+                let dataset = table.dataset().unwrap().get().await?;
+                assert!(Arc::ptr_eq(&dataset.session(), &session));
+            }
+            assert!(
+                credentials
+                    .to_db_with_session("other", session.clone())
+                    .await
+                    .is_err()
+            );
+            assert!(
+                credentials
+                    .to_db_scoped_with_session("other", "project", session.clone())
+                    .await
+                    .is_err()
+            );
+            assert!(
+                credentials
+                    .to_db_scoped_with_session("user", "other", session.clone())
+                    .await
+                    .is_err()
+            );
+        }
+
+        source.revoked.store(true, Ordering::SeqCst);
+        assert!(
+            owner
+                .to_db_with_session("project", session.clone())
+                .is_err()
+        );
+        assert!(
+            owner
+                .to_db_scoped_with_session("user", "project", session)
+                .is_err()
+        );
         Ok(())
     }
 

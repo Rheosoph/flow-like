@@ -15,6 +15,17 @@ pub struct ConvNorm {
     norm: BatchNorm,
 }
 impl ConvNorm {
+    fn import_torchvision(
+        mut self,
+        convolution: &str,
+        normalization: &str,
+        reader: &mut crate::pretrained::SafeTensorReader<'_>,
+        device: &Device,
+    ) -> crate::Result<Self> {
+        self.conv = reader.conv2d(self.conv, convolution, device)?;
+        self.norm = reader.batch_norm(self.norm, normalization, device)?;
+        Ok(self)
+    }
     fn new(input: usize, output: usize, kernel: usize, stride: usize, device: &Device) -> Self {
         let padding = kernel / 2;
         Self {
@@ -65,6 +76,60 @@ pub struct ResNet18 {
     classifier: Linear,
 }
 impl ResNet18 {
+    pub(crate) fn import_torchvision(
+        mut self,
+        reader: &mut crate::pretrained::SafeTensorReader<'_>,
+        device: &Device,
+    ) -> crate::Result<Self> {
+        self.stem = self
+            .stem
+            .import_torchvision("conv1", "bn1", reader, device)?;
+        self.blocks = self
+            .blocks
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut block)| {
+                let prefix = format!("layer{}.{}", index / 2 + 1, index % 2);
+                block.first = block.first.import_torchvision(
+                    &format!("{prefix}.conv1"),
+                    &format!("{prefix}.bn1"),
+                    reader,
+                    device,
+                )?;
+                block.second = block.second.import_torchvision(
+                    &format!("{prefix}.conv2"),
+                    &format!("{prefix}.bn2"),
+                    reader,
+                    device,
+                )?;
+                if let Some(projection) = block.projection.take() {
+                    block.projection = Some(projection.import_torchvision(
+                        &format!("{prefix}.downsample.0"),
+                        &format!("{prefix}.downsample.1"),
+                        reader,
+                        device,
+                    )?);
+                }
+                Ok(block)
+            })
+            .collect::<crate::Result<_>>()?;
+        self.classifier = reader.linear(self.classifier, "fc", device)?;
+        Ok(self)
+    }
+    pub(crate) fn reset_classifier(mut self, classes: usize, device: &Device) -> Self {
+        let input = self.classifier.weight.val().dims()[0];
+        self.classifier = LinearConfig::new(input, classes).init(device);
+        self
+    }
+    pub(crate) fn configure_fine_tuning(self, freeze_backbone: bool) -> Self {
+        let mut model = if freeze_backbone {
+            self.freeze()
+        } else {
+            self.unfreeze()
+        };
+        model.classifier = model.classifier.unfreeze();
+        model
+    }
     pub fn new(input: usize, classes: usize, width: usize, device: &Device) -> Self {
         let mut blocks = Vec::new();
         let mut channels = width;

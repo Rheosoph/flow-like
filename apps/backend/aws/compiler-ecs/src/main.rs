@@ -1,10 +1,10 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use flow_like_compiler::{CompilationJob, CompilerConfig, process_job};
+use flow_like_compiler::{process_job, CompilationJob, CompilerConfig};
 use flow_like_types_contracts::dispatch::CompilationJobRef;
 use std::time::Duration;
-use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer as _};
 
 const DEFAULT_TASK_TIMEOUT_SECS: u64 = 3600; // 1 hour
 

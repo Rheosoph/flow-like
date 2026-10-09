@@ -80,6 +80,32 @@ Inspecting first is especially important for agent-driven analysis and sources w
 
 Use it when downstream nodes need structured values.
 
+### Lance SQL functions
+
+SQL sessions register Lance's token and JSON functions alongside Flow-Like's spatial
+functions. For example, `contains_tokens(content, 'cat fish')` matches rows containing
+both tokens. JSON functions include `json_extract`, `json_extract_with_type`, `json_exists`,
+`json_get`, `json_get_string`, `json_get_int`, `json_get_float`, `json_get_bool`,
+`json_array_contains`, and `json_array_length`. These functions expect Lance JSONB values
+stored as `LargeBinary`; an ordinary JSON text column needs conversion before use.
+
+Full-text search is available on registered Lance tables through `fts`:
+
+```sql
+SELECT title, _score
+FROM fts('articles', '{"match":{"column":"content","terms":"climate energy"}}')
+ORDER BY _score DESC
+LIMIT 20;
+```
+
+Create a full-text index on the searched column first. The table name refers to a Lance
+table already registered in the session. FTS results retain the table's selected snapshot
+and access checks, and cannot be used as a write target.
+
+A new workflow run opens current table data. Within a long-running workflow, refresh
+external changes explicitly with Checkout Database set to Latest, then register its
+output under the same SQL name. See [database references](/topics/datascience/loading/#branches-versions-and-snapshots).
+
 ### Agent-readable output
 
 [Execute SQL](/nodes/data/datafusion/tools/df-execute-sql/) returns a Markdown table, a CSVTable, and the row count. Its formatted text output is convenient for a controlled data-analysis tool, but large results should remain in structured storage rather than being copied into a model context.

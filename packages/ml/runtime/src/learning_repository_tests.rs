@@ -887,3 +887,272 @@ fn learning_observation_bytes_and_cross_cycle_budget_are_enforced() {
         0
     );
 }
+
+fn canary_review_fixture(
+    bind_review: bool,
+) -> (
+    tempfile::TempDir,
+    TrainingRepository,
+    LearningProject,
+    LearningCycle,
+    ModelArtifact,
+    ModelArtifact,
+) {
+    let (directory, repo, initial, budget) = setup();
+    let mut policy = initial.request.policy.clone();
+    policy.canary_fraction = 1.;
+    let project = repo
+        .update_learning_project(
+            &initial.id,
+            initial.generation,
+            initial.request.source.clone(),
+            policy,
+            100,
+        )
+        .unwrap();
+    let first = repo
+        .reserve_learning_cycle(&project.id, "first", budget.clone(), 101)
+        .unwrap();
+    let data = snapshot(&repo, &project, &[0, 1], &[2, 3], &[4, 5]);
+    let exp = experiment(&repo, &project, &first, &data, 102);
+    repo.attach_learning_experiment(&first.id, &exp.id, 103)
+        .unwrap();
+    let champion = finish(&repo, &exp, &data, true, 104);
+    repo.settle_learning_cycle(&first.id, 112).unwrap();
+    repo.promote_learning_cycle(&first.id, 0, 113).unwrap();
+    review(&repo, &project, 8, 114);
+    review(&repo, &project, 9, 114);
+    let second = repo
+        .reserve_learning_cycle(&project.id, "second", budget, 115)
+        .unwrap();
+    let data2 = snapshot(&repo, &project, &[0, 1], &[2, 3], &[8, 9]);
+    let exp2 = experiment(&repo, &project, &second, &data2, 116);
+    repo.attach_learning_experiment(&second.id, &exp2.id, 117)
+        .unwrap();
+    let candidate = finish(&repo, &exp2, &data2, true, 118);
+    repo.settle_learning_cycle(&second.id, 126).unwrap();
+    for sample in &data2.test {
+        prediction(&repo, &champion.id, &sample.id, false, 127);
+    }
+    let old_deployment = repo.promote_learning_cycle(&second.id, 1, 128).unwrap();
+    assert_eq!(old_deployment.active_artifact_id, champion.id);
+    assert_eq!(
+        repo.get_learning_project(&project.id).unwrap().state,
+        LearningState::Canary
+    );
+    assert!(
+        matches!(repo.learning_route(&project.id,"same").unwrap(),LearningRoute::Canary {artifact_id,..} if artifact_id==candidate.id)
+    );
+    assert!(!repo.learning_canary_ready(&project.id, 129).unwrap());
+    assert!(matches!(
+        repo.promote_learning_cycle(&second.id, 1, 129),
+        Err(Error::Conflict(_))
+    ));
+    for index in [100, 101] {
+        let mut sample = sample(index);
+        sample.captured_at_ms = 130;
+        sample.label_available_at_ms = 131;
+        repo.record_sample(&project.request.stream, &sample)
+            .unwrap();
+        let mut observation = observation(index, "bad", 0.9, index as f64);
+        observation.captured_at_ms = 130;
+        observation.student.as_mut().unwrap().artifact_id = Some(candidate.id.clone());
+        repo.record_learning_observation(&project.id, &observation)
+            .unwrap();
+        repo.record_learning_review(
+            &project.id,
+            &LearningReview {
+                sample_id: sample.id.clone(),
+                annotation: json!({"kind":"class","class_id":0}),
+                source: LabelSource::Reviewed,
+                reviewer: "operator".into(),
+                available_at_ms: 131,
+                revision: 1,
+                outcome: None,
+            },
+        )
+        .unwrap();
+        for (artifact, correct) in [(&candidate.id, true), (&champion.id, false)] {
+            repo.record_prediction(&PredictionRecord {
+                sample_id: sample.id.clone(),
+                artifact_id: artifact.clone(),
+                predicted_label: Some(if correct { "good" } else { "bad" }.into()),
+                teacher_label: None,
+                actual_label: Some("good".into()),
+                actual_source: Some(LabelSource::Reviewed),
+                latency_ms: 1.,
+                failed: false,
+                recorded_at_ms: 132,
+                details: if bind_review {
+                    json!({"learning_review_revision":1})
+                } else {
+                    Value::Null
+                },
+            })
+            .unwrap();
+        }
+    }
+
+    (directory, repo, project, second, champion, candidate)
+}
+
+fn correct_canary_reviews(
+    repo: &TrainingRepository,
+    project: &LearningProject,
+    available_at_ms: i64,
+) {
+    for index in [100, 101] {
+        repo.record_learning_review(
+            &project.id,
+            &LearningReview {
+                sample_id: format!("sample-{index}"),
+                annotation: json!({"kind":"class","class_id":1}),
+                source: LabelSource::Reviewed,
+                reviewer: "operator".into(),
+                available_at_ms,
+                revision: 2,
+                outcome: None,
+            },
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn corrected_canary_reviews_reject_cached_evidence_and_allow_later_cycles() {
+    for bind_review in [false, true] {
+        let (_directory, repo, project, cycle, champion, candidate) =
+            canary_review_fixture(bind_review);
+        let original = serde_json::to_value(repo.predictions(&candidate.id).unwrap()).unwrap();
+        correct_canary_reviews(&repo, &project, 150);
+        assert!(
+            repo.reconcile_learning_canary_reviews(&project.id, 134)
+                .unwrap()
+        );
+        assert!(repo.learning_canary_ready(&project.id, 134).unwrap());
+        assert!(!repo.learning_canary_ready(&project.id, 150).unwrap());
+        if bind_review {
+            // Host replay has synchronized the corrected truth before hitting its cache.
+            for index in [100, 101] {
+                let mut corrected = sample(index);
+                corrected.annotation_revision = 3;
+                corrected.captured_at_ms = 130;
+                corrected.label_available_at_ms = 150;
+                corrected.payload["annotation"] = json!({"kind":"class","class_id":1});
+                corrected.payload["label"] = json!("bad");
+                repo.record_prepared_sample(&project.request.stream, &corrected)
+                    .unwrap();
+            }
+        }
+        let error = repo.promote_learning_cycle(&cycle.id, 1, 150).unwrap_err();
+        assert!(error.to_string().contains("canary review changed"));
+        let restored = repo.get_learning_project(&project.id).unwrap();
+        assert_eq!(restored.state, LearningState::Active);
+        assert_eq!(
+            restored.champion_artifact_id.as_deref(),
+            Some(champion.id.as_str())
+        );
+        assert!(restored.candidate_artifact_id.is_none());
+        let comparison = repo.get_learning_comparison(&cycle.id).unwrap();
+        assert!(!comparison.eligible);
+        assert!(comparison.reasons.contains(&"canary_review_changed".into()));
+        assert!(
+            repo.get_learning_cycle(&cycle.id)
+                .unwrap()
+                .error
+                .unwrap()
+                .contains("champion retained")
+        );
+        assert_eq!(
+            serde_json::to_value(repo.predictions(&candidate.id).unwrap()).unwrap(),
+            original
+        );
+        review(&repo, &project, 200, 151);
+        review(&repo, &project, 201, 151);
+        assert!(
+            repo.learning_next_actions(&project.id, 152)
+                .unwrap()
+                .ready_to_train
+        );
+    }
+}
+
+#[test]
+fn concurrent_review_invalidates_promotion_without_advancing_the_project_clock() {
+    let (_directory, repo, project, cycle, _champion, candidate) = canary_review_fixture(true);
+    let before = repo.get_learning_project(&project.id).unwrap();
+    let cohort = repo
+        .learning_canary_sample_ids(&project.id, 140)
+        .unwrap()
+        .into_iter()
+        .collect();
+    repo.learning_cohort_report(&candidate.id, EvaluationTask::Classification, &cohort, 140)
+        .unwrap();
+    correct_canary_reviews(&repo, &project, 150);
+    let after = repo.get_learning_project(&project.id).unwrap();
+    assert!(after.generation > before.generation);
+    assert_eq!(after.updated_at_ms, before.updated_at_ms);
+    let mut connection = repo.connection().unwrap();
+    let tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    let current = super::project(&tx, &project.id).unwrap();
+    assert!(matches!(
+        cas(&current, before.generation, 140),
+        Err(Error::Conflict(_))
+    ));
+    tx.commit().unwrap();
+    // The corrected review remains unavailable at 140, then rejects the old
+    // evidence on a retry after its availability time.
+    assert!(
+        repo.reconcile_learning_canary_reviews(&project.id, 140)
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .reconcile_learning_canary_reviews(&project.id, 150)
+            .unwrap()
+    );
+    assert_eq!(
+        repo.get_learning_project(&project.id).unwrap().state,
+        LearningState::Active
+    );
+    assert!(!repo.get_learning_comparison(&cycle.id).unwrap().eligible);
+}
+
+#[test]
+fn canary_review_comparison_preserves_exact_class_ids() {
+    let accepted = json!({"kind":"class","class_id":16_777_216});
+    assert!(review_annotation_matches(Some(&accepted), &accepted).unwrap());
+    assert!(
+        !review_annotation_matches(
+            Some(&accepted),
+            &json!({"kind":"class","class_id":16_777_217}),
+        )
+        .unwrap()
+    );
+}
+
+#[cfg(any(feature = "native", feature = "burn"))]
+#[test]
+fn canary_review_comparison_accepts_typed_numeric_serialization() {
+    for reviewed in [
+        json!({"kind":"scalar","value":10}),
+        json!({"kind":"values","values":[0.1,2]}),
+        json!({"kind":"boxes","boxes":[{"class_id":0,"x_min":0,"y_min":0.1,"x_max":1,"y_max":1}]}),
+        json!({"kind":"instance_masks","instances":[{"instance_id":"part","bounds":{"class_id":0,"x_min":0,"y_min":0.1,"x_max":1,"y_max":1},"width":1,"height":1,"foreground":[true]}]}),
+    ] {
+        let typed: flow_like_ml_core::Annotation =
+            serde_json::from_value(reviewed.clone()).unwrap();
+        let accepted = serde_json::to_value(typed).unwrap();
+        assert_ne!(accepted, reviewed);
+        assert!(review_annotation_matches(Some(&accepted), &reviewed).unwrap());
+    }
+    assert!(
+        !review_annotation_matches(
+            Some(&json!({"kind":"scalar","value":0.10000000000000001})),
+            &json!({"kind":"scalar","value":0.10000000000000002}),
+        )
+        .unwrap()
+    );
+}
