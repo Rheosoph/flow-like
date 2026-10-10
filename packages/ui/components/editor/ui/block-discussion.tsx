@@ -44,6 +44,7 @@ import { Comment, CommentCreateForm } from "./comment";
 
 export const BlockDiscussion: RenderNodeWrapper<AnyPluginConfig> = (props) => {
 	const { editor, element } = props;
+	if (!editor.getOption(discussionPlugin, "inline")) return;
 
 	const commentsApi = editor.getApi(CommentPlugin).comment;
 	const blockPath = editor.api.findPath(element);

@@ -1,6 +1,11 @@
 import type { LessonAssetView } from "../../lib/learn/types";
 
-const PLATE_JSON_PREFIX = "plate_json::";
+import type { Value } from "platejs";
+import {
+	PLATE_JSON_PREFIX,
+	parsePlateDocument,
+	replacePlateDocumentChildren,
+} from "../../lib/plate-document";
 const MARKDOWN_REF_RE = /(^|[^\w\\])@([A-Za-z_][A-Za-z0-9_-]{0,63})/g;
 const MARKDOWN_H1_RE = /^\s{0,3}#\s+([^\s][^\r\n]*)\r*(?:\n|$)/;
 
@@ -53,7 +58,7 @@ export function removeDuplicateLessonTitle(
 
 	if (content.startsWith(PLATE_JSON_PREFIX)) {
 		try {
-			const parsed = JSON.parse(content.slice(PLATE_JSON_PREFIX.length));
+			const parsed = parsePlateDocument(content)?.children;
 			if (!Array.isArray(parsed) || parsed.length === 0) return content;
 			const first = parsed[0] as PlateNode;
 			if (
@@ -63,11 +68,12 @@ export function removeDuplicateLessonTitle(
 				return content;
 			}
 			const remaining = parsed.slice(1);
-			return `${PLATE_JSON_PREFIX}${JSON.stringify(
+			return replacePlateDocumentChildren(
+				content,
 				remaining.length > 0
 					? remaining
 					: [{ type: "p", children: [{ text: "" }] }],
-			)}`;
+			);
 		} catch {
 			return content;
 		}
@@ -175,10 +181,10 @@ export function resolveAssetReferences(
 
 	if (content.startsWith(PLATE_JSON_PREFIX)) {
 		try {
-			const parsed = JSON.parse(content.slice(PLATE_JSON_PREFIX.length));
+			const parsed = parsePlateDocument(content)?.children;
 			if (!Array.isArray(parsed)) return content;
 			const transformed = walkPlateNodes(parsed as PlateNode[], byName);
-			return `${PLATE_JSON_PREFIX}${JSON.stringify(transformed)}`;
+			return replacePlateDocumentChildren(content, transformed as Value);
 		} catch {
 			return content;
 		}

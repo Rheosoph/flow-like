@@ -254,6 +254,7 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 	},
 	richText: {
 		value: str(""),
+		reviewEnabled: bool(false),
 		label: str("Document"),
 		placeholder: str("Start writing..."),
 		uploadScope: str("app"),

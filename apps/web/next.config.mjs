@@ -21,6 +21,8 @@ const nextConfig = {
 		unoptimized: true,
 	},
 	transpilePackages: ["@flow-like/flow-like-ui", "@flow-like/locales"],
+	// Share one server-side Yjs instance across route bundles and dev recompiles.
+	serverExternalPackages: ["yjs"],
 	experimental: {
 		serverComponentsHmrCache: true,
 		webpackMemoryOptimizations: true,

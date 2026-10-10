@@ -354,10 +354,11 @@ describe("markdown block shortcuts", () => {
 	});
 
 	describe("deliberate changes from Plate 49", () => {
-		// 49 turned these into h4-h6 nodes the editor kits never register (rendered as a plain div).
+		// Every heading level is registered in the authoring and static kits.
 		check([
-			["#### Title", 'p<"#### Title">'],
-			["###### Title", 'p<"###### Title">'],
+			["#### Title", 'h4<"Title"> | p<"">'],
+			["##### Title", 'h5<"Title"> | p<"">'],
+			["###### Title", 'h6<"Title"> | p<"">'],
 		]);
 
 		// 49 converted the whole block, hiding the text after the cursor inside the hr void.

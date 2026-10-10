@@ -6,6 +6,9 @@ import {
 	H1Plugin,
 	H2Plugin,
 	H3Plugin,
+	H4Plugin,
+	H5Plugin,
+	H6Plugin,
 	HorizontalRulePlugin,
 } from "@platejs/basic-nodes/react";
 import {
@@ -19,7 +22,14 @@ import {
 import { ParagraphPlugin } from "platejs/react";
 
 import { BlockquoteElement } from "../ui/blockquote-node";
-import { H1Element, H2Element, H3Element } from "../ui/heading-node";
+import {
+	H1Element,
+	H2Element,
+	H3Element,
+	H4Element,
+	H5Element,
+	H6Element,
+} from "../ui/heading-node";
 import { HrElement } from "../ui/hr-node";
 import { ParagraphElement } from "../ui/paragraph-node";
 import { notInside } from "./input-rule-guards";
@@ -110,6 +120,30 @@ export const BasicBlocksKit = [
 		},
 		rules: headingRules,
 		shortcuts: { toggle: { keys: "mod+alt+3" } },
+	}),
+	H4Plugin.configure({
+		inputRules: [
+			HeadingRules.markdown({ enabled: notInside(KEYS.codeBlock, KEYS.h4) }),
+		],
+		node: { component: H4Element },
+		rules: headingRules,
+		shortcuts: { toggle: { keys: "mod+alt+4" } },
+	}),
+	H5Plugin.configure({
+		inputRules: [
+			HeadingRules.markdown({ enabled: notInside(KEYS.codeBlock, KEYS.h5) }),
+		],
+		node: { component: H5Element },
+		rules: headingRules,
+		shortcuts: { toggle: { keys: "mod+alt+5" } },
+	}),
+	H6Plugin.configure({
+		inputRules: [
+			HeadingRules.markdown({ enabled: notInside(KEYS.codeBlock, KEYS.h6) }),
+		],
+		node: { component: H6Element },
+		rules: headingRules,
+		shortcuts: { toggle: { keys: "mod+alt+6" } },
 	}),
 	BlockquotePlugin.configure({
 		inputRules: [blockquoteMarkdownRule],

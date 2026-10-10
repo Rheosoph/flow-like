@@ -2,78 +2,130 @@
 
 import { ChevronRightIcon } from "lucide-react";
 import { memo, useMemo } from "react";
+import {
+	type LayerVisit,
+	resolveLayerChain,
+} from "../../../hooks/use-layer-navigation";
+import {
+	MAIN_FILE_LABEL,
+	activeModuleId,
+	modulePathLabel,
+} from "../../../lib/flow-modules";
+import { type ILayer, ILayerType } from "../../../lib/schema/flow/board";
 import { cn } from "../../../lib/utils";
 
-/** Ancestors within the open file. The tab strip already names the file at its root. */
+interface BreadcrumbEntry {
+	label: string;
+	path: string;
+	visitIndex?: number;
+}
+
+/** The route into the open function, with ownership ancestors before the first visit. */
 export const BoardBreadcrumb = memo(function BoardBreadcrumb({
-	fileLabel,
-	fileRootPath,
+	layers,
 	layerPath,
-	layerNames,
+	navigationTrail,
+	onReturnToVisit,
 	onJumpToLayer,
 }: Readonly<{
-	fileLabel: string;
-	/** Full layer path to the module root. Undefined or `root` means main. */
-	fileRootPath?: string;
-	/** Full layer path from the board root, deepest last. */
+	layers: Record<string, ILayer>;
+	/** Full ownership path from the board root, deepest last. */
 	layerPath?: string;
-	layerNames: Map<string, string>;
+	navigationTrail?: readonly LayerVisit[];
+	onReturnToVisit?: (index: number) => void;
 	onJumpToLayer: (path: string) => void;
 }>) {
-	const { rootPath, segments } = useMemo(() => {
-		const fileSegments =
-			fileRootPath && fileRootPath !== "root"
-				? fileRootPath.split("/").filter(Boolean)
-				: [];
-		const pathSegments =
-			layerPath && layerPath !== "root"
-				? layerPath.split("/").filter(Boolean)
-				: [];
-		const rootPath = fileSegments.join("/") || "root";
-		if (!fileSegments.every((id, index) => pathSegments[index] === id)) {
-			return { rootPath, segments: [] };
-		}
-		return {
-			rootPath,
-			segments: pathSegments.slice(fileSegments.length).map((id, index) => ({
-				id,
-				path: pathSegments.slice(0, fileSegments.length + index + 1).join("/"),
+	const entries = useMemo(() => {
+		const trail =
+			navigationTrail?.length && navigationTrail.at(-1)?.to === layerPath
+				? navigationTrail
+				: undefined;
+		const origin = trail ? trail[0].from : layerPath;
+		const originChain = resolveLayerChain(layers, origin?.split("/").pop());
+		const originModule = activeModuleId(origin, originChain.at(-1), layers);
+		const fileChain = resolveLayerChain(layers, originModule);
+		const fileLabel = originModule
+			? modulePathLabel(layers, originModule)
+			: MAIN_FILE_LABEL;
+		const result: BreadcrumbEntry[] = [
+			{
+				label: fileLabel,
+				path: fileChain.join("/") || "root",
+				visitIndex:
+					trail && originChain.length === fileChain.length ? 0 : undefined,
+			},
+			...originChain.slice(fileChain.length).map((id, index) => ({
+				label: layers[id]?.name ?? id,
+				path: originChain.slice(0, fileChain.length + index + 1).join("/"),
+				visitIndex:
+					trail && fileChain.length + index === originChain.length - 1
+						? 0
+						: undefined,
 			})),
-		};
-	}, [fileRootPath, layerPath]);
+		];
 
-	if (segments.length === 0) return null;
+		let previousModule = originModule;
+		for (const [index, visit] of (trail ?? []).entries()) {
+			const chain = resolveLayerChain(layers, visit.to.split("/").pop());
+			const layerId = chain.at(-1);
+			const layer = layerId ? layers[layerId] : undefined;
+			const moduleId = activeModuleId(visit.to, layerId, layers);
+			const moduleLabel = moduleId
+				? modulePathLabel(layers, moduleId)
+				: MAIN_FILE_LABEL;
+			const name = layer?.name ?? layerId ?? MAIN_FILE_LABEL;
+			result.push({
+				label:
+					layer?.type === ILayerType.Module
+						? moduleLabel
+						: moduleId !== previousModule
+							? `${moduleLabel}: ${name}`
+							: name,
+				path: chain.join("/") || "root",
+				visitIndex: index + 1,
+			});
+			previousModule = moduleId;
+		}
+		return result;
+	}, [layers, layerPath, navigationTrail]);
+
+	if (entries.length < 2) return null;
 
 	return (
 		<nav
-			aria-label={fileLabel}
+			aria-label={entries[0].label}
 			className="flex h-5 shrink-0 items-center gap-0.5 overflow-x-auto border-b bg-muted/10 px-2 no-scrollbar"
 		>
-			<button
-				type="button"
-				onClick={() => onJumpToLayer(rootPath)}
-				className="shrink-0 rounded-sm px-1 font-mono text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-			>
-				{fileLabel}
-			</button>
-			{segments.map(({ id, path }, index) => {
-				const last = index === segments.length - 1;
+			{entries.map(({ label, path, visitIndex }, index) => {
+				const last = index === entries.length - 1;
 				return (
-					<span key={path} className="flex shrink-0 items-center gap-0.5">
-						<ChevronRightIcon className="size-3 text-muted-foreground/50" />
+					<span
+						key={`${index}:${path}`}
+						className="flex shrink-0 items-center gap-0.5"
+					>
+						{index > 0 && (
+							<ChevronRightIcon className="size-3 text-muted-foreground/50" />
+						)}
 						<button
 							type="button"
 							disabled={last}
 							aria-current={last ? "page" : undefined}
-							onClick={() => onJumpToLayer(path)}
+							onClick={() => {
+								if (visitIndex !== undefined && onReturnToVisit) {
+									onReturnToVisit(visitIndex);
+								} else {
+									onJumpToLayer(path);
+								}
+							}}
 							className={cn(
 								"rounded-sm px-1 text-[11px]",
+								index === 0 && "font-mono",
 								last
 									? "text-foreground"
 									: "text-muted-foreground hover:bg-accent hover:text-foreground",
 							)}
 						>
-							{layerNames.get(id) ?? id}
+							{label}
 						</button>
 					</span>
 				);

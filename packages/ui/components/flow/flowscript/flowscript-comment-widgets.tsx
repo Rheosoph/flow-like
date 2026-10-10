@@ -24,6 +24,8 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type PeerUserInfo, colorFromSub } from "../../../hooks/use-peer-users";
+import { plainTextFromRichContent } from "../../../lib/plate-text";
+import { prepareCommentSave } from "../../../lib/flow-comment-edit";
 import type { IComment } from "../../../lib/schema/flow/board";
 import { userInitials } from "../../../lib/user-display";
 import {
@@ -34,6 +36,7 @@ import {
 	Button,
 	RelativeTime,
 	Textarea,
+	TextEditor,
 } from "../../ui";
 import {
 	canModifyFlowScriptComment,
@@ -53,6 +56,7 @@ export interface FlowScriptCommentThreadState {
 }
 
 export interface FlowScriptCommentOverlayProps {
+	appId: string;
 	editor: FlowScriptEditor | null;
 	monaco: Monaco | null;
 	anchorId: string;
@@ -71,6 +75,7 @@ export interface FlowScriptCommentOverlayProps {
 }
 
 export function FlowScriptCommentOverlay({
+	appId,
 	editor,
 	monaco,
 	anchorId,
@@ -140,6 +145,13 @@ export function FlowScriptCommentOverlay({
 		if (!host) return;
 		const onPointerDown = (event: PointerEvent) => {
 			if (event.target instanceof Node && host.contains(event.target)) return;
+			if (
+				event.target instanceof Element &&
+				event.target.closest(
+					"[data-radix-popper-content-wrapper], [role=dialog]",
+				)
+			)
+				return;
 			onCloseRef.current();
 		};
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -188,6 +200,7 @@ export function FlowScriptCommentOverlay({
 					comments.map((comment) => (
 						<CommentRow
 							key={comment.id}
+							appId={appId}
 							comment={comment}
 							authors={authors}
 							sub={sub}
@@ -210,6 +223,7 @@ export function FlowScriptCommentOverlay({
 }
 
 interface CommentRowProps {
+	appId: string;
 	comment: IComment;
 	authors: ReadonlyMap<string, PeerUserInfo>;
 	sub?: string;
@@ -219,6 +233,7 @@ interface CommentRowProps {
 }
 
 function CommentRow({
+	appId,
 	comment,
 	authors,
 	sub,
@@ -229,6 +244,8 @@ function CommentRow({
 	const { t } = useTranslation("flow");
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(comment.content);
+	const [baseContent, setBaseContent] = useState(comment.content);
+	const [error, setError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 
 	const author =
@@ -241,15 +258,24 @@ function CommentRow({
 
 	const saveEdit = async () => {
 		const trimmed = draft.trim();
-		if (busy || trimmed.length === 0 || trimmed === comment.content) {
+		if (
+			busy ||
+			plainTextFromRichContent(trimmed).length === 0 ||
+			trimmed === comment.content
+		) {
 			setEditing(false);
 			setDraft(comment.content);
 			return;
 		}
 		setBusy(true);
 		try {
-			await onUpdate(comment, trimmed);
+			const next = prepareCommentSave(comment, baseContent, trimmed);
+			if (next) await onUpdate(next, next.content);
 			setEditing(false);
+		} catch (error) {
+			setError(
+				error instanceof Error ? error.message : "Could not save this comment.",
+			);
 		} finally {
 			setBusy(false);
 		}
@@ -293,6 +319,8 @@ function CommentRow({
 							disabled={busy}
 							onClick={() => {
 								setDraft(comment.content);
+								setBaseContent(comment.content);
+								setError(undefined);
 								setEditing(true);
 							}}
 						>

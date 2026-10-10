@@ -6,7 +6,7 @@ import type { BoundValue } from "../types";
 
 export interface BoundInputOptions<T> {
 	/** The component's value-write counter, from `valueRevisionOf`. */
-	revision?: number;
+	revision?: number | string;
 	/** Called when an external write replaces what the input was showing. */
 	onExternalValue?: (value: T) => void;
 }

@@ -254,10 +254,11 @@ export function VariablesMenu({
 	/** Re-files a function into another module — or into `main.flow`, which is no module. */
 	const moveFunctionToModule = useCallback(
 		async (layerId: string, target: string | null) => {
-			await executeCommand(
+			const result = await executeCommand(
 				moveToLayerCommand({ ids: [layerId], target }),
 				false,
 			);
+			return result !== undefined;
 		},
 		[executeCommand],
 	);
@@ -988,6 +989,11 @@ export function VariablesMenu({
 					layer={editingFunction}
 					calls={usage.functions[editingFunction.id] ?? 0}
 					folders={functionFolders}
+					modules={modules}
+					moduleId={owningModuleId(board.layers, editingFunction.id)}
+					onMoveToModule={(target) =>
+						moveFunctionToModule(editingFunction.id, target)
+					}
 					boardRef={boardRef}
 					onApply={async (updated) => {
 						await upsertFunction(updated);
@@ -999,7 +1005,7 @@ export function VariablesMenu({
 						void deleteFunction(layer);
 					}}
 					onOpenLayer={() => {
-						const layer = editingFunction;
+						const layer = board.layers[editingFunction.id] ?? editingFunction;
 						setEditingFunction(null);
 						void openFunction(layer);
 					}}

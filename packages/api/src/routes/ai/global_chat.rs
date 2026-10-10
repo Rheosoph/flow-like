@@ -882,7 +882,24 @@ pub(crate) async fn reserve_assistant_usage(
     funding: &str,
     app_id: Option<&str>,
 ) -> Result<AssistantUsage, ApiError> {
+    reserve_assistant_usage_with_max_runtime(
+        state, sub, model, provider, funding, app_id, 600_000, true,
+    )
+    .await
+}
+
+pub(crate) async fn reserve_assistant_usage_with_max_runtime(
+    state: &AppState,
+    sub: &str,
+    model: &str,
+    provider: &str,
+    funding: &str,
+    app_id: Option<&str>,
+    max_runtime_ms: i64,
+    use_worker: bool,
+) -> Result<AssistantUsage, ApiError> {
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    let max_runtime_ms = max_runtime_ms.clamp(1, 600_000);
     let payer = crate::quota::resolve_payer(state, Some(sub), app_id).await?;
     let (_, tier) = crate::quota::payer_plan(state, &payer).await?;
     let now = chrono::Utc::now();
@@ -911,17 +928,19 @@ pub(crate) async fn reserve_assistant_usage(
         funding_basis_points: 0,
         api_micro_usd_per_million_ms: 20_001,
         serving_request_micro_usd: 1,
-        max_request_ms: 600_000,
+        max_request_ms: max_runtime_ms,
     };
-    crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+    if use_worker {
+        crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+    }
     let runtime_ms = if funding == "hosted" || !crate::quota::enforcing() {
-        600_000
+        max_runtime_ms
     } else if tier.max_runtime_ms < 0 {
-        600_000
+        max_runtime_ms
     } else {
         tier.max_runtime_ms
             .saturating_sub(occupied.runtime_ms)
-            .clamp(1, 600_000)
+            .clamp(1, max_runtime_ms)
     };
     let operation_id = flow_like_types::create_id();
     let deadline = now + chrono::Duration::milliseconds(runtime_ms);

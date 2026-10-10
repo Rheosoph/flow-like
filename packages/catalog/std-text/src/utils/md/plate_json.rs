@@ -33,6 +33,20 @@ pub fn parse_plate_document(input: &str) -> flow_like_types::Result<Vec<Value>> 
 
     match parsed {
         Value::Array(nodes) => Ok(nodes),
+        Value::Object(ref object) if object.contains_key("version") => {
+            if object.get("version").and_then(Value::as_u64) != Some(1) {
+                return Err(flow_like_types::anyhow!(
+                    "Unsupported rich text document version"
+                ));
+            }
+            object
+                .get("children")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!("Rich text document children must be an array")
+                })
+        }
         Value::Object(_) => Ok(vec![parsed]),
         other => Err(flow_like_types::anyhow!(
             "plate_json document must be an array of nodes, found {}",
@@ -111,7 +125,7 @@ fn indent_of(node: &Value) -> usize {
     node.get("indent")
         .and_then(Value::as_u64)
         .unwrap_or(0)
-        .max(1) as usize
+        .clamp(1, 64) as usize
 }
 
 /// CSS `list-style-type` values that render as an ordered list.
@@ -162,8 +176,197 @@ fn caption_text(node: &Value) -> String {
     }
 }
 
+pub fn safe_html_url(url: &str, kind: &str) -> bool {
+    let compact: String = url
+        .chars()
+        .filter(|c| !c.is_ascii_control() && !c.is_ascii_whitespace())
+        .collect();
+    let lower = compact.to_ascii_lowercase();
+    if lower.starts_with("data:") {
+        let mime = lower
+            .strip_prefix("data:")
+            .unwrap_or_default()
+            .split([';', ','])
+            .next()
+            .unwrap_or_default();
+        return match kind {
+            "img" => matches!(
+                mime,
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
+            ),
+            "video" => matches!(mime, "video/mp4" | "video/webm" | "video/ogg"),
+            "audio" => matches!(
+                mime,
+                "audio/mpeg" | "audio/mp4" | "audio/ogg" | "audio/wav" | "audio/webm"
+            ),
+            "file" => matches!(
+                mime,
+                "application/pdf" | "application/octet-stream" | "text/plain"
+            ),
+            _ => false,
+        };
+    }
+    match lower.find(':') {
+        Some(index) if !lower[..index].contains(['/', '?', '#']) => match &lower[..index] {
+            "http" | "https" | "storage" => true,
+            "mailto" | "tel" => kind == "a",
+            _ => false,
+        },
+        _ => true,
+    }
+}
+
 fn media_url(node: &Value) -> &str {
-    str_prop(node, "url").unwrap_or_default()
+    str_prop(node, "url")
+        .filter(|url| safe_html_url(url, node_type(node)))
+        .unwrap_or_default()
+}
+
+/// Provider IDs are copied into fixed embed hosts, never interpolated as arbitrary URLs.
+fn video_embed_url(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let (host, path) = rest.split_once('/')?;
+    let host = host.to_ascii_lowercase();
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    let path = path.split('#').next().unwrap_or(path);
+    let parameter = |key: &str| {
+        query.split('&').find_map(|pair| {
+            let (name, value) = pair.split_once('=')?;
+            (name == key).then_some(value.split('#').next().unwrap_or(value))
+        })
+    };
+    let id = match host.as_str() {
+        "youtu.be" | "www.youtu.be" => path.split('/').next()?,
+        "youtube.com"
+        | "www.youtube.com"
+        | "m.youtube.com"
+        | "youtube-nocookie.com"
+        | "www.youtube-nocookie.com" => {
+            if path == "watch" {
+                parameter("v")?
+            } else {
+                path.strip_prefix("embed/")
+                    .or_else(|| path.strip_prefix("shorts/"))
+                    .or_else(|| path.strip_prefix("live/"))?
+                    .split('/')
+                    .next()?
+            }
+        }
+        "vimeo.com" | "www.vimeo.com" | "player.vimeo.com" => {
+            let id = path
+                .split('/')
+                .find(|part| !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()))?;
+            let suffix = parameter("h")
+                .filter(|hash| {
+                    !hash.is_empty()
+                        && hash.len() <= 64
+                        && hash.bytes().all(|c| c.is_ascii_alphanumeric())
+                })
+                .map(|hash| format!("?h={hash}"))
+                .unwrap_or_default();
+            return Some(format!("https://player.vimeo.com/video/{id}{suffix}"));
+        }
+        _ => return None,
+    };
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(format!("https://www.youtube-nocookie.com/embed/{id}"))
+}
+
+fn equation_html(tex: &str, block: bool) -> String {
+    let fallback = || {
+        format!(
+            "<code class=\"equation-source\">{}</code>",
+            escape_html(tex)
+        )
+    };
+    let mut depth: usize = 0;
+    let mut operations = 0;
+    if tex.len() > 4096 {
+        return fallback();
+    }
+    for ch in tex.chars() {
+        match ch {
+            '{' => {
+                depth += 1;
+                if depth > 64 {
+                    return fallback();
+                }
+            }
+            '}' => depth = depth.saturating_sub(1),
+            '\\' | '^' | '_' => {
+                operations += 1;
+                if operations > 128 {
+                    return fallback();
+                }
+            }
+            _ => {}
+        }
+    }
+    let config = math_core::MathCoreConfig {
+        xml_namespace: true,
+        annotation: true,
+        max_expansions: math_core::MaxExpansions(128),
+        ..Default::default()
+    };
+    let rendered = std::panic::catch_unwind(|| {
+        math_core::LatexToMathML::new(config)
+            .ok()?
+            .convert_with_local_state(
+                tex,
+                if block {
+                    math_core::MathDisplay::Block
+                } else {
+                    math_core::MathDisplay::Inline
+                },
+            )
+            .ok()
+            .map(|result| result.mathml)
+    })
+    .ok()
+    .flatten();
+    rendered
+        .filter(|html| html.len() <= 128 * 1024)
+        .unwrap_or_else(fallback)
+}
+
+/// Callers supply permanent media URLs or embedded bytes before exporting HTML.
+/// This function does not fetch private storage or mint expiring access tokens.
+pub fn resolve_publication_media(nodes: &mut [Value], urls: &Value) -> flow_like_types::Result<()> {
+    for node in nodes {
+        let kind = node_type(node).to_string();
+        if let Some(url) = str_prop(node, "url").map(str::to_owned) {
+            let resolved = urls.get(&url).and_then(Value::as_str).unwrap_or(&url);
+            let normalized: String = resolved
+                .chars()
+                .filter(|c| !c.is_ascii_control() && !c.is_ascii_whitespace())
+                .collect::<String>()
+                .to_ascii_lowercase();
+            if normalized.starts_with("storage:") || normalized.starts_with("blob:") {
+                return Err(flow_like_types::anyhow!(
+                    "A permanent media URL is required for {url}"
+                ));
+            }
+            if !safe_html_url(resolved, &kind) {
+                return Err(flow_like_types::anyhow!(
+                    "The {kind} URL is not safe to export"
+                ));
+            }
+            node["url"] = Value::String(resolved.to_string());
+        }
+        if let Some(children) = node.get_mut("children").and_then(Value::as_array_mut) {
+            resolve_publication_media(children, urls)?;
+        }
+    }
+    Ok(())
 }
 
 /// One entry per `code_line`; a code block that holds its text directly keeps it too.
@@ -382,7 +585,9 @@ impl MarkdownWriter {
 
     fn image(&mut self, node: &Value) {
         let url = media_url(node);
-        let alt = caption_text(node);
+        let alt = str_prop(node, "alt")
+            .map(str::to_owned)
+            .unwrap_or_else(|| caption_text(node));
         match self.images {
             ImageHandling::Strip => {}
             ImageHandling::AltText => {
@@ -494,7 +699,7 @@ impl MarkdownWriter {
                 "a" => {
                     let url = str_prop(node, "url").unwrap_or_default();
                     let label = self.inline(children(node));
-                    if url.is_empty() {
+                    if url.is_empty() || !safe_html_url(url, "a") {
                         out.push_str(&label);
                     } else {
                         out.push_str(&format!("[{}]({})", escape_link_text(&label), url));
@@ -696,10 +901,69 @@ fn escape_link_text(text: &str) -> String {
 /// Unlike routing through Markdown this keeps alignment, colours, column layout, callout
 /// variants and table spans.
 pub fn to_html(nodes: &[Value], images: ImageHandling) -> String {
+    let mut headings = Vec::new();
+    fn collect(nodes: &[Value], parent: &[usize], headings: &mut Vec<(usize, String, String, u8)>) {
+        for (index, node) in nodes.iter().enumerate() {
+            let mut path = parent.to_vec();
+            path.push(index);
+            if matches!(node_type(node), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                let id = format!(
+                    "heading-{}",
+                    path.iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join("-")
+                );
+                let title = plain_text(children(node));
+                let depth = node_type(node).as_bytes()[1] - b'0';
+                headings.push((node as *const Value as usize, id, title, depth));
+            }
+            collect(children(node), &path, headings);
+        }
+    }
+    collect(nodes, &[], &mut headings);
+    let ids = headings
+        .iter()
+        .map(|(pointer, id, _, _)| (*pointer, id.clone()))
+        .collect();
+    render_html(
+        nodes,
+        images,
+        Default::default(),
+        std::rc::Rc::new(HtmlHeadings {
+            entries: headings,
+            ids,
+        }),
+    )
+}
+
+type FootnoteReferences = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, usize>>>;
+struct HtmlHeadings {
+    entries: Vec<(usize, String, String, u8)>,
+    ids: std::collections::HashMap<usize, String>,
+}
+type Headings = std::rc::Rc<HtmlHeadings>;
+
+fn footnote_anchor_id(identifier: &str) -> String {
+    identifier
+        .chars()
+        .map(|ch| format!("{:x}", ch as u32))
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn render_html(
+    nodes: &[Value],
+    images: ImageHandling,
+    footnote_refs: FootnoteReferences,
+    headings: Headings,
+) -> String {
     let mut writer = HtmlWriter {
         out: String::new(),
         images,
         open_lists: Vec::new(),
+        footnote_refs,
+        headings,
     };
     writer.blocks(nodes);
     writer.close_lists_to(0);
@@ -715,9 +979,16 @@ struct HtmlWriter {
     out: String,
     images: ImageHandling,
     open_lists: Vec<OpenList>,
+    footnote_refs: FootnoteReferences,
+    headings: Headings,
 }
 
 impl HtmlWriter {
+    fn video_embed(&mut self, node: &Value) {
+        if let Some(url) = video_embed_url(media_url(node)) {
+            self.out.push_str(&format!("<figure><iframe src=\"{}\" title=\"{}\" loading=\"lazy\" allowfullscreen></iframe>{}</figure>\n", escape_attr(&url), escape_attr(str_prop(node,"alt").filter(|s| !s.is_empty()).unwrap_or("Video")), self.figcaption(node)));
+        }
+    }
     fn blocks(&mut self, nodes: &[Value]) {
         for node in nodes {
             self.block(node);
@@ -726,7 +997,12 @@ impl HtmlWriter {
 
     fn block(&mut self, node: &Value) {
         if let Some(style) = str_prop(node, "listStyleType") {
-            let style = style.to_string();
+            let style = if style.bytes().all(|c| c.is_ascii_alphabetic() || c == b'-') {
+                style
+            } else {
+                "disc"
+            }
+            .to_string();
             self.list_item(node, &style);
             return;
         }
@@ -736,8 +1012,16 @@ impl HtmlWriter {
         match ty {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let body = self.inline(children(node));
-                self.out
-                    .push_str(&format!("<{ty}{}>{body}</{ty}>\n", block_attrs(node)));
+                let anchor = self
+                    .headings
+                    .ids
+                    .get(&(node as *const Value as usize))
+                    .map(|id| format!(" id=\"{id}\""))
+                    .unwrap_or_default();
+                self.out.push_str(&format!(
+                    "<{ty}{anchor}{}>{body}</{ty}>\n",
+                    block_attrs(node)
+                ));
             }
             "blockquote" => {
                 let body = self.container_body(node);
@@ -749,7 +1033,10 @@ impl HtmlWriter {
             "footnoteDefinition" => {
                 let body = self.container_body(node);
                 self.out.push_str(&format!(
-                    "<div class=\"footnote\"><sup>[{}]</sup> {body}</div>\n",
+                    "<div class=\"footnote\" id=\"fn-note-{}\"><a href=\"#fn-ref-{}\" aria-label=\"Back to reference {}\">[{}] ↩</a> {body}</div>\n",
+                    footnote_anchor_id(footnote_label(node)),
+                    footnote_anchor_id(footnote_label(node)),
+                    escape_attr(footnote_label(node)),
                     escape_html(footnote_label(node))
                 ));
             }
@@ -786,13 +1073,18 @@ impl HtmlWriter {
             "video" | "audio" => {
                 let url = media_url(node);
                 if !url.is_empty() {
-                    self.out.push_str(&format!(
-                        "<figure><{ty} src=\"{}\" controls></{ty}>{}</figure>\n",
-                        escape_attr(url),
-                        self.figcaption(node)
-                    ));
+                    if ty == "video" && video_embed_url(url).is_some() {
+                        self.video_embed(node);
+                    } else {
+                        self.out.push_str(&format!(
+                            "<figure><{ty} src=\"{}\" controls></{ty}>{}</figure>\n",
+                            escape_attr(url),
+                            self.figcaption(node)
+                        ));
+                    }
                 }
             }
+            "media_embed" if video_embed_url(media_url(node)).is_some() => self.video_embed(node),
             "file" | "media_embed" => {
                 let url = media_url(node);
                 if !url.is_empty() {
@@ -800,10 +1092,19 @@ impl HtmlWriter {
                     if label.is_empty() {
                         label = str_prop(node, "name").unwrap_or(url).to_string();
                     }
+                    let download = if ty == "file" {
+                        format!(
+                            " download=\"{}\"",
+                            escape_attr(str_prop(node, "name").unwrap_or("attachment"))
+                        )
+                    } else {
+                        String::new()
+                    };
                     self.out.push_str(&format!(
-                        "<p><a href=\"{}\">{}</a></p>\n",
+                        "<figure><a href=\"{}\"{download}>{}</a>{}</figure>\n",
                         escape_attr(url),
-                        escape_html(&label)
+                        escape_html(&label),
+                        self.figcaption(node)
                     ));
                 }
             }
@@ -812,7 +1113,9 @@ impl HtmlWriter {
                 self.out
                     .push_str("<div class=\"column-group\" style=\"display:flex;gap:1rem\">\n");
                 for column in children(node) {
-                    let width = str_prop(column, "width").unwrap_or("auto");
+                    let width = str_prop(column, "width")
+                        .filter(|value| safe_css_value(value))
+                        .unwrap_or("auto");
                     self.out.push_str(&format!(
                         "<div class=\"column\" style=\"flex:0 0 {}\">\n",
                         escape_attr(width)
@@ -833,12 +1136,27 @@ impl HtmlWriter {
                 let tex = str_prop(node, "texExpression").unwrap_or_default();
                 if !tex.is_empty() {
                     self.out.push_str(&format!(
-                        "<div class=\"equation\">\\[{}\\]</div>\n",
-                        escape_html(tex)
+                        "<div class=\"equation\" role=\"math\" aria-label=\"{}\">{}</div>\n",
+                        escape_attr(tex),
+                        equation_html(tex, true)
                     ));
                 }
             }
-            "toc" => {}
+            "toc" => {
+                self.out.push_str(
+                    "<nav class=\"table-of-contents\" aria-label=\"Table of contents\"><ol>\n",
+                );
+                for (_, id, title, depth) in &self.headings.entries {
+                    if !title.trim().is_empty() {
+                        self.out.push_str(&format!(
+                            "<li style=\"margin-left:{}rem\"><a href=\"#{id}\">{}</a></li>\n",
+                            depth.saturating_sub(1),
+                            escape_html(title.trim())
+                        ));
+                    }
+                }
+                self.out.push_str("</ol></nav>\n");
+            }
             _ => {
                 let body = self.inline(children(node));
                 if !body.trim().is_empty() {
@@ -908,7 +1226,9 @@ impl HtmlWriter {
             return;
         }
         let url = media_url(node);
-        let alt = caption_text(node);
+        let alt = str_prop(node, "alt")
+            .map(str::to_owned)
+            .unwrap_or_else(|| caption_text(node));
         if self.images == ImageHandling::AltText || url.is_empty() {
             let label = if alt.is_empty() { "Image" } else { &alt };
             self.out.push_str(&format!(
@@ -922,8 +1242,19 @@ impl HtmlWriter {
             .and_then(Value::as_u64)
             .map(|w| format!(" width=\"{w}\""))
             .unwrap_or_default();
+        let focal = node
+            .get("focalPoint")
+            .and_then(|point| Some((point.get("x")?.as_f64()?, point.get("y")?.as_f64()?)))
+            .map(|(x, y)| {
+                format!(
+                    " style=\"object-position:{}% {}%\"",
+                    x.clamp(0.0, 100.0),
+                    y.clamp(0.0, 100.0)
+                )
+            })
+            .unwrap_or_default();
         self.out.push_str(&format!(
-            "<figure><img src=\"{}\" alt=\"{}\"{width} />{}</figure>\n",
+            "<figure><img src=\"{}\" alt=\"{}\"{width}{focal} />{}</figure>\n",
             escape_attr(url),
             escape_attr(&alt),
             self.figcaption(node)
@@ -931,7 +1262,15 @@ impl HtmlWriter {
     }
 
     fn figcaption(&self, node: &Value) -> String {
-        let caption = caption_text(node);
+        let caption = [
+            caption_text(node),
+            str_prop(node, "credit").unwrap_or_default().to_string(),
+            str_prop(node, "license").unwrap_or_default().to_string(),
+        ]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
         if caption.is_empty() {
             String::new()
         } else {
@@ -1002,7 +1341,15 @@ impl HtmlWriter {
 
     fn container_body(&self, node: &Value) -> String {
         if has_block_children(node) {
-            format!("\n{}", to_html(children(node), self.images))
+            format!(
+                "\n{}",
+                render_html(
+                    children(node),
+                    self.images,
+                    self.footnote_refs.clone(),
+                    self.headings.clone()
+                )
+            )
         } else {
             self.inline(children(node))
         }
@@ -1011,6 +1358,17 @@ impl HtmlWriter {
     /// Plate 53 keeps a `<br/>` inside a cell as a line break in one paragraph; earlier
     /// versions split the cell into paragraphs, or held a link directly in the cell.
     fn cell_body(&self, cell: &Value) -> String {
+        if children(cell)
+            .iter()
+            .any(|node| matches!(node_type(node), "h1" | "h2" | "h3" | "h4" | "h5" | "h6"))
+        {
+            return render_html(
+                children(cell),
+                self.images,
+                self.footnote_refs.clone(),
+                self.headings.clone(),
+            );
+        }
         let body = if has_block_children(cell) {
             children(cell)
                 .iter()
@@ -1031,7 +1389,7 @@ impl HtmlWriter {
                 "a" => {
                     let url = str_prop(node, "url").unwrap_or_default();
                     let label = self.inline(children(node));
-                    if url.is_empty() {
+                    if url.is_empty() || !safe_html_url(url, "a") {
                         out.push_str(&label);
                     } else {
                         out.push_str(&format!(
@@ -1053,16 +1411,28 @@ impl HtmlWriter {
                     let tex = str_prop(node, "texExpression").unwrap_or_default();
                     if !tex.is_empty() {
                         out.push_str(&format!(
-                            "<span class=\"equation-inline\">\\({}\\)</span>",
-                            escape_html(tex)
+                            "<span class=\"equation-inline\" role=\"math\" aria-label=\"{}\">{}</span>",
+                            escape_attr(tex), equation_html(tex, false)
                         ));
                     }
                 }
                 "date" => out.push_str(&escape_html(date_text(node))),
-                "footnoteReference" => out.push_str(&format!(
-                    "<sup class=\"footnote-ref\">[{}]</sup>",
-                    escape_html(footnote_label(node))
-                )),
+                "footnoteReference" => {
+                    let label = footnote_label(node);
+                    let anchor = footnote_anchor_id(label);
+                    let mut counts = self.footnote_refs.borrow_mut();
+                    let count = counts.entry(anchor.clone()).or_default();
+                    let suffix = if *count == 0 {
+                        String::new()
+                    } else {
+                        format!("-{}", *count)
+                    };
+                    *count += 1;
+                    out.push_str(&format!(
+                        "<sup class=\"footnote-ref\"><a id=\"fn-ref-{anchor}{suffix}\" href=\"#fn-note-{anchor}\" aria-label=\"Footnote {}\">[{}]</a></sup>",
+                        escape_attr(label), escape_html(label)
+                    ));
+                }
                 "img" if self.images == ImageHandling::Keep => {
                     let url = media_url(node);
                     if !url.is_empty() {
@@ -1121,16 +1491,18 @@ fn apply_html_marks(node: &Value, text: &str) -> String {
     }
 
     let mut styles = Vec::new();
-    if let Some(color) = str_prop(node, "color") {
+    if let Some(color) = str_prop(node, "color").filter(|value| safe_css_value(value)) {
         styles.push(format!("color:{}", escape_attr(color)));
     }
-    if let Some(background) = str_prop(node, "backgroundColor") {
+    if let Some(background) =
+        str_prop(node, "backgroundColor").filter(|value| safe_css_value(value))
+    {
         styles.push(format!("background-color:{}", escape_attr(background)));
     }
-    if let Some(size) = str_prop(node, "fontSize") {
+    if let Some(size) = str_prop(node, "fontSize").filter(|value| safe_css_value(value)) {
         styles.push(format!("font-size:{}", escape_attr(size)));
     }
-    if let Some(family) = str_prop(node, "fontFamily") {
+    if let Some(family) = str_prop(node, "fontFamily").filter(|value| safe_css_value(value)) {
         styles.push(format!("font-family:{}", escape_attr(family)));
     }
     if styles.is_empty() {
@@ -1144,9 +1516,24 @@ fn block_attrs(node: &Value) -> String {
     block_style_attr(node)
 }
 
+fn safe_css_value(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    !value
+        .chars()
+        .any(|c| c.is_control() || matches!(c, ';' | '{' | '}' | '<' | '>' | '\\'))
+        && !["url(", "expression(", "@import", "/*"]
+            .iter()
+            .any(|pattern| lower.contains(pattern))
+}
+
 fn block_style_attr(node: &Value) -> String {
     let mut styles = Vec::new();
-    if let Some(align) = str_prop(node, "align") {
+    if let Some(align) = str_prop(node, "align").filter(|value| {
+        matches!(
+            *value,
+            "left" | "center" | "right" | "justify" | "start" | "end"
+        )
+    }) {
         styles.push(format!("text-align:{}", escape_attr(align)));
     }
     if let Some(height) = node.get("lineHeight").and_then(Value::as_f64) {
@@ -1156,7 +1543,7 @@ fn block_style_attr(node: &Value) -> String {
         && let Some(indent) = node.get("indent").and_then(Value::as_u64)
         && indent > 0
     {
-        styles.push(format!("margin-left:{}px", indent * 24));
+        styles.push(format!("margin-left:{}px", indent.min(64) * 24));
     }
     if styles.is_empty() {
         String::new()
@@ -1515,10 +1902,11 @@ mod tests {
             "A claim.[^1]\n\n[^1]: The source.\n"
         );
         let html = to_html(&nodes, ImageHandling::Keep);
-        assert!(html.contains("A claim.<sup class=\"footnote-ref\">[1]</sup>"));
-        assert!(
-            html.contains("<div class=\"footnote\"><sup>[1]</sup> \n<p>The source.</p>\n</div>")
-        );
+        assert!(html.contains("href=\"#fn-note-31\""));
+        assert!(html.contains("id=\"fn-note-31\""));
+        assert!(html.contains("href=\"#fn-ref-31\""));
+        assert!(html.contains("id=\"fn-ref-31\""));
+        assert!(html.contains("<p>The source.</p>"));
     }
 
     #[test]
@@ -1594,7 +1982,7 @@ mod tests {
         );
         assert_eq!(
             to_html(&nodes, ImageHandling::Keep),
-            "<p>A claim with a footnote.<sup class=\"footnote-ref\">[1]</sup></p>\n<div class=\"footnote\"><sup>[1]</sup> \n<p>The footnote text.</p>\n</div>\n"
+            "<p>A claim with a footnote.<sup class=\"footnote-ref\"><a id=\"fn-ref-31\" href=\"#fn-note-31\" aria-label=\"Footnote 1\">[1]</a></sup></p>\n<div class=\"footnote\" id=\"fn-note-31\"><a href=\"#fn-ref-31\" aria-label=\"Back to reference 1\">[1] ↩</a> \n<p>The footnote text.</p>\n</div>\n"
         );
     }
 
@@ -1611,5 +1999,124 @@ mod tests {
             to_html(&nodes, ImageHandling::Keep),
             "<pre><code>code_block with text child</code></pre>\n"
         );
+    }
+
+    #[test]
+    fn versioned_documents_keep_their_body() {
+        let input = r#"plate_json::{"version":1,"children":[{"type":"p","children":[{"text":"Story"}]}],"discussions":[],"users":{}}"#;
+        assert_eq!(
+            to_html(&parse_plate_document(input).unwrap(), ImageHandling::Keep),
+            "<p>Story</p>\n"
+        );
+        assert!(parse_plate_document(r#"{"version":2,"children":[]}"#).is_err());
+    }
+
+    #[test]
+    fn html_drops_script_urls_and_active_data_links() {
+        let nodes = doc(json!([
+            {"type":"p","children":[{"type":"a","url":"java\nscript:alert(1)","children":[{"text":"source"}]}]},
+            {"type":"file","url":"javascript:alert(1)","name":"file","children":[{"text":""}]},
+            {"type":"img","url":"data:text/html,<script>alert(1)</script>","children":[{"text":""}]}
+        ]));
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert!(html.contains("source"));
+        assert!(
+            !html.contains("javascript:")
+                && !html.contains("script:alert")
+                && !html.contains("data:text/html")
+        );
+        assert!(!safe_html_url("data:image/png;base64,aGVsbG8=", "a"));
+        assert!(safe_html_url(
+            "data:application/pdf;base64,aGVsbG8=",
+            "file"
+        ));
+    }
+
+    #[test]
+    fn publication_requires_resolved_media_and_keeps_editorial_metadata() {
+        let mut nodes = doc(
+            json!([{ "type":"img", "url":"storage://editor/photo.png", "alt":"Harbor", "caption":[{"text":"At dawn"}], "credit":"Reporter", "license":"CC BY", "focalPoint":{"x":20,"y":75}, "children":[{"text":""}] }]),
+        );
+        assert!(resolve_publication_media(&mut nodes, &json!({})).is_err());
+        resolve_publication_media(
+            &mut nodes,
+            &json!({"storage://editor/photo.png":"https://cdn.example/photo.png"}),
+        )
+        .unwrap();
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert!(html.contains("https://cdn.example/photo.png"));
+        assert!(html.contains("alt=\"Harbor\""));
+        assert!(html.contains("At dawn · Reporter · CC BY"));
+        assert!(html.contains("object-position:20% 75%"));
+    }
+
+    #[test]
+    fn publication_video_provider_embeds_and_downloads_work_without_javascript() {
+        let nodes = doc(json!([
+            {"type":"video","url":"https://www.youtube.com/watch?v=abc_123-def0","alt":"News report","children":[{"text":""}]},
+            {"type":"media_embed","url":"https://vimeo.com/123456?h=ab12","credit":"Reporter","children":[{"text":""}]},
+            {"type":"video","url":"https://cdn.example/report.mp4","children":[{"text":""}]},
+            {"type":"file","url":"data:application/pdf;base64,aGVsbG8=","name":"evidence.pdf","children":[{"text":""}]}
+        ]));
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert!(html.contains("https://www.youtube-nocookie.com/embed/abc_123-def0"));
+        assert!(html.contains("https://player.vimeo.com/video/123456?h=ab12"));
+        assert!(html.contains("<video src=\"https://cdn.example/report.mp4\" controls>"));
+        assert!(html.contains("download=\"evidence.pdf\""));
+        assert!(html.contains("Reporter"));
+        assert!(video_embed_url("https://youtube.com.evil.example/watch?v=abc").is_none());
+        assert!(video_embed_url("https://evil.example@youtube.com/watch?v=abc").is_none());
+    }
+
+    #[test]
+    fn publication_toc_links_to_top_level_and_nested_heading_paths() {
+        let nodes = doc(json!([
+            {"type":"toc","children":[{"text":""}]},
+            {"type":"h2","children":[{"text":"World news"}]},
+            {"type":"blockquote","children":[{"type":"h4","children":[{"text":"Analysis & context"}]}]}
+        ]));
+        let html = to_html(&nodes, ImageHandling::Keep);
+        for id in ["heading-1", "heading-2-0"] {
+            assert!(html.contains(&format!("href=\"#{id}\"")));
+            assert!(html.contains(&format!("id=\"{id}\"")));
+        }
+        assert!(html.contains("Analysis &amp; context"));
+    }
+
+    #[test]
+    fn publication_equations_render_mathml_with_escaped_accessible_fallbacks() {
+        let html = equation_html(r"\frac{x^2}{2} < 4", true);
+        assert!(html.contains("<math "));
+        assert!(html.contains("<mfrac>"));
+        assert!(html.contains("<msup>"));
+        assert!(html.contains("&lt;"));
+        for tex in [
+            r"\href{javascript:alert(1)}{click}",
+            r"\text{<script>alert(1)</script>}",
+            r#"\eqref{x\" onmouseover=\"alert(1)}"#,
+            r"\htmlClass{evil}{x}",
+        ] {
+            let html = equation_html(tex, false);
+            assert!(!html.contains("<script"));
+            assert!(!html.contains("href=\"javascript:"));
+            assert!(!html.contains(" onmouseover=\""));
+        }
+        let deeply_nested = format!("{}x{}", "{".repeat(100), "}".repeat(100));
+        assert!(equation_html(&deeply_nested, false).starts_with("<code"));
+        assert!(equation_html(&"x".repeat(5000), false).starts_with("<code"));
+    }
+
+    #[test]
+    fn published_styles_cannot_add_declarations_and_list_indents_are_bounded() {
+        let nodes = doc(json!([
+            {"type":"p","indent":18446744073709551615u64,"listStyleType":"disc;position:fixed","children":[{"text":"safe","color":"red;background:url(https://tracker.invalid/x)"}]},
+            {"type":"p","indent":18446744073709551615u64,"children":[{"text":"bounded"}]},
+            {"type":"column_group","children":[{"type":"column","width":"50%;position:fixed","children":[{"type":"p","children":[{"text":"column"}]}]}]}
+        ]));
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert!(!html.contains("position:fixed"));
+        assert!(!html.contains("tracker.invalid"));
+        assert!(html.len() < 10000);
+        assert!(html.contains("bounded"));
     }
 }

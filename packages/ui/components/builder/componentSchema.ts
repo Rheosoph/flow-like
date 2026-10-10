@@ -499,6 +499,21 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	richText: {
 		type: { type: "string", required: true },
 		value: { type: "boundValue", required: true },
+		documentId: {
+			type: "boundValue",
+			description:
+				"Stable document identity, included in document and upload events",
+		},
+		documentRevision: {
+			type: "boundValue",
+			description:
+				"Authoritative revision; changing it replaces local edits with value",
+		},
+		currentUser: {
+			type: "boundValue",
+			description: "Reviewer identity: { id, name, avatarUrl? }",
+		},
+		reviewEnabled: { type: "boundValue" },
 		label: { type: "boundValue" },
 		helperText: { type: "boundValue" },
 		placeholder: { type: "boundValue" },

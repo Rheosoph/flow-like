@@ -6,7 +6,9 @@ use flow_like::flow::{
 };
 use flow_like_types::{async_trait, json::json};
 
-use super::plate_json::{ImageHandling, collect_media_urls, parse_plate_document, to_html};
+use super::plate_json::{
+    ImageHandling, collect_media_urls, parse_plate_document, resolve_publication_media, to_html,
+};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -96,6 +98,9 @@ impl NodeLogic for PlateJsonToHtmlNode {
             VariableType::Execution,
         );
 
+        node.add_input_pin("media_urls", "Media URLs", "JSON object mapping stored media references to permanent public URLs or embedded data URLs", VariableType::String)
+            .set_default_value(Some(json!("{}")));
+
         node.add_output_pin("html", "HTML", "The converted HTML", VariableType::String);
 
         node.add_output_pin(
@@ -117,9 +122,15 @@ impl NodeLogic for PlateJsonToHtmlNode {
         let full_document: bool = context.evaluate_pin("full_document").await?;
         let title: String = context.evaluate_pin("title").await?;
 
-        let nodes = parse_plate_document(&document)?;
-        let body = to_html(&nodes, ImageHandling::from_str_or_keep(&images));
+        let mut nodes = parse_plate_document(&document)?;
         let media = collect_media_urls(&nodes);
+        let mapping: String = context.evaluate_pin("media_urls").await?;
+        let urls: flow_like_types::Value = flow_like_types::json::from_str(&mapping)?;
+        if !urls.is_object() {
+            return Err(flow_like_types::anyhow!("Media URLs must be a JSON object"));
+        }
+        resolve_publication_media(&mut nodes, &urls)?;
+        let body = to_html(&nodes, ImageHandling::from_str_or_keep(&images));
 
         let html = if full_document {
             wrap_document(&title, &body)

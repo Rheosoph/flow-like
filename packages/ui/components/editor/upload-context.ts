@@ -6,9 +6,9 @@ import { AIUsageAppContext } from "./ai-usage-context";
 /**
  * Where an editable surface stores media dropped, pasted or picked inside it.
  *
- * Uploads land in app storage under `{prefix}/…` and the document stores the durable
- * `storage://{prefix}/…` path, never a signed URL — signed URLs expire, and a document
- * outlives them.
+ * Uploads land under `{prefix}/…` in the selected storage area. Documents keep
+ * `storage://apps/{appId}/{scope}/{prefix}/…` so moving a document does not change
+ * its storage owner. The renderer requests short-lived read URLs when needed.
  */
 export interface UploadedMedia {
 	/** Durable `storage://…` reference written into the document. */
@@ -71,13 +71,47 @@ export function isStorageUrl(url: string | undefined): url is string {
 	return typeof url === "string" && url.startsWith(STORAGE_URL_PREFIX);
 }
 
-export function toStorageUrl(prefix: string, filename: string): string {
+export function toStorageUrl(
+	prefix: string,
+	filename: string,
+	owner?: { appId: string; scope: "app" | "user" },
+): string {
 	const folder = normalizeUploadPrefix(prefix);
-	return folder
-		? `${STORAGE_URL_PREFIX}${folder}/${filename}`
-		: `${STORAGE_URL_PREFIX}${filename}`;
+	const path = folder ? `${folder}/${filename}` : filename;
+	return owner
+		? `${STORAGE_URL_PREFIX}apps/${encodeURIComponent(owner.appId)}/${owner.scope}/${path}`
+		: `${STORAGE_URL_PREFIX}${path}`;
 }
 
 export function storagePathFromUrl(url: string): string {
-	return url.slice(STORAGE_URL_PREFIX.length);
+	return parseEditorStorageReference(url)?.path ?? url;
+}
+
+export interface EditorStorageReference {
+	appId?: string;
+	scope: "app" | "user";
+	path: string;
+}
+
+/** New references carry their owner; legacy paths inherit the hosting editor's storage. */
+export function parseEditorStorageReference(
+	url: string,
+	fallbackAppId?: string,
+	fallbackScope: "app" | "user" = "app",
+): EditorStorageReference | undefined {
+	if (!isStorageUrl(url)) return undefined;
+	const path = url.slice(STORAGE_URL_PREFIX.length);
+	const owned = /^apps\/([^/]+)\/(app|user)\/(.+)$/.exec(path);
+	if (owned) {
+		try {
+			return {
+				appId: decodeURIComponent(owned[1]),
+				scope: owned[2] as "app" | "user",
+				path: owned[3],
+			};
+		} catch {
+			return undefined;
+		}
+	}
+	return { appId: fallbackAppId, scope: fallbackScope, path };
 }

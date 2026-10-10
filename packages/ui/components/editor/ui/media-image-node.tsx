@@ -11,6 +11,8 @@ import { PlateElement, withHOC } from "platejs/react";
 
 import { cn } from "../../../lib/utils";
 
+import { mediaObjectPosition, type MediaMetadata } from "../media-metadata";
+import { MediaAttribution } from "./media-attribution";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 import { Caption, CaptionTextarea } from "./caption";
 import { MediaToolbar } from "./media-toolbar";
@@ -55,7 +57,15 @@ export const ImageElement = withHOC(
 									focused && selected && "ring-2 ring-ring ring-offset-2",
 									isDragging && "opacity-50",
 								)}
-								alt={props.attributes.alt as string | undefined}
+								alt={
+									(props.element as typeof props.element & MediaMetadata).alt ??
+									""
+								}
+								style={{
+									objectPosition: mediaObjectPosition(
+										props.element as typeof props.element & MediaMetadata,
+									),
+								}}
 								src={src}
 							/>
 							<ResizeHandle
@@ -75,6 +85,9 @@ export const ImageElement = withHOC(
 								placeholder={t("writeACaption", "Write a caption...")}
 							/>
 						</Caption>
+						<MediaAttribution
+							element={props.element as typeof props.element & MediaMetadata}
+						/>
 					</figure>
 
 					{props.children}

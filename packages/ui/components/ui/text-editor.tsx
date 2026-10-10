@@ -4,6 +4,7 @@ import { remarkMdx, remarkMention } from "@platejs/markdown";
 import { type Value, createSlateEditor } from "platejs";
 import { PlateStatic } from "platejs/static";
 import {
+	type HTMLAttributes,
 	type KeyboardEvent,
 	type MouseEvent,
 	Suspense,
@@ -12,10 +13,17 @@ import {
 	useContext,
 	useMemo,
 } from "react";
+import { AuthContext } from "react-oidc-context";
+import {
+	type EditorUser,
+	PLATE_JSON_PREFIX,
+	parsePlateDocument,
+} from "../../lib/plate-document";
 import remarkBreaks from "remark-breaks";
 import remarkEmoji from "remark-emoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { FootnoteScope } from "../editor/footnote-context";
 import { AIUsageAppContext } from "../editor/ai-usage-context";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import {
@@ -52,7 +60,7 @@ const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
  * A prefix to identify content that is serialized as Plate's native JSON.
  * This allows switching from initial Markdown to JSON after the first edit.
  */
-export const PLATE_JSON_PREFIX = "plate_json::";
+export { PLATE_JSON_PREFIX } from "../../lib/plate-document";
 
 type PlateLikeNode = {
 	children?: PlateLikeNode[];
@@ -98,6 +106,8 @@ const MINIMAL_STATIC_PLUGIN_IDS = new Set([
 	"h4",
 	"h5",
 	"h6",
+	"footnoteReference",
+	"footnoteDefinition",
 	"italic",
 	"li",
 	"lic",
@@ -212,47 +222,6 @@ const splitMarkdownPreservingCodeBlocks = (markdown: string): string[] => {
 	return blocks.filter(Boolean);
 };
 
-const footnoteLabel = (node: PlateLikeNode) =>
-	typeof node.identifier === "string" && node.identifier
-		? `[${node.identifier}]`
-		: "";
-
-const isPlainText = (
-	node: PlateLikeNode | undefined,
-): node is { text: string } =>
-	node !== undefined &&
-	typeof node.text === "string" &&
-	Object.keys(node).length === 1;
-
-function prependText(
-	children: PlateLikeNode[],
-	prefix: string,
-): PlateLikeNode[] {
-	const [head, ...tail] = children;
-	return isPlainText(head)
-		? [{ text: `${prefix}${head.text}` }, ...tail]
-		: [{ text: prefix }, ...children];
-}
-
-/**
- * No footnote plugin is registered, so the parser's footnote nodes become text:
- * a reference turns into a superscript `[1]` and a definition into its own
- * paragraphs, the first one labelled `[1] `.
- */
-function transformFootnote(node: PlateLikeNode): PlateLikeNode[] {
-	const label = footnoteLabel(node);
-	if (node.type === "footnoteReference") {
-		return label ? [{ text: label, superscript: true }] : [];
-	}
-	const [first, ...rest] = transformSpecialLinks(node.children ?? []);
-	if (!first) return [];
-	if (!label || !Array.isArray(first.children)) return [first, ...rest];
-	return [
-		{ ...first, children: prependText(first.children, `${label} `) },
-		...rest,
-	];
-}
-
 /**
  * Post-process Plate nodes to convert focus://, invalid://, and user:// links to custom elements
  */
@@ -260,12 +229,6 @@ export const transformSpecialLinks = (
 	nodes: ReadonlyArray<PlateLikeNode>,
 ): PlateLikeNode[] => {
 	return nodes.flatMap<PlateLikeNode>((node) => {
-		if (
-			node.type === "footnoteReference" ||
-			node.type === "footnoteDefinition"
-		) {
-			return transformFootnote(node);
-		}
 		// If this is a link with focus:// url, convert to focus_node
 		if (
 			node.type === "a" &&
@@ -382,10 +345,12 @@ export const safeDeserialize = (
 	// 1. Check for the native JSON prefix first.
 	if (data.startsWith(PLATE_JSON_PREFIX)) {
 		try {
-			const jsonString = data.substring(PLATE_JSON_PREFIX.length);
-			const nodes: unknown = JSON.parse(jsonString);
-			if (Array.isArray(nodes) && nodes.length > 0) {
-				return toValue(transformSpecialLinks(nodes as PlateLikeNode[]));
+			const document = parsePlateDocument(data);
+			const nodes = document?.children;
+			if (Array.isArray(nodes)) {
+				return nodes.length > 0
+					? toValue(transformSpecialLinks(nodes as PlateLikeNode[]))
+					: paragraphValue("");
 			}
 		} catch (error) {
 			console.error(
@@ -647,7 +612,13 @@ function TextEditorStatic({
 	);
 }
 
-type TextEditorProps = {
+export type TextEditorProps = {
+	documentId?: string;
+	currentUser?: EditorUser;
+	reviewEnabled?: boolean;
+	reviewCanModerate?: boolean;
+	contentReadOnly?: boolean;
+	editorProps?: HTMLAttributes<HTMLDivElement>;
 	/** App owning this editable content; used for hosted-model usage attribution and media uploads. */
 	appId?: string;
 	initialContent: string;
@@ -665,6 +636,12 @@ type TextEditorProps = {
 };
 
 export const TextEditor = memo(function TextEditor({
+	documentId,
+	currentUser,
+	reviewEnabled,
+	reviewCanModerate,
+	contentReadOnly,
+	editorProps,
 	appId,
 	initialContent,
 	onChange,
@@ -678,48 +655,79 @@ export const TextEditor = memo(function TextEditor({
 	uploadScope,
 }: Readonly<TextEditorProps>) {
 	const items = mentionItems ?? EMPTY_MENTION_ITEMS;
+	const inheritedUpload = useContext(EditorUploadContext);
+	const auth = useContext(AuthContext);
+	const profile = auth?.user?.profile;
+	const resolvedUser = useMemo(
+		() =>
+			currentUser ??
+			(profile?.sub
+				? {
+						id: profile.sub,
+						name: profile.name ?? profile.preferred_username ?? profile.sub,
+						avatarUrl: profile.picture,
+					}
+				: undefined),
+		[currentUser, profile],
+	);
 	const inheritedAppId = useContext(AIUsageAppContext);
-	const resolvedAppId = appId ?? inheritedAppId;
+	const resolvedAppId = appId ?? inheritedUpload?.appId ?? inheritedAppId;
 	const uploadConfig = useMemo(
 		() => ({
+			...inheritedUpload,
 			appId: resolvedAppId,
-			prefix: uploadPrefix ?? DEFAULT_UPLOAD_PREFIX,
-			scope: uploadScope ?? ("app" as const),
+			prefix: uploadPrefix ?? inheritedUpload?.prefix ?? DEFAULT_UPLOAD_PREFIX,
+			scope: uploadScope ?? inheritedUpload?.scope ?? ("app" as const),
 		}),
-		[resolvedAppId, uploadPrefix, uploadScope],
+		[resolvedAppId, uploadPrefix, uploadScope, inheritedUpload],
 	);
 
 	if (editable && onChange) {
 		return (
+			<FootnoteScope>
+				<AIUsageAppContext.Provider value={resolvedAppId}>
+					<EditorUploadContext.Provider value={uploadConfig}>
+						<MentionItemsProvider value={items}>
+							<Suspense fallback={<div className="px-4 py-2" />}>
+								<TextEditorEditable
+									documentId={documentId}
+									currentUser={resolvedUser}
+									reviewEnabled={reviewEnabled}
+									reviewCanModerate={reviewCanModerate}
+									contentReadOnly={contentReadOnly}
+									editorProps={editorProps}
+									initialContent={initialContent}
+									onChange={(content: string) => {
+										onChange(content);
+									}}
+									isMarkdown={isMarkdown}
+									onFocusNode={onFocusNode}
+								/>
+							</Suspense>
+						</MentionItemsProvider>
+					</EditorUploadContext.Provider>
+				</AIUsageAppContext.Provider>
+			</FootnoteScope>
+		);
+	}
+	const content = (
+		<TextEditorStatic
+			initialContent={initialContent}
+			isMarkdown={isMarkdown}
+			minimal={minimal}
+			onFocusNode={onFocusNode}
+			onUserMention={onUserMention}
+		/>
+	);
+	return (
+		<FootnoteScope>
 			<AIUsageAppContext.Provider value={resolvedAppId}>
 				<EditorUploadContext.Provider value={uploadConfig}>
 					<MentionItemsProvider value={items}>
-						<Suspense fallback={<div className="px-4 py-2" />}>
-							<TextEditorEditable
-								initialContent={initialContent}
-								onChange={(content: string) => {
-									onChange(content);
-								}}
-								isMarkdown={isMarkdown}
-								onFocusNode={onFocusNode}
-							/>
-						</Suspense>
+						{editorProps ? <div {...editorProps}>{content}</div> : content}
 					</MentionItemsProvider>
 				</EditorUploadContext.Provider>
 			</AIUsageAppContext.Provider>
-		);
-	}
-	return (
-		<AIUsageAppContext.Provider value={resolvedAppId}>
-			<MentionItemsProvider value={items}>
-				<TextEditorStatic
-					initialContent={initialContent}
-					isMarkdown={isMarkdown}
-					minimal={minimal}
-					onFocusNode={onFocusNode}
-					onUserMention={onUserMention}
-				/>
-			</MentionItemsProvider>
-		</AIUsageAppContext.Provider>
+		</FootnoteScope>
 	);
 });

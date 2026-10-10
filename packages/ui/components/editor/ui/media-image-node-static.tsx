@@ -1,5 +1,7 @@
 "use client";
 
+import { safeCssLength } from "../safe-css-length";
+
 import type { TCaptionProps, TImageElement, TResizableProps } from "platejs";
 import type { SlateElementProps } from "platejs/static";
 
@@ -7,11 +9,13 @@ import { NodeApi } from "platejs";
 import { SlateElement } from "platejs/static";
 
 import { cn } from "../../../lib/utils";
+import { mediaObjectPosition, type MediaMetadata } from "../media-metadata";
+import { MediaAttribution } from "./media-attribution";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 
 export function ImageElementStatic(
 	props: SlateElementProps<
-		TImageElement & TCaptionProps & TResizableProps & { alt?: string }
+		TImageElement & TCaptionProps & TResizableProps & MediaMetadata
 	>,
 ) {
 	const { align = "center", alt, caption, url, width } = props.element;
@@ -19,7 +23,10 @@ export function ImageElementStatic(
 
 	return (
 		<SlateElement {...props} className="py-2.5">
-			<figure className="group relative m-0 inline-block" style={{ width }}>
+			<figure
+				className="group relative m-0 inline-block"
+				style={{ width: safeCssLength(width) }}
+			>
 				<div
 					className="relative max-w-full min-w-[92px]"
 					style={{ textAlign: align }}
@@ -30,14 +37,16 @@ export function ImageElementStatic(
 							"rounded-sm",
 						)}
 						alt={alt ?? ""}
+						style={{ objectPosition: mediaObjectPosition(props.element) }}
 						src={src}
 					/>
 					{caption && (
-						<figcaption className="mx-auto mt-2 h-[24px] max-w-full">
-							{NodeApi.string(caption[0])}
+						<figcaption className="mx-auto mt-2 max-w-full">
+							{caption.map((node) => NodeApi.string(node)).join("\n")}
 						</figcaption>
 					)}
 				</div>
+				<MediaAttribution element={props.element} />
 			</figure>
 			{props.children}
 		</SlateElement>

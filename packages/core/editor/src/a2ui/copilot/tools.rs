@@ -260,6 +260,10 @@ Example:
 Properties:
 - type: "richText" (required)
 - value: BoundValue - The document, a "plate_json::"-prefixed string. NOT markdown: convert with the Rich Text to Markdown (utils_md_plate_to_md) or Rich Text to HTML (utils_md_plate_to_html) node
+- documentId: BoundValue string - stable article identity, included in document and upload event context
+- documentRevision: BoundValue string or number - authoritative revision; changing it replaces local edits with value. Return it with saves to reject stale writes
+- currentUser: BoundValue object - reviewer identity { id, name, avatarUrl? }, supplied by the authenticated host
+- reviewEnabled: BoundValue boolean - enable document comments and tracked suggestions for the current reviewer
 - label / helperText / placeholder: BoundValue string
 - readOnly / disabled: BoundValue boolean
 - error: BoundValue boolean

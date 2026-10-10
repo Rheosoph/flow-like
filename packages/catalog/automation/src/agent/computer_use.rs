@@ -37,11 +37,14 @@ pub(crate) const DEFAULT_FORBIDDEN_TEXT: [&str; 8] = [
 pub struct AgentStep {
     /// 1-based turn number.
     pub index: u32,
-    /// The screenshot the model looked at.
+    /// Summary of the observed screen before the actions.
     pub observation: String,
     /// Text the model wrote next to its tool calls.
     pub assistant: String,
     pub actions: Vec<AgentAction>,
+    /// Optional action selection or reason for falling back to the vision model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<super::decision::AgentDecision>,
     pub duration_ms: u64,
 }
 
@@ -49,7 +52,7 @@ pub struct AgentStep {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
 pub struct AgentAction {
     pub tool: String,
-    /// Arguments as the model sent them; coordinates are pixels of its screenshot.
+    /// Arguments passed to the action; coordinates are pixels of the observed screenshot.
     pub args: Value,
     /// Desktop input coordinates the action used.
     #[serde(default)]
@@ -118,7 +121,39 @@ async fn read_inputs(context: &mut ExecutionContext) -> flow_like_types::Result<
     let forbidden = context
         .evaluate_pin::<Vec<String>>("forbidden_text")
         .await?;
+    let decision_bit = crate::llm::optional_pin::<Bit>(context, "decision_model").await?;
+    let decision_model = match decision_bit {
+        Some(bit) => {
+            context.check_cancelled()?;
+            let app_state = context.app_state.clone();
+            let token = context.token.clone();
+            let usage_context = context.model_usage_context();
+            let built = context
+                .run_cancellable(async move {
+                    app_state
+                        .model_factory
+                        .build_systemone(&bit, app_state.clone(), token, usage_context)
+                        .await
+                })
+                .await?;
+            context.check_cancelled()?;
+            match built {
+                Ok(model) => Some(model),
+                Err(error) => {
+                    context.log_message(
+                        &format!(
+                            "Could not load the computer use Decision Model; continuing with the vision model: {error}"
+                        ),
+                        flow_like::flow::execution::LogLevel::Warn,
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
     let settings = super::episode::Settings {
+        decision_model,
         perception: super::observe::Perception::parse(&perception)?,
         max_steps: bounded("Max Steps", max_steps, 1, 500)? as u32,
         max_duration: Duration::from_secs(bounded("Max Duration", max_duration, 1, 86_400)? as u64),
@@ -180,10 +215,10 @@ impl NodeLogic for ComputerUseAgentNode {
         let mut node = Node::new(
             "computer_use_agent",
             "Computer Use Agent",
-            "Lets a vision model operate the desktop until a goal is reached: it looks at a screenshot (optionally with numbered accessibility marks), calls mouse and keyboard tools, waits for the screen to settle, checks the result and repeats. Works with any vision model that supports tool calling. Ends when the model reports done or asks the user, or when it is stuck or out of steps or time",
+            "Operate the desktop toward a goal using a vision model with tool calling. An optional Decision Model selects routine actions from observed elements; the vision model handles complex interactions and confirms completion. Stops when done, when input is needed, or when stuck or out of steps or time",
             "Automation/Computer/Agent",
         );
-        node.set_version(2);
+        node.set_version(4);
         node.set_flowscript_name("computer", "useAgent");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_scores(
@@ -314,6 +349,16 @@ impl NodeLogic for ComputerUseAgentNode {
         )
         .set_default_value(Some(json!("")));
 
+        node.add_input_pin(
+            "decision_model",
+            "Decision Model",
+            "Optional SystemOne model from Find Decision Model or Load Bit. Chooses observed elements and routine actions from accessibility/OCR text. The vision model handles text entry, planning, verification and fallback. Leave empty for the vision model alone",
+            VariableType::Struct,
+        )
+        .set_schema::<Bit>()
+        .set_default_value(Some(json!(null)))
+        .set_options(PinOptions::new().set_enforce_schema(true).set_optional(true).build());
+
         node.add_output_pin(
             "exec_out",
             "Done",
@@ -354,7 +399,7 @@ impl NodeLogic for ComputerUseAgentNode {
         node.add_output_pin(
             "steps",
             "Steps",
-            "Trajectory: per turn the screenshot seen, the model's text, each action with its arguments, desktop coordinates and result, and the duration",
+            "Trajectory: per turn the screenshot seen, model text, action results, optional decision selection or fallback reason, and duration",
             VariableType::Struct,
         )
         .set_schema::<AgentStep>()
@@ -432,5 +477,91 @@ impl NodeLogic for ComputerUseAgentNode {
         Err(flow_like_types::anyhow!(
             "Computer automation requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::board::cleanup::sync_node_schema::sync_node_with_catalog;
+
+    #[test]
+    fn decision_model_upgrade_preserves_existing_inputs_and_connections() {
+        let catalog = ComputerUseAgentNode.get_node();
+        let mut placed = catalog.clone();
+        placed.version = Some(2);
+        placed.pins.retain(|_, pin| pin.name != "decision_model");
+        placed
+            .get_pin_mut_by_name("model")
+            .unwrap()
+            .depends_on
+            .insert("vision-model".into());
+        placed
+            .get_pin_mut_by_name("goal")
+            .unwrap()
+            .set_default_value(Some(json!("Read the current document")));
+        placed
+            .get_pin_mut_by_name("exec_out")
+            .unwrap()
+            .connected_to
+            .insert("next-step".into());
+        let original = placed.clone();
+        sync_node_with_catalog(&mut placed, &catalog);
+        for before in original.pins.values() {
+            let after = placed.get_pin_by_name(&before.name).unwrap();
+            assert_eq!(after.id, before.id);
+            assert_eq!(after.index, before.index);
+            assert_eq!(after.default_value, before.default_value);
+            assert_eq!(after.depends_on, before.depends_on);
+            assert_eq!(after.connected_to, before.connected_to);
+        }
+        let decision = placed.get_pin_by_name("decision_model").unwrap();
+        assert!(
+            decision.index
+                > original
+                    .get_pin_by_name("extra_instructions")
+                    .unwrap()
+                    .index
+        );
+        assert!(
+            flow_like_types::json::from_slice::<Value>(decision.default_value.as_ref().unwrap())
+                .unwrap()
+                .is_null()
+        );
+        assert_eq!(placed.version, Some(4));
+    }
+
+    #[test]
+    fn action_selection_upgrade_preserves_a_connected_decision_model() {
+        let catalog = ComputerUseAgentNode.get_node();
+        let mut placed = catalog.clone();
+        placed.version = Some(3);
+        let decision = placed.get_pin_mut_by_name("decision_model").unwrap();
+        decision.depends_on.insert("decision-model".into());
+        placed
+            .get_pin_mut_by_name("perception")
+            .unwrap()
+            .set_default_value(Some(json!(PERCEPTION_SCREENSHOT)));
+        let original = placed.clone();
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        for before in original.pins.values() {
+            let after = placed.get_pin_by_name(&before.name).unwrap();
+            assert_eq!(after.id, before.id);
+            assert_eq!(after.index, before.index);
+            assert_eq!(after.default_value, before.default_value);
+            assert_eq!(after.depends_on, before.depends_on);
+            assert_eq!(after.connected_to, before.connected_to);
+        }
+        assert_eq!(placed.version, Some(4));
+    }
+
+    #[test]
+    fn old_step_traces_deserialize_without_a_decision() {
+        let value = json!({"index":1,"observation":"original screen","assistant":"","actions":[],"duration_ms":100});
+        let step: AgentStep = flow_like_types::json::from_value(value.clone()).unwrap();
+        assert!(step.decision.is_none());
+        assert_eq!(json!(step), value);
     }
 }

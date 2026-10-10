@@ -2794,6 +2794,7 @@ export function FlowScriptPanel({
 				)}
 				{commentThreadState && commentsEnabled && !loading && !loadError && (
 					<FlowScriptCommentOverlay
+						appId={appId}
 						editor={editorReady ? editorRef.current : null}
 						monaco={monacoRef.current}
 						anchorId={commentThreadState.anchorId}

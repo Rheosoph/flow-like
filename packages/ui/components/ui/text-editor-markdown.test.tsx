@@ -75,49 +75,51 @@ describe("markdown code keeps its markup verbatim", () => {
 describe("footnotes", () => {
 	const markdown = "A claim.[^1]\n\n[^1]: The **source**.";
 
-	test("become a superscript reference and a labelled paragraph", () => {
+	test("preserve linked reference and definition nodes", () => {
 		const value = parse(markdown);
-		expect(types(value)).not.toContain("footnoteReference");
-		expect(types(value)).not.toContain("footnoteDefinition");
-		expect(value).toEqual([
-			{
-				type: "p",
-				children: [{ text: "A claim." }, { text: "[1]", superscript: true }],
-			},
-			{
-				type: "p",
-				children: [
-					{ text: "[1] The " },
-					{ text: "source", bold: true },
-					{ text: "." },
-				],
-			},
-		] as Node[]);
+		expect(types(value)).toContain("footnoteReference");
+		expect(types(value)).toContain("footnoteDefinition");
+		expect((value[0] as { children: unknown[] })?.children).toEqual([
+			{ text: "A claim." },
+			{ type: "footnoteReference", identifier: "1", children: [{ text: "" }] },
+		]);
+		expect((value[1] as { identifier?: string })?.identifier).toBe("1");
 	});
 
-	test("stored footnote nodes render as text instead of block elements", () => {
+	test("renders links to definitions and back to references", () => {
 		const html = renderToStaticMarkup(
-			createElement(TextEditor, {
-				initialContent: `plate_json::${JSON.stringify([
-					{
-						type: "p",
-						children: [
-							{ text: "See" },
-							{
-								type: "footnoteReference",
-								identifier: "n",
-								children: [{ text: "" }],
-							},
-							{ text: " here." },
-						],
-					},
-				])}`,
-				isMarkdown: false,
-			}),
+			createElement(TextEditor, { initialContent: markdown, isMarkdown: true }),
 		);
-		expect(html).toContain("<sup");
-		expect(html).toContain("[n]");
-		expect(html).not.toContain("footnoteReference");
+		expect(html).toContain('aria-label="Footnote 1"');
+		expect(html).toContain('aria-label="Back to reference 1"');
+		const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+		const links = [...html.matchAll(/href="#([^"]+)"/g)].map(
+			(match) => match[1],
+		);
+		for (const target of links) expect(ids).toContain(target);
+		expect(html).toContain("source");
+	});
+
+	test("repeated references have distinct IDs and documents use separate scopes", () => {
+		const html = renderToStaticMarkup(
+			createElement(
+				"div",
+				null,
+				createElement(TextEditor, {
+					initialContent: "First[^1] and again[^1].\n\n[^1]: Source",
+					isMarkdown: true,
+				}),
+				createElement(TextEditor, {
+					initialContent: markdown,
+					isMarkdown: true,
+				}),
+			),
+		);
+		const ids = [...html.matchAll(/\bid="(fn-[^"]+)"/g)].map(
+			(match) => match[1],
+		);
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(ids.length).toBe(5);
 	});
 });
 

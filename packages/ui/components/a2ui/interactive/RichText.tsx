@@ -1,6 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type FocusEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+} from "react";
+import {
+	PLATE_JSON_PREFIX,
+	parsePlateDocument,
+} from "../../../lib/plate-document";
 import { cn } from "../../../lib/utils";
 import {
 	type EditorUploadConfig,
@@ -16,13 +26,17 @@ import {
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	useBoundInputValue,
+	valueRevisionOf,
+} from "../hooks/use-bound-input-value";
 import { useDebouncedTrigger } from "../hooks/use-debounced-trigger";
 import type { BoundValue, RichTextComponent } from "../types";
 
 /** `richText` shipped with every event already declared, so none of them inherit `*` or `actions[0]`. */
 const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
 
-/** Authoring pauses are longer than typing pauses — a document is edited in bursts, not keystrokes. */
+/** Documents are edited in bursts, so allow a longer pause than a single-line input. */
 const DEFAULT_RICH_TEXT_DEBOUNCE_MS = 600;
 const MIN_RICH_TEXT_DEBOUNCE_MS = 100;
 
@@ -39,37 +53,21 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
-function resolveStringOrBound(
-	value: string | BoundValue | undefined,
-): string | undefined {
-	if (!value) return undefined;
-	if (typeof value === "string") return value;
-	if ("literalString" in value) return value.literalString;
-	if ("literalNumber" in value) return String(value.literalNumber);
-	return undefined;
-}
-
 function toCssLength(value: string | number | undefined): string | undefined {
 	if (value === undefined) return undefined;
 	return typeof value === "number" ? `${value}px` : value;
 }
 
-const PLATE_JSON_PREFIX = "plate_json::";
-
 /**
- * A freshly created document is not the empty string — it is one empty paragraph — so the
- * placeholder has to look past the envelope.
+ * A new document contains an empty paragraph. Review metadata does not make its body nonempty.
  */
 export function isBlankDocument(value: string | undefined): boolean {
 	if (!value) return true;
 	if (!value.startsWith(PLATE_JSON_PREFIX)) return value.trim().length === 0;
-	try {
-		const nodes = JSON.parse(value.slice(PLATE_JSON_PREFIX.length));
-		if (!Array.isArray(nodes)) return true;
-		return nodes.every((node) => collectText(node).trim().length === 0);
-	} catch {
-		return false;
-	}
+	const document = parsePlateDocument(value);
+	return document
+		? document.children.every((node) => collectText(node).trim().length === 0)
+		: false;
 }
 
 function collectText(node: unknown): string {
@@ -77,6 +75,19 @@ function collectText(node: unknown): string {
 	const record = node as Record<string, unknown>;
 	// A media node is content even though it carries no text.
 	if (typeof record.url === "string" && record.url.length > 0) return "media";
+	if (
+		[
+			"hr",
+			"equation",
+			"inline_equation",
+			"date",
+			"mention",
+			"user_mention",
+			"toc",
+			"placeholder",
+		].includes(String(record.type))
+	)
+		return "content";
 	let text = typeof record.text === "string" ? record.text : "";
 	if (Array.isArray(record.children)) {
 		for (const child of record.children) {
@@ -86,18 +97,28 @@ function collectText(node: unknown): string {
 	return text;
 }
 
-export function A2UIRichText({
+export function A2UIRichText(props: ComponentProps<RichTextComponent>) {
+	const documentId = useResolved<string>(props.component.documentId);
+	return (
+		<RichTextInput
+			key={`${props.surfaceId}/${props.componentId}/${documentId ?? ""}`}
+			{...props}
+			documentId={documentId}
+		/>
+	);
+}
+
+function RichTextInput({
 	elementRef,
 	component,
 	style,
 	componentId,
 	surfaceId,
-}: ComponentProps<RichTextComponent>) {
+	documentId,
+}: ComponentProps<RichTextComponent> & { documentId?: string }) {
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const { appId } = useActionContext();
-	const { setByPath } = useData();
-
 	const resolvedValue = useResolved<string>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const readOnly = useResolved<boolean>(component.readOnly);
@@ -106,36 +127,53 @@ export function A2UIRichText({
 	const uploadScope = useResolved<string>(component.uploadScope);
 	const minHeight = useResolved<string | number>(component.minHeight);
 	const maxHeight = useResolved<string | number>(component.maxHeight);
+	const documentRevision = useResolved<string | number>(
+		component.documentRevision,
+	);
+	const currentUser = useResolved<{
+		id: string;
+		name: string;
+		avatarUrl?: string;
+	}>(component.currentUser);
+	const reviewEnabled = useResolved<boolean>(component.reviewEnabled);
 	const debounceMs = resolveDebounceMs(
 		useResolved<number>(component.debounceMs),
 	);
 
-	const label = resolveStringOrBound(
-		component.label as string | BoundValue | undefined,
-	);
-	const helperText = resolveStringOrBound(
-		component.helperText as string | BoundValue | undefined,
-	);
-	const placeholder = resolveStringOrBound(
-		component.placeholder as string | BoundValue | undefined,
-	);
+	const label = useResolved<string>(component.label);
+	const helperText = useResolved<string>(component.helperText);
+	const placeholder = useResolved<string>(component.placeholder);
 
 	const { schedule, cancel } = useDebouncedTrigger(debounceMs);
-	const isPathBound = Boolean(component.value && "path" in component.value);
-
-	// The editor is uncontrolled once mounted: remounting it on every keystroke would
-	// destroy the selection. `seed` only advances when the value changes from outside.
-	const [seed, setSeed] = useState(resolvedValue ?? "");
+	const activeRef = useRef(true);
+	useEffect(() => {
+		activeRef.current = true;
+		return () => {
+			activeRef.current = false;
+		};
+	}, []);
 	const latestRef = useRef(resolvedValue ?? "");
 	const committedRef = useRef(resolvedValue ?? "");
-
-	useEffect(() => {
-		const next = resolvedValue ?? "";
-		if (next === latestRef.current) return;
-		latestRef.current = next;
-		committedRef.current = next;
-		setSeed(next);
-	}, [resolvedValue]);
+	const rememberExternalValue = useCallback(
+		(next: string) => {
+			cancel();
+			latestRef.current = next;
+			committedRef.current = next;
+		},
+		[cancel],
+	);
+	const [value, setValue] = useBoundInputValue<string>(component.value, "", {
+		revision: JSON.stringify([valueRevisionOf(component), documentRevision]),
+		onExternalValue: rememberExternalValue,
+	});
+	const documentContext = useMemo(
+		() => ({
+			...(documentId === undefined ? {} : { documentId }),
+			...(documentRevision === undefined ? {} : { documentRevision }),
+		}),
+		[documentId, documentRevision],
+	);
+	const isEditable = !readOnly && !disabled;
 
 	const uploadConfig = useMemo<EditorUploadConfig>(
 		() => ({
@@ -143,10 +181,12 @@ export function A2UIRichText({
 			prefix: uploadPrefix?.trim() || `a2ui/${surfaceId}/${componentId}`,
 			scope: uploadScope === "user" ? "user" : "app",
 			onUploaded: (media) => {
+				if (!activeRef.current) return;
 				void triggerEvent(
 					"imageUploaded",
 					component,
 					{
+						...documentContext,
 						path: media.path,
 						url: media.url,
 						name: media.name,
@@ -157,10 +197,11 @@ export function A2UIRichText({
 				);
 			},
 			onUploadError: (name, message) => {
+				if (!activeRef.current) return;
 				void triggerEvent(
 					"imageUploadError",
 					component,
-					{ name, message },
+					{ ...documentContext, name, message },
 					EXACT_ONLY,
 				);
 			},
@@ -169,6 +210,7 @@ export function A2UIRichText({
 			appId,
 			component,
 			componentId,
+			documentContext,
 			surfaceId,
 			triggerEvent,
 			uploadPrefix,
@@ -178,11 +220,9 @@ export function A2UIRichText({
 
 	const handleChange = useCallback(
 		(content: string) => {
+			if (!activeRef.current || !isEditable) return;
 			latestRef.current = content;
-
-			if (isPathBound && component.value && "path" in component.value) {
-				setByPath(component.value.path, content);
-			}
+			setValue(content);
 
 			// Mirrors TextField: the raw action is what `Get Element Value` reads back.
 			onAction?.({
@@ -191,39 +231,75 @@ export function A2UIRichText({
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
-				context: { value: content },
+				context: { ...documentContext, value: content },
 			});
 
 			schedule(() => {
 				if (committedRef.current === content) return;
 				committedRef.current = content;
-				void triggerEvent("change", component, { value: content }, EXACT_ONLY);
+				void triggerEvent(
+					"change",
+					component,
+					{ ...documentContext, value: content },
+					EXACT_ONLY,
+				);
 			});
 		},
 		[
 			component,
 			componentId,
-			isPathBound,
+			documentContext,
+			isEditable,
 			onAction,
 			schedule,
-			setByPath,
+			setValue,
 			surfaceId,
 			triggerEvent,
 		],
 	);
 
-	const handleBlur = useCallback(() => {
-		cancel();
-		const content = latestRef.current;
-		if (committedRef.current !== content) {
-			committedRef.current = content;
-			void triggerEvent("change", component, { value: content }, EXACT_ONLY);
-		}
-		void triggerEvent("blur", component, { value: content }, EXACT_ONLY);
-	}, [cancel, component, triggerEvent]);
+	const handleBlur = useCallback(
+		(event: FocusEvent<HTMLDivElement>) => {
+			if (
+				event.relatedTarget &&
+				event.currentTarget.contains(event.relatedTarget)
+			) {
+				return;
+			}
+			cancel();
+			const content = latestRef.current;
+			if (committedRef.current !== content) {
+				committedRef.current = content;
+				void triggerEvent(
+					"change",
+					component,
+					{ ...documentContext, value: content },
+					EXACT_ONLY,
+				);
+			}
+			void triggerEvent(
+				"blur",
+				component,
+				{ ...documentContext, value: content },
+				EXACT_ONLY,
+			);
+		},
+		[cancel, component, documentContext, triggerEvent],
+	);
 
-	const isEditable = !readOnly && !disabled;
-	const isEmptyDocument = isBlankDocument(seed);
+	const isEmptyDocument = isBlankDocument(value);
+	const editorId = `${surfaceId}-${componentId}-editor`;
+	const labelId = `${editorId}-label`;
+	const helperId = `${editorId}-helper`;
+	const editorProps = {
+		id: editorId,
+		"aria-label": label ? undefined : "Document",
+		"aria-labelledby": label ? labelId : undefined,
+		"aria-describedby": helperText ? helperId : undefined,
+		"aria-invalid": error || undefined,
+		"aria-disabled": disabled || undefined,
+		"aria-readonly": readOnly || undefined,
+	};
 
 	return (
 		<div
@@ -231,7 +307,11 @@ export function A2UIRichText({
 			className={cn("flex w-full flex-col gap-1.5", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>
-			{label && <Label htmlFor={componentId}>{label}</Label>}
+			{label && (
+				<Label id={labelId} htmlFor={editorId}>
+					{label}
+				</Label>
+			)}
 			<div
 				id={componentId}
 				onBlur={isEditable ? handleBlur : undefined}
@@ -254,7 +334,11 @@ export function A2UIRichText({
 					{isEditable ? (
 						<TextEditor
 							appId={appId}
-							initialContent={seed}
+							initialContent={value}
+							documentId={documentId}
+							currentUser={currentUser}
+							reviewEnabled={reviewEnabled}
+							editorProps={editorProps}
 							onChange={handleChange}
 							editable
 							uploadPrefix={uploadConfig.prefix}
@@ -264,7 +348,11 @@ export function A2UIRichText({
 						<div className="px-4 py-2">
 							<TextEditor
 								appId={appId}
-								initialContent={seed}
+								initialContent={value}
+								documentId={documentId}
+								currentUser={currentUser}
+								reviewEnabled={reviewEnabled}
+								editorProps={editorProps}
 								editable={false}
 							/>
 						</div>
@@ -273,6 +361,7 @@ export function A2UIRichText({
 			</div>
 			{helperText && (
 				<p
+					id={helperId}
 					className={cn(
 						"text-xs",
 						error ? "text-destructive" : "text-muted-foreground",

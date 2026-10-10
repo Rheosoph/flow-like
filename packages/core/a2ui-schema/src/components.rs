@@ -778,6 +778,18 @@ pub struct DateTimeInputProps {
 #[serde(rename_all = "camelCase")]
 pub struct RichTextProps {
     pub value: BoundValue,
+    /// Stable document identity, included in document and upload events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<BoundValue>,
+    /// Authoritative revision. Changing it replaces local edits with `value`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_revision: Option<BoundValue>,
+    /// Reviewer identity: { id, name, avatarUrl? }.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_user: Option<BoundValue>,
+    /// Enable document comments and tracked suggestions for the current reviewer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_enabled: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2083,6 +2095,42 @@ pub struct GanttProps {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn rich_text_review_and_revision_bindings_round_trip() {
+        let wire = json!({
+            "type": "richText",
+            "value": { "path": "/article/body" },
+            "documentId": { "path": "/article/id" },
+            "documentRevision": { "literalNumber": 4.0 },
+            "currentUser": { "path": "/reviewer" },
+            "reviewEnabled": { "literalBool": true }
+        });
+        let component: A2UIComponentType = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(component).unwrap(), wire);
+
+        let legacy: A2UIComponentType = serde_json::from_value(json!({
+            "type": "richText",
+            "value": { "literalString": "" }
+        }))
+        .unwrap();
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("documentId")
+                .is_none()
+        );
+
+        let schema = serde_json::to_value(schemars::schema_for!(RichTextProps)).unwrap();
+        for name in [
+            "documentId",
+            "documentRevision",
+            "currentUser",
+            "reviewEnabled",
+        ] {
+            assert!(schema["properties"][name].is_object());
+        }
+    }
 
     #[test]
     fn camera_audio_settings_preserve_literal_and_dynamic_bindings() {

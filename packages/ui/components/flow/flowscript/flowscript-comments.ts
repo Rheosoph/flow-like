@@ -12,6 +12,8 @@
  * indicator key actually moves (same contract as flowscript-run-trace).
  */
 
+import { plainTextFromRichContent } from "../../../lib/plate-text";
+
 import {
 	type IComment,
 	ICommentType,
@@ -250,10 +252,11 @@ export function formatFlowScriptCommentPreview(
 	maxContentLength = 140,
 ): string {
 	const lines = thread.comments.slice(0, maxComments).map((comment) => {
+		const text = plainTextFromRichContent(comment.content);
 		const content =
-			comment.content.length > maxContentLength
-				? `${comment.content.slice(0, maxContentLength - 1)}…`
-				: comment.content;
+			text.length > maxContentLength
+				? `${text.slice(0, maxContentLength - 1)}…`
+				: text;
 		const author = comment.author ?? undefined;
 		const name = nameFor(author && author !== "anonymous" ? author : undefined);
 		return `${name} · ${timeFor(commentTimestampMs(comment))}: ${content.replaceAll("\n", " ")}`;

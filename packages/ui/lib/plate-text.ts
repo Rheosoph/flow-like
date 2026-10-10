@@ -1,4 +1,4 @@
-const PLATE_JSON_PREFIX = "plate_json::";
+import { PLATE_JSON_PREFIX, parsePlateDocument } from "./plate-document";
 
 interface PlateNode {
 	readonly type?: string;
@@ -55,9 +55,9 @@ function nodeText(node: PlateNode): string {
 export function plainTextFromRichContent(content: string): string {
 	if (!content.startsWith(PLATE_JSON_PREFIX)) return content;
 	try {
-		const parsed: unknown = JSON.parse(content.slice(PLATE_JSON_PREFIX.length));
-		if (!Array.isArray(parsed)) return "";
-		return (parsed as PlateNode[])
+		const parsed = parsePlateDocument(content);
+		if (!parsed) return "";
+		return (parsed.children as PlateNode[])
 			.map(nodeText)
 			.filter((line) => line.length > 0)
 			.join("\n")

@@ -1,6 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactFlowInstance } from "@xyflow/react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import {
 	type IBoard,
 	type IComment,
@@ -242,6 +242,24 @@ interface LayerNavigationState {
 	trail: LayerVisit[];
 }
 
+/** Module moves change paths while the visited functions keep their identity. */
+function resolveNavigationState(
+	history: LayerNavigationState,
+	layers: Record<string, ILayer> | undefined,
+): LayerNavigationState {
+	let trail: LayerVisit[] = [];
+	for (const visit of history.trail) {
+		const from = resolveLayerPath(layers, visit.from);
+		const to = resolveLayerPath(layers, visit.to);
+		if (!to) {
+			trail = [];
+			continue;
+		}
+		trail = recordVisit(trail, { from, to });
+	}
+	return { path: resolveLayerPath(layers, history.path), trail };
+}
+
 interface UseLayerNavigationProps {
 	navigationKey?: string;
 	board: UseQueryResult<IBoard>;
@@ -265,6 +283,10 @@ export function useLayerNavigation({
 	fitView,
 	getNodes,
 }: UseLayerNavigationProps) {
+	const [navigationRevision, refreshNavigation] = useReducer(
+		(revision: number) => revision + 1,
+		0,
+	);
 	const histories = useRef(new Map<string, LayerNavigationState>());
 	const activeKey = useRef(navigationKey);
 	const renderedKey = useRef(navigationKey);
@@ -294,17 +316,18 @@ export function useLayerNavigation({
 	useEffect(() => cancelFocus, [cancelFocus]);
 
 	const currentHistory = useCallback(() => {
-		const history = histories.current.get(activeKey.current) ?? {
-			path: currentPath.current,
-			trail: [],
-		};
-		if (history.path !== currentPath.current) {
-			history.trail = reconcileLayerTrail(
-				history.trail,
-				history.path,
-				currentPath.current,
-			);
-			history.path = currentPath.current;
+		const layers = latest.current.board.data?.layers;
+		const history = resolveNavigationState(
+			histories.current.get(activeKey.current) ?? {
+				path: currentPath.current,
+				trail: [],
+			},
+			layers,
+		);
+		const path = resolveLayerPath(layers, currentPath.current);
+		if (history.path !== path) {
+			history.trail = reconcileLayerTrail(history.trail, history.path, path);
+			history.path = path;
 		}
 		return history;
 	}, []);
@@ -315,6 +338,8 @@ export function useLayerNavigation({
 			currentPath.current = path;
 			setCurrentLayer(path?.split("/").pop());
 			setLayerPath(path);
+			// A repeated function can have the same path at two different trail positions.
+			refreshNavigation();
 		},
 		[setCurrentLayer, setLayerPath],
 	);
@@ -341,6 +366,10 @@ export function useLayerNavigation({
 					? { path: source.path, trail: [...source.trail] }
 					: (existing ?? { path, trail: [] });
 			}
+			history = resolveNavigationState(
+				history,
+				latest.current.board.data?.layers,
+			);
 			history.trail = options.resetTrail
 				? []
 				: reconcileLayerTrail(history.trail, history.path, path);
@@ -352,6 +381,34 @@ export function useLayerNavigation({
 	const forgetNavigation = useCallback((key: string) => {
 		histories.current.delete(key);
 	}, []);
+
+	// Keep an open function and its callers attached when it moves to another module.
+	useEffect(() => {
+		const path = resolveLayerPath(board.data?.layers, currentPath.current);
+		if (path !== currentPath.current) {
+			cancelFocus();
+			commitPath(path, currentHistory());
+		}
+	}, [board.data?.layers, cancelFocus, commitPath, currentHistory]);
+
+	const returnToVisit = useCallback(
+		(index: number) => {
+			const history = currentHistory();
+			if (
+				!Number.isInteger(index) ||
+				index < 0 ||
+				index >= history.trail.length ||
+				history.trail.at(-1)?.to !== history.path
+			)
+				return;
+			cancelFocus();
+			void latest.current.saveViewport();
+			const path = history.trail[index].from;
+			history.trail = history.trail.slice(0, index);
+			commitPath(path, history);
+		},
+		[cancelFocus, commitPath, currentHistory],
+	);
 
 	/**
 	 * Navigates to anything addressable on the canvas: a node (in whichever layer or
@@ -389,11 +446,10 @@ export function useLayerNavigation({
 
 			cancelFocus();
 			const history = currentHistory();
-			history.trail = reconcileLayerTrail(
-				history.trail,
-				history.path,
-				targetPath,
-			);
+			history.trail =
+				boardData.layers[targetId]?.type === ILayerType.Function && targetPath
+					? recordVisit(history.trail, { from: history.path, to: targetPath })
+					: reconcileLayerTrail(history.trail, history.path, targetPath);
 			const baselineIds = new Set(getNodes().map((rendered) => rendered.id));
 
 			const release = holdViewport();
@@ -487,7 +543,7 @@ export function useLayerNavigation({
 			const saving = saveViewport();
 			const history = currentHistory();
 			history.trail = recordVisit(history.trail, {
-				from: currentPath.current,
+				from: history.path,
 				to: targetPath,
 			});
 			// Viewport persistence can finish later without overwriting a newer navigation.
@@ -503,7 +559,7 @@ export function useLayerNavigation({
 		if (!path) return;
 		void latest.current.saveViewport();
 		const history = currentHistory();
-		const exit = resolveExit(history.trail, path);
+		const exit = resolveExit(history.trail, history.path ?? path);
 		history.trail = exit.trail;
 		commitPath(
 			resolveLayerPath(latest.current.board.data?.layers, exit.path),
@@ -511,11 +567,25 @@ export function useLayerNavigation({
 		);
 	}, [cancelFocus, commitPath, currentHistory]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: history lives in refs; these values invalidate its rendered snapshot.
+	const navigationTrail = useMemo(
+		() => currentHistory().trail,
+		[
+			board.data?.layers,
+			layerPath,
+			navigationKey,
+			navigationRevision,
+			currentHistory,
+		],
+	);
+
 	return {
 		focusNode,
 		pushLayer,
 		popLayer,
 		navigateToLayer,
 		forgetNavigation,
+		navigationTrail,
+		returnToVisit,
 	};
 }
