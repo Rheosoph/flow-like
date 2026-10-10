@@ -1,5 +1,10 @@
-import { type DeserializeMdOptions, deserializeMd } from "@platejs/markdown";
+import {
+	type DeserializeMdOptions,
+	deserializeMd,
+	MarkdownPlugin,
+} from "@platejs/markdown";
 import type { SlateEditor, Value } from "platejs";
+import { remarkReferenceLinks } from "./remark-reference-links";
 
 // The markdown parser rewrites every `<tag attr>` in its input to JSX before
 // parsing (`class` → `className`, attributes quoted, void tags self-closed,
@@ -94,8 +99,30 @@ export function deserializeMdKeepingCode(
 	markdown: string,
 	options?: Omit<DeserializeMdOptions, "editor">,
 ): Value {
-	if (options?.withoutMdx) return deserializeMd(editor, markdown, options);
-	return withCodeGuard(markdown, (guarded) =>
-		deserializeMd(editor, guarded, options),
-	);
+	const configured = {
+		...options,
+		// Plate's incomplete-MDX fallback can silently discard paragraphs around
+		// `<tag`. Retry those documents as Markdown with literal brace/angle text.
+		onError: (error: Error) => {
+			options?.onError?.(error);
+			throw error;
+		},
+		remarkPlugins: [
+			...(options?.remarkPlugins ??
+				editor.getOptions(MarkdownPlugin).remarkPlugins ??
+				[]),
+			remarkReferenceLinks,
+		],
+	};
+	if (options?.withoutMdx) return deserializeMd(editor, markdown, configured);
+	return withCodeGuard(markdown, (guarded) => {
+		try {
+			return deserializeMd(editor, guarded, configured);
+		} catch {
+			return deserializeMd(editor, guarded, {
+				...configured,
+				withoutMdx: true,
+			});
+		}
+	});
 }

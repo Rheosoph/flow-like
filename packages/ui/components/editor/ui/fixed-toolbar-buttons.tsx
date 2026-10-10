@@ -49,35 +49,26 @@ export function FixedToolbarButtons() {
 	const readOnly = useEditorReadOnly();
 
 	return (
-		<div className="flex w-full">
+		<div className="flex w-full min-w-0 flex-col">
 			{!readOnly && (
-				<>
-					<ToolbarGroup>
+				<div
+					className="flex min-w-0 flex-wrap items-center gap-y-1 border-b border-border/60 px-1.5 py-1"
+					data-toolbar-row="formatting"
+				>
+					<ToolbarGroup className="shrink-0">
 						<UndoToolbarButton />
 						<RedoToolbarButton />
 					</ToolbarGroup>
 
-					<ToolbarGroup>
-						<AIToolbarButton tooltip="AI commands">
-							<WandSparklesIcon />
-						</AIToolbarButton>
-					</ToolbarGroup>
-
-					<ToolbarGroup>
-						<ExportToolbarButton>
-							<ArrowUpToLineIcon />
-						</ExportToolbarButton>
-
-						<ImportToolbarButton />
-					</ToolbarGroup>
-
-					<ToolbarGroup>
-						<InsertToolbarButton />
+					<ToolbarGroup className="shrink-0">
 						<TurnIntoToolbarButton />
+					</ToolbarGroup>
+
+					<ToolbarGroup className="shrink-0">
 						<FontSizeToolbarButton />
 					</ToolbarGroup>
 
-					<ToolbarGroup>
+					<ToolbarGroup className="shrink-0">
 						<MarkToolbarButton nodeType={KEYS.bold} tooltip="Bold (⌘+B)">
 							<BoldIcon />
 						</MarkToolbarButton>
@@ -92,7 +83,9 @@ export function FixedToolbarButtons() {
 						>
 							<UnderlineIcon />
 						</MarkToolbarButton>
+					</ToolbarGroup>
 
+					<ToolbarGroup className="shrink-0">
 						<MarkToolbarButton
 							nodeType={KEYS.strikethrough}
 							tooltip="Strikethrough (⌘+⇧+M)"
@@ -116,7 +109,7 @@ export function FixedToolbarButtons() {
 						</FontColorToolbarButton>
 					</ToolbarGroup>
 
-					<ToolbarGroup>
+					<ToolbarGroup className="shrink-0">
 						<AlignToolbarButton />
 
 						<NumberedListToolbarButton />
@@ -124,44 +117,69 @@ export function FixedToolbarButtons() {
 						<TodoListToolbarButton />
 						<ToggleToolbarButton />
 					</ToolbarGroup>
-
-					<ToolbarGroup>
-						<LinkToolbarButton />
-						<TableToolbarButton />
-						<EmojiToolbarButton />
-					</ToolbarGroup>
-
-					<ToolbarGroup>
-						<MediaToolbarButton nodeType={KEYS.img} />
-						<MediaToolbarButton nodeType={KEYS.video} />
-						<MediaToolbarButton nodeType={KEYS.audio} />
-						<MediaToolbarButton nodeType={KEYS.file} />
-					</ToolbarGroup>
-
-					<ToolbarGroup>
-						<LineHeightToolbarButton />
-						<OutdentToolbarButton />
-						<IndentToolbarButton />
-					</ToolbarGroup>
-
-					<ToolbarGroup>
-						<MoreToolbarButton />
-					</ToolbarGroup>
-				</>
+				</div>
 			)}
 
-			<div className="grow" />
+			<div
+				className="flex min-w-0 flex-wrap items-center gap-y-1 px-1.5 py-1"
+				data-toolbar-row="actions"
+			>
+				{!readOnly && (
+					<>
+						<ToolbarGroup className="shrink-0">
+							<AIToolbarButton tooltip="AI commands">
+								<WandSparklesIcon />
+							</AIToolbarButton>
+						</ToolbarGroup>
 
-			<ToolbarGroup>
-				<MarkToolbarButton nodeType={KEYS.highlight} tooltip="Highlight">
-					<HighlighterIcon />
-				</MarkToolbarButton>
-				<CommentToolbarButton />
-			</ToolbarGroup>
+						<ToolbarGroup className="shrink-0">
+							<InsertToolbarButton />
+							<LinkToolbarButton />
+							<TableToolbarButton />
+							<EmojiToolbarButton />
+						</ToolbarGroup>
 
-			<ToolbarGroup>
-				<ModeToolbarButton />
-			</ToolbarGroup>
+						<ToolbarGroup className="shrink-0">
+							<MediaToolbarButton nodeType={KEYS.img} />
+							<MediaToolbarButton nodeType={KEYS.video} />
+							<MediaToolbarButton nodeType={KEYS.audio} />
+							<MediaToolbarButton nodeType={KEYS.file} />
+						</ToolbarGroup>
+
+						<ToolbarGroup className="shrink-0">
+							<LineHeightToolbarButton />
+							<OutdentToolbarButton />
+							<IndentToolbarButton />
+						</ToolbarGroup>
+
+						<ToolbarGroup className="shrink-0">
+							<MoreToolbarButton />
+						</ToolbarGroup>
+					</>
+				)}
+
+				<div className="ml-auto flex flex-wrap items-center gap-y-1">
+					{!readOnly && (
+						<ToolbarGroup className="shrink-0">
+							<ExportToolbarButton>
+								<ArrowUpToLineIcon />
+							</ExportToolbarButton>
+							<ImportToolbarButton />
+						</ToolbarGroup>
+					)}
+
+					<ToolbarGroup className="shrink-0">
+						<MarkToolbarButton nodeType={KEYS.highlight} tooltip="Highlight">
+							<HighlighterIcon />
+						</MarkToolbarButton>
+						<CommentToolbarButton />
+					</ToolbarGroup>
+
+					<ToolbarGroup className="shrink-0">
+						<ModeToolbarButton />
+					</ToolbarGroup>
+				</div>
+			</div>
 		</div>
 	);
 }

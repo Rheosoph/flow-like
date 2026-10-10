@@ -30,6 +30,7 @@ schemars = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 strsim = "0.11.1"
 regex = { workspace = true }
+math-core = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 urlencoding = { workspace = true }

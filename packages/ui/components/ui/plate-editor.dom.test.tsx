@@ -8,7 +8,13 @@ import {
 } from "bun:test";
 import { Window } from "happy-dom";
 import type { PlateEditor } from "platejs/react";
-import { type ReactElement, act, createElement, useEffect } from "react";
+import {
+	type ComponentProps,
+	type ReactElement,
+	act,
+	createElement,
+	useEffect,
+} from "react";
 import { plainTextFromRichContent } from "../../lib/plate-text";
 import {
 	HTML_IMPORT_FIXTURES,
@@ -167,7 +173,9 @@ const handlerBearingWrites = () =>
 
 const { createRoot } = await import("react-dom/client");
 const { KEYS, NodeApi } = await import("platejs");
-const { getEditorDOMFromHtmlString } = await import("platejs/static");
+const { deserializeHtmlFile } = await import(
+	"../editor/ui/import-toolbar-button"
+);
 const { PlateController, createPlateEditor, useEditorMounted, useEditorRef } =
 	await import("platejs/react");
 const { createEditorKit } = await import("../editor/editor-kit");
@@ -365,9 +373,10 @@ const EDITOR_ID = "rendered-editor";
 
 function EditorProbe({
 	onReady,
-}: Readonly<{ onReady: (editor: PlateEditor) => void }>) {
-	const editor = useEditorRef(EDITOR_ID);
-	const mounted = useEditorMounted(EDITOR_ID);
+	editorId = EDITOR_ID,
+}: Readonly<{ onReady: (editor: PlateEditor) => void; editorId?: string }>) {
+	const editor = useEditorRef(editorId);
+	const mounted = useEditorMounted(editorId);
 	useEffect(() => {
 		if (mounted && !editor.meta.isFallback) onReady(editor);
 	}, [editor, mounted, onReady]);
@@ -378,14 +387,20 @@ function EditorProbe({
 const EDITABLE_VOLATILE_ATTRIBUTES = ["data-block-id", "id"];
 
 /** Mounts the app's editable `TextEditor` (lazy `TextEditorEditable`, full `createEditorKit`). */
-async function mountEditable(initialContent: string, isMarkdown: boolean) {
+async function mountEditable(
+	initialContent: string,
+	isMarkdown: boolean,
+	props: Partial<ComponentProps<typeof TextEditor>> = {},
+) {
 	const changes: string[] = [];
 	let editor: PlateEditor | undefined;
+	let commentEditor: PlateEditor | undefined;
 	const view = await mount(
 		createElement(
 			PlateController,
 			null,
 			createElement(TextEditor, {
+				...props,
 				initialContent,
 				isMarkdown,
 				editable: true,
@@ -396,6 +411,12 @@ async function mountEditable(initialContent: string, isMarkdown: boolean) {
 					editor = ready;
 				},
 			}),
+			createElement(EditorProbe, {
+				editorId: "comment",
+				onReady: (ready: PlateEditor) => {
+					commentEditor = ready;
+				},
+			}),
 		),
 	);
 	if (!editor) throw new Error("the editable editor never mounted");
@@ -404,6 +425,9 @@ async function mountEditable(initialContent: string, isMarkdown: boolean) {
 	return {
 		...view,
 		editor,
+		get commentEditor() {
+			return commentEditor;
+		},
 		changes,
 		editableMarkup: () =>
 			formatHtml(editable.outerHTML, {
@@ -490,7 +514,7 @@ describe("editable editor", () => {
 		});
 	}
 
-	test.failing("keeps an ordered list's start number", async () => {
+	test("keeps an ordered list's start number", async () => {
 		const view = await mountEditable("3. three\n4. four", true);
 		const [first] = view.editor.children;
 		await view.unmount();
@@ -594,11 +618,6 @@ function findUnsafeNodes(nodes: unknown): string[] {
 	return [...hits].sort();
 }
 
-/** Pinned Plate 49 behaviour: an iframe's javascript: src survives as a media_embed url. */
-const KNOWN_UNSAFE_IMPORTS: Readonly<Record<string, readonly string[]>> = {
-	"H07-iframe": ["media_embed.url"],
-};
-
 function pasteHtml(html: string) {
 	const editor = createPlateEditor({
 		plugins: createEditorKit(),
@@ -618,7 +637,7 @@ function pasteHtml(html: string) {
 
 function deserializeHtmlString(html: string) {
 	const editor = createPlateEditor({ plugins: createEditorKit() });
-	return editor.api.html.deserialize({ element: html });
+	return deserializeHtmlFile(editor, html);
 }
 
 describe("HTML deserialization", () => {
@@ -629,9 +648,7 @@ describe("HTML deserialization", () => {
 				const nodes = await quietly(async () => pasteHtml(fixture.html));
 
 				expect(nodes).toMatchSnapshot();
-				expect(findUnsafeNodes(nodes)).toEqual([
-					...(KNOWN_UNSAFE_IMPORTS[fixture.id] ?? []),
-				]);
+				expect(findUnsafeNodes(nodes)).toEqual([]);
 				expect(handlerBearingWrites()).toEqual([]);
 			});
 
@@ -641,9 +658,7 @@ describe("HTML deserialization", () => {
 				);
 
 				expect(normalizeNodeIds(nodes)).toMatchSnapshot();
-				expect(findUnsafeNodes(nodes)).toEqual([
-					...(KNOWN_UNSAFE_IMPORTS[fixture.id] ?? []),
-				]);
+				expect(findUnsafeNodes(nodes)).toEqual([]);
 			});
 		});
 	}
@@ -674,43 +689,260 @@ describe("HTML deserialization", () => {
 			expect(marks).toContain(mark);
 	});
 
-	test.failing(
-		"an iframe with a javascript: src never becomes a media embed",
-		async () => {
-			const nodes = await quietly(async () =>
-				pasteHtml(
-					HTML_IMPORT_FIXTURES.find((fixture) => fixture.id === "H07-iframe")
-						?.html ?? "",
-				),
-			);
-			expect(findUnsafeNodes(nodes)).toEqual([]);
-		},
-	);
+	test("an iframe with a javascript: src never becomes a media embed", async () => {
+		const nodes = await quietly(async () =>
+			pasteHtml(
+				HTML_IMPORT_FIXTURES.find((fixture) => fixture.id === "H07-iframe")
+					?.html ?? "",
+			),
+		);
+		expect(findUnsafeNodes(nodes)).toEqual([]);
+	});
 
-	test.failing(
-		"the html api never parses markup into the live document",
-		async () => {
-			liveMarkupWrites.length = 0;
-			await quietly(async () => {
-				for (const fixture of HTML_IMPORT_FIXTURES)
-					deserializeHtmlString(fixture.html);
-			});
-			expect(handlerBearingWrites()).toEqual([]);
-		},
-	);
+	test("the html api never parses markup into the live document", async () => {
+		liveMarkupWrites.length = 0;
+		await quietly(async () => {
+			for (const fixture of HTML_IMPORT_FIXTURES)
+				deserializeHtmlString(fixture.html);
+		});
+		expect(handlerBearingWrites()).toEqual([]);
+	});
 
-	test.failing(
-		"Import from HTML accepts markup that is not a Plate export",
-		async () => {
-			const editor = createPlateEditor({ plugins: createEditorKit() });
-			const nodes = await quietly(async () =>
-				editor.api.html.deserialize({
-					element: getEditorDOMFromHtmlString(
-						"<h1>Title</h1><p>Body</p>",
-					) as HTMLElement,
-				}),
-			);
-			expect(nodes.map((node) => node.type)).toEqual(["h1", "p"]);
-		},
+	test("Import from HTML accepts markup that is not a Plate export", async () => {
+		const editor = createPlateEditor({ plugins: createEditorKit() });
+		const nodes = await quietly(async () =>
+			deserializeHtmlFile(editor, "<h1>Title</h1><p>Body</p>"),
+		);
+		expect(nodes.map((node) => node.type)).toEqual(["h1", "p"]);
+	});
+});
+
+describe("persistent editorial review", () => {
+	test("persists review-only mutations and restores thread bodies and identity", async () => {
+		const { discussionPlugin } = await import(
+			"../editor/plugins/discussion-kit"
+		);
+		const { parsePlateDocument } = await import("../../lib/plate-document");
+		const user = { id: "real-reporter", name: "Reporter" };
+		const view = await mountEditable(
+			'plate_json::[{"type":"p","id":"stable-p","children":[{"text":"Article"}]}]',
+			true,
+			{ documentId: "article-1", currentUser: user, reviewEnabled: true },
+		);
+		expect(view.editor.getOption(discussionPlugin, "discussions")).toEqual([]);
+		expect(view.editor.getOption(discussionPlugin, "currentUserId")).toBe(
+			user.id,
+		);
+		await act(async () => {
+			view.editor.setOption(discussionPlugin, "discussions", [
+				{
+					id: "thread-1",
+					userId: user.id,
+					createdAt: new Date("2026-10-09T12:00:00Z"),
+					isResolved: true,
+					comments: [
+						{
+							id: "reply-1",
+							userId: user.id,
+							discussionId: "thread-1",
+							createdAt: new Date("2026-10-09T12:00:00Z"),
+							isEdited: false,
+							contentRich: [
+								{ type: "p", children: [{ text: "Verify attribution" }] },
+							],
+						},
+					],
+				},
+			]);
+		});
+		await settle(2);
+		const saved = view.changes.at(-1)!;
+		expect(
+			parsePlateDocument(saved)?.discussions[0]?.comments[0]?.contentRich,
+		).toEqual([{ type: "p", children: [{ text: "Verify attribution" }] }]);
+		await view.unmount();
+		const restored = await mountEditable(saved, true, {
+			currentUser: user,
+			reviewEnabled: true,
+		});
+		expect(
+			restored.editor.getOption(discussionPlugin, "discussions")[0]?.isResolved,
+		).toBe(true);
+		expect(
+			restored.editor.getOption(discussionPlugin, "users")[user.id],
+		).toEqual(user);
+		expect(restored.container.textContent).toContain(
+			"Resolved discussions (1)",
+		);
+		await restored.unmount();
+	});
+
+	test("puts field accessibility attributes on the contenteditable root", async () => {
+		const view = await mountEditable("Article", true, {
+			editorProps: {
+				id: "article-body",
+				"aria-label": "Article body",
+				"aria-describedby": "body-help",
+				"aria-invalid": true,
+			},
+		});
+		const field = view.container.querySelector('[data-slate-editor="true"]');
+		expect(field?.getAttribute("id")).toBe("article-body");
+		expect(field?.getAttribute("aria-label")).toBe("Article body");
+		expect(field?.getAttribute("aria-describedby")).toBe("body-help");
+		expect(field?.getAttribute("aria-invalid")).toBe("true");
+		await view.unmount();
+	});
+});
+
+test("footnote authoring inserts a linked definition and preserves Markdown references", async () => {
+	const { insertFootnote } = await import("../editor/plugins/footnote-kit");
+	const view = await mountEditable("A claim.", true);
+	await act(async () => {
+		view.editor.tf.select({ path: [0, 0], offset: 8 });
+		insertFootnote(view.editor);
+		view.editor.tf.insertText("Source details");
+	});
+	await settle(2);
+	const definition = view.editor.children.find(
+		(node) => node.type === "footnoteDefinition",
 	);
+	expect(definition?.identifier).toBe("1");
+	expect(NodeApi.string(definition!)).toBe("Source details");
+	const markdown = view.editor
+		.getApi((await import("@platejs/markdown")).MarkdownPlugin)
+		.markdown.serialize();
+	expect(markdown).toContain("[^1]");
+	expect(markdown).toContain("[^1]: Source details");
+	const note = view.container.querySelector('[aria-label="Footnote 1"]');
+	expect(note).not.toBeNull();
+	const target = note!.getAttribute("href")!.slice(1);
+	expect(view.container.querySelector(`[id="${target}"]`)).not.toBeNull();
+	await view.unmount();
+});
+
+test("review mode protects article text and does not autosave merely on mount", async () => {
+	const view = await mountEditable("A claim.", true, {
+		currentUser: { id: "reviewer", name: "Reviewer" },
+		reviewEnabled: true,
+		contentReadOnly: true,
+	});
+	const body = view.container.querySelector('[data-slate-editor="true"]');
+	expect(body?.getAttribute("contenteditable")).toBe("false");
+	expect(view.changes).toEqual([]);
+	await act(async () => {
+		view.editor.tf.select({
+			anchor: { path: [0, 0], offset: 0 },
+			focus: { path: [0, 0], offset: 7 },
+		});
+		(
+			view.container.querySelector(
+				'[aria-label="Document review"] button',
+			) as HTMLButtonElement
+		).click();
+	});
+	await settle(2);
+	expect(NodeApi.string({ type: "p", children: view.editor.children })).toBe(
+		"A claim.",
+	);
+	expect(
+		window.document.querySelector(
+			'[data-slate-editor="true"][contenteditable="true"]',
+		),
+	).not.toBeNull();
+	expect(view.changes).toEqual([]);
+	await act(async () => {
+		view.commentEditor!.tf.select({ path: [0, 0], offset: 0 });
+		view.commentEditor!.tf.insertText("Verify the source");
+	});
+	await settle(2);
+	await act(async () => {
+		(
+			window.document.querySelector(
+				'button[aria-label="Send comment"]',
+			) as unknown as HTMLButtonElement
+		).click();
+	});
+	await settle(2);
+	const { parsePlateDocument } = await import("../../lib/plate-document");
+	expect(
+		parsePlateDocument(view.changes.at(-1)!)?.discussions[0]?.comments[0]
+			?.userId,
+	).toBe("reviewer");
+	expect(
+		parsePlateDocument(view.changes.at(-1)!)?.discussions[0]?.comments[0]
+			?.contentRich,
+	).toMatchObject([{ type: "p", children: [{ text: "Verify the source" }] }]);
+	expect(NodeApi.string({ type: "p", children: view.editor.children })).toBe(
+		"A claim.",
+	);
+	await view.unmount();
+});
+
+test("reviewers can resolve another author's thread without editing article copy", async () => {
+	const { serializePlateDocument, parsePlateDocument } = await import(
+		"../../lib/plate-document"
+	);
+	const content = serializePlateDocument({
+		version: 1,
+		children: [
+			{
+				type: "p",
+				children: [{ text: "A claim.", comment: true, comment_thread: true }],
+			},
+		],
+		users: { author: { id: "author", name: "Author" } },
+		discussions: [
+			{
+				id: "thread",
+				userId: "author",
+				createdAt: "2026-10-09T12:00:00Z",
+				isResolved: false,
+				comments: [
+					{
+						id: "reply",
+						discussionId: "thread",
+						userId: "author",
+						createdAt: "2026-10-09T12:00:00Z",
+						isEdited: false,
+						contentRich: [
+							{ type: "p", children: [{ text: "Verify attribution" }] },
+						],
+					},
+				],
+			},
+		],
+	});
+	const ownOnly = await mountEditable(content, false, {
+		currentUser: { id: "reader", name: "Reader" },
+		reviewEnabled: true,
+		contentReadOnly: true,
+	});
+	expect(
+		ownOnly.container.querySelector('[aria-label="Resolve discussion"]'),
+	).toBeNull();
+	await ownOnly.unmount();
+	const view = await mountEditable(content, false, {
+		currentUser: { id: "reviewer", name: "Reviewer" },
+		reviewEnabled: true,
+		reviewCanModerate: true,
+		contentReadOnly: true,
+	});
+	expect(view.changes).toEqual([]);
+	await act(async () => {
+		(
+			view.container.querySelector(
+				'[aria-label="Resolve discussion"]',
+			) as HTMLButtonElement
+		).click();
+	});
+	await settle(2);
+	const saved = parsePlateDocument(view.changes.at(-1)!)!;
+	expect(saved.discussions[0]?.isResolved).toBe(true);
+	expect(saved.discussions[0]?.userId).toBe("author");
+	expect(NodeApi.string({ type: "p", children: saved.children })).toBe(
+		"A claim.",
+	);
+	expect(view.container.textContent).toContain("Resolved discussions (1)");
+	await view.unmount();
 });

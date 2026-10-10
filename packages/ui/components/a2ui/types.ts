@@ -605,6 +605,14 @@ export interface RichTextComponent extends ComponentBase {
 	type: "richText";
 	/** The editor document, a `plate_json::`-prefixed string. */
 	value: BoundValue;
+	/** Stable document identity, included in document and upload events. */
+	documentId?: BoundValue;
+	/** Authoritative revision. Changing it replaces local edits with `value`. */
+	documentRevision?: BoundValue;
+	/** Reviewer identity: { id, name, avatarUrl? }. */
+	currentUser?: BoundValue;
+	/** Enable document comments and tracked suggestions for the current reviewer. */
+	reviewEnabled?: BoundValue;
 	label?: BoundValue;
 	helperText?: BoundValue;
 	placeholder?: BoundValue;

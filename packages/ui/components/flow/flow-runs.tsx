@@ -17,7 +17,7 @@ import {
 	ScrollIcon,
 	TriangleAlertIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import {
@@ -145,7 +145,11 @@ const FlowRunsComponent = ({
 		currentLogs,
 		setFilter,
 		refetchLogs,
+		loadMoreLogs,
 		isLoading,
+		isLoadingMore,
+		hasMore,
+		loadMoreFailed,
 		heatmapEnabled,
 		setHeatmapEnabled,
 	} = useLogAggregation();
@@ -157,11 +161,47 @@ const FlowRunsComponent = ({
 	});
 	const [timeRange, setTimeRange] = useState("last_5_minutes");
 	const [selectedRunId, setSelectedRunId] = useState<string>();
+	const listRef = useRef<HTMLDivElement>(null);
+	const loadMoreRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
-		setFilter(backend, localFilter);
+		const root = listRef.current;
+		const sentinel = loadMoreRef.current;
+		if (
+			!root ||
+			!sentinel ||
+			!hasMore ||
+			isLoading ||
+			isLoadingMore ||
+			loadMoreFailed ||
+			typeof IntersectionObserver === "undefined"
+		)
+			return;
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((entry) => entry.isIntersecting)) {
+					void loadMoreLogs(backend);
+				}
+			},
+			{ root, rootMargin: "200px" },
+		);
+		observer.observe(sentinel);
+		return () => observer.disconnect();
+	}, [
+		backend,
+		hasMore,
+		isLoading,
+		isLoadingMore,
+		loadMoreFailed,
+		loadMoreLogs,
+	]);
+
+	useEffect(() => {
+		if (listRef.current) listRef.current.scrollTop = 0;
+		void setFilter(backend, { ...localFilter, appId, boardId });
 	}, [appId, boardId, backend, localFilter, setFilter]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: changing boards clears the pending run selection
 	useEffect(() => {
 		setSelectedRunId(undefined);
 	}, [appId, boardId]);
@@ -537,11 +577,14 @@ const FlowRunsComponent = ({
 					title={t("noLogs", "No Logs")}
 				/>
 			)}
-			<div className="flex flex-col gap-2 max-h-full overflow-y-auto">
+			<div
+				ref={listRef}
+				className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto"
+			>
 				{currentLogs?.map((run) => (
 					<div
 						key={run.run_id}
-						className={`flex flex-row gap-2 items-center justify-between border p-2 rounded-md ${currentMetadata?.run_id === run.run_id ? "bg-muted/50" : "hover:bg-muted/50"}`}
+						className={`flex shrink-0 flex-row gap-2 items-center justify-between border p-2 rounded-md ${currentMetadata?.run_id === run.run_id ? "bg-muted/50" : "hover:bg-muted/50"}`}
 					>
 						<button
 							type="button"
@@ -661,6 +704,23 @@ const FlowRunsComponent = ({
 						</DropdownMenu>
 					</div>
 				))}
+				{hasMore && (
+					<div ref={loadMoreRef} className="flex shrink-0 justify-center py-2">
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={isLoadingMore}
+							onClick={() => void loadMoreLogs(backend)}
+						>
+							{isLoadingMore && <Loader2Icon className="size-4 animate-spin" />}
+							{isLoadingMore
+								? t("loadingRuns", "Loading runs...")
+								: loadMoreFailed
+									? t("retry", "Retry")
+									: t("loadMore", "Load more")}
+						</Button>
+					</div>
+				)}
 			</div>
 		</div>
 	);

@@ -642,6 +642,7 @@
 	"failedToLoadMedia": "Medien konnten nicht geladen werden",
 	"failedToLoadTemplates": "Vorlagen konnten nicht geladen werden",
 	"failedToLoadWidgets": "Widgets konnten nicht geladen werden",
+	"failedToMoveFunction": "Funktion konnte nicht verschoben werden",
 	"failedToParseCsvVal": "CSV konnte nicht geparst werden: {{val}}",
 	"failedToRenameWidget": "Widget konnte nicht umbenannt werden",
 	"failedToRenderFlowscript": "FlowScript konnte nicht gerendert werden",

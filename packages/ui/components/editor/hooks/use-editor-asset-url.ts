@@ -1,81 +1,86 @@
 "use client";
 
-import { useContext, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { signedUrlExpiry } from "../../../lib/stable-asset-url";
 import { useBackend } from "../../../state/backend-state";
-import { AIUsageAppContext } from "../ai-usage-context";
-import { isStorageUrl, storagePathFromUrl } from "../upload-context";
+import type { IStorageState } from "../../../state/backend-state/storage-state";
+import {
+	isStorageUrl,
+	parseEditorStorageReference,
+	useEditorUpload,
+} from "../upload-context";
 
-interface CacheEntry {
-	url: string;
-	expiresAt: number;
+type StorageReader = Pick<
+	IStorageState,
+	"downloadStorageItems" | "downloadStorageItemsUser"
+>;
+
+/** Resolve through the same storage area used by the uploader. */
+export async function resolveEditorAssetUrl(
+	url: string,
+	storage: StorageReader,
+	appId?: string,
+	scope: "app" | "user" = "app",
+): Promise<string> {
+	if (!isStorageUrl(url)) return url;
+	const reference = parseEditorStorageReference(url, appId, scope);
+	if (!reference?.appId || !reference.path)
+		throw new Error("The media reference has no storage owner.");
+	const download =
+		reference.scope === "user"
+			? storage.downloadStorageItemsUser
+			: storage.downloadStorageItems;
+	const results = await download.call(storage, reference.appId, [
+		reference.path,
+	]);
+	const resolved = results[0]?.url;
+	if (!resolved) throw new Error(`Media is unavailable: ${reference.path}`);
+	return resolved;
 }
 
-const signedUrlCache = new Map<string, CacheEntry>();
-
-/** Signed URLs are valid for 24h; refresh well before that so a long session never serves a dead one. */
-const CACHE_DURATION_MS = 30 * 60 * 1000;
-
-/**
- * Resolve a media reference for display.
- *
- * Editor documents persist `storage://…` paths rather than signed URLs, because a signed URL
- * expires long before the document does. Everything else (http, data, blob, asset) passes
- * through untouched.
- */
+/** Private signed URLs remain local to the mounted media component. */
 export function useEditorAssetUrl(url: string | undefined): string | undefined {
 	const backend = useBackend();
-	const appId = useContext(AIUsageAppContext);
-	const [resolved, setResolved] = useState<string | undefined>(
-		isStorageUrl(url) ? undefined : url,
-	);
-	const requestRef = useRef(0);
+	const { appId, scope } = useEditorUpload();
+	const [asset, setAsset] = useState<{ source: string; url: string }>();
+	const source = `${appId ?? ""}:${scope}:${url ?? ""}`;
 
 	useEffect(() => {
-		if (!isStorageUrl(url)) {
-			setResolved(url);
-			return;
-		}
-
-		const path = storagePathFromUrl(url);
-		const cacheKey = `${appId ?? "no-app"}:${path}`;
-		const cached = signedUrlCache.get(cacheKey);
-		if (cached && cached.expiresAt > Date.now()) {
-			setResolved(cached.url);
-			return;
-		}
-
-		if (!appId || !backend?.storageState) {
-			setResolved(undefined);
-			return;
-		}
-
-		const request = ++requestRef.current;
+		if (!url || !isStorageUrl(url)) return;
 		let cancelled = false;
-
-		backend.storageState
-			.downloadStorageItems(appId, [path])
-			.then((results) => {
-				if (cancelled || request !== requestRef.current) return;
-				const signed = results[0]?.url;
-				if (!signed) {
-					setResolved(undefined);
-					return;
-				}
-				signedUrlCache.set(cacheKey, {
-					url: signed,
-					expiresAt: Date.now() + CACHE_DURATION_MS,
-				});
-				setResolved(signed);
-			})
-			.catch(() => {
-				if (cancelled || request !== requestRef.current) return;
-				setResolved(undefined);
-			});
-
+		let timer: ReturnType<typeof setTimeout>;
+		const refresh = async () => {
+			try {
+				const resolved = await resolveEditorAssetUrl(
+					url,
+					backend.storageState,
+					appId,
+					scope,
+				);
+				if (cancelled) return;
+				setAsset({ source, url: resolved });
+				const expiry = signedUrlExpiry(resolved);
+				const delay = Math.max(
+					30_000,
+					Math.min(
+						25 * 60_000,
+						expiry ? expiry - Date.now() - 60_000 : Infinity,
+					),
+				);
+				timer = setTimeout(refresh, delay);
+			} catch {
+				if (cancelled) return;
+				setAsset(undefined);
+				timer = setTimeout(refresh, 30_000);
+			}
+		};
+		void refresh();
 		return () => {
 			cancelled = true;
+			clearTimeout(timer);
 		};
-	}, [url, appId, backend?.storageState]);
+	}, [url, appId, scope, source, backend.storageState]);
 
-	return resolved;
+	if (!isStorageUrl(url)) return url;
+	return asset?.source === source ? asset.url : undefined;
 }

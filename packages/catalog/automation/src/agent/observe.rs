@@ -167,6 +167,10 @@ pub(crate) struct Observation {
     pub model_frame: ScreenFrame,
     pub image: ModelImage,
     pub elements: Vec<ScreenElement>,
+    /// Native locators in the same order as `elements`; OCR candidates have none.
+    pub element_native_ids: Vec<Option<String>>,
+    /// The window used for accessibility evidence, including the resolved default target.
+    pub target_window: Option<WindowInfo>,
     pub element_text: Option<String>,
     pub source: String,
 }
@@ -185,6 +189,62 @@ impl Observation {
         };
         format!("{width}x{height} screenshot of {}{elements}", self.source)
     }
+}
+
+/// Whether this observation can support a decision that sends input to the foreground window.
+pub(crate) fn decision_observation_ready(observation: &Observation) -> bool {
+    observation.target_window.as_ref().is_some_and(|window| {
+        !window.id.is_empty()
+            && window.is_focused
+            && !window.is_minimized
+            && window.width > 0
+            && window.height > 0
+            && window_rect(window)
+                .intersection(&frame_rect(&observation.shot.frame))
+                .is_some()
+    }) && !observation.elements.is_empty()
+        && observation.element_native_ids.len() == observation.elements.len()
+        && observation
+            .element_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+        && observation.shot.frame.validate().is_ok()
+        && observation.model_frame.validate().is_ok()
+        && observation.shot.image.dimensions()
+            == (
+                observation.shot.frame.pixel_width,
+                observation.shot.frame.pixel_height,
+            )
+        && observation.shot.fingerprint.width() > 0
+        && observation.shot.fingerprint.height() > 0
+}
+
+fn same_window(before: &WindowInfo, after: &WindowInfo) -> bool {
+    before.id == after.id
+        && before.title == after.title
+        && before.app_name == after.app_name
+        && window_rect(before) == window_rect(after)
+        && before.is_focused == after.is_focused
+        && before.is_minimized == after.is_minimized
+}
+
+/// Reject decisions whose target, controls or meaningful screen content changed while waiting.
+/// Capture and accessibility reads are sequential, so the executor must still use the fresh state.
+pub(crate) fn decision_observation_unchanged(before: &Observation, after: &Observation) -> bool {
+    decision_observation_ready(before)
+        && decision_observation_ready(after)
+        && before
+            .target_window
+            .as_ref()
+            .zip(after.target_window.as_ref())
+            .is_some_and(|(before, after)| same_window(before, after))
+        && before.source == after.source
+        && before.shot.frame == after.shot.frame
+        && before.model_frame == after.model_frame
+        && before.elements == after.elements
+        && before.element_native_ids == after.element_native_ids
+        && before.element_text == after.element_text
+        && !screen_changed(&before.shot.fingerprint, &after.shot.fingerprint)
 }
 
 /// Element centers in pixels of the model's image, for the list the model reads.
@@ -222,25 +282,30 @@ async fn accessibility_elements(
     window: Option<&WindowInfo>,
     frame: &ScreenFrame,
     warnings: &mut Vec<String>,
-) -> Vec<Candidate> {
+) -> (Vec<Candidate>, Option<WindowInfo>) {
     let window = match window {
         Some(window) => Ok(Some(window.clone())),
         None => resolve_window("").await,
     };
-    let tree = match window {
-        Ok(Some(window)) => load_window_tree(&window.id, AX_DEPTH).await,
-        Ok(None) => Err(flow_like_types::anyhow!(
-            "no application window outside Flow-Like is open"
-        )),
-        Err(error) => Err(error),
+    let window = match window {
+        Ok(Some(window)) => window,
+        Ok(None) => {
+            warnings.push("Accessibility elements unavailable: no application window outside Flow-Like is open".into());
+            return (Vec::new(), None);
+        }
+        Err(error) => {
+            warnings.push(format!("Accessibility elements unavailable: {error}"));
+            return (Vec::new(), None);
+        }
     };
-    match tree {
+    let elements = match load_window_tree(&window.id, AX_DEPTH).await {
         Ok(tree) => dedup_ax(ax_candidates(flatten(&tree), &frame_rect(frame), true)),
         Err(error) => {
             warnings.push(format!("Accessibility elements unavailable: {error}"));
             Vec::new()
         }
-    }
+    };
+    (elements, Some(window))
 }
 
 async fn text_elements(
@@ -266,17 +331,17 @@ async fn marked_elements(
     located: &Located,
     perception: Perception,
     warnings: &mut Vec<String>,
-) -> Vec<Candidate> {
+) -> (Vec<Candidate>, Option<WindowInfo>) {
     if !perception.marks() {
-        return Vec::new();
+        return (Vec::new(), located.window.clone());
     }
-    let ax = accessibility_elements(located.window.as_ref(), &shot.frame, warnings).await;
+    let (ax, window) = accessibility_elements(located.window.as_ref(), &shot.frame, warnings).await;
     let ocr = if perception == Perception::MarksOcr {
         text_elements(&shot.image, &shot.frame, &ax, warnings).await
     } else {
         Vec::new()
     };
-    assemble(ax, ocr, MAX_ELEMENTS)
+    (assemble(ax, ocr, MAX_ELEMENTS), window)
 }
 
 /// The capture with its marks drawn, downscaled and encoded for the model, and its frame.
@@ -319,11 +384,15 @@ pub(crate) async fn observe(
     perception: Perception,
 ) -> flow_like_types::Result<Observation> {
     let mut warnings = Vec::new();
-    let candidates = marked_elements(&shot, located, perception, &mut warnings).await;
+    let (candidates, target_window) =
+        marked_elements(&shot, located, perception, &mut warnings).await;
+    // The fallback display can help the vision model recover, but is not the requested window.
+    let target_window = target_window.filter(|_| located.warning.is_none());
     let marks: Vec<(u32, PixelBox)> = candidates
         .iter()
         .filter_map(|c| Some((c.element.id, pixel_crop(&shot.frame, &c.element.bbox)?)))
         .collect();
+    let element_native_ids = candidates.iter().map(|c| c.native_id.clone()).collect();
     let elements: Vec<ScreenElement> = candidates.into_iter().map(|c| c.element).collect();
     let (shot, image, model_frame) = model_image(shot, marks).await?;
     let element_text = perception
@@ -335,6 +404,8 @@ pub(crate) async fn observe(
         model_frame,
         image,
         elements,
+        element_native_ids,
+        target_window,
         element_text,
         source,
     })
@@ -431,6 +502,181 @@ mod tests {
             (width * scale, height * scale),
         )
         .unwrap()
+    }
+
+    fn decision_observation() -> Observation {
+        let frame = frame(0, 0, 0, 100, 100, 1);
+        let image = image::RgbaImage::new(100, 100);
+        let elements = ["Save", "Cancel"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let bbox = InputRect {
+                    x: 10 + index as i32 * 30,
+                    y: 20,
+                    width: 20,
+                    height: 10,
+                };
+                ScreenElement {
+                    id: index as u32 + 1,
+                    source: "ax".into(),
+                    role: "button".into(),
+                    name: Some(name.into()),
+                    value: None,
+                    states: vec!["enabled".into()],
+                    bbox,
+                    center: bbox.center(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let element_text = Some(element_list(&elements, &[], &frame));
+        Observation {
+            shot: Shot {
+                fingerprint: fingerprint(&image),
+                image,
+                frame: frame.clone(),
+            },
+            model_frame: frame,
+            image: ModelImage {
+                media_type: "image/png".into(),
+                base64: String::new(),
+            },
+            elements,
+            element_native_ids: vec![
+                Some("window-1/path-0".into()),
+                Some("window-1/path-1".into()),
+            ],
+            target_window: Some(WindowInfo {
+                id: "window-1".into(),
+                title: "Document".into(),
+                app_name: Some("Editor".into()),
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                is_focused: true,
+                is_minimized: false,
+            }),
+            element_text,
+            source: "window \"Document\" on display 0".into(),
+        }
+    }
+
+    #[test]
+    fn decision_guard_accepts_stable_observations_and_ignores_small_pixel_noise() {
+        let before = decision_observation();
+        let mut after = decision_observation();
+        assert!(decision_observation_ready(&before));
+        assert!(decision_observation_unchanged(&before, &after));
+        after.shot.image.put_pixel(0, 0, image::Rgba([255; 4]));
+        after.shot.fingerprint = fingerprint(&after.shot.image);
+        assert!(decision_observation_unchanged(&before, &after));
+        for x in 0..2 {
+            for y in 0..2 {
+                after.shot.image.put_pixel(x, y, image::Rgba([255; 4]));
+            }
+        }
+        after.shot.fingerprint = fingerprint(&after.shot.image);
+        assert!(!decision_observation_unchanged(&before, &after));
+    }
+
+    #[test]
+    fn decision_guard_rejects_changed_or_missing_window_identity_and_geometry() {
+        let before = decision_observation();
+        let mutations: [fn(&mut WindowInfo); 8] = [
+            |window| window.id = "replacement-window".into(),
+            |window| window.title = "Another document".into(),
+            |window| window.app_name = Some("Another editor".into()),
+            |window| window.x += 1,
+            |window| window.y += 1,
+            |window| window.width -= 1,
+            |window| window.height -= 1,
+            |window| window.is_focused = false,
+        ];
+        for (index, mutate) in mutations.into_iter().enumerate() {
+            let mut after = decision_observation();
+            mutate(after.target_window.as_mut().unwrap());
+            assert!(
+                !decision_observation_unchanged(&before, &after),
+                "change {index}"
+            );
+        }
+        let mut after = decision_observation();
+        after.target_window = None;
+        assert!(!decision_observation_ready(&after));
+        assert!(!decision_observation_unchanged(&before, &after));
+    }
+
+    #[test]
+    fn decision_guard_requires_a_visible_focused_target_and_usable_evidence() {
+        let mutations: [fn(&mut Observation); 8] = [
+            |observation| observation.target_window.as_mut().unwrap().id.clear(),
+            |observation| observation.target_window.as_mut().unwrap().is_focused = false,
+            |observation| observation.target_window.as_mut().unwrap().is_minimized = true,
+            |observation| observation.target_window.as_mut().unwrap().width = 0,
+            |observation| observation.target_window.as_mut().unwrap().x = 200,
+            |observation| observation.element_text = None,
+            |observation| observation.elements.clear(),
+            |observation| observation.element_native_ids.clear(),
+        ];
+        for (index, mutate) in mutations.into_iter().enumerate() {
+            let mut observation = decision_observation();
+            mutate(&mut observation);
+            assert!(!decision_observation_ready(&observation), "change {index}");
+        }
+    }
+
+    #[test]
+    fn decision_guard_rejects_control_changes_even_with_unchanged_pixels() {
+        let before = decision_observation();
+        let mutations: [fn(&mut Observation); 12] = [
+            |observation| observation.elements[0].id = 3,
+            |observation| observation.elements[0].source = "ocr".into(),
+            |observation| observation.elements[0].role = "checkbox".into(),
+            |observation| observation.elements[0].name = Some("Delete".into()),
+            |observation| observation.elements[0].value = Some("changed".into()),
+            |observation| observation.elements[0].states = vec!["disabled".into()],
+            |observation| observation.elements[0].bbox.width += 1,
+            |observation| observation.elements[0].center.x += 1,
+            |observation| observation.element_native_ids[0] = Some("replacement-control".into()),
+            |observation| observation.elements.swap(0, 1),
+            |observation| {
+                observation.elements.pop();
+                observation.element_native_ids.pop();
+            },
+            |observation| observation.element_text = Some("Accessibility read failed".into()),
+        ];
+        for (index, mutate) in mutations.into_iter().enumerate() {
+            let mut after = decision_observation();
+            mutate(&mut after);
+            assert!(
+                !decision_observation_unchanged(&before, &after),
+                "change {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn decision_guard_rejects_changed_display_and_viewport_mapping() {
+        let before = decision_observation();
+        let mutations: [fn(&mut Observation); 6] = [
+            |observation| observation.source = "another display".into(),
+            |observation| observation.shot.frame.display_index = Some(1),
+            |observation| observation.shot.frame.x += 1,
+            |observation| observation.shot.frame.width += 1,
+            |observation| {
+                observation.model_frame = observation.model_frame.resized(50, 50).unwrap()
+            },
+            |observation| observation.shot.fingerprint = image::GrayImage::new(99, 100),
+        ];
+        for (index, mutate) in mutations.into_iter().enumerate() {
+            let mut after = decision_observation();
+            mutate(&mut after);
+            assert!(
+                !decision_observation_unchanged(&before, &after),
+                "change {index}"
+            );
+        }
     }
 
     #[test]

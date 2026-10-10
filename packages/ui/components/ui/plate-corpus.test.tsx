@@ -102,6 +102,19 @@ const renderTextEditor = (initialContent: string, mode: TextEditorMode) =>
 const renderStreaming = (content: string) =>
 	ssr(() => createElement(StreamingTextEditor, { content }));
 
+// Each mounted document has its own footnote scope; compare structure and target pairing.
+const comparableMarkup = (rendered: Rendered) => {
+	const identifiers = new Map<string, string>();
+	return formatRendered(rendered).replace(
+		/fn-(?:note|ref)-[a-zA-Z0-9-]+/g,
+		(id) => {
+			if (!identifiers.has(id))
+				identifiers.set(id, `footnote-${identifiers.size}`);
+			return identifiers.get(id)!;
+		},
+	);
+};
+
 /** `TextEditorStatic` rebuilt from stock Plate parts: no parse caches, no path index. */
 const renderStock = (value: Value) =>
 	ssr(() =>
@@ -226,9 +239,6 @@ beforeAll(async () => {
 	throw new Error("lazy code-block renderers did not settle");
 }, 60_000);
 
-/** Plate 49 drops what an MDX fallback swallows; the stream still shows it. */
-const KNOWN_SETTLE_LOSS = new Set(["M02-marks-markdown", "M21-mdx-breaking"]);
-
 describe("markdown fixtures", () => {
 	for (const fixture of MARKDOWN_FIXTURES) {
 		const { markdown } = fixture;
@@ -259,8 +269,8 @@ describe("markdown fixtures", () => {
 					expect(html(rendered)).toContain("data-slate-placeholder");
 					return;
 				}
-				expect(formatRendered(rendered)).toBe(
-					formatRendered(renderStock(value)),
+				expect(comparableMarkup(rendered)).toBe(
+					comparableMarkup(renderStock(value)),
 				);
 			});
 
@@ -292,14 +302,11 @@ describe("markdown fixtures", () => {
 				expect(streamThroughCuts(markdown)).toMatchSnapshot();
 			});
 
-			(KNOWN_SETTLE_LOSS.has(fixture.id) ? test.failing : test)(
-				"the finished stream equals the settled render",
-				() => {
-					expect(formatRendered(renderStreaming(markdown))).toBe(
-						formatRendered(renderStock(parse(markdown))),
-					);
-				},
-			);
+			test("the finished stream equals the settled render", () => {
+				expect(formatRendered(renderStreaming(markdown))).toBe(
+					formatRendered(renderStock(parse(markdown))),
+				);
+			});
 
 			test("serializes back to markdown", () => {
 				expect(markdownRoundTrip(parse(markdown))).toMatchSnapshot();
@@ -307,14 +314,6 @@ describe("markdown fixtures", () => {
 		});
 	}
 });
-
-/**
- * A stored column width reaches the inline style unchecked (`width:expression(…)`).
- * Inert outside legacy IE, but it is CSS injection from document data.
- */
-const KNOWN_UNSAFE_STORED: Readonly<Record<string, readonly string[]>> = {
-	"S09-malicious-stored": ["style:div"],
-};
 
 describe("stored Plate JSON fixtures", () => {
 	for (const fixture of STORED_FIXTURES) {
@@ -371,9 +370,7 @@ describe("stored Plate JSON fixtures", () => {
 					});
 					expect(rich.error).toBeUndefined();
 					expect(minimal.error).toBeUndefined();
-					expect(findUnsafeMarkup(html(rich))).toEqual([
-						...(KNOWN_UNSAFE_STORED[fixture.id] ?? []),
-					]);
+					expect(findUnsafeMarkup(html(rich))).toEqual([]);
 					expect(findUnsafeMarkup(html(minimal))).toEqual([]);
 				});
 			}
@@ -517,45 +514,36 @@ describe("HTML export", () => {
 	}
 });
 
-describe("Plate 49 defects pinned as expected failures", () => {
-	test.failing(
-		"an <img> tag in markdown renders instead of crashing the document",
-		() => {
-			expect(
-				renderTextEditor(markdownFixture("X03-event-handlers-mdx"), {
-					isMarkdown: true,
-				}).error,
-			).toBeUndefined();
-		},
-	);
+describe("Plate regression cases", () => {
+	test("an <img> tag in markdown renders instead of crashing the document", () => {
+		expect(
+			renderTextEditor(markdownFixture("X03-event-handlers-mdx"), {
+				isMarkdown: true,
+			}).error,
+		).toBeUndefined();
+	});
 
-	test.failing(
-		"a table cell outside a table renders instead of crashing the document",
-		() => {
-			expect(
-				renderTextEditor(toEnvelope(storedFixture("S11-orphan-table-cell")), {
-					isMarkdown: false,
-				}).error,
-			).toBeUndefined();
-		},
-	);
+	test("a table cell outside a table renders instead of crashing the document", () => {
+		expect(
+			renderTextEditor(toEnvelope(storedFixture("S11-orphan-table-cell")), {
+				isMarkdown: false,
+			}).error,
+		).toBeUndefined();
+	});
 
-	test.failing(
-		"an empty stored document renders empty instead of the raw envelope",
-		() => {
-			expect(
-				textOf(html(renderTextEditor("plate_json::[]", { isMarkdown: false }))),
-			).not.toContain(PLATE_JSON_PREFIX);
-		},
-	);
+	test("an empty stored document renders empty instead of the raw envelope", () => {
+		expect(
+			textOf(html(renderTextEditor("plate_json::[]", { isMarkdown: false }))),
+		).not.toContain(PLATE_JSON_PREFIX);
+	});
 
-	test.failing("KaTeX renders without a DOM (server rendering)", () => {
+	test("KaTeX renders without a DOM (server rendering)", () => {
 		expect(
 			renderTextEditor(markdownFixture("M11-math"), { isMarkdown: true }).error,
 		).toBeUndefined();
 	});
 
-	test.failing("reference links keep their text", () => {
+	test("reference links keep their text", () => {
 		expect(
 			textOf(
 				html(
@@ -567,7 +555,7 @@ describe("Plate 49 defects pinned as expected failures", () => {
 		).toContain("the docs");
 	});
 
-	test.failing("HTML export keeps markup typed as text escaped", async () => {
+	test("HTML export keeps markup typed as text escaped", async () => {
 		const exported = await exportHtml([
 			{
 				type: "p",
@@ -581,7 +569,7 @@ describe("Plate 49 defects pinned as expected failures", () => {
 		expect(findUnsafeMarkup(exported)).toEqual([]);
 	});
 
-	test.failing("markdown h4-h6 render as heading elements", () => {
+	test("markdown h4-h6 render as heading elements", () => {
 		const rendered = html(
 			renderTextEditor(markdownFixture("M01-headings"), { isMarkdown: true }),
 		);

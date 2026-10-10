@@ -49,25 +49,30 @@ const layers = {
 	child: layer("child", "module", ILayerType.Collapsed),
 	localFn: layer("localFn", "module", ILayerType.Function),
 	sharedFn: layer("sharedFn", null, ILayerType.Function),
+	otherFn: layer("otherFn", "other", ILayerType.Function),
 };
 
 function mount(initialPath = "module", saveViewport = mock(async () => {})) {
 	let navigation!: ReturnType<typeof useLayerNavigation>;
 	let path: string | undefined;
 	let changeKey!: (key: string) => void;
+	let changeLayers!: (layers: Record<string, ILayer>) => void;
 	const fitView = mock(async () => true);
 	const release = mock(() => {});
 
 	function Harness() {
 		const [layerPath, setLayerPath] = useState<string | undefined>(initialPath);
 		const [key, setKey] = useState("left");
+		const [boardLayers, setBoardLayers] =
+			useState<Record<string, ILayer>>(layers);
 		const [, setCurrentLayer] = useState<string | undefined>();
 		path = layerPath;
 		changeKey = setKey;
+		changeLayers = setBoardLayers;
 		navigation = useLayerNavigation({
 			navigationKey: key,
 			board: {
-				data: { layers, nodes: {}, comments: {} },
+				data: { layers: boardLayers, nodes: {}, comments: {} },
 			} as unknown as UseQueryResult<IBoard>,
 			layerPath,
 			setLayerPath,
@@ -94,6 +99,9 @@ function mount(initialPath = "module", saveViewport = mock(async () => {})) {
 		},
 		fitView,
 		release,
+		updateLayers(next: Record<string, ILayer>) {
+			act(() => changeLayers(next));
+		},
 		switchTab(key: string, target: string, copyNavigationKey?: string) {
 			act(() => {
 				changeKey(key);
@@ -107,6 +115,125 @@ function mount(initialPath = "module", saveViewport = mock(async () => {})) {
 }
 
 describe("useLayerNavigation", () => {
+	test("breadcrumbs return through callers across modules and preserve earlier visits", async () => {
+		const view = mount();
+		await act(async () => {
+			await view.navigation.pushLayer(layers.localFn);
+			await view.navigation.pushLayer(layers.otherFn);
+			await view.navigation.pushLayer(layers.sharedFn);
+		});
+		expect(view.navigation.navigationTrail).toEqual([
+			{ from: "module", to: "module/localFn" },
+			{ from: "module/localFn", to: "other/otherFn" },
+			{ from: "other/otherFn", to: "sharedFn" },
+		]);
+		act(() => view.navigation.returnToVisit(2));
+		expect(view.path).toBe("other/otherFn");
+		act(() => view.navigation.popLayer());
+		expect(view.path).toBe("module/localFn");
+		act(() => view.navigation.returnToVisit(0));
+		expect(view.path).toBe("module");
+		expect(view.navigation.navigationTrail).toEqual([]);
+	});
+
+	test("a breadcrumb selects the earlier occurrence of a repeated function", async () => {
+		const view = mount();
+		await act(async () => {
+			await view.navigation.pushLayer(layers.localFn);
+			await view.navigation.pushLayer(layers.otherFn);
+			await view.navigation.pushLayer(layers.localFn);
+		});
+		act(() => view.navigation.returnToVisit(1));
+		expect(view.path).toBe("module/localFn");
+		expect(view.navigation.navigationTrail).toEqual([
+			{ from: "module", to: "module/localFn" },
+		]);
+		act(() => view.navigation.popLayer());
+		expect(view.path).toBe("module");
+	});
+
+	test("focusing a function records the function it was opened from", () => {
+		const view = mount("module/localFn");
+		act(() => view.navigation.focusNode("otherFn"));
+		expect(view.path).toBe("other/otherFn");
+		act(() => view.navigation.returnToVisit(0));
+		expect(view.path).toBe("module/localFn");
+		expect(frames.size).toBe(0);
+	});
+
+	test("module moves keep the open function and caller history attached", async () => {
+		const view = mount();
+		await act(async () => {
+			await view.navigation.pushLayer(layers.localFn);
+			await view.navigation.pushLayer(layers.otherFn);
+		});
+		view.updateLayers({
+			...layers,
+			localFn: { ...layers.localFn, parent_id: "other" },
+			otherFn: { ...layers.otherFn, parent_id: null },
+		});
+		expect(view.path).toBe("otherFn");
+		expect(view.navigation.navigationTrail).toEqual([
+			{ from: "module", to: "other/localFn" },
+			{ from: "other/localFn", to: "otherFn" },
+		]);
+		act(() => view.navigation.returnToVisit(1));
+		expect(view.path).toBe("other/localFn");
+		act(() => view.navigation.popLayer());
+		expect(view.path).toBe("module");
+	});
+
+	test("deleting a caller returns to its surviving module", async () => {
+		const view = mount();
+		await act(async () => {
+			await view.navigation.pushLayer(layers.localFn);
+			await view.navigation.pushLayer(layers.otherFn);
+		});
+		const { localFn: _deleted, ...remaining } = layers;
+		view.updateLayers(remaining);
+		expect(view.navigation.navigationTrail).toEqual([
+			{ from: "module", to: "other/otherFn" },
+		]);
+		act(() => view.navigation.returnToVisit(0));
+		expect(view.path).toBe("module");
+	});
+
+	test("an inactive tab restores moved functions through its saved caller history", async () => {
+		const view = mount();
+		await act(async () => {
+			await view.navigation.pushLayer(layers.localFn);
+			await view.navigation.pushLayer(layers.otherFn);
+		});
+		view.switchTab("right", "other");
+		view.updateLayers({
+			...layers,
+			localFn: { ...layers.localFn, parent_id: "other" },
+			otherFn: { ...layers.otherFn, parent_id: null },
+		});
+		view.switchTab("left", "other/otherFn");
+		expect(view.path).toBe("otherFn");
+		act(() => view.navigation.returnToVisit(1));
+		expect(view.path).toBe("other/localFn");
+		act(() => view.navigation.popLayer());
+		expect(view.path).toBe("module");
+	});
+
+	test("a breadcrumb changes only its own tab's caller history", async () => {
+		const view = mount();
+		await act(async () => {
+			await view.navigation.pushLayer(layers.localFn);
+			await view.navigation.pushLayer(layers.otherFn);
+		});
+		view.switchTab("split", "other/otherFn", "left");
+		act(() => view.navigation.returnToVisit(0));
+		expect(view.path).toBe("module");
+		view.switchTab("left", "other/otherFn");
+		act(() => view.navigation.returnToVisit(1));
+		expect(view.path).toBe("module/localFn");
+		act(() => view.navigation.popLayer());
+		expect(view.path).toBe("module");
+	});
+
 	test("back remains in the module while an earlier viewport save is pending", async () => {
 		let finishSave!: () => void;
 		const pendingSave = new Promise<void>((resolve) => {

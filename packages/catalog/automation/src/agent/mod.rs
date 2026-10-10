@@ -1,4 +1,5 @@
 pub mod computer_use;
+pub mod decision;
 
 #[cfg(feature = "execute")]
 pub(crate) mod episode;

@@ -10,8 +10,9 @@ import {
 	useReactFlow,
 } from "@xyflow/react";
 import { LockIcon, UnlockIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { prepareCommentSave } from "../../lib/flow-comment-edit";
 import type { IComment } from "../../lib/schema/flow/board";
 import { Button, TextEditor } from "../ui";
 import {
@@ -20,6 +21,7 @@ import {
 	DialogDescription,
 	DialogHeader,
 	DialogTitle,
+	DialogFooter,
 } from "../ui/dialog";
 import { CommentColorPicker } from "./comment-node/comment-color-picker";
 import { CommentNodeToolbar } from "./comment-node/comment-node-toolbar";
@@ -33,6 +35,7 @@ export type CommentNode = Node<
 		boardId: string;
 		appId: string;
 		hash: string;
+		readOnly?: boolean;
 	},
 	"commentNode"
 >;
@@ -43,13 +46,56 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 	const [edit, setEdit] = useState({
 		open: false,
 		content: props.data.comment.content,
+		baseContent: props.data.comment.content,
 	});
+	const [saving, setSaving] = useState(false);
+	const [saveError, setSaveError] = useState<string>();
+	const readOnly = props.data.readOnly ?? false;
 	const [isHovered, setIsHovered] = useState(false);
 	const [currentColor, setCurrentColor] = useState<string | undefined>(
 		props.data.comment.color ?? undefined,
 	);
 
 	const isLocked = props.data.comment.is_locked ?? false;
+	useEffect(
+		() => setCurrentColor(props.data.comment.color ?? undefined),
+		[props.data.comment.color],
+	);
+	const openEditor = () => {
+		if (readOnly) return;
+		const content =
+			(
+				getNodes().find((node) => node.id === props.id)?.data.comment as
+					| IComment
+					| undefined
+			)?.content ?? props.data.comment.content;
+		setSaveError(undefined);
+		setEdit({ open: true, content, baseContent: content });
+	};
+	const save = async () => {
+		if (saving || readOnly) return;
+		const current = getNodes().find((node) => node.id === props.id)?.data
+			.comment as IComment | undefined;
+		if (!current) {
+			setSaveError("This comment no longer exists.");
+			return;
+		}
+		setSaving(true);
+		try {
+			const next = prepareCommentSave(current, edit.baseContent, edit.content);
+			if (next) await props.data.onUpsert(next);
+			setEdit((old) => ({ ...old, open: false }));
+			if (next) toast.success("Comment saved");
+		} catch (error) {
+			setSaveError(
+				error instanceof Error
+					? error.message
+					: "Could not save the comment. Your draft is still open.",
+			);
+		} finally {
+			setSaving(false);
+		}
+	};
 
 	const toggleLock = useCallback(async () => {
 		const next = !isLocked;
@@ -127,7 +173,7 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 					height: 10,
 					zIndex: (props.data.comment.z_index ?? 1) + 1,
 				}}
-				isVisible={!isLocked && props.selected}
+				isVisible={!readOnly && !isLocked && props.selected}
 				onResizeEnd={onResizeEnd}
 				minWidth={30}
 				minHeight={30}
@@ -137,10 +183,10 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 				onMouseEnter={() => setIsHovered(true)}
 				onMouseLeave={() => setIsHovered(false)}
 			>
-				{(props.selected || isHovered) && (
+				{!readOnly && (props.selected || isHovered) && (
 					<CommentNodeToolbar
 						isLocked={isLocked}
-						onEdit={() => setEdit((old) => ({ ...old, open: true }))}
+						onEdit={openEditor}
 						onMoveUp={() => onMoveLayer(1)}
 						onMoveDown={() => onMoveLayer(-1)}
 						onToggleLock={toggleLock}
@@ -154,26 +200,28 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 						backgroundColor: currentColor,
 					}}
 				>
-					<div className="absolute top-1 right-1 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-						<Button
-							variant="secondary"
-							size="icon"
-							title={isLocked ? "Unlock comment" : "Lock comment"}
-							onClick={(e) => {
-								e.preventDefault();
-								e.stopPropagation();
-								toggleLock();
-							}}
-							className="h-6 w-6"
-						>
-							{isLocked ? (
-								<LockIcon className="w-3.5 h-3.5" />
-							) : (
-								<UnlockIcon className="w-3.5 h-3.5" />
-							)}
-						</Button>
-					</div>
-					{(props.selected || isHovered) && (
+					{!readOnly && (
+						<div className="absolute top-1 right-1 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+							<Button
+								variant="secondary"
+								size="icon"
+								title={isLocked ? "Unlock comment" : "Lock comment"}
+								onClick={(e) => {
+									e.preventDefault();
+									e.stopPropagation();
+									toggleLock();
+								}}
+								className="h-6 w-6"
+							>
+								{isLocked ? (
+									<LockIcon className="w-3.5 h-3.5" />
+								) : (
+									<UnlockIcon className="w-3.5 h-3.5" />
+								)}
+							</Button>
+						</div>
+					)}
+					{!readOnly && (props.selected || isHovered) && (
 						<CommentColorPicker
 							value={currentColor ?? "#ffffff"}
 							onChange={(value) => setCurrentColor(value)}
@@ -182,15 +230,8 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 					)}
 					<Dialog
 						open={edit.open}
-						onOpenChange={async (open) => {
-							if (!open) {
-								await props.data.onUpsert({
-									...props.data.comment,
-									content: edit.content,
-								});
-								toast.success("Comment updated successfully");
-							}
-							setEdit((old) => ({ ...old, open }));
+						onOpenChange={(open) => {
+							if (!saving) setEdit((old) => ({ ...old, open }));
 						}}
 					>
 						<DialogContent className="max-w-(--breakpoint-xl) min-w-[95dvw] w-full min-h-[90vh] max-h-[90vh] overflow-hidden flex flex-col">
@@ -206,11 +247,8 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 							<div className="flex flex-col grow max-h-full overflow-auto relative">
 								<TextEditor
 									appId={props.data.appId}
-									initialContent={
-										props.data.comment.content === ""
-											? "Empty Comment"
-											: props.data.comment.content
-									}
+									initialContent={edit.baseContent}
+									editorProps={{ "aria-label": "Comment text" }}
 									onChange={(content) => {
 										setEdit((old) => ({ ...old, content }));
 									}}
@@ -218,10 +256,37 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 									editable={true}
 								/>
 							</div>
+							{saveError && (
+								<p role="alert" className="text-destructive text-sm">
+									{saveError}
+								</p>
+							)}
+							<DialogFooter>
+								{saveError && (
+									<Button
+										variant="outline"
+										disabled={saving}
+										onClick={openEditor}
+									>
+										Reload latest
+									</Button>
+								)}
+								<Button
+									variant="outline"
+									disabled={saving}
+									onClick={() => setEdit((old) => ({ ...old, open: false }))}
+								>
+									Cancel
+								</Button>
+								<Button disabled={saving} onClick={() => void save()}>
+									{saving ? "Saving…" : "Save"}
+								</Button>
+							</DialogFooter>
 						</DialogContent>
 					</Dialog>
 					<div className="text-start relative">
 						<TextEditor
+							appId={props.data.appId}
 							initialContent={
 								props.data.comment.content === ""
 									? "Empty Comment"

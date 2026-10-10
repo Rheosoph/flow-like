@@ -17,6 +17,7 @@ use std::{
 use urlencoding::encode;
 mod helper;
 pub mod local_store;
+mod path_info;
 pub mod read_only_store;
 #[cfg(feature = "smb")]
 pub mod smb_store;

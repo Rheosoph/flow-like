@@ -20,7 +20,11 @@ export const completeEditorChat = (
 	aiState: IAIState,
 	messages: IHistoryMessage[],
 	appId?: string,
-) => aiState.chatComplete(messages, appId);
+	signal?: AbortSignal | null,
+) => {
+	signal?.throwIfAborted();
+	return untilAborted(aiState.chatComplete(messages, appId), signal);
+};
 
 const ROLES: Readonly<Record<UIMessage["role"], IRole>> = {
 	assistant: IRole.Assistant,
@@ -87,16 +91,17 @@ export const toUIMessageChunks = (
 	);
 };
 
-/** Settles as soon as `signal` aborts; a stream that arrives later is cancelled. */
+/** Settle on abort even when the backend cannot cancel its pending request. */
 const untilAborted = <T>(
-	pending: Promise<ReadableStream<T>>,
-	signal: AbortSignal | undefined,
-): Promise<ReadableStream<T>> => {
+	pending: Promise<T>,
+	signal: AbortSignal | null | undefined,
+	onLateValue?: (value: T) => unknown,
+): Promise<T> => {
 	if (!signal) return pending;
 	return new Promise((resolve, reject) => {
 		const abort = () => {
 			reject(new DOMException("Editor AI request was stopped", "AbortError"));
-			pending.then((stream) => stream.cancel()).catch(() => undefined);
+			pending.then(onLateValue).catch(() => undefined);
 		};
 		if (signal.aborted) {
 			abort();
@@ -138,6 +143,7 @@ export class BackendEditorChatTransport<M extends UIMessage>
 		const source = await untilAborted(
 			streamEditorChat(aiState, toHistoryMessages(messages), appId),
 			abortSignal,
+			(stream) => stream.cancel(),
 		);
 		return toUIMessageChunks(source, generateId());
 	};

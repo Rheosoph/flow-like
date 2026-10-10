@@ -61,6 +61,8 @@ export const LogList = memo(function LogList({
 	menu: ReactNode;
 	empty: ReactNode;
 }>) {
+	"use no memo";
+	// The virtualizer mutates in place, so its scroll range and height must be read each render.
 	const { t } = useTranslation("flow");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const virtualizer = useVirtualizer({

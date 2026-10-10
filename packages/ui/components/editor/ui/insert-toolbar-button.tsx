@@ -35,6 +35,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../../..";
+import { insertFootnote } from "../plugins/footnote-kit";
 import { insertBlock, insertInlineElement } from "../transforms";
 
 import { ToolbarButton, ToolbarMenuGroup } from "./toolbar";
@@ -53,6 +54,20 @@ interface Item {
 }
 
 const groups: Group[] = [
+	{
+		group: "References",
+		items: [
+			{
+				icon: <QuoteIcon />,
+				label: "Footnote",
+				value: "footnoteReference",
+				onSelect: (editor) => {
+					insertFootnote(editor);
+				},
+				focusEditor: false,
+			},
+		],
+	},
 	{
 		group: "Basic blocks",
 		items: [

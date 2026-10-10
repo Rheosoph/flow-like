@@ -361,3 +361,22 @@ describe("FlowScript comment preview", () => {
 		expect(lines[3]).toBe("+1");
 	});
 });
+
+test("rich comment previews show article text rather than its storage envelope", () => {
+	const model = deriveFlowScriptCommentThreads(
+		{
+			a: comment("a", {
+				node_id: "nodeAdd",
+				content:
+					'plate_json::{"version":1,"children":[{"type":"p","children":[{"text":"Check source"}]}],"discussions":[],"users":{}}',
+			}),
+		},
+		INDEX,
+	);
+	const preview = formatFlowScriptCommentPreview(
+		model.threads[0],
+		() => "Reporter",
+		() => "now",
+	);
+	expect(preview).toBe("Reporter · now: Check source");
+});

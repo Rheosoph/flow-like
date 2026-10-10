@@ -66,7 +66,7 @@ export function useUploadFile() {
 		async (file: File): Promise<UploadedFile | undefined> => {
 			if (!appId) {
 				const message =
-					"Media upload is not available here — this editor has no app storage configured.";
+					"Media upload is unavailable because this editor has no app storage configured.";
 				toast.error(message);
 				onUploadError?.(file.name, message);
 				return undefined;
@@ -95,7 +95,7 @@ export function useUploadFile() {
 				);
 
 				const result: UploadedFile = {
-					url: toStorageUrl(folder, filename),
+					url: toStorageUrl(folder, filename, { appId, scope }),
 					key: folder ? `${folder}/${filename}` : filename,
 					name: file.name,
 					size: file.size,

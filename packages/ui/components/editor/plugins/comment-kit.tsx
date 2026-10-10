@@ -10,6 +10,8 @@ import {
 import { isSlateString } from "platejs";
 import { toTPlatePlugin } from "platejs/react";
 
+import { discussionPlugin } from "./discussion-kit";
+
 import { CommentLeaf } from "../ui/comment-node";
 
 type CommentConfig = ExtendConfig<
@@ -75,6 +77,11 @@ export const commentPlugin = toTPlatePlugin<CommentConfig>(BaseCommentPlugin, {
 			},
 		}) => ({
 			setDraft: () => {
+				if (
+					!editor.getOption(discussionPlugin, "enabled") ||
+					!editor.getOption(discussionPlugin, "currentUserId") || !editor.selection
+				)
+					return;
 				if (editor.api.isCollapsed()) {
 					editor.tf.select(editor.api.block()![1]);
 				}

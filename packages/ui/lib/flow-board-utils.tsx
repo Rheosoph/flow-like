@@ -1151,7 +1151,7 @@ export function parseBoard(
 				? undefined
 				: oldNodesMap.get(renderedNodeCacheKey(comment.id, hash));
 		// Media URLs are resolved after sync and are not part of the comment hash.
-		if (oldNode) {
+		if (oldNode && oldNode.data?.readOnly === (typeof version !== "undefined")) {
 			nodes.push(
 				oldNode.data?.presignedUrl === comment.presigned_url
 					? oldNode
@@ -1182,6 +1182,7 @@ export function parseBoard(
 			draggable: !(comment.is_locked ?? false),
 			data: {
 				label: comment.id,
+				readOnly: typeof version !== "undefined",
 				boardId: board.id,
 				appId: appId,
 				hash: hash,
@@ -1189,6 +1190,7 @@ export function parseBoard(
 				comment: { ...comment, is_locked: comment.is_locked ?? false },
 				presignedUrl: comment.presigned_url,
 				onUpsert: async (comment: IComment) => {
+					if (typeof version !== "undefined") throw new Error("Historical board versions are read-only.");
 					const command = upsertCommentCommand({
 						comment: comment,
 						current_layer: currentLayer,

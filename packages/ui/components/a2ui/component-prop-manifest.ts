@@ -185,6 +185,10 @@ export const COMPONENT_PROPS = {
 	],
 	richText: [
 		"value",
+		"documentId",
+		"documentRevision",
+		"currentUser",
+		"reviewEnabled",
 		"label",
 		"helperText",
 		"placeholder",

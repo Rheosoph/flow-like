@@ -55,6 +55,9 @@ interface ILogAggregationState {
 	filter?: ILogAggregationFilter;
 	currentMetadata?: ILogMetadata;
 	isLoading: boolean;
+	isLoadingMore: boolean;
+	hasMore: boolean;
+	loadMoreFailed: boolean;
 	/** When enabled, the board renders aggregated run activity per node. */
 	heatmapEnabled: boolean;
 	heatmap?: IBoardHeatmap;
@@ -62,6 +65,7 @@ interface ILogAggregationState {
 	currentSummary?: IRunLogSummary;
 	currentSummaryRunId?: string;
 	refetchLogs: (backend: IBackendState) => Promise<void>;
+	loadMoreLogs: (backend: IBackendState) => Promise<void>;
 	setFilter(
 		backend: IBackendState,
 		filter: ILogAggregationFilter,
@@ -109,108 +113,152 @@ export function nodeLogCounts(
 	};
 }
 
-export const useLogAggregation = create<ILogAggregationState>((set, get) => ({
-	currentLogs: [],
-	filter: undefined,
-	currentMetadata: undefined,
-	currentSummary: undefined,
-	currentSummaryRunId: undefined,
-	isLoading: false,
-	heatmapEnabled: false,
-	heatmap: undefined,
-	setFilter: async (backend: IBackendState, filter: ILogAggregationFilter) => {
+function mergeRuns(
+	current: ILogMetadata[],
+	incoming: ILogMetadata[],
+): ILogMetadata[] {
+	const runs = new Map(current.map((run) => [run.run_id, run]));
+	for (const run of incoming) {
+		const previous = runs.get(run.run_id);
+		if (!previous || previous.is_remote || !run.is_remote) {
+			runs.set(run.run_id, run);
+		}
+	}
+	return Array.from(runs.values()).sort((a, b) => b.start - a.start);
+}
+
+function fetchRuns(
+	backend: IBackendState,
+	filter: ILogAggregationFilter,
+	offset: number,
+	includeNodes: boolean,
+): Promise<ILogMetadata[]> {
+	return backend.boardState.listRuns(
+		filter.appId,
+		filter.boardId,
+		filter.nodeId,
+		filter.from,
+		filter.to,
+		filter.status,
+		filter.lastMeta,
+		offset,
+		filter.limit ?? 100,
+		includeNodes,
+	);
+}
+
+export const useLogAggregation = create<ILogAggregationState>((set, get) => {
+	let requestId = 0;
+	let nextOffset = 0;
+
+	const loadFirstPage = async (
+		backend: IBackendState,
+		filter: ILogAggregationFilter,
+		clearRows: boolean,
+	) => {
+		const request = ++requestId;
 		const currentFilter = get().filter;
 		const boardChanged =
 			currentFilter?.appId !== filter.appId ||
 			currentFilter?.boardId !== filter.boardId;
-
-		// Clear currentMetadata when board changes to avoid showing stale logs
-		if (boardChanged) {
-			set({ filter, currentMetadata: undefined, isLoading: true });
-		} else {
-			set({ filter, isLoading: true });
-		}
+		nextOffset = filter.offset ?? 0;
+		set({
+			filter,
+			isLoading: true,
+			isLoadingMore: false,
+			hasMore: false,
+			loadMoreFailed: false,
+			...(clearRows ? withHeatmap([], get().heatmapEnabled) : {}),
+			...(boardChanged ? { currentMetadata: undefined } : {}),
+		});
 
 		try {
-			const runs = await backend.boardState.listRuns(
-				filter.appId,
-				filter.boardId,
-				filter.nodeId,
-				filter.from,
-				filter.to,
-				filter.status,
-				filter.lastMeta,
-				filter.offset,
-				filter.limit,
-				// Per-node summaries cost an extra query — only when the heatmap needs them.
+			const runs = await fetchRuns(
+				backend,
+				filter,
+				nextOffset,
 				get().heatmapEnabled,
 			);
-
+			if (request !== requestId) return;
+			const pageSize = filter.limit ?? 100;
+			nextOffset += pageSize;
 			set({
-				...withHeatmap(
-					runs.toSorted((a, b) => b.start - a.start),
-					get().heatmapEnabled,
-				),
+				...withHeatmap(mergeRuns([], runs), get().heatmapEnabled),
+				hasMore: pageSize > 0 && runs.length >= pageSize,
 				isLoading: false,
 			});
 		} catch {
-			set({ isLoading: false });
+			if (request === requestId) set({ isLoading: false });
 		}
-	},
-	setCurrentMetadata: (meta?: ILogMetadata) => {
-		if (meta?.run_id === get().currentSummaryRunId) {
-			set({ currentMetadata: meta });
-			return;
-		}
-		set({
-			currentMetadata: meta,
-			currentSummary: undefined,
-			currentSummaryRunId: undefined,
-		});
-	},
-	setCurrentSummary: (runId: string, summary?: IRunLogSummary | null) => {
-		if (get().currentMetadata?.run_id !== runId) return;
-		set({ currentSummary: summary ?? undefined, currentSummaryRunId: runId });
-	},
-	setHeatmapEnabled: (enabled: boolean) => {
-		set({
-			heatmapEnabled: enabled,
-			heatmap: enabled ? aggregateHeatmap(get().currentLogs) : undefined,
-		});
-	},
-	refetchLogs: async (backend: IBackendState) => {
-		const { filter } = get();
+	};
 
-		if (!filter) {
-			return;
-		}
-
-		set({ isLoading: true });
-
-		try {
-			const runs = await backend.boardState.listRuns(
-				filter.appId,
-				filter.boardId,
-				filter.nodeId,
-				filter.from,
-				filter.to,
-				filter.status,
-				filter.lastMeta,
-				filter.offset,
-				filter.limit,
-				// Per-node summaries cost an extra query — only when the heatmap needs them.
-				get().heatmapEnabled,
-			);
-
+	return {
+		currentLogs: [],
+		filter: undefined,
+		currentMetadata: undefined,
+		currentSummary: undefined,
+		currentSummaryRunId: undefined,
+		isLoading: false,
+		isLoadingMore: false,
+		hasMore: false,
+		loadMoreFailed: false,
+		heatmapEnabled: false,
+		heatmap: undefined,
+		setFilter: (backend, filter) => loadFirstPage(backend, filter, true),
+		setCurrentMetadata: (meta?: ILogMetadata) => {
+			if (meta?.run_id === get().currentSummaryRunId) {
+				set({ currentMetadata: meta });
+				return;
+			}
 			set({
-				...withHeatmap(
-					runs.toSorted((a, b) => b.start - a.start),
-					get().heatmapEnabled,
-				),
-				isLoading: false,
+				currentMetadata: meta,
+				currentSummary: undefined,
+				currentSummaryRunId: undefined,
 			});
-		} catch {
-			set({ isLoading: false });
-		}
-	},
-}));
+		},
+		setCurrentSummary: (runId: string, summary?: IRunLogSummary | null) => {
+			if (get().currentMetadata?.run_id !== runId) return;
+			set({ currentSummary: summary ?? undefined, currentSummaryRunId: runId });
+		},
+		setHeatmapEnabled: (enabled: boolean) => {
+			set({
+				heatmapEnabled: enabled,
+				heatmap: enabled ? aggregateHeatmap(get().currentLogs) : undefined,
+			});
+		},
+		refetchLogs: async (backend) => {
+			const { filter } = get();
+			if (filter) await loadFirstPage(backend, filter, false);
+		},
+		loadMoreLogs: async (backend) => {
+			const { filter, hasMore, isLoading, isLoadingMore } = get();
+			if (!filter || !hasMore || isLoading || isLoadingMore) return;
+			const request = requestId;
+			set({ isLoadingMore: true, loadMoreFailed: false });
+			try {
+				const runs = await fetchRuns(
+					backend,
+					filter,
+					nextOffset,
+					get().heatmapEnabled,
+				);
+				if (request !== requestId) return;
+				const pageSize = filter.limit ?? 100;
+				// Desktop merges local and remote pages, each using this offset.
+				nextOffset += pageSize;
+				set({
+					...withHeatmap(
+						mergeRuns(get().currentLogs, runs),
+						get().heatmapEnabled,
+					),
+					hasMore: pageSize > 0 && runs.length >= pageSize,
+					isLoadingMore: false,
+				});
+			} catch {
+				if (request === requestId) {
+					set({ isLoadingMore: false, loadMoreFailed: true });
+				}
+			}
+		},
+	};
+});

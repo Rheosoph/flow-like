@@ -61,7 +61,6 @@ export const EMPTY_STREAMING_STATE: StreamingParseState = {
 };
 
 const DEFINITION = /^ {0,3}\[[^\]]+\]:\s/m;
-const REFERENCE_USE = /\]\[[^[\]]*\]|\[\^[^[\]]+\]/;
 const HTML_BLOCK = /^ {0,3}<[a-zA-Z!/?]/m;
 
 /**
@@ -70,7 +69,7 @@ const HTML_BLOCK = /^ {0,3}<[a-zA-Z!/?]/m;
  * Those fall back to a whole-document parse — exactly the previous behaviour.
  */
 export function isBlockCacheable(markdown: string): boolean {
-	if (DEFINITION.test(markdown) && REFERENCE_USE.test(markdown)) return false;
+	if (DEFINITION.test(markdown)) return false;
 	return !HTML_BLOCK.test(markdown);
 }
 

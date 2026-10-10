@@ -19,6 +19,8 @@ import {
 	DropdownMenuTrigger,
 } from "../../..";
 
+import { discussionPlugin } from "../plugins/discussion-kit";
+
 import { ToolbarButton } from "./toolbar";
 
 export function ModeToolbarButton(props: DropdownMenuProps) {
@@ -27,6 +29,8 @@ export function ModeToolbarButton(props: DropdownMenuProps) {
 	const [readOnly, setReadOnly] = usePlateState("readOnly");
 	const [open, setOpen] = React.useState(false);
 
+	const reviewEnabled = usePluginOption(discussionPlugin, "enabled");
+	const currentUserId = usePluginOption(discussionPlugin, "currentUserId");
 	const isSuggesting = usePluginOption(SuggestionPlugin, "isSuggesting");
 
 	let value = "editing";
@@ -55,7 +59,9 @@ export function ModeToolbarButton(props: DropdownMenuProps) {
 			<DropdownMenuTrigger asChild>
 				<ToolbarButton pressed={open} tooltip="Editing mode" isDropdown>
 					{item[value].icon}
-					<span className="hidden lg:inline">{item[value].label}</span>
+					<span className="hidden @min-[600px]/editor-toolbar:inline">
+						{item[value].label}
+					</span>
 				</ToolbarButton>
 			</DropdownMenuTrigger>
 
@@ -107,6 +113,7 @@ export function ModeToolbarButton(props: DropdownMenuProps) {
 					<DropdownMenuRadioItem
 						className="pl-2 [span]:first:*:hidden [svg]:*:text-muted-foreground"
 						value="suggestion"
+						disabled={!reviewEnabled || !currentUserId}
 					>
 						<Indicator />
 						{item.suggestion.icon}

@@ -1,5 +1,5 @@
 import { loader } from "@monaco-editor/react";
-import { version } from "monaco-editor/package.json";
+import monacoPackage from "monaco-editor/package.json";
 
 // Configure the shared loader before hydration can mount an editor.
-loader.config({ paths: { vs: `/monaco/${version}/vs` } });
+loader.config({ paths: { vs: `/monaco/${monacoPackage.version}/vs` } });

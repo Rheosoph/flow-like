@@ -3874,6 +3874,10 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         ]),
         "richText" => Some(&[
             "value",
+            "documentId",
+            "documentRevision",
+            "currentUser",
+            "reviewEnabled",
             "label",
             "helperText",
             "placeholder",

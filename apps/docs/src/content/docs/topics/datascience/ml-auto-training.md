@@ -35,7 +35,22 @@ The task nodes share one experiment controller and return an `experiment_id` imm
 | Step Auto Training | Run one candidate for a workflow that controls the search loop |
 | Finalize Auto Training | Freeze the validation winner and audit it on the final test partition |
 
-Supply a database connection, a task specification, stable row IDs, feature and target mappings, and a split policy. Use a group such as a part, production run, or overlapping sensor window to keep related rows in one partition. Temporal splits use timestamp boundaries, an embargo, and the task's prediction horizon. A source is pinned to its exact branch and version before it is read; incomplete reads and duplicate row IDs fail.
+### Start Auto Train Agent with database columns
+
+For tabular classification or regression, configure **Auto Train Agent** through its inputs. Start with a table containing stable, unique row IDs, feature columns, and known, measured target values. For example, a defect dataset might contain `id`, `temperature`, `vibration`, `machine_type`, and `defective`.
+
+1. Connect **Open Database** to the Agent's **Database** input and execution input.
+2. Leave **Task** at **Classification**, set **Target Column** to `defective`, and leave **Row ID Column** at `id`. Choose **Regression** for a continuous numeric target. Classification labels are inferred from the source table.
+3. Set **Numeric Columns** to `temperature,vibration` and **Categorical Columns** to `machine_type`. Both inputs accept comma-separated names; at least one must contain a feature. If multiple rows describe the same part or production run, set **Group Column** to that identity column so related rows stay together. Otherwise, grouping uses the row ID.
+4. Optionally connect a **Consultant Model**, then run the workflow. The Agent returns **Result** after model selection and final evaluation. Without a consultant, the deterministic search still runs.
+
+The default split targets 70% training, 15% validation, and 15% test data, with seed `42`. The source is pinned before reading. Median imputation, standardization, and categorical encoding are fitted on training rows only. The default search allows eight candidates, with limits of 12 trials, 20 minutes elapsed time, and 10 minutes of training. An attached consultant can make up to four calls.
+
+Use **Advanced Configuration** for custom budgets, split policies, quality goals, ordered classes, vision, forecasting, or other full-request settings. This optional input replaces the direct inputs in full when supplied. It retains the former **Configuration** input's schema and connections, so existing workflows keep their settings.
+
+### Configure a durable experiment
+
+The task-specific nodes accept a database connection, a task specification, stable row IDs, feature and target mappings, and a split policy through their configuration. Use a group such as a part, production run, or overlapping sensor window to keep related rows in one partition. Temporal splits use timestamp boundaries, an embargo, and the task's prediction horizon. A source is pinned to its exact branch and version before it is read; incomplete reads and duplicate row IDs fail.
 
 Tabular mappings accept explicit numeric and categorical columns. Numeric imputation, standardization, and categorical vocabulary are fitted only on training rows and saved in the model's preprocessing manifest. Missing and previously unseen categories have distinct encoded values. Targets, group IDs, timestamps, and outcome columns cannot be selected as tabular features. Use tensor or serialized-sample mappings for images, sequences, detection annotations, and per-row label provenance. **Window Features** constructs causal tabular statistics; sequence tensors and image decoding still require their explicit preprocessing nodes.
 
@@ -88,6 +103,8 @@ Splits are fixed before transformations run. Window history resets at train, val
 ### Continuous learning projects
 
 **Create Learning Project** saves a training request, review policy, aggregate budget, and deployment identity. A workflow timer or event must invoke **Step Learning Project** or **Learning Project Agent** to advance it. The Agent adds optional feature and model consultation; saving a project alone does not schedule execution.
+
+Set **Learning Project Agent**'s **Project ID** to the saved identifier from **Create Learning Project**, then optionally connect a **Consultant Model** and **Instructions**. The Agent uses the project's saved dataset and budgets with default limits of four consultation calls per experiment. **Create Learning Project** still defines the dataset, training settings, and project budgets. Use **Advanced Configuration** to supply a project identifier and custom consultation limits together; it overrides **Project ID** and retains existing configuration connections.
 
 Feed **Observe Learning Samples** stable sample/group IDs, capture times, model predictions, and optional embeddings and declared operating slices. **Select Samples for Review** prioritizes uncertainty, teacher disagreement, diversity, and rare predicted classes. **Review Learning Sample** records an independent reviewed annotation or measured outcome with its availability time and increasing revision. **Analyze Model Errors** reports classification errors by class and declared slice; it does not diagnose detection or segmentation failure regions. Consultant error summaries use training or validation observations and exclude independent audit samples and groups.
 

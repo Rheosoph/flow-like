@@ -642,6 +642,7 @@
 	"failedToLoadMedia": "Failed to load media",
 	"failedToLoadTemplates": "Failed to load templates",
 	"failedToLoadWidgets": "Failed to load widgets",
+	"failedToMoveFunction": "Failed to move function",
 	"failedToParseCsvVal": "Failed to parse CSV: {{val}}",
 	"failedToRenameWidget": "Failed to rename widget",
 	"failedToRenderFlowscript": "Failed to render FlowScript",
