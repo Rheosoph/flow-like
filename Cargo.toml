@@ -143,6 +143,7 @@ members = [
 ]
 
 [workspace.dependencies]
+math-core = "0.8.2"
 flow-like-platform = { path = "libs/platform/rust" }
 flow-like-browser = { path = "packages/browser", default-features = false }
 flow-like-device-client = { path = "packages/device-client" }

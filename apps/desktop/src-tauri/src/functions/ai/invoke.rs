@@ -4,7 +4,7 @@ use flow_like::{
     app::{App, AppVisibility},
     bit::{Bit, BitModelPreference},
     flow_like_model_provider::{
-        history::{History, HistoryMessage},
+        history::{History, HistoryMessage, HistoryThinking},
         llm::LLMCallback,
         response::Response,
     },
@@ -40,6 +40,13 @@ async fn resolve_model_usage_context(
         run_id: None,
         api_base_url: None,
     }))
+}
+
+fn inline_completion_preferences() -> BitModelPreference {
+    BitModelPreference {
+        cost_weight: Some(1.0),
+        ..BitModelPreference::default()
+    }
 }
 
 #[tauri::command(async)]
@@ -88,11 +95,13 @@ pub async fn chat_completion(
     let current_profile = TauriSettingsState::current_profile(&app_handle).await?;
     let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
 
-    let preferences = BitModelPreference::default();
+    // Inline suggestions rank the active profile's models by cost efficiency.
+    let preferences = inline_completion_preferences();
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let capabilities =
         flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await;
-    let devices = flow_like_state.device_model_probe(Interaction::Allowed { run_label: None });
+    // Typing must not open a device connection prompt.
+    let devices = flow_like_state.device_model_probe(Interaction::Forbidden);
 
     let best_model = current_profile
         .hub_profile
@@ -130,6 +139,8 @@ pub async fn chat_completion(
     let mut history = History::new("local".to_string(), vec![]);
     history.messages.extend(messages);
     history.set_stream(false);
+    history.max_completion_tokens = Some(256);
+    history.thinking = Some(HistoryThinking::Off);
     let res = model.invoke(&history, Some(callback)).await?;
 
     Ok(res)
@@ -223,6 +234,63 @@ pub async fn stream_chat_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::{
+        bit::BitTypes,
+        profile::{Profile, ProfileCustomBit},
+        state::CompletionModelCapabilities,
+        utils::http::HTTPClient,
+    };
+
+    fn completion_bit(id: &str, provider: &str, cost_efficiency: f32) -> Bit {
+        Bit {
+            id: id.to_string(),
+            bit_type: BitTypes::Llm,
+            parameters: flow_like_types::json::json!({
+                "context_length": 20_000,
+                "model_classification": {
+                    "cost": cost_efficiency,
+                    "speed": 0.5,
+                    "reasoning": 0.5,
+                    "creativity": 0.5,
+                    "factuality": 0.5,
+                    "function_calling": 0.5,
+                    "safety": 0.5,
+                    "openness": 0.5,
+                    "multilinguality": 0.5,
+                    "coding": 0.5,
+                },
+                "provider": { "provider_name": provider, "model_id": id },
+            }),
+            ..Bit::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn inline_completion_selects_the_cheapest_available_active_profile_bit() {
+        let profile = Profile {
+            bits: vec!["expensive".into(), "cheap".into(), "local".into()],
+            custom_bits: vec![
+                ProfileCustomBit(completion_bit("expensive", "hosted:openai", 0.2)),
+                ProfileCustomBit(completion_bit("cheap", "hosted:openai", 0.8)),
+                ProfileCustomBit(completion_bit("local", "Local", 0.9)),
+                ProfileCustomBit(completion_bit("inactive", "hosted:openai", 1.0)),
+            ],
+            ..Profile::default()
+        };
+        let selected = profile
+            .resolve_completion_model(
+                None,
+                &inline_completion_preferences(),
+                false,
+                CompletionModelCapabilities::default(),
+                None,
+                Arc::new(HTTPClient::new_without_refetch()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(selected.id, "cheap");
+    }
 
     #[test]
     fn offline_editor_usage_is_not_app_attributed() {

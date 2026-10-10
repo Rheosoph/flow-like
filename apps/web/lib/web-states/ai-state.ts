@@ -4,7 +4,7 @@ import type {
 	IResponse,
 	IResponseChunk,
 } from "@flow-like/flow-like-ui";
-import { type WebBackendRef, getApiBaseUrl } from "./api-utils";
+import { type WebBackendRef, apiPost, getApiBaseUrl } from "./api-utils";
 
 const parseDataLines = (lines: readonly string[]): IResponseChunk[] =>
 	lines.flatMap((line) => {
@@ -31,8 +31,7 @@ export class WebAIState implements IAIState {
 			Accept: "text/event-stream",
 		};
 		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
 		}
 
 		const response = await fetch(url, {
@@ -82,27 +81,15 @@ export class WebAIState implements IAIState {
 		messages: IHistoryMessage[],
 		appId?: string,
 	): Promise<IResponse> {
-		const baseUrl = getApiBaseUrl();
-		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
-
-		const headers: HeadersInit = {
-			"Content-Type": "application/json",
-		};
-		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+		const profileId = this.backend.profile?.id;
+		if (!profileId) {
+			throw new Error("Select a profile before using inline completion.");
 		}
 
-		const response = await fetch(url, {
-			method: "POST",
-			headers,
-			body: JSON.stringify({ messages, app_id: appId }),
-		});
-
-		if (!response.ok) {
-			throw new Error(`AI chat failed: ${response.status}`);
-		}
-
-		return response.json();
+		return apiPost<IResponse>(
+			"ai/completion",
+			{ messages, app_id: appId, profile_id: profileId },
+			this.backend.auth,
+		);
 	}
 }

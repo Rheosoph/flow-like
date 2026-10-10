@@ -17,6 +17,9 @@ const MEMBERSHIP_PAGE_SIZE: u64 = 100;
 pub struct UserRef {
     #[serde(alias = "id")]
     pub user_id: String,
+    // Lookup responses omit sub; lookup_users fills it from user_id before output.
+    #[serde(default)]
+    #[schemars(!default)]
     pub sub: String,
     pub email: Option<String>,
     pub username: Option<String>,
@@ -1021,8 +1024,128 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        api_base_url, effective_permission_names, has_effective_permission, permission_from_name,
+        HubClient, ProjectMembership, UserRef, api_base_url, effective_permission_names,
+        has_effective_permission, hydrate_project_users, permission_from_name,
     };
+    use flow_like_types::{json::json, reqwest};
+    use std::{collections::HashMap, time::Duration};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn hydrates_project_users_from_lookup_response_without_sub() {
+        let body = json!([
+            {
+                "id": "user-1",
+                "email": "member@example.com",
+                "username": null,
+                "preferred_username": null,
+                "name": "Project Member",
+                "avatar_url": null,
+                "additional_information": null,
+                "description": null,
+                "created_at": "2026-10-10T12:00:00+00:00"
+            },
+            { "id": "user-2", "name": null, "email": null },
+            { "user_id": "user-3", "sub": "subject-3" }
+        ])
+        .to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            assert!(request.starts_with(b"POST /user/lookup HTTP/1.1\r\n"));
+            let body_start = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+            let headers = String::from_utf8_lossy(&request[..body_start]);
+            let content_length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .unwrap()
+                .1
+                .trim()
+                .parse::<usize>()
+                .unwrap();
+            while request.len() < body_start + content_length {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let client = HubClient {
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            token: "test-token".to_string(),
+            base_url: format!("http://{address}"),
+        };
+        let memberships = (1..=3)
+            .map(|index| ProjectMembership {
+                id: format!("membership-{index}"),
+                user_id: format!("user-{index}"),
+                app_id: "app-1".to_string(),
+                ..Default::default()
+            })
+            .collect();
+
+        let result = hydrate_project_users(&client, memberships, &HashMap::new()).await;
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        let (users, status) = result.unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(users.len(), 3);
+        assert_eq!(users[0].membership_id, "membership-1");
+        assert_eq!(users[0].user.user_id, "user-1");
+        assert_eq!(users[0].user.sub, "user-1");
+        assert_eq!(users[0].user.name.as_deref(), Some("Project Member"));
+        assert_eq!(users[0].user.email.as_deref(), Some("member@example.com"));
+        assert_eq!(users[1].user.user_id, "user-2");
+        assert_eq!(users[1].user.sub, "user-2");
+        assert_eq!(users[1].user.email, None);
+        assert_eq!(users[2].user.user_id, "user-3");
+        assert_eq!(users[2].user.sub, "subject-3");
+    }
+
+    #[test]
+    fn lookup_user_requires_an_id() {
+        assert!(
+            flow_like_types::json::from_value::<UserRef>(json!({
+                "sub": "subject-1",
+                "name": "Project Member"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn user_ref_output_schema_still_requires_sub() {
+        let schema = flow_like_types::json::to_value(schemars::schema_for!(UserRef)).unwrap();
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("sub"))
+        );
+        assert!(schema["properties"]["sub"].get("default").is_none());
+    }
 
     #[test]
     fn builds_api_base_url() {

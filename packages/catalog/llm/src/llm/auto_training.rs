@@ -1,12 +1,14 @@
 use flow_like::{
     bit::Bit,
     flow::{
+        board::Board,
         execution::context::ExecutionContext,
         node::{Node, NodeLogic},
         pin::PinOptions,
         variable::VariableType,
     },
 };
+use flow_like_catalog_core::NodeDBConnection;
 use flow_like_catalog_ml::inspection::auto_training::{AutoTrainRequest, AutoTrainingResult};
 use flow_like_model_provider::{history::History, response::LLMUsageStats};
 use flow_like_types::{Result, async_trait, json::json};
@@ -89,9 +91,10 @@ impl NodeLogic for AutoTrainAgentNode {
         let mut node = Node::new(
             "ml_auto_train_agent",
             "Auto Train Agent",
-            "Search model and dataset variants with optional LLM consultation and an independent final test",
+            "Train from table columns with default search settings, optional LLM consultation and an independent final test",
             "AI/ML/Auto Training",
         );
+        node.set_version(1);
         node.set_flowscript_name("inspection", "autoTrainAgent");
         node.add_icon("/flow/icons/bot-invoke.svg");
         node.set_long_running(true);
@@ -101,14 +104,16 @@ impl NodeLogic for AutoTrainAgentNode {
             "Start or continue an experiment",
             VariableType::Execution,
         );
+        // Keep these first so existing positional FlowScript calls retain their meaning.
         node.add_input_pin(
             "request",
-            "Configuration",
-            "Task, table mapping, goals and experiment budgets",
+            "Advanced Configuration",
+            "Optional full configuration, overriding all table inputs. Use for custom budgets, ordered classes, vision, forecasts or resuming an experiment",
             VariableType::Struct,
         )
         .set_schema::<AutoTrainerAgentRequest>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        .set_default_value(Some(json!(null)))
+        .set_options(PinOptions::new().set_enforce_schema(true).set_optional(true).build());
         node.add_input_pin(
             "model",
             "Consultant Model",
@@ -119,6 +124,62 @@ impl NodeLogic for AutoTrainAgentNode {
         .set_default_value(Some(json!(null)));
         node.add_input_pin("history", "Instructions", "Optional task context; the controller supplies training profiles and validation results", VariableType::Struct)
             .set_schema::<History>().set_default_value(Some(json!(null)));
+        node.add_input_pin(
+            "database",
+            "Database",
+            "Connect Open Database for tabular training. Advanced Configuration overrides these table inputs",
+            VariableType::Struct,
+        )
+        .set_schema::<NodeDBConnection>()
+        .set_default_value(Some(json!(null)))
+        .set_options(PinOptions::new().set_enforce_schema(true).set_optional(true).build());
+        node.add_input_pin(
+            "task",
+            "Task",
+            "Classification predicts a category; Regression predicts a number",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("Classification")))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(vec!["Classification".into(), "Regression".into()])
+                .build(),
+        );
+        node.add_input_pin(
+            "target_column",
+            "Target Column",
+            "Column containing measured target values to predict. Classification discovers its class labels from this column",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "numeric_columns",
+            "Numeric Columns",
+            "Comma-separated numeric feature columns, for example temperature, vibration. Supply numeric or categorical features",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "categorical_columns",
+            "Categorical Columns",
+            "Optional comma-separated categorical feature columns, for example material, machine_type",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "row_id_column",
+            "Row ID Column",
+            "Column containing a unique, stable string or integer for each row",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("id")));
+        node.add_input_pin(
+            "group_column",
+            "Group Column",
+            "Optional column keeping related rows in the same partition. Defaults to Row ID Column; split is 70% training, 15% validation, 15% test",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_output_pin(
             "exec_out",
             "Done",
@@ -139,7 +200,7 @@ impl NodeLogic for AutoTrainAgentNode {
         #[cfg(feature = "training")]
         {
             context.deactivate_exec_pin("exec_out").await?;
-            let request: AutoTrainerAgentRequest = context.evaluate_pin("request").await?;
+            let request = agent_request(context).await?;
             let model: Option<Bit> = context.evaluate_pin("model").await?;
             let history: Option<History> = context.evaluate_pin("history").await?;
             let result = run_agent(context, request, model, history, true).await?;
@@ -155,6 +216,73 @@ impl NodeLogic for AutoTrainAgentNode {
             ))
         }
     }
+
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        // Older nodes required a configuration and had no fallback after disconnecting it.
+        if let Some(pin) = node.get_pin_mut_by_name("request")
+            && pin.default_value.is_none()
+        {
+            pin.set_default_value(Some(json!(null)));
+        }
+    }
+}
+
+#[cfg(feature = "training")]
+fn column_names(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(feature = "training")]
+async fn agent_request(context: &mut ExecutionContext) -> Result<AutoTrainerAgentRequest> {
+    use flow_like_catalog_ml::inspection::auto_training_setup::{
+        TabularAutoTrainSetup, TabularAutoTrainTask, build_tabular_auto_train_request,
+    };
+    use flow_like_types::anyhow;
+
+    if let Some(request) = context
+        .evaluate_pin::<Option<AutoTrainerAgentRequest>>("request")
+        .await?
+    {
+        return Ok(request);
+    }
+    let database = context
+        .evaluate_pin::<Option<NodeDBConnection>>("database")
+        .await?
+        .ok_or_else(|| {
+            anyhow!("Connect a Database for tabular training, or provide Advanced Configuration")
+        })?;
+    let task: String = context.evaluate_pin("task").await?;
+    let task = match task.as_str() {
+        "Classification" => TabularAutoTrainTask::Classification,
+        "Regression" => TabularAutoTrainTask::Regression,
+        _ => {
+            return Err(anyhow!(
+                "Task must be Classification or Regression; use Advanced Configuration for other tasks"
+            ));
+        }
+    };
+    let numeric: String = context.evaluate_pin("numeric_columns").await?;
+    let categorical: String = context.evaluate_pin("categorical_columns").await?;
+    let group: String = context.evaluate_pin("group_column").await?;
+    let setup = TabularAutoTrainSetup {
+        database,
+        task,
+        target_column: context.evaluate_pin("target_column").await?,
+        row_id_column: context.evaluate_pin("row_id_column").await?,
+        numeric_columns: column_names(&numeric),
+        categorical_columns: column_names(&categorical),
+        group_column: (!group.trim().is_empty()).then(|| group.trim().to_owned()),
+    };
+    Ok(AutoTrainerAgentRequest {
+        training: build_tabular_auto_train_request(context, setup).await?,
+        consultations: ConsultationLimits::default(),
+        experiment_id: None,
+    })
 }
 
 #[cfg(feature = "training")]
@@ -415,6 +543,109 @@ pub(crate) async fn run_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn direct_setup_upgrade_preserves_existing_configuration_and_connections() {
+        use flow_like::flow::board::cleanup::sync_node_schema::sync_node_with_catalog;
+
+        let logic = AutoTrainAgentNode;
+        let catalog = logic.get_node();
+        let mut placed = catalog.clone();
+        placed.version = None;
+        placed.pins.retain(|_, pin| {
+            matches!(
+                pin.name.as_str(),
+                "exec_in" | "request" | "model" | "history" | "exec_out" | "result"
+            )
+        });
+        let request = placed.get_pin_mut_by_name("request").unwrap();
+        request.index = 2;
+        request.friendly_name = "Configuration".into();
+        request.options = Some(PinOptions::new().set_enforce_schema(true).build());
+        request.set_default_value(Some(json!({"saved": "configuration"})));
+        request
+            .depends_on
+            .insert("existing-configuration-output".into());
+        placed.get_pin_mut_by_name("model").unwrap().index = 3;
+        placed.get_pin_mut_by_name("history").unwrap().index = 4;
+        placed
+            .get_pin_mut_by_name("exec_out")
+            .unwrap()
+            .connected_to
+            .insert("next-node".into());
+        let original = placed.clone();
+
+        sync_node_with_catalog(&mut placed, &catalog);
+        logic
+            .on_update(
+                &mut placed,
+                &Board::new_detached(None, "auto-train-test".into()),
+            )
+            .await;
+
+        for before in original.pins.values() {
+            let after = placed.get_pin_by_name(&before.name).unwrap();
+            assert_eq!(after.id, before.id);
+            assert_eq!(after.depends_on, before.depends_on);
+            assert_eq!(after.connected_to, before.connected_to);
+            assert_eq!(after.default_value, before.default_value);
+            assert_eq!(after.schema, before.schema);
+        }
+        assert_eq!(placed.version, Some(1));
+        assert_eq!(
+            placed.get_pin_by_name("request").unwrap().friendly_name,
+            "Advanced Configuration"
+        );
+        let mut indices: Vec<_> = placed
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == flow_like::flow::pin::PinType::Input)
+            .map(|pin| pin.index)
+            .collect();
+        let count = indices.len();
+        indices.sort_unstable();
+        indices.dedup();
+        assert_eq!(indices.len(), count);
+
+        let mut inputs: Vec<_> = catalog
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == flow_like::flow::pin::PinType::Input
+                    && pin.data_type != VariableType::Execution
+            })
+            .collect();
+        inputs.sort_by_key(|pin| pin.index);
+        assert_eq!(
+            inputs[..3]
+                .iter()
+                .map(|pin| pin.name.as_str())
+                .collect::<Vec<_>>(),
+            ["request", "model", "history"]
+        );
+
+        let request = placed.get_pin_mut_by_name("request").unwrap();
+        request.default_value = None;
+        request.depends_on.clear();
+        logic
+            .on_update(
+                &mut placed,
+                &Board::new_detached(None, "direct-setup-test".into()),
+            )
+            .await;
+        let default = placed
+            .get_pin_by_name("request")
+            .unwrap()
+            .default_value
+            .as_ref()
+            .unwrap();
+        assert!(
+            flow_like_types::json::from_slice::<flow_like_types::Value>(default)
+                .unwrap()
+                .is_null()
+        );
+    }
+
     #[test]
     fn consultant_feature_action_round_trips_a_typed_plan() {
         let action = json!({"action":"engineer_features","plan":{

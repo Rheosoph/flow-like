@@ -10,6 +10,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
 import { deserializeMdKeepingCode } from "./markdown-code-guard";
+import { editorialMediaMarkdown } from "./editorial-media-markdown";
 import { withoutUnsafeUrls } from "./safe-url-kit";
 
 export const MarkdownKit = [
@@ -17,7 +18,16 @@ export const MarkdownKit = [
 		options: {
 			disallowedNodes: [KEYS.suggestion],
 			plainMarks: [KEYS.comment],
-			remarkPlugins: [remarkMath, remarkGfm, remarkMdx, remarkMention],
+			rules: editorialMediaMarkdown,
+			remarkPlugins: [
+				[
+					remarkMath,
+					{ singleDollarTextMath: false },
+				] as unknown as typeof remarkMath,
+				remarkGfm,
+				remarkMdx,
+				remarkMention,
+			],
 		},
 	}).extendApi(({ editor }) => ({
 		/** Links and media with script or non-image `data:` URLs never leave the parser. */

@@ -4,11 +4,14 @@ import { useCallback, useMemo } from "react";
 import { useInvalidateInvoke } from "../../../hooks";
 import {
 	type IGenericCommand,
+	moveToLayerCommand,
 	removeLayerCommand,
 	removeVariableCommand,
 	upsertLayerCommand,
 	upsertVariableCommand,
 } from "../../../lib";
+import { boardModules } from "../../../lib/flow-modules";
+import { owningModuleId } from "../../../lib/layer-to-function";
 import type { IBoard, ILayer, IVariable } from "../../../lib/schema/flow/board";
 import { ILayerType } from "../../../lib/schema/flow/board";
 import type { INode } from "../../../lib/schema/flow/node";
@@ -145,6 +148,7 @@ export function FlowNodeEditMenu({
 			);
 			await pushCommand(result);
 			await invalidate(backend.boardState.getBoard, [appId, boardId]);
+			return result;
 		},
 		[appId, boardId, invalidate, pushCommand],
 	);
@@ -221,6 +225,14 @@ export function FlowNodeEditMenu({
 			calls={usage.functions[layer.id] ?? 0}
 			folders={folders}
 			boardRef={boardRef}
+			modules={boardModules(board?.layers)}
+			moduleId={owningModuleId(board?.layers, layer.id)}
+			onMoveToModule={async (target) => {
+				const result = await execute(
+					moveToLayerCommand({ ids: [layer.id], target }),
+				);
+				return result !== undefined;
+			}}
 			onApply={async (updated) => {
 				await execute(upsertLayerCommand({ layer: updated, node_ids: [] }));
 			}}
@@ -239,7 +251,7 @@ export function FlowNodeEditMenu({
 			}}
 			onOpenLayer={() => {
 				onOpenChange(false);
-				onOpenLayer?.(layer);
+				onOpenLayer?.(boardRef?.current?.layers[layer.id] ?? layer);
 			}}
 		/>
 	);

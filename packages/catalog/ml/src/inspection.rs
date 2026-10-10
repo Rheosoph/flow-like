@@ -1,5 +1,6 @@
 pub mod auto_training;
 pub mod auto_training_legacy;
+pub mod auto_training_setup;
 pub mod auto_training_tables;
 pub mod compute;
 pub mod data;

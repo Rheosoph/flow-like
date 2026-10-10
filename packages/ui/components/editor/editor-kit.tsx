@@ -17,13 +17,15 @@ import { CommentKit } from "./plugins/comment-kit";
 import { createCopilotKit } from "./plugins/copilot-kit";
 import { CursorOverlayKit } from "./plugins/cursor-overlay-kit";
 import { DateKit } from "./plugins/date-kit";
-import { DiscussionKit } from "./plugins/discussion-kit";
+import { discussionPlugin } from "./plugins/discussion-kit";
+import type { EditorUser, ReviewDiscussion } from "../../lib/plate-document";
 import { DndKit } from "./plugins/dnd-kit";
 import { DocxKit } from "./plugins/docx-kit";
 import { EmojiKit } from "./plugins/emoji-kit";
 import { ExitBreakKit } from "./plugins/exit-break-kit";
 import { FixedToolbarKit } from "./plugins/fixed-toolbar-kit";
 import { FloatingToolbarKit } from "./plugins/floating-toolbar-kit";
+import { FootnoteKit } from "./plugins/footnote-kit";
 import { FontKit } from "./plugins/font-kit";
 import { LineHeightKit } from "./plugins/line-height-kit";
 import { LinkKit } from "./plugins/link-kit";
@@ -39,10 +41,24 @@ import { TableKit } from "./plugins/table-kit";
 import { TocKit } from "./plugins/toc-kit";
 import { ToggleKit } from "./plugins/toggle-kit";
 
-export const createEditorKit = (appId?: string) => [
+export interface EditorReviewOptions {
+	contentReadOnly?: boolean;
+	documentId?: string;
+	legacy?: boolean;
+	currentUser?: EditorUser;
+	enabled?: boolean;
+	canModerate?: boolean;
+	discussions?: ReviewDiscussion[];
+	users?: Record<string, EditorUser>;
+}
+
+export const createEditorKit = (
+	appId?: string,
+	review: EditorReviewOptions = {},
+) => [
 	...AIKit,
 	...createCopilotKit(appId),
-	...BlockMenuKit,
+	...(review.contentReadOnly ? [] : BlockMenuKit),
 
 	// Elements
 	...BasicBlocksKit,
@@ -55,6 +71,7 @@ export const createEditorKit = (appId?: string) => [
 	...ColumnKit,
 	...MathKit,
 	...DateKit,
+	...FootnoteKit,
 	...LinkKit,
 	...MentionKit,
 	...SafeUrlKit,
@@ -69,7 +86,23 @@ export const createEditorKit = (appId?: string) => [
 	...LineHeightKit,
 
 	// Collaboration
-	...DiscussionKit,
+	discussionPlugin.configure({
+		options: {
+			inline: !review.contentReadOnly,
+			documentId: review.documentId,
+			legacy: review.legacy ?? true,
+			currentUserId: review.currentUser?.id ?? "",
+			enabled: review.enabled ?? Boolean(review.currentUser),
+			canModerate: review.canModerate ?? false,
+			discussions: review.discussions ?? [],
+			users: {
+				...review.users,
+				...(review.currentUser
+					? { [review.currentUser.id]: review.currentUser }
+					: {}),
+			},
+		},
+	}),
 	...CommentKit,
 	...SuggestionKit,
 
@@ -77,7 +110,7 @@ export const createEditorKit = (appId?: string) => [
 	...SlashKit,
 	...AutoformatKit,
 	...CursorOverlayKit,
-	...DndKit,
+	...(review.contentReadOnly ? [] : DndKit),
 	...EmojiKit,
 	...ExitBreakKit,
 	TrailingBlockPlugin,
@@ -88,8 +121,8 @@ export const createEditorKit = (appId?: string) => [
 
 	// UI
 	...BlockPlaceholderKit,
-	...FixedToolbarKit,
-	...FloatingToolbarKit,
+	...(review.contentReadOnly ? [] : FixedToolbarKit),
+	...(review.contentReadOnly ? [] : FloatingToolbarKit),
 ];
 
 export const EditorKit = createEditorKit();

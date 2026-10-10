@@ -16,6 +16,7 @@ import {
 import { KEYS, isUrl } from "platejs";
 import { useEditorRef } from "platejs/react";
 import { toast } from "sonner";
+import { MediaLibraryDialog } from "./media-library-dialog";
 import { useFilePicker } from "use-file-picker";
 
 import {
@@ -88,6 +89,7 @@ export function MediaToolbarButton({
 	const editor = useEditorRef();
 	const [open, setOpen] = React.useState(false);
 	const [dialogOpen, setDialogOpen] = React.useState(false);
+	const [libraryOpen, setLibraryOpen] = React.useState(false);
 
 	const { openFilePicker } = useFilePicker({
 		accept: currentConfig.accept,
@@ -135,6 +137,9 @@ export function MediaToolbarButton({
 								{currentConfig.icon}
 								Upload from computer
 							</DropdownMenuItem>
+							<DropdownMenuItem onSelect={() => setLibraryOpen(true)}>
+								Browse media library
+							</DropdownMenuItem>
 							<DropdownMenuItem onSelect={() => setDialogOpen(true)}>
 								<LinkIcon />
 								{t("insertViaUrl", "Insert via URL")}
@@ -144,6 +149,11 @@ export function MediaToolbarButton({
 				</DropdownMenu>
 			</ToolbarSplitButton>
 
+			<MediaLibraryDialog
+				open={libraryOpen}
+				onOpenChange={setLibraryOpen}
+				nodeType={nodeType}
+			/>
 			<AlertDialog
 				open={dialogOpen}
 				onOpenChange={(value) => {

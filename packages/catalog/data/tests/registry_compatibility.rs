@@ -1,6 +1,7 @@
 //! Keep every pre-split public node path and its catalog position available.
 
 use flow_like_catalog_data::{self as catalog, NodeLogic};
+use flow_like_runtime::flow::{pin::PinType, variable::VariableType};
 
 macro_rules! assert_legacy_registry {
     (
@@ -56,5 +57,55 @@ fn database_reference_nodes_are_registered_once() {
         assert_eq!(matches.len(), 1, "Expected one registration for {name}");
         assert!(matches[0].get_pin_by_name("reference").is_some());
         assert!(matches[0].get_pin_by_name("database").is_some());
+    }
+}
+
+#[test]
+fn path_type_nodes_are_registered_once_with_boolean_outputs() {
+    for (entry_point, nodes) in [
+        ("collect_nodes", catalog::collect_nodes()),
+        ("get_catalog", catalog::get_catalog()),
+    ] {
+        for (name, output_name, alias) in [
+            ("path_is_file", "is_file", "isFile"),
+            ("path_is_folder", "is_folder", "isFolder"),
+        ] {
+            let matches: Vec<_> = nodes
+                .iter()
+                .map(|logic| logic.get_node())
+                .filter(|node| node.name == name)
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "Expected one registration for {name} in {entry_point}"
+            );
+            let node = &matches[0];
+            assert_eq!(node.flowscript_namespace(), "files");
+            assert_eq!(node.flowscript_alias(), alias);
+            assert_eq!(node.flowscript_receiver().as_deref(), Some("path"));
+
+            let path = node.get_pin_by_name("path").unwrap();
+            assert_eq!(path.pin_type, PinType::Input);
+            assert_eq!(path.data_type, VariableType::Struct);
+            assert!(path.schema.is_some());
+            assert_eq!(
+                path.options
+                    .as_ref()
+                    .and_then(|options| options.enforce_schema),
+                Some(true)
+            );
+
+            let output = node.get_pin_by_name(output_name).unwrap();
+            assert_eq!(output.pin_type, PinType::Output);
+            assert_eq!(output.data_type, VariableType::Boolean);
+
+            for (pin_name, pin_type) in [("exec_in", PinType::Input), ("exec_out", PinType::Output)]
+            {
+                let pin = node.get_pin_by_name(pin_name).unwrap();
+                assert_eq!(pin.pin_type, pin_type);
+                assert_eq!(pin.data_type, VariableType::Execution);
+            }
+        }
     }
 }

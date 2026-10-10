@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import MiniSearch from "minisearch";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { plainTextFromRichContent } from "../../lib/plate-text";
 import { resolveBoardRef } from "../../lib/board-refs";
 import type { IBoard, ILayer, INode, IPin } from "../../lib/schema/flow/board";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
@@ -248,6 +249,25 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 		for (const node of Object.values(layer.nodes)) {
 			processNode(node, layer.id, path);
 		}
+	}
+
+	for (const comment of Object.values(board.comments ?? {})) {
+		const content = plainTextFromRichContent(comment.content);
+		if (!content.trim()) continue;
+		const path = getLayerPath(layers, comment.layer);
+		results.push({
+			id: `board-comment-${comment.id}`,
+			type: "comment",
+			nodeId: comment.id,
+			layerId: comment.layer ?? undefined,
+			layerPath: path.length ? path : undefined,
+			name: "Comment",
+			nodeName: "Comment",
+			description: content,
+			matchedField: "comment",
+			matchedValue: content,
+			searchText: content,
+		});
 	}
 
 	// Index board variables

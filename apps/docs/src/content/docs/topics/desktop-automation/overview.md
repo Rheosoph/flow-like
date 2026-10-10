@@ -224,6 +224,16 @@ Browser**. New Flows need neither node.
 
 Computer nodes interact with the active desktop session.
 
+### Set up Computer Use Agent
+
+Connect the session from **Start Automation Session** to **Session**, connect a vision model with tool calling to **Model**, and describe the task in **Goal**. The defaults allow 30 steps within 600 seconds and use `screenshot_marks` perception, which includes accessibility text. Set **Target Window** to the relevant window title when needed.
+
+Optionally connect a SystemOne model Bit from **Find Decision Model** or **Load Bit** to **Decision Model**. It selects clicks, double-clicks, scrolling, or waits from fresh accessibility or OCR observations, using one model request per decision. Clicks and scrolls stay within the focused target window, whose state is checked again before acting. The model receives text and observed element choices, with no screenshot. Use `screenshot_marks_ocr` when accessibility text is incomplete. The vision model handles text entry, complex actions, planning, and final completion. When a turn includes input actions and a completion claim, another vision turn must check a fresh screenshot.
+
+With `screenshot` perception or missing element evidence, the Agent uses the vision model. Uncertain or invalid decisions, a changed target, model setup failures, and API errors also fall back to vision. Vision takes over after failed actions or actions with no visible effect, when a zoomed view is needed, and after eight consecutive decision actions. Each decision action uses one step; each decision request has a maximum of three seconds and counts toward **Max Duration (s)**.
+
+The **Steps** output includes each available decision selection, confidence, probabilities, and fallback reason or error. Leave **Decision Model** empty to use the vision model for every turn.
+
 ### Accessibility
 
 [Get Accessibility Tree](/nodes/automation/computer/accessibility/computer-get-accessibility-tree/) inspects the accessible controls exposed by the current interface. [Find Accessibility Element](/nodes/automation/computer/accessibility/computer-find-accessibility-element/) locates a target from that structure.

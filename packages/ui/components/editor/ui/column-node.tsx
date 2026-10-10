@@ -1,5 +1,7 @@
 "use client";
 
+import { safeCssLength } from "../safe-css-length";
+
 import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
@@ -60,7 +62,10 @@ export const ColumnElement = withHOC(
 		});
 
 		return (
-			<div className="group/column relative" style={{ width: width ?? "100%" }}>
+			<div
+				className="group/column relative"
+				style={{ width: safeCssLength(width) ?? "100%" }}
+			>
 				{!readOnly && !isSelectionAreaVisible && (
 					<div
 						ref={handleRef}

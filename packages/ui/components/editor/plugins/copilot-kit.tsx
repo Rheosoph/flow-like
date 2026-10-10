@@ -1,10 +1,9 @@
 "use client";
 
-import { faker } from "@faker-js/faker";
 import { CopilotPlugin } from "@platejs/ai/react";
 import { serializeMd, stripMarkdown } from "@platejs/markdown";
-import type { TElement } from "platejs";
-import { IRole } from "../../../lib";
+import { RangeApi, type TElement } from "platejs";
+import { IRole } from "../../../lib/schema/llm/history";
 import { useBackendStore } from "../../../state/backend-state";
 import { completeEditorChat } from "../ai-transport";
 import { GhostText } from "../ui/ghost-text";
@@ -24,7 +23,7 @@ const SYSTEM_PROMPT = `You are an advanced AI writing assistant, similar to VSCo
 
 export const createCopilotKit = (appId?: string) => [
 	...MarkdownKit,
-	CopilotPlugin.configure(({ api }) => ({
+	CopilotPlugin.configure(({ api, editor }) => ({
 		options: {
 			completeOptions: {
 				api: "/api/ai/copilot",
@@ -32,13 +31,13 @@ export const createCopilotKit = (appId?: string) => [
 					system: SYSTEM_PROMPT,
 				},
 				// Plate only calls `fetch(api, init)`; Bun's `typeof fetch` also declares `preconnect`.
-				fetch: (async (request, init) => {
+				fetch: (async (_request, init) => {
+					init?.signal?.throwIfAborted();
 					const backend = useBackendStore.getState().backend;
-					console.dir({
-						request,
-						init,
-					});
+					const profileId = backend?.profile?.id;
 					const body = JSON.parse(init?.body?.toString() ?? "{}") || {};
+					const value = editor.children;
+					const selection = editor.selection;
 
 					if (!backend) {
 						throw new Error("Backend not initialized");
@@ -56,22 +55,27 @@ export const createCopilotKit = (appId?: string) => [
 							},
 						],
 						appId,
+						init?.signal,
 					);
 
-					console.dir(response);
-					const text = response.choices[0]?.message?.content || "0";
+					init?.signal?.throwIfAborted();
+					// A native completion can finish after the user edits or moves the cursor.
+					if (
+						backend !== useBackendStore.getState().backend ||
+						profileId !== backend.profile?.id ||
+						value !== editor.children ||
+						!selection ||
+						!editor.selection ||
+						!RangeApi.equals(selection, editor.selection)
+					) {
+						return new Response(JSON.stringify({ text: "0" }));
+					}
 
-					return new Response(JSON.stringify({ ...response, text: text }));
+					const text = response.choices[0]?.message?.content || "0";
+					return new Response(JSON.stringify({ text }));
 				}) as typeof fetch,
-				onError: (err) => {
-					// Mock the API response. Remove it when you implement the route /api/ai/copilot
-					console.warn(err);
-					api.copilot.setBlockSuggestion({
-						text: stripMarkdown(faker.lorem.sentence()),
-					});
-				},
 				onFinish: (_, completion) => {
-					if (completion === "0") return;
+					if (!completion.trim() || completion.trim() === "0") return;
 
 					api.copilot.setBlockSuggestion({
 						text: stripMarkdown(completion),
@@ -109,7 +113,16 @@ export const createCopilotKit = (appId?: string) => [
 				keys: "ctrl+space",
 			},
 		},
-	})),
+	})).extendApi(({ api }) => {
+		const reject = api.copilot.reject;
+		return {
+			reject: () => {
+				// Plate only stops on rejection after ghost text exists.
+				api.copilot.stop();
+				return reject();
+			},
+		};
+	}),
 ];
 
 export const CopilotKit = createCopilotKit();

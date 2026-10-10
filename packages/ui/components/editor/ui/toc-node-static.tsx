@@ -9,7 +9,7 @@ import { cva } from "class-variance-authority";
 import { NodeApi } from "platejs";
 import { SlateElement } from "platejs/static";
 
-import { Button } from "../../..";
+import { headingAnchor } from "../heading-anchor";
 
 const headingItemVariants = cva(
 	"block h-auto w-full cursor-pointer truncate rounded-none px-0.5 py-1.5 text-left font-medium text-muted-foreground underline decoration-[0.5px] underline-offset-4 hover:bg-accent hover:text-muted-foreground",
@@ -34,15 +34,15 @@ export function TocElementStatic(props: SlateElementProps) {
 			<div>
 				{headingList.length > 0 ? (
 					headingList.map((item) => (
-						<Button
-							key={item.title}
-							variant="ghost"
+						<a
+							key={item.id}
+							href={`#${item.id}`}
 							className={headingItemVariants({
 								depth: item.depth as 1 | 2 | 3,
 							})}
 						>
 							{item.title}
-						</Button>
+						</a>
 					))
 				) : (
 					<div className="text-sm text-gray-500">
@@ -89,7 +89,7 @@ const getHeadingList = (editor?: SlateEditor) => {
 		const { type } = node;
 		const title = NodeApi.string(node);
 		const depth = headingDepth[type];
-		const id = node.id as string;
+		const id = headingAnchor(editor, node, path);
 
 		if (title) {
 			headingList.push({ id, depth, path, title, type });

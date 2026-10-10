@@ -1,15 +1,16 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
 import * as React from "react";
 
 import type { DropdownMenuProps } from "@radix-ui/react-dropdown-menu";
 
-import { MarkdownPlugin } from "@platejs/markdown";
 import { ArrowUpToLineIcon } from "lucide-react";
 import { type SlateEditor, parseHtmlDocument } from "platejs";
 import { useEditorRef } from "platejs/react";
+import { toast } from "sonner";
 import { useFilePicker } from "use-file-picker";
+import { deserializeNativeDocumentFile } from "../native-document";
+import { applyPlateEditorDocument } from "../plugins/discussion-kit";
 
 import {
 	DropdownMenu,
@@ -19,6 +20,7 @@ import {
 	DropdownMenuTrigger,
 } from "../../..";
 
+import { RICH_REMARK_PLUGINS, safeDeserialize } from "../../ui/text-editor";
 import { withoutUnsafeUrls } from "../plugins/safe-url-kit";
 import { ToolbarButton } from "./toolbar";
 
@@ -43,13 +45,48 @@ export function deserializeHtmlFile(editor: SlateEditor, html: string) {
 }
 
 export function deserializeMarkdownFile(editor: SlateEditor, markdown: string) {
-	return editor.getApi(MarkdownPlugin).markdown.deserialize(markdown);
+	return safeDeserialize(editor, markdown, true, RICH_REMARK_PLUGINS);
 }
 
 export function ImportToolbarButton(props: DropdownMenuProps) {
-	const { t } = useTranslation("common");
 	const editor = useEditorRef();
 	const [open, setOpen] = React.useState(false);
+
+	const { openFilePicker: openNativeFilePicker } = useFilePicker({
+		accept: [".json"],
+		multiple: false,
+		onFilesSelected: async (result: { plainFiles?: File[] }) => {
+			if (!result.plainFiles?.length) return;
+			const { plainFiles } = result;
+			if (!plainFiles[0]) return;
+			try {
+				const document = await deserializeNativeDocumentFile(plainFiles[0]);
+				applyPlateEditorDocument(editor, document);
+			} catch (error) {
+				toast.error(error instanceof Error ? error.message : "Import failed.");
+			}
+		},
+	});
+
+	const { openFilePicker: openDocxFilePicker } = useFilePicker({
+		accept: [".docx"],
+		multiple: false,
+		onFilesSelected: async (result: { plainFiles?: File[] }) => {
+			if (!result.plainFiles?.[0]) return;
+			try {
+				const { importDocx } = await import("../docx");
+				const resultDoc = importDocx(
+					new Uint8Array(await result.plainFiles[0].arrayBuffer()),
+				);
+				editor.tf.insertNodes(withoutUnsafeUrls(editor, resultDoc.value));
+				for (const warning of resultDoc.warnings) toast.warning(warning);
+			} catch (error) {
+				toast.error(
+					error instanceof Error ? error.message : "DOCX import failed.",
+				);
+			}
+		},
+	});
 
 	const getFileNodes = (text: string, type: ImportType) => {
 		if (type === "html") {
@@ -66,8 +103,9 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
 	const { openFilePicker: openMdFilePicker } = useFilePicker({
 		accept: [".md", ".mdx"],
 		multiple: false,
-		onFilesSelected: async ({ plainFiles }: any) => {
-			const text = await plainFiles[0].text();
+		onFilesSelected: async (result: { plainFiles?: File[] }) => {
+			if (!result.plainFiles?.[0]) return;
+			const text = await result.plainFiles[0].text();
 
 			const nodes = getFileNodes(text, "markdown");
 
@@ -78,8 +116,9 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
 	const { openFilePicker: openHtmlFilePicker } = useFilePicker({
 		accept: ["text/html"],
 		multiple: false,
-		onFilesSelected: async ({ plainFiles }: any) => {
-			const text = await plainFiles[0].text();
+		onFilesSelected: async (result: { plainFiles?: File[] }) => {
+			if (!result.plainFiles?.[0]) return;
+			const text = await result.plainFiles[0].text();
 
 			const nodes = getFileNodes(text, "html");
 
@@ -97,12 +136,18 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
 
 			<DropdownMenuContent align="start">
 				<DropdownMenuGroup>
+					<DropdownMenuItem onSelect={() => openDocxFilePicker()}>
+						Import from Word (.docx)
+					</DropdownMenuItem>
+					<DropdownMenuItem onSelect={() => openNativeFilePicker()}>
+						Open editable document (.plate.json)
+					</DropdownMenuItem>
 					<DropdownMenuItem
 						onSelect={() => {
 							openHtmlFilePicker();
 						}}
 					>
-						{`Import from HTML`}
+						Import from HTML
 					</DropdownMenuItem>
 
 					<DropdownMenuItem
@@ -110,7 +155,7 @@ export function ImportToolbarButton(props: DropdownMenuProps) {
 							openMdFilePicker();
 						}}
 					>
-						{`Import from Markdown`}
+						Import from Markdown
 					</DropdownMenuItem>
 				</DropdownMenuGroup>
 			</DropdownMenuContent>

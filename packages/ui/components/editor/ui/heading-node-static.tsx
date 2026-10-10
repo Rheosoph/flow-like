@@ -4,6 +4,7 @@ import type { SlateElementProps } from "platejs/static";
 
 import { type VariantProps, cva } from "class-variance-authority";
 import { SlateElement } from "platejs/static";
+import { headingAnchor } from "../heading-anchor";
 
 const headingVariants = cva("relative mb-1", {
 	variants: {
@@ -27,6 +28,10 @@ export function HeadingElementStatic({
 			as={variant!}
 			className={headingVariants({ variant })}
 			{...props}
+			attributes={{
+				...props.attributes,
+				id: headingAnchor(props.editor, props.element),
+			}}
 		>
 			{props.children}
 		</SlateElement>

@@ -265,7 +265,6 @@ import {
 	FLOWSCRIPT_KEYWORDS,
 	MAIN_FILE_ID,
 	MAIN_FILE_LABEL,
-	MODULE_FILE_EXTENSION,
 	activeModuleId,
 	boardFlowScriptScope,
 	boardModules,
@@ -395,10 +394,7 @@ const MAIN_DOCUMENT: IEditorDocument = { kind: "board", fileId: MAIN_FILE_ID };
 const MAIN_TAB_KEY = documentKey(MAIN_DOCUMENT);
 const OPEN_TABS_STORAGE_PREFIX = "flow-board-tabs";
 
-/**
- * Canvas node types a "move to module" carries: nodes and comments. A layer keeps its
- * own file through its parent chain, so it is not re-filed from the canvas.
- */
+/** Canvas nodes and comments that can be moved between modules. Functions move from their editor. */
 const MOVABLE_SELECTION_TYPES = new Set([
 	"node",
 	"flowNode",
@@ -1225,18 +1221,25 @@ export function FlowBoard({
 		nodesLength: nodes.length,
 	});
 
-	const { focusNode, pushLayer, popLayer, navigateToLayer, forgetNavigation } =
-		useLayerNavigation({
-			board,
-			layerPath,
-			navigationKey: `${appId}:${boardId}:${activeTabKey}`,
-			setCurrentLayer,
-			setLayerPath,
-			saveViewport,
-			holdViewport,
-			fitView,
-			getNodes,
-		});
+	const {
+		focusNode,
+		pushLayer,
+		popLayer,
+		navigateToLayer,
+		forgetNavigation,
+		navigationTrail,
+		returnToVisit,
+	} = useLayerNavigation({
+		board,
+		layerPath,
+		navigationKey: `${appId}:${boardId}:${activeTabKey}`,
+		setCurrentLayer,
+		setLayerPath,
+		saveViewport,
+		holdViewport,
+		fitView,
+		getNodes,
+	});
 
 	const restoreTabPositionRef = useRef<
 		(tab: IEditorTab | undefined, copyKey?: string) => void
@@ -4329,10 +4332,10 @@ export function FlowBoard({
 			coordinates: [location.x, location.y, 0],
 			id: createId(),
 			timestamp: {
-				nanos_since_epoch: 0,
-				secs_since_epoch: 0,
+				nanos_since_epoch: (Date.now() % 1000) * 1_000_000,
+				secs_since_epoch: Math.floor(Date.now() / 1000),
 			},
-			author: "anonymous",
+			author: sub || undefined,
 		};
 
 		const command = upsertCommentCommand({
@@ -4341,7 +4344,7 @@ export function FlowBoard({
 		});
 
 		await executeCommand(command);
-	}, [currentLayer, clickPosition, executeCommand, version]);
+	}, [currentLayer, clickPosition, executeCommand, version, sub]);
 
 	// FlowScript comment bridge: the editor mutates board comments through the
 	// same command funnel as the canvas (undo-able, sync-propagated). A comment
@@ -5672,19 +5675,10 @@ export function FlowBoard({
 				breadcrumb={
 					<>
 						<BoardBreadcrumb
-							fileLabel={
-								currentModuleId
-									? `${board.data?.layers?.[currentModuleId]?.name ?? ""}${MODULE_FILE_EXTENSION}`
-									: MAIN_FILE_LABEL
-							}
 							layerPath={layerPath}
-							fileRootPath={
-								resolveLayerChain(
-									board.data?.layers ?? {},
-									currentModuleId,
-								).join("/") || undefined
-							}
-							layerNames={layerNames}
+							layers={board.data?.layers ?? {}}
+							navigationTrail={navigationTrail}
+							onReturnToVisit={returnToVisit}
 							onJumpToLayer={jumpToLayer}
 						/>
 						{typeof version === "undefined" && (

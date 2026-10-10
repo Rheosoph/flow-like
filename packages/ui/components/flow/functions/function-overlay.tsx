@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	ChevronRightIcon,
 	DatabaseIcon,
+	FolderInputIcon,
 	MaximizeIcon,
 	PlusIcon,
 	SaveIcon,
@@ -19,9 +20,11 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { useBoardFormat } from "../../../hooks/use-board-format";
 import { IVariableType } from "../../../lib";
 import { GEOMETRY_BOARD_FORMAT_VERSION } from "../../../lib/board-format";
+import { type IBoardModule, MAIN_FILE_LABEL } from "../../../lib/flow-modules";
 import {
 	type IBoard,
 	type ILayer,
@@ -32,6 +35,10 @@ import {
 import {
 	Badge,
 	Button,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
 	Tabs,
 	TabsContent,
 	TabsList,
@@ -75,6 +82,9 @@ export interface IFunctionOverlayProps {
 	calls: number;
 	/** Existing function folder paths, for the folder picker. May be empty. */
 	folders: string[];
+	modules: IBoardModule[];
+	moduleId: string | null;
+	onMoveToModule: (moduleId: string | null) => Promise<boolean>;
 	boardRef?: RefObject<IBoard | undefined>;
 	/** Persists name, category, pins and cache in one command. */
 	onApply: (updated: ILayer) => Promise<void>;
@@ -90,6 +100,9 @@ export function FunctionOverlay({
 	layer,
 	calls,
 	folders,
+	modules,
+	moduleId,
+	onMoveToModule,
 	boardRef,
 	onApply,
 	onDelete,
@@ -118,6 +131,26 @@ export function FunctionOverlay({
 	const [tab, setTab] = useState<"inputs" | "outputs" | "caching">("inputs");
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [saving, setSaving] = useState(false);
+	const [moving, setMoving] = useState(false);
+	const [currentModuleId, setCurrentModuleId] = useState(moduleId);
+
+	useEffect(() => setCurrentModuleId(moduleId), [moduleId]);
+
+	const moveToModule = useCallback(
+		async (target: string | null) => {
+			if (target === currentModuleId) return;
+			setMoving(true);
+			try {
+				if (await onMoveToModule(target)) setCurrentModuleId(target);
+			} catch (error) {
+				console.error(error);
+				toast.error(t("failedToMoveFunction", "Failed to move function"));
+			} finally {
+				setMoving(false);
+			}
+		},
+		[currentModuleId, onMoveToModule, t],
+	);
 
 	useEffect(() => {
 		if (!open) return;
@@ -195,15 +228,54 @@ export function FunctionOverlay({
 				</Badge>
 			}
 			actions={
-				<Button
-					variant="ghost"
-					size="sm"
-					className="gap-1.5"
-					onClick={onOpenLayer}
-				>
-					<MaximizeIcon className="size-3.5" />
-					{t("openLayer", "Open layer")}
-				</Button>
+				<div className="flex flex-wrap items-center gap-1">
+					{modules.length > 0 && (
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="gap-1.5"
+									disabled={moving || saving}
+									aria-label={t("moveToModule", "Move to module")}
+									title={t("moveToModule", "Move to module")}
+								>
+									<FolderInputIcon className="size-3.5" />
+									<span className="hidden sm:inline">
+										{t("moveToModule", "Move to module")}
+									</span>
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent className="max-h-64 overflow-y-auto">
+								<DropdownMenuItem
+									disabled={currentModuleId === null}
+									onSelect={() => void moveToModule(null)}
+								>
+									{MAIN_FILE_LABEL}
+								</DropdownMenuItem>
+								{modules.map((module) => (
+									<DropdownMenuItem
+										key={module.id}
+										disabled={currentModuleId === module.id}
+										onSelect={() => void moveToModule(module.id)}
+									>
+										{module.pathLabel}
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					)}
+					<Button
+						variant="ghost"
+						size="sm"
+						className="gap-1.5"
+						onClick={onOpenLayer}
+						disabled={moving}
+					>
+						<MaximizeIcon className="size-3.5" />
+						{t("openLayer", "Open layer")}
+					</Button>
+				</div>
 			}
 			rail={
 				<>
@@ -254,7 +326,11 @@ export function FunctionOverlay({
 						<Button variant="ghost" onClick={() => onOpenChange(false)}>
 							{t("cancel", "Cancel")}
 						</Button>
-						<Button className="gap-2" onClick={applyChanges} disabled={saving}>
+						<Button
+							className="gap-2"
+							onClick={applyChanges}
+							disabled={saving || moving}
+						>
 							<SaveIcon className="h-4 w-4" />
 							{t("saveFunction", "Save function")}
 						</Button>

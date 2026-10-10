@@ -26,6 +26,7 @@ import { Separator } from "../../..";
 
 import { useEffect } from "react";
 import { CaptionButton } from "./caption";
+import { MediaMetadataDialog } from "./media-metadata-dialog";
 
 const inputVariants = cva(
 	"flex h-[28px] w-full rounded-md border-none bg-transparent px-1.5 py-1 text-base placeholder:text-muted-foreground focus-visible:ring-transparent focus-visible:outline-hidden md:text-sm",
@@ -98,6 +99,7 @@ export function MediaToolbar({
 							{t("caption", "Caption")}
 						</CaptionButton>
 
+						<MediaMetadataDialog />
 						<Separator orientation="vertical" className="mx-1 h-6" />
 
 						<Button size="sm" variant="ghost" {...buttonProps}>

@@ -372,6 +372,7 @@ mod runtime {
             ))),
         }
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn protocol_timeouts(response: Duration) -> ethercrab::Timeouts {
         let defaults = ethercrab::Timeouts::default();
         // These operations await PDUs internally. A shorter outer deadline drops a
@@ -390,6 +391,7 @@ mod runtime {
         use super::*;
         use std::cell::RefCell;
 
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         #[test]
         fn operation_deadlines_allow_configured_responses_and_preserve_longer_defaults() {
             let short = protocol_timeouts(Duration::from_millis(1));

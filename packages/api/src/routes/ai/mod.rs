@@ -1,3 +1,4 @@
+pub mod completion;
 pub mod copilot;
 pub mod global_chat;
 pub mod governance;
@@ -8,6 +9,7 @@ use crate::State;
 
 pub fn routes() -> Router<std::sync::Arc<State>> {
     Router::new()
+        .merge(completion::routes())
         .nest("/copilot", copilot::routes())
         .nest("/global-chat", global_chat::routes())
 }

@@ -74,6 +74,8 @@ const KATEX_ALLOWED_ATTR = [
 ];
 
 function sanitizeKatexHtml(html: string): string {
+	// KaTeX generates this HTML with trust:false; SSR has no DOMPurify window.
+	if (typeof DOMPurify.sanitize !== "function") return html;
 	return DOMPurify.sanitize(html, {
 		ADD_TAGS: KATEX_ALLOWED_TAGS,
 		ADD_ATTR: KATEX_ALLOWED_ATTR,
@@ -89,7 +91,7 @@ export function EquationElementStatic(
 	const texExpression = getEquationExpression(element);
 
 	const html = getEquationHtml({
-		element,
+		element: { ...element, texExpression },
 		options: {
 			displayMode: true,
 			errorColor: "#cc0000",
@@ -134,9 +136,9 @@ export function InlineEquationElementStatic(
 ) {
 	const texExpression = getEquationExpression(props.element);
 	const html = getEquationHtml({
-		element: props.element,
+		element: { ...props.element, texExpression },
 		options: {
-			displayMode: true,
+			displayMode: false,
 			errorColor: "#cc0000",
 			fleqn: false,
 			leqno: false,

@@ -56,6 +56,10 @@ const CORPUS: ReadonlyArray<readonly [string, string]> = [
 	],
 	["directive block", ":::info\nSome info\n\nWith a blank line\n:::\n\nAfter."],
 	["reference link", "See [the docs][ref] for more.\n\n[ref]: https://x.dev"],
+	[
+		"shortcut reference link",
+		"See [the docs] for more.\n\n[the docs]: https://x.dev",
+	],
 	["html block", "<div>\nhi\n</div>\n\nAfter."],
 	[
 		"table then prose",

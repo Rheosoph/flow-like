@@ -163,7 +163,7 @@ generic `userAction`, but that fallback does not execute a workflow by itself.
 
 ## Component catalog
 
-The current runtime contains 71 component types.
+The tables below group runtime components by purpose.
 
 ### Layout
 
@@ -214,6 +214,7 @@ The current runtime contains 71 component types.
 | `feedback` | Positive/negative, rating, and comment feedback | `mode`, labels, ratings, comment settings, context flags |
 | `appLink` | Link to an app surface | `target`, `label`, `appId`, `eventId`, `variant`, `disabled` |
 | `textField` | Single- or multi-line text input | `value`, `placeholder`, `label`, `inputType`, `multiline`, `required` |
+| `richText` | Plate document editor with media and editorial review | `value`, `documentId`, `documentRevision`, `currentUser`, `reviewEnabled`, `readOnly`, `uploadScope` |
 | `select` | Single or multiple selection | `value`, `options`, `placeholder`, `multiple`, `searchable` |
 | `slider` | Numeric range input | `value`, `min`, `max`, `step`, `showValue`, `label` |
 | `checkbox` | Boolean or indeterminate input | `checked`, `label`, `disabled`, `indeterminate` |
@@ -272,6 +273,51 @@ for static design-time content.
 | `inventoryGrid` | Inventory slots and items |
 | `healthBar` | Health or resource meter |
 | `miniMap` | Compact map with markers |
+
+## Rich text documents
+
+Use `richText` to edit and display a Plate document. Its `value` is a string
+beginning with `plate_json::`. Store the complete string: the version 1 envelope
+contains `children`, `discussions`, and `users`, with an optional `documentId`.
+It preserves comment bodies, authors, replies, and resolution state alongside
+the article. Existing documents containing a node array after the prefix remain
+readable. Native `.plate.json` export preserves review metadata; HTML and Markdown
+exports represent the article content.
+
+All properties below use `BoundValue`:
+
+| Property | Contract |
+| --- | --- |
+| `value` | Required document string. Bind it to the document body in surface data. |
+| `documentId` | Stable document identity. Changing it opens a separate editing session and cancels pending events from the previous document. |
+| `documentRevision` | Server revision as a string or number. Changing it replaces local edits with the supplied `value`, even when that value matches an earlier value. |
+| `currentUser` | Reviewer object with `id`, `name`, and optional `avatarUrl`. Without an explicit value, the editor uses the signed-in identity when available. |
+| `reviewEnabled` | Enable comments and tracked suggestions for the current user. Defaults to whether an identity is available; this setting does not grant server permissions. |
+| `readOnly`, `disabled` | Display the current document without editing. Changing either preserves the current local value. |
+| `uploadScope`, `uploadPrefix` | Media storage scope (`app` by default, or `user`) and folder. The default folder is `a2ui/{surfaceId}/{componentId}`. |
+| `label`, `helperText`, `error` | Accessible field label, description, and invalid state. `placeholder` appears while the document is empty. |
+
+```json
+{
+  "type": "richText",
+  "value": { "path": "$.data.article.body" },
+  "documentId": { "path": "$.data.article.id" },
+  "documentRevision": { "path": "$.data.article.revision" },
+  "currentUser": { "path": "$.data.reviewer" },
+  "label": { "literalString": "Article body" },
+  "reviewEnabled": { "literalBool": true }
+}
+```
+
+Bind the exact `change`, `blur`, `imageUploaded`, or `imageUploadError` event in
+the Actions tab. Change events wait for `debounceMs` (600 milliseconds by default,
+minimum 100). Leaving the editor flushes a pending change before `blur`; moving
+focus among its controls does not commit. Change and blur carry `value` plus
+`documentId` and `documentRevision` when supplied. Upload events carry the same
+document identity, with media metadata or an error. A server save should compare
+the submitted revision before accepting an update. Supplying a new authoritative
+revision to the component resets its local draft; it does not merge simultaneous
+edits.
 
 ## Styling
 

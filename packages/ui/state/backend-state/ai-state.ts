@@ -5,5 +5,6 @@ export interface IAIState {
 		messages: IHistoryMessage[],
 		appId?: string,
 	): Promise<ReadableStream<IResponseChunk[]>>;
+	/** Inline writing completion using the active profile's most cost-efficient available Bit. */
 	chatComplete(messages: IHistoryMessage[], appId?: string): Promise<IResponse>;
 }
