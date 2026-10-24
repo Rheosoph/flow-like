@@ -687,6 +687,9 @@ pub struct TextFieldProps {
     pub max_length: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<BoundValue>,
+    /// Pause before the "input" event fires, in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debounce_ms: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -722,6 +725,9 @@ pub struct SliderProps {
     pub show_value: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<BoundValue>,
+    /// Pause before the "input" event fires, in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debounce_ms: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

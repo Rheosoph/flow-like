@@ -7,7 +7,6 @@ use flow_like::flow::{
 use flow_like_types::{
     async_trait,
     base64::{Engine, engine::general_purpose},
-    json::json,
 };
 
 #[crate::register_node]
@@ -47,7 +46,7 @@ impl NodeLogic for Base64DecodeBytesNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let input: String = context.evaluate_pin("input").await?;
         let bytes = general_purpose::STANDARD.decode(&input)?;
-        context.set_pin_value("output", json!(bytes)).await?;
+        context.set_pin_bytes("output", bytes).await?;
         Ok(())
     }
 }

@@ -43,6 +43,7 @@ use crate::{
             page_trigger::{resolve_authorized_page_trigger, resolve_page_contract_for_bootstrap},
             prerun_event::{PrerunEventResponse, PrerunPageEventRequest, build_response},
         },
+        internal::change_legal::LegalLinksResponse,
         page::bootstrap::{
             BootstrapResponse, bootstrap_event, canonical_route, normalize_route_path,
         },
@@ -92,6 +93,7 @@ struct FrontendResponse {
     app_id: String,
     kind: &'static str,
     auth_proxy: bool,
+    legal: LegalLinksResponse,
     bootstrap: BootstrapResponse,
 }
 
@@ -397,6 +399,7 @@ async fn bootstrap(
         app_id,
         kind,
         auth_proxy: config.requires_auth(),
+        legal: LegalLinksResponse::from_frontend(app.frontend.as_ref()),
         bootstrap: BootstrapResponse {
             canonical_route,
             route_miss: false,

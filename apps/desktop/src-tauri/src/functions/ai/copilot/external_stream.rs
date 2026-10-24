@@ -27,6 +27,8 @@ pub(super) struct ExternalAgentStreamState {
     pub(super) claude_tool_call_ids_by_index: HashMap<u64, String>,
     pub(super) claude_flowscript_preview:
         flow_like::flow::copilot::stream::FlowScriptToolCallPreviewTracker,
+    // Same partial tool JSON, scanned for `emit_ui` components as each one closes.
+    pub(super) claude_ui_draft: flow_like::flow::copilot::stream::UiDraftToolCallTracker,
 }
 
 impl ExternalAgentStreamState {
@@ -663,8 +665,9 @@ fn claude_display_tool_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// Decode Claude's streamed `input_json_delta` fragments into live FlowScript workspace prefixes.
-/// The later complete `assistant/tool_use` block remains authoritative and emits `submitted`.
+/// Decode Claude's streamed `input_json_delta` fragments into live FlowScript workspace prefixes
+/// and `emit_ui` component drafts. The later complete `assistant/tool_use` block remains
+/// authoritative and emits `submitted`.
 fn claude_partial_tool_input_events(
     value: &serde_json::Value,
     state: &mut ExternalAgentStreamState,
@@ -680,65 +683,81 @@ fn claude_partial_tool_input_events(
 
     match event_type {
         "content_block_start" => {
-            let Some(block) = event.get("content_block") else {
-                return Vec::new();
-            };
-            if block.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
-                return Vec::new();
-            }
-            let Some(id) = block.get("id").and_then(serde_json::Value::as_str) else {
-                return Vec::new();
-            };
-            let name = block
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("tool");
-            if let Some(index) = index {
-                if state.claude_tool_call_ids_by_index.len()
-                    >= EXTERNAL_AGENT_MESSAGE_STATE_MAX_ENTRIES
-                    && !state.claude_tool_call_ids_by_index.contains_key(&index)
-                {
-                    state.claude_tool_call_ids_by_index.clear();
-                }
-                state
-                    .claude_tool_call_ids_by_index
-                    .insert(index, id.to_string());
-            }
-            state.claude_flowscript_preview.observe_name(id, name);
+            claude_tool_block_started(event, index, state);
             Vec::new()
         }
-        "content_block_delta" => {
-            let Some(index) = index else {
-                return Vec::new();
-            };
-            let Some(id) = state.claude_tool_call_ids_by_index.get(&index).cloned() else {
-                return Vec::new();
-            };
-            let Some(delta) = event.get("delta") else {
-                return Vec::new();
-            };
-            if delta.get("type").and_then(serde_json::Value::as_str) != Some("input_json_delta") {
-                return Vec::new();
-            }
-            delta
-                .get("partial_json")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|partial| {
-                    state
-                        .claude_flowscript_preview
-                        .observe_arguments_delta(&id, partial)
-                })
-                .into_iter()
-                .collect()
-        }
+        "content_block_delta" => claude_tool_input_delta(event, index, state),
         "content_block_stop" => {
-            if let Some(index) = index {
-                state.claude_tool_call_ids_by_index.remove(&index);
+            if let Some(id) =
+                index.and_then(|index| state.claude_tool_call_ids_by_index.remove(&index))
+            {
+                state.claude_ui_draft.finish(&id);
             }
             Vec::new()
         }
         _ => Vec::new(),
     }
+}
+
+fn claude_tool_block_started(
+    event: &serde_json::Value,
+    index: Option<u64>,
+    state: &mut ExternalAgentStreamState,
+) {
+    let Some(block) = event.get("content_block") else {
+        return;
+    };
+    if block.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
+        return;
+    }
+    let Some(id) = block.get("id").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    let name = block
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("tool");
+    if let Some(index) = index {
+        if state.claude_tool_call_ids_by_index.len() >= EXTERNAL_AGENT_MESSAGE_STATE_MAX_ENTRIES
+            && !state.claude_tool_call_ids_by_index.contains_key(&index)
+        {
+            state.claude_tool_call_ids_by_index.clear();
+        }
+        state
+            .claude_tool_call_ids_by_index
+            .insert(index, id.to_string());
+    }
+    state.claude_flowscript_preview.observe_name(id, name);
+    state.claude_ui_draft.observe_name(id, name);
+}
+
+fn claude_tool_input_delta(
+    event: &serde_json::Value,
+    index: Option<u64>,
+    state: &mut ExternalAgentStreamState,
+) -> Vec<String> {
+    let Some(id) = index.and_then(|index| state.claude_tool_call_ids_by_index.get(&index).cloned())
+    else {
+        return Vec::new();
+    };
+    let Some(delta) = event.get("delta") else {
+        return Vec::new();
+    };
+    if delta.get("type").and_then(serde_json::Value::as_str) != Some("input_json_delta") {
+        return Vec::new();
+    }
+    let Some(partial) = delta
+        .get("partial_json")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Vec::new();
+    };
+    state
+        .claude_flowscript_preview
+        .observe_arguments_delta(&id, partial)
+        .into_iter()
+        .chain(state.claude_ui_draft.observe_arguments_delta(&id, partial))
+        .collect()
 }
 
 /// Surface Claude Code's tool activity as FlowPilot `tool_start`/`tool_end`
@@ -786,6 +805,7 @@ pub(super) fn claude_agent_tool_events(
                     state.claude_tool_names.clear();
                 }
                 state.claude_tool_names.insert(id.to_string(), name.clone());
+                state.claude_ui_draft.finish(id);
                 if let Some(arguments) = block.get("input").or_else(|| block.get("arguments"))
                     && let Some(frame) = state
                         .claude_flowscript_preview

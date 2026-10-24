@@ -204,11 +204,7 @@ export function useCommandExecution({
 			}
 
 			return withHistoryLock(async () => {
-				console.log(
-					"[executeCommand] Executing:",
-					command.command_type,
-					command,
-				);
+				console.log("[executeCommand] Executing:", command.command_type);
 
 				let result: IGenericCommand;
 				let resultingBoard: IBoard | undefined;
@@ -236,7 +232,7 @@ export function useCommandExecution({
 					toastError(`Command failed: ${recoveredError.message}`, <XIcon />);
 					throw recoveredError;
 				}
-				console.log("[executeCommand] Success:", command.command_type, result);
+				console.log("[executeCommand] Success:", command.command_type);
 				await settleCommittedMutation(
 					() => pushCommand(result),
 					true,

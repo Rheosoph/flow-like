@@ -168,6 +168,24 @@ describe("web authoritative resource reads", () => {
 		]);
 	});
 
+	test("rejects an empty FlowScript body instead of rendering undefined", async () => {
+		mocks.apiGet
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ flowscript: "fn a() {}\n" });
+		const state = new WebBoardState(backend);
+
+		await expect(
+			state.getFlowScriptFile("app-1", "board-1", "main"),
+		).rejects.toThrow("The hub returned no FlowScript for board board-1");
+		await expect(
+			state.getFlowScriptScoped("app-1", "board-1", ["node-1"]),
+		).rejects.toThrow("The hub returned no FlowScript for board board-1");
+		await expect(
+			state.getFlowScriptFile("app-1", "board-1", "main"),
+		).resolves.toEqual({ flowscript: "fn a() {}\n", scope_anchors: [] });
+	});
+
 	test("propagates authoritative Board and Event failures", async () => {
 		const boardFailure = new Error("board authority unavailable");
 		const eventFailure = new Error("event authority unavailable");

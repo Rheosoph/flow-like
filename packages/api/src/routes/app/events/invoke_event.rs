@@ -24,13 +24,13 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend,
-        ExecutionJwtParams, PageActionSealingContext, PageExecutionJwtContext, TokenType,
-        fetch_profile_for_dispatch, format_run_version, is_completed_event, is_jwt_configured,
-        parse_completed_payload, payload_storage, proxy_sse_response_with_page_actions, rejection,
+        ByteStream, CompletionWrites, DispatchError, DispatchRequest, DispatchTrigger,
+        ExecutionBackend, ExecutionJwtParams, PageActionSealingContext, PageExecutionJwtContext,
+        TokenType, fail_run_on_stream_error, fetch_profile_for_dispatch, format_run_version,
+        is_jwt_configured, payload_storage, proxy_sse_response_with_page_actions, rejection,
         resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
-        update_run_on_completed_event, update_run_on_completion, variant,
+        stream_failure_event, variant,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -47,9 +47,16 @@ use flow_like::flow::execution::UserExecutionContext;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use utoipa::ToSchema;
 
 use super::db::get_event_from_db;
+
+macro_rules! invoke_span {
+    ($name:literal) => {
+        tracing::info_span!(target: "flow_like::observability", $name)
+    };
+}
 
 fn sync_dispatch_failure_message(error: &DispatchError) -> String {
     match error {
@@ -169,6 +176,25 @@ async fn mark_sync_dispatch_failure(
     if let Err(error) = crate::audit::record_execution_outcome(state, run_id, "dispatcher").await {
         tracing::error!(run_id, %error, "Failed to audit dispatch outcome");
     }
+}
+
+/// A run rejected before its admission committed has no row yet. It gets one
+/// first, so every dispatch failure stays visible as a failed run.
+async fn record_dispatch_failure(
+    state: &AppState,
+    run_id: &str,
+    app_id: &str,
+    record: crate::quota::RunRecord,
+    admitted: bool,
+    error: &DispatchError,
+) {
+    if !admitted
+        && let Err(insert_error) =
+            crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, record.run).await
+    {
+        tracing::error!(run_id, error = %insert_error, "Failed to create the record of a rejected run");
+    }
+    mark_sync_dispatch_failure(state, run_id, app_id, error).await;
 }
 
 /// Query parameters for event invocation
@@ -520,27 +546,29 @@ async fn invoke_event_impl(
     let hosted_subject = hosted_invocation
         .as_ref()
         .map(|context| context.subject.as_str());
-    let (sub, technical_user_id, user_context, actor_user_id) = if let Some(subject) =
-        hosted_subject
-    {
-        let user_context = match &user {
-            AppUser::OpenID(_) => Some(match user.app_permission_fresh(&app_id, &state).await {
-                Ok(permission) => permission.to_user_context(),
-                Err(error)
-                    if matches!(
-                        error.status(),
-                        axum::http::StatusCode::FORBIDDEN | axum::http::StatusCode::UNAUTHORIZED
-                    ) =>
-                {
-                    UserExecutionContext::new(subject)
+    let caller = async {
+        if let Some(subject) = hosted_subject {
+            let user_context = match &user {
+                AppUser::OpenID(_) => {
+                    Some(match user.app_permission_fresh(&app_id, &state).await {
+                        Ok(permission) => permission.to_user_context(),
+                        Err(error)
+                            if matches!(
+                                error.status(),
+                                axum::http::StatusCode::FORBIDDEN
+                                    | axum::http::StatusCode::UNAUTHORIZED
+                            ) =>
+                        {
+                            UserExecutionContext::new(subject)
+                        }
+                        Err(error) => return Err(error),
+                    })
                 }
-                Err(error) => return Err(error),
-            }),
-            _ => None,
-        };
-        let actor_user_id = user_context.as_ref().map(|_| subject.to_string());
-        (subject.to_string(), None, user_context, actor_user_id)
-    } else {
+                _ => None,
+            };
+            let actor_user_id = user_context.as_ref().map(|_| subject.to_string());
+            return Ok((subject.to_string(), None, user_context, actor_user_id));
+        }
         let permission = if params.page_trigger.is_some() {
             ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
         } else {
@@ -550,13 +578,40 @@ async fn invoke_event_impl(
             ApiError::forbidden("Invoking requires a caller that is linked to a user account")
         })?;
         let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
-        (
+        Ok((
             sub.clone(),
             technical_user_id,
             Some(permission.to_user_context()),
             Some(sub),
-        )
+        ))
     };
+    // A pre-resolved event is accepted only from another crate-private,
+    // governed contract. Generic event invocation always loads from the DB and
+    // applies the direct connected-app surface policy. The read runs while the
+    // caller is authorized; an authorization failure still wins.
+    let event = async {
+        match resolved_event {
+            Some(event) => Ok(event),
+            None => get_event_from_db(&state.db, &event_id, &app_id)
+                .instrument(tracing::info_span!(
+                    target: "flow_like::observability",
+                    "db.query",
+                    db.operation = "select",
+                    db.table = "Event"
+                ))
+                .await
+                .map_err(ApiError::from),
+        }
+    };
+    let (caller, event) =
+        flow_like_types::tokio::join!(caller.instrument(invoke_span!("invoke.authorize")), event);
+    let (sub, technical_user_id, user_context, actor_user_id): (
+        String,
+        Option<String>,
+        Option<UserExecutionContext>,
+        Option<String>,
+    ) = caller?;
+    let event = event?;
     // If invoked through an app connection, keep the caller app chain so the
     // run (and any tokens it mints) stays attributable across apps.
     let caller_app_chain = match &user {
@@ -574,13 +629,6 @@ async fn invoke_event_impl(
         _ => None,
     };
 
-    // A pre-resolved event is accepted only from another crate-private,
-    // governed contract. Generic event invocation always loads from the DB and
-    // applies the direct connected-app surface policy.
-    let event = match resolved_event {
-        Some(event) => event,
-        None => get_event_from_db(&state.db, &event_id, &app_id).await?,
-    };
     super::ensure_source_execution_allowed(&event)?;
     if !governed_connected_app_call {
         super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
@@ -681,13 +729,14 @@ async fn invoke_event_impl(
     // only resolves the WASM package set.
     let remote = !query.local;
     let (wasm_packages, input_payload_key, credentials, profile) = flow_like_types::tokio::join!(
-        resolve_wasm_packages(&state, &app_id),
+        resolve_wasm_packages(&state, &app_id).instrument(invoke_span!("invoke.wasm_packages")),
         store_input_payload(
             &state,
             &app_id,
             &run_id,
             params.payload.as_ref().filter(|_| remote),
-        ),
+        )
+        .instrument(invoke_span!("invoke.store_payload")),
         async {
             if remote {
                 Some(
@@ -698,7 +747,8 @@ async fn invoke_event_impl(
             } else {
                 None
             }
-        },
+        }
+        .instrument(invoke_span!("invoke.scoped_credentials")),
         async {
             if remote && !hosted {
                 fetch_profile_for_dispatch(
@@ -714,7 +764,8 @@ async fn invoke_event_impl(
                     .as_ref()
                     .and_then(|context| context.profile.clone())
             }
-        },
+        }
+        .instrument(invoke_span!("invoke.profile")),
     );
     let wasm_authority_revision =
         flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
@@ -1062,30 +1113,42 @@ async fn invoke_event_impl(
     let backend = state.dispatcher.backend();
     tracing::info!(run_id = %run_id, ?backend, "Dispatching streaming execution for event");
 
-    // Persist the run record BEFORE dispatch so infrastructure failures
-    // (executor crashes, network drops, timeouts) leave a visible Pending
-    // row that can be reconciled, rather than a silently lost workflow.
-    crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
-        .await
-        .map_err(|e| {
-            tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
-            ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
-        })?;
+    // The run row commits in the admission transaction, before the executor
+    // starts, so infrastructure failures (executor crashes, network drops,
+    // timeouts) leave a visible Pending row that can be reconciled.
+    let record = crate::quota::RunRecord {
+        caller_apps: crate::entity::caller_apps::caller_app_rows(
+            &run_id,
+            caller_app_chain.as_deref().unwrap_or_default(),
+        ),
+        run,
+    };
     record_invocation_start(&state, &user, execution_audit, hosted_subject).await;
 
     // Dispatch based on the configured backend
     match backend {
         ExecutionBackend::LambdaStream => {
             // Use Lambda SDK streaming
-            let (_dispatch_response, byte_stream) =
-                match state.dispatcher.dispatch_streaming(request).await {
-                    Ok(response) => response,
-                    Err(e) => {
-                        mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
-                        tracing::error!(error = %e, "Failed to dispatch Lambda streaming job");
-                        return Err(ApiError::from(e));
-                    }
-                };
+            let (_dispatch_response, byte_stream) = match state
+                .dispatcher
+                .dispatch_streaming_with_run(request, Some(record.clone()))
+                .await
+            {
+                Ok(response) => response,
+                Err(failure) => {
+                    record_dispatch_failure(
+                        &state,
+                        &run_id,
+                        &app_id,
+                        record,
+                        failure.admitted,
+                        &failure.error,
+                    )
+                    .await;
+                    tracing::error!(error = %failure.error, "Failed to dispatch Lambda streaming job");
+                    return Err(ApiError::from(failure.error));
+                }
+            };
 
             tracing::info!(run_id = %run_id, "Got Lambda response, starting stream proxy");
 
@@ -1099,15 +1162,26 @@ async fn invoke_event_impl(
         }
         _ => {
             // Use HTTP SSE for all other backends (Http, etc.)
-            let (_dispatch_response, executor_response) =
-                match state.dispatcher.dispatch_http_sse(request).await {
-                    Ok(response) => response,
-                    Err(e) => {
-                        mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
-                        tracing::error!(error = %e, "Failed to dispatch HTTP SSE job");
-                        return Err(ApiError::from(e));
-                    }
-                };
+            let (_dispatch_response, executor_response) = match state
+                .dispatcher
+                .dispatch_http_sse_with_run(request, Some(record.clone()))
+                .await
+            {
+                Ok(response) => response,
+                Err(failure) => {
+                    record_dispatch_failure(
+                        &state,
+                        &run_id,
+                        &app_id,
+                        record,
+                        failure.admitted,
+                        &failure.error,
+                    )
+                    .await;
+                    tracing::error!(error = %failure.error, "Failed to dispatch HTTP SSE job");
+                    return Err(ApiError::from(failure.error));
+                }
+            };
 
             tracing::info!(run_id = %run_id, "Got executor response, starting stream proxy");
 
@@ -1185,6 +1259,7 @@ fn proxy_lambda_sse_response(
         let mut byte_stream = stream;
         let mut buffer = Vec::new();
         let mut event_ordinal = 0_u64;
+        let mut completion = CompletionWrites::default();
 
         while let Some(result) = byte_stream.next().await {
             match result {
@@ -1203,10 +1278,8 @@ fn proxy_lambda_sse_response(
                         event_ordinal = event_ordinal.saturating_add(1);
                         if let Some(db) = &db
                             && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event_data)
-                            && is_completed_event(&parsed)
-                            && let Err(e) = update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed)).await
                         {
-                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                            completion.start(db, &run_id, &parsed);
                         }
 
                         let sse_event = Event::default()
@@ -1217,19 +1290,18 @@ fn proxy_lambda_sse_response(
                 }
                 Err(e) => {
                     tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
+                    completion.finish().await;
                     if let Some(context) = &db
-                        && let Err(error) = update_run_on_completion(context, &run_id, RunStatus::Failed, 0).await {
+                        && let Err(error) = fail_run_on_stream_error(context, &run_id, &e.to_string()).await {
                             tracing::error!(run_id = %run_id, %error, "Failed to record Lambda stream failure");
                         }
-                    let error_event = Event::default()
-                        .event("error")
-                        .data(flow_like_types::json::json!({ "error": e.to_string() }).to_string());
-                    yield Ok(error_event);
+                    yield Ok(stream_failure_event(e.to_string()));
                     break;
                 }
             }
         }
 
+        completion.finish().await;
         tracing::debug!(run_id = %run_id, "Lambda SSE stream ended");
     };
 
@@ -1386,5 +1458,124 @@ mod tests {
         assert!(statement.contains("\"ExecutionRun\".\"status\" IN"));
         assert!(statement.contains("'PENDING'"));
         assert!(statement.contains("'RUNNING'"));
+    }
+
+    /// A SQLite stand-in for the tables a `completed` event writes.
+    async fn completion_context() -> crate::audit::ExecutionAuditContext {
+        use crate::entity::{execution_usage_tracking, payment_request};
+        use sea_orm::{ConnectOptions, ConnectionTrait, Database, Schema, sea_query::Table};
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        let schema = Schema::new(db.get_database_backend());
+        for source in [
+            schema.create_table_from_entity(execution_run::Entity),
+            schema.create_table_from_entity(payment_request::Entity),
+            schema.create_table_from_entity(execution_usage_tracking::Entity),
+        ] {
+            let mut table = Table::create();
+            table.table(source.get_table_name().unwrap().clone());
+            for column in source.get_columns() {
+                table.col(column.clone());
+            }
+            db.execute(&table).await.unwrap();
+        }
+        let now = chrono::Utc::now().fixed_offset();
+        db.execute_raw(sea_orm::Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            r#"INSERT INTO public."ExecutionRun" (id,"boardId","nodeId","logLevel","inputPayloadLen","outputPayloadLen",progress,"appId","createdAt","updatedAt",status,mode,"runVariant") VALUES ('run-1','board-1','node-1',0,0,0,0,'app-1',?,?,'RUNNING','HTTP','PRIMARY')"#,
+            [now.into(), now.into()],
+        ))
+        .await
+        .unwrap();
+        crate::audit::ExecutionAuditContext {
+            db: std::sync::Arc::new(db),
+            dialect: crate::db::DbDialect::Postgres,
+            enabled: false,
+            state: None,
+        }
+    }
+
+    async fn run_status(context: &crate::audit::ExecutionAuditContext) -> RunStatus {
+        execution_run::Entity::find_by_id("run-1")
+            .one(context.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+    }
+
+    fn completed_frame() -> bytes::Bytes {
+        bytes::Bytes::from_static(
+            b"event: message\ndata: {\"event_type\":\"completed\",\"payload\":{\"status\":\"completed\"}}\n\n",
+        )
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn completion_writes_finish_after_the_client_disconnects() {
+        use futures::StreamExt;
+        let context = completion_context().await;
+        // The executor keeps its stream open after `completed`.
+        let executor = futures::stream::iter([Ok::<_, DispatchError>(completed_frame())])
+            .chain(futures::stream::pending());
+        let body = proxy_lambda_sse_response(
+            Box::pin(executor),
+            "run-1".into(),
+            Some(context.clone()),
+            None,
+        )
+        .into_response()
+        .into_body();
+        let mut frames = body.into_data_stream();
+        while let Some(frame) = frames.next().await {
+            if String::from_utf8_lossy(&frame.unwrap()).contains("\"completed\"") {
+                break;
+            }
+        }
+        drop(frames);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while run_status(&context).await != RunStatus::Completed {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the completion update was cancelled with the response body"
+            );
+            flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn the_stream_ends_only_after_its_completion_writes() {
+        let context = completion_context().await;
+        let executor = futures::stream::iter([Ok::<_, DispatchError>(completed_frame())]);
+        let body = proxy_lambda_sse_response(
+            Box::pin(executor),
+            "run-1".into(),
+            Some(context.clone()),
+            None,
+        )
+        .into_response()
+        .into_body();
+        let text = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&text).contains("\"completed\""));
+        assert_eq!(run_status(&context).await, RunStatus::Completed);
+
+        let context = completion_context().await;
+        let executor = reqwest::Response::from(axum::http::Response::new(reqwest::Body::from(
+            completed_frame(),
+        )));
+        let body = proxy_sse_response_with_page_actions(
+            executor,
+            "run-1".into(),
+            Some(context.clone()),
+            None,
+        )
+        .into_response()
+        .into_body();
+        axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+        assert_eq!(run_status(&context).await, RunStatus::Completed);
     }
 }

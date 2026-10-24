@@ -100,6 +100,7 @@ export interface ILockedUploadTarget {
 
 export interface ILockedUploadSettings {
 	readonly retentionDays?: number;
+	readonly deleteAfterRetention?: boolean;
 	readonly comment?: string;
 }
 
@@ -342,6 +343,7 @@ export function useLockedStorage({
 									: "error",
 							}),
 					retentionDays: settings.retentionDays,
+					deleteAfterRetention: settings.deleteAfterRetention,
 					comment: settings.comment,
 				},
 			})),
@@ -464,6 +466,30 @@ export function useLockedStorage({
 		[appId, mutate, state, t],
 	);
 
+	const toggleAutoDelete = useCallback(
+		(target: ILockedVersionTarget) =>
+			mutate(
+				() =>
+					state.setLockedAutoDelete(
+						appId,
+						target.item.id,
+						target.version.id,
+						!target.version.delete_after_retention,
+					),
+				target.version.delete_after_retention
+					? t("lockedStorage.autoDeleteOff", "Kept after retention ends")
+					: t(
+							"lockedStorage.autoDeleteOn",
+							"Deleted automatically when retention ends",
+						),
+				t(
+					"lockedStorage.autoDeleteFailed",
+					"Could not change automatic deletion",
+				),
+			),
+		[appId, mutate, state, t],
+	);
+
 	const confirmPurge = useCallback(async () => {
 		const target = purgeTarget;
 		if (!target) return;
@@ -528,6 +554,7 @@ export function useLockedStorage({
 		closeRetention,
 		extendRetention,
 		toggleLegalHold,
+		toggleAutoDelete,
 		purgeTarget,
 		openPurge: setPurgeTarget,
 		closePurge,

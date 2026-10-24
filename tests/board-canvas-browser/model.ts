@@ -126,6 +126,8 @@ export function project(
 	const flowNodes: Node[] = Object.values(nodes).map((node) => ({
 		id: node.id,
 		type: "node",
+		// The named fixture nodes exercise rich DOM editors; a custom class always keeps one.
+		className: node.id.startsWith("extra-") ? undefined : "harness-rich-editor",
 		position: { x: node.coordinates?.[0] ?? 0, y: node.coordinates?.[1] ?? 0 },
 		selected: selectedNodes.has(node.id),
 		data: { node },

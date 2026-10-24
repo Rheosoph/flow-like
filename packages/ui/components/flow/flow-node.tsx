@@ -251,6 +251,8 @@ const FlowNodeInner = memo(
 			props.data.boardId,
 		);
 		const nativePinControls = props.data.__flowNativeDom === true;
+		// The native canvas paints run glows, the spinner and corner badges around this node.
+		const canvasMarks = nativePinControls;
 		const { resolvedTheme } = useTheme();
 		const invalidate = useInvalidateInvoke();
 		// Field selectors: subscribing to the whole log store re-renders every
@@ -1175,7 +1177,7 @@ const FlowNodeInner = memo(
 				style={
 					isReroute
 						? nodeStyle
-						: props.data.remoteExecuting
+						: props.data.remoteExecuting && !canvasMarks
 							? {
 									boxShadow:
 										"0 0 12px 2px rgba(59, 130, 246, 0.5), 0 0 4px 1px rgba(59, 130, 246, 0.3)",
@@ -1191,11 +1193,11 @@ const FlowNodeInner = memo(
 					participants={presence.list}
 					peerUsers={props.data.peerUsers}
 				/>
-				{props.data.remoteExecuting && (
+				{props.data.remoteExecuting && !canvasMarks && (
 					<div className="absolute inset-0 rounded-md pointer-events-none animate-pulse ring-2 ring-blue-400/60" />
 				)}
 				{playNode}
-				{props.data.node.long_running && (
+				{props.data.node.long_running && !canvasMarks && (
 					<div
 						title={i18next.t("longRunningNode", "Long-running node")}
 						className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(-50%)] left-0 text-center bg-background rounded-full"
@@ -1226,7 +1228,7 @@ const FlowNodeInner = memo(
 						<BoxIcon className="w-2 h-2 text-amber-500" />
 					</div>
 				)}
-				{!props.data.isUnavailable && !isReroute && (
+				{!props.data.isUnavailable && !isReroute && !canvasMarks && (
 					<FlowNodeQualityBadge
 						boardId={props.data.boardId}
 						targetId={props.data.node.id}
@@ -1244,7 +1246,7 @@ const FlowNodeInner = memo(
 						<TriangleAlertIcon className="w-2 h-2 text-destructive-foreground" />
 					</div>
 				)}
-				{severity !== ILogLevel.Debug && (
+				{severity !== ILogLevel.Debug && !canvasMarks && (
 					<div className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(50%)] right-0 text-center bg-background rounded-full">
 						{severity === ILogLevel.Fatal && (
 							<BanIcon className="w-3 h-3 text-red-800" />
@@ -1257,7 +1259,7 @@ const FlowNodeInner = memo(
 						)}
 					</div>
 				)}
-				{nodeHeat && !isReroute && (
+				{nodeHeat && !isReroute && !canvasMarks && (
 					<>
 						<div
 							className="pointer-events-none absolute inset-0 rounded-md"
@@ -1344,7 +1346,7 @@ const FlowNodeInner = memo(
 							) : (
 								<WorkflowIcon className="w-2 h-2 shrink-0" />
 							)}
-							<small className="font-medium leading-none text-start truncate">
+							<small className="font-medium leading-tight text-start truncate">
 								<AutoResizeText
 									text={props.data.node?.friendly_name}
 									maxChars={30}
@@ -1371,7 +1373,7 @@ const FlowNodeInner = memo(
 								executed={executed === true}
 								onFilterLogs={props.data.onFilterLogs}
 							/>
-							{debouncedExecutionState === "running" && (
+							{debouncedExecutionState === "running" && !canvasMarks && (
 								<PuffLoader
 									color={resolvedTheme === "dark" ? "white" : "black"}
 									size={10}
@@ -1390,7 +1392,7 @@ const FlowNodeInner = memo(
 									{runActivity.formattedTime}
 								</span>
 							)}
-							{debouncedExecutionState === "done" && (
+							{debouncedExecutionState === "done" && !canvasMarks && (
 								<SquareCheckIcon className="w-2 h-2 text-primary" />
 							)}
 						</div>

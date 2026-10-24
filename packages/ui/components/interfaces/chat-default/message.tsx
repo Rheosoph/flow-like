@@ -11,6 +11,7 @@ import ThumbsDownIcon from "lucide-react/dist/esm/icons/thumbs-down.js";
 import ThumbsUpIcon from "lucide-react/dist/esm/icons/thumbs-up.js";
 import XIcon from "lucide-react/dist/esm/icons/x.js";
 import {
+	type ReactNode,
 	createContext,
 	memo,
 	useCallback,
@@ -54,7 +55,12 @@ import { AttachmentStrip } from "./attachment-strip";
 import type { IAttachment, IMessage } from "./chat-db";
 import { ChatMessageError } from "./chat-message-error";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
-import { buildInlineSegments, joinContentText } from "./inline-segments";
+import {
+	type InlineAnchoredContent,
+	buildInlineSegments,
+	joinContentText,
+	unanchoredWidgets,
+} from "./inline-segments";
 import { MessageWidgets } from "./message-widgets";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
 import { extractThinkBlocks } from "./reasoning-format";
@@ -92,6 +98,27 @@ interface MessageProps {
 	eventId?: string;
 	/** Pre-rasterize embedded widgets for the model's context (chat `attach_widget_snapshots`). */
 	widgetSnapshots?: boolean;
+	/** Host nodes placed at offsets of this message's text. Compared by identity. */
+	anchoredContent?: readonly MessageInlineContent[];
+}
+
+/** A node the chat host renders inside one message, at `offset` into its joined text. */
+export interface MessageInlineContent extends InlineAnchoredContent {
+	node: ReactNode;
+}
+
+/** Blocks placed inside the prose column drop its text-sm/relaxed type, matching the after-text block. */
+const ANCHORED_BLOCK_CLASS = "my-3 text-base leading-normal";
+
+function AnchoredContentBlock({ entry }: { entry: MessageInlineContent }) {
+	return (
+		<div
+			className={cn(ANCHORED_BLOCK_CLASS, "w-full whitespace-normal")}
+			data-fl-chat-anchored-content
+		>
+			{entry.node}
+		</div>
+	);
 }
 
 const MessageActionButton = ({
@@ -455,6 +482,7 @@ export const MessageComponent = memo(
 		boardId,
 		eventId,
 		widgetSnapshots = true,
+		anchoredContent,
 	}: Readonly<MessageProps>) {
 		const { t } = useTranslation("chat");
 		const feedbackEnabled = useContext(ChatFeedbackEnabledContext);
@@ -693,40 +721,63 @@ export const MessageComponent = memo(
 			() =>
 				isUser || messageContent.thinking
 					? null
-					: buildInlineSegments(messageContent.text, planSteps),
-			[isUser, messageContent.text, messageContent.thinking, planSteps],
+					: buildInlineSegments(
+							messageContent.text,
+							planSteps,
+							message.widgets,
+							anchoredContent,
+						),
+			[
+				isUser,
+				messageContent.text,
+				messageContent.thinking,
+				planSteps,
+				message.widgets,
+				anchoredContent,
+			],
 		);
 
 		// Which segments are still moving while the turn streams: the growing text tail (not
 		// necessarily the last segment — an action anchored at the end sorts after it) and the one
 		// action group that can still gain steps.
-		const { lastTextSegmentIndex, liveSegmentIndex } = useMemo(() => {
-			let lastText = -1;
-			let lastSteps = -1;
-			let withCurrent = -1;
-			inlineSegments?.forEach((segment, index) => {
-				if (segment.steps) {
-					lastSteps = index;
-					if (
-						currentPlanStepId &&
-						segment.steps.some((step) => step.id === currentPlanStepId)
-					) {
-						withCurrent = index;
+		const { lastTextSegmentIndex, liveSegmentIndex, stepsInline } =
+			useMemo(() => {
+				let lastText = -1;
+				let lastSteps = -1;
+				let withCurrent = -1;
+				inlineSegments?.forEach((segment, index) => {
+					if (segment.steps) {
+						lastSteps = index;
+						if (
+							currentPlanStepId &&
+							segment.steps.some((step) => step.id === currentPlanStepId)
+						) {
+							withCurrent = index;
+						}
+						return;
 					}
-					return;
-				}
-				lastText = index;
-			});
-			return {
-				lastTextSegmentIndex: lastText,
-				liveSegmentIndex: withCurrent === -1 ? lastSteps : withCurrent,
-			};
-		}, [inlineSegments, currentPlanStepId]);
+					if (segment.text !== undefined) lastText = index;
+				});
+				return {
+					lastTextSegmentIndex: lastText,
+					liveSegmentIndex: withCurrent === -1 ? lastSteps : withCurrent,
+					stepsInline: lastSteps !== -1,
+				};
+			}, [inlineSegments, currentPlanStepId]);
 
 		// A failed turn that never produced text has nothing to render but the error card — an empty
 		// prose block would still reserve a line above it.
 		const hideEmptyBody =
 			!isUser && !loading && !messageContent.text && Boolean(message.error);
+
+		// Whatever the segments do not place keeps the legacy spot after the text.
+		const segmentsShown = !hideEmptyBody && inlineSegments !== null;
+		const trailingWidgets = useMemo(
+			() =>
+				segmentsShown ? unanchoredWidgets(message.widgets) : message.widgets,
+			[segmentsShown, message.widgets],
+		);
+		const trailingContent = segmentsShown ? undefined : anchoredContent;
 
 		const usageStats = !isUser ? (message.usage_stats ?? []) : [];
 		const hasUsageStats = usageStats.length > 0;
@@ -775,7 +826,7 @@ export const MessageComponent = memo(
 								{t("asked", "Asked")}
 							</span>
 						)}
-						{!isUser && !inlineSegments && planSteps.length > 0 && (
+						{!isUser && !stepsInline && planSteps.length > 0 && (
 							<PlanSteps
 								steps={planSteps}
 								currentStepId={currentPlanStepId}
@@ -811,8 +862,28 @@ export const MessageComponent = memo(
 						>
 							{hideEmptyBody ? null : inlineSegments ? (
 								<>
+									{/* Only anchored widgets or host nodes and no text yet: the same
+									    dots the unsegmented empty turn shows. */}
+									{loading &&
+										!messageContent.text &&
+										planSteps.length === 0 && <ThinkingIndicator />}
 									{inlineSegments.map((segment, index) =>
-										segment.steps ? (
+										segment.widgets ? (
+											<MessageWidgets
+												key={segment.key}
+												widgets={segment.widgets}
+												appId={appId}
+												boardId={boardId}
+												eventId={eventId}
+												snapshots={widgetSnapshots}
+												className={ANCHORED_BLOCK_CLASS}
+											/>
+										) : segment.content ? (
+											<AnchoredContentBlock
+												key={segment.key}
+												entry={segment.content}
+											/>
+										) : segment.steps ? (
 											<InlineStepGroup
 												key={segment.key}
 												steps={segment.steps}
@@ -916,15 +987,18 @@ export const MessageComponent = memo(
 							onFullscreen={setFullscreenFile}
 							onShowAll={showAllAttachments}
 						/>
-						{(message.widgets?.length ?? 0) > 0 && (
+						{(trailingWidgets?.length ?? 0) > 0 && (
 							<MessageWidgets
-								widgets={message.widgets}
+								widgets={trailingWidgets}
 								appId={appId}
 								boardId={boardId}
 								eventId={eventId}
 								snapshots={widgetSnapshots}
 							/>
 						)}
+						{trailingContent?.map((entry) => (
+							<AnchoredContentBlock key={entry.key} entry={entry} />
+						))}
 						{!isUser && (message.app_refs?.length ?? 0) > 0 && (
 							<AppReferences appIds={message.app_refs ?? []} />
 						)}
@@ -1043,6 +1117,7 @@ export const MessageComponent = memo(
 			prev.eventId === next.eventId &&
 			prev.loading === next.loading &&
 			prev.widgetSnapshots === next.widgetSnapshots &&
+			prev.anchoredContent === next.anchoredContent &&
 			prev.onMessageUpdate === next.onMessageUpdate
 		);
 	},

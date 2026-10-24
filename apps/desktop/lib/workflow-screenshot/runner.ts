@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BOARD_RENDERER_STORAGE_KEY } from "@flow-like/flow-like-ui/hooks/use-board-renderer";
 import type { IBoard } from "@flow-like/flow-like-ui/lib/schema/flow/board";
 import type {
 	DocScreenshotPlan,
@@ -227,7 +228,10 @@ export function buildWorkflowScreenshotPlan(
 					id: "flowscript-render-board",
 					...(focusId ? { node: focusId } : {}),
 				},
-				localStorage: { "tutorial-finished-new": "true" },
+				localStorage: {
+					"tutorial-finished-new": "true",
+					[BOARD_RENDERER_STORAGE_KEY]: options.renderer,
+				},
 				steps,
 			},
 		],

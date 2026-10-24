@@ -77,7 +77,10 @@ all-metadata = [
 
 # Product-oriented bundles keep the CLI/task UX simple. Applications select one intent rather
 # than reproducing a long and easy-to-drift feature list.
-desktop = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local", "training-auto"]
+# Desktop and server builds link the unixODBC driver manager (system odbc32 on Windows) and
+# ship it with the app or image; mobile reaches the database bundles via `portable-all` and
+# stays without ODBC.
+desktop = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local", "training-auto", "odbc-federation"]
 desktop-apple = [
     "desktop",
     "local-tts-metal",
@@ -104,7 +107,7 @@ mobile-apple = [
 # Headless servers run forecasting on CPU and proxy general text/image models. They
 # list desktop automation as metadata only and refuse boards that use it.
 # The historical `server-execute` feature remains compatibility-complete below.
-server = ["remote-all", "portable-execute", "remote", "forecasting", "local-only-metadata"]
+server = ["remote-all", "portable-execute", "remote", "forecasting", "local-only-metadata", "odbc-federation"]
 # Executors keep no device-local training ledger, so server-local-ml, executor-local-ml
 # and local-runtime-ml never train: boards with training nodes still load, and running
 # one reports that training needs the desktop app or an offline device placement. Through
@@ -243,8 +246,8 @@ clickhouse = ["package-data", "flow-like-catalog-data/clickhouse"]
 flight = ["package-data", "flow-like-catalog-data/flight"]
 bigquery = ["package-data", "flow-like-catalog-data/bigquery"]
 odbc = ["package-data", "flow-like-catalog-data/odbc"]
-# ODBC excluded by default - requires system library (unixodbc on macOS/Linux)
-all-databases = ["postgres", "mysql", "sqlite", "duckdb", "clickhouse", "flight", "bigquery"]
+# ODBC links the unixODBC driver manager on macOS/Linux, so only bundles that ship it opt in.
+all-databases =["postgres", "mysql", "sqlite", "duckdb", "clickhouse", "flight", "bigquery"]
 all-databases-with-odbc = ["all-databases", "odbc"]
 
 # Federation support
@@ -256,13 +259,13 @@ sqlite-federation = ["package-data", "flow-like-catalog-data/sqlite-federation"]
 duckdb-federation = ["package-data", "flow-like-catalog-data/duckdb-federation"]
 clickhouse-federation = ["package-data", "flow-like-catalog-data/clickhouse-federation"]
 odbc-federation = ["package-data", "flow-like-catalog-data/odbc-federation"]
-# ODBC excluded by default - requires system library (unixodbc on macOS/Linux)
-all-databases-federation = ["postgres-federation", "mysql-federation", "sqlite-federation", "duckdb-federation", "clickhouse-federation"]
+# ODBC links the unixODBC driver manager on macOS/Linux, so only bundles that ship it opt in.
+all-databases-federation =["postgres-federation", "mysql-federation", "sqlite-federation", "duckdb-federation", "clickhouse-federation"]
 all-databases-federation-with-odbc = ["all-databases-federation", "odbc-federation"]
 
 # Full feature bundle (all databases + federation + data lakes) - catalog metadata only
-# ODBC excluded by default to avoid runtime crashes if unixodbc is not installed
-all = ["all-metadata", "all-lakes", "all-databases", "all-databases-federation"]
+# ODBC is added by the desktop/server bundles, which ship the driver manager it links.
+all =["all-metadata", "all-lakes", "all-databases", "all-databases-federation"]
 all-with-odbc = ["all-metadata", "all-lakes", "all-databases-with-odbc", "all-databases-federation-with-odbc"]
 portable-all = ["portable-metadata", "all-lakes", "all-databases", "all-databases-federation"]
 remote-all = ["remote-metadata", "all-lakes", "all-databases", "all-databases-federation"]

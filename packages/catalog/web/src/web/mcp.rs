@@ -2160,6 +2160,7 @@ async fn tool_call_response(
     match super::http_runtime::trigger_shared_function_context(
         &tool.context,
         &flow_like_types::Value::Object(args),
+        None,
         parent_node_id,
         "MCP tool handler",
     )

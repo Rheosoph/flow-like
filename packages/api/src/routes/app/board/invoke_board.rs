@@ -23,11 +23,10 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
-        TokenType, fetch_profile_for_dispatch, format_run_version, is_completed_event,
-        is_jwt_configured, parse_completed_payload, payload_storage, proxy_sse_response,
-        resolve_wasm_packages, sign_execution_jwt, update_run_on_completed_event,
-        update_run_on_completion,
+        ByteStream, CompletionWrites, DispatchRequest, DispatchTrigger, ExecutionBackend,
+        ExecutionJwtParams, TokenType, fail_run_on_stream_error, fetch_profile_for_dispatch,
+        format_run_version, is_jwt_configured, payload_storage, proxy_sse_response,
+        resolve_wasm_packages, sign_execution_jwt, stream_failure_event,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -520,6 +519,7 @@ fn proxy_lambda_sse_response(
     let stream = async_stream::stream! {
         let mut byte_stream = stream;
         let mut buffer = Vec::new();
+        let mut completion = CompletionWrites::default();
 
         while let Some(result) = byte_stream.next().await {
             match result {
@@ -531,10 +531,8 @@ fn proxy_lambda_sse_response(
                     while let Some(event) = extract_sse_event(&mut buffer) {
                         if let Some(db) = &db
                             && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
-                            && is_completed_event(&parsed)
-                            && let Err(e) = update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed)).await
                         {
-                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                            completion.start(db, &run_id, &parsed);
                         }
 
                         let sse_event = Event::default()
@@ -545,19 +543,18 @@ fn proxy_lambda_sse_response(
                 }
                 Err(e) => {
                     tracing::warn!(run_id = %run_id, error = %e, "Lambda stream error");
+                    completion.finish().await;
                     if let Some(context) = &db
-                        && let Err(error) = update_run_on_completion(context, &run_id, RunStatus::Failed, 0).await {
+                        && let Err(error) = fail_run_on_stream_error(context, &run_id, &e.to_string()).await {
                             tracing::error!(run_id = %run_id, %error, "Failed to record Lambda stream failure");
                         }
-                    let error_event = Event::default()
-                        .event("error")
-                        .data(format!(r#"{{"error":"{}"}}"#, e));
-                    yield Ok(error_event);
+                    yield Ok(stream_failure_event(e.to_string()));
                     break;
                 }
             }
         }
 
+        completion.finish().await;
         tracing::debug!(run_id = %run_id, "Lambda SSE stream ended");
     };
 

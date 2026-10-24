@@ -13,18 +13,25 @@ import { useEffect, useRef, useState } from "react";
 import { Toaster } from "sonner";
 import { FlowBoard } from "../../packages/ui/components/flow/flow-board";
 import { historyRegistry } from "../../packages/ui/components/flow/flow-history";
+import { FlowWrapper } from "../../packages/ui/components/flow/flow-wrapper";
 import { MobileHeaderProvider } from "../../packages/ui/components/ui/mobile-header";
 import { TooltipProvider } from "../../packages/ui/components/ui/tooltip";
 import { NgramModel } from "../../packages/ui/lib/node-suggestions/ngram";
 import { openSuggestionStore } from "../../packages/ui/lib/node-suggestions/store";
 import type { BoardFacts } from "../../packages/ui/lib/node-suggestions/types";
-import type { IBoard } from "../../packages/ui/lib/schema/flow/board";
+import {
+	type IBoard,
+	ILayerType,
+} from "../../packages/ui/lib/schema/flow/board";
 import type { IGenericCommand } from "../../packages/ui/lib/schema/flow/board/commands/generic-command";
+import type { INode } from "../../packages/ui/lib/schema/flow/node";
 import {
 	type IPin,
 	IPinType,
+	IValueType,
 	IVariableType,
 } from "../../packages/ui/lib/schema/flow/pin";
+import type { IStorageItem } from "../../packages/ui/lib/schema/storage/storage-item";
 import { useAssistantSurface } from "../../packages/ui/state/assistant-surface";
 import {
 	type IBackendState,
@@ -43,6 +50,102 @@ const APP_ID = "host-parity-app";
 const BOARD_ID = "host-parity";
 const wait = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Shell drags need FlowWrapper's drop handling and something to drag. */
+const dropFixture = () =>
+	typeof window !== "undefined" &&
+	new URLSearchParams(window.location.search).has("drop-ghosts");
+
+function dropPin(
+	id: string,
+	name: string,
+	direction: IPinType,
+	index: number,
+	dataType: IVariableType,
+): IPin {
+	return {
+		id,
+		name,
+		friendly_name: name,
+		description: "",
+		pin_type: direction,
+		data_type: dataType,
+		value_type: IValueType.Normal,
+		index,
+		connected_to: [],
+		depends_on: [],
+	};
+}
+
+/** The production catalog entries a shell drop plans from. */
+function dropTemplates(): INode[] {
+	const template = (
+		name: string,
+		friendlyName: string,
+		icon: string,
+		pins: IPin[],
+	): INode => ({
+		id: `${name}-template`,
+		name,
+		friendly_name: friendlyName,
+		description: friendlyName,
+		category: "Fixture",
+		icon,
+		coordinates: [0, 0, 0],
+		pins: Object.fromEntries(
+			pins.map((pin) => [
+				`${name}.${pin.id}`,
+				{ ...pin, id: `${name}.${pin.id}` },
+			]),
+		),
+	});
+	const { Input, Output } = IPinType;
+	const types = IVariableType;
+	return [
+		template("variable_get", "Get Variable", "/flow/icons/variable.svg", [
+			dropPin("var_ref", "var_ref", Input, 1, types.String),
+			dropPin("value", "value", Output, 1, types.Generic),
+		]),
+		template("variable_set", "Set Variable", "/flow/icons/variable.svg", [
+			dropPin("exec_in", "exec_in", Input, 1, types.Execution),
+			dropPin("var_ref", "var_ref", Input, 2, types.String),
+			dropPin("value_in", "value_in", Input, 3, types.Generic),
+			dropPin("exec_out", "exec_out", Output, 1, types.Execution),
+			dropPin("value_out", "value_out", Output, 2, types.Generic),
+		]),
+		template(
+			"control_call_function",
+			"Call Function",
+			"/flow/icons/workflow.svg",
+			[
+				dropPin(
+					"function_layer_id",
+					"function_layer_id",
+					Input,
+					1,
+					types.String,
+				),
+			],
+		),
+		template("path_from_upload_dir", "Upload Dir", "/flow/icons/path.svg", [
+			dropPin("path", "path", Output, 1, types.Struct),
+		]),
+		template("path_from_user_dir", "User Dir", "/flow/icons/path.svg", [
+			dropPin("node_scope", "node_scope", Input, 1, types.Boolean),
+			dropPin("path", "path", Output, 1, types.Struct),
+		]),
+		template("child", "Child", "/flow/icons/path.svg", [
+			dropPin("parent_path", "parent_path", Input, 1, types.Struct),
+			dropPin("child_name", "child_name", Input, 2, types.String),
+			dropPin("path", "path", Output, 1, types.Struct),
+		]),
+	];
+}
+
+const DROP_STORAGE: IStorageItem[] = [
+	{ location: "reports", is_dir: true, size: 0, last_modified: "" },
+	{ location: "invoice.pdf", size: 2048, last_modified: "" },
+];
 
 function makeHostBoard(id = BOARD_ID): IBoard {
 	const board = { ...makeParityBoard(), id };
@@ -264,6 +367,52 @@ function makeHostBoard(id = BOARD_ID): IBoard {
 			pins: { [targetPin.id]: targetPin },
 		};
 	}
+	if (dropFixture()) {
+		board.variables.counter = {
+			id: "counter",
+			name: "Counter",
+			data_type: IVariableType.Integer,
+			value_type: IValueType.Normal,
+			editable: true,
+			exposed: false,
+			secret: false,
+		};
+		board.layers.fetch = {
+			id: "fetch",
+			name: "Fetch",
+			type: ILayerType.Function,
+			coordinates: [0, 0, 0],
+			nodes: {},
+			comments: {},
+			variables: {},
+			pins: Object.fromEntries(
+				[
+					dropPin(
+						"fetch.exec_in",
+						"exec_in",
+						IPinType.Input,
+						1,
+						IVariableType.Execution,
+					),
+					dropPin("fetch.url", "url", IPinType.Input, 2, IVariableType.String),
+					dropPin(
+						"fetch.exec_out",
+						"exec_out",
+						IPinType.Output,
+						1,
+						IVariableType.Execution,
+					),
+					dropPin(
+						"fetch.body",
+						"body",
+						IPinType.Output,
+						2,
+						IVariableType.String,
+					),
+				].map((pin) => [pin.id, pin]),
+			),
+		};
+	}
 	return board;
 }
 
@@ -286,6 +435,19 @@ function Host() {
 	const reads = useRef<Record<string, number>>({});
 
 	useEffect(() => {
+		const params = new URLSearchParams(window.location.search);
+		const boardReadDelay = Math.max(
+			0,
+			Math.min(Number(params.get("board-read-delay")) || 0, 15_000),
+		);
+		let boardReadFailures = Math.max(
+			0,
+			Number(params.get("board-read-failures")) || 0,
+		);
+		let invalidBoardReads = Math.max(
+			0,
+			Number(params.get("board-read-invalid")) || 0,
+		);
 		const read = (name: string) => {
 			reads.current[name] = (reads.current[name] ?? 0) + 1;
 		};
@@ -347,10 +509,23 @@ function Host() {
 						pin.name = pin.pin_type === "Input" ? "route_in" : "route_out";
 						pin.data_type = "Generic" as typeof pin.data_type;
 					}
-					return [...catalog, reroute];
+					return [
+						...catalog,
+						reroute,
+						...(dropFixture() ? dropTemplates() : []),
+					];
 				},
 				async getBoard() {
 					read("getBoard");
+					if (boardReadDelay) await wait(boardReadDelay);
+					if (boardReadFailures > 0) {
+						boardReadFailures -= 1;
+						throw new Error("Fixture could not load the board");
+					}
+					if (invalidBoardReads > 0) {
+						invalidBoardReads -= 1;
+						return { message: "Invalid board response" } as unknown as IBoard;
+					}
 					return structuredClone(model.current);
 				},
 				async getBoardAuthoritative() {
@@ -445,6 +620,30 @@ function Host() {
 				async getProfileBits() {
 					return [];
 				},
+			}),
+			...(dropFixture() && {
+				storageState: Object.assign(
+					Object.create(originalBackend.storageState),
+					{
+						async listStorageItems(_app: string, prefix: string) {
+							return prefix ? [] : DROP_STORAGE;
+						},
+					},
+				),
+				// The explorer lists widgets and tables beside storage.
+				widgetState: {
+					async getWidgets() {
+						return [];
+					},
+				} as unknown as IBackendState["widgetState"],
+				dbState: Object.assign(Object.create(originalBackend.dbState), {
+					async listTables() {
+						return [];
+					},
+					async listTablesUser() {
+						return [];
+					},
+				}),
 			}),
 			async isOffline() {
 				return true;
@@ -586,18 +785,21 @@ function Host() {
 				className="parity-board"
 				style={{ display: "flex", flexDirection: "column" }}
 			>
-				{ready && (
-					<FlowBoard
-						appId={APP_ID}
-						boardId={boardId}
-						initialVersion={
-							new URLSearchParams(window.location.search).has("historical")
-								? [0, 0, 1]
-								: undefined
-						}
-						externalAssistant
-					/>
-				)}
+				{ready &&
+					(dropFixture() ? (
+						<FlowWrapper appId={APP_ID} boardId={boardId} externalAssistant />
+					) : (
+						<FlowBoard
+							appId={APP_ID}
+							boardId={boardId}
+							initialVersion={
+								new URLSearchParams(window.location.search).has("historical")
+									? [0, 0, 1]
+									: undefined
+							}
+							externalAssistant
+						/>
+					))}
 			</div>
 		</main>
 	);

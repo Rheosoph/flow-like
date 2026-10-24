@@ -178,6 +178,7 @@ export type FlowScriptWorkerRequest =
 			names?: FlowScriptNamesTable;
 	  }
 	| { kind: "cancel"; id: number }
+	| { kind: "forget-doc"; uri: string }
 	| FlowScriptWorkerDocRequest;
 
 export type FlowScriptWorkerResult =
@@ -242,6 +243,10 @@ export function handleFlowScriptWorkerMessage(
 	if (request.kind === "cancel") {
 		if (state.cancelled.size >= MAX_CANCELLED) state.cancelled.clear();
 		state.cancelled.add(request.id);
+		return null;
+	}
+	if (request.kind === "forget-doc") {
+		state.docs.delete(request.uri);
 		return null;
 	}
 	if (state.cancelled.delete(request.id)) {

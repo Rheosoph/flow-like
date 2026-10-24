@@ -42,10 +42,12 @@ impl NodeLogic for HexEncodeBytesNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let input: Vec<u8> = context.evaluate_pin("input").await?;
+        let input = context.evaluate_pin_bytes("input").await?;
+        const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut s = String::with_capacity(input.len() * 2);
         for &b in &input {
-            s.push_str(&format!("{b:02x}"));
+            s.push(HEX[usize::from(b >> 4)] as char);
+            s.push(HEX[usize::from(b & 0x0f)] as char);
         }
         context.set_pin_value("output", json!(s)).await?;
         Ok(())

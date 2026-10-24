@@ -17,6 +17,7 @@ import type { IEvent } from "../../lib/schema/flow/event";
 import type { IPage } from "../../state/backend-state/page-state";
 import type { FrontendStateStore } from "../a2ui/frontend-state";
 import type { Surface } from "../a2ui/types";
+import type { PageView } from "./page-transition";
 
 type RunEvents = { event_type: string; payload: unknown }[];
 type Run = {
@@ -73,6 +74,7 @@ const actual = {
 		...(await import("./native-widget-page-capture")),
 	},
 	pageLoadingSkeleton: { ...(await import("./page-loading-skeleton")) },
+	loadingScreen: { ...(await import("../ui/loading-screen")) },
 };
 
 const persistence = {
@@ -160,6 +162,7 @@ mock.module("../a2ui/A2UIRenderer", () => ({
 		renderedOnA2UIMessage = onA2UIMessage;
 		return (
 			<div
+				data-surface-id={surface.id}
 				data-page-actions-enabled={isPreviewMode}
 				data-rendered-components={Object.keys(surface.components)
 					.sort()
@@ -213,8 +216,13 @@ mock.module("./page-loading-skeleton", () => ({
 		<div data-page-skeleton="">{title}</div>
 	),
 }));
+mock.module("../ui/loading-screen", () => ({
+	...actual.loadingScreen,
+	LoadingScreen: () => <div data-loading-screen="" />,
+}));
 
 const { PageInterface } = await import("./page-interface");
+const { PageTransition } = await import("./page-transition");
 const { STALE_SURFACE_SETTLE_MS } = await import("./use-page-surface-cache");
 const { getFrontendStateStore } = await import("../a2ui/frontend-state");
 const { notifyLivePageRun } = await import("../a2ui/live-page-registry");
@@ -281,6 +289,7 @@ afterAll(() => {
 		() => actual.nativeWidgetPageCapture,
 	);
 	mock.module("./page-loading-skeleton", () => actual.pageLoadingSkeleton);
+	mock.module("../ui/loading-screen", () => actual.loadingScreen);
 });
 
 function createPage(overrides: Partial<IPage> = {}): IPage {
@@ -320,11 +329,7 @@ async function flushDisposal() {
 	});
 }
 
-async function mount(
-	appId: string,
-	page: IPage,
-	{ strict = false, executionPending = false } = {},
-) {
+function openHost() {
 	const window = new Window({ url: "https://example.test/use" });
 	// Bun does not populate this Happy DOM realm constructor used by selector parsing.
 	Object.assign(window, { SyntaxError });
@@ -358,12 +363,23 @@ async function mount(
 	window.document.body.append(container);
 	host = container as unknown as HTMLElement;
 	root = createRoot(host);
+}
+
+async function mount(
+	appId: string,
+	page: IPage,
+	{ strict = false, executionPending = false } = {},
+) {
+	openHost();
 	const event = { id: "page-event", default_page_id: page.id } as IEvent;
+	let queryParams: Record<string, string> = {};
 	const rerender = async (
 		nextPage: IPage,
 		nextExecutionPending = executionPending,
+		nextQueryParams = queryParams,
 	) => {
 		executionPending = nextExecutionPending;
+		queryParams = nextQueryParams;
 		const element = (
 			<PageInterface
 				appId={appId}
@@ -372,7 +388,7 @@ async function mount(
 				pageExecutionRevision="execution-v1"
 				executionPending={executionPending}
 				route="/load"
-				queryParams={{}}
+				queryParams={queryParams}
 			/>
 		);
 		await act(async () => {
@@ -870,6 +886,147 @@ describe("noCache pages", () => {
 		await finishRun(runs[0]);
 		expect(readCachedSurface).not.toHaveBeenCalled();
 		expect(writeCachedSurface).not.toHaveBeenCalled();
+	});
+
+	test("keep their output on screen while a run for new query parameters loads", async () => {
+		const page = createPage({ noCache: true });
+		const { rerender } = await mount("no-cache-query", page);
+		await deliver(runs[0], freshElement);
+		await finishRun(runs[0]);
+
+		await rerender(page, false, { filter: "open" });
+		expect(runs).toHaveLength(2);
+		expect(skeleton()).toBeNull();
+		expect(renderedComponents()).toBe("fresh headline root");
+		expect(loadIndicator()).not.toBeNull();
+	});
+});
+
+describe("page transitions", () => {
+	const pageView = (page: IPage): PageView => ({
+		kind: "page",
+		key: page.id,
+		props: {
+			appId: "transition",
+			event: { id: `${page.id}-event`, default_page_id: page.id } as IEvent,
+			page,
+			pageExecutionRevision: "execution-v1",
+			route: "/load",
+			queryParams: {},
+		},
+	});
+	const staticPage = (id: string) =>
+		createPage({ id, onLoadEventId: undefined });
+	const loadingView: PageView = { kind: "loading" };
+
+	async function mountTransition(view: PageView, scope = "app") {
+		openHost();
+		const show = async (next: PageView, nextScope = scope) => {
+			await act(async () => {
+				root?.render(<PageTransition scope={nextScope} view={next} />);
+			});
+		};
+		await show(view);
+		return { show };
+	}
+
+	const surfaces = (visible: boolean) =>
+		[...(host?.querySelectorAll("[data-surface-id]") ?? [])]
+			.filter(
+				(element) =>
+					Boolean(element.closest('[aria-hidden="true"]')) !== visible,
+			)
+			.map((element) => element.getAttribute("data-surface-id"));
+	const loadingScreen = () => host?.querySelector("[data-loading-screen]");
+
+	test("opening the first page still shows the loading screens", async () => {
+		const { show } = await mountTransition(loadingView);
+		expect(loadingScreen()).not.toBeNull();
+
+		await show(pageView(createPage({ noCache: true })));
+		expect(loadingScreen()).toBeNull();
+		expect(skeleton()?.textContent).toBe("Running workflow");
+	});
+
+	test("a navigation that is still resolving keeps the page on screen under the indicator", async () => {
+		const { show } = await mountTransition(pageView(staticPage("page-a")));
+		expect(loadIndicator()).toBeNull();
+
+		await show(loadingView);
+		expect(loadingScreen()).toBeNull();
+		expect(surfaces(true)).toEqual(["page-a"]);
+		expect(loadIndicator()).not.toBeNull();
+		expect(loadStatus()?.textContent).toBe("Loading page data…");
+	});
+
+	test("the next page loads out of sight and replaces the previous one at its first output", async () => {
+		const { show } = await mountTransition(pageView(staticPage("page-a")));
+		await show(pageView(createPage({ noCache: true })));
+		expect(runs).toHaveLength(1);
+		expect(surfaces(true)).toEqual(["page-a"]);
+		expect(skeleton()).toBeNull();
+		expect(loadIndicator()).not.toBeNull();
+
+		await deliver(runs[0], freshElement);
+		expect(surfaces(true)).toEqual(["load-page"]);
+		expect(surfaces(false)).toEqual([]);
+		expect(renderedComponents()).toBe("fresh headline root");
+		expect(loadIndicator()).toBeNull();
+		expect(runs).toHaveLength(1);
+	});
+
+	test("a default page takes over once its saved surface has been read", async () => {
+		const releaseCache = holdCacheRead();
+		const { show } = await mountTransition(pageView(staticPage("page-a")));
+		await show(pageView(createPage()));
+		expect(surfaces(true)).toEqual(["page-a"]);
+		expect(surfaces(false)).toEqual(["load-page"]);
+
+		await act(async () => releaseCache(cachedSurface()));
+		expect(surfaces(true)).toEqual(["load-page"]);
+		expect(surfaces(false)).toEqual([]);
+		expect(renderedComponents()).toBe("cached headline root");
+	});
+
+	test("a page with content at once replaces the previous one before it paints", async () => {
+		const { show } = await mountTransition(pageView(staticPage("page-a")));
+		await show(pageView(staticPage("page-b")));
+		expect(surfaces(true)).toEqual(["page-b"]);
+		expect(surfaces(false)).toEqual([]);
+		expect(loadIndicator()).toBeNull();
+	});
+
+	test("returning to the page on screen drops the page loading behind it", async () => {
+		const pageA = pageView(staticPage("page-a"));
+		const { show } = await mountTransition(pageA);
+		await show(pageView(createPage({ noCache: true })));
+		await act(async () => runs[0].onStarted?.("run-next"));
+
+		await show(pageA);
+		expect(surfaces(true)).toEqual(["page-a"]);
+		expect(loadIndicator()).toBeNull();
+		await flushDisposal();
+		expect(cancelExecution.mock.calls).toEqual([["run-next"]]);
+	});
+
+	test("a page from another account is never held", async () => {
+		const { show } = await mountTransition(
+			pageView(staticPage("page-a")),
+			"account-1",
+		);
+		await show(loadingView, "account-2");
+		expect(loadingScreen()).not.toBeNull();
+		expect(surfaces(true)).toEqual([]);
+	});
+
+	test("another interface replaces the page at once", async () => {
+		const { show } = await mountTransition(pageView(staticPage("page-a")));
+		await show({ kind: "content", node: <div data-chat="" /> });
+		expect(surfaces(true)).toEqual([]);
+		expect(host?.querySelector("[data-chat]")).not.toBeNull();
+
+		await show(loadingView);
+		expect(loadingScreen()).not.toBeNull();
 	});
 });
 

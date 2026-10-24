@@ -6,6 +6,7 @@ import { RolePermissions } from "../../lib/permission/role-permission";
 import type { IBoard } from "../../lib/schema/flow/board";
 import { useLogAggregation } from "../../state/log-aggregation-state";
 import { LogsPanel } from "./logs/logs-panel";
+import { RunErrorBanner, runErrorToShow } from "./run-error-message";
 
 function PanelNotice({
 	icon: Icon,
@@ -58,16 +59,23 @@ export function Traces({
 	}
 
 	// The server serves cloud run logs only with ReadLogs; say so instead of failing every query.
+	// The failure reason rides on the run listing, so it stays readable here.
 	if (remote && !permissions.can(RolePermissions.ReadLogs)) {
+		const reason = runErrorToShow(currentMetadata.error_message);
 		return (
-			<PanelNotice
-				icon={LockIcon}
-				title={t("logViewNoLogPermission", "Your role can't read run logs")}
-				hint={t(
-					"logViewNoLogPermissionHint",
-					"Logs of cloud runs need the Logs permission. Ask an app admin to add it to your role.",
-				)}
-			/>
+			<div className="flex h-full flex-col">
+				{reason ? <RunErrorBanner message={reason} /> : null}
+				<div className="min-h-0 flex-1">
+					<PanelNotice
+						icon={LockIcon}
+						title={t("logViewNoLogPermission", "Your role can't read run logs")}
+						hint={t(
+							"logViewNoLogPermissionHint",
+							"Logs of cloud runs need the Logs permission. Ask an app admin to add it to your role.",
+						)}
+					/>
+				</div>
+			</div>
 		);
 	}
 

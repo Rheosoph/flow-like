@@ -101,6 +101,8 @@ export interface INode {
 	pins_collapsed?: boolean | null;
 	/** The editor generated this reroute and may replace it during automatic layout. */
 	auto_reroute?: boolean | null;
+	/** FlowScript names for this node's values, keyed by output pin name; `""` is the node's own binding. Presentation only. */
+	code_names?: { [key: string]: string } | null;
 	[property: string]: any;
 }
 

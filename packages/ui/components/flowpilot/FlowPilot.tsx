@@ -119,6 +119,7 @@ import {
 	type CopilotStreamEvent,
 	appendBoundedStreamDetail,
 	createCopilotStreamParser,
+	readUiDraftFrame,
 } from "./copilot-stream-parser";
 import {
 	type FlowScriptWorkspaceCandidate,
@@ -167,6 +168,7 @@ import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "./types";
+import { createThrottledUiDraft } from "./ui-draft-extractor";
 import { getCommandSummary } from "./utils";
 import {
 	validateCanvasSettings,
@@ -622,6 +624,11 @@ function FlowPilotImpl({
 	const [pendingCanvasSettings, setPendingCanvasSettings] = useState<
 		CanvasSettings | undefined
 	>();
+	// Live preview of streamed UI components; display-only, never applied.
+	const [componentsDraft, setComponentsDraft] = useState<{
+		components: SurfaceComponent[];
+		canvasSettings?: CanvasSettings;
+	} | null>(null);
 	const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
 
 	// History state
@@ -2618,6 +2625,21 @@ function FlowPilotImpl({
 			let hasAuthoritativeFlowScriptWorkspace = false;
 			let generationMetricsRun: FlowPilotGenerationMetricsRun | undefined;
 			let ownedCopilotRequestId: string | undefined;
+			const draftsComponents = agentMode === "ui" || agentMode === "both";
+			const uiDraft = createThrottledUiDraft((snapshot) => {
+				const { components: draftComponents } = validateComponents(
+					snapshot.components as SurfaceComponent[],
+				);
+				if (draftComponents.length === 0) return;
+				setComponentsDraft({
+					components: draftComponents,
+					canvasSettings: validateCanvasSettings(snapshot.canvasSettings),
+				});
+			});
+			const endUiDraft = () => {
+				uiDraft.cancel();
+				setComponentsDraft(null);
+			};
 			try {
 				let currentMessageContent = "";
 				let lastUpdateTime = 0;
@@ -3086,6 +3108,7 @@ function FlowPilotImpl({
 								const { components: validatedBatch, warnings } =
 									validateComponents(components);
 								if (validatedBatch.length > 0) {
+									endUiDraft();
 									setPendingComponents((prev) => [...prev, ...validatedBatch]);
 									appendProcessEvent({
 										id: `components-${Date.now()}`,
@@ -3163,10 +3186,18 @@ function FlowPilotImpl({
 
 				const processStreamEvent = (event: CopilotStreamEvent) => {
 					if (event.type === "text") {
-						if (event.text) processStreamToken(event.text);
+						if (event.text) {
+							if (draftsComponents) uiDraft.pushText(event.text);
+							processStreamToken(event.text);
+						}
 						return;
 					}
 					if (event.type === "usage_stat") return;
+					if (event.type === "ui_draft") {
+						const frame = readUiDraftFrame(event.data);
+						if (frame && draftsComponents) uiDraft.pushFrame(frame);
+						return;
+					}
 					processStreamToken(
 						`<${event.type}>${event.raw ?? ""}</${event.type}>`,
 					);
@@ -3667,6 +3698,7 @@ function FlowPilotImpl({
 					setInlineFlowScriptPreview(interruptedPreview);
 					setShowWorkspace(true);
 				}
+				endUiDraft();
 				setLoading(false);
 				setLoadingPhase("idle");
 				setLoadingStartTime(null);
@@ -4095,12 +4127,15 @@ function FlowPilotImpl({
 
 					{/* Pending components (UI mode or both mode) */}
 					{(agentMode === "ui" || agentMode === "both") &&
-						pendingComponents.length > 0 && (
+						(componentsDraft || pendingComponents.length > 0) && (
 							<PendingComponentsView
-								components={pendingComponents}
-								canvasSettings={pendingCanvasSettings}
-								warnings={validationWarnings}
+								components={componentsDraft?.components ?? pendingComponents}
+								canvasSettings={
+									componentsDraft?.canvasSettings ?? pendingCanvasSettings
+								}
+								warnings={componentsDraft ? undefined : validationWarnings}
 								appId={activeAppId}
+								drafting={Boolean(componentsDraft)}
 								onApply={handleApplyComponents}
 								onDismiss={handleDismissComponents}
 							/>

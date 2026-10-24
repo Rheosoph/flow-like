@@ -2,6 +2,25 @@ use crate::model::{ConnectionKind, Direction, Edge, Scene, SceneIndex};
 
 pub type Point = [f32; 2];
 
+/// Inter's hhea ascender and descender, in em.
+const INTER_ASCENT: f32 = 1984.0 / 2048.0;
+const INTER_DESCENT: f32 = 494.0 / 2048.0;
+
+/// Where the DOM paints the baseline of a line box starting at `top`, so native text stays still
+/// when the DOM node replaces it. Both engines round Inter's ascent and descent to whole pixels.
+/// Chrome floors the leading above the baseline and snaps the baseline to a whole pixel;
+/// WebKit keeps the exact half-leading.
+pub fn dom_baseline(top: f32, size: f32, line_height: f32, webkit: bool) -> f32 {
+    let ascent = (size * INTER_ASCENT).round();
+    let descent = (size * INTER_DESCENT).round();
+    let leading = (line_height - ascent - descent) * 0.5;
+    if webkit {
+        top + ascent + leading
+    } else {
+        (top + ascent + leading.floor()).round()
+    }
+}
+
 /** A convex header outline with rounded top corners and a square bottom edge. */
 pub fn header_outline(width: f32, height: f32, radius: f32) -> Vec<Point> {
     let radius = radius.max(0.0).min(width * 0.5).min(height);
@@ -199,6 +218,30 @@ impl Detail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn baselines_match_measured_chrome_and_webkit_layout() {
+        // Line boxes and baselines measured on production nodes, in CSS pixels.
+        // Chrome floors the half-leading: Inter at 9.6px on 12px lines sits 9px below the top.
+        assert_eq!(dom_baseline(23.0, 9.6, 12.0, false), 32.0);
+        // The title box starts at 2.515625 after flex centering; Chrome snaps 11.52 to 12.
+        assert_eq!(dom_baseline(2.515625, 9.6, 12.0, false), 12.0);
+        // WebKit keeps the half-leading.
+        assert_eq!(dom_baseline(23.0, 9.6, 12.0, true), 32.5);
+        assert_eq!(dom_baseline(2.5, 9.6, 12.0, true), 12.0);
+        // Chrome cases from isolated line boxes: (size, line height, baseline from the top).
+        for (size, line, baseline) in [
+            (9.6, 9.6, 8.0),
+            (9.6, 11.5, 9.0),
+            (12.0, 15.0, 12.0),
+            (7.0, 7.0, 6.0),
+            (8.0, 8.0, 7.0),
+            (5.76, 12.0, 8.0),
+            (11.52, 14.4, 11.0),
+        ] {
+            assert_eq!(dom_baseline(100.0, size, line, false), 100.0 + baseline);
+        }
+    }
 
     #[test]
     fn header_gradient_avoids_corner_cutouts_but_keeps_square_separator() {

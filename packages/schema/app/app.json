@@ -248,6 +248,14 @@
 			"properties": {
 				"landing_page": {
 					"type": ["string", "null"]
+				},
+				"legal_notice_url": {
+					"description": "The app publisher's legal notice (imprint), linked from hosted pages.",
+					"type": ["string", "null"]
+				},
+				"privacy_policy_url": {
+					"description": "The app publisher's privacy policy, linked from hosted pages.",
+					"type": ["string", "null"]
 				}
 			}
 		}

@@ -108,6 +108,7 @@ describe("locked uploads", () => {
 			folder: "Übersicht",
 			scope: "user",
 			retentionDays: 30,
+			deleteAfterRetention: true,
 			comment: "  signed contract  ",
 			ifExists: "new_version",
 			onProgress: ({ phase }) => {
@@ -123,6 +124,7 @@ describe("locked uploads", () => {
 			size: 4,
 			sha256: DATA_SHA256,
 			retention_days: 30,
+			delete_after_retention: true,
 			comment: "signed contract",
 			metadata: undefined,
 			scope: "user",
@@ -195,6 +197,7 @@ describe("locked storage calls", () => {
 			"2040-01-01T00:00:00.000Z",
 		);
 		await client.setLockedLegalHold("app", "item-1", "version-1", true);
+		await client.setLockedAutoDelete("app", "item-1", "version-1", false);
 		await client.purgeLockedItem("app", "item-1");
 		await client.purgeLockedItem("app", "item-1", "version-1");
 		expect(
@@ -220,6 +223,11 @@ describe("locked storage calls", () => {
 				"legal-hold",
 				"POST",
 				{ item_id: "item-1", version_id: "version-1", enabled: true },
+			],
+			[
+				"auto-delete",
+				"POST",
+				{ item_id: "item-1", version_id: "version-1", enabled: false },
 			],
 			["purge", "POST", { item_id: "item-1", version_id: undefined }],
 			["purge", "POST", { item_id: "item-1", version_id: "version-1" }],

@@ -1,6 +1,9 @@
 use crate::utils::pure_scores;
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{
+        byte_store::{handle_hash, handle_len},
+        context::ExecutionContext,
+    },
     node::{Node, NodeLogic},
     pin::ValueType,
     variable::VariableType,
@@ -57,12 +60,14 @@ impl NodeLogic for BytesLengthNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let recorded = handle_len(&context.evaluate_pin_raw("bytes").await?);
+        let length = match recorded {
+            Some(length) => length as i64,
+            None => context.evaluate_pin_bytes("bytes").await?.len() as i64,
+        };
+        context.set_pin_value("length", json!(length)).await?;
         context
-            .set_pin_value("length", json!(bytes.len() as i64))
-            .await?;
-        context
-            .set_pin_value("is_empty", json!(bytes.is_empty()))
+            .set_pin_value("is_empty", json!(length == 0))
             .await?;
         Ok(())
     }
@@ -104,7 +109,7 @@ impl NodeLogic for BytesConcatNode {
             result.extend(part);
         }
 
-        context.set_pin_value("result", json!(result)).await?;
+        context.set_pin_bytes("result", result).await?;
         Ok(())
     }
 }
@@ -150,7 +155,7 @@ impl NodeLogic for BytesSliceNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
         let start: i64 = context.evaluate_pin("start").await?;
         let length: i64 = context.evaluate_pin("length").await?;
 
@@ -166,13 +171,10 @@ impl NodeLogic for BytesSliceNode {
             length.min(total - start_index)
         };
 
-        let sliced: Vec<u8> = bytes
-            .into_iter()
-            .skip(start_index.max(0) as usize)
-            .take(take.max(0) as usize)
-            .collect();
+        let from = start_index.max(0) as usize;
+        let sliced = bytes[from..from + take.max(0) as usize].to_vec();
 
-        context.set_pin_value("result", json!(sliced)).await?;
+        context.set_pin_bytes("result", sliced).await?;
         Ok(())
     }
 }
@@ -210,11 +212,21 @@ impl NodeLogic for BytesEqualNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
-        let other: Vec<u8> = context.evaluate_pin("other").await?;
-        context
-            .set_pin_value("equal", json!(bytes == other))
-            .await?;
+        let by_hash = {
+            let bytes = context.evaluate_pin_raw("bytes").await?;
+            let other = context.evaluate_pin_raw("other").await?;
+            handle_hash(&bytes)
+                .zip(handle_hash(&other))
+                .map(|(left, right)| left == right)
+        };
+        let equal = match by_hash {
+            Some(equal) => equal,
+            None => {
+                context.evaluate_pin_bytes("bytes").await?
+                    == context.evaluate_pin_bytes("other").await?
+            }
+        };
+        context.set_pin_value("equal", json!(equal)).await?;
         Ok(())
     }
 }
@@ -252,8 +264,8 @@ impl NodeLogic for BytesStartsWithNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
-        let prefix: Vec<u8> = context.evaluate_pin("prefix").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
+        let prefix = context.evaluate_pin_bytes("prefix").await?;
         context
             .set_pin_value(
                 "starts_with",

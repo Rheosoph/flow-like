@@ -1,8 +1,10 @@
 // data — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -1940,6 +1942,23 @@ declare namespace df {
      * @impure has side effects / drives control flow
      */
     function registerMysql(this: DataFusionSession, { session: Struct, host?: string, port?: int, database: string, username: string, password: string, sourceTable: string, tableName: string, sslMode?: string, readonly?: bool }): { sessionOut: Struct, connectionUrl: string };
+
+    /**
+     * Register a table from any database with an installed ODBC driver (Snowflake, SQL Server, Teradata, …) for federated queries. The driver and an ODBC driver manager must be installed where the flow runs.
+     * @node df_register_odbc @receiver session @alias dfRegisterOdbc
+     * @param session — DataFusion session (receiver: `this` in `x.registerOdbc(...)`)
+     * @param connectionString — ODBC connection string without credentials, e.g. Driver={SnowflakeDSIIDriver};Server=<account>.snowflakecomputing.com;Database=SALES;Warehouse=COMPUTE_WH
+     * @param username (optional) — Database username, sent as UID (leave empty if the connection string authenticates)
+     * @param password (optional) — Database password, sent as PWD
+     * @param catalog (optional) — Catalog (database) of the source table; empty uses the connection default
+     * @param schema (optional) — Schema of the source table; empty uses the connection default
+     * @param sourceTable — Table name exactly as the source spells it (case is preserved)
+     * @param tableName — Name to register in DataFusion
+     * @param maxTextSize (optional) — Largest text value fetched per cell, in bytes. Drivers report columns like Snowflake VARCHAR or PostgreSQL TEXT as unbounded, so the fetch buffers need a cap; longer values fail the query.
+     * @returns sessionOut — DataFusion session
+     * @impure has side effects / drives control flow
+     */
+    function registerOdbc(this: DataFusionSession, { session: Struct, connectionString: string, username?: string, password?: string, catalog?: string, schema?: string, sourceTable: string, tableName: string, maxTextSize?: int }): Struct;
 
     /**
      * Register an Oracle database table for federated queries via ODBC. Requires Oracle Instant Client with ODBC driver installed.
@@ -5463,6 +5482,17 @@ declare namespace lockedFiles {
     function purge({ itemId?: string, versionId?: string }): { file: Struct, versions: Struct[] };
 
     /**
+     * Chooses whether a locked version is deleted automatically once its retention ends and no legal hold remains. The retention itself does not change; project files need app admin rights
+     * @node locked_set_auto_delete @alias lockedSetAutoDelete
+     * @param itemId (optional) — ID of the locked file
+     * @param versionId (optional) — ID of the version to change; empty uses the newest locked version
+     * @param enabled (optional) — True deletes the version once its retention ends, false keeps it until someone deletes it; false also cancels a deletion that is due
+     * @returns version — The version with its automatic deletion state
+     * @impure has side effects / drives control flow
+     */
+    function setAutoDelete({ itemId?: string, versionId?: string, enabled?: bool }): Struct;
+
+    /**
      * Places or lifts a legal hold on a locked version. A held version cannot be deleted even after its retention ends; needs app admin rights and a provider with legal hold support
      * @node locked_set_legal_hold @alias lockedSetLegalHold
      * @param itemId (optional) — ID of the locked file
@@ -5490,6 +5520,7 @@ declare namespace lockedFiles {
      * @param folder (optional) — Folder to store the file in, such as invoices/2026; empty for the root
      * @param name (optional) — Display name of the locked file; empty uses the file's name
      * @param retentionDays (optional) — Days the version stays write-once and undeletable; 0 uses the server default. The server clamps it to its allowed range and ignores it under a bucket-wide policy
+     * @param deleteAfterRetention (optional) — Delete the version automatically once its retention ends and no legal hold remains; otherwise it stays stored until someone deletes it. Project files need app admin rights
      * @param comment (optional) — Note stored with this version, such as why it was archived
      * @param metadata (optional) — Optional JSON object stored with this version
      * @param ifExists (optional) — error: fail when a file with this name already exists in the folder; new_version: add the upload as its next version
@@ -5497,7 +5528,7 @@ declare namespace lockedFiles {
      * @returns version — The uploaded version with its lock details
      * @impure has side effects / drives control flow
      */
-    function upload({ path: Struct, scope?: string, folder?: string, name?: string, retentionDays?: int, comment?: string, metadata?: Struct, ifExists?: string }): { file: Struct, version: Struct };
+    function upload({ path: Struct, scope?: string, folder?: string, name?: string, retentionDays?: int, deleteAfterRetention?: bool, comment?: string, metadata?: Struct, ifExists?: string }): { file: Struct, version: Struct };
 
     /**
      * Adds a new write-once version to an existing locked file; earlier versions stay unchanged. Fails when storage is full
@@ -5505,13 +5536,14 @@ declare namespace lockedFiles {
      * @param itemId (optional) — ID of the locked file to add a version to
      * @param path — File to lock; it is read twice, once to hash and once to upload
      * @param retentionDays (optional) — Days the version stays write-once and undeletable; 0 uses the server default. The server clamps it to its allowed range and ignores it under a bucket-wide policy
+     * @param deleteAfterRetention (optional) — Delete the version automatically once its retention ends and no legal hold remains; otherwise it stays stored until someone deletes it. Project files need app admin rights
      * @param comment (optional) — Note stored with this version, such as why it was archived
      * @param metadata (optional) — Optional JSON object stored with this version
      * @returns file — The locked file with the uploaded version
      * @returns version — The uploaded version with its lock details
      * @impure has side effects / drives control flow
      */
-    function uploadVersion({ itemId?: string, path: Struct, retentionDays?: int, comment?: string, metadata?: Struct }): { file: Struct, version: Struct };
+    function uploadVersion({ itemId?: string, path: Struct, retentionDays?: int, deleteAfterRetention?: bool, comment?: string, metadata?: Struct }): { file: Struct, version: Struct };
 }
 
 declare namespace microsoft {

@@ -91,6 +91,8 @@ impl FrontendConfiguration {
         flow_like_types::proto::FrontendConfiguration {
             landing_page: self.landing_page.clone(),
             custom_css: self.custom_css.clone(),
+            legal_notice_url: self.legal_notice_url.clone(),
+            privacy_policy_url: self.privacy_policy_url.clone(),
         }
     }
 
@@ -98,6 +100,8 @@ impl FrontendConfiguration {
         FrontendConfiguration {
             landing_page: proto.landing_page,
             custom_css: proto.custom_css,
+            legal_notice_url: proto.legal_notice_url,
+            privacy_policy_url: proto.privacy_policy_url,
         }
     }
 }

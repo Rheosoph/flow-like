@@ -1,5 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Futures that run flows (e.g. the workflow benchmark batch) reach the runtime's storage
+// readers, whose auto-trait proofs exceed rustc's default 128-step budget depending on
+// type-check order.
+#![recursion_limit = "256"]
 
 // Compile the shared application implementation into the desktop executable
 // directly. The package library is reserved for Tauri's mobile entry point, so

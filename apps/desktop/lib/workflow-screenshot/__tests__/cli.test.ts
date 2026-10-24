@@ -18,6 +18,7 @@ describe("workflow screenshot CLI", () => {
 			"--viewport=1440x900",
 			"--dpr=2.5",
 			"--theme=light",
+			"--renderer=react-flow",
 		]);
 
 		expect(options).toMatchObject({
@@ -35,7 +36,11 @@ describe("workflow screenshot CLI", () => {
 			viewport: { width: 1440, height: 900 },
 			dpr: 2.5,
 			theme: "light",
+			renderer: "react-flow",
 		});
+		expect(() =>
+			parseWorkflowScreenshotArgs(["sample.flow", "--renderer=svg"]),
+		).toThrow("--renderer must be egui or react-flow.");
 	});
 
 	test("requires a Handle Errors node selector", () => {
@@ -52,6 +57,7 @@ describe("workflow screenshot CLI", () => {
 		);
 		expect(options.viewport).toEqual({ width: 1624, height: 1060 });
 		expect(options.dpr).toBe(2);
+		expect(options.renderer).toBe("egui");
 	});
 
 	test("validates layout, output format, and JPEG quality", () => {

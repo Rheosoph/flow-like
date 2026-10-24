@@ -33,6 +33,8 @@ export interface ILockedItemVersion {
 	retain_until: string;
 	enforcement: LockedEnforcement;
 	legal_hold: boolean;
+	/** Purged automatically once retention ends and no legal hold remains. */
+	delete_after_retention: boolean;
 	comment: string | null;
 	metadata: Record<string, unknown> | null;
 	uploaded_by: string;
@@ -106,6 +108,8 @@ export interface ICreateLockedUploadRequest {
 	size: number;
 	sha256: string;
 	retention_days?: number;
+	/** Project files need an admin, as for any purge. */
+	delete_after_retention?: boolean;
 	comment?: string;
 	metadata?: Record<string, unknown>;
 	if_exists?: LockedIfExists;
@@ -148,6 +152,7 @@ export interface ILockedUploadOptions {
 	folder?: string;
 	name?: string;
 	retentionDays?: number;
+	deleteAfterRetention?: boolean;
 	comment?: string;
 	metadata?: Record<string, unknown>;
 	ifExists?: LockedIfExists;
@@ -183,6 +188,13 @@ export interface ILockedStorageState {
 		retainUntil: string,
 	): Promise<ILockedItemVersion>;
 	setLockedLegalHold(
+		appId: string,
+		itemId: string,
+		versionId: string,
+		enabled: boolean,
+	): Promise<ILockedItemVersion>;
+	/** Retention stays unchanged; needs the right to purge the file. */
+	setLockedAutoDelete(
 		appId: string,
 		itemId: string,
 		versionId: string,

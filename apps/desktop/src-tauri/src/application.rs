@@ -1145,6 +1145,7 @@ pub fn run() {
             functions::download::init::get_downloads,
             functions::settings::profiles::get_profiles,
             functions::settings::profiles::get_profiles_raw,
+            functions::settings::profiles::prune_missing_profile_bits,
             functions::settings::profiles::get_default_profiles,
             functions::settings::profiles::profile_update_home_layout,
             functions::settings::profiles::get_current_profile,

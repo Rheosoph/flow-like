@@ -9,15 +9,17 @@ pub const FLOWSCRIPT_FEW_SHOT_EXAMPLES: &str = r##"
 ## FLOWSCRIPT NAMES AND SUGAR
 - Every catalog node is `namespace::alias({ pin: value })` — `::` separates namespace path
   segments (`string::trim`, `ai::response::make`), `.` is field/method access on a VALUE. Argument
-  names are the node's exact pin names; never rename an argument.
+  names are the node's exact pin names; never rename an argument. Rendered calls pass their first
+  one or two inputs positionally, in declaration order, before the named object:
+  `log::info(message)`, `db::open(name, { userScoped: true })`. Name any argument you add.
 - `use ns::*` at the TOP of the file (before interfaces and variables, nowhere else) opens a
   namespace so its members are called bare: `use db::*` then `open({ name: "x" })`. Open a
   namespace when you call several of its members; rendered boards open every namespace with two or
   more call sites. `use a::b` (brings `b::…` into scope), `use a::b as c`, `use a::{ x, y }` and
   `use a::{ x as y }` are accepted too.
 - A declaration with a `this:` parameter is also a METHOD on that value: `s.trim()`,
-  `s.contains("?")` (one remaining input may be positional), `s.contains({ substring: "?",
-  ignoreCase: true })`, `xs.push(item)`, `date.format("%Y-%m-%d")`. The receiver binds the `this`
+  `s.contains("?")`, `s.contains("?", { ignoreCase: true })` (the receiver plus one positional
+  input), `xs.push(item)`, `date.format("%Y-%m-%d")`. The receiver binds the `this`
   pin, so do not repeat that pin inside `{ … }`. Numeric literals need parens: `(5).abs()`.
 - The legacy camelCase name (`stringTrim`, `openLocalDb`, shown as `@alias` in declarations)
   still resolves everywhere; prefer the qualified or method spelling in new code.

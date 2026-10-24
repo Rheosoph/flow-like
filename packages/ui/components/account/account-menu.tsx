@@ -19,6 +19,7 @@ import Link from "next/link";
 import { useHub } from "../../hooks/use-hub";
 import { userInitials } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
+import { useFlowLikeLegalLinks } from "../legal/legal-links";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import {
 	DropdownMenu,
@@ -65,6 +66,7 @@ export function AccountMenu({
 	const { t } = useTranslation("common");
 	const { t: paymentText } = useTranslation("payments");
 	const { hub } = useHub();
+	const legalLinks = useFlowLikeLegalLinks();
 	const count = notificationCount > 99 ? "99+" : notificationCount;
 	const avatarContent = (
 		<Avatar className="size-7 shrink-0 rounded-lg ring-1 ring-border/60">
@@ -263,6 +265,23 @@ export function AccountMenu({
 						</DropdownMenuItem>
 					</>
 				)}
+				<DropdownMenuSeparator />
+				<DropdownMenuGroup
+					aria-label={t("legal.title", "Legal information")}
+					className="flex flex-wrap items-center gap-0.5 px-1"
+				>
+					{legalLinks.map((link) => (
+						<DropdownMenuItem
+							key={link.kind}
+							asChild
+							className="h-7 rounded-md px-1.5 text-[11px] text-muted-foreground focus:text-foreground"
+						>
+							<a href={link.href} target="_blank" rel="noopener noreferrer">
+								{link.label}
+							</a>
+						</DropdownMenuItem>
+					))}
+				</DropdownMenuGroup>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

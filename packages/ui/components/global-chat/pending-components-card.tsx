@@ -7,8 +7,22 @@ import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useAssistantSurface } from "../../index";
 import type { AssistantWidgetSurface } from "../../state/assistant-surface";
-import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import {
+	type PendingComponentsEntry,
+	useGlobalChatStore,
+} from "../../state/global-chat/global-chat-store";
 import { PendingComponentsView } from "../flowpilot/PendingComponentsView";
+
+/** A staged set (never a live draft) bound to the builder that is open right now. */
+const canAutoApply = (
+	pending: PendingComponentsEntry | null,
+	surface: AssistantWidgetSurface | null,
+) => {
+	if (!pending || pending.draftRequestId || pending.components.length === 0)
+		return false;
+	if (!surface) return false;
+	return !pending.surfaceId || surface.surfaceId === pending.surfaceId;
+};
 
 /**
  * The builder's `applyComponents` applies its OWN staged components (it ignores the passed array),
@@ -62,7 +76,7 @@ export function PendingComponentsCard() {
 		if (applyingRef.current) return;
 		const current = useGlobalChatStore.getState().pendingComponents;
 		const surface = useAssistantSurface.getState().widgetSurface;
-		if (!current) return;
+		if (!current || current.draftRequestId) return;
 		if (!surface) {
 			toast.error(
 				t(
@@ -119,10 +133,7 @@ export function PendingComponentsCard() {
 	// the same object and is never retried. Skipped while the builder is closed or showing a
 	// different surface — handleApply would only raise a toast the user did not trigger.
 	useEffect(() => {
-		if (!autoMode || !pending || pending.components.length === 0) return;
-		if (!widgetSurface) return;
-		if (pending.surfaceId && widgetSurface.surfaceId !== pending.surfaceId)
-			return;
+		if (!autoMode || !canAutoApply(pending, widgetSurface)) return;
 		if (autoAppliedRef.current === pending) return;
 		autoAppliedRef.current = pending;
 		void handleApply();
@@ -130,7 +141,10 @@ export function PendingComponentsCard() {
 
 	if (!pending || pending.components.length === 0) return null;
 
+	// A live draft is display-only, so the builder-state warnings about applying do not apply yet.
+	const drafting = Boolean(pending.draftRequestId);
 	const surfaceMismatch =
+		!drafting &&
 		widgetSurface !== null &&
 		Boolean(pending.surfaceId) &&
 		widgetSurface.surfaceId !== pending.surfaceId;
@@ -144,7 +158,7 @@ export function PendingComponentsCard() {
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}
 			className="mx-3 mb-2 rounded-xl border border-border/50 bg-background/80 backdrop-blur-xl shadow-lg overflow-hidden shrink-0"
 		>
-			{!widgetSurface && (
+			{!drafting && !widgetSurface && (
 				<div className="flex items-center gap-2 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/5 border-b border-amber-500/15">
 					<AlertTriangleIcon className="size-3.5 shrink-0" />
 					{t(
@@ -167,6 +181,7 @@ export function PendingComponentsCard() {
 				canvasSettings={pending.canvasSettings}
 				warnings={pending.warnings}
 				appId={pending.appId}
+				drafting={drafting}
 				onApply={() => void handleApply()}
 				onDismiss={handleDismiss}
 			/>

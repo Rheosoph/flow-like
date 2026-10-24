@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	canApplyFlowScript,
+	flowScriptApplyFailureReport,
 	flowScriptApplyReport,
 	isRejectedFlowScriptDraft,
 	resolveFlowScriptScope,
@@ -48,6 +49,35 @@ describe("FlowScript apply state", () => {
 
 describe("FlowScript apply report", () => {
 	const draft = { text: "edited", baseline: "rendered" };
+
+	test("a fetch failure stays visible without rejecting the draft or disabling retry", () => {
+		const report = flowScriptApplyFailureReport(
+			new TypeError("Failed to fetch"),
+			"Unknown apply error",
+		);
+		expect(report.failed).toBe(true);
+		expect(report.diagnostics).toEqual(["Failed to fetch"]);
+		expect(report.rejected).toBeUndefined();
+		expect(
+			canApplyFlowScript({
+				...editableDirtyState,
+				rejectedDraft: isRejectedFlowScriptDraft(report, draft),
+			}),
+		).toBe(true);
+	});
+
+	test("failure reports preserve backend messages and handle missing details", () => {
+		expect(
+			flowScriptApplyFailureReport(
+				{ message: "Gateway timeout" },
+				"Unknown apply error",
+			).diagnostics,
+		).toEqual(["Gateway timeout"]);
+		expect(
+			flowScriptApplyFailureReport(undefined, "Unknown apply error")
+				.diagnostics,
+		).toEqual(["Unknown apply error"]);
+	});
 
 	test("a clean apply reports nothing", () => {
 		expect(

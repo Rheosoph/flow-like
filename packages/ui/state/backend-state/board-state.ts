@@ -22,6 +22,7 @@ import type {
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type { BoardFormatCapabilities } from "../../lib/board-format";
 import type { FlowScriptApplyOrigin } from "../../lib/flowscript-apply-failure";
+import type { IFlowScriptChanges } from "../../lib/flowscript/changes";
 import type {
 	BoardEditJob,
 	BoardEditJobDeliveryClaim,
@@ -56,8 +57,12 @@ export interface IApplyFlowScriptResponse {
 	/** Non-blocking source repairs; reload canonical FlowScript when present. */
 	corrections?: string[];
 	diagnostics: string[];
+	/** Positioned diagnostics for the exact submitted source, when supported by the host. */
+	structured_diagnostics?: IFlowScriptStructuredDiagnostic[];
 	/** Aggregate-only authoritative count after the host refreshes the applied board. */
 	final_board_node_count?: number;
+	/** What the apply changed on the board; absent when nothing applied. */
+	changes?: IFlowScriptChanges;
 }
 
 export interface IApplyFlowIrCommitResponse extends IApplyFlowScriptResponse {
@@ -90,6 +95,48 @@ export interface IFlowScriptDiagnostic {
 	severity: "error" | "warning";
 }
 
+export interface IFlowScriptSourcePosition {
+	/** 1-based line number. */
+	line: number;
+	/** 1-based Unicode scalar column, converted to UTF-16 for editor locations. */
+	column: number;
+	/** UTF-8 byte offset in the submitted source. */
+	offset?: number;
+}
+
+export interface IFlowScriptSourceSpan {
+	start: IFlowScriptSourcePosition;
+	end: IFlowScriptSourcePosition;
+}
+
+/** Semantic validation metadata shared by Apply and reconcile preview. */
+export interface IFlowScriptStructuredDiagnostic {
+	id: string;
+	message: string;
+	code?: string;
+	phase?: string;
+	source_span?: IFlowScriptSourceSpan;
+	/** True when the source span identifies the failing site rather than a candidate. */
+	source_span_is_exact?: boolean;
+	spans?: IFlowScriptSourceSpan[];
+	additional_sites?: number;
+	ast_path?: string;
+	scope?: string;
+	expected?: string;
+	actual?: string;
+	declaration?: string;
+	pin?: string;
+	fix?: {
+		summary: string;
+		declaration_search?: string;
+		catalog_declarations?: string[];
+		companion_declarations?: string[];
+	};
+	caused_by?: string;
+	occurrences?: number;
+	related_messages?: string[];
+}
+
 export interface ICheckFlowScriptReconcileResponse {
 	parse_valid: boolean;
 	reconcile_valid: boolean;
@@ -99,6 +146,10 @@ export interface ICheckFlowScriptReconcileResponse {
 	board_commands?: BoardCommand[];
 	corrections: string[];
 	diagnostics: string[];
+	/** Positioned diagnostics for the exact submitted source, when supported by the host. */
+	structured_diagnostics?: IFlowScriptStructuredDiagnostic[];
+	/** What applying the source would change, measured on a scratch copy of the board. */
+	changes?: IFlowScriptChanges;
 }
 
 /** A selection-scoped FlowScript render plus the anchors a scoped apply must be limited to. */

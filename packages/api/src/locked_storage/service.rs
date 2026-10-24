@@ -6,7 +6,7 @@ use super::paths::{
 use super::types::*;
 use crate::audit_branch;
 use crate::entity::sea_orm_active_enums::{
-    LockedEnforcement, LockedItemScope, LockedVersionStatus,
+    AuditActorType, LockedEnforcement, LockedItemScope, LockedVersionStatus,
 };
 use crate::entity::{locked_item, locked_item_version};
 use crate::error::ApiError;
@@ -176,6 +176,16 @@ impl Caller {
 
     fn is_admin(&self) -> bool {
         self.permission.has_permission(RolePermissions::Admin)
+    }
+
+    /// Deleting project records is an admin decision, also when it is scheduled at upload.
+    fn may_purge(&self, scope: LockedItemScope) -> Result<(), ApiError> {
+        if scope == LockedItemScope::Project && !self.is_admin() {
+            return Err(ApiError::forbidden(
+                "Only admins can delete expired project locked files",
+            ));
+        }
+        Ok(())
     }
 
     /// Personal locked files belong to a person; keys and app connections have none.
@@ -545,9 +555,17 @@ async fn target_item(
     file_name: &str,
 ) -> Result<locked_item::Model, ApiError> {
     if let Some(item_id) = request.item_id.as_deref().filter(|id| !id.is_empty()) {
-        return visible_item(state, caller, app_id, item_id, RolePermissions::WriteFiles).await;
+        let item =
+            visible_item(state, caller, app_id, item_id, RolePermissions::WriteFiles).await?;
+        if request.delete_after_retention {
+            caller.may_purge(item.scope)?;
+        }
+        return Ok(item);
     }
     let scope = request.scope.unwrap_or(LockedItemScope::Project);
+    if request.delete_after_retention {
+        caller.may_purge(scope)?;
+    }
     let owner = caller.owner_for(scope)?;
     let folder = normalize_folder(request.folder.as_deref().unwrap_or_default())?;
     let name = normalize_name(request.name.as_deref().unwrap_or(file_name))?;
@@ -677,6 +695,7 @@ pub async fn upload(
         )),
         enforcement: Set(config.enforcement),
         legal_hold: Set(false),
+        delete_after_retention: Set(Some(request.delete_after_retention)),
         comment: Set(request
             .comment
             .clone()
@@ -705,6 +724,7 @@ pub async fn upload(
             "size": size,
             "sha256": version.sha256,
             "retention_days": retention_days,
+            "delete_after_retention": request.delete_after_retention,
         })
     );
 
@@ -1106,13 +1126,22 @@ async fn locked_version_for_admin(
 ) -> Result<(locked_item::Model, locked_item_version::Model), ApiError> {
     caller.require(RolePermissions::Admin)?;
     let item = visible_item(state, caller, app_id, item_id, RolePermissions::ReadFiles).await?;
-    let version = load_version(state, &item, version_id).await?;
+    let version = committed_version(state, &item, version_id).await?;
+    Ok((item, version))
+}
+
+async fn committed_version(
+    state: &AppState,
+    item: &locked_item::Model,
+    version_id: &str,
+) -> Result<locked_item_version::Model, ApiError> {
+    let version = load_version(state, item, version_id).await?;
     if version.status != LockedVersionStatus::Locked {
         return Err(ApiError::conflict(
             "Only stored, committed versions can be changed.",
         ));
     }
-    Ok((item, version))
+    Ok(version)
 }
 
 pub async fn extend_retention(
@@ -1210,6 +1239,39 @@ pub async fn set_legal_hold(
     Ok(LockedItemVersion::from_model(version, now()))
 }
 
+/// Retention stays as it is either way, so this needs only the right to purge the file.
+pub async fn set_auto_delete(
+    state: &AppState,
+    caller: &Caller,
+    app_id: &str,
+    request: SetLockedAutoDeleteRequest,
+) -> Result<LockedItemVersion, ApiError> {
+    storage(state)?;
+    let item = visible_item(
+        state,
+        caller,
+        app_id,
+        &request.item_id,
+        RolePermissions::WriteFiles,
+    )
+    .await?;
+    caller.may_purge(item.scope)?;
+    let version = committed_version(state, &item, &request.version_id).await?;
+    let mut active: locked_item_version::ActiveModel = version.into();
+    active.delete_after_retention = Set(Some(request.enabled));
+    let version = active.update(&state.db).await?;
+    audit_branch!(
+        state,
+        caller.user,
+        app_id,
+        "locked_file.auto_delete.set",
+        "LockedFile",
+        &item.id,
+        serde_json::json!({ "version_id": version.id, "enabled": request.enabled })
+    );
+    Ok(LockedItemVersion::from_model(version, now()))
+}
+
 pub async fn purge(
     state: &AppState,
     caller: &Caller,
@@ -1225,11 +1287,7 @@ pub async fn purge(
         RolePermissions::WriteFiles,
     )
     .await?;
-    if item.scope == LockedItemScope::Project && !caller.is_admin() {
-        return Err(ApiError::forbidden(
-            "Only admins can delete expired project locked files",
-        ));
-    }
+    caller.may_purge(item.scope)?;
     let mut query = locked_item_version::Entity::find()
         .filter(locked_item_version::Column::ItemId.eq(&item.id))
         .filter(locked_item_version::Column::Status.eq(LockedVersionStatus::Locked));
@@ -1262,25 +1320,7 @@ pub async fn purge(
 
     let purged_by = caller.actor_id();
     for version in versions {
-        storage
-            .backend
-            .delete(&version.object_key, version.provider_version_id.as_deref())
-            .await
-            .map_err(|error| {
-                ApiError::conflict(format!(
-                    "The store still retains version {}: {error}",
-                    version.version.unwrap_or_default()
-                ))
-            })?;
-        let (row_item, row_version, row_purger) =
-            (item.clone(), version.clone(), purged_by.clone());
-        state
-            .transaction(move |txn| {
-                let (item, version, purged_by) =
-                    (row_item.clone(), row_version.clone(), row_purger.clone());
-                Box::pin(async move { purge_rows(txn, &item, &version, &purged_by, at).await })
-            })
-            .await?;
+        purge_version(state, storage, &item, &version, &purged_by, at).await?;
         audit_branch!(
             state,
             caller.user,
@@ -1298,6 +1338,35 @@ pub async fn purge(
     }
     let item = load_item(state, app_id, &item.id).await?;
     detail(state, caller, item).await
+}
+
+/// Deletes the stored bytes of one expired version; its row stays as `PURGED` evidence.
+async fn purge_version(
+    state: &AppState,
+    storage: &LockedStorage,
+    item: &locked_item::Model,
+    version: &locked_item_version::Model,
+    purged_by: &str,
+    at: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    storage
+        .backend
+        .delete(&version.object_key, version.provider_version_id.as_deref())
+        .await
+        .map_err(|error| {
+            ApiError::conflict(format!(
+                "The store still retains version {}: {error}",
+                version.version.unwrap_or_default()
+            ))
+        })?;
+    let (row_item, row_version, row_purger) = (item.clone(), version.clone(), purged_by.to_owned());
+    state
+        .transaction(move |txn| {
+            let (item, version, purged_by) =
+                (row_item.clone(), row_version.clone(), row_purger.clone());
+            Box::pin(async move { purge_rows(txn, &item, &version, &purged_by, at).await })
+        })
+        .await
 }
 
 async fn purge_rows(
@@ -1423,6 +1492,102 @@ async fn settle_abandoned(
     }
 }
 
+/// `purgedBy` and audit actor of the versions the sweep deletes.
+const RETENTION_PURGER: &str = "system:retention";
+const RETENTION_SWEEP_LIMIT: usize = 1_000;
+
+/// Versions marked for deletion that may be deleted at `at`, oldest retention first,
+/// after the `(retainUntil, id)` keyset position of `after`.
+async fn due_for_deletion<C: ConnectionTrait>(
+    db: &C,
+    at: DateTime<Utc>,
+    after: Option<&locked_item_version::Model>,
+) -> Result<Vec<locked_item_version::Model>, ApiError> {
+    let mut query = locked_item_version::Entity::find()
+        .filter(locked_item_version::Column::Status.eq(LockedVersionStatus::Locked))
+        .filter(locked_item_version::Column::DeleteAfterRetention.eq(true))
+        .filter(locked_item_version::Column::LegalHold.eq(false))
+        .filter(locked_item_version::Column::RetainUntil.lte(db_time(at)));
+    if let Some(last) = after {
+        query = query.filter(
+            Condition::any()
+                .add(locked_item_version::Column::RetainUntil.gt(last.retain_until))
+                .add(
+                    Condition::all()
+                        .add(locked_item_version::Column::RetainUntil.eq(last.retain_until))
+                        .add(locked_item_version::Column::Id.gt(last.id.clone())),
+                ),
+        );
+    }
+    Ok(query
+        .order_by_asc(locked_item_version::Column::RetainUntil)
+        .order_by_asc(locked_item_version::Column::Id)
+        .limit(SWEEP_BATCH)
+        .all(db)
+        .await?)
+}
+
+/// Purges versions uploaded with `delete_after_retention` once their retention ended
+/// and no legal hold remains. A version the store still refuses is retried next run;
+/// the keyset walk keeps it from starving the versions behind it.
+pub async fn sweep_expired_versions(state: &AppState) -> Result<u64, ApiError> {
+    let Some(storage) = state.locked_storage.as_deref() else {
+        return Ok(0);
+    };
+    let at = now();
+    let mut purged = 0;
+    let mut seen = 0;
+    let mut after = None;
+    loop {
+        let page = due_for_deletion(&state.db, at, after.as_ref()).await?;
+        seen += page.len();
+        let last_page = page.len() < SWEEP_BATCH as usize || seen >= RETENTION_SWEEP_LIMIT;
+        for version in &page {
+            match purge_due(state, storage, version, at).await {
+                Ok(()) => purged += 1,
+                Err(error) => {
+                    tracing::warn!(%error, version_id = %version.id, "Locked version due for deletion could not be purged");
+                }
+            }
+        }
+        if last_page {
+            return Ok(purged);
+        }
+        after = page.into_iter().last();
+    }
+}
+
+async fn purge_due(
+    state: &AppState,
+    storage: &LockedStorage,
+    version: &locked_item_version::Model,
+    at: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let item = load_item(state, &version.app_id, &version.item_id).await?;
+    purge_version(state, storage, &item, version, RETENTION_PURGER, at).await?;
+    crate::audit::record_entry(
+        state,
+        crate::audit::AuditRecordInput {
+            actor_id: RETENTION_PURGER.to_owned(),
+            actor_type: AuditActorType::System,
+            actor_ip: None,
+            action: "locked_file.version.purge".to_owned(),
+            resource_type: "LockedFile".to_owned(),
+            resource_id: item.id.clone(),
+            scope: Some(item.app_id.clone()),
+            details: Some(serde_json::json!({
+                "version_id": version.id,
+                "version": version.version,
+                "sha256": version.sha256,
+                "size": version.size,
+                "delete_after_retention": true,
+            })),
+        },
+    )
+    .await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1537,6 +1702,9 @@ mod tests {
         let migrations = [
             include_str!("../../prisma/migrations/20260913120002_account_capacity/migration.sql"),
             include_str!("../../prisma/migrations/20261021140000_locked_storage/migration.sql"),
+            include_str!(
+                "../../prisma/migrations/20261022120000_locked_delete_after_retention/migration.sql"
+            ),
         ];
         let statements = fixtures.into_iter().map(str::to_owned).chain(
             migrations
@@ -1597,6 +1765,7 @@ mod tests {
             retain_until: Set(db_time(at + chrono::Duration::days(10))),
             enforcement: Set(LockedEnforcement::Object),
             legal_hold: Set(false),
+            delete_after_retention: Set(None),
             comment: Set(None),
             metadata: Set(Some(serde_json::json!({ "invoice": 42 }))),
             uploaded_by: Set("member".into()),
@@ -1605,6 +1774,52 @@ mod tests {
             locked_at: Set(None),
             purged_at: Set(None),
             purged_by: Set(None),
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn locked_version(
+        db: &sea_orm::DatabaseConnection,
+        item: &locked_item::Model,
+        retain_until: DateTime<Utc>,
+        delete_after_retention: Option<bool>,
+        legal_hold: bool,
+        status: LockedVersionStatus,
+    ) -> locked_item_version::Model {
+        let mut version: locked_item_version::ActiveModel = pending(db, item, 10).await.into();
+        version.status = Set(status);
+        version.retain_until = Set(db_time(retain_until));
+        version.delete_after_retention = Set(delete_after_retention);
+        version.legal_hold = Set(legal_hold);
+        version.update(db).await.unwrap()
+    }
+
+    async fn user_item(db: &sea_orm::DatabaseConnection) -> locked_item::Model {
+        let at = db_time(now());
+        locked_item::ActiveModel {
+            id: Set(create_id()),
+            app_id: Set("app".into()),
+            scope: Set(LockedItemScope::User),
+            owner_id: Set(Some("member".into())),
+            path_key: Set(path_key(
+                LockedItemScope::User,
+                Some("member"),
+                "Übersicht",
+                "Übersicht (2)#1.pdf",
+            )),
+            name: Set("Übersicht (2)#1.pdf".into()),
+            folder: Set("Übersicht".into()),
+            content_type: Set(None),
+            latest_version: Set(0),
+            latest_size: Set(0),
+            live_versions: Set(0),
+            live_size: Set(0),
+            metadata: Set(None),
+            created_by: Set("member".into()),
+            created_at: Set(at),
+            updated_at: Set(at),
         }
         .insert(db)
         .await
@@ -1633,33 +1848,7 @@ mod tests {
             return;
         };
         let db = scratch_database(&url).await;
-        let at = db_time(now());
-        let item = locked_item::ActiveModel {
-            id: Set(create_id()),
-            app_id: Set("app".into()),
-            scope: Set(LockedItemScope::User),
-            owner_id: Set(Some("member".into())),
-            path_key: Set(path_key(
-                LockedItemScope::User,
-                Some("member"),
-                "Übersicht",
-                "Übersicht (2)#1.pdf",
-            )),
-            name: Set("Übersicht (2)#1.pdf".into()),
-            folder: Set("Übersicht".into()),
-            content_type: Set(None),
-            latest_version: Set(0),
-            latest_size: Set(0),
-            live_versions: Set(0),
-            live_size: Set(0),
-            metadata: Set(None),
-            created_by: Set("member".into()),
-            created_at: Set(at),
-            updated_at: Set(at),
-        }
-        .insert(&db)
-        .await
-        .unwrap();
+        let item = user_item(&db).await;
 
         let first = pending(&db, &item, 100).await;
         let txn = db.begin().await.unwrap();
@@ -1793,6 +1982,71 @@ mod tests {
             )
             .await,
             50
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn postgres_finds_only_versions_due_for_deletion_in_keyset_order() {
+        let Ok(url) = std::env::var("FLOW_LIKE_TEST_DATABASE_URL") else {
+            eprintln!(
+                "skipping locked storage integration test: FLOW_LIKE_TEST_DATABASE_URL is unset"
+            );
+            return;
+        };
+        let db = scratch_database(&url).await;
+        let item = user_item(&db).await;
+        let at = now();
+        let ended = at - chrono::Duration::days(1);
+        let locked = LockedVersionStatus::Locked;
+
+        let mut due = vec![
+            locked_version(&db, &item, ended, Some(true), false, locked).await,
+            locked_version(&db, &item, ended, Some(true), false, locked).await,
+            locked_version(
+                &db,
+                &item,
+                at - chrono::Duration::days(2),
+                Some(true),
+                false,
+                locked,
+            )
+            .await,
+        ];
+        for (retain_until, delete_after_retention, legal_hold, status) in [
+            (at + chrono::Duration::days(1), Some(true), false, locked),
+            (ended, Some(false), false, locked),
+            (ended, None, false, locked),
+            (ended, Some(true), true, locked),
+            (ended, Some(true), false, LockedVersionStatus::Purged),
+            (ended, Some(true), false, LockedVersionStatus::Pending),
+        ] {
+            locked_version(
+                &db,
+                &item,
+                retain_until,
+                delete_after_retention,
+                legal_hold,
+                status,
+            )
+            .await;
+        }
+        due.sort_by(|a, b| (a.retain_until, &a.id).cmp(&(b.retain_until, &b.id)));
+        let ids = |versions: &[locked_item_version::Model]| {
+            versions
+                .iter()
+                .map(|version| version.id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let found = due_for_deletion(&db, at, None).await.unwrap();
+        assert_eq!(ids(&found), ids(&due));
+        let rest = due_for_deletion(&db, at, Some(&found[1])).await.unwrap();
+        assert_eq!(ids(&rest), ids(&due[2..]));
+        assert!(
+            due_for_deletion(&db, at, Some(&found[2]))
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 }

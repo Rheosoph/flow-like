@@ -4859,6 +4859,56 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Locked",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/files/locked"
+              },
+              {
+                "label": "Delete Expired Locked File",
+                "slug": "nodes/data/files/locked/locked-purge"
+              },
+              {
+                "label": "Download Locked File",
+                "slug": "nodes/data/files/locked/locked-download-item"
+              },
+              {
+                "label": "Extend Locked File Retention",
+                "slug": "nodes/data/files/locked/locked-extend-retention"
+              },
+              {
+                "label": "Get Locked File",
+                "slug": "nodes/data/files/locked/locked-get-item"
+              },
+              {
+                "label": "List Locked Files",
+                "slug": "nodes/data/files/locked/locked-list-items"
+              },
+              {
+                "label": "Locked Storage Status",
+                "slug": "nodes/data/files/locked/locked-storage-status"
+              },
+              {
+                "label": "Set Locked File Auto Delete",
+                "slug": "nodes/data/files/locked/locked-set-auto-delete"
+              },
+              {
+                "label": "Set Locked File Legal Hold",
+                "slug": "nodes/data/files/locked/locked-set-legal-hold"
+              },
+              {
+                "label": "Upload Locked File",
+                "slug": "nodes/data/files/locked/locked-upload-item"
+              },
+              {
+                "label": "Upload Locked File Version",
+                "slug": "nodes/data/files/locked/locked-upload-version"
+              }
+            ]
+          },
+          {
             "label": "Operations",
             "collapsed": true,
             "items": [
@@ -4881,6 +4931,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Get",
                 "slug": "nodes/data/files/operations/path-get"
+              },
+              {
+                "label": "Get File Metadata",
+                "slug": "nodes/data/files/operations/file-get-metadata"
               },
               {
                 "label": "Get Range",
@@ -7223,6 +7277,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Read Image (URL)",
             "slug": "nodes/image/content/read-image-url"
+          },
+          {
+            "label": "Read Image Dimensions",
+            "slug": "nodes/image/content/read-image-dimensions"
           },
           {
             "label": "Read QR-/Barcode",

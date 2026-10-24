@@ -60,6 +60,10 @@ import {
 	isChannelHandle,
 } from "@flow-like/flow-like-ui/lib/channel";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
+import {
+	flowScriptFromResponse,
+	scopedFlowScriptFromResponse,
+} from "@flow-like/flow-like-ui/lib/flowscript/response";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IChannelHandle } from "@flow-like/flow-like-ui/lib/schema/channel";
 import type {
@@ -1113,7 +1117,7 @@ export class WebBoardState implements IBoardState {
 			`apps/${appId}/board/${boardId}/flowscript?${params}`,
 			this.backend.auth,
 		);
-		return response.flowscript;
+		return flowScriptFromResponse(response, boardId);
 	}
 
 	async renderFlowScript(
@@ -1127,7 +1131,7 @@ export class WebBoardState implements IBoardState {
 			{ board, anchors },
 			this.backend.auth,
 		);
-		return response.flowscript;
+		return flowScriptFromResponse(response, boardId);
 	}
 
 	async getFlowScriptAuthoritative(
@@ -1143,7 +1147,7 @@ export class WebBoardState implements IBoardState {
 			`apps/${appId}/board/${boardId}/flowscript?${params}`,
 			this.backend.auth,
 		);
-		return response.flowscript;
+		return flowScriptFromResponse(response, boardId);
 	}
 
 	async getFlowScriptScoped(
@@ -1162,10 +1166,7 @@ export class WebBoardState implements IBoardState {
 			`apps/${appId}/board/${boardId}/flowscript?${params}`,
 			this.backend.auth,
 		);
-		return {
-			flowscript: response.flowscript,
-			scope_anchors: response.scope_anchors ?? [],
-		};
+		return scopedFlowScriptFromResponse(response, boardId);
 	}
 
 	async getFlowScriptFile(
@@ -1184,10 +1185,7 @@ export class WebBoardState implements IBoardState {
 			`apps/${appId}/board/${boardId}/flowscript?${params}`,
 			this.backend.auth,
 		);
-		return {
-			flowscript: response.flowscript,
-			scope_anchors: response.scope_anchors ?? [],
-		};
+		return scopedFlowScriptFromResponse(response, boardId);
 	}
 
 	async formatFlowScript(
@@ -1201,7 +1199,7 @@ export class WebBoardState implements IBoardState {
 			{ flowscript, anchors },
 			this.backend.auth,
 		);
-		return response.flowscript;
+		return flowScriptFromResponse(response, boardId);
 	}
 
 	async getExecutionElements(

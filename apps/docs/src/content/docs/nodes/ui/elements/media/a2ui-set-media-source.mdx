@@ -22,22 +22,3 @@ import { NodeReference } from "../../../../../../components/node-docs/NodeRefere
 import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
 
 <NodeReference node={nodesBySlug["nodes/ui/elements/media/a2ui-set-media-source"]} />
-
-## Opening a document in File Preview
-
-Connect **Get Element** for a `filePreview` component to **Element**, and supply
-the document's FlowPath to **File**. The node signs the file and sends its URL
-and filename to the component. File Preview then selects the matching viewer,
-including the WASM viewers for DOCX, PPTX, and supported spreadsheets such as
-XLSX and CSV. The node's broad **Media Kind** output does not determine which
-WASM viewer opens the document.
-
-The execution output means the source update was sent. It does not wait for
-the viewer to finish loading. If the current document has unsaved changes,
-the component asks before replacing it. Editing still requires `editable`
-and an exact `save` workflow handler; see the
-[File Preview editing contract](/reference/a2ui-components/#file-preview-and-editing).
-
-The signed URL expires after **Expiration (seconds)**, which defaults to
-3,600 seconds. Run the node again when a new signed URL is needed. The node
-sends a URL rather than retaining the FlowPath for automatic renewal.

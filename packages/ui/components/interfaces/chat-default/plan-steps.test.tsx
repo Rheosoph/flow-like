@@ -447,4 +447,38 @@ describe("tool activity context", () => {
 		expect(text).toContain("Flow-Like license terms");
 		expect(text).toContain("reports/revenue.csv");
 	});
+
+	test("the outcome replaces the progress note so the meta stays one line", async () => {
+		const { text } = await renderSteps([
+			{
+				id: "apps",
+				title: "Using list_apps",
+				toolName: "list_apps",
+				description: "Looking through installed apps",
+				status: "done",
+				detail: {
+					kind: "tool_activity",
+					category: "apps",
+					label: "Checking available apps",
+					query: "weather",
+					outcome: "0 apps found",
+				},
+			},
+			{
+				id: "apps-running",
+				title: "Using list_apps",
+				toolName: "list_apps",
+				description: "Looking through installed apps",
+				status: "progress",
+				detail: {
+					kind: "tool_activity",
+					category: "apps",
+					label: "Checking available apps",
+				},
+			},
+		]);
+		expect(text).toContain("weather");
+		expect(text).toContain("0 apps found");
+		expect(text.match(/Looking through installed apps/g)).toHaveLength(1);
+	});
 });

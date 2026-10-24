@@ -37,6 +37,8 @@ pub struct InternalPin {
     pub default_value: Option<Arc<Value>>,
     /// Whether this is a layer relay pin
     pub layer_pin: bool,
+    /// Byte buffers written here never leave memory for the run's spill directory.
+    pub sensitive: bool,
     /// Pin ordering index
     pub index: u16,
     /// Reference to parent node (set once after construction via OnceLock)
@@ -74,6 +76,7 @@ impl InternalPin {
                 && (pin.data_type != VariableType::Geometry || default_value.is_some()),
             default_value,
             layer_pin,
+            sensitive: pin.is_sensitive(),
             index: pin.index,
             node: OnceLock::new(),
             connected_to: OnceLock::new(),
@@ -95,6 +98,7 @@ impl InternalPin {
             has_default: pin.default_value.is_some(),
             default_value: pin.default_value.clone(),
             layer_pin: pin.layer_pin,
+            sensitive: pin.sensitive,
             index: pin.index,
             node: OnceLock::new(),
             connected_to: OnceLock::new(),

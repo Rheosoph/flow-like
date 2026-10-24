@@ -985,8 +985,8 @@ pub async fn app_set_stylesheet(
         Some(frontend) => frontend.custom_css = next,
         None => {
             app.frontend = Some(flow_like::app::FrontendConfiguration {
-                landing_page: None,
                 custom_css: next,
+                ..Default::default()
             })
         }
     }

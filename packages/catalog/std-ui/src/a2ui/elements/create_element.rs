@@ -6,6 +6,7 @@ use flow_like::flow::{
 use flow_like_types::{Value, async_trait};
 
 use super::element_utils::extract_element_id;
+use crate::a2ui::authoring_utils::lower_component_data;
 
 /// Creates a new element and adds it to a parent container.
 ///
@@ -109,15 +110,9 @@ impl NodeLogic for CreateElement {
         let index: Option<i64> = context.evaluate_pin("index").await.ok();
 
         // Build the component Value
-        let component_value = if let Some(obj) = props.as_object() {
-            let mut map = obj.clone();
-            map.insert("type".to_string(), Value::String(component_type));
-            Value::Object(map)
-        } else {
-            let mut map = flow_like_types::json::Map::new();
-            map.insert("type".to_string(), Value::String(component_type));
-            Value::Object(map)
-        };
+        let mut component_data = props.as_object().cloned().unwrap_or_default();
+        component_data.insert("type".to_string(), Value::String(component_type));
+        let component_value = lower_component_data(Value::Object(component_data))?;
 
         // Create the SurfaceComponent
         let surface_component =

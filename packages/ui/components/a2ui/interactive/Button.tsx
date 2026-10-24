@@ -1,18 +1,22 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
 import { DynamicIcon, type IconName, iconNames } from "lucide-react/dynamic";
 import { useRef } from "react";
+import { toast } from "sonner";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import {
 	useComponentEventTrigger,
 	useIsComponentTriggering,
+	useMarkComponentTriggering,
 } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { firstEventAction } from "../event-handlers";
+import { useActivationSnapshot } from "../hooks/use-activation-snapshot";
 import type { BoundValue, ButtonComponent } from "../types";
 
 const variantMap: Record<
@@ -70,8 +74,8 @@ export function A2UIButton({
 	surfaceId,
 	onAction,
 }: ComponentProps<ButtonComponent>) {
-	const pointerActivationAtRef = useRef(0);
-	const keyboardActivationAtRef = useRef(0);
+	const { t } = useTranslation("common");
+	const actionInFlightRef = useRef(false);
 	const label = useResolved<string>(component.label) ?? "";
 	const disabled = useResolved<boolean>(component.disabled);
 	const explicitLoading = useResolved<boolean>(component.loading);
@@ -82,41 +86,34 @@ export function A2UIButton({
 	const icon = useResolved<string>(component.icon);
 	const iconPosition = useResolved<string>(component.iconPosition) ?? "left";
 	const triggerEvent = useComponentEventTrigger(componentId);
+	const markComponentTriggering = useMarkComponentTriggering();
 
 	const variant = variantMap[variantValue ?? "default"] ?? "default";
 	const size = sizeMap[sizeValue ?? "md"] ?? "default";
 
-	const handleClick = () => {
-		const now = Date.now();
-		const hasPointerIntent = now - pointerActivationAtRef.current < 1000;
-		const hasKeyboardIntent = now - keyboardActivationAtRef.current < 1000;
-
-		if (!hasPointerIntent && !hasKeyboardIntent) {
-			console.log(
-				"[A2UI Button] Ignoring click without local activation intent:",
-				{
-					componentId,
-				},
-			);
-			return;
-		}
-
-		pointerActivationAtRef.current = 0;
-		keyboardActivationAtRef.current = 0;
+	const activation = useActivationSnapshot<HTMLButtonElement>(async () => {
+		if (disabled || loading || actionInFlightRef.current) return;
 
 		const action = firstEventAction(
 			component.eventHandlers,
 			"click",
 			component.actions,
 		);
-		console.log("[A2UI Button] handleClick:", {
-			componentId,
-			action,
-			hasResolvedAction: Boolean(action),
-			legacyActionsLength: component.actions?.length,
-		});
 		if (action) {
-			void triggerEvent("click", component);
+			actionInFlightRef.current = true;
+			// Keep feedback active between the event's ordered actions.
+			markComponentTriggering?.(componentId, true);
+			try {
+				await triggerEvent("click", component);
+			} catch (error) {
+				console.error("[A2UI Button] Action failed", error);
+				toast.error(t("somethingWentWrong"), {
+					description: error instanceof Error ? error.message : undefined,
+				});
+			} finally {
+				actionInFlightRef.current = false;
+				markComponentTriggering?.(componentId, false);
+			}
 		} else if (onAction) {
 			onAction({
 				type: "userAction",
@@ -127,7 +124,7 @@ export function A2UIButton({
 				context: {},
 			});
 		}
-	};
+	});
 
 	const showIcon = icon && icon.trim() !== "";
 	const iconLeft = iconPosition === "left" && showIcon;
@@ -139,17 +136,10 @@ export function A2UIButton({
 			variant={variant}
 			size={size}
 			disabled={disabled || loading}
+			aria-busy={Boolean(loading)}
 			className={cn(loading && "cursor-wait", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
-			onPointerDown={() => {
-				pointerActivationAtRef.current = Date.now();
-			}}
-			onKeyDown={(event) => {
-				if (event.key === "Enter" || event.key === " ") {
-					keyboardActivationAtRef.current = Date.now();
-				}
-			}}
-			onClick={handleClick}
+			{...activation}
 		>
 			{loading ? (
 				<Loader2 className="size-4 animate-spin" />

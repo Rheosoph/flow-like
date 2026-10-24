@@ -29,6 +29,10 @@ import {
 	throwFlowPilotCommandApplyError,
 } from "../lib/flowpilot-command-apply";
 import { flowPilotDebugLog } from "../lib/flowpilot-debug";
+import {
+	migratedBoundaryPins,
+	placeholderPin,
+} from "../lib/layer-boundary-pins";
 import { toastError } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import {
@@ -151,60 +155,94 @@ function layerTypeFromCommand(value?: string): ILayerType {
 	}
 }
 
+const LAYER_NESTING_RULE =
+	"Module and Function layers only nest under a Module layer or the root";
+
+function isGroupLayer(layer: ILayer | undefined): boolean {
+	return (
+		layer?.type === ILayerType.Collapsed || layer?.type === ILayerType.Macro
+	);
+}
+
+/** The executable scope a layer belongs to: the first Function or Module layer at or above it,
+ * `null` for the board root. Groups are transparent. */
+function executableScope(
+	layerId: string | null | undefined,
+	layers: Record<string, ILayer>,
+): string | null {
+	const seen = new Set<string>();
+	let current = layerId || null;
+	while (current) {
+		if (seen.has(current)) return current;
+		seen.add(current);
+		const layer = layers[current];
+		if (!layer || !isGroupLayer(layer)) return current;
+		current = layer.parent_id || null;
+	}
+	return null;
+}
+
+/** Mirrors the Rust apply's regroup rule: a move into a group, or one that keeps every item in
+ * its executable scope, only regroups and runs after the connections. */
+function isRegroupMove(
+	ids: readonly string[],
+	target: ILayer | undefined,
+	board: {
+		nodes: Record<string, INode>;
+		comments: Record<string, IComment>;
+		layers: Record<string, ILayer>;
+	},
+): boolean {
+	if (isGroupLayer(target)) return true;
+	const targetScope = executableScope(target?.id, board.layers);
+	const scopeOf = (id: string): string | null | undefined => {
+		const node = board.nodes[id];
+		if (node) return executableScope(node.layer, board.layers);
+		const comment = board.comments[id];
+		if (comment) return executableScope(comment.layer, board.layers);
+		const layer = board.layers[id];
+		if (layer && isGroupLayer(layer))
+			return executableScope(layer.parent_id, board.layers);
+		return undefined;
+	};
+	return ids.length > 0 && ids.every((id) => scopeOf(id) === targetScope);
+}
+
+/** Mirrors the Rust `MoveToLayerCommand`: whether `layer` may nest under `target` (`undefined` =
+ * the board root). Collapsed/Macro groups nest anywhere; nodes and comments move under any layer. */
+function canNestLayer(layer: ILayer, target: ILayer | undefined): boolean {
+	return !target || target.type === ILayerType.Module || isGroupLayer(layer);
+}
+
+const DEFAULT_EXEC_PIN_DEFS: readonly PlaceholderPinDef[] = [
+	{
+		name: "exec_in",
+		friendly_name: "Exec In",
+		pin_type: "Input",
+		data_type: "Execution",
+	},
+	{
+		name: "exec_out",
+		friendly_name: "Exec Out",
+		pin_type: "Output",
+		data_type: "Execution",
+	},
+];
+
 function pinsFromDefs(
 	pinDefs: PlaceholderPinDef[] | undefined,
 	includeDefaultExec: boolean,
 ): Record<string, IPin> {
-	const pins: Record<string, IPin> = {};
-	let pinIndex = 0;
-
-	const addPin = (
-		name: string,
-		friendlyName: string,
-		pinType: IPinType,
-		dataType: IVariableType,
-		valueType = IValueType.Normal,
-		description = "",
-		schema?: string,
-		enforceSchema = false,
-	) => {
-		const pin: IPin = {
-			id: createId(),
-			name,
-			friendly_name: friendlyName,
-			connected_to: [],
-			depends_on: [],
-			description,
-			index: pinIndex++,
-			pin_type: pinType,
-			value_type: valueType,
-			data_type: dataType,
-			default_value: null,
-			schema: schema ?? null,
-			options: enforceSchema ? { enforce_schema: true } : null,
-		};
-		pins[pin.id] = pin;
-	};
-
-	if (includeDefaultExec) {
-		addPin("exec_in", "Exec In", IPinType.Input, IVariableType.Execution);
-		addPin("exec_out", "Exec Out", IPinType.Output, IVariableType.Execution);
-	}
-
-	for (const pinDef of pinDefs ?? []) {
-		addPin(
-			pinDef.name,
-			pinDef.friendly_name,
-			pinDef.pin_type as IPinType,
-			pinDef.data_type as IVariableType,
-			(pinDef.value_type as IValueType) || IValueType.Normal,
-			pinDef.description || "",
-			pinDef.schema,
-			pinDef.enforce_schema ?? false,
-		);
-	}
-
-	return pins;
+	const defs = [
+		...(includeDefaultExec ? DEFAULT_EXEC_PIN_DEFS : []),
+		...(pinDefs ?? []),
+	];
+	return Object.fromEntries(
+		defs.map((def, index) => {
+			const pin = placeholderPin(def, index);
+			return [pin.id, pin];
+		}),
+	);
 }
 
 /**
@@ -717,13 +755,12 @@ export function useCopilotCommands({
 							const moveTarget = command.target ?? undefined;
 							if (moveIds.length === 0) break;
 
-							const targetType = moveTarget
-								? latestBoardLayers[moveTarget]?.type
-								: ILayerType.Module;
-							const targetsAFunction = targetType === ILayerType.Function;
-							if (targetType !== ILayerType.Module && !targetsAFunction) {
+							const targetLayer = moveTarget
+								? latestBoardLayers[moveTarget]
+								: undefined;
+							if (moveTarget && !targetLayer) {
 								console.warn(
-									`[FlowPilot] MoveToLayer target ${moveTarget} is not an existing Module or Function layer, skipping the move`,
+									`[FlowPilot] MoveToLayer target ${moveTarget} is not an existing layer, skipping the move`,
 								);
 								break;
 							}
@@ -764,9 +801,9 @@ export function useCopilotCommands({
 
 								const layer = latestBoardLayers[id];
 								if (layer) {
-									if (targetsAFunction) {
+									if (!canNestLayer(layer, targetLayer)) {
 										console.warn(
-											`[FlowPilot] MoveToLayer skipping layer ${id} — layers do not nest inside a Function layer`,
+											`[FlowPilot] MoveToLayer skipping layer ${id} — ${LAYER_NESTING_RULE}`,
 										);
 										continue;
 									}
@@ -1272,6 +1309,11 @@ export function useCopilotCommands({
 			});
 
 			const remainingGenericCommands: IGenericCommand[] = [];
+			// Mirrors the Rust apply: a move into a Function layer runs with the connections and a
+			// move into a Collapsed/Macro group after them, so no earlier cleanup bridges an edge
+			// this batch still rewires.
+			const functionMoveCommands: IGenericCommand[] = [];
+			const groupMoveCommands: IGenericCommand[] = [];
 
 			for (const cmd of commands) {
 				switch (cmd.command_type) {
@@ -1358,6 +1400,50 @@ export function useCopilotCommands({
 						);
 						latestBoardNodes[renamedNode.id] = renamedNode;
 						replaceMappedNode(renamedNode);
+						break;
+					}
+
+					case "SetNodeDescription": {
+						const node = resolveNode(cmd.node_id);
+						if (!node) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot describe node: "${cmd.node_id}" was not found`,
+							);
+							break;
+						}
+						const describedNode: INode = {
+							...node,
+							description: cmd.description,
+						};
+						remainingGenericCommands.push(
+							updateNodeCommand({ node: describedNode, old_node: node }),
+						);
+						latestBoardNodes[describedNode.id] = describedNode;
+						replaceMappedNode(describedNode);
+						break;
+					}
+
+					case "SetNodeCodeNames": {
+						const node = resolveNode(cmd.node_id);
+						if (!node) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot name node values: "${cmd.node_id}" was not found`,
+							);
+							break;
+						}
+						const namedNode: INode = {
+							...node,
+							code_names: { ...(node.code_names ?? {}), ...cmd.code_names },
+						};
+						remainingGenericCommands.push(
+							updateNodeCommand({ node: namedNode, old_node: node }),
+						);
+						latestBoardNodes[namedNode.id] = namedNode;
+						replaceMappedNode(namedNode);
 						break;
 					}
 
@@ -1783,24 +1869,54 @@ export function useCopilotCommands({
 						break;
 					}
 
+					case "UpdateFunctionSignature": {
+						const functionLayer = resolveLayer(cmd.layer_id);
+						if (!functionLayer) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot change function signature: "${cmd.layer_id}" was not found`,
+							);
+							break;
+						}
+						if (functionLayer.type !== ILayerType.Function) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot change function signature: "${functionLayer.name}" is a ${functionLayer.type} layer; only a Function has a signature`,
+							);
+							break;
+						}
+						const updatedLayer: ILayer = {
+							...functionLayer,
+							pins: migratedBoundaryPins(functionLayer.pins ?? {}, cmd.pins),
+						};
+						remainingGenericCommands.push(
+							upsertLayerCommand({
+								layer: updatedLayer,
+								node_ids: [],
+								current_layer: functionLayer.parent_id ?? null,
+								old_layer: functionLayer,
+							}),
+						);
+						latestBoardLayers[functionLayer.id] = updatedLayer;
+						replaceMappedNode(layerAsNode(updatedLayer));
+						flowPilotDebugLog(
+							`[UpdateFunctionSignature] Queued "${functionLayer.name}" with ${cmd.pins.length} boundary pins`,
+						);
+						break;
+					}
+
 					case "MoveToLayer": {
 						const moveTarget = resolveLayerId(cmd.target_layer);
-						if (cmd.target_layer && !moveTarget) {
+						const targetLayer = moveTarget
+							? latestBoardLayers[moveTarget]
+							: undefined;
+						if (cmd.target_layer && !targetLayer) {
 							recordCommandFailure(
 								cmd,
 								"board edit",
 								`Cannot move to layer: "${cmd.target_layer}" was not found`,
-							);
-							break;
-						}
-						if (
-							moveTarget &&
-							latestBoardLayers[moveTarget]?.type !== ILayerType.Module
-						) {
-							recordCommandFailure(
-								cmd,
-								"board edit",
-								`Cannot move to layer: "${cmd.target_layer}" is not a Module layer`,
 							);
 							break;
 						}
@@ -1815,7 +1931,28 @@ export function useCopilotCommands({
 							);
 							break;
 						}
-						remainingGenericCommands.push(
+						const misplacedLayer = moveIds
+							.map((id) => latestBoardLayers[id])
+							.find((layer) => layer && !canNestLayer(layer, targetLayer));
+						if (misplacedLayer) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot move layer "${misplacedLayer.name}" into "${cmd.target_layer}": ${LAYER_NESTING_RULE}`,
+							);
+							break;
+						}
+						const regroup = isRegroupMove(moveIds, targetLayer, {
+							nodes: latestBoardNodes,
+							comments: latestBoardComments,
+							layers: latestBoardLayers,
+						});
+						const moveQueue = regroup
+							? groupMoveCommands
+							: targetLayer?.type === ILayerType.Function
+								? functionMoveCommands
+								: remainingGenericCommands;
+						moveQueue.push(
 							moveToLayerCommand({
 								ids: moveIds,
 								target: moveTarget ?? null,
@@ -1868,7 +2005,9 @@ export function useCopilotCommands({
 				refreshedAfterLastExecution = true;
 			}
 
-			const connectionGenericCommands: IGenericCommand[] = [];
+			const connectionGenericCommands: IGenericCommand[] = [
+				...functionMoveCommands,
+			];
 			for (const cmd of pendingConnectionCommands) {
 				const fromNode = resolveNode(cmd.from_node);
 				const toNode = resolveNode(cmd.to_node);
@@ -1961,6 +2100,7 @@ export function useCopilotCommands({
 					);
 				}
 			}
+			connectionGenericCommands.push(...groupMoveCommands);
 
 			const executedConnectionCommands = await executeInBatches(
 				connectionGenericCommands,

@@ -9,14 +9,19 @@ import {
 	useDeveloperMode,
 } from "@flow-like/flow-like-ui";
 import { BoardRendererCard } from "@flow-like/flow-like-ui/components/settings/board-renderer-card";
+import { FLOW_LIKE_LEGAL_URLS } from "@flow-like/flow-like-ui/lib/legal-links";
 import { useTranslation } from "@flow-like/locales";
 import {
+	Activity,
 	BarChart3,
 	Brain,
 	ChevronRight,
-	Cpu,
 	ExternalLink,
+	FileLock2,
+	FileText,
+	HardDrive,
 	type LucideIcon,
+	Scale,
 	Scroll,
 	Server,
 	ShieldCheck,
@@ -101,10 +106,22 @@ function buildSettingsSections(
 			label: t("system", "System"),
 			cards: [
 				{
-					title: t("systemInfo", "System Info"),
-					description: t("cpuRamAndVramDetails", "CPU, RAM, and VRAM details"),
+					title: t("settings:storageTitle", "Storage"),
+					description: t(
+						"settings:storageCardDescription",
+						"See what this browser keeps and clean it up",
+					),
+					href: "/settings/storage",
+					icon: HardDrive,
+				},
+				{
+					title: t("settings:diagnosticsCardTitle", "About & diagnostics"),
+					description: t(
+						"settings:diagnosticsCardDescription",
+						"Version, browser features and a report for support",
+					),
 					href: "/settings/system",
-					icon: Cpu,
+					icon: Activity,
 				},
 				{
 					title: t("boardStatistics", "Board Statistics"),
@@ -133,6 +150,41 @@ function buildSettingsSections(
 					),
 					href: "https://flow-like.com/thirdparty",
 					icon: Scroll,
+					external: true,
+				},
+			],
+		},
+		{
+			label: t("legal.title", "Legal information"),
+			cards: [
+				{
+					title: t("legal.notice", "Legal notice"),
+					description: t(
+						"legal.noticeDescription",
+						"Who operates Flow-Like and how to reach us",
+					),
+					href: FLOW_LIKE_LEGAL_URLS.notice,
+					icon: Scale,
+					external: true,
+				},
+				{
+					title: t("legal.privacy", "Privacy policy"),
+					description: t(
+						"legal.privacyDescription",
+						"What data Flow-Like processes and your rights",
+					),
+					href: FLOW_LIKE_LEGAL_URLS.privacy,
+					icon: FileLock2,
+					external: true,
+				},
+				{
+					title: t("legal.eula", "EULA"),
+					description: t(
+						"legal.eulaDescription",
+						"The terms for using Flow-Like",
+					),
+					href: FLOW_LIKE_LEGAL_URLS.eula,
+					icon: FileText,
 					external: true,
 				},
 			],

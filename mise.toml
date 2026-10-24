@@ -267,6 +267,15 @@ echo "==> Running catalog lint tests..."
 cargo test --package flow-like-catalog --test lint_catalog -- --nocapture
 """
 
+[tasks."test:datafusion:e2e"]
+description = "Run the DataFusion session e2e tests against every supported database (starts tests/docker-compose.test.yml; needs unixODBC + the PostgreSQL ODBC driver)"
+run = """
+docker compose -f tests/docker-compose.test.yml up -d --wait postgres cockroachdb mysql mariadb clickhouse gizmosql
+cargo test -p flow-like-catalog-data \
+  --features execute,postgres-federation,mysql-federation,sqlite-federation,duckdb-federation,clickhouse-federation,flight,odbc-federation \
+  --test datafusion_session_e2e -- --include-ignored
+"""
+
 [tasks."test:wasm:rust:e2e"]
 description = "Build Rust template + run e2e integration tests via host runtime"
 depends = ["test:wasm:rust:lint"]

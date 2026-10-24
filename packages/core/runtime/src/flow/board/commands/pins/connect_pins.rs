@@ -6,7 +6,7 @@ use crate::{
     flow::{
         board::{Board, Layer, commands::Command},
         node::Node,
-        pin::PinType,
+        pin::{Pin, PinType},
         variable::VariableType,
     },
     state::FlowLikeState,
@@ -55,6 +55,15 @@ fn find_node_or_layer(board: &Board, id: &str) -> flow_like_types::Result<NodeOr
         return Ok(NodeOrLayer::Layer(layer.clone()));
     }
     Err(flow_like_types::anyhow!("Entity ({}) not found", id))
+}
+
+fn endpoint_pin<'a>(board: &'a Board, entity_id: &str, pin_id: &str) -> Option<&'a Pin> {
+    board
+        .nodes
+        .get(entity_id)
+        .map(|node| &node.pins)
+        .or_else(|| board.layers.get(entity_id).map(|layer| &layer.pins))?
+        .get(pin_id)
 }
 
 /// Checked in `validate`: a command that fails while executing is undone, and undoing an edge
@@ -117,8 +126,8 @@ impl Command for ConnectPinsCommand {
             )
         })?;
         if let (Some(source), Some(target)) = (
-            board.get_pin_by_id(&self.from_pin),
-            board.get_pin_by_id(&self.to_pin),
+            endpoint_pin(board, &self.from_node, &self.from_pin),
+            endpoint_pin(board, &self.to_node, &self.to_pin),
         ) && !crate::flow::pin::geometry_pins_are_compatible(source, target, &board.refs)?
         {
             return Err(flow_like_types::anyhow!(

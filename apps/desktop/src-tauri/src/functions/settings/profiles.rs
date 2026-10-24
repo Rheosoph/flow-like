@@ -5,12 +5,12 @@ use crate::{
 };
 use flow_like::{
     bit::{Bit, BitTypes, ForecastingAssetRef},
-    hub::Hub,
-    profile::{Profile, ProfileApp, ProfileShortcut},
+    hub::{Hub, hub_api_url},
+    profile::{Profile, ProfileApp, ProfileCustomBit, ProfileShortcut},
     utils::{cache::get_cache_dir, hash::hash_file, http::HTTPClient},
 };
 use flow_like_types::tokio::task::JoinHandle;
-use futures::future::join_all;
+use futures::{StreamExt, future::join_all, stream};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::{
@@ -109,6 +109,100 @@ pub async fn get_profiles_raw(
         settings_guard.profiles.clone()
     };
     Ok(profiles)
+}
+
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn prune_missing_profile_bits(
+    app_handle: AppHandle,
+    hub: String,
+    remote_custom_bit_ids: Vec<String>,
+) -> Result<bool, TauriFunctionError> {
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
+    let sync_hub = hub_api_url(&hub, true, &[])?;
+    let remote_custom_bit_ids: HashSet<_> = remote_custom_bit_ids.into_iter().collect();
+    let snapshots: Vec<_> = {
+        let settings = settings.lock().await;
+        settings
+            .profiles
+            .iter()
+            .filter(|(_, profile)| {
+                hub_api_url(&profile.hub_profile.hub, profile.hub_profile.secure, &[])
+                    .is_ok_and(|profile_hub| profile_hub == sync_hub)
+            })
+            .map(|(id, profile)| {
+                let mut snapshot = profile.hub_profile.clone();
+                snapshot
+                    .custom_bits
+                    .extend(settings.profile_custom_bits(profile));
+                (id.clone(), snapshot)
+            })
+            .collect()
+    };
+
+    // Validation can wait on several hubs. Keep networking outside the settings lock.
+    let results: Vec<_> = stream::iter(snapshots)
+        .map(|(id, snapshot)| {
+            let http_client = http_client.clone();
+            let mut validation = snapshot.clone();
+            // Protect remote custom IDs before their definitions are cached locally.
+            validation
+                .custom_bits
+                .extend(remote_custom_bit_ids.iter().map(|id| {
+                    ProfileCustomBit(Bit {
+                        id: id.clone(),
+                        ..Bit::default()
+                    })
+                }));
+            async move {
+                let missing = validation.missing_bit_references(http_client).await;
+                (id, snapshot, missing)
+            }
+        })
+        .buffer_unordered(4)
+        .collect()
+        .await;
+
+    let mut settings = settings.lock().await;
+    let custom_bit_ids = settings
+        .custom_bits
+        .iter()
+        .map(|bit| bit.id.clone())
+        .chain(remote_custom_bit_ids)
+        .collect();
+    let mut removed = Vec::new();
+    let mut previous_profiles = Vec::new();
+    for (id, snapshot, missing) in results {
+        if missing.is_empty() {
+            continue;
+        }
+        if let Some(profile) = settings.profiles.get_mut(&id) {
+            let previous = profile.clone();
+            let references = profile.prune_missing_bits(&snapshot, &missing, &custom_bit_ids);
+            if !references.is_empty() {
+                removed.extend(
+                    references
+                        .into_iter()
+                        .map(|reference| (id.clone(), reference)),
+                );
+                previous_profiles.push((id, previous));
+            }
+        }
+    }
+    if removed.is_empty() {
+        return Ok(false);
+    }
+    if let Err(error) = settings.try_serialize() {
+        for (id, previous) in previous_profiles {
+            settings.profiles.insert(id, previous);
+        }
+        return Err(error.into());
+    }
+    for (profile_id, reference) in removed {
+        tracing::warn!(%profile_id, %reference, "Removed missing hub bit from profile");
+    }
+    Ok(true)
 }
 
 /// Hub profiles paired with the bits (models, embedding models) each one references.

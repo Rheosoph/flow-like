@@ -69,7 +69,6 @@ export type IQualityDetail =
 	| { kind: "wasm-network"; permissions: string[] }
 	| { kind: "missing-input"; pin: string }
 	| { kind: "entry-unwired" }
-	| { kind: "exec-never-returns" }
 	| { kind: "output-unassigned"; pin: string }
 	| { kind: "no-outputs" }
 	| { kind: "exec-cycle"; members: string[]; exit: boolean }
@@ -616,11 +615,52 @@ function checkMissingInputs(
 	}
 }
 
-function checkFunctions(graph: Graph, out: Findings) {
+function checkFunctions(
+	graph: Graph,
+	calls: Map<string, string[]>,
+	out: Findings,
+) {
+	const layersWithNodes = new Set<string>();
+	let hasDynamicCall = false;
+	const markBody = (layerId: string | null | undefined) => {
+		let current = layerId;
+		while (current && !layersWithNodes.has(current)) {
+			layersWithNodes.add(current);
+			current = graph.layers.get(current)?.parent_id;
+		}
+	};
+	for (const node of graph.nodes.values()) {
+		markBody(node.layer);
+		if (
+			node.name === CALL_FUNCTION_NODE &&
+			Object.values(node.pins ?? {}).some(
+				(pin) => pin.name === FUNCTION_LAYER_PIN && pin.depends_on.length > 0,
+			)
+		) {
+			hasDynamicCall = true;
+		}
+	}
+	for (const layer of graph.layers.values()) {
+		if (Object.keys(layer.nodes ?? {}).length > 0) markBody(layer.id);
+	}
+
 	for (const layer of graph.layers.values()) {
 		if (layer.type !== ILayerType.Function) continue;
 		const target = layerTarget(layer);
 		const pins = Object.values(layer.pins ?? {});
+		// FlowScript can leave a signature after removing a function's body. Until
+		// something calls or implements it, the unused-function hint is enough.
+		// A wired call target can resolve to any function at runtime.
+		if (
+			!hasDynamicCall &&
+			!calls.has(layer.id) &&
+			!layersWithNodes.has(layer.id) &&
+			!pins.some(
+				(pin) => pin.connected_to.length > 0 || pin.depends_on.length > 0,
+			)
+		) {
+			continue;
+		}
 		const execIn = pins.filter(
 			(pin) => pin.pin_type === IPinType.Input && isExecPin(pin),
 		);
@@ -634,12 +674,8 @@ function checkFunctions(graph: Graph, out: Findings) {
 		if (execIn.length > 0 && functionEntryNodes(graph, layer).length === 0) {
 			out.push("no-return", "error", target, { kind: "entry-unwired" });
 		}
-		if (
-			execOut.length > 0 &&
-			!execOut.some((pin) => resolveBackward(graph, pin.depends_on).length > 0)
-		) {
-			out.push("no-return", "warning", target, { kind: "exec-never-returns" });
-		}
+		// Call Function activates its execution outputs when the body finishes,
+		// even when no internal wire reaches the layer's execution output.
 		for (const pin of dataOut) {
 			if (resolveBackward(graph, pin.depends_on).length > 0) continue;
 			out.push(
@@ -1131,7 +1167,7 @@ export function analyzeBoardQuality(board: IBoard): IBoardQualityReport {
 
 	checkSecrets(graph, board, out);
 	checkCycles(graph, calls, out);
-	checkFunctions(graph, out);
+	checkFunctions(graph, calls, out);
 	checkMissingInputs(graph, reachability, out);
 	checkInsecureNodes(graph, out);
 	checkPaymentReadiness(graph, out);
@@ -1244,11 +1280,6 @@ export function describeQualityFinding(
 			return t(
 				"qualityEntryUnwired",
 				"Nothing is connected to the execution input, so calling it fails.",
-			);
-		case "exec-never-returns":
-			return t(
-				"qualityExecNeverReturns",
-				"No path reaches the execution output, so callers never continue.",
 			);
 		case "output-unassigned":
 			return t(

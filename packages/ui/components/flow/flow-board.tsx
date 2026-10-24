@@ -229,6 +229,11 @@ import {
 	buildDisconnectionCommands,
 } from "../../lib/board-canvas/connection-commands";
 import { snapGroupToGrid } from "../../lib/board-canvas/interaction";
+import {
+	type BoardDropPayload,
+	boardDropPayload,
+	planBoardDrop,
+} from "../../lib/board-drop";
 import { ownsWindowChrome } from "../../lib/chrome-route";
 import { buildEdgeRerouteCommands } from "../../lib/edge-reroute";
 import { getErrorMessage } from "../../lib/error-message";
@@ -302,10 +307,8 @@ import {
 import { type INode, IVariableType } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
-import { buildStoragePathNodes } from "../../lib/storage-path-nodes";
 import { storageDisplayName } from "../../lib/storage-tree";
 import { buildTemplateCopyPasteCommand } from "../../lib/template-copy-paste";
-import { convertJsonToUint8Array } from "../../lib/uint8";
 import { cn } from "../../lib/utils";
 import {
 	type AssistantBoardSurface,
@@ -325,6 +328,7 @@ import {
 	useRuntimeVariables,
 } from "../../state/runtime-variables-context";
 import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
+import { BoardDropGhosts } from "./board-drop-ghosts";
 import { BoardEditRecovery } from "./board-edit-recovery";
 import { CallFunctionNode } from "./call-function-node";
 import { EguiFlowCanvas } from "./egui-flow-canvas";
@@ -365,35 +369,6 @@ import { NodeSuggestionGhost } from "./node-suggestion-ghost";
 import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 
-/**
- * A catalog node with one pin default filled in, as a copy.
- *
- * The catalog is a shared query result: writing a default straight onto it left the last
- * dragged variable's id baked into the palette's own `variable_get` for the rest of the
- * session.
- */
-function withPinDefault(
-	template: INode | undefined,
-	pinName: string,
-	value: unknown,
-): INode | undefined {
-	if (!template) return undefined;
-	const target = Object.values(template.pins).find(
-		(pin) => pin.name === pinName,
-	);
-	if (!target) return undefined;
-	return {
-		...template,
-		pins: {
-			...template.pins,
-			[target.id]: {
-				...target,
-				default_value: convertJsonToUint8Array(value),
-			},
-		},
-	};
-}
-
 /** The board root. Always open, because the canvas is always showing something. */
 const MAIN_DOCUMENT: IEditorDocument = { kind: "board", fileId: MAIN_FILE_ID };
 const MAIN_TAB_KEY = documentKey(MAIN_DOCUMENT);
@@ -428,6 +403,7 @@ type ReactFlowProps = ComponentProps<typeof ReactFlow>;
 
 export interface FlowCanvasProps {
 	overlay?: ReactFlowProps["children"];
+	loadingStatus?: { content: ReactFlowProps["children"]; busy: boolean };
 	flowRef: ReactFlowProps["ref"];
 	nodes: ReactFlowProps["nodes"];
 	edges: ReactFlowProps["edges"];
@@ -475,6 +451,54 @@ const FlowCanvas = memo(function FlowCanvas(props: FlowCanvasProps) {
 
 const PROFILE_BITS_STALE_TIME = 5 * 60 * 1000;
 
+type Ref<F> = { readonly current: F };
+
+interface ParseCallbackRefs {
+	copy: Ref<(event?: ClipboardEvent) => unknown>;
+	pushLayer: Ref<(layer: ILayer) => void>;
+	executeBoard: Ref<(node: INode, payload?: object) => Promise<void>>;
+	executeRemote: Ref<(node: INode, payload?: object) => Promise<void>>;
+	executeCommand: Ref<
+		(command: IGenericCommand, append: boolean) => Promise<unknown>
+	>;
+	openNodeInfo: Ref<(node: INode) => void>;
+	explainNodes: Ref<(nodeIds: string[]) => void>;
+	filterLogs: Ref<(nodeId: string) => void>;
+	openFlowScriptAtNode: Ref<(nodeId: string) => void>;
+}
+
+// parseBoard stores its callbacks in rendered node data, which outlives renders. A callback
+// created during a render closes over that render's nodes, whose data holds the callbacks of
+// the render before — so they are built here, holding nothing but the refs.
+function parseCallbacksFor(refs: ParseCallbackRefs) {
+	return {
+		copy: (event?: ClipboardEvent) => {
+			refs.copy.current(event);
+		},
+		pushLayer: (layer: ILayer) => {
+			refs.pushLayer.current(layer);
+		},
+		executeBoard: (node: INode, payload?: object) =>
+			refs.executeBoard.current(node, payload),
+		executeRemote: (node: INode, payload?: object) =>
+			refs.executeRemote.current(node, payload),
+		executeCommand: (command: IGenericCommand, append: boolean) =>
+			refs.executeCommand.current(command, append),
+		openNodeInfo: (node: INode) => {
+			refs.openNodeInfo.current(node);
+		},
+		explainNodes: (nodeIds: string[]) => {
+			refs.explainNodes.current(nodeIds);
+		},
+		filterLogs: (nodeId: string) => {
+			refs.filterLogs.current(nodeId);
+		},
+		openCommentInCode: (comment: IComment) => {
+			if (comment.node_id) refs.openFlowScriptAtNode.current(comment.node_id);
+		},
+	};
+}
+
 export function FlowBoard(props: ComponentProps<typeof FlowBoardContent>) {
 	const runtime = useBoardRuntime();
 	return runtime ? (
@@ -495,6 +519,7 @@ function FlowBoardContent({
 	renderOverlay,
 	sub,
 	externalAssistant = false,
+	pendingDrop,
 }: Readonly<{
 	appId: string;
 	boardId: string;
@@ -515,6 +540,11 @@ function FlowBoardContent({
 	 * requestOpenAssistant() and the embedded FlowCopilot panel/sheet are not mounted.
 	 */
 	externalAssistant?: boolean;
+	/** A dropped variable waiting for Get or Set; its preview stays at the drop point. */
+	pendingDrop?: {
+		variable: IVariable;
+		screenPosition: { x: number; y: number };
+	};
 }>) {
 	const { t } = useTranslation("flow");
 	// Without an in-interface FlowPilot button the floating bubble is this board's only way into the
@@ -609,6 +639,12 @@ function FlowBoardContent({
 			? boardQuery
 			: ({ ...boardQuery, data: undefined } as unknown as typeof boardQuery);
 	const boardRef = useRef<IBoard | undefined>(undefined);
+	const boardLoadKey = JSON.stringify([appId, boardId, version]);
+	const [preparedBoardKey, setPreparedBoardKey] = useState<string>();
+	const boardNodeCount = useMemo(
+		() => Object.keys(board.data?.nodes ?? {}).length,
+		[board.data?.nodes],
+	);
 	const boardDiff = useBoardDiffController({
 		appId,
 		boardId,
@@ -2274,6 +2310,8 @@ function FlowBoardContent({
 				);
 			} catch (error) {
 				console.warn("Failed to execute board", error);
+				const executedCount = runExecutedCount(runId);
+				removeRun(runId);
 
 				// Check if this is an OAuth error with missing providers
 				const oauthError = error as Error & {
@@ -2321,7 +2359,7 @@ function FlowBoardContent({
 					errorMessage || t("failedToExecuteBoard", "Failed to execute board"),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
-				announceRunOutcome(runId, "error");
+				announceRunOutcome(runId, "error", executedCount);
 				return;
 			}
 			// Read the count now — removeRun drops it — but announce only once the
@@ -2413,6 +2451,8 @@ function FlowBoardContent({
 				);
 			} catch (error) {
 				console.warn("Failed to execute board remotely", error);
+				const executedCount = runExecutedCount(runId);
+				removeRun(runId);
 				const errorMessage = getErrorMessage(error, "");
 				toastError(
 					errorMessage ||
@@ -2422,7 +2462,7 @@ function FlowBoardContent({
 						),
 					<PlayCircleIcon className="w-4 h-4" />,
 				);
-				announceRunOutcome(runId, "error");
+				announceRunOutcome(runId, "error", executedCount);
 				return;
 			}
 			// Read the count now — removeRun drops it — but announce only once the
@@ -3180,45 +3220,31 @@ function FlowBoardContent({
 
 	const handleDrop = useCallback(
 		async (event: any) => {
-			const { type, screenPosition } = event.detail;
-
-			// Function layer drop -> place a CallFunction node
-			if (type === "function-layer") {
-				const layerId: string = event.detail.layerId;
-				const template = catalog.data?.find(
-					(node) => node.name === "control_call_function",
-				);
-				const callFnNode = withPinDefault(
-					template,
-					"function_layer_id",
-					layerId,
-				);
-				if (!callFnNode) return;
-
-				placeNode(callFnNode, {
-					x: screenPosition.x,
-					y: screenPosition.y,
-				});
-				return;
-			}
+			const { screenPosition } = event.detail;
+			// The variables menu sends a variable and its operation without a drag type.
+			const payload: BoardDropPayload | undefined = event.detail.variable
+				? { type: "variable", variable: event.detail.variable }
+				: boardDropPayload(event.detail);
+			if (!payload) return;
+			// The drop preview plans the same nodes, so it shows what lands here.
+			const nodes = planBoardDrop(
+				payload,
+				catalog.data,
+				event.detail.operation,
+			);
 
 			// Stored file drop -> plant the pair that addresses it. A FlowPath cannot be a
 			// pin literal (its `store_ref` is minted at run time), so the path has to be
 			// built by nodes rather than written into one.
-			if (type === "storage-path") {
-				const fragment = buildStoragePathNodes({
-					catalog: catalog.data,
-					scope: event.detail.scope,
-					path: event.detail.path,
-				});
-				if (!fragment) {
+			if (payload.type === "storage-path") {
+				if (!nodes) {
 					toast.error(
 						t("pathNodesMissingFromCatalog", "Path nodes are not available"),
 					);
 					return;
 				}
 				await placeNodeFragment({
-					nodes: fragment.nodes,
+					nodes,
 					position: screenToFlowPosition({
 						x: screenPosition.x,
 						y: screenPosition.y,
@@ -3229,17 +3255,9 @@ function FlowBoardContent({
 				return;
 			}
 
-			// Variable drop -> place a Get/Set variable node
-			const variable: IVariable = event.detail.variable;
-			const operation: "set" | "get" = event.detail.operation;
-			const getVarNode = withPinDefault(
-				catalog.data?.find((node) => node.name === `variable_${operation}`),
-				"var_ref",
-				variable.id,
-			);
-			if (!getVarNode) return;
-
-			placeNode(getVarNode, {
+			// A function becomes its call node; a variable its Get or Set node.
+			if (!nodes?.[0]) return;
+			placeNode(nodes[0], {
 				x: screenPosition.x,
 				y: screenPosition.y,
 			});
@@ -3414,6 +3432,19 @@ function FlowBoardContent({
 	);
 	const handleFilterLogsRef = useRef(handleFilterLogs);
 	handleFilterLogsRef.current = handleFilterLogs;
+	const [parseCallbacks] = useState(() =>
+		parseCallbacksFor({
+			copy: handleCopyRef,
+			pushLayer: pushLayerRef,
+			executeBoard: executeBoardRef,
+			executeRemote: executeBoardRemoteRef,
+			executeCommand: executeCommandRef,
+			openNodeInfo: openNodeInfoRef,
+			explainNodes: handleExplainNodesRef,
+			filterLogs: handleFilterLogsRef,
+			openFlowScriptAtNode: openFlowScriptAtNodeRef,
+		}),
+	);
 
 	// Extract stable primitives from complex objects to avoid re-parsing on unrelated changes
 	const connectionMode =
@@ -3515,12 +3546,10 @@ function FlowBoardContent({
 		const parsed = parseBoard(
 			board.data,
 			appId,
-			handleCopyCB,
-			(...args: Parameters<typeof pushLayer>) => pushLayerRef.current(...args),
-			(...args: Parameters<typeof executeBoard>) =>
-				executeBoardRef.current(...args),
-			(...args: Parameters<typeof executeCommand>) =>
-				executeCommandRef.current(...args),
+			parseCallbacks.copy,
+			parseCallbacks.pushLayer,
+			parseCallbacks.executeBoard,
+			parseCallbacks.executeCommand,
 			selected.current,
 			connectionMode,
 			nodes,
@@ -3528,27 +3557,22 @@ function FlowBoardContent({
 			currentLayer,
 			boardRef,
 			version,
-			(node: INode) => openNodeInfoRef.current(node),
-			(nodeIds: string[]) => handleExplainNodesRef.current(nodeIds),
-			(nodeId: string) => handleFilterLogsRef.current(nodeId),
+			parseCallbacks.openNodeInfo,
+			parseCallbacks.explainNodes,
+			parseCallbacks.filterLogs,
 			hasRemoteExecution
-				? {
-						isOffline,
-						onRemoteExecute: (node: INode, payload?: object) =>
-							executeBoardRemoteRef.current(node, payload),
-					}
+				? { isOffline, onRemoteExecute: parseCallbacks.executeRemote }
 				: undefined,
 			catalogLookup,
 			selectorDataRef,
 			selectorDataVersion,
-			(comment: IComment) => {
-				if (comment.node_id) openFlowScriptAtNodeRef.current(comment.node_id);
-			},
+			parseCallbacks.openCommentInCode,
 		);
 
 		setNodes(parsed.nodes);
 		setEdges(parsed.edges);
 		setPinCache(parsed.cache);
+		setPreparedBoardKey(boardLoadKey);
 	}, [
 		board.data,
 		currentLayer,
@@ -3558,6 +3582,7 @@ function FlowBoardContent({
 		hasRemoteExecution,
 		catalogLookup,
 		selectorDataVersion,
+		boardLoadKey,
 	]);
 
 	// Apply remote execution presence indicators to nodes
@@ -5125,6 +5150,20 @@ function FlowBoardContent({
 							: command.id === "quality"
 								? qualityAttention
 								: undefined,
+					badgeLabel:
+						command.id === "comments"
+							? t("commentsBadgeSummary", {
+									defaultValue_one: "{{count}} comment",
+									defaultValue_other: "{{count}} comments",
+									count: Object.keys(board.data?.comments ?? {}).length,
+								})
+							: command.id === "quality"
+								? t("qualityBadgeSummary", {
+										defaultValue_one: "{{count}} error or warning",
+										defaultValue_other: "{{count}} errors and warnings",
+										count: qualityAttention,
+									})
+								: undefined,
 					badgeTone:
 						command.id === "quality"
 							? qualityHasErrors
@@ -5142,6 +5181,7 @@ function FlowBoardContent({
 			board.data?.comments,
 			qualityAttention,
 			qualityHasErrors,
+			t,
 		],
 	);
 
@@ -5516,6 +5556,29 @@ function FlowBoardContent({
 				))}
 			</ul>
 		);
+
+	const boardLoadFailed =
+		!board.data && !board.isFetching && (board.isError || board.isSuccess);
+	const canvasLoadingContent = !board.data ? (
+		boardLoadFailed ? (
+			<span className="flex flex-col items-center gap-2">
+				<span>{t("boardLoadFailed", "The flow could not be loaded.")}</span>
+				<Button
+					size="sm"
+					variant="outline"
+					onClick={() => void board.refetch()}
+				>
+					{t("retry", "Retry")}
+				</Button>
+			</span>
+		) : (
+			t("loadingFlow", "Loading flow…")
+		)
+	) : preparedBoardKey !== boardLoadKey ? (
+		t("preparingFlowNodes", "Preparing {{count}} nodes…", {
+			count: boardNodeCount,
+		})
+	) : undefined;
 
 	const scriptPane =
 		board.data && shell.script ? (
@@ -6004,7 +6067,10 @@ function FlowBoardContent({
 								}}
 							>
 								<div
-									className={`w-full flex-1 min-h-0 relative select-none touch-none ${isOver && "border-green-400 border-2 z-10"}`}
+									className={cn(
+										"w-full flex-1 min-h-0 relative select-none touch-none",
+										isOver && "z-10",
+									)}
 									ref={setNodeRef}
 									style={{
 										WebkitUserSelect: "none",
@@ -6079,6 +6145,14 @@ function FlowBoardContent({
 									)}
 									<FlowCanvas
 										overlay={groupOverlay ?? ghostOverlay}
+										loadingStatus={
+											canvasLoadingContent
+												? {
+														content: canvasLoadingContent,
+														busy: !boardLoadFailed,
+													}
+												: undefined
+										}
 										flowRef={flowRef}
 										nodes={previewNodes}
 										edges={previewEdges}
@@ -6125,6 +6199,15 @@ function FlowBoardContent({
 										peerUsers={peerUsers}
 										sub={sub}
 									/>
+									<BoardDropGhosts
+										catalog={catalog.data}
+										layers={board.data?.layers}
+										pending={pendingDrop}
+									/>
+									{/* Overlaid rather than a border, so the drop point does not move. */}
+									{isOver && (
+										<div className="pointer-events-none absolute inset-0 z-30 border-2 border-green-400" />
+									)}
 									<FlowPingsLayer
 										store={pingStore}
 										currentLayerPath={layerPath ?? "root"}
@@ -6146,8 +6229,15 @@ function FlowBoardContent({
 											easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
 										}}
 									>
+										{/* Over the board the drop preview shows the node itself. The chip
+										stays mounted, because dnd-kit collides with its measured box. */}
 										{active?.data?.current?.type === "function-layer" ? (
-											<div className="flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md">
+											<div
+												className={cn(
+													"flex items-center gap-2 rounded-md bg-background border px-3 py-2 shadow-md",
+													isOver && "invisible",
+												)}
+											>
 												<SquareFunctionIcon className="w-4 h-4 text-violet-500" />
 												<span className="text-sm font-medium">
 													{board.data?.layers?.[active.data.current.layerId]
@@ -6155,7 +6245,12 @@ function FlowBoardContent({
 												</span>
 											</div>
 										) : (active?.data?.current as IVariable)?.id ? (
-											<div className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating">
+											<div
+												className={cn(
+													"flex items-center gap-2 rounded-md border bg-background px-3 py-2 shadow-floating",
+													isOver && "invisible",
+												)}
+											>
 												<span
 													className="h-2 w-4 rounded-full"
 													style={{

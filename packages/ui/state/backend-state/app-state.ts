@@ -11,6 +11,7 @@ import type {
 	IBoard,
 	IMetadata,
 } from "../../lib";
+import type { IAppLegalLinks } from "../../lib/legal-links";
 import type { IAppSearchSort } from "../../lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -149,6 +150,20 @@ export interface IAppState {
 	 * (PATCH /apps/{app_id}/settings/appearance).
 	 */
 	setAppStylesheet(appId: string, css: string): Promise<void>;
+	/**
+	 * Read the legal notice and privacy policy links shown on the app's hosted
+	 * pages (GET /apps/{app_id}/settings/legal). Online apps only.
+	 */
+	getAppLegalLinks(appId: string): Promise<IAppLegalLinks>;
+	/**
+	 * Update the hosted pages' legal links. An empty string clears a link, an
+	 * omitted field stays unchanged. Returns the stored links
+	 * (PATCH /apps/{app_id}/settings/legal).
+	 */
+	setAppLegalLinks(
+		appId: string,
+		links: IAppLegalLinks,
+	): Promise<IAppLegalLinks>;
 	/**
 	 * Toggle the project-level Fork-an-app opt-in. Owner-only on the backend
 	 * (PATCH /apps/{app_id}/settings/forking).

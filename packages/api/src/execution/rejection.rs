@@ -20,11 +20,15 @@ use crate::entity::execution_run;
 use crate::entity::sea_orm_active_enums::{RunMode, RunStatus, RunVariant};
 use crate::state::AppState;
 use flow_like::credentials::StoreType;
-use flow_like::flow::execution::rejection::{RejectedRun, record_rejection};
+use flow_like::flow::execution::LogLevel;
+use flow_like::flow::execution::log::LogMessage;
+use flow_like::flow::execution::rejection::{RejectedRun, append_run_logs, record_rejection};
+use flow_like::flow::execution::run_index::runs_base_path;
 
 pub use flow_like::flow::execution::rejection::RejectionStage;
 use flow_like_types::create_id;
 use sea_orm::ActiveValue::Set;
+use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, Iterable, QueryFilter, QueryOrder, QuerySelect,
 };
@@ -522,6 +526,49 @@ async fn record_run_logs(
     )
     .await?;
 
+    Ok(())
+}
+
+/// Operation id of the entry `record_failure_log` leaves.
+const EXECUTOR_FAILED_OPERATION: &str = "executor:failed";
+
+/// Leave why a run ended without its executor reporting (a crash, a sweeper timeout) as the
+/// run's last log entry. Such a run usually never flushed, so its Logs panel would be empty.
+pub(crate) async fn record_failure_log(
+    state: &AppState,
+    run: &execution_run::Model,
+    reason: &str,
+) -> flow_like_types::Result<()> {
+    if run.board_id.is_empty() {
+        return Ok(());
+    }
+    let subject = run.user_id.as_deref().unwrap_or(SYSTEM_CREDENTIAL_SUBJECT);
+    let credentials = state
+        .scoped_credentials(subject, &run.app_id, CredentialsAccess::ServerExecute)
+        .await
+        .map_err(|e| flow_like_types::anyhow!("failed to scope log credentials: {e}"))?;
+    let logs_db_builder = credentials.into_shared_credentials().to_logs_db_builder()?;
+    let db = logs_db_builder(runs_base_path(&run.app_id, &run.board_id))
+        .execute()
+        .await?;
+    let message = LogMessage::new(
+        reason,
+        LogLevel::Fatal,
+        Some(EXECUTOR_FAILED_OPERATION.to_string()),
+    );
+    append_run_logs(&db, None, &run.id, vec![message]).await?;
+
+    execution_run::Entity::update_many()
+        .col_expr(
+            execution_run::Column::LogsCount,
+            sea_orm::sea_query::Expr::col(execution_run::Column::LogsCount)
+                .if_null(0)
+                .add(1),
+        )
+        .filter(execution_run::Column::Id.eq(&run.id))
+        .filter(execution_run::Column::AppId.eq(&run.app_id))
+        .exec(&state.db)
+        .await?;
     Ok(())
 }
 

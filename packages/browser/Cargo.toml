@@ -24,7 +24,7 @@ futures-util.workspace = true
 url = "2.5"
 tracing.workspace = true
 uuid.workspace = true
-zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { workspace = true }
 md-5 = "0.10"
 socket2 = "0.6"
 dirs = "6"

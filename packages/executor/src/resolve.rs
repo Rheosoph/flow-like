@@ -78,13 +78,18 @@ pub async fn fetch_bounded_with(
     bearer: Option<&str>,
     max_bytes: u64,
 ) -> Result<Vec<u8>, ResolveError> {
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(FETCH_CONNECT_TIMEOUT)
-        .timeout(FETCH_TIMEOUT)
-        .build()
-        .map_err(|e| ResolveError::Fetch(e.to_string()))?;
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    let client = CLIENT
+        .get_or_try_init(|| async {
+            reqwest::Client::builder()
+                .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(FETCH_CONNECT_TIMEOUT)
+                .timeout(FETCH_TIMEOUT)
+                .build()
+                .map_err(|e| ResolveError::Fetch(e.to_string()))
+        })
+        .await?;
 
     let mut request = client.get(url);
     if let Some(token) = bearer {
@@ -142,4 +147,95 @@ pub enum ResolveError {
     Fetch(String),
     #[error("Failed to deserialize payload: {0}")]
     Deserialize(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{extract::ConnectInfo, http::HeaderMap, response::Redirect, routing::get, Router};
+    use std::{net::SocketAddr, sync::Arc};
+
+    #[tokio::test]
+    async fn bounded_fetches_reuse_connections_without_reusing_credentials() {
+        let observations = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let received = observations.clone();
+        let router = Router::new().route(
+            "/",
+            get(
+                move |ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap| {
+                    let received = received.clone();
+                    async move {
+                        let token = headers
+                            .get(reqwest::header::AUTHORIZATION)
+                            .map(|value| value.to_str().unwrap().to_owned());
+                        received.lock().await.push((peer, token));
+                        "payload"
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        for token in [None, Some("first-run"), Some("second-run"), None] {
+            assert_eq!(
+                fetch_bounded_with(&base, token, 64).await.unwrap(),
+                b"payload"
+            );
+        }
+
+        let observations = observations.lock().await;
+        assert_eq!(observations.len(), 4);
+        assert!(observations
+            .iter()
+            .all(|(peer, _)| *peer == observations[0].0));
+        assert_eq!(
+            observations
+                .iter()
+                .map(|(_, token)| token.as_deref())
+                .collect::<Vec<_>>(),
+            [
+                None,
+                Some("Bearer first-run"),
+                Some("Bearer second-run"),
+                None
+            ]
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn pooled_fetches_still_reject_redirects_and_oversized_bodies() {
+        let router = Router::new()
+            .route(
+                "/redirect",
+                get(|| async { Redirect::temporary("/payload") }),
+            )
+            .route("/payload", get(|| async { "payload" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let redirect = fetch_bounded(&format!("{base}/redirect"), 64)
+            .await
+            .unwrap_err();
+        assert!(matches!(redirect, ResolveError::Fetch(message) if message.contains("307")));
+        let oversized = fetch_bounded(&format!("{base}/payload"), 3)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(oversized, ResolveError::Fetch(message) if message.contains("3 byte limit"))
+        );
+        server.abort();
+    }
 }

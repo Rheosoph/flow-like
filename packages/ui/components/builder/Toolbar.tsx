@@ -11,7 +11,7 @@ import {
 	Scissors,
 	Trash2,
 } from "lucide-react";
-import { cn } from "../../lib";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Separator } from "../ui/separator";
 import {
@@ -198,7 +198,8 @@ function ToolbarButton({
 					<Icon className="h-4 w-4" />
 				</Button>
 			</TooltipTrigger>
-			<TooltipContent side="bottom">
+			{/* The entry animation overlaps the button, so the label must not intercept clicks. */}
+			<TooltipContent side="bottom" style={{ pointerEvents: "none" }}>
 				<p className="font-medium">{label}</p>
 				{shortcut && (
 					<p className="text-xs text-muted-foreground">{shortcut}</p>

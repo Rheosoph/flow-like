@@ -80,6 +80,11 @@ import {
 } from "@flow-like/flow-like-ui/lib/board-sync";
 import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import {
+	REMOTE_BOARD_APPLIED_EVENT,
+	type RemoteBoardAppliedDetail,
+	type RemoteBoardAppliedReason,
+} from "@flow-like/flow-like-ui/lib/flow-history";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
 import {
@@ -89,6 +94,10 @@ import {
 	type IFlowScriptApplyFailureReport,
 	flowScriptApplyOutcome,
 } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
+import {
+	flowScriptFromResponse,
+	scopedFlowScriptFromResponse,
+} from "@flow-like/flow-like-ui/lib/flowscript/response";
 import {
 	isExpiredPin,
 	isWidgetsOnlyCopy,
@@ -154,8 +163,6 @@ interface DiffEntry {
 	local: any;
 	remote: any;
 }
-
-const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
 /** How many stale boards may hydrate at once from a summaries listing. */
 const BOARD_HYDRATION_CONCURRENCY = 3;
@@ -319,28 +326,23 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 	return hubCachePromise;
 }
 
-/**
- * `sync`: the remote board was merged in (a peer's edit, or our own undo returning from the hub);
- * recorded undo history still describes this board. `reset`: the board was replaced wholesale and
- * local edits were discarded, so that history must go.
- */
-type RemoteBoardAppliedReason = "sync" | "reset";
-
 function dispatchRemoteBoardApplied(
 	appId: string,
 	boardId: string,
 	reason: RemoteBoardAppliedReason,
+	merge?: RemoteBoardAppliedDetail["merge"],
 ) {
 	if (typeof window === "undefined") {
 		return;
 	}
 
 	window.dispatchEvent(
-		new CustomEvent(REMOTE_BOARD_APPLIED_EVENT, {
+		new CustomEvent<RemoteBoardAppliedDetail>(REMOTE_BOARD_APPLIED_EVENT, {
 			detail: {
 				appId,
 				boardId,
 				reason,
+				...(merge ? { merge } : {}),
 			},
 		}),
 	);
@@ -455,14 +457,6 @@ const logBoardDifferences = (localBoard: IBoard, remoteBoard: IBoard) => {
 		console.groupEnd();
 	});
 };
-const flowScriptFromResponse = (response: unknown, boardId: string): string => {
-	const flowscript = isRecord(response) ? response.flowscript : undefined;
-	if (typeof flowscript !== "string") {
-		throw new Error(`The hub returned no FlowScript for board ${boardId}`);
-	}
-	return flowscript;
-};
-
 const getAppPackageCatalogNodes = (
 	catalogNodes: INode[] | undefined,
 ): INode[] | undefined => {
@@ -1352,6 +1346,8 @@ export class BoardState implements IBoardState {
 		merged: IBoard,
 	): Promise<IBoard> {
 		console.log("[BoardState] forceFresh: updating local board:", { boardId });
+		// A local apply may finish while the remote fetch waits, before the editor reads it back.
+		const before = await this.fetchLocalBoard(appId, boardId);
 		await timeRunStep("get_board.upsert", () =>
 			invoke("upsert_board", {
 				appId: appId,
@@ -1373,7 +1369,10 @@ export class BoardState implements IBoardState {
 			merged,
 			false,
 		);
-		dispatchRemoteBoardApplied(appId, boardId, "sync");
+		dispatchRemoteBoardApplied(appId, boardId, "sync", {
+			before,
+			after: displayBoard,
+		});
 		this.backend.queryClient?.setQueryData(
 			[this.getBoard.name || "backendFn", appId, boardId],
 			displayBoard,
@@ -1533,6 +1532,8 @@ export class BoardState implements IBoardState {
 
 					logBoardDifferences(board, merged);
 
+					// A local apply may finish while the remote fetch waits, before the editor reads it back.
+					const before = await this.fetchLocalBoard(appId, boardId);
 					await invoke("upsert_board", {
 						appId: appId,
 						boardId: boardId,
@@ -1550,7 +1551,10 @@ export class BoardState implements IBoardState {
 						merged,
 						false,
 					);
-					dispatchRemoteBoardApplied(appId, boardId, "sync");
+					dispatchRemoteBoardApplied(appId, boardId, "sync", {
+						before,
+						after: mergedDisplayBoard,
+					});
 					return mergedDisplayBoard;
 				}
 
@@ -4002,10 +4006,7 @@ export class BoardState implements IBoardState {
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			return {
-				flowscript: flowScriptFromResponse(response, boardId),
-				scope_anchors: asArray(response.scope_anchors),
-			};
+			return scopedFlowScriptFromResponse(response, boardId);
 		}
 	}
 
@@ -4039,10 +4040,7 @@ export class BoardState implements IBoardState {
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			return {
-				flowscript: flowScriptFromResponse(response, boardId),
-				scope_anchors: asArray(response.scope_anchors),
-			};
+			return scopedFlowScriptFromResponse(response, boardId);
 		}
 	}
 

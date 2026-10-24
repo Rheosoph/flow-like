@@ -2,8 +2,9 @@
 //! starts only after reservation commits; uncertain outcomes retain capacity.
 
 use crate::{
+    compute_attempts::AttemptReport,
     db::{DbDialect, RetryPolicy, coordination::coordinate, retry_transaction},
-    entity::user,
+    entity::{execution_run, execution_run_caller_app, user},
     error::{ApiError, QuotaLimitDetails},
     state::AppState,
 };
@@ -16,6 +17,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tracing::Instrument;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
@@ -304,6 +306,43 @@ enum ReserveMode {
     Instance,
 }
 
+/// A run row that commits with its cloud admission: no reservation exists
+/// without its run, and a rejected admission leaves no run behind.
+#[derive(Clone, Debug)]
+pub struct RunRecord {
+    pub run: execution_run::ActiveModel,
+    pub caller_apps: Vec<execution_run_caller_app::ActiveModel>,
+}
+
+impl RunRecord {
+    async fn insert(&self, txn: &DatabaseTransaction) -> Result<(), ApiError> {
+        execution_run::Entity::insert(self.run.clone())
+            .exec_without_returning(txn)
+            .await?;
+        if !self.caller_apps.is_empty() {
+            execution_run_caller_app::Entity::insert_many(self.caller_apps.clone())
+                .exec_without_returning(txn)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// Rows written in the reservation transaction of a new operation.
+#[derive(Clone, Default)]
+struct AdmissionRecords {
+    run: Option<RunRecord>,
+    attempt: Option<crate::compute_attempts::AttemptReport>,
+}
+
+struct Admission {
+    payer_id: String,
+    amounts: QuotaAmounts,
+    created_at: i64,
+    /// This transaction created the operation and wrote its records.
+    fresh: bool,
+}
+
 pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiError> {
     reserve_as(state, request, ReserveMode::Fixed, None)
         .await
@@ -318,7 +357,7 @@ pub async fn reserve_for_owner(
 ) -> Result<String, ApiError> {
     Ok(reserve_as(state, request, ReserveMode::ResolvePayer, None)
         .await?
-        .0)
+        .payer_id)
 }
 
 pub(crate) async fn reserve_instance(
@@ -368,9 +407,10 @@ pub(crate) async fn reserve_instance_with_db(
         request,
         ReserveMode::Instance,
         Some((usage.clone(), required_model_tier.to_owned())),
+        AdmissionRecords::default(),
     )
     .await?
-    .0)
+    .payer_id)
 }
 
 async fn reserve_as(
@@ -378,7 +418,7 @@ async fn reserve_as(
     request: QuotaRequest,
     mode: ReserveMode,
     instance: Option<(crate::instances::VerifiedInstanceUsage, String)>,
-) -> Result<(String, QuotaAmounts), ApiError> {
+) -> Result<Admission, ApiError> {
     reserve_as_with_db(
         &state.db,
         state.db_dialect,
@@ -386,6 +426,7 @@ async fn reserve_as(
         request,
         mode,
         instance,
+        AdmissionRecords::default(),
     )
     .await
 }
@@ -397,7 +438,8 @@ async fn reserve_as_with_db(
     request: QuotaRequest,
     mode: ReserveMode,
     instance: Option<(crate::instances::VerifiedInstanceUsage, String)>,
-) -> Result<(String, QuotaAmounts), ApiError> {
+    records: AdmissionRecords,
+) -> Result<Admission, ApiError> {
     if request.amounts.values().iter().any(|v| *v < 0) || request.operation_id.is_empty() {
         return Err(ApiError::bad_request("Invalid quota reservation"));
     }
@@ -411,7 +453,7 @@ async fn reserve_as_with_db(
     let tiers = tiers.clone();
     let enforce = enforcing();
     retry_transaction(db, dialect, None, &RetryPolicy::idempotent(), move |txn| {
-        let mut request = request.clone(); let tiers = tiers.clone(); let instance = instance.clone();
+        let mut request = request.clone(); let tiers = tiers.clone(); let instance = instance.clone(); let records = records.clone();
         Box::pin(async move {
             if mode == ReserveMode::Instance {
                 if instance.is_none() { return Err(ApiError::internal("Instance grant authorization is missing")); }
@@ -433,6 +475,9 @@ async fn reserve_as_with_db(
                 crate::instances::reserve_budget(txn, usage, &request.operation_id, request.amounts.ai_cost_micros, required_model_tier, &tiers).await?;
             }
             if let Some(existing) = operation(txn, &request.operation_id).await? {
+                if mode == ReserveMode::CloudRuntime {
+                    return cloud_readmission(existing, &request);
+                }
                 let ceiling = decode(&existing.ceiling)?;
                 // A cloud ceiling is derived below, so a repeated admission keeps the committed one.
                 let expected = if mode==ReserveMode::CloudRuntime { QuotaAmounts { runtime_ms: ceiling.runtime_ms, ..request.amounts } } else { request.amounts };
@@ -440,7 +485,7 @@ async fn reserve_as_with_db(
                     return Err(ApiError::conflict("Operation identity already has a different reservation"));
                 }
                 require_live_instance_proof(instance.as_ref())?;
-                return Ok((request.payer_id, ceiling));
+                return Ok(Admission { payer_id: request.payer_id, amounts: ceiling, created_at: existing.created_at, fresh: false });
             }
             // Billing webhooks use this account lock too. Read the entitlement
             // after acquiring it so a concurrent downgrade cannot admit old caps.
@@ -459,7 +504,7 @@ async fn reserve_as_with_db(
             if mode==ReserveMode::CloudRuntime {
                 request.amounts.runtime_ms = if !enforce || tier.max_runtime_ms < 0 { 900_000 } else { tier.max_runtime_ms.saturating_sub(used.runtime_ms.saturating_add(reserved.runtime_ms)).clamp(1, 900_000) };
             }
-            let admitted = (request.payer_id.clone(), request.amounts);
+            let admitted = Admission { payer_id: request.payer_id.clone(), amounts: request.amounts, created_at: now.timestamp_millis(), fresh: true };
             let next = used.checked_add(reserved)?.checked_add(request.amounts)?;
             for (i, limit) in limits(&tier).values().into_iter().enumerate() {
                 if enforce && limit >= 0 && next.values()[i] > limit {
@@ -490,6 +535,12 @@ async fn reserve_as_with_db(
                 plan.into(),entitlement_version.into(),
             ])).await?;
             txn.execute_raw(sql("UPDATE \"QuotaPeriod\" SET reserved=$2,\"updatedAt\"=$3 WHERE id=$1", vec![period.id.into(), encode(reserved.checked_add(request.amounts)?).into(), now.timestamp_millis().into()])).await?;
+            if let Some(run) = &records.run {
+                run.insert(txn).await?;
+            }
+            if let Some(attempt) = records.attempt {
+                crate::compute_attempts::record_in(txn, AttemptReport { payer_id: Some(admitted.payer_id.clone()), ..attempt }).await?;
+            }
             require_live_instance_proof(instance.as_ref())?;
             Ok(admitted)
         })
@@ -611,59 +662,124 @@ pub(crate) async fn mark_instance_started_with_db(
     result
 }
 
+/// A repeated admission of the same run keeps its committed reservation.
+fn cloud_readmission(
+    existing: OperationRow,
+    request: &QuotaRequest,
+) -> Result<Admission, ApiError> {
+    if existing.app_id != request.app_id
+        || existing.kind != request.kind
+        || existing.actor_id != request.actor_id
+        || existing.execution_mode != request.execution_mode
+    {
+        return Err(ApiError::forbidden(
+            "Execution reservation does not match this app",
+        ));
+    }
+    if existing.status != "reserved" {
+        return Err(ApiError::conflict(
+            "This cloud run was already started or completed",
+        ));
+    }
+    Ok(Admission {
+        amounts: decode(&existing.ceiling)?,
+        payer_id: existing.payer_id,
+        created_at: existing.created_at,
+        fresh: false,
+    })
+}
+
+pub struct CloudAdmission {
+    pub runtime_ms: u64,
+    pub created_at: i64,
+}
+
+const WORKFLOW_ATTEMPT_ROLE: &str = "workflow_api";
+const WORKFLOW_ATTEMPT_COST_CLASS: &str = "workflow_compute";
+
+/// Reserves a cloud run in one transaction together with its `run` row and the
+/// API's compute attempt. A run id seen before returns its committed admission.
 pub async fn reserve_cloud(
     state: &AppState,
     request: &crate::execution::DispatchRequest,
     mode: &str,
-) -> Result<u64, ApiError> {
-    if let Some(existing) = operation(&state.db, &request.run_id).await? {
-        if existing.app_id.as_deref() != Some(&request.app_id)
-            || existing.kind != "workflow"
-            || existing.actor_id.as_deref() != Some(&request.user_id)
-            || existing.execution_mode != mode
-        {
-            return Err(ApiError::forbidden(
-                "Execution reservation does not match this app",
-            ));
-        }
-        if existing.status != "reserved" {
-            return Err(ApiError::conflict(
-                "This cloud run was already started or completed",
-            ));
-        }
-        return Ok(decode(&existing.ceiling)?.runtime_ms as u64);
-    }
-    let (payer_id, admitted) = reserve_as(
-        state,
-        QuotaRequest {
-            operation_id: request.run_id.clone(),
-            payer_id: String::new(),
-            actor_id: Some(request.user_id.clone()),
-            app_id: Some(request.app_id.clone()),
-            model_id: None,
-            provider: None,
-            kind: "workflow".into(),
-            funding_class: "cloud".into(),
-            execution_mode: mode.into(),
-            amounts: QuotaAmounts {
-                cloud_starts: 1,
-                ..Default::default()
-            },
-            deadline: Utc::now() + chrono::Duration::hours(24),
-        },
+    run: Option<RunRecord>,
+) -> Result<CloudAdmission, ApiError> {
+    reserve_cloud_with_db(
+        &state.db,
+        state.db_dialect,
+        &state.platform_config.tiers,
+        request,
+        mode,
+        run,
+    )
+    .await
+}
+
+pub(crate) async fn reserve_cloud_with_db(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    tiers: &flow_like::hub::UserTiers,
+    request: &crate::execution::DispatchRequest,
+    mode: &str,
+    run: Option<RunRecord>,
+) -> Result<CloudAdmission, ApiError> {
+    let claim = crate::compute_attempts::AttemptClaim::current().await;
+    let attempt = |payer_id: &str, claim: &crate::compute_attempts::AttemptClaim| {
+        claim.report(
+            &request.run_id,
+            payer_id,
+            WORKFLOW_ATTEMPT_ROLE,
+            WORKFLOW_ATTEMPT_COST_CLASS,
+        )
+    };
+    let records = AdmissionRecords {
+        run,
+        attempt: claim.as_ref().map(|claim| attempt("", claim)),
+    };
+    let admission = reserve_as_with_db(
+        db,
+        dialect,
+        tiers,
+        cloud_quota_request(request, mode),
         ReserveMode::CloudRuntime,
         None,
+        records,
     )
+    .instrument(tracing::info_span!(
+        target: "flow_like::observability",
+        "quota.reserve_cloud",
+        run_id = %request.run_id,
+        execution_mode = mode
+    ))
     .await?;
-    crate::compute_attempts::associate_current(
-        &state.db,
-        &request.run_id,
-        &payer_id,
-        "workflow_api",
-        "workflow_compute",
-    )
-    .await?;
-    Ok(admitted.runtime_ms as u64)
+    if let Some(claim) = claim.filter(|_| admission.fresh) {
+        let report = attempt(&admission.payer_id, &claim);
+        claim.confirm(report);
+    }
+    Ok(CloudAdmission {
+        runtime_ms: admission.amounts.runtime_ms as u64,
+        created_at: admission.created_at,
+    })
+}
+
+fn cloud_quota_request(request: &crate::execution::DispatchRequest, mode: &str) -> QuotaRequest {
+    QuotaRequest {
+        operation_id: request.run_id.clone(),
+        payer_id: String::new(),
+        actor_id: Some(request.user_id.clone()),
+        app_id: Some(request.app_id.clone()),
+        model_id: None,
+        provider: None,
+        kind: "workflow".into(),
+        funding_class: "cloud".into(),
+        execution_mode: mode.into(),
+        amounts: QuotaAmounts {
+            cloud_starts: 1,
+            ..Default::default()
+        },
+        deadline: Utc::now() + chrono::Duration::hours(24),
+    }
 }
 
 pub fn enforcing() -> bool {
@@ -677,19 +793,9 @@ pub fn receipt_path(operation_id: &str) -> flow_like_storage::Path {
     ))
 }
 
-pub async fn receipt_ttl(
-    state: &AppState,
-    operation_id: &str,
-) -> Result<std::time::Duration, ApiError> {
-    let seconds = match operation(&state.db, operation_id).await? {
-        Some(op) => {
-            op.created_at
-                .saturating_add(86_400_000)
-                .saturating_sub(Utc::now().timestamp_millis())
-                / 1000
-        }
-        None => 86_400,
-    };
+/// A receipt URL lives until 24 hours after its operation was admitted.
+pub fn receipt_ttl(created_at: i64, now: i64) -> Result<std::time::Duration, ApiError> {
+    let seconds = created_at.saturating_add(86_400_000).saturating_sub(now) / 1000;
     if seconds <= 0 {
         return Err(ApiError::conflict("Cloud dispatch admission has expired"));
     }
@@ -703,50 +809,88 @@ pub(crate) async fn runtime_receipt_candidates(
     db.query_all_raw(sql("SELECT id FROM \"QuotaOperation\" WHERE status IN ('running','unknown') AND kind='workflow' AND \"nextReceiptCheckAt\"<=$1 ORDER BY \"nextReceiptCheckAt\",id LIMIT 50", vec![now.into()])).await?.into_iter().map(|row|row.try_get("","id").map_err(ApiError::from)).collect()
 }
 
+/// Claims each operation for one receipt check in a single statement. A receipt
+/// upload URL expires 24 hours after admission (`receipt_ttl`); after that a
+/// missing receipt can no longer appear, so the check repeats daily, not every
+/// ten minutes.
+pub(crate) async fn claim_runtime_receipt_checks(
+    db: &DatabaseConnection,
+    ids: &[String],
+    now: i64,
+) -> Result<Vec<String>, ApiError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut values: Vec<sea_orm::Value> = vec![now.into()];
+    values.extend(ids.iter().map(|id| id.clone().into()));
+    db.query_all_raw(sql(
+        &format!(
+            r#"UPDATE "QuotaOperation" SET "nextReceiptCheckAt"=$1+CASE WHEN "createdAt">$1-86400000 THEN 600000 ELSE 86400000 END WHERE id IN ({}) AND status IN ('running','unknown') AND "nextReceiptCheckAt"<=$1 RETURNING id"#,
+            crate::rolling_usage::placeholders(2, ids.len())
+        ),
+        values,
+    ))
+    .await?
+    .into_iter()
+    .map(|row| row.try_get("", "id").map_err(ApiError::from))
+    .collect()
+}
+
+#[cfg(test)]
 pub(crate) async fn schedule_runtime_receipt_retry(
     db: &DatabaseConnection,
     id: &str,
     now: i64,
 ) -> Result<bool, ApiError> {
-    Ok(db.execute_raw(sql("UPDATE \"QuotaOperation\" SET \"nextReceiptCheckAt\"=$2 WHERE id=$1 AND status IN ('running','unknown') AND \"nextReceiptCheckAt\"<=$3", vec![id.into(),now.saturating_add(600_000).into(),now.into()])).await?.rows_affected()>0)
+    Ok(!claim_runtime_receipt_checks(db, &[id.to_owned()], now)
+        .await?
+        .is_empty())
+}
+
+async fn read_runtime_receipt(state: &AppState, id: &str) -> Result<Option<Value>, ApiError> {
+    let read = async {
+        let result = match state.meta_bucket.as_generic().get(&receipt_path(id)).await {
+            Ok(value) => value,
+            Err(flow_like_storage::object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => return Err(ApiError::from(error)),
+        };
+        if result.meta.size > 16_384 {
+            return Err(ApiError::internal("Runtime receipt exceeds its size limit"));
+        }
+        Ok(Some(serde_json::from_slice(&result.bytes().await?)?))
+    };
+    flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(2), read)
+        .await
+        .map_err(|_| ApiError::internal("Runtime receipt read timed out after 2 s"))?
 }
 
 /// Replay retained worker measurements when its SQL callback was unavailable.
 pub async fn reconcile_runtime_receipts(state: &AppState) -> Result<u64, ApiError> {
+    use futures::StreamExt;
+    let started = std::time::Instant::now();
     let now = Utc::now().timestamp_millis();
     let ids = runtime_receipt_candidates(&state.db, now).await?;
-    let started = std::time::Instant::now();
+    // Advance before reading, including missing or invalid receipts, so an
+    // unresolved older run cannot starve newer terminal measurements.
+    let claimed = claim_runtime_receipt_checks(&state.db, &ids, now).await?;
+    let reads = futures::stream::iter(claimed)
+        .map(|id| async move {
+            let read = read_runtime_receipt(state, &id).await;
+            (id, read)
+        })
+        .buffer_unordered(8)
+        .collect::<Vec<_>>()
+        .await;
     let mut reconciled = 0;
-    for id in ids {
+    for (id, read) in reads {
         if started.elapsed() > std::time::Duration::from_secs(20) {
             break;
         }
-        // Advance before reading, including missing or invalid receipts, so an
-        // unresolved older run cannot starve newer terminal measurements.
-        if !schedule_runtime_receipt_retry(&state.db, &id, now).await? {
-            continue;
-        }
-        let read =
-            flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                let result = match state.meta_bucket.as_generic().get(&receipt_path(&id)).await {
-                    Ok(value) => value,
-                    Err(flow_like_storage::object_store::Error::NotFound { .. }) => {
-                        return Ok(None);
-                    }
-                    Err(error) => return Err(ApiError::from(error)),
-                };
-                if result.meta.size > 16_384 {
-                    return Err(ApiError::internal("Runtime receipt exceeds its size limit"));
-                }
-                let value: Value = serde_json::from_slice(&result.bytes().await?)?;
-                Ok::<_, ApiError>(Some(value))
-            })
-            .await;
         let value = match read {
-            Ok(Ok(Some(value))) => value,
-            Ok(Ok(None)) => continue,
-            error => {
-                tracing::warn!(operation_id=%id,?error,"Cannot read runtime receipt; retry scheduled");
+            Ok(Some(value)) => value,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(operation_id=%id,%error,"Cannot read runtime receipt; retry scheduled");
                 continue;
             }
         };
@@ -1260,12 +1404,16 @@ pub async fn operations(
 
 /// Expiry is evidence that work needs reconciliation, never evidence of no cost.
 pub async fn flag_stale(db: &DatabaseConnection, limit: u64) -> Result<u64, ApiError> {
-    let rows = db.query_all_raw(sql("SELECT id FROM \"QuotaOperation\" WHERE status IN ('reserved','running') AND deadline<$1 ORDER BY deadline LIMIT $2", vec![Utc::now().timestamp_millis().into(), (limit.clamp(1,500) as i64).into()])).await?;
-    let mut count = 0;
-    for row in rows {
-        count += db.execute_raw(sql("UPDATE \"QuotaOperation\" SET status='unknown',\"updatedAt\"=$2 WHERE id=$1 AND status IN ('reserved','running')", vec![row.try_get::<String>("","id")?.into(), Utc::now().timestamp_millis().into()])).await?.rows_affected();
+    let now = Utc::now().timestamp_millis();
+    let rows = db.query_all_raw(sql("SELECT id FROM \"QuotaOperation\" WHERE status IN ('reserved','running') AND deadline<$1 ORDER BY deadline LIMIT $2", vec![now.into(), (limit.clamp(1,500) as i64).into()])).await?;
+    if rows.is_empty() {
+        return Ok(0);
     }
-    Ok(count)
+    let mut values: Vec<sea_orm::Value> = vec![now.into()];
+    for row in &rows {
+        values.push(row.try_get::<String>("", "id")?.into());
+    }
+    Ok(db.execute_raw(sql(&format!("UPDATE \"QuotaOperation\" SET status='unknown',\"updatedAt\"=$1 WHERE id IN ({}) AND status IN ('reserved','running') AND deadline<$1", crate::rolling_usage::placeholders(2, rows.len())), values)).await?.rows_affected())
 }
 
 #[cfg(test)]
@@ -1293,6 +1441,21 @@ mod tests {
             .0,
             Utc.with_ymd_and_hms(2025, 1, 31, 12, 30, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn receipt_urls_expire_one_day_after_admission() {
+        let admitted = 1_800_000_000_000;
+        assert_eq!(
+            receipt_ttl(admitted, admitted).unwrap(),
+            std::time::Duration::from_secs(86_400)
+        );
+        assert_eq!(
+            receipt_ttl(admitted, admitted + 3_600_000).unwrap(),
+            std::time::Duration::from_secs(82_800)
+        );
+        assert!(receipt_ttl(admitted, admitted + 86_400_000).is_err());
+        assert!(receipt_ttl(admitted, admitted + 86_399_500).is_err());
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod behavioral_state;
 pub mod benchmark_cases;
 mod context;
 mod declarations;
+pub(crate) use declarations::opened_alias_reaches_other;
 mod draft_test;
 pub mod evaluation;
 mod executability;
@@ -2661,6 +2662,7 @@ impl Copilot {
                             event_version: None,
                             event_id: String::new(),
                             payload: vec![],
+                            error_message: None,
                             is_remote: false,
                         };
 

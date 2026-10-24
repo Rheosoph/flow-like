@@ -36,6 +36,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import { betweenFrames } from "../../lib/board-canvas/frames";
 
 export { useEdgesState, useNodesState } from "@xyflow/react";
 
@@ -145,7 +146,7 @@ export function createBoardRuntime(): BoardRuntime {
 		| { flow: ReactFlowInstance; store: ReturnType<typeof useLegacyStoreApi> }
 		| undefined;
 	let animation:
-		| { frame: number; finish: (completed: boolean) => void }
+		| { cancel: () => void; finish: (completed: boolean) => void }
 		| undefined;
 	let selectedNodeIds: string[] = [];
 	let selectedEdgeIds: string[] = [];
@@ -304,7 +305,7 @@ export function createBoardRuntime(): BoardRuntime {
 	});
 	const cancelAnimation = () => {
 		if (!animation) return;
-		cancelAnimationFrame(animation.frame);
+		animation.cancel();
 		animation.finish(false);
 		animation = undefined;
 	};
@@ -352,7 +353,7 @@ export function createBoardRuntime(): BoardRuntime {
 			const start = performance.now();
 			const duration = options.duration ?? 0;
 			const current = {
-				frame: 0,
+				cancel: () => {},
 				finish(completed: boolean) {
 					if (notify) state.onMoveEnd?.(null, viewport());
 					resolve(completed);
@@ -368,14 +369,15 @@ export function createBoardRuntime(): BoardRuntime {
 					y: from.y + (target.y - from.y) * progress,
 					zoom: from.zoom + (target.zoom - from.zoom) * progress,
 				});
-				if (fraction < 1) current.frame = requestAnimationFrame(tick);
+				// Between frames, so the canvases draw each step with the DOM.
+				if (fraction < 1) current.cancel = betweenFrames(tick);
 				else {
 					animation = undefined;
 					current.finish(true);
 				}
 			};
 			animation = current;
-			current.frame = requestAnimationFrame(tick);
+			current.cancel = betweenFrames(tick);
 		});
 	};
 	const updateNodeInternals: ReactFlowState["updateNodeInternals"] = (

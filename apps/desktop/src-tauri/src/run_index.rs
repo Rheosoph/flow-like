@@ -11,7 +11,7 @@ use flow_like::flow::execution::{LogLevel, LogMeta};
 use flow_like::state::FlowLikeState;
 use flow_like_types::{async_trait, tokio};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS runs (
@@ -27,13 +27,18 @@ CREATE TABLE IF NOT EXISTS runs (
     event_version TEXT,
     logs INTEGER,
     nodes TEXT,
-    payload_len INTEGER NOT NULL DEFAULT 0
+    payload_len INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_board_start ON runs(app_id, board_id, start DESC);
 CREATE INDEX IF NOT EXISTS runs_event_start ON runs(app_id, event_id, start DESC);
 ";
 
-const ROW_COLUMNS: &str = "run_id, app_id, board_id, start, end, log_level, version, node_id, event_id, event_version, logs";
+/// Columns added after the first release, which `CREATE TABLE IF NOT EXISTS`
+/// leaves out of older files. Additive and nullable only.
+const ADDED_COLUMNS: &[(&str, &str)] = &[("error_message", "error_message TEXT")];
+
+const ROW_COLUMNS: &str = "run_id, app_id, board_id, start, end, log_level, version, node_id, event_id, event_version, logs, error_message";
 
 pub struct SqliteRunIndex {
     conn: Arc<Mutex<Connection>>,
@@ -63,9 +68,10 @@ impl SqliteRunIndex {
             .expect("in-memory sqlite run index")
     }
 
-    fn with_connection(conn: Connection) -> rusqlite::Result<Self> {
+    fn with_connection(mut conn: Connection) -> rusqlite::Result<Self> {
         configure_connection(&conn)?;
         conn.execute_batch(SCHEMA)?;
+        add_missing_columns(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -96,13 +102,30 @@ pub(crate) fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "synchronous", "NORMAL")
 }
 
+/// Checks and alters under one write lock, so two connections opening the
+/// same older file cannot both add a column.
+fn add_missing_columns(conn: &mut Connection) -> rusqlite::Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (column, definition) in ADDED_COLUMNS {
+        let present: bool = tx.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('runs') WHERE name = ?1",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            tx.execute(&format!("ALTER TABLE runs ADD COLUMN {definition}"), [])?;
+        }
+    }
+    tx.commit()
+}
+
 fn micros(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogMeta> {
     let nodes = row
-        .get::<_, Option<String>>(11)?
+        .get::<_, Option<String>>(12)?
         .and_then(|json| flow_like_types::json::from_str(&json).ok());
     Ok(LogMeta {
         run_id: row.get(0)?,
@@ -116,6 +139,7 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogMeta> {
         event_id: row.get(8)?,
         event_version: row.get(9)?,
         logs: row.get(10)?,
+        error_message: row.get(11)?,
         nodes,
         payload: Vec::new(),
         is_remote: false,
@@ -182,8 +206,8 @@ impl RunIndex for SqliteRunIndex {
             .transpose()?;
         self.with_conn("record", move |conn| {
             conn.execute(
-                "INSERT OR REPLACE INTO runs (run_id, app_id, board_id, start, end, log_level, version, node_id, event_id, event_version, logs, nodes, payload_len) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                "INSERT OR REPLACE INTO runs (run_id, app_id, board_id, start, end, log_level, version, node_id, event_id, event_version, logs, nodes, payload_len, error_message) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     meta.run_id,
                     meta.app_id,
@@ -198,6 +222,7 @@ impl RunIndex for SqliteRunIndex {
                     meta.logs.map(micros),
                     nodes,
                     micros(meta.payload.len() as u64),
+                    meta.error_message,
                 ],
             )?;
             Ok(())
@@ -276,6 +301,7 @@ mod tests {
             event_version: Some("1.0.0".to_string()),
             event_id: "evt".to_string(),
             payload: b"{\"a\":1}".to_vec(),
+            error_message: None,
             is_remote: false,
         }
     }
@@ -422,6 +448,60 @@ mod tests {
         let row = index.get("app", "untraced").await.unwrap().unwrap();
         assert_eq!(row.nodes, None);
         assert_eq!(row.logs, None);
+    }
+
+    #[tokio::test]
+    async fn error_messages_are_kept_on_list_and_get() {
+        let index = SqliteRunIndex::in_memory();
+        let mut failed = meta("failed", "b1", 10, 4);
+        failed.error_message = Some("payload does not match the event schema".to_string());
+        index.record(&failed).await.unwrap();
+        index.record(&meta("ok", "b1", 20, 1)).await.unwrap();
+
+        let rows = index.list(&RunQuery::new("app")).await.unwrap();
+        assert_eq!(run_ids(&rows), ["ok", "failed"]);
+        assert_eq!(rows[0].error_message, None);
+        assert_eq!(
+            rows[1].error_message.as_deref(),
+            Some("payload does not match the event schema")
+        );
+        assert_eq!(
+            index
+                .get("app", "failed")
+                .await
+                .unwrap()
+                .unwrap()
+                .error_message,
+            failed.error_message
+        );
+    }
+
+    #[tokio::test]
+    async fn older_files_gain_the_error_message_column_and_keep_their_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, board_id TEXT NOT NULL,
+                start INTEGER NOT NULL, end INTEGER NOT NULL, log_level INTEGER NOT NULL,
+                version TEXT NOT NULL, node_id TEXT NOT NULL, event_id TEXT NOT NULL DEFAULT '',
+                event_version TEXT, logs INTEGER, nodes TEXT, payload_len INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO runs (run_id, app_id, board_id, start, end, log_level, version, node_id)
+            VALUES ('legacy', 'app', 'b1', 10, 20, 3, 'v1-0-0', 'start');",
+        )
+        .unwrap();
+        add_missing_columns(&mut conn).unwrap();
+
+        let index = SqliteRunIndex::with_connection(conn).unwrap();
+        let legacy = index.get("app", "legacy").await.unwrap().unwrap();
+        assert_eq!(legacy.log_level, 3);
+        assert_eq!(legacy.error_message, None);
+
+        let mut failed = meta("failed", "b1", 30, 4);
+        failed.error_message = Some("executor crashed".to_string());
+        index.record(&failed).await.unwrap();
+        let row = index.get("app", "failed").await.unwrap().unwrap();
+        assert_eq!(row.error_message.as_deref(), Some("executor crashed"));
     }
 
     #[tokio::test]

@@ -58,20 +58,22 @@ const ContainerInner = ({
 
 	// Memoize children to prevent re-renders when sidebar state changes
 	const memoizedChildren = useMemo(() => children, [children]);
+	const showDesktopSidebar = !!sidebar && !isMobile && isDesktopSidebarOpen;
 
-	// The wrapper renders before a sidebar exists on purpose. Interfaces push
-	// theirs from a mount effect, and swapping the tree shape underneath them at
-	// that moment unmounts the interface that just finished rendering — the user
-	// sees the app load itself a second time.
+	// The interface keeps one position in the tree whatever the sidebar does. Opening it, pushing
+	// one, or crossing the mobile breakpoint used to give the interface a different parent, so
+	// React mounted it afresh: the app loaded itself again, and a chat lost the answer it was
+	// streaming. The optional sidebar panel and handle come first and only add siblings.
 	return (
 		<div className="h-full overflow-hidden flex flex-col grow max-h-full">
-			{/* Desktop Resizable Layout */}
-			{sidebar && !isMobile && isDesktopSidebarOpen ? (
-				<ResizablePanelGroup
-					direction="horizontal"
-					className="flex-1 w-full flex flex-row items-stretch overflow-hidden"
-				>
+			<ResizablePanelGroup
+				direction="horizontal"
+				className="flex-1 w-full flex flex-row items-stretch overflow-hidden"
+			>
+				{showDesktopSidebar && (
 					<ResizablePanel
+						id="interface-sidebar"
+						order={1}
 						defaultSize={25}
 						minSize={20}
 						maxSize={40}
@@ -85,40 +87,28 @@ const ContainerInner = ({
 							{sidebar}
 						</div>
 					</ResizablePanel>
+				)}
+				{showDesktopSidebar && <ResizableHandle withHandle />}
+				<ResizablePanel
+					id="interface-content"
+					order={2}
+					defaultSize={showDesktopSidebar ? 75 : 100}
+					className="flex flex-col overflow-hidden"
+				>
+					{memoizedChildren}
+				</ResizablePanel>
+			</ResizablePanelGroup>
 
-					<ResizableHandle withHandle />
-
-					<ResizablePanel
-						defaultSize={75}
-						className="flex flex-col overflow-hidden"
+			{isMobile && sidebar ? (
+				<Sheet open={isOpen} onOpenChange={setIsOpen}>
+					<SheetContent
+						side="left"
+						className="w-80 p-0 border-r bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/60"
 					>
-						{memoizedChildren}
-					</ResizablePanel>
-				</ResizablePanelGroup>
-			) : !isMobile ? (
-				<>{memoizedChildren}</>
+						{sidebar}
+					</SheetContent>
+				</Sheet>
 			) : null}
-
-			{/* Mobile Sheet */}
-			{isMobile && (
-				<>
-					{sidebar ? (
-						<Sheet open={isOpen} onOpenChange={setIsOpen}>
-							<SheetContent
-								side="left"
-								className="w-80 p-0 border-r bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/60"
-							>
-								{sidebar}
-							</SheetContent>
-						</Sheet>
-					) : null}
-
-					{/* Main Content for Mobile */}
-					<div className="relative h-full flex flex-col grow max-h-full overflow-hidden">
-						{memoizedChildren}
-					</div>
-				</>
-			)}
 		</div>
 	);
 };

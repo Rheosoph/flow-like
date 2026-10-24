@@ -122,9 +122,9 @@
 //! ASYNC_EXECUTION_BACKEND=redis
 //! ```
 
-#[cfg(feature = "lambda")]
 use tracing::Instrument;
 
+use crate::quota::RunRecord;
 use flow_like_storage::Path as StorePath;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::channel::ChannelGrant;
@@ -393,7 +393,7 @@ pub struct DispatchRequest {
     pub wasm_packages:
         Option<std::collections::HashMap<String, flow_like_types::dispatch::WasmPackageRef>>,
     /// Channel credentials for this run. Left `None` by callers; the dispatcher mints the grant
-    /// on every entry point (see [`Dispatcher::attach_channel`]).
+    /// on every entry point (see [`Dispatcher::mint_channel`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<ChannelGrant>,
     /// Who triggered the run. Decides how much the run's channel is worth minting.
@@ -429,6 +429,15 @@ pub enum DispatchError {
     Network(String),
     #[error("Lambda error: {0}")]
     Lambda(String),
+    /// The invoke API or the executor answered 4xx before streaming (throttled,
+    /// too large, invalid or unauthorized request, function missing or pending),
+    /// so the run never started and its admission can be released.
+    #[error("Rejected before the run started: {0}")]
+    Rejected(String),
+    /// The execution platform reported that the worker died (memory or time
+    /// limit, crash). No `completed` event will follow, so the run is over.
+    #[error("Executor failed: {0}")]
+    ExecutorFailed(String),
     #[error("Kubernetes error: {0}")]
     Kubernetes(String),
     #[error("SQS error: {0}")]
@@ -457,6 +466,84 @@ impl From<DispatchError> for crate::error::ApiError {
             error => Self::internal(error.to_string()),
         }
     }
+}
+
+/// A failed dispatch, and whether the run's admission (with any run record
+/// passed along) had committed before it failed.
+#[derive(Debug)]
+pub struct RunDispatchError {
+    pub error: DispatchError,
+    pub admitted: bool,
+}
+
+impl RunDispatchError {
+    fn before_admission(error: DispatchError) -> Self {
+        Self {
+            error,
+            admitted: false,
+        }
+    }
+
+    fn after_admission(error: DispatchError) -> Self {
+        Self {
+            error,
+            admitted: true,
+        }
+    }
+}
+
+/// What minting a run's channel needs, taken before the request is borrowed
+/// for its admission. Absent when the caller supplied its own grant.
+struct ChannelRequest {
+    run_id: String,
+    user_id: String,
+    app_id: String,
+    attended: bool,
+    ttl: i64,
+}
+
+impl ChannelRequest {
+    fn pending(request: &DispatchRequest) -> Option<Self> {
+        request.channel.is_none().then(|| Self {
+            run_id: request.run_id.clone(),
+            user_id: request.user_id.clone(),
+            app_id: request.app_id.clone(),
+            attended: request.trigger.is_attended(),
+            ttl: channel_ttl_from_jwt(&request.jwt),
+        })
+    }
+}
+
+/// Signs the receipt URL for the admitted operation's remaining lifetime and
+/// binds the allowance into the executor token.
+async fn bind_runtime_allowance(
+    state: &crate::state::AppState,
+    request: &mut DispatchRequest,
+    admission: &crate::quota::CloudAdmission,
+) -> Result<(), DispatchError> {
+    let receipt_url = match state.meta_bucket.as_ref() {
+        FlowLikeStore::AWS(_) | FlowLikeStore::Azure(_) | FlowLikeStore::Google(_) => {
+            let ttl = crate::quota::receipt_ttl(
+                admission.created_at,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(DispatchError::Quota)?;
+            let url = state
+                .meta_bucket
+                .sign("PUT", &crate::quota::receipt_path(&request.run_id), ttl)
+                .await
+                .map_err(|e| {
+                    DispatchError::Configuration(format!(
+                        "Cannot prepare durable runtime accounting: {e}"
+                    ))
+                })?;
+            Some(url.to_string())
+        }
+        _ => None,
+    };
+    request.jwt = super::jwt::bind_runtime_limit(&request.jwt, admission.runtime_ms, receipt_url)
+        .map_err(|error| DispatchError::Configuration(error.to_string()))?;
+    Ok(())
 }
 
 fn validate_runtime_variable_transport(
@@ -536,6 +623,8 @@ pub type WasmPackageResolver = Arc<
 #[derive(Clone)]
 pub struct Dispatcher {
     config: Arc<DispatchConfig>,
+    /// Reuse executor connections across invocations and dispatcher clones.
+    http_client: reqwest::Client,
     staging_bucket: Option<Arc<FlowLikeStore>>,
     artifact_ensurer: std::sync::OnceLock<ArtifactEnsurer>,
     async_wasm_package_resolver: std::sync::OnceLock<WasmPackageResolver>,
@@ -614,6 +703,7 @@ impl Dispatcher {
 
         Self {
             config: Arc::new(config),
+            http_client: reqwest::Client::new(),
             staging_bucket,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -633,6 +723,7 @@ impl Dispatcher {
     pub fn from_config(config: DispatchConfig) -> Self {
         Self {
             config: Arc::new(config),
+            http_client: reqwest::Client::new(),
             staging_bucket: None,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -658,69 +749,55 @@ impl Dispatcher {
         let _ = self.quota_state.set(Arc::downgrade(state));
     }
 
+    /// Reserves the run (with `run` in the same transaction) and binds its
+    /// runtime allowance into the executor token.
     async fn admit_runtime(
         &self,
         request: &mut DispatchRequest,
         mode: &str,
-    ) -> Result<(), DispatchError> {
-        if let Some(state) = self.quota_state.get().and_then(std::sync::Weak::upgrade) {
-            let receipt_url = match state.meta_bucket.as_ref() {
-                FlowLikeStore::AWS(_) | FlowLikeStore::Azure(_) | FlowLikeStore::Google(_) => Some(
-                    state
-                        .meta_bucket
-                        .sign(
-                            "PUT",
-                            &crate::quota::receipt_path(&request.run_id),
-                            crate::quota::receipt_ttl(&state, &request.run_id)
-                                .await
-                                .map_err(DispatchError::Quota)?,
-                        )
-                        .await
-                        .map_err(|e| {
-                            DispatchError::Configuration(format!(
-                                "Cannot prepare durable runtime accounting: {e}"
-                            ))
-                        })?
-                        .to_string(),
-                ),
-                _ => None,
+        run: Option<RunRecord>,
+    ) -> Result<(), RunDispatchError> {
+        let Some(state) = self.quota_state.get().and_then(std::sync::Weak::upgrade) else {
+            return match run {
+                Some(_) => Err(RunDispatchError::before_admission(
+                    DispatchError::Configuration(
+                        "recording a run with its admission requires the API state".into(),
+                    ),
+                )),
+                None => Ok(()),
             };
-            let limit = crate::quota::reserve_cloud(&state, request, mode)
-                .await
-                .map_err(DispatchError::Quota)?;
-            request.jwt = match super::jwt::bind_runtime_limit(&request.jwt, limit, receipt_url) {
-                Ok(token) => token,
-                Err(error) => {
-                    crate::quota::release_failed_dispatch(
-                        &state,
-                        &request.run_id,
-                        "Cannot sign runtime allowance",
-                    )
-                    .await
-                    .map_err(DispatchError::Quota)?;
-                    return Err(DispatchError::Configuration(error.to_string()));
-                }
-            };
+        };
+        let admission = crate::quota::reserve_cloud(&state, request, mode, run)
+            .await
+            .map_err(|error| RunDispatchError::before_admission(DispatchError::Quota(error)))?;
+        if let Err(error) = bind_runtime_allowance(&state, request, &admission).await {
+            if let Err(release) = crate::quota::release_failed_dispatch(
+                &state,
+                &request.run_id,
+                "Cannot bind runtime allowance",
+            )
+            .await
+            {
+                tracing::warn!(run_id = %request.run_id, %release, "Unstarted reservation requires scheduled recovery");
+            }
+            return Err(RunDispatchError::after_admission(error));
         }
         Ok(())
     }
 
-    async fn release_configuration_failure(&self, run_id: &str, error: &DispatchError) {
-        if !matches!(
-            error,
+    /// Releases the run's admission when `error` proves no worker received it.
+    async fn release_undelivered(&self, run_id: &str, error: &DispatchError) {
+        let reason = match error {
             DispatchError::Configuration(_)
-                | DispatchError::Serialization(_)
-                | DispatchError::Artifact(_)
-        ) {
-            return;
-        }
+            | DispatchError::Serialization(_)
+            | DispatchError::Artifact(_) => "Dispatch configuration rejected work before delivery",
+            DispatchError::Rejected(_) => {
+                "The execution platform refused the run before it started"
+            }
+            _ => return,
+        };
         if let Some(state) = self.quota_state.get().and_then(std::sync::Weak::upgrade) {
-            if let Err(error) = crate::quota::release_failed_dispatch(
-                &state,
-                run_id,
-                "Dispatch configuration rejected work before delivery",
-            )
-            .await
+            if let Err(error) = crate::quota::release_failed_dispatch(&state, run_id, reason).await
             {
                 tracing::warn!(%run_id,%error,"Unstarted reservation requires scheduled recovery");
             }
@@ -781,42 +858,93 @@ impl Dispatcher {
     /// builds it into a lazy channel, so one that never asks its client anything never connects);
     /// an unattended one gets the HTTP grant, which mints locally and costs the API nothing. A
     /// failed cloud grant degrades to HTTP rather than blocking the dispatch.
-    async fn attach_channel(&self, request: &mut DispatchRequest) {
-        if request.channel.is_some() {
-            return;
-        }
-        let Some(issuer) = &self.channels else {
-            return;
-        };
-        let ttl = channel_ttl_from_jwt(&request.jwt);
-        let app_id = Some(request.app_id.as_str());
-        let grant = if request.trigger.is_attended() {
+    async fn mint_channel(&self, pending: Option<ChannelRequest>) -> Option<ChannelGrant> {
+        let pending = pending?;
+        let issuer = self.channels.as_ref()?;
+        let app_id = Some(pending.app_id.as_str());
+        let grant = if pending.attended {
             match issuer
-                .grant(&request.run_id, &request.user_id, app_id, ttl)
+                .grant(&pending.run_id, &pending.user_id, app_id, pending.ttl)
+                .instrument(tracing::info_span!(
+                    target: "flow_like::observability",
+                    "dispatch.channel_grant",
+                    transport = issuer.transport()
+                ))
                 .await
             {
                 Ok(grant) => Ok(grant),
                 Err(error) => {
                     tracing::error!(
-                        run_id = %request.run_id,
+                        run_id = %pending.run_id,
                         transport = issuer.transport(),
                         %error,
                         "cloud channel grant failed; falling back to the http transport"
                     );
-                    issuer.http_grant(&request.run_id, &request.user_id, app_id, ttl)
+                    issuer.http_grant(&pending.run_id, &pending.user_id, app_id, pending.ttl)
                 }
             }
         } else {
-            issuer.http_grant(&request.run_id, &request.user_id, app_id, ttl)
+            issuer.http_grant(&pending.run_id, &pending.user_id, app_id, pending.ttl)
         };
-        match grant {
-            Ok(grant) => request.channel = Some(grant),
-            Err(error) => tracing::error!(
-                run_id = %request.run_id,
-                %error,
-                "channel grant failed; the run cannot receive client replies"
-            ),
+        grant
+            .inspect_err(|error| {
+                tracing::error!(
+                    run_id = %pending.run_id,
+                    %error,
+                    "channel grant failed; the run cannot receive client replies"
+                )
+            })
+            .ok()
+    }
+
+    #[cfg(test)]
+    async fn attach_channel(&self, request: &mut DispatchRequest) {
+        if let Some(grant) = self.mint_channel(ChannelRequest::pending(request)).await {
+            request.channel = Some(grant);
         }
+    }
+
+    /// Mints the channel while the artifact is assured and the run admitted:
+    /// neither side depends on the other, and each costs round trips.
+    async fn prepare(
+        &self,
+        request: &mut DispatchRequest,
+        backend: &ExecutionBackend,
+        mode: &str,
+        run: Option<RunRecord>,
+    ) -> Result<(), RunDispatchError> {
+        let pending = ChannelRequest::pending(request);
+        let (channel, admitted) = futures::join!(
+            self.mint_channel(pending),
+            self.assure_and_admit(request, backend, mode, run)
+        );
+        if let Some(grant) = channel {
+            request.channel = Some(grant);
+        }
+        admitted
+    }
+
+    async fn assure_and_admit(
+        &self,
+        request: &mut DispatchRequest,
+        backend: &ExecutionBackend,
+        mode: &str,
+        run: Option<RunRecord>,
+    ) -> Result<(), RunDispatchError> {
+        let ensured = self
+            .ensure_artifact(request)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "dispatch.ensure_artifact"
+            ))
+            .await
+            .map_err(RunDispatchError::before_admission)?;
+        request.artifact = Some(
+            self.sign_artifact(&ensured, backend)
+                .await
+                .map_err(RunDispatchError::before_admission)?,
+        );
+        self.admit_runtime(request, mode, run).await
     }
 
     /// Guarantee the compiled artifact exists before handing the run to the
@@ -910,18 +1038,14 @@ impl Dispatcher {
             })?;
             request.wasm_packages = resolver(request.app_id.clone(), platform.clone()).await;
         }
-        self.attach_channel(&mut request).await;
-        let ensured = self.ensure_artifact(&request).await?;
-        request.artifact = Some(self.sign_artifact(&ensured, &backend).await?);
-        self.admit_runtime(
-            &mut request,
-            if backend == ExecutionBackend::Http {
-                "realtime"
-            } else {
-                "async"
-            },
-        )
-        .await?;
+        let mode = if backend == ExecutionBackend::Http {
+            "realtime"
+        } else {
+            "async"
+        };
+        self.prepare(&mut request, &backend, mode, None)
+            .await
+            .map_err(|failure| failure.error)?;
         let job_id = create_id();
 
         let result = match backend {
@@ -941,48 +1065,58 @@ impl Dispatcher {
             ExecutionBackend::Redis => self.dispatch_redis(&job_id, &request).await,
         };
         if let Err(error) = &result {
-            self.release_configuration_failure(&request.run_id, error)
-                .await;
+            self.release_undelivered(&request.run_id, error).await;
         }
         result
     }
 
     /// Dispatch an execution request and return a streaming response
     /// Only supported for LambdaStream backend
-    #[cfg(feature = "lambda")]
-    pub async fn dispatch_streaming(
-        &self,
-        mut request: DispatchRequest,
-    ) -> Result<(DispatchResponse, ByteStream), DispatchError> {
-        validate_runtime_variable_transport(&self.config.backend, &request)?;
-        self.attach_channel(&mut request).await;
-        let ensured = self.ensure_artifact(&request).await?;
-        request.artifact = Some(self.sign_artifact(&ensured, &self.config.backend).await?);
-        self.admit_runtime(&mut request, "realtime").await?;
-        let job_id = create_id();
-
-        let result = match self.config.backend {
-            ExecutionBackend::LambdaStream => self.dispatch_lambda_stream(&job_id, &request).await,
-            _ => Err(DispatchError::Configuration(format!(
-                "Streaming dispatch not supported for {:?} backend. Use LambdaStream backend.",
-                self.config.backend
-            ))),
-        };
-        if let Err(error) = &result {
-            self.release_configuration_failure(&request.run_id, error)
-                .await;
-        }
-        result
-    }
-
-    #[cfg(not(feature = "lambda"))]
     pub async fn dispatch_streaming(
         &self,
         request: DispatchRequest,
     ) -> Result<(DispatchResponse, ByteStream), DispatchError> {
-        validate_runtime_variable_transport(&self.config.backend, &request)?;
-        Err(DispatchError::Configuration(
-            "Streaming dispatch requires the 'lambda' feature".into(),
+        self.dispatch_streaming_with_run(request, None)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// [`Self::dispatch_streaming`] that commits `run` with the run's admission.
+    #[cfg(feature = "lambda")]
+    pub async fn dispatch_streaming_with_run(
+        &self,
+        mut request: DispatchRequest,
+        run: Option<RunRecord>,
+    ) -> Result<(DispatchResponse, ByteStream), RunDispatchError> {
+        validate_runtime_variable_transport(&self.config.backend, &request)
+            .map_err(RunDispatchError::before_admission)?;
+        let backend = self.config.backend.clone();
+        self.prepare(&mut request, &backend, "realtime", run)
+            .await?;
+        let job_id = create_id();
+
+        let result = match backend {
+            ExecutionBackend::LambdaStream => self.dispatch_lambda_stream(&job_id, &request).await,
+            _ => Err(DispatchError::Configuration(format!(
+                "Streaming dispatch not supported for {backend:?} backend. Use LambdaStream backend."
+            ))),
+        };
+        if let Err(error) = &result {
+            self.release_undelivered(&request.run_id, error).await;
+        }
+        result.map_err(RunDispatchError::after_admission)
+    }
+
+    #[cfg(not(feature = "lambda"))]
+    pub async fn dispatch_streaming_with_run(
+        &self,
+        request: DispatchRequest,
+        _run: Option<RunRecord>,
+    ) -> Result<(DispatchResponse, ByteStream), RunDispatchError> {
+        validate_runtime_variable_transport(&self.config.backend, &request)
+            .map_err(RunDispatchError::before_admission)?;
+        Err(RunDispatchError::before_admission(
+            DispatchError::Configuration("Streaming dispatch requires the 'lambda' feature".into()),
         ))
     }
 
@@ -999,13 +1133,13 @@ impl Dispatcher {
 
         let body = build_executor_payload(job_id, request)?;
 
-        let client = reqwest::Client::new();
-        let response = attach_executor_iam_auth(client.post(format!("{}/execute", url)), url)
-            .await?
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| DispatchError::Network(e.to_string()))?;
+        let response =
+            attach_executor_iam_auth(self.http_client.post(format!("{}/execute", url)), url)
+                .await?
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| DispatchError::Network(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1023,43 +1157,65 @@ impl Dispatcher {
     /// Dispatch via HTTP POST to executor SSE endpoint and return streaming response
     pub async fn dispatch_http_sse(
         &self,
-        mut request: DispatchRequest,
+        request: DispatchRequest,
     ) -> Result<(DispatchResponse, reqwest::Response), DispatchError> {
-        validate_runtime_variable_transport(&ExecutionBackend::Http, &request)?;
-        self.attach_channel(&mut request).await;
-        let ensured = self.ensure_artifact(&request).await?;
-        request.artifact = Some(
-            self.sign_artifact(&ensured, &ExecutionBackend::Http)
-                .await?,
-        );
-        let url =
-            self.config.executor_url.as_ref().ok_or_else(|| {
-                DispatchError::Configuration("EXECUTOR_URL not configured".into())
-            })?;
+        self.dispatch_http_sse_with_run(request, None)
+            .await
+            .map_err(|failure| failure.error)
+    }
 
+    /// [`Self::dispatch_http_sse`] that commits `run` with the run's admission.
+    pub async fn dispatch_http_sse_with_run(
+        &self,
+        mut request: DispatchRequest,
+        run: Option<RunRecord>,
+    ) -> Result<(DispatchResponse, reqwest::Response), RunDispatchError> {
+        validate_runtime_variable_transport(&ExecutionBackend::Http, &request)
+            .map_err(RunDispatchError::before_admission)?;
+        let url = self.config.executor_url.as_ref().ok_or_else(|| {
+            RunDispatchError::before_admission(DispatchError::Configuration(
+                "EXECUTOR_URL not configured".into(),
+            ))
+        })?;
         tracing::info!(url = %url, "Dispatching HTTP SSE");
+        self.prepare(&mut request, &ExecutionBackend::Http, "realtime", run)
+            .await?;
+        let result = self.send_http_sse(url, &request).await;
+        if let Err(error) = &result {
+            self.release_undelivered(&request.run_id, error).await;
+        }
+        result.map_err(RunDispatchError::after_admission)
+    }
 
-        self.admit_runtime(&mut request, "realtime").await?;
-
+    async fn send_http_sse(
+        &self,
+        url: &str,
+        request: &DispatchRequest,
+    ) -> Result<(DispatchResponse, reqwest::Response), DispatchError> {
         let job_id = create_id();
-        let body = build_executor_payload(&job_id, &request)?;
+        let body = build_executor_payload(&job_id, request)?;
 
         tracing::debug!(job_id = %job_id, "Dispatch payload built");
 
-        let client = reqwest::Client::new();
-        let response = attach_executor_iam_auth(client.post(format!("{}/execute/sse", url)), url)
-            .await?
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| DispatchError::Network(e.to_string()))?;
+        let response =
+            attach_executor_iam_auth(self.http_client.post(format!("{}/execute/sse", url)), url)
+                .await?
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| DispatchError::Network(e.to_string()))?;
 
         let status = response.status();
         tracing::info!(job_id = %job_id, status = %status, "Executor responded");
 
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
-            return Err(DispatchError::Network(format!("HTTP {}: {}", status, text)));
+            let message = format!("HTTP {}: {}", status, text);
+            return Err(if status.is_client_error() {
+                DispatchError::Rejected(message)
+            } else {
+                DispatchError::Network(message)
+            });
         }
 
         let dispatch_response = DispatchResponse {
@@ -1352,8 +1508,6 @@ impl Dispatcher {
         job_id: &str,
         request: &DispatchRequest,
     ) -> Result<(DispatchResponse, ByteStream), DispatchError> {
-        use aws_sdk_lambda::types::InvokeWithResponseStreamResponseEvent;
-
         let function_name = self.config.lambda_function_name.as_ref().ok_or_else(|| {
             DispatchError::Configuration("LAMBDA_EXECUTOR_FUNCTION not configured".into())
         })?;
@@ -1389,25 +1543,20 @@ impl Dispatcher {
                 rpc.method = "InvokeWithResponseStream"
             ))
             .await
-            .map_err(|e| lambda_dispatch_error(e, tenant_id.is_some()))?;
+            .map_err(|error| {
+                let refused = error
+                    .raw_response()
+                    .is_some_and(|response| response.status().is_client_error());
+                match lambda_dispatch_error(error, tenant_id.is_some()) {
+                    DispatchError::Lambda(message) if refused => DispatchError::Rejected(message),
+                    other => other,
+                }
+            })?;
 
-        let event_stream = response.event_stream;
-        let stream = futures::stream::unfold(event_stream, |mut receiver| async move {
-            match receiver.recv().await {
-                Ok(Some(event)) => match event {
-                    InvokeWithResponseStreamResponseEvent::PayloadChunk(chunk) => {
-                        if let Some(payload) = chunk.payload {
-                            Some((Ok(bytes::Bytes::from(payload.into_inner())), receiver))
-                        } else {
-                            Some((Ok(bytes::Bytes::new()), receiver))
-                        }
-                    }
-                    InvokeWithResponseStreamResponseEvent::InvokeComplete(_) => None,
-                    _ => Some((Ok(bytes::Bytes::new()), receiver)),
-                },
-                Ok(None) => None,
-                Err(e) => Some((Err(DispatchError::Lambda(e.to_string())), receiver)),
-            }
+        let stream = futures::stream::unfold(Some(response.event_stream), |receiver| async move {
+            let mut receiver = receiver?;
+            let (chunk, more) = lambda_stream_chunk(receiver.recv().await)?;
+            Some((chunk, more.then_some(receiver)))
         });
         let stream = confirm_lambda_stream_prelude(Box::pin(stream)).await?;
 
@@ -2243,6 +2392,48 @@ fn lambda_dispatch_error<E: std::error::Error>(error: E, tenant_isolated: bool) 
     ))
 }
 
+/// One event of a streaming invocation as the next chunk; `None` ends the
+/// stream. The flag says whether the receiver may be polled again.
+#[cfg(feature = "lambda")]
+fn lambda_stream_chunk<E: std::fmt::Display>(
+    event: Result<Option<aws_sdk_lambda::types::InvokeWithResponseStreamResponseEvent>, E>,
+) -> Option<(StreamChunk, bool)> {
+    use aws_sdk_lambda::types::InvokeWithResponseStreamResponseEvent as Event;
+
+    match event {
+        Ok(Some(Event::PayloadChunk(chunk))) => Some((
+            Ok(chunk
+                .payload
+                .map(|payload| bytes::Bytes::from(payload.into_inner()))
+                .unwrap_or_default()),
+            true,
+        )),
+        Ok(Some(Event::InvokeComplete(complete))) => {
+            lambda_invoke_complete_error(&complete).map(|error| (Err(error), false))
+        }
+        Ok(Some(_)) => Some((Ok(bytes::Bytes::new()), true)),
+        Ok(None) => None,
+        Err(error) => Some((Err(DispatchError::Lambda(error.to_string())), false)),
+    }
+}
+
+/// A streaming invocation ends with `InvokeComplete`; when it carries an
+/// `error_code` the executor died mid-run (e.g. `Runtime.OutOfMemory`) and
+/// never sent its `completed` event. `error_details` stays out: the message
+/// reaches page viewers, and the details are in the executor's CloudWatch log.
+#[cfg(feature = "lambda")]
+fn lambda_invoke_complete_error(
+    complete: &aws_sdk_lambda::types::InvokeWithResponseStreamCompleteEvent,
+) -> Option<DispatchError> {
+    let code = complete.error_code()?;
+    let cause = match code {
+        "Runtime.OutOfMemory" => "the run exceeded the executor's memory limit",
+        "Sandbox.Timedout" => "the run exceeded the executor's time limit",
+        _ => "the executor stopped before the run completed",
+    };
+    Some(DispatchError::ExecutorFailed(format!("{cause} ({code})")))
+}
+
 /// The eight NUL bytes `lambda_http` writes between the metadata prelude and
 /// the body of an `application/vnd.awslambda.http-integration-response`
 /// streaming response.
@@ -2337,10 +2528,15 @@ async fn confirm_lambda_stream_prelude(
                 }
                 body.truncate(LAMBDA_PRELUDE_ERROR_BODY_CAP);
                 let body = String::from_utf8_lossy(&body);
-                return Err(DispatchError::Lambda(format!(
+                let message = format!(
                     "executor rejected the run before streaming: HTTP {status}: {}",
                     body.trim()
-                )));
+                );
+                return Err(if (400..500).contains(&status) {
+                    DispatchError::Rejected(message)
+                } else {
+                    DispatchError::Lambda(message)
+                });
             }
             LambdaPreludeScan::Absent => {
                 let head = bytes::Bytes::from(buffered);
@@ -3450,6 +3646,28 @@ pub(crate) mod gcp_id_token {
 /// ephemeral dispatch (encrypted payload storage / in-memory); persisted
 /// copies (event rows) must use `false` and re-hydrate at trigger time via
 /// [`hydrate_profile_custom_bit_secrets`].
+/// The requested profile, else the first one linked to the app, else the first.
+fn dispatch_profile<'a>(
+    profiles: &'a [crate::entity::profile::Model],
+    profile_id: Option<&str>,
+    app_id: &str,
+) -> Option<&'a crate::entity::profile::Model> {
+    let linked = |profile: &&crate::entity::profile::Model| {
+        profile
+            .apps
+            .as_ref()
+            .and_then(|apps| apps.as_array())
+            .is_some_and(|apps| {
+                apps.iter()
+                    .any(|app| app.get("app_id").and_then(|id| id.as_str()) == Some(app_id))
+            })
+    };
+    profile_id
+        .and_then(|id| profiles.iter().find(|profile| profile.id == id))
+        .or_else(|| profiles.iter().find(linked))
+        .or_else(|| profiles.first())
+}
+
 pub async fn fetch_profile_for_dispatch(
     state: &crate::state::AppState,
     user_id: &str,
@@ -3461,55 +3679,24 @@ pub async fn fetch_profile_for_dispatch(
     use sea_orm::sea_query::ExprTrait;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-    let db = &state.db;
-
-    let model = if let Some(pid) = profile_id {
-        profile::Entity::find()
-            .filter(
-                profile::Column::Id
-                    .eq(pid)
-                    .and(profile::Column::UserId.eq(user_id))
-                    .and(profile::Column::DeletedAt.is_null()),
-            )
-            .one(db)
-            .await
-            .ok()
-            .flatten()
-    } else {
-        None
-    };
-
-    let model = if model.is_some() {
-        model
-    } else {
-        let profiles = profile::Entity::find()
-            .filter(
-                profile::Column::UserId
-                    .eq(user_id)
-                    .and(profile::Column::DeletedAt.is_null()),
-            )
-            .all(db)
-            .await
-            .ok()
-            .unwrap_or_default();
-
-        profiles
-            .iter()
-            .find(|p| {
-                p.apps
-                    .as_ref()
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .any(|a| a.get("app_id").and_then(|id| id.as_str()) == Some(app_id))
-                    })
-                    .unwrap_or(false)
-            })
-            .or_else(|| profiles.first())
-            .cloned()
-    };
-
-    let model = model?;
+    // One read serves the requested profile and both fallbacks.
+    let profiles = profile::Entity::find()
+        .filter(
+            profile::Column::UserId
+                .eq(user_id)
+                .and(profile::Column::DeletedAt.is_null()),
+        )
+        .all(&state.db)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "db.query",
+            db.operation = "select",
+            db.table = "Profile"
+        ))
+        .await
+        .ok()
+        .unwrap_or_default();
+    let model = dispatch_profile(&profiles, profile_id, app_id)?.clone();
 
     let profile_bit_ids = model.bit_ids.clone().unwrap_or_default();
     let custom_bits = crate::routes::user::bits::load_custom_bits_for_profile(
@@ -3679,6 +3866,79 @@ mod tests {
         collected
     }
 
+    #[cfg(feature = "lambda")]
+    #[test]
+    fn lambda_invoke_complete_error_codes_end_the_run() {
+        use aws_sdk_lambda::types::InvokeWithResponseStreamCompleteEvent;
+
+        let clean = InvokeWithResponseStreamCompleteEvent::builder().build();
+        assert!(lambda_invoke_complete_error(&clean).is_none());
+
+        let oom = InvokeWithResponseStreamCompleteEvent::builder()
+            .error_code("Runtime.OutOfMemory")
+            .error_details("Runtime exited with error: signal: killed")
+            .build();
+        let Some(DispatchError::ExecutorFailed(reason)) = lambda_invoke_complete_error(&oom) else {
+            panic!("an error code must become an executor failure");
+        };
+        assert_eq!(
+            reason,
+            "the run exceeded the executor's memory limit (Runtime.OutOfMemory)"
+        );
+
+        let panicked = InvokeWithResponseStreamCompleteEvent::builder()
+            .error_code("Unhandled")
+            .error_details("panicked at apps/app-1/boards/private-board")
+            .build();
+        let Some(DispatchError::ExecutorFailed(reason)) = lambda_invoke_complete_error(&panicked)
+        else {
+            panic!("an unknown error code must still end the run");
+        };
+        assert_eq!(
+            reason,
+            "the executor stopped before the run completed (Unhandled)"
+        );
+    }
+
+    #[cfg(feature = "lambda")]
+    #[test]
+    fn lambda_stream_stops_after_a_failed_invocation() {
+        use aws_sdk_lambda::types::{
+            InvokeResponseStreamUpdate, InvokeWithResponseStreamCompleteEvent,
+            InvokeWithResponseStreamResponseEvent as Event,
+        };
+
+        let chunk = Event::PayloadChunk(
+            InvokeResponseStreamUpdate::builder()
+                .payload(aws_sdk_lambda::primitives::Blob::new(
+                    b"data: {}\n\n".to_vec(),
+                ))
+                .build(),
+        );
+        let Some((Ok(bytes), true)) = lambda_stream_chunk::<&str>(Ok(Some(chunk))) else {
+            panic!("a payload chunk must stream and keep the receiver");
+        };
+        assert_eq!(&bytes[..], b"data: {}\n\n");
+
+        let clean = Event::InvokeComplete(InvokeWithResponseStreamCompleteEvent::builder().build());
+        assert!(lambda_stream_chunk::<&str>(Ok(Some(clean))).is_none());
+
+        let oom = Event::InvokeComplete(
+            InvokeWithResponseStreamCompleteEvent::builder()
+                .error_code("Runtime.OutOfMemory")
+                .build(),
+        );
+        assert!(matches!(
+            lambda_stream_chunk::<&str>(Ok(Some(oom))),
+            Some((Err(DispatchError::ExecutorFailed(_)), false))
+        ));
+        assert!(matches!(
+            lambda_stream_chunk(Err("connection reset")),
+            Some((Err(DispatchError::Lambda(_)), false))
+        ));
+        assert!(lambda_stream_chunk::<&str>(Ok(None)).is_none());
+    }
+
     #[test]
     fn lambda_prelude_scan_recognizes_the_integration_response_format() {
         assert_eq!(scan_lambda_http_prelude(b""), LambdaPreludeScan::Incomplete);
@@ -3717,12 +3977,33 @@ mod tests {
             panic!("a non-2xx prelude must fail dispatch");
         };
 
+        assert!(
+            matches!(error, DispatchError::Lambda(_)),
+            "a 5xx may have started the run: {error:?}"
+        );
         let rendered = error.to_string();
         assert!(rendered.contains("HTTP 500"), "{rendered}");
         assert!(
             rendered.contains("the executor rejected the claims"),
             "{rendered}"
         );
+    }
+
+    #[tokio::test]
+    async fn lambda_4xx_prelude_is_a_rejection_that_releases_admission() {
+        let mut head = b"{\"statusCode\":429,\"headers\":{}}".to_vec();
+        head.extend_from_slice(&LAMBDA_PRELUDE_SEPARATOR);
+        let Err(error) = confirm_lambda_stream_prelude(byte_stream(vec![
+            &head,
+            b"Execution capacity is occupied or draining",
+        ]))
+        .await
+        else {
+            panic!("a non-2xx prelude must fail dispatch");
+        };
+
+        assert!(matches!(error, DispatchError::Rejected(_)), "{error:?}");
+        assert!(error.to_string().contains("HTTP 429"), "{error}");
     }
 
     #[tokio::test]
@@ -3797,6 +4078,83 @@ mod tests {
             shadow: false,
             artifact: None,
         }
+    }
+
+    #[tokio::test]
+    async fn http_dispatch_reuses_connections_across_streams_and_dispatcher_clones() {
+        use axum::{
+            Json, Router,
+            extract::{ConnectInfo, State},
+            http::StatusCode,
+            routing::post,
+        };
+        use std::net::SocketAddr;
+
+        let peers = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        async fn record_peer(
+            State(peers): State<Arc<tokio::sync::Mutex<Vec<SocketAddr>>>>,
+            ConnectInfo(peer): ConnectInfo<SocketAddr>,
+            Json(_payload): Json<serde_json::Value>,
+        ) -> StatusCode {
+            peers.lock().await.push(peer);
+            StatusCode::NO_CONTENT
+        }
+        let app = Router::new()
+            .route("/execute/sse", post(record_peer))
+            .route("/execute", post(record_peer))
+            .with_state(peers.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let dispatcher = Dispatcher::from_config(DispatchConfig {
+            executor_url: Some(url.clone()),
+            ..DispatchConfig::default()
+        });
+        let cloned = dispatcher.clone();
+        crate::backend_jwt::init_for_tests();
+        let mut request = dispatch_request(DispatchTrigger::User);
+        request.jwt = super::super::jwt::sign(super::super::jwt::ExecutionJwtParams {
+            user_id: request.user_id.clone(),
+            technical_user_id: None,
+            run_id: request.run_id.clone(),
+            app_id: request.app_id.clone(),
+            board_id: request.board_id.clone(),
+            event_id: None,
+            app_chain: None,
+            correlation: None,
+            callback_url: request.callback_url.clone(),
+            token_type: crate::backend_jwt::TokenType::Executor,
+            ttl_seconds: Some(3600),
+            shadow: None,
+        })
+        .unwrap();
+
+        for sender in [&dispatcher, &cloned] {
+            sender
+                .send_http_sse(&url, &request)
+                .await
+                .unwrap()
+                .1
+                .bytes()
+                .await
+                .unwrap();
+        }
+        dispatcher
+            .dispatch_http("job-http", &request)
+            .await
+            .unwrap();
+
+        let peers = peers.lock().await;
+        assert_eq!(peers.len(), 3);
+        assert!(peers.iter().all(|peer| peer == &peers[0]));
+        server.abort();
     }
 
     fn request_with_runtime_variables(secret: bool) -> DispatchRequest {
@@ -3899,8 +4257,14 @@ mod tests {
             ..DispatchConfig::default()
         });
         let request = request_with_runtime_variables(true);
+        // HTTP carries runtime variables, so the run gets past that check and fails on
+        // the missing executor URL, before anything is reserved.
         let result = dispatcher.dispatch_http_sse(request.clone()).await;
-        assert!(matches!(result, Err(DispatchError::Artifact(_))));
+        assert!(
+            matches!(result, Err(DispatchError::Configuration(ref reason))
+            if reason.contains("EXECUTOR_URL")),
+            "{result:?}"
+        );
 
         let result = dispatcher.dispatch_streaming(request.clone()).await;
         assert!(

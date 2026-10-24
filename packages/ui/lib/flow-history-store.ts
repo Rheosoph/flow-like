@@ -1,4 +1,8 @@
 import {
+	readRetentionPolicy,
+	retentionCutoff,
+} from "./browser-storage/retention";
+import {
 	type HistoryEntry,
 	type HistorySummary,
 	type HistoryTimeline,
@@ -303,7 +307,6 @@ export const boardHistoryKey = (appId: string, boardId: string) =>
 	`${appId}_${boardId}`;
 
 const IDLE_EVICTION_MS = 60_000;
-const GC_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * One `BoardHistory` per board for the whole session, shared by every component that edits it.
@@ -380,12 +383,17 @@ export class BoardHistoryRegistry {
 	 * replaced (server reset, app removal): the entries describe a board that no longer exists.
 	 */
 	async clear(appId: string, boardId: string): Promise<void> {
-		const live = this.peek(appId, boardId);
-		if (live) {
+		await this.clearKey(boardHistoryKey(appId, boardId));
+	}
+
+	/** `clear` for callers that only know the stored key, such as the storage settings. */
+	async clearKey(key: string): Promise<void> {
+		const live = this.histories.get(key);
+		if (live && !live.isDisposed) {
 			await live.clear();
 			return;
 		}
-		await this.persistence?.write(boardHistoryKey(appId, boardId), {
+		await this.persistence?.write(key, {
 			clear: true,
 			appliedSeq: 0,
 			nextSeq: 1,
@@ -397,7 +405,9 @@ export class BoardHistoryRegistry {
 		this.gcScheduled = true;
 		const gc = this.persistence.gc.bind(this.persistence);
 		setTimeout(() => {
-			gc(Date.now() - GC_AGE_MS).catch((error) => {
+			const days = readRetentionPolicy().undoHistory;
+			if (days === null) return;
+			gc(retentionCutoff(days)).catch((error) => {
 				console.warn(
 					"[flow-history] History garbage collection failed:",
 					error,

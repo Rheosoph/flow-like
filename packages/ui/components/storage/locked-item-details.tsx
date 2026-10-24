@@ -9,6 +9,8 @@ import {
 	LockIcon,
 	ShieldAlertIcon,
 	ShieldCheckIcon,
+	TimerIcon,
+	TimerOffIcon,
 	Trash2Icon,
 	UploadIcon,
 } from "lucide-react";
@@ -31,6 +33,7 @@ import {
 	UserInlineTag,
 } from "../ui";
 import {
+	autoDeletionLabel,
 	formatLockedDate,
 	retentionEnded,
 	shortSha256,
@@ -90,6 +93,42 @@ function Sha256Fact({ version }: Readonly<{ version: ILockedItemVersion }>) {
 	);
 }
 
+/** Switching on after retention ended would delete within the hour; that is the purge button's job. */
+function AutoDeleteToggle({
+	controller,
+	item,
+	version,
+}: Readonly<{
+	controller: LockedStorageController;
+	item: ILockedItem;
+	version: ILockedItemVersion;
+}>) {
+	const { t } = useTranslation("common");
+	const enabled = version.delete_after_retention;
+	if (!controller.canPurge) return null;
+	if (!enabled && retentionEnded(version.retain_until)) return null;
+	return (
+		<Button
+			variant="outline"
+			size="sm"
+			disabled={controller.mutating}
+			onClick={() => void controller.toggleAutoDelete({ item, version })}
+		>
+			{enabled ? (
+				<TimerOffIcon className="h-4 w-4" />
+			) : (
+				<TimerIcon className="h-4 w-4" />
+			)}
+			{enabled
+				? t("lockedStorage.keepAfterRetention", "Keep after retention")
+				: t(
+						"lockedStorage.deleteAfterRetentionAction",
+						"Delete after retention",
+					)}
+		</Button>
+	);
+}
+
 function VersionActions({
 	controller,
 	item,
@@ -138,6 +177,7 @@ function VersionActions({
 						: t("lockedStorage.placeLegalHold", "Place legal hold")}
 				</Button>
 			)}
+			<AutoDeleteToggle controller={controller} item={item} version={version} />
 			{controller.canPurge && version.purgeable && (
 				<Button
 					variant="outline"
@@ -239,17 +279,21 @@ function VersionCard({
 						</Badge>
 						{!purged && (
 							<span className="text-muted-foreground">
-								{retentionEnded(version.retain_until)
-									? t(
-											"lockedStorage.retentionEndedOn",
-											"Retention ended {{date}}",
-											{
+								{autoDeletionLabel(version, language, t) ??
+									(retentionEnded(version.retain_until)
+										? t(
+												"lockedStorage.retentionEndedOn",
+												"Retention ended {{date}}",
+												{
+													date: formatLockedDate(
+														version.retain_until,
+														language,
+													),
+												},
+											)
+										: t("lockedStorage.lockedUntil", "Locked until {{date}}", {
 												date: formatLockedDate(version.retain_until, language),
-											},
-										)
-									: t("lockedStorage.lockedUntil", "Locked until {{date}}", {
-											date: formatLockedDate(version.retain_until, language),
-										})}
+											}))}
 							</span>
 						)}
 					</span>

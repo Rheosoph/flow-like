@@ -68,6 +68,12 @@ pub struct ApplyFlowIrCommitResult {
     pub diagnostics: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_board_node_count: Option<usize>,
+    /// What the apply changed on the board, from a before/after comparison.
+    #[serde(
+        default,
+        skip_serializing_if = "flow_like::flow::ast::FlowScriptChanges::is_empty"
+    )]
+    pub changes: flow_like::flow::ast::FlowScriptChanges,
 }
 
 const FLOW_IR_DURABLE_RECEIPT_REF_PREFIX: &str =
@@ -134,6 +140,7 @@ impl ApplyFlowIrCommitResult {
             board_commands: Vec::new(),
             diagnostics: Vec::new(),
             final_board_node_count: None,
+            changes: Default::default(),
         }
     }
 
@@ -152,6 +159,7 @@ impl ApplyFlowIrCommitResult {
             board_commands,
             diagnostics,
             final_board_node_count: None,
+            changes: Default::default(),
         }
     }
 }
@@ -1128,6 +1136,7 @@ pub async fn apply_flow_ir_commit(
         board_commands: apply_result.board_commands.clone(),
         diagnostics: apply_result.diagnostics.clone(),
         final_board_node_count: Some(board_total_node_count(&board)),
+        changes: apply_result.changes.clone(),
     };
     // Pending -> applied is one canonical state transition: no replica can observe the graph
     // mutation without its success receipt, or retain an applicable claim after that mutation.
@@ -1265,6 +1274,7 @@ mod tests {
             board_commands: Vec::new(),
             diagnostics: Vec::new(),
             final_board_node_count: Some(3),
+            changes: Default::default(),
         }
     }
 

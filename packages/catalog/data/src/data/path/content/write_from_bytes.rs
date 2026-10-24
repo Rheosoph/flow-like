@@ -63,9 +63,9 @@ impl NodeLogic for WriteBytesNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let path: FlowPath = context.evaluate_pin("path").await?;
-        let content: Vec<u8> = context.evaluate_pin("content").await?;
+        let content = context.evaluate_pin_bytes("content").await?;
 
-        path.put(context, content, false).await?;
+        path.put_bytes(context, content, false).await?;
 
         context.activate_exec_pin("exec_out").await?;
 

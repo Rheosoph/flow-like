@@ -150,6 +150,13 @@
 		"auto_reroute": {
 			"description": "The editor generated this reroute and may replace it during automatic layout.",
 			"type": ["boolean", "null"]
+		},
+		"code_names": {
+			"description": "FlowScript names the text gave this node's values, keyed by output pin name; `\"\"` is the node's own binding (`const name = …`). Presentation only: identity stays `id`, and the renderer falls back to a generated name when a stored one is invalid or already taken.",
+			"type": ["object", "null"],
+			"additionalProperties": {
+				"type": "string"
+			}
 		}
 	},
 	"required": [

@@ -14,6 +14,14 @@ import {
 	useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { betweenFrames } from "../../lib/board-canvas/frames";
+import {
+	type IconRaster,
+	NODE_GLYPHS,
+	rasterizeGlyph,
+	rasterizeIcon,
+} from "../../lib/board-canvas/icon-raster";
+import { iconRasterSize } from "../../lib/board-canvas/icons";
 import {
 	BoardHitIndex,
 	ConnectionGesture,
@@ -32,6 +40,10 @@ import {
 import { pinchViewport } from "../../lib/board-canvas/pinch";
 import type { Overlay, Palette, Scene } from "../../lib/board-canvas/scene";
 import { waitForCanvasPaint } from "../../lib/board-canvas/startup";
+import {
+	type NodeStatus,
+	collectRunActivity,
+} from "../../lib/board-canvas/status";
 import { useBoardRuntime, useReactFlow, useStoreApi } from "./board-runtime";
 import type { FlowCanvasProps } from "./flow-board";
 
@@ -43,10 +55,16 @@ export interface EguiCanvasLayerProps {
 	active?: boolean;
 	paintLayer?: "all" | "edges" | "nodes";
 	interactive?: boolean;
+	/** Run state, logs and lint marks per node id, painted without rebuilding the scene. */
+	status?: Readonly<Record<string, NodeStatus>>;
+	/** Live runs, for the "last activity" clock on running nodes. */
+	runs?: ReadonlyMap<string, { lastNodeUpdateMs: number }>;
 	onHoverNode?(id?: string): void;
 	onError(error: Error): void;
 	onReady(): void;
 }
+
+const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 
 interface PointerDrag {
 	id: number;
@@ -109,10 +127,79 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 	const store = useStoreApi();
 	const [announcement, setAnnouncement] = useState("");
 	const [pending, setPending] = useState(false);
+	const sentIcons = useRef(new Set<string>());
+	/** Graph nodes the canvas indexes; comments and media move in the DOM only. */
+	const sceneIds = useRef(new Set<string>());
+	const statusFrame = useRef(0);
+	const sendStatus = useRef(() => {});
+	sendStatus.current = () => {
+		statusFrame.current = 0;
+		const handle = handleRef.current;
+		if (!handle?.set_status) return;
+		try {
+			handle.set_status(
+				JSON.stringify({
+					nodes: latest.current.status ?? {},
+					motion: !window.matchMedia(REDUCED_MOTION).matches,
+				}),
+			);
+		} catch (error) {
+			// Missing run marks must not cost the board its native renderer.
+			console.error(updateError("the run state", error));
+		}
+	};
+	const sendActivity = useRef(() => {});
+	sendActivity.current = () => {
+		const handle = handleRef.current;
+		if (!handle?.set_activity) return;
+		try {
+			handle.set_activity(
+				JSON.stringify(
+					collectRunActivity(latest.current.runs ?? new Map(), Date.now()),
+				),
+			);
+		} catch (error) {
+			console.error(updateError("the run activity", error));
+		}
+	};
+	const syncIcons = useRef(() => {});
+	syncIcons.current = () => {
+		const handle = handleRef.current;
+		if (!handle?.set_icon || props.paintLayer === "edges") return;
+		const size = iconRasterSize(
+			store.getState().maxZoom,
+			globalThis.devicePixelRatio ?? 1,
+		);
+		const send = (
+			key: string,
+			raster: (size: number) => Promise<IconRaster>,
+		) => {
+			const sent = `${size}:${key}`;
+			if (sentIcons.current.has(sent)) return;
+			sentIcons.current.add(sent);
+			raster(size)
+				.then((icon) => {
+					if (handleRef.current !== handle) return;
+					handle.set_icon?.(key, icon.width, icon.height, icon.rgba, icon.tint);
+				})
+				.catch((error: unknown) => {
+					sentIcons.current.delete(sent);
+					// The painter keeps its vector fallback; the board stays usable.
+					console.warn(`Canvas icon ${key} is unavailable`, error);
+				});
+		};
+		for (const key of Object.keys(NODE_GLYPHS))
+			send(key, (size) => rasterizeGlyph(key, size));
+		for (const node of props.scene.nodes) {
+			const url = node.icon;
+			if (url && !node.dom) send(url, (size) => rasterizeIcon(url, size));
+		}
+	};
 
 	useEffect(() => {
 		if (props.interactive !== false) {
 			const nativeIds = new Set(props.scene.nodes.map((node) => node.id));
+			sceneIds.current = nativeIds;
 			const obstacles = (props.boardProps.nodes ?? []).flatMap((node) => {
 				if (node.hidden || nativeIds.has(node.id)) return [];
 				const internal = flow.getInternalNode(node.id);
@@ -138,6 +225,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		}
 		try {
 			handleRef.current?.set_scene(JSON.stringify(props.scene));
+			syncIcons.current();
 			repaintRef.current();
 		} catch (error) {
 			props.onError(updateError("the scene", error));
@@ -149,6 +237,30 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		props.interactive,
 		flow,
 	]);
+	// A run updates its stores many times a frame; the canvas takes the latest once per frame.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: The sender reads the latest status.
+	useEffect(() => {
+		const flush = () => sendStatus.current();
+		if (!statusFrame.current)
+			statusFrame.current = requestAnimationFrame(flush);
+	}, [props.status]);
+	useEffect(() => {
+		const motion = window.matchMedia(REDUCED_MOTION);
+		const resend = () => sendStatus.current();
+		motion.addEventListener("change", resend);
+		return () => {
+			motion.removeEventListener("change", resend);
+			cancelAnimationFrame(statusFrame.current);
+			statusFrame.current = 0;
+		};
+	}, []);
+	useEffect(() => {
+		const tick = () => sendActivity.current();
+		tick();
+		if (!props.runs?.size) return;
+		const timer = setInterval(tick, 1000);
+		return () => clearInterval(timer);
+	}, [props.runs]);
 	useEffect(() => {
 		try {
 			handleRef.current?.set_palette(JSON.stringify(props.palette));
@@ -313,7 +425,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		let waitingForClick = false;
 		let space = false;
 		let suppressClick = false;
-		let frame = 0;
+		let frame: (() => void) | undefined;
 		let cameraHover: ReturnType<typeof setTimeout> | undefined;
 		const clearCameraHover = () => {
 			clearTimeout(cameraHover);
@@ -729,7 +841,11 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				);
 				hitRef.current.moveNodes(positions);
 				try {
-					handleRef.current?.set_positions(JSON.stringify(positions));
+					handleRef.current?.set_positions(
+						JSON.stringify(
+							positions.filter((position) => sceneIds.current.has(position.id)),
+						),
+					);
 				} catch (error) {
 					report(updateError("node positions", error));
 					return;
@@ -768,11 +884,12 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		};
 
 		const animate = (time: number) => {
-			frame = 0;
+			frame = undefined;
 			const dt = Math.min(32, time - (lastFrameTime || time));
 			lastFrameTime = time;
 			if (pinch) paintPinch();
-			else if (lastPointerEvent && drag) moveDrag(lastPointerEvent);
+			else if (lastPointerEvent && drag && drag.mode !== "pan")
+				moveDrag(lastPointerEvent);
 			if (
 				drag &&
 				(drag.mode === "connection" || drag.mode === "node") &&
@@ -795,12 +912,13 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 						y: view.y + vy * dt * 0.6,
 					});
 				}
-				frame = requestAnimationFrame(animate);
+				frame = betweenFrames(animate);
 			}
 			paintOverlay();
 		};
+		// Between frames: changed inside a frame callback, the canvases would draw a frame late.
 		const schedule = () => {
-			if (!frame) frame = requestAnimationFrame(animate);
+			frame ??= betweenFrames(animate);
 		};
 
 		const isDomControl = (target: EventTarget | null) =>
@@ -1166,6 +1284,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			}
 			lastPointerEvent = event;
 			if (drag) consume(event);
+			// Moved before egui's frame callback, the camera is painted in the same frame as the DOM.
+			if (drag?.mode === "pan") moveDrag(event);
 			schedule();
 		};
 		const commitConnection = async (event: PointerEvent) => {
@@ -1565,12 +1685,16 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					return;
 				}
 				handleRef.current = handle;
+				sentIcons.current.clear();
 				handle.set_layer(latest.current.paintLayer ?? "all");
 				// Prop effects can run while WebRunner starts and no handle exists yet.
 				if (latest.current.scene !== startingScene)
 					handle.set_scene(JSON.stringify(latest.current.scene));
 				if (latest.current.palette !== startingPalette)
 					handle.set_palette(JSON.stringify(latest.current.palette));
+				syncIcons.current();
+				sendStatus.current();
+				sendActivity.current();
 				const renderedFrames = () => {
 					const value = handle.stats();
 					const stats = typeof value === "string" ? JSON.parse(value) : value;
@@ -1609,7 +1733,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			ready = false;
 			cancel(true);
 			pinHint.remove();
-			cancelAnimationFrame(frame);
+			frame?.();
 			unsubscribe();
 			root.removeEventListener("pointerdown", down, true);
 			root.removeEventListener("pointermove", move, true);

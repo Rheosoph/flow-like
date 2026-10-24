@@ -200,6 +200,7 @@ export function toNode(
 		error: wire.error ?? null,
 		pins_collapsed: wire.pins_collapsed ?? null,
 		auto_reroute: wire.auto_reroute ?? null,
+		code_names: wire.code_names ?? null,
 		hash: wire.hash ?? null,
 		fn_refs: wire.fn_refs ?? null,
 		wasm: wire.wasm ?? null,

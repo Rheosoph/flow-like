@@ -53,6 +53,7 @@ if (process.env.FLOW_EVENT_HOSTING_TEST_CHILD !== "1") {
 		...backendState,
 		useBackend: () => ({
 			userState: { getProfile: async () => ({}) },
+			appState: { getAppLegalLinks: async () => ({}) },
 			eventState: {},
 		}),
 	}));

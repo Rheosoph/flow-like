@@ -39,6 +39,7 @@ fn renders_event_with_let_and_named_args() {
             name: "onStart".to_string(),
             node_type: "events_simple_start".to_string(),
             event_name: None,
+            description: None,
             params: vec![],
             anchor: None,
             body: Block {
@@ -107,6 +108,7 @@ fn renders_if_else_branch() {
             name: "onStart".to_string(),
             node_type: "start".to_string(),
             event_name: None,
+            description: None,
             params: vec![],
             anchor: None,
             body: Block {
@@ -169,6 +171,7 @@ fn expr_text(value: Expr) -> String {
             name: "onTest".to_string(),
             node_type: "test".to_string(),
             event_name: None,
+            description: None,
             params: vec![],
             anchor: None,
             body: Block {
@@ -344,6 +347,7 @@ fn renders_return_statement() {
             name: "writeReport".to_string(),
             node_type: "events_generic".to_string(),
             event_name: None,
+            description: None,
             params: vec![Param::new(
                 "title",
                 TypeRef::new("string", Container::Normal),
@@ -380,6 +384,7 @@ fn renders_event_with_multiple_params() {
             name: "now".to_string(),
             node_type: "events_generic".to_string(),
             event_name: None,
+            description: None,
             params: vec![
                 Param::new("date", TypeRef::new("Date", Container::Normal)),
                 Param::new("items", TypeRef::new("Struct", Container::Array)),
@@ -417,6 +422,7 @@ fn renders_optional_event_params() {
             name: "eventsGeneric".to_string(),
             node_type: "events_generic".to_string(),
             event_name: Some("addTargetAction".to_string()),
+            description: None,
             params: vec![
                 Param::new("actionId", string()),
                 optional("label", string(), Some(Literal::String("x".to_string()))),
@@ -572,6 +578,7 @@ fn renders_destructuring_with_camelcased_pins() {
             name: "onTest".to_string(),
             node_type: "test".to_string(),
             event_name: None,
+            description: None,
             params: vec![],
             anchor: None,
             body: Block {
@@ -629,6 +636,7 @@ fn renders_sugared_loops_and_template_literals() {
             name: "onTest".to_string(),
             node_type: "events_simple".to_string(),
             event_name: None,
+            description: None,
             params: vec![],
             anchor: None,
             body: Block {

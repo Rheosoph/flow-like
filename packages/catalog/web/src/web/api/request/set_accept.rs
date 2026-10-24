@@ -65,7 +65,8 @@ impl NodeLogic for SetAcceptNode {
 
         request.set_header("Accept".to_string(), accept);
 
-        context.set_pin_value("request_out", json!(request)).await?;
+        let request = request.into_pin_value(context).await;
+        context.set_pin_value("request_out", request).await?;
 
         Ok(())
     }

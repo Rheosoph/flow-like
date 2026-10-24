@@ -141,8 +141,8 @@ pub async fn change_appearance(
         Some(frontend) => frontend.custom_css = next.clone(),
         None => {
             app.frontend = Some(FrontendConfiguration {
-                landing_page: None,
                 custom_css: next.clone(),
+                ..Default::default()
             })
         }
     }

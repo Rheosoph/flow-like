@@ -22,6 +22,7 @@ pub enum LockedAction {
     Download,
     Retention,
     LegalHold,
+    AutoDelete,
     Purge,
 }
 
@@ -37,6 +38,7 @@ impl LockedAction {
             Self::Download => "download",
             Self::Retention => "retention",
             Self::LegalHold => "legal-hold",
+            Self::AutoDelete => "auto-delete",
             Self::Purge => "purge",
         }
     }
@@ -52,6 +54,7 @@ impl LockedAction {
             Self::Download => "Requesting the locked download",
             Self::Retention => "Extending the locked retention",
             Self::LegalHold => "Setting the legal hold",
+            Self::AutoDelete => "Setting automatic deletion",
             Self::Purge => "Deleting the expired locked file",
         }
     }
@@ -335,6 +338,7 @@ mod tests {
             LockedAction::Abort,
             LockedAction::Retention,
             LockedAction::LegalHold,
+            LockedAction::AutoDelete,
             LockedAction::Purge,
         ] {
             let retry = action.retry();

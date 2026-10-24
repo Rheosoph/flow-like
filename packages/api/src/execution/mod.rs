@@ -55,13 +55,13 @@ pub use regression::spawn_regression_suites_worker;
 pub use run_sweeper::{RunSweeperConfig, spawn_run_sweeper};
 pub(crate) use sse_proxy::completed_run_status;
 pub(crate) use sse_proxy::update_run_on_completion_with_runtime;
+pub(crate) use sse_proxy::{
+    CompletionWrites, executor_response_bytes, fail_run_on_stream_error, stream_failure_event,
+    stream_http_response, wants_http_event_stream,
+};
 pub use sse_proxy::{
     collect_generic_result, collect_generic_result_bytes, proxy_sse_response,
     proxy_sse_response_with_page_actions, update_run_on_completion,
-};
-pub(crate) use sse_proxy::{
-    executor_response_bytes, is_completed_event, parse_completed_payload, stream_http_response,
-    update_run_on_completed_event, wants_http_event_stream,
 };
 pub use state::{
     CreateEventInput, CreateRunInput, EventQuery, ExecutionEventRecord, ExecutionRunRecord,

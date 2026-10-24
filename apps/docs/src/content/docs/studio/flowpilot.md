@@ -56,7 +56,8 @@ The global FlowPilot can also:
 - Create an app and coordinate its workflow, UI, data, and Events
 - Navigate to supported Flow-Like views
 - Create or update app Events and page-load behavior
-- Open an app page or app chat inline in the conversation
+- Open an app page or app chat inline in the conversation, at the point in the answer where it is used
+- Answer with an interactive interface — cards, tables, charts, or a short form — rendered inside the reply while it streams; its buttons can send your next message
 - Call chat and headless app interfaces on your behalf
 - Pass relevant attached files to an app chat
 - Search and read public web sources when your request needs current external information

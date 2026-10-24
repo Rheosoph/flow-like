@@ -294,9 +294,7 @@ impl NodeLogic for RegisterDeltaTableNode {
             let actual_version = delta_table.version().unwrap_or(0);
             let table_provider = delta_table_provider(&delta_table).await?;
 
-            cached_session
-                .ctx
-                .register_table(&table_name, table_provider)?;
+            cached_session.replace_table(&table_name, table_provider)?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context
@@ -475,9 +473,7 @@ impl NodeLogic for DeltaTimeTravelNode {
 
             let loaded_version = delta_table.version().unwrap_or(0);
             let table_provider = delta_table_provider(&delta_table).await?;
-            cached_session
-                .ctx
-                .register_table(&table_name, table_provider)?;
+            cached_session.replace_table(&table_name, table_provider)?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context
@@ -793,9 +789,7 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
             .await?;
 
         let listing_table = ListingTable::try_new(config)?;
-        cached_session
-            .ctx
-            .register_table(&table_name, Arc::new(listing_table))?;
+        cached_session.replace_table(&table_name, Arc::new(listing_table))?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -938,9 +932,7 @@ impl NodeLogic for RegisterPartitionedJsonNode {
             .await?;
 
         let listing_table = ListingTable::try_new(config)?;
-        cached_session
-            .ctx
-            .register_table(&table_name, Arc::new(listing_table))?;
+        cached_session.replace_table(&table_name, Arc::new(listing_table))?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -1329,9 +1321,7 @@ impl NodeLogic for RegisterIcebergTableNode {
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Failed to create table provider: {}", e))?;
 
-            cached_session
-                .ctx
-                .register_table(&table_name, Arc::new(table_provider))?;
+            cached_session.replace_table(&table_name, Arc::new(table_provider))?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context
@@ -1724,9 +1714,7 @@ impl NodeLogic for IcebergTimeTravelNode {
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to create table provider: {}", e))?;
 
-            cached_session
-                .ctx
-                .register_table(&table_name, Arc::new(table_provider))?;
+            cached_session.replace_table(&table_name, Arc::new(table_provider))?;
 
             context.set_pin_value("session_out", json!(session)).await?;
             context

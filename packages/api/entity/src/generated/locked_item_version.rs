@@ -35,6 +35,8 @@ pub struct Model {
     pub enforcement: crate::sea_orm_active_enums::LockedEnforcement,
     #[sea_orm(column_name = "legalHold")]
     pub legal_hold: bool,
+    #[sea_orm(column_name = "deleteAfterRetention")]
+    pub delete_after_retention: Option<bool>,
     #[sea_orm(column_type = "Text", nullable)]
     pub comment: Option<String>,
     #[sea_orm(column_type = "JsonBinary", nullable)]

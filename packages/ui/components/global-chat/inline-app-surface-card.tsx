@@ -3,10 +3,10 @@
 import { useTranslation } from "@flow-like/locales";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDownIcon, LayoutGridIcon, XIcon } from "lucide-react";
-import { useState } from "react";
 import type { InlineAppSurface } from "../../state/global-chat/global-chat-store";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { Button } from "../ui/button";
+import { useInlineCardExpanded } from "./use-inline-card-expanded";
 
 interface InlineAppSurfaceCardProps {
 	surface: InlineAppSurface;
@@ -26,12 +26,15 @@ export function InlineAppSurfaceCard({
 	compact = false,
 }: InlineAppSurfaceCardProps) {
 	const { t } = useTranslation("chat");
-	const [expanded, setExpanded] = useState(false);
+	const { expanded, setExpanded, remounted } = useInlineCardExpanded(
+		surface.id,
+		false,
+	);
 
 	return (
 		<motion.div
 			layout
-			initial={{ opacity: 0, y: 8, scale: 0.98 }}
+			initial={remounted ? false : { opacity: 0, y: 8, scale: 0.98 }}
 			animate={{ opacity: 1, y: 0, scale: 1 }}
 			exit={{ opacity: 0, y: 8, scale: 0.98 }}
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}

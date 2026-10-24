@@ -12,6 +12,7 @@ RUN rustup toolchain install
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    unixodbc-dev \
     protobuf-compiler \
     libclang-dev \
     libwayland-dev \
@@ -57,6 +58,8 @@ FROM debian:bookworm-slim AS runtime-deps
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    libodbc2 \
+    libodbcinst2 \
     curl \
     libstdc++6 \
     libwayland-client0 \

@@ -52,6 +52,10 @@ export interface IFrontendConfiguration {
 	 * manual in this repo and never runs in CI.
 	 */
 	custom_css?: null | string;
+	/** The app publisher's legal notice (imprint), linked from hosted pages. */
+	legal_notice_url?: null | string;
+	/** The app publisher's privacy policy, linked from hosted pages. */
+	privacy_policy_url?: null | string;
 	[property: string]: any;
 }
 

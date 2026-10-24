@@ -1,15 +1,23 @@
 import { autoResizeTextScale } from "../../components/flow/auto-resize-text-size";
 import {
 	isPinAction,
-	isPinCollapsible,
 	layoutCollapsiblePins,
 } from "../../components/flow/flow-node/pin-collapse";
-import { resolvePinEditorKind } from "../../components/flow/flow-pin/pin-editor-kind";
-import { planPinLabelCaps } from "../../components/flow/flow-pin/pin-label-caps";
+import {
+	type PinEditorKind,
+	resolvePinEditorKind,
+} from "../../components/flow/flow-pin/pin-editor-kind";
+import {
+	PIN_LABEL_CAP_SHARED,
+	planPinLabelCaps,
+} from "../../components/flow/flow-pin/pin-label-caps";
+import { isTestEventNode } from "../board-tests";
 import type { INode } from "../schema/flow/node";
 import type { IPin } from "../schema/flow/pin";
 import type { ILayer } from "../schema/flow/run";
+import { parseUint8ArrayToJson } from "../uint8";
 import { hasNativeGlyphs } from "./font-coverage";
+import { isNativeIcon } from "./icons";
 
 export type RGBA = readonly [number, number, number, number];
 export type PinDirection = "input" | "output";
@@ -23,7 +31,30 @@ export interface Palette {
 	border: RGBA;
 	primary: RGBA;
 	tertiary: RGBA;
+	/** Card text; xyflow's dark node color differs from the theme foreground. */
+	nodeText?: RGBA;
+	/** xyflow's node background, behind container pin icons. */
+	nodeBackdrop?: RGBA;
+	input?: RGBA;
+	/** Unchecked checkbox fill. */
+	checkbox?: RGBA;
+	primaryForeground?: RGBA;
+	mutedBackground?: RGBA;
+	/** Status colors for runs, logs and lint marks. */
+	destructive?: RGBA;
+	success?: RGBA;
+	caution?: RGBA;
+	warning?: RGBA;
+	info?: RGBA;
+	remote?: RGBA;
+	fatal?: RGBA;
 }
+
+export type PinEditor =
+	| { kind: "variable"; set: boolean }
+	| { kind: "boolean"; checked: boolean }
+	/** The pin label holds the select's value or placeholder. */
+	| { kind: "select"; placeholder: boolean };
 
 export interface ScenePin {
 	id: string;
@@ -32,10 +63,15 @@ export interface ScenePin {
 	x: number;
 	y: number;
 	label: string;
+	/** Text width before truncation, excluding the inline editor. */
 	labelMaxWidth?: number;
 	fontSize?: number;
 	color: RGBA;
 	kind: ConnectionKind;
+	/** Container handles show their type icon instead of a dot. */
+	container?: "array" | "set" | "map";
+	/** Inline editor of an unconnected input. */
+	editor?: PinEditor;
 }
 
 export interface SceneNode {
@@ -48,6 +84,16 @@ export interface SceneNode {
 	labelFontSize?: number;
 	headerHeight?: number;
 	cornerRadius?: number;
+	/** Same-origin catalog icon URL; the host rasterizes it into the canvas. */
+	icon?: string;
+	/** Header gradient from the card to `color`; reversed runs from the right edge. */
+	header?: { color: RGBA; reversed?: boolean };
+	/** The strip that hides unconnected pins, with the count it hides. */
+	latch?: { collapsed: boolean; hidden: number };
+	/** Mirror WebKit's DOM node: flat pins and its text baselines. */
+	lite?: boolean;
+	/** The clock badge on the node's top-left corner. */
+	longRunning?: boolean;
 	kind:
 		| "event"
 		| "function"
@@ -162,6 +208,8 @@ export interface SceneOptions {
 	boundaryLabels?: { input: string; output: string };
 	domNodeIds?: ReadonlySet<string>;
 	webkitLite?: boolean;
+	/** Resolved Tailwind violet-500 and cyan-500 header tints. */
+	headerColors?: { function: RGBA; testEvent: RGBA };
 	rootFontSize?: number;
 	nodeRadius?: number;
 	rerouteRadius?: number;
@@ -212,17 +260,14 @@ export function nodeNeedsDom(node: FlowSceneNode): boolean {
 	if (
 		entity.error ||
 		entity.comment ||
-		entity.icon ||
+		(entity.icon && !isNativeIcon(entity.icon)) ||
 		entity.start ||
-		entity.event_callback ||
-		entity.long_running ||
 		entity.only_offline ||
 		entity.wasm?.package_id ||
 		entity.fn_refs?.can_reference_fns ||
 		entity.fn_refs?.can_be_referenced_by_fns ||
 		node.data.functionCache ||
 		node.data.isUnavailable ||
-		node.data.remoteExecuting ||
 		(Array.isArray(node.data.remoteSelections) &&
 			node.data.remoteSelections.length > 0) ||
 		(Array.isArray(node.data.remoteEditors) &&
@@ -239,76 +284,42 @@ export function nodeNeedsDom(node: FlowSceneNode): boolean {
 		pinGroups.add(group);
 	}
 	return Object.values(entity.pins).some(
-		(pin) =>
-			pin.dynamic ||
-			isPinCollapsible(pin) ||
-			(pin.value_type !== undefined && pin.value_type !== "Normal") ||
-			(pin.name !== "exec_in" &&
-				pin.name !== "exec_out" &&
-				resolvePinEditorKind(pin, entity.name) !== "label"),
+		(pin) => pin.dynamic || !hasNativeEditor(pin, entity.name),
 	);
+}
+
+const NATIVE_EDITORS = new Set<PinEditorKind>([
+	"label",
+	"plain",
+	"boolean",
+	"enum",
+]);
+
+/** The canvas draws labels, the (x) button, checkboxes and enum selects; pickers stay DOM. */
+function hasNativeEditor(pin: IPin, nodeName: string): boolean {
+	if (pin.name === "exec_in" || pin.name === "exec_out") return true;
+	const kind = resolvePinEditorKind(pin, nodeName);
+	if (kind !== "enum") return NATIVE_EDITORS.has(kind);
+	const value = parseUint8ArrayToJson(pin.default_value);
+	return typeof value !== "string" || hasNativeGlyphs(value);
 }
 
 export interface NativePresentationState {
 	/** A custom UI font is displayed by the original DOM until its native font is available. */
 	forceDomText?: boolean;
-	runs?: ReadonlyMap<
-		string,
-		{
-			nodes: ReadonlySet<string>;
-			already_executed: ReadonlySet<string>;
-		}
-	>;
-	currentMetadata?: {
-		run_id?: string;
-		nodes?: readonly (readonly unknown[])[] | null;
-	};
-	currentSummary?: { nodes: Record<string, number[]> };
-	currentSummaryRunId?: string;
-	heatmapEnabled?: boolean;
-	heatmap?: { nodes: Record<string, { visits: number }> };
-	qualityInline?: boolean;
-	qualityMarks?: Record<string, Record<string, unknown>>;
 }
 
-/** Mirrors the stores read by FlowNode without duplicating any badge or control UI. */
+/**
+ * Nodes the DOM renders. Run state, logs, heat and lint marks are painted by the canvas
+ * (`collectNodeStatus`), so running a board never moves nodes into the DOM.
+ */
 export function collectDomNodeIds(
 	nodes: readonly FlowSceneNode[],
 	state: NativePresentationState = {},
 ): Set<string> {
-	const runtimeIds = new Set<string>();
-	for (const run of state.runs?.values() ?? []) {
-		for (const id of run.nodes) runtimeIds.add(id);
-		for (const id of run.already_executed) runtimeIds.add(id);
-	}
-	for (const entry of state.currentMetadata?.nodes ?? []) {
-		if (typeof entry[0] === "string") runtimeIds.add(entry[0]);
-	}
-	if (state.currentMetadata?.run_id === state.currentSummaryRunId) {
-		for (const [id, counts] of Object.entries(
-			state.currentSummary?.nodes ?? {},
-		)) {
-			if (counts.some((count) => count > 0)) runtimeIds.add(id);
-		}
-	}
-	if (state.heatmapEnabled) {
-		for (const [id, heat] of Object.entries(state.heatmap?.nodes ?? {})) {
-			if (heat.visits > 0) runtimeIds.add(id);
-		}
-	}
 	const result = new Set<string>();
 	for (const node of nodes) {
-		const mark =
-			state.qualityInline && typeof node.data.boardId === "string"
-				? state.qualityMarks?.[node.data.boardId]?.[node.id]
-				: undefined;
-		if (
-			state.forceDomText ||
-			node.selected ||
-			nodeNeedsDom(node) ||
-			runtimeIds.has(node.id) ||
-			mark
-		)
+		if (state.forceDomText || node.selected || nodeNeedsDom(node))
 			result.add(node.id);
 	}
 	return result;
@@ -387,6 +398,90 @@ function nodeKind(
 	return Object.values(data.pins).some((pin) => pin.data_type === "Execution")
 		? "standard"
 		: "pure";
+}
+
+const PIN_CONTAINERS: Partial<Record<string, ScenePin["container"]>> = {
+	Array: "array",
+	HashSet: "set",
+	HashMap: "map",
+};
+/** Tailwind violet-500 and cyan-500 in sRGB, for themes that do not resolve them. */
+const FUNCTION_HEADER: RGBA = [141, 84, 255, 255];
+const TEST_EVENT_HEADER: RGBA = [0, 183, 215, 255];
+
+/**
+ * PinEdit's row inside its label cap: the label keeps a 4px margin, and an unconnected
+ * input adds its editor after a gap (the (x) button, a checkbox, or a select chevron).
+ */
+function pinRow(
+	pin: IPin,
+	nodeName: string | undefined,
+	cap = PIN_LABEL_CAP_SHARED,
+): Pick<ScenePin, "label" | "labelMaxWidth" | "editor"> {
+	const label = pin.friendly_name || pin.name;
+	const room = cap - 4;
+	if (pin.pin_type !== "Input") return { label, labelMaxWidth: room };
+	switch (resolvePinEditorKind(pin, nodeName)) {
+		case "plain":
+			return pin.connected_to.length > 0
+				? { label, labelMaxWidth: room }
+				: {
+						label,
+						labelMaxWidth: room - 12,
+						editor: { kind: "variable", set: pin.default_value != null },
+					};
+		case "boolean":
+			return {
+				label,
+				labelMaxWidth: room - 14,
+				editor: {
+					kind: "boolean",
+					checked: parseUint8ArrayToJson(pin.default_value) === true,
+				},
+			};
+		case "enum": {
+			const value = parseUint8ArrayToJson(pin.default_value);
+			const set = typeof value === "string" && value !== "";
+			return {
+				label: set ? value : `Select ${pin.friendly_name}`,
+				labelMaxWidth: room - 10,
+				editor: { kind: "select", placeholder: !set },
+			};
+		}
+		default:
+			return { label, labelMaxWidth: room };
+	}
+}
+
+/**
+ * FlowNode stacks every matching gradient class, so the stylesheet order decides:
+ * violet over tertiary over primary over cyan, and a rightward gradient over a leftward one.
+ */
+function headerStyle(
+	node: FlowSceneNode,
+	entity: INode,
+	visible: readonly IPin[],
+	palette: Palette,
+	options: SceneOptions,
+): NonNullable<SceneNode["header"]> {
+	const functionLayer = Boolean(node.data.functionLayerId);
+	const pure = !visible.some((pin) => pin.data_type === "Execution");
+	const start = entity.start === true;
+	const testEvent = isTestEventNode(entity);
+	const color = functionLayer
+		? (options.headerColors?.function ?? FUNCTION_HEADER)
+		: pure
+			? palette.tertiary
+			: entity.event_callback || (start && !testEvent)
+				? palette.primary
+				: start
+					? (options.headerColors?.testEvent ?? TEST_EVENT_HEADER)
+					: palette.card;
+	return {
+		color,
+		reversed:
+			entity.event_callback === true && !functionLayer && !pure && !start,
+	};
 }
 
 function repeatedFamilyCount(pins: readonly IPin[]): number {
@@ -506,21 +601,25 @@ function makeNode(
 			id: pin.id,
 			fontSize: rootFontSize * 0.6,
 			direction: pin.pin_type === "Input" ? "input" : "output",
-			x: pin.pin_type === "Input" ? 0 : width,
+			// DOM handles are centered on the padding box, inside the 1px card border.
+			x: pin.pin_type === "Input" ? 1 : width - 1,
 			y: reroute
 				? height / 2
 				: firstPinY +
+					1 +
 					((layout.slots[pin.id] ?? pin.index) - 1) * PIN_ROW_HEIGHT,
-			label:
-				reroute || pin.name === "exec_in" || pin.name === "exec_out"
-					? ""
-					: pin.friendly_name || pin.name,
-			labelMaxWidth: caps[pin.id],
+			...(reroute || pin.name === "exec_in" || pin.name === "exec_out"
+				? { label: "" }
+				: pinRow(pin, domainNode?.name, caps[pin.id])),
 			color:
 				pin.data_type === "Execution"
 					? palette.foreground
 					: (options.pinColors?.[pin.data_type] ?? palette.foreground),
 			kind: pin.data_type === "Execution" ? "execution" : "data",
+			container:
+				pin.data_type === "Execution"
+					? undefined
+					: PIN_CONTAINERS[pin.value_type],
 		}),
 	);
 	const referenceColor = options.referenceColor ?? palette.tertiary;
@@ -529,8 +628,8 @@ function makeNode(
 			locate({
 				id: `ref_in_${domainNode.id}`,
 				direction: "input",
-				x: width / 2,
-				y: 0,
+				x: width - 9,
+				y: 9,
 				label: "",
 				color: referenceColor,
 				kind: "reference",
@@ -542,7 +641,7 @@ function makeNode(
 				id: `ref_out_${domainNode.id}`,
 				direction: "output",
 				x: width / 2,
-				y: height,
+				y: height - 1,
 				label: "",
 				color: referenceColor,
 				kind: "reference",
@@ -577,7 +676,8 @@ function makeNode(
 		width,
 		height,
 		label,
-		labelFontSize: 10 * autoResizeTextScale(label, 30),
+		// The title is a <small> in xyflow's fixed 12px node text, so rem sizing never scales it.
+		labelFontSize: 9.6 * autoResizeTextScale(label, 30),
 		headerHeight: rootFontSize,
 		cornerRadius: Math.max(
 			0,
@@ -586,6 +686,19 @@ function makeNode(
 				reroute ? 6 : 4,
 			),
 		),
+		icon:
+			domainNode?.icon && isNativeIcon(domainNode.icon)
+				? domainNode.icon
+				: undefined,
+		header: domainNode
+			? headerStyle(node, domainNode, visible, palette, options)
+			: undefined,
+		latch:
+			ordinary && !reroute && layout.collapsibleCount > 0
+				? { collapsed, hidden: layout.hiddenCount }
+				: undefined,
+		lite: options.webkitLite === true,
+		longRunning: domainNode?.long_running === true || undefined,
 		kind,
 		pins: scenePins,
 		selected: node.selected === true,

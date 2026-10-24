@@ -1,3 +1,4 @@
+pub mod authoring_utils;
 pub mod begin_rendering;
 pub mod camera;
 pub mod create_component;

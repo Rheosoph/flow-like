@@ -3,7 +3,6 @@
 import { useTranslation } from "@flow-like/locales";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
-import { DEFAULT_CHAT_EXAMPLE_MESSAGES } from "../../../lib/chat-appearance";
 import { createComposerActivity } from "../../../lib/composer-activity";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
@@ -19,8 +18,6 @@ interface ChatWelcomeProps {
 	/** Needed to resolve a storage-backed placeholder image. */
 	appId?: string;
 }
-
-const defaultExamples: readonly string[] = DEFAULT_CHAT_EXAMPLE_MESSAGES;
 
 export function ChatWelcome({
 	onSendMessage,
@@ -95,10 +92,9 @@ export function ChatWelcome({
 
 	// Filter examples based on current message and show max 5
 	const filteredExamples = useMemo(() => {
-		const examples =
-			(config?.example_messages?.length ?? 0) === 0
-				? defaultExamples
-				: (config?.example_messages ?? []);
+		const examples = (config?.example_messages ?? []).filter((example) =>
+			example.trim(),
+		);
 		if (!currentMessage.trim()) {
 			return examples.slice(0, 4);
 		}
@@ -314,13 +310,11 @@ export function ChatWelcome({
 						/>
 
 						{/* Example Prompts List */}
-						{(filteredExamples.length > 0 || currentMessage.trim()) && (
+						{filteredExamples.length > 0 && (
 							<div className="space-y-2" data-fl-chat-suggestions>
-								{filteredExamples.length > 0 && (
-									<p className="text-xs text-muted-foreground uppercase tracking-wide">
-										{t("suggestions", "Suggestions")}
-									</p>
-								)}
+								<p className="text-xs text-muted-foreground uppercase tracking-wide">
+									{t("suggestions", "Suggestions")}
+								</p>
 								<div className="grid max-h-[min(15rem,30dvh)] grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">
 									{filteredExamples.map((example) => (
 										<button

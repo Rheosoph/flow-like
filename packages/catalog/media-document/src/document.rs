@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod chart;
 pub mod docx;
+pub mod file_metadata;
 pub mod pdf;
 pub mod pptx;
 pub mod styles;

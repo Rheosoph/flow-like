@@ -541,13 +541,14 @@ mod tests {
     use axum::{
         Router,
         body::to_bytes,
-        http::{StatusCode, header},
+        http::{HeaderValue, StatusCode, header},
         middleware::from_fn,
         routing::{get, post},
     };
     use futures::StreamExt;
     use std::collections::BTreeSet;
     use tower::ServiceExt;
+    use tower_http::cors::CorsLayer;
 
     /// (method, full route template, expected class, observed max seconds).
     const CASES: &[(&str, &str, DeadlineClass, Option<f64>)] = &[
@@ -1146,6 +1147,48 @@ mod tests {
         assert_eq!(
             body["error"]["message"],
             "The request exceeded its 10 s deadline"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_flowscript_apply_returns_a_cors_readable_timeout() {
+        let origin = HeaderValue::from_static("https://app.flow-like.com");
+        let router = surface(Router::new().route(
+            "/apps/{app_id}/board/{board_id}/flowscript/apply",
+            post(|| async {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                "late"
+            }),
+        ))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(origin.clone())
+                .allow_methods([Method::POST]),
+        );
+        let started = Instant::now();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/apps/a1/board/b1/flowscript/apply")
+                    .header(header::ORIGIN, origin.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_at_deadline(started, Write);
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            origin
+        );
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "GATEWAY_TIMEOUT");
+        assert_eq!(
+            body["error"]["message"],
+            "The request exceeded its 30 s deadline"
         );
     }
 

@@ -13,13 +13,15 @@ const INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 
 struct ProviderSlot {
     config: ProviderConfig,
+    negative_cache_ttl: Duration,
     provider: OnceCell<Arc<dyn SecretProvider>>,
 }
 
 impl ProviderSlot {
-    fn new(config: ProviderConfig) -> Self {
+    fn new(config: ProviderConfig, negative_cache_ttl: Duration) -> Self {
         Self {
             config,
+            negative_cache_ttl,
             provider: OnceCell::new(),
         }
     }
@@ -27,7 +29,9 @@ impl ProviderSlot {
     async fn get_or_init(&self) -> Result<Arc<dyn SecretProvider>> {
         let provider = self
             .provider
-            .get_or_try_init(|| async { providers::build_provider(&self.config).await })
+            .get_or_try_init(|| async {
+                providers::build_provider(&self.config, self.negative_cache_ttl).await
+            })
             .await?;
 
         Ok(Arc::clone(provider))
@@ -60,7 +64,10 @@ impl SecretStore {
             }
 
             provider_order.push(kind);
-            providers.insert(kind, ProviderSlot::new(provider_config));
+            providers.insert(
+                kind,
+                ProviderSlot::new(provider_config, config.negative_cache_ttl),
+            );
         }
 
         Ok(Self {
@@ -133,7 +140,8 @@ impl SecretStore {
 
     /// Pre-fetch all secrets from providers that support bulk listing
     /// (e.g. AWS SSM `GetParametersByPath`). Populates the cache so that
-    /// subsequent [`get_secret`] calls are instant cache hits.
+    /// subsequent [`get_secret`] calls are instant cache hits, and lets such a
+    /// provider answer a miss from its listing for the negative-cache TTL.
     pub async fn warmup(&self) {
         for kind in &self.provider_order {
             let slot = match self.provider_for(*kind) {

@@ -32,6 +32,11 @@ use std::{
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const POLL_MS: u64 = 500;
+/// Evidence for an invocation lands within minutes; until then recovery retries quickly.
+const FRESH_RECOVERY_WINDOW_SECS: i64 = 3_600;
+/// Older rows that still hold `pending`/`unknown_usage` rarely change on replay
+/// (`unknown_usage` keeps its applied receipt), so they are revisited this rarely.
+const STALE_RECOVERY_INTERVAL_SECS: i64 = 6 * 3_600;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct HostedAiJob {
@@ -228,9 +233,14 @@ fn decode_usage_receipt(value: serde_json::Value) -> Result<UsageInvocationSettl
 /// Replay only accounting evidence. No provider call belongs in this recovery path.
 pub(crate) async fn recover_usage_receipts(state: &AppState) -> Result<u64, ApiError> {
     let started = Instant::now();
+    let now = Utc::now();
     let rows = state.db.query_all_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-        "SELECT i.id,i.\"createdAt\",i.\"rawUsage\",q.status AS quota_status,q.\"ownerId\" FROM \"UsageInvocation\" i LEFT JOIN \"QuotaOperation\" q ON q.id=i.id WHERE i.status IN ('pending','unknown_usage') AND i.\"updatedAt\"<$1 ORDER BY i.\"updatedAt\" LIMIT 25",
-        [(Utc::now() - chrono::Duration::seconds(30)).fixed_offset().into()])).await?;
+        "SELECT i.id,i.\"createdAt\",i.\"rawUsage\",q.status AS quota_status,q.\"ownerId\" FROM \"UsageInvocation\" i LEFT JOIN \"QuotaOperation\" q ON q.id=i.id WHERE i.status IN ('pending','unknown_usage') AND i.\"updatedAt\"<$1 AND (i.\"createdAt\">$2 OR i.\"updatedAt\"<$3) ORDER BY i.\"updatedAt\" LIMIT 25",
+        [
+            (now - chrono::Duration::seconds(30)).fixed_offset().into(),
+            (now - chrono::Duration::seconds(FRESH_RECOVERY_WINDOW_SECS)).fixed_offset().into(),
+            (now - chrono::Duration::seconds(STALE_RECOVERY_INTERVAL_SECS)).fixed_offset().into(),
+        ])).await?;
     let mut recovered = 0;
     for row in rows {
         if started.elapsed() >= Duration::from_secs(20) {
@@ -272,8 +282,12 @@ pub(crate) async fn recover_usage_receipts(state: &AppState) -> Result<u64, ApiE
                 None => read_usage_receipt(state, &id, false).await?,
             };
             if let Some(receipt) = receipt {
-                settle_hosted_usage_invocation(state, Some(&id), decode_usage_receipt(receipt)?)
-                    .await?;
+                crate::usage_accounting::apply_hosted_usage_settlement(
+                    state,
+                    &id,
+                    decode_usage_receipt(receipt)?,
+                )
+                .await?;
                 return Ok(true);
             }
             Ok(false)

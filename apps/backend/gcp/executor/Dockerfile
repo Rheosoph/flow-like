@@ -7,6 +7,7 @@ RUN rustup toolchain install
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
+    unixodbc-dev \
     protobuf-compiler \
     libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -32,6 +33,8 @@ COPY LICENSE /usr/share/licenses/flow-like/LICENSE
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
+    libodbc2 \
+    libodbcinst2 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin flowlike
 

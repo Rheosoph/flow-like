@@ -75,7 +75,7 @@ impl NodeLogic for SetVariable {
         context.deactivate_exec_pin_ref(&exec_out).await?;
 
         let var_ref: String = context.evaluate_pin("var_ref").await?;
-        let value = context.evaluate_pin_to_ref("value_in").await?;
+        let value = context.evaluate_pin_raw("value_in").await?;
 
         context.set_variable_value(&var_ref, value.clone()).await?;
         context.set_pin_value("value_ref", value).await?;

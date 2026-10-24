@@ -1,10 +1,11 @@
 /**
  * Anchor comments tie rendered FlowScript lines back to board entities:
- * `//@n:<id>` (node), `//@v:<id>` (variable), `//@l:<id>` (function layer).
- * The renderer always emits them TRAILING on the line that owns the entity —
- * a statement's anchor at end of line, a branch node's anchor on its `if (...) {`
+ * `//@n:<id>` (node), `//@v:<id>` (variable), `//@l:<id>` (function, module or
+ * `@collapse` group layer). The renderer always emits them TRAILING on the line that owns the
+ * entity — a statement's anchor at end of line, a branch node's anchor on its `if (...) {`
  * line (possibly after a pin-name comment like `// exec_out_exists`), a variable's
- * on its `const … =` line, a function's `//@l:` on its `function … {` line.
+ * on its `const … =` line, a layer's `//@l:` on its `function … {`, `module … {` or
+ * `@collapse("…") {` line.
  *
  * Parsing scans the document with a tiny string/template/comment state machine so
  * anchor-shaped text inside string or template literals is never treated as an

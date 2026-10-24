@@ -36,7 +36,7 @@ impl NodeLogic for ParseUtf8LossyNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
         let string = String::from_utf8_lossy(&bytes).to_string();
 
         context.set_pin_value("string", json!(string)).await?;

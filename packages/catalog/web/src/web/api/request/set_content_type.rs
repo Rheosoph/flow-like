@@ -65,7 +65,8 @@ impl NodeLogic for SetContentTypeNode {
 
         request.set_header("Content-Type".to_string(), content_type);
 
-        context.set_pin_value("request_out", json!(request)).await?;
+        let request = request.into_pin_value(context).await;
+        context.set_pin_value("request_out", request).await?;
 
         Ok(())
     }

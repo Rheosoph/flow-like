@@ -20,7 +20,8 @@ export interface ElementDemandBoardState {
 	): Promise<IElementDemand>;
 }
 
-export type RunElementDemand = Pick<IElementDemand, "selectors">;
+export type RunElementDemand = Pick<IElementDemand, "selectors"> &
+	Partial<Pick<IElementDemand, "dynamic">>;
 
 export interface CollectRunElementsInput {
 	backend: { boardState: ElementDemandBoardState };
@@ -72,7 +73,9 @@ async function resolveElementDemand(
 
 	const key = demandKey(appId, boardId, boardVersion);
 	const entry = demandCache.get(key);
-	if (entry?.inflight) return entry.inflight;
+	if (entry?.inflight) {
+		return entry.demand && !refresh ? entry.demand : entry.inflight;
+	}
 
 	const fetchDemand = (): Promise<IElementDemand> => {
 		const inflight = getElementDemand
@@ -120,6 +123,19 @@ function triggerSelectors(input: CollectRunElementsInput): string[] {
 		: [`${surfaceId}/${triggeringComponentId}`];
 }
 
+function pageScopeElements(
+	input: CollectRunElementsInput,
+): Record<string, unknown> {
+	const { surfaceId, components, storedValues } = input;
+	const pageComponents = withoutWidgetHosts(components);
+	return mergeStoredElementValues(
+		flattenSurfaceComponentsForElements(pageComponents, surfaceId),
+		storedValues,
+		pageComponents,
+		surfaceId,
+	);
+}
+
 /**
  * A widget run's own scope is its instance. A page run's is the page without widget
  * instances: every runtime-built list row would otherwise add its host and a copy of its
@@ -138,14 +154,8 @@ function ownScopeElements(
 			widgetScope,
 		);
 	}
-	const pageComponents = withoutWidgetHosts(components);
 	return {
-		...mergeStoredElementValues(
-			flattenSurfaceComponentsForElements(pageComponents, surfaceId),
-			storedValues,
-			pageComponents,
-			surfaceId,
-		),
+		...pageScopeElements(input),
 		...materializeSurfaceElements(
 			{ surfaceId, components, storedValues },
 			triggerSelectors(input),
@@ -155,7 +165,8 @@ function ownScopeElements(
 
 /**
  * The `_elements` map a run starts with: the elements its board reads statically plus
- * the element that triggered it.
+ * the element that triggered it. Dynamic reads also carry the page's own elements
+ * when the combined snapshot fits the transfer limit.
  *
  * Without a demand, or when a broad selector (`type:`, `glob:`) selects more than an
  * invocation can carry, the run sends its own scope. It asks the live page for anything
@@ -183,7 +194,21 @@ export async function collectRunElements(
 		widgetScope,
 	);
 	const selectedBytes = JSON.stringify(selected).length;
-	if (selectedBytes <= MAX_ELEMENTS_BYTES) return selected;
+	if (selectedBytes <= MAX_ELEMENTS_BYTES) {
+		if (demand.dynamic) {
+			// Dynamic helper arguments are unknown to the static demand scan. Carry
+			// the page's own elements when they fit, avoiding a round trip per read.
+			// Widget definitions stay selected explicitly or scoped to the trigger.
+			const snapshot = { ...pageScopeElements(input), ...selected };
+			if (
+				new TextEncoder().encode(JSON.stringify(snapshot)).byteLength <=
+				MAX_ELEMENTS_BYTES
+			) {
+				return snapshot;
+			}
+		}
+		return selected;
+	}
 
 	const own = ownScopeElements(input);
 	console.warn(

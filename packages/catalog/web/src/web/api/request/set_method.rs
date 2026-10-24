@@ -83,7 +83,8 @@ impl NodeLogic for SetMethodNode {
             _ => return Err(flow_like_types::anyhow!("Invalid method")),
         };
 
-        context.set_pin_value("request_out", json!(request)).await?;
+        let request = request.into_pin_value(context).await;
+        context.set_pin_value("request_out", request).await?;
 
         Ok(())
     }

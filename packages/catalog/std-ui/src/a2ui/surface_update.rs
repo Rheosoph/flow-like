@@ -1,3 +1,4 @@
+use super::authoring_utils::lower_surface_components;
 use flow_like::{
     a2ui::SurfaceComponent,
     flow::{
@@ -62,7 +63,7 @@ impl NodeLogic for SurfaceUpdate {
         context.deactivate_exec_pin("exec_out").await?;
 
         let surface_id: String = context.evaluate_pin("surface_id").await?;
-        let components: Vec<SurfaceComponent> = context.evaluate_pin("components").await?;
+        let components = lower_surface_components(context.evaluate_pin("components").await?)?;
 
         context
             .stream_a2ui_surface_update(&surface_id, components)

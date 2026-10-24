@@ -35,6 +35,7 @@ pub mod gemini;
 pub mod groq;
 pub mod huggingface;
 pub mod hyperbolic;
+pub mod lenient_settings;
 pub mod llamacpp;
 pub mod lmstudio;
 pub mod media;

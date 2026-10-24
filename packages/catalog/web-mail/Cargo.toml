@@ -8,6 +8,7 @@ default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
 execute = [
     "flow-like-catalog-core/execute",
+    "flow-like-catalog-core/mail",
     "dep:async-imap",
     "dep:tokio-rustls",
     "dep:rustls-pki-types",

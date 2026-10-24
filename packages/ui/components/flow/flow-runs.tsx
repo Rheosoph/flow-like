@@ -52,6 +52,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../ui";
+import { RunErrorLine } from "./run-error-message";
 import { usePanelToolbarSlot } from "./shell/board-panes";
 
 function parseVersion(
@@ -595,7 +596,7 @@ const FlowRunsComponent = ({
 								void handleRunSelection(run);
 							}}
 						>
-							<div className="flex flex-col gap-2 items-start justify-center">
+							<div className="flex min-w-0 flex-col gap-2 items-start justify-center">
 								<div className="flex flex-row gap-2 items-center">
 									{run.is_remote ? (
 										<span title={t("remoteExecution", "Remote execution")}>
@@ -626,8 +627,11 @@ const FlowRunsComponent = ({
 										"narrow",
 									)}
 								</small>
+								{run.error_message ? (
+									<RunErrorLine message={run.error_message} />
+								) : null}
 							</div>
-							<div className="flex flex-row items-center gap-2">
+							<div className="flex shrink-0 flex-row items-center gap-2">
 								{selectedRunId === run.run_id && (
 									<Loader2Icon className="w-3 h-3 animate-spin text-muted-foreground" />
 								)}

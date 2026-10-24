@@ -89,6 +89,9 @@ pub struct LockedItemVersion {
     pub enforcement: LockedEnforcement,
     /// Whether a legal hold blocks deletion regardless of the retention date.
     pub legal_hold: bool,
+    /// Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.
+    #[serde(default)]
+    pub delete_after_retention: bool,
     /// Comment given at upload.
     pub comment: Option<String>,
     /// Metadata given at upload.
@@ -258,6 +261,8 @@ pub struct CreateLockedUploadRequest {
     pub sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention_days: Option<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub delete_after_retention: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,8 +292,9 @@ pub struct LockedRetentionRequest<'a> {
     pub retain_until: &'a str,
 }
 
+/// Switches a per-version flag: the legal hold or automatic deletion.
 #[derive(Debug, Clone, Serialize)]
-pub struct LockedLegalHoldRequest<'a> {
+pub struct LockedVersionFlagRequest<'a> {
     pub item_id: &'a str,
     pub version_id: &'a str,
     pub enabled: bool,
@@ -338,6 +344,8 @@ pub struct LockedFile {
     pub enforcement: Option<LockedEnforcement>,
     /// Whether a legal hold blocks deletion regardless of the retention date.
     pub legal_hold: bool,
+    /// Whether the server deletes this version's bytes automatically once the retention ends and no legal hold remains.
+    pub delete_after_retention: bool,
     /// Whether this version's bytes may be deleted now: locked, retention ended and no legal hold.
     pub purgeable: bool,
     /// Comment given when this version was uploaded.
@@ -398,6 +406,7 @@ impl LockedFile {
             retain_until: version.map(|v| v.retain_until.clone()),
             enforcement: version.map(|v| v.enforcement),
             legal_hold: version.is_some_and(|v| v.legal_hold),
+            delete_after_retention: version.is_some_and(|v| v.delete_after_retention),
             purgeable: version.is_some_and(|v| v.purgeable),
             comment: version.and_then(|v| v.comment.clone()),
             metadata: item.metadata.clone(),

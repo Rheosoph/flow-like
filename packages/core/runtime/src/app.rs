@@ -22,6 +22,8 @@ pub mod duplicate;
 pub mod remap;
 pub mod sharing;
 
+const WIDGET_READ_CONCURRENCY: usize = 8;
+
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub enum StandardInterfaces {
     Chat,
@@ -31,7 +33,7 @@ pub enum StandardInterfaces {
     A2UI,
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FrontendConfiguration {
     pub landing_page: Option<String>,
 
@@ -40,6 +42,14 @@ pub struct FrontendConfiguration {
     /// keeps winning ties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_css: Option<String>,
+
+    /// The app publisher's legal notice (imprint), linked from hosted pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legal_notice_url: Option<String>,
+
+    /// The app publisher's privacy policy, linked from hosted pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy_policy_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -900,13 +910,14 @@ impl App {
 
     /// Get all widgets for this app
     pub async fn get_widgets(&self) -> flow_like_types::Result<Vec<crate::a2ui::widget::Widget>> {
-        let mut widgets = Vec::with_capacity(self.widget_ids.len());
-        for widget_id in &self.widget_ids {
-            if let Ok(widget) = self.open_widget(widget_id.clone(), None).await {
-                widgets.push(widget);
-            }
-        }
-        Ok(widgets)
+        // Widget actions load this inventory before rendering. Overlap storage
+        // reads while retaining manifest order and skipping unreadable entries.
+        Ok(futures::stream::iter(self.widget_ids.clone())
+            .map(|widget_id| self.open_widget(widget_id, None))
+            .buffered(WIDGET_READ_CONCURRENCY)
+            .filter_map(|widget| async move { widget.ok() })
+            .collect()
+            .await)
     }
 
     /// Open/load a widget by ID with optional version
@@ -1466,6 +1477,8 @@ mod tests {
         app.frontend = Some(super::FrontendConfiguration {
             landing_page: Some("/home".to_string()),
             custom_css: Some(".card { border-radius: 1rem; }".to_string()),
+            legal_notice_url: Some("https://example.com/imprint".to_string()),
+            privacy_policy_url: Some("https://example.com/privacy".to_string()),
         });
         app.save().await.expect("app should save");
 
@@ -1479,6 +1492,14 @@ mod tests {
             Some(".card { border-radius: 1rem; }")
         );
         assert_eq!(frontend.landing_page.as_deref(), Some("/home"));
+        assert_eq!(
+            frontend.legal_notice_url.as_deref(),
+            Some("https://example.com/imprint")
+        );
+        assert_eq!(
+            frontend.privacy_policy_url.as_deref(),
+            Some("https://example.com/privacy")
+        );
     }
 
     #[tokio::test]
@@ -1639,6 +1660,57 @@ mod tests {
 
         snapshot.version = None;
         assert!(app.cache_widget_version(&snapshot).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn widget_reads_overlap_and_keep_manifest_order_when_an_entry_is_missing() {
+        use crate::a2ui::widget::Widget;
+        use object_store::throttle::{ThrottleConfig, ThrottledStore};
+        use std::time::Duration;
+
+        let store = Arc::new(ThrottledStore::new(
+            object_store::memory::InMemory::new(),
+            ThrottleConfig::default(),
+        ));
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Other(store.clone())),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut app = super::App::new(
+            Some("widget-read-concurrency".to_string()),
+            Metadata::default(),
+            Vec::new(),
+            state,
+        )
+        .await
+        .unwrap();
+        for index in (0..12).rev() {
+            let id = format!("widget-{index}");
+            app.save_widget(&Widget::new(&id, &id, "root"))
+                .await
+                .unwrap();
+        }
+        let expected_ids = app.widget_ids.clone();
+        app.widget_ids.insert(5, "missing-widget".to_string());
+        store.config_mut(|config| config.wait_get_per_call = Duration::from_secs(1));
+
+        // Thirteen serialized reads take thirteen seconds; bounded overlap
+        // needs two storage round trips, with room for a busy test host.
+        fn require_send<T: Send>(value: T) -> T {
+            value
+        }
+        let widgets = tokio::time::timeout(Duration::from_secs(5), require_send(app.get_widgets()))
+            .await
+            .expect("widget inventory reads must overlap")
+            .unwrap();
+
+        assert_eq!(
+            widgets
+                .into_iter()
+                .map(|widget| widget.id)
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
     }
 
     #[tokio::test]

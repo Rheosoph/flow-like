@@ -13,7 +13,10 @@ import type {
 import type { INode } from "../../lib/schema/flow/node";
 import type { IApplyFlowIrCommitResponse } from "../../state/backend-state/board-state";
 import type { SurfaceComponent } from "../a2ui/types";
-import type { FlowScriptApplyOptions } from "../flow/flow-copilot/types";
+import type {
+	FlowScriptApplyOptions,
+	FlowScriptApplyResultLike,
+} from "../flow/flow-copilot/types";
 
 /**
  * Agent mode determines what the copilot operates on:
@@ -236,21 +239,15 @@ export interface FlowPilotProcessEvent {
 	updatedAt?: number;
 }
 
-export interface FlowScriptApplyResultLike {
-	commands?: unknown[];
-	board_commands?: BoardCommand[];
-	/** Non-blocking source repairs that require a canonical FlowScript readback. */
-	corrections?: string[];
-	diagnostics?: string[];
-	final_board_node_count?: number;
-}
-
 /**
  * Re-exported rather than redeclared: the board copilot and the global assistant hand the same
  * options object to the same apply pipeline, and a second copy of this shape has already drifted
  * once.
  */
-export type { FlowScriptApplyOptions } from "../flow/flow-copilot/types";
+export type {
+	FlowScriptApplyOptions,
+	FlowScriptApplyResultLike,
+} from "../flow/flow-copilot/types";
 
 /**
  * Unified message format for the copilot chat

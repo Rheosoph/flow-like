@@ -227,6 +227,16 @@ fn folded_archive_path(path: &str) -> Option<String> {
         .map(|segments| segments.join("/"))
 }
 
+fn archive_entry_names<R: Read + Seek>(archive: &ZipArchive<R>) -> Result<Vec<String>> {
+    archive
+        .file_names()
+        .map(|name| {
+            name.map(|name| name.into_owned())
+                .context("Widget bundle entry name could not be decoded")
+        })
+        .collect()
+}
+
 /// Archive names that would overwrite each other when unpacked.
 fn archive_name_collisions(names: &[String]) -> Vec<String> {
     let mut errors = Vec::new();
@@ -465,7 +475,10 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
             errors.push("Bundle contains no widgets".to_string());
         }
 
-        let names: Vec<String> = self.archive.file_names().map(str::to_string).collect();
+        let names = archive_entry_names(&self.archive).unwrap_or_else(|error| {
+            errors.push(format!("{error:#}"));
+            Vec::new()
+        });
         errors.extend(
             names
                 .iter()
@@ -610,7 +623,7 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
     }
 
     fn unpack_into(&mut self, staging: &Path) -> Result<()> {
-        let names: Vec<String> = self.archive.file_names().map(|n| n.to_string()).collect();
+        let names = archive_entry_names(&self.archive)?;
         let declared: HashSet<String> = std::iter::once(BUNDLE_MANIFEST_PATH.to_string())
             .chain(
                 self.manifest
@@ -1033,7 +1046,7 @@ mod tests {
             let options = zip::write::FileOptions::<zip::write::ExtendedFileOptions>::default()
                 .compression_method(zip::CompressionMethod::Deflated);
             let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
-            let names: Vec<String> = archive.file_names().map(|n| n.to_string()).collect();
+            let names = archive_entry_names(&archive).unwrap();
             for name in names {
                 let data = if name == "widgets/sales-chart/index.html" {
                     b"<html>tampered</html>".to_vec()
@@ -1096,7 +1109,7 @@ mod tests {
 
     fn archive_entries(bytes: Vec<u8>) -> Vec<(String, Vec<u8>)> {
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
-        let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+        let names = archive_entry_names(&archive).unwrap();
         names
             .into_iter()
             .map(|name| {

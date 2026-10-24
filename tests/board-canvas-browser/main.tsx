@@ -71,7 +71,8 @@ const richCount = Math.max(
 );
 function makeFixtureBoard() {
 	const board = makeBoard(count);
-	for (const node of Object.values(board).slice(0, richCount))
+	// The farthest nodes are rich, so culling tests scroll an editor into view.
+	for (const node of richCount ? Object.values(board).slice(-richCount) : [])
 		node.comment = "Rich-editor culling fixture";
 	return board;
 }
@@ -449,13 +450,16 @@ function Harness() {
 			setVersion((n) => n + 1);
 		}
 	}, []);
+	// Every renderer calls onInit when it mounts, so a renderer switch would reset the camera.
+	const cameraPlaced = useRef(false);
 	const onInit = useCallback<NonNullable<FlowCanvasProps["onInit"]>>(
 		(instance) => {
-			if (count === 10)
-				setTimeout(
-					() => void instance.setViewport({ x: 20, y: 10, zoom: 1 }),
-					80,
-				);
+			if (count !== 10 || cameraPlaced.current) return;
+			cameraPlaced.current = true;
+			setTimeout(
+				() => void instance.setViewport({ x: 20, y: 10, zoom: 1 }),
+				80,
+			);
 		},
 		[],
 	);

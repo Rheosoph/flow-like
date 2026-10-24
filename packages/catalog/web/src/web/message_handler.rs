@@ -108,6 +108,8 @@ pub async fn trigger_message_handler(
     for entry in handler.connected_nodes.iter() {
         let (_id, ctx) = entry.pair();
         let mut ctx = ctx.lock().await;
+        let scope = ctx.new_byte_scope();
+        let previous_scope = ctx.enter_byte_scope(&scope);
         let client = metadata
             .iter()
             .find(|(name, _)| normalize_pin_key(name) == "client")
@@ -144,6 +146,7 @@ pub async fn trigger_message_handler(
         if let Err(e) = run {
             tracing::warn!("{} handler error: {:?}", log_name, e);
         }
+        ctx.restore_byte_scope(previous_scope);
     }
 }
 
@@ -164,6 +167,8 @@ pub async fn trigger_message_handler_checked(
         let mut context = template.create_sub_context(&template.node).await;
         context.delegated = true;
         context.context_pin_overrides = Some(Default::default());
+        let scope = context.new_byte_scope();
+        context.enter_byte_scope(&scope);
         if context.is_cancelled() {
             return Err(flow_like_types::anyhow!("Message handler was cancelled"));
         }
@@ -454,11 +459,12 @@ async fn apply_incoming_payload_to_handler(
             }
         }
         IncomingPayload::Binary(data) => {
+            let data = context.bytes_value(data.clone()).await;
             if handler.single_byte {
                 matched_message |= set_first_typed_output_pin(
                     context,
                     VariableType::Byte,
-                    json!(data),
+                    data,
                     &handler.metadata_pin_names,
                 )
                 .await;
@@ -469,7 +475,7 @@ async fn apply_incoming_payload_to_handler(
                         set_named_output_pin(context, "payload", payload_value).await;
                 }
             } else if handler.has_payload_pin {
-                let mut payload_value = wrap_payload_value(json!(data));
+                let mut payload_value = wrap_payload_value(data);
                 inject_client(&mut payload_value, client);
                 matched_message |= set_named_output_pin(context, "payload", payload_value).await;
             }

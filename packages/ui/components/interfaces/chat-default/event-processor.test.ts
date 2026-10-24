@@ -5,8 +5,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { Response } from "../../../lib/llm/response";
-import type { IMessage } from "./chat-db";
-import { processChatEvents } from "./event-processor";
+import type { IChatWidget, IMessage } from "./chat-db";
+import { mergeChatWidgets, processChatEvents } from "./event-processor";
 import { joinContentText } from "./inline-segments";
 
 const baseMessage = (): IMessage => ({
@@ -496,6 +496,133 @@ describe("processChatEvents step anchors", () => {
 			title: "Thinking",
 			content_offset: "Intro ".length,
 		});
+	});
+});
+
+describe("processChatEvents widget anchors", () => {
+	const offsetsOf = (message: IMessage) =>
+		(message.widgets ?? []).map((widget) => widget.content_offset);
+
+	const chatOutWithWidgets = (content: string, instanceIds: string[]) => ({
+		...chatOutEvent(content),
+		payload: {
+			...chatOutEvent(content).payload,
+			widgets: instanceIds.flatMap((id) => widgetPushEvent(id).payload.widgets),
+		},
+	});
+
+	test("Push Widget anchors at the text streamed so far; longer re-sends keep it", () => {
+		const result = processChatEvents(
+			[
+				chunkEvent({ content: "Here is the map: " }),
+				widgetPushEvent("inst-1"),
+				chunkEvent({ content: "done." }),
+				widgetPushEvent("inst-1", [{ type: "upsertElement" }]),
+			],
+			baseState(baseMessage()),
+		);
+
+		expect(offsetsOf(result.responseMessage)).toEqual([
+			"Here is the map: ".length,
+		]);
+		expect(result.responseMessage.widgets?.[0]?.updates).toHaveLength(1);
+	});
+
+	test("Push Response detaches widget anchors; later widgets anchor against the replaced text", () => {
+		const result = processChatEvents(
+			[
+				chunkEvent({ content: "draft" }),
+				widgetPushEvent("before"),
+				chatStreamEvent("The final answer"),
+				widgetPushEvent("after"),
+			],
+			baseState(baseMessage()),
+		);
+
+		expect(offsetsOf(result.responseMessage)).toEqual([
+			undefined,
+			"The final answer".length,
+		]);
+	});
+
+	test("the final flush keeps widget anchors when it extends the streamed text, drops them otherwise", () => {
+		const streamed = () => [
+			chunkEvent({ content: "Hello" }),
+			widgetPushEvent("inst-1"),
+		];
+
+		const kept = processChatEvents(
+			[...streamed(), chatOutWithWidgets("Hello world", ["inst-1"])],
+			baseState(baseMessage()),
+		);
+		expect(offsetsOf(kept.responseMessage)).toEqual([5]);
+
+		const rewritten = processChatEvents(
+			[...streamed(), chatOutWithWidgets("Something else", ["inst-1"])],
+			baseState(baseMessage()),
+		);
+		expect(offsetsOf(rewritten.responseMessage)).toEqual([undefined]);
+	});
+
+	test("widgets the final flush introduces keep the after-text placement", () => {
+		const result = processChatEvents(
+			[chunkEvent({ content: "Hi" }), chatOutWithWidgets("Hi there", ["late"])],
+			baseState(baseMessage()),
+		);
+
+		expect(result.responseMessage.widgets).toHaveLength(1);
+		expect(offsetsOf(result.responseMessage)).toEqual([undefined]);
+	});
+
+	test("live a2ui updates still reach a widget after its anchor was detached", () => {
+		const result = processChatEvents(
+			[
+				widgetPushEvent("inst-1"),
+				chatStreamEvent("Replaced"),
+				upsertEvent("inst-1/map-1"),
+			],
+			baseState(baseMessage()),
+		);
+
+		expect(offsetsOf(result.responseMessage)).toEqual([undefined]);
+		expect(result.responseMessage.widgets?.[0]?.updates).toHaveLength(1);
+	});
+});
+
+describe("mergeChatWidgets anchors", () => {
+	const widget = (
+		updates: unknown[],
+		content_offset?: number,
+	): IChatWidget => ({
+		instance_id: "inst-1",
+		widget_id: "w1",
+		surface_id: "inst-1",
+		component: {},
+		updates,
+		...(content_offset === undefined ? {} : { content_offset }),
+	});
+
+	test("first sight takes the anchor; without one the widget is kept as sent", () => {
+		expect(mergeChatWidgets([], [widget([])], 7)[0]?.content_offset).toBe(7);
+		const sent = widget([]);
+		expect(mergeChatWidgets([], [sent])[0]).toBe(sent);
+	});
+
+	test("a longer re-send replaces the widget but keeps its first-seen anchor", () => {
+		const [merged] = mergeChatWidgets([widget([], 3)], [widget(["u"], 9)], 12);
+		expect(merged?.updates).toEqual(["u"]);
+		expect(merged?.content_offset).toBe(3);
+	});
+
+	test("a detached widget is never re-anchored by a re-send", () => {
+		const [merged] = mergeChatWidgets([widget([])], [widget(["u"], 9)], 12);
+		expect(merged?.updates).toEqual(["u"]);
+		expect(merged && "content_offset" in merged).toBe(false);
+	});
+
+	test("an equal re-send keeps the existing array and objects", () => {
+		const existing = [widget(["u"], 3)];
+		expect(mergeChatWidgets(existing, [widget(["u"])], 12)).toBe(existing);
 	});
 });
 

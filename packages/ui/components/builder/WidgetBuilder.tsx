@@ -26,7 +26,6 @@ import {
 } from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
 import type { IWidgetRef } from "../../state/backend-state/page-state";
-import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRequestFabBubble } from "../../state/fab-bubble";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
@@ -58,11 +57,7 @@ import {
 	BuilderProvider,
 	useBuilder,
 } from "./BuilderContext";
-import {
-	BuilderDndProvider,
-	type WidgetDragData,
-	useBuilderDnd,
-} from "./BuilderDndContext";
+import { BuilderDndProvider, useBuilderDnd } from "./BuilderDndContext";
 import { BuilderDragOverlay } from "./BuilderDragOverlay";
 import { BuilderRenderer } from "./BuilderRenderer";
 import { ComponentPalette } from "./ComponentPalette";
@@ -140,6 +135,8 @@ function createRootComponent(): SurfaceComponent {
 
 export interface WidgetBuilderProps {
 	className?: string;
+	/** Size widget content naturally instead of stretching it to the canvas height. */
+	fitContent?: boolean;
 	initialComponents?: SurfaceComponent[];
 	initialWidgetRefs?: Record<string, IWidgetRef>;
 	widgetId?: string;
@@ -217,6 +214,7 @@ function BuilderHandleBridge({
 
 export function WidgetBuilder({
 	className,
+	fitContent = false,
 	initialComponents = [],
 	initialWidgetRefs,
 	widgetId,
@@ -255,6 +253,7 @@ export function WidgetBuilder({
 			initialComponents={componentsWithRoot}
 			initialWidgetRefs={initialWidgetRefs}
 			onChange={onChange}
+			onRawJsonApply={onSave}
 			initialCanvasSettings={initialCanvasSettings}
 			onCanvasSettingsChange={onCanvasSettingsChange}
 			actionContext={actionContext}
@@ -262,6 +261,7 @@ export function WidgetBuilder({
 			{handleRef && <BuilderHandleBridge handleRef={handleRef} />}
 			<WidgetBuilderWithDnd
 				className={className}
+				fitContent={fitContent}
 				surfaceId={surfaceId}
 				widgetId={widgetId}
 				mode={mode}
@@ -285,6 +285,7 @@ export function WidgetBuilder({
 
 interface WidgetBuilderContentProps {
 	className?: string;
+	fitContent: boolean;
 	surfaceId: string;
 	widgetId?: string;
 	mode: "edit" | "preview";
@@ -320,6 +321,7 @@ function WidgetBuilderWithDnd(props: WidgetBuilderContentProps) {
 
 function WidgetBuilderContent({
 	className,
+	fitContent,
 	surfaceId,
 	widgetId,
 	mode,
@@ -642,12 +644,14 @@ function WidgetBuilderContent({
 								<VisualCanvas
 									surfaceId={surfaceId}
 									appCustomCss={appCustomCss}
+									fitContent={fitContent}
 								/>
 							) : (
 								<ResponsivePreview>
 									<BuilderPreview
 										surfaceId={surfaceId}
 										appCustomCss={appCustomCss}
+										fitContent={fitContent}
 									/>
 								</ResponsivePreview>
 							)}
@@ -756,21 +760,18 @@ function PendingComponentsBar({
 function VisualCanvas({
 	surfaceId,
 	appCustomCss,
+	fitContent,
 }: {
 	surfaceId: string;
 	appCustomCss?: string;
+	fitContent: boolean;
 }) {
 	const { t } = useTranslation("flow");
-	const backend = useBackend();
 	const {
 		components,
 		selection,
 		selectComponent,
-		addComponent,
-		updateComponent,
 		canvasSettings,
-		addWidgetRef,
-		widgetRefs,
 		actionContext,
 	} = useBuilder();
 	const { activeId } = useBuilderDnd();
@@ -803,112 +804,6 @@ function VisualCanvas({
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
 		console.log("Canvas action:", message);
 	}, []);
-
-	// Helper to insert a widget instance - copies widget components into page
-	const insertWidgetInstance = useCallback(
-		async (
-			widgetItem: WidgetDragData,
-			parentId: string,
-			insertIndex?: number,
-		) => {
-			const { appId, widgetId } = widgetItem;
-
-			// Get parent BEFORE adding components to avoid stale closure
-			const parent = components.get(parentId);
-			if (!parent) return;
-
-			// Fetch widget data
-			let widget: IWidget;
-
-			try {
-				widget = await backend.widgetState.getWidget(appId, widgetId);
-			} catch (err) {
-				console.error("Failed to fetch widget:", err);
-				return;
-			}
-
-			if (!widget.components?.length || !widget.rootComponentId) {
-				console.warn("Widget has no components");
-				return;
-			}
-
-			// Determine actual root component ID - prefer 'root', then stored value, then first component
-			const componentIds = new Set(widget.components.map((c) => c.id));
-			const effectiveRootId = componentIds.has("root")
-				? "root"
-				: componentIds.has(widget.rootComponentId)
-					? widget.rootComponentId
-					: (widget.components[0]?.id ?? widget.rootComponentId);
-
-			// Create a unique instance ID
-			const instanceId = `widget-${widgetId}-${Date.now()}`;
-			const widgetInstanceComponentId = `widgetInstance-${instanceId}`;
-
-			// Store the widget definition in refs
-			addWidgetRef(instanceId, {
-				id: widget.id,
-				name: widget.name,
-				description: widget.description,
-				rootComponentId: effectiveRootId,
-				components: widget.components,
-				dataModel: widget.dataModel,
-				customizationOptions: widget.customizationOptions,
-				exposedProps: widget.exposedProps,
-				actions: widget.actions,
-				tags: widget.tags ?? [],
-				catalogId: widget.catalogId,
-				thumbnail: widget.thumbnail,
-				version: widget.version,
-				createdAt: widget.createdAt,
-				updatedAt: widget.updatedAt,
-			});
-
-			// Create a widgetInstance component that references the widget in refs
-			const widgetInstanceComponent: SurfaceComponent = {
-				id: widgetInstanceComponentId,
-				component: {
-					type: "widgetInstance",
-					instanceId,
-					widgetId,
-					appId,
-					exposedPropValues: {},
-					actionBindings: {},
-				} as A2UIComponent,
-			};
-
-			// Add the widget instance component
-			addComponent(widgetInstanceComponent);
-
-			// Add to parent's children (using captured parent)
-			const parentChildren = (
-				parent.component as unknown as Record<string, unknown>
-			)?.children as Children | undefined;
-			const existingChildren =
-				parentChildren && "explicitList" in parentChildren
-					? [...parentChildren.explicitList]
-					: [];
-
-			if (insertIndex !== undefined) {
-				existingChildren.splice(insertIndex, 0, widgetInstanceComponentId);
-			} else {
-				existingChildren.push(widgetInstanceComponentId);
-			}
-
-			updateComponent(parentId, {
-				component: {
-					...parent.component,
-					children: { explicitList: existingChildren },
-				} as A2UIComponent,
-			});
-		},
-		[
-			backend.widgetState,
-			components,
-			addComponent,
-			updateComponent,
-			addWidgetRef,
-		],
-	);
 
 	// Root-level drop target using @dnd-kit
 	const { setNodeRef: setDropRef, isOver } = useDroppable({
@@ -1018,7 +913,10 @@ function VisualCanvas({
 					{/* Editor controls use the rendered elements without adding layout boxes. */}
 					<BuilderRenderer
 						surface={surface}
-						className="h-full w-full min-h-full"
+						className={cn(
+							"w-full",
+							fitContent ? "h-auto min-h-0" : "h-full min-h-full",
+						)}
 					/>
 
 					{/* Empty state */}
@@ -1051,9 +949,14 @@ function VisualCanvas({
 interface BuilderPreviewProps {
 	surfaceId: string;
 	appCustomCss?: string;
+	fitContent: boolean;
 }
 
-function BuilderPreview({ surfaceId, appCustomCss }: BuilderPreviewProps) {
+function BuilderPreview({
+	surfaceId,
+	appCustomCss,
+	fitContent,
+}: BuilderPreviewProps) {
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
@@ -1063,6 +966,9 @@ function BuilderPreview({ surfaceId, appCustomCss }: BuilderPreviewProps) {
 	const frontendStateStore = getFrontendStateStore(actionContext?.appId);
 	const previewCanvasId = useId();
 	const [previewSurface, setPreviewSurface] = useState<Surface | null>(null);
+	// Builder edits replace the workflow's snapshot with the current page.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Only changes to the underlying page invalidate runtime preview state.
+	useEffect(() => setPreviewSurface(null), [components, widgetRefs]);
 	// Canvas styling the preview is showing right now: the builder's own settings
 	// until a running workflow overrides them with a setCanvasSettings message.
 	const [liveCanvasSettings, setLiveCanvasSettings] = useState(canvasSettings);
@@ -1343,7 +1249,10 @@ function BuilderPreview({ surfaceId, appCustomCss }: BuilderPreviewProps) {
 				widgetRefs={Object.fromEntries(widgetRefs)}
 				onMessage={handleMessage}
 				onA2UIMessage={handleA2UIMessage}
-				className="h-full min-h-full w-full"
+				className={cn(
+					"w-full",
+					fitContent ? "h-auto min-h-0" : "h-full min-h-full",
+				)}
 				appId={actionContext?.appId}
 				boardId={actionContext?.boardId}
 				eventId={actionContext?.eventId}

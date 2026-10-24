@@ -32,6 +32,7 @@ RUN set -eu && \
         pkgconf-pkg-config \
         openssl-devel \
         libcurl-devel \
+        unixODBC-devel \
         glib2-devel \
         gtk3-devel \
         tar \
@@ -82,6 +83,7 @@ RUN strip --strip-all /app/aws-executor
 FROM public.ecr.aws/lambda/provided:al2023
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
+RUN dnf install -y unixODBC && dnf clean all
 COPY --from=build /opt/onnxruntime/lib/ /usr/lib64/
 COPY --from=build /opt/onnxruntime/LICENSE /usr/share/licenses/onnxruntime/LICENSE
 COPY --from=build /opt/onnxruntime/ThirdPartyNotices.txt /usr/share/licenses/onnxruntime/ThirdPartyNotices.txt

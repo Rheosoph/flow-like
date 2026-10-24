@@ -154,6 +154,7 @@ function ProtectedContent() {
 	}, []);
 	return (
 		<div data-testid="protected-content">
+			<input aria-label="Workspace draft" defaultValue="" />
 			{harness.showCallbackReadiness ? (
 				<output>{callbackReady ? "Callback ready" : "Callback waiting"}</output>
 			) : harness.showLibrary ? (
@@ -187,13 +188,21 @@ function LibraryProbe() {
 	);
 }
 
-function user(accessToken = "token-1") {
+function user(
+	accessToken = "token-1",
+	{
+		subject = "user-1",
+		expired = false,
+	}: { subject?: string; expired?: boolean | (() => boolean) } = {},
+) {
 	return {
 		access_token: accessToken,
 		id_token: "unchanged-id-token",
-		profile: { sub: "user-1" },
-		expired: false,
-	} as AuthContextProps["user"];
+		profile: { sub: subject },
+		get expired() {
+			return typeof expired === "function" ? expired() : expired;
+		},
+	} as NonNullable<AuthContextProps["user"]>;
 }
 
 let root: Root;
@@ -490,6 +499,224 @@ describe("WebAuthProvider", () => {
 			}),
 		);
 		expect(container.textContent).toBe("App content");
+		expect(harness.childMounts).toBe(1);
+		expect(harness.backend.userState.getInfo).toHaveBeenCalledOnce();
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledOnce();
+		expect(harness.backend.appState.getApps).toHaveBeenCalledOnce();
+		expect(harness.backend.appState.getMyGroups).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the loaded workspace mounted during silent token renewal", async () => {
+		await renderProvider();
+		const content = container.querySelector(
+			'[data-testid="protected-content"]',
+		);
+
+		await act(async () =>
+			harness.auth.set({ isLoading: true, activeNavigator: "signinSilent" }),
+		);
+		expect(container.textContent).toBe("App content");
+		expect(container.querySelector('[data-testid="protected-content"]')).toBe(
+			content,
+		);
+
+		await act(async () =>
+			harness.auth.set({
+				isLoading: false,
+				activeNavigator: undefined,
+				user: user("token-2"),
+			}),
+		);
+		expect(harness.childMounts).toBe(1);
+		expect(harness.backend.userState.getInfo).toHaveBeenCalledOnce();
+		expect(harness.backend.appState.getApps).toHaveBeenCalledOnce();
+	});
+
+	it.each([false, true])(
+		"preserves workspace state through expiry recovery (active navigator: %s)",
+		async (navigatorActive) => {
+			let expired = false;
+			let finishRenewal!: (renewed: ReturnType<typeof user>) => void;
+			const renewal = new Promise<ReturnType<typeof user>>((resolve) => {
+				finishRenewal = resolve;
+			});
+			const signinSilent = vi.fn(async () => {
+				if (navigatorActive) {
+					harness.auth.set({
+						isLoading: true,
+						activeNavigator: "signinSilent",
+					});
+				}
+				const renewed = await renewal;
+				harness.auth.set({
+					user: renewed,
+					isLoading: false,
+					activeNavigator: undefined,
+				});
+				return renewed;
+			});
+			harness.auth.set({
+				signinSilent,
+				user: user("token-1", { expired: () => expired }),
+			});
+			await renderProvider();
+			const content = container.querySelector(
+				'[data-testid="protected-content"]',
+			);
+			const draft = container.querySelector("input");
+			if (!draft) throw new Error("Workspace draft did not mount");
+			draft.value = "Unsaved widget state";
+
+			await act(async () => {
+				if (navigatorActive) void signinSilent();
+				expired = true;
+				vi.mocked(
+					harness.auth.get().events.addAccessTokenExpired,
+				).mock.calls[0][0]();
+			});
+			expect(signinSilent).toHaveBeenCalledOnce();
+			expect(container.textContent).toBe("App content");
+			expect(container.querySelector('[data-testid="protected-content"]')).toBe(
+				content,
+			);
+			expect(container.querySelector("input")).toBe(draft);
+			expect(draft.value).toBe("Unsaved widget state");
+
+			await act(async () => finishRenewal(user("token-2")));
+			expect(container.querySelector("input")).toBe(draft);
+			expect(draft.value).toBe("Unsaved widget state");
+			expect(harness.childMounts).toBe(1);
+			expect(
+				harness.backend.userState.getSettingsProfile,
+			).toHaveBeenCalledOnce();
+			expect(harness.auth.get().signinRedirect).not.toHaveBeenCalled();
+			expect(harness.auth.get().removeUser).not.toHaveBeenCalled();
+		},
+	);
+
+	it("waits for expiry recovery before mounting a cold workspace", async () => {
+		let finishRenewal!: (renewed: ReturnType<typeof user>) => void;
+		harness.auth.set({
+			isAuthenticated: false,
+			user: user("token-1", { expired: true }),
+			signinSilent: vi.fn(async () => {
+				const renewed = await new Promise<ReturnType<typeof user>>(
+					(resolve) => {
+						finishRenewal = resolve;
+					},
+				);
+				harness.auth.set({ isAuthenticated: true, user: renewed });
+				return renewed;
+			}),
+		});
+		await renderProvider();
+		expect(container.textContent).toBe("Loading");
+		expect(harness.childMounts).toBe(0);
+		expect(harness.backend.userState.getSettingsProfile).not.toHaveBeenCalled();
+
+		await act(async () => finishRenewal(user("token-2")));
+		expect(container.textContent).toBe("App content");
+		expect(harness.childMounts).toBe(1);
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledOnce();
+	});
+
+	it("removes the workspace when expiry recovery requires sign-in", async () => {
+		let rejectRenewal!: (error: Error) => void;
+		harness.auth.set({
+			signinSilent: vi.fn(
+				() =>
+					new Promise<ReturnType<typeof user>>((_, reject) => {
+						rejectRenewal = reject;
+					}),
+			),
+		});
+		await renderProvider();
+		await act(async () =>
+			harness.auth.set({ user: user("token-1", { expired: true }) }),
+		);
+		expect(container.textContent).toBe("App content");
+
+		await act(async () =>
+			rejectRenewal(
+				Object.assign(new Error("Sign in required"), {
+					error: "invalid_grant",
+				}),
+			),
+		);
+		expect(
+			container.querySelector('[data-testid="protected-content"]'),
+		).toBeNull();
+		expect(harness.auth.get().removeUser).toHaveBeenCalledOnce();
+		expect(harness.auth.get().signinRedirect).toHaveBeenCalledOnce();
+		expect(harness.childMounts).toBe(1);
+	});
+
+	it.each(["network", "refusal"])(
+		"keeps signout effective when pending renewal ends with %s",
+		async (failure) => {
+			let rejectRenewal!: (error: Error) => void;
+			harness.auth.set({
+				signinSilent: vi.fn(
+					() =>
+						new Promise<ReturnType<typeof user>>((_, reject) => {
+							rejectRenewal = reject;
+						}),
+				),
+			});
+			await renderProvider();
+			await act(async () =>
+				harness.auth.set({ user: user("token-1", { expired: true }) }),
+			);
+			expect(container.textContent).toBe("App content");
+			await act(async () => harness.auth.get().removeUser());
+			expect(container.textContent).toBe("Sign in required");
+
+			await act(async () =>
+				rejectRenewal(
+					failure === "network"
+						? new TypeError("Failed to fetch")
+						: Object.assign(new Error("Sign in required"), {
+								error: "invalid_grant",
+							}),
+				),
+			);
+			expect(container.textContent).toBe("Sign in required");
+			expect(harness.auth.get().removeUser).toHaveBeenCalledOnce();
+			expect(harness.auth.get().signinRedirect).not.toHaveBeenCalled();
+		},
+	);
+
+	it("loads a new account's profile before restoring the workspace", async () => {
+		await renderProvider();
+		let finishProfile!: (
+			settings: Awaited<
+				ReturnType<typeof harness.backend.userState.getSettingsProfile>
+			>,
+		) => void;
+		harness.backend.userState.getSettingsProfile.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishProfile = resolve;
+				}),
+		);
+		await act(async () =>
+			harness.auth.set({
+				user: user("token-2", { subject: "user-2" }),
+			}),
+		);
+		expect(container.textContent).toBe("Loading");
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledTimes(
+			2,
+		);
+
+		await act(async () =>
+			finishProfile({
+				hub_profile: await harness.backend.userState.getProfile(),
+				execution_settings: { gpu_mode: false, max_context_size: 8192 },
+			}),
+		);
+		expect(container.textContent).toBe("App content");
+		expect(harness.backend.appState.getApps).toHaveBeenCalledTimes(2);
 	});
 
 	it("removes an already loaded app after rejection and shows sign-in if navigation fails", async () => {

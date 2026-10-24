@@ -57,9 +57,7 @@ impl NodeLogic for GetStructFieldNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let struct_value = context
-            .evaluate_pin::<flow_like_types::Value>("struct")
-            .await?;
+        let struct_value = context.evaluate_pin_raw("struct").await?;
         context.log_message(&format!("Got Value: {:?}", struct_value), LogLevel::Debug);
         let field = context.evaluate_pin::<String>("field").await?;
 

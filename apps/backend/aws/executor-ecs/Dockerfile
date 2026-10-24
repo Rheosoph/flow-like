@@ -32,6 +32,7 @@ RUN set -eu && \
         pkgconf-pkg-config \
         openssl-devel \
         libcurl-devel \
+        unixODBC-devel \
         glib2-devel \
         gtk3-devel \
         tar \
@@ -83,6 +84,7 @@ RUN strip --strip-all /app/aws-executor-ecs
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
 
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
+RUN dnf install -y unixODBC && dnf clean all
 
 COPY --from=build /opt/onnxruntime/lib/ /usr/lib64/
 COPY --from=build /opt/onnxruntime/LICENSE /usr/share/licenses/onnxruntime/LICENSE

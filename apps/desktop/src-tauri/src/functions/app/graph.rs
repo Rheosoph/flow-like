@@ -271,7 +271,7 @@ async fn ensure_action_board_published_with_mode(
     if pinned == current {
         let guard = board.snapshot();
         if existing.contains(&pinned) {
-            if publish_draft && !guard.snapshot_matches_current(pinned, None).await? {
+            if publish_draft && !guard.snapshot_matches_persisted_draft(pinned, None).await? {
                 let snapshot = guard.prepare_snapshot_recovering_from_races(None).await?;
                 pinned = snapshot.version();
                 action.board_version = Some([pinned.0, pinned.1, pinned.2]);
@@ -318,7 +318,7 @@ async fn ensure_action_board_published_with_mode(
         && pinned.2 > current.2
     {
         let guard = board.snapshot();
-        if guard.snapshot_matches_current(pinned, None).await? {
+        if guard.snapshot_matches_persisted_draft(pinned, None).await? {
             prepared = Some(guard.prepared_snapshot_at_version(pinned, None).await?);
         } else {
             let snapshot = guard.prepare_snapshot_recovering_from_races(None).await?;

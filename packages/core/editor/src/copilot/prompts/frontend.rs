@@ -218,7 +218,8 @@ Wrap it in a ```json fence like this:
     "padding": "1rem"
   }},
   "components": [
-    {{"id": "root", "style": {{"className": "..."}}, "component": {{"type": "column", ...}}}}
+    {{"id": "root", "type": "column", "style": {{"className": "..."}}, "children": ["title"]}},
+    {{"id": "title", "type": "text", "content": "Hello", "variant": "heading"}}
   ]
 }}
 ```
@@ -242,20 +243,19 @@ untouched. Include it only when you are changing it, and then emit the COMPLETE 
 value replaces the previous one, so any rule you leave out is deleted.
 
 ## Component Format
+One flat object per component:
 ```json
-{{"id": "unique-id", "style": {{"className": "tailwind"}}, "component": {{"type": "componentType", ...props}}}}
+{{"id": "unique-id", "type": "componentType", "style": {{"className": "tailwind"}}, ...props}}
 ```
 
-## BoundValue Format (for all component props)
-- String: {{"literalString": "text"}}
-- Number: {{"literalNumber": 42}}
-- Boolean: {{"literalBool": true}}
-- Options array: {{"literalOptions": [{{"value": "v1", "label": "Label 1"}}]}}
-- Data binding: {{"path": "$.data.field", "defaultValue": "fallback"}}
+## Values (plain JSON)
+- Props take plain values: "text", 42, true, ["a", "b"], {{"key": "value"}}
+- Data binding: {{"path": "$.data.field", "defaultValue": "fallback"}} (a bare string is always a literal, never a path)
+- Options: [{{"value": "v1", "label": "Label 1"}}]
 
 ## Children Format
 ```json
-"children": {{"explicitList": ["child-id-1", "child-id-2"]}}
+"children": ["child-id-1", "child-id-2"]
 ```
 
 ## WIDGETS (reusable / repeated elements)
@@ -263,7 +263,7 @@ When the page needs a REUSABLE or REPEATED element — a card in a list/grid, a 
 
 Place a widget on the page as a `widgetInstance` component inside `components`, carrying its definition inline:
 ```json
-{{"id": "project-card-1", "component": {{
+{{"id": "project-card-1",
   "type": "widgetInstance",
   "widgetId": "project-card",
   "instanceId": "project-card-1",
@@ -271,16 +271,16 @@ Place a widget on the page as a `widgetInstance` component inside `components`, 
     "name": "Project Card",
     "rootComponentId": "pc-root",
     "components": [
-      {{"id": "pc-root", "component": {{"type": "column", "children": {{"explicitList": ["pc-title", "pc-desc"]}}}}}},
-      {{"id": "pc-title", "component": {{"type": "text", "content": {{"path": "$.item.name", "defaultValue": "Project"}}}}}},
-      {{"id": "pc-desc", "component": {{"type": "text", "content": {{"path": "$.item.description"}}}}}}
+      {{"id": "pc-root", "type": "column", "children": ["pc-title", "pc-desc"]}},
+      {{"id": "pc-title", "type": "text", "content": {{"path": "$.item.name", "defaultValue": "Project"}}}},
+      {{"id": "pc-desc", "type": "text", "content": {{"path": "$.item.description"}}}}
     ],
     "exposedProps": [
       {{"id": "accent", "label": "Accent", "targetComponentId": "pc-root", "propertyPath": "style.className", "propType": "TailwindClass"}}
     ]
   }},
-  "exposedPropValues": {{"accent": "border-l-4 border-primary"}}
-}}}}
+  "exposedPropValues": {{"accent": "bg-muted"}}
+}}
 ```
 - `inlineWidgetDef` is the widget's OWN component tree (same format as the page) with its own `rootComponentId`. Define it ONCE; to reuse it, add more `widgetInstance` components with the SAME `widgetId` and a fresh `instanceId`.
 - `exposedProps` declares caller-settable parameters: `targetComponentId` (a component id INSIDE the widget) + `propertyPath` (`"content"`, `"style.className"`, `"data"`) + `propType` (`String`, `Number`, `Boolean`, `Color`, `TailwindClass`, `StyleObject`, `BoundValue`). Set them per instance in `exposedPropValues` (keyed by prop id).
@@ -301,7 +301,7 @@ Place a widget on the page as a `widgetInstance` component inside `components`, 
   Trigger a widget action from a component INSIDE the widget with the `widget_event` action, which
   carries the declared action id in `context.actionId` — the action `name` is ALWAYS the literal
   `"widget_event"`, never the action id itself:
-  `{{"id": "pc-approve", "component": {{"type": "button", "label": {{"literalString": "Approve"}}, "actions": [{{"name": "widget_event", "context": {{"actionId": "approve"}}}}]}}}}`.
+  `{{"id": "pc-approve", "type": "button", "label": "Approve", "actions": [{{"name": "widget_event", "context": {{"actionId": "approve"}}}}]}}`.
   The board workflow binds its `eventsWidgetAction` handlers to these declared action ids.
 
 {component_docs}
@@ -347,35 +347,26 @@ Emitted-but-unapplied UI cannot be driven — verify only persisted, rendered pa
 the evidence (runs, logs, screenshots) actually shows.
 
 ## emit_ui TOOL FORMAT
+One flat object per component: `id`, `type`, optional `style`, then its props.
 ```json
 {{
   "rootComponentId": "root",
   "canvasSettings": {{ "backgroundColor": "bg-background", "padding": "1rem" }},
   "components": [
-    {{
-      "id": "root",
-      "style": {{ "className": "tailwind classes" }},
-      "component": {{ "type": "column", "children": {{ "explicitList": ["child-1"] }} }}
-    }},
-    {{
-      "id": "child-1",
-      "component": {{ "type": "text", "content": {{ "literalString": "Hello" }} }}
-    }}
+    {{ "id": "root", "type": "column", "style": {{ "className": "tailwind classes" }}, "children": ["child-1"] }},
+    {{ "id": "child-1", "type": "text", "content": "Hello", "variant": "heading" }}
   ]
 }}
 ```
 
-## BoundValue Format (ALL props MUST use these wrappers)
-- String: `{{"literalString": "text"}}`
-- Number: `{{"literalNumber": 42}}`
-- Boolean: `{{"literalBool": true}}`
-- Options: `{{"literalOptions": [{{"value": "v", "label": "L"}}]}}`
-- JSON data: `{{"literalJson": "[...]"}}`
-- Data binding: `{{"path": "$.data.field"}}`
+## Values (plain JSON)
+- Strings, numbers, booleans, arrays and objects are written as they are: `"text"`, `42`, `true`, `["a", "b"]`, `{{"key": "value"}}`
+- Options: `[{{"value": "v", "label": "L"}}]`
+- Data binding: `{{"path": "$.data.field", "defaultValue": "fallback"}}` (a bare string is always a literal, never a path)
 
 ## Children Format
 ```json
-"children": {{"explicitList": ["child-id-1", "child-id-2"]}}
+"children": ["child-id-1", "child-id-2"]
 ```
 Every child ID MUST exist in the components array.
 
@@ -384,8 +375,8 @@ Every child ID MUST exist in the components array.
 ## RULES
 1. Call emit_ui with the complete tree — text-only responses render nothing
 2. Put ALL components in ONE emit_ui call
-3. ALWAYS wrap prop values in BoundValue format
-4. Every `children.explicitList` ID must exist in the components array
+3. Write props as plain JSON values; bind live data with `{{"path": ...}}`
+4. Every `children` ID must exist in the components array
 5. If emit_ui returns errors, fix them and call emit_ui again
 6. Make design choices autonomously — do not ask questions
 7. Honor the design quality bar: distinct direction, real hierarchy, responsive, purpose-built components"#,

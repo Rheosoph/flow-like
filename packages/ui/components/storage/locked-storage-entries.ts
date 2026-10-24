@@ -8,8 +8,14 @@ import {
 import type {
 	IListLockedItemsResponse,
 	ILockedItem,
+	ILockedItemVersion,
 	LockedScope,
 } from "../../state/backend-state/locked-storage-state";
+
+type LockedRetention = Pick<
+	ILockedItemVersion,
+	"retain_until" | "delete_after_retention" | "legal_hold"
+>;
 
 /** Never a listed storage key, so a locked row cannot collide with a storage file of the same name. */
 const LOCKED_ENTRY_ROOT = "locked:";
@@ -101,13 +107,35 @@ export function retentionEnded(retainUntil: string): boolean {
 	return new Date(retainUntil).getTime() <= Date.now();
 }
 
+/** Null unless the server deletes the version by itself; a legal hold keeps it. */
+export function autoDeletionLabel(
+	version: LockedRetention,
+	language: string,
+	t: TFunction<"common">,
+): string | null {
+	if (!version.delete_after_retention || version.legal_hold) return null;
+	const date = formatLockedDate(version.retain_until, language);
+	if (!retentionEnded(version.retain_until)) {
+		return t("lockedStorage.deletedOn", "Deleted automatically on {{date}}", {
+			date,
+		});
+	}
+	return t(
+		"lockedStorage.deletionDue",
+		"Retention ended {{date}}, deletion pending",
+		{ date },
+	);
+}
+
 export function retentionLabel(
-	retainUntil: string,
+	version: LockedRetention,
 	language: string,
 	t: TFunction<"common">,
 ): string {
-	const date = formatLockedDate(retainUntil, language);
-	return retentionEnded(retainUntil)
+	const automatic = autoDeletionLabel(version, language, t);
+	if (automatic) return automatic;
+	const date = formatLockedDate(version.retain_until, language);
+	return retentionEnded(version.retain_until)
 		? t("lockedStorage.retentionEndedOn", "Retention ended {{date}}", { date })
 		: t("lockedStorage.retainedUntil", "Retained until {{date}}", { date });
 }

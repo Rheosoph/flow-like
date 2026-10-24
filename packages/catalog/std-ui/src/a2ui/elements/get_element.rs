@@ -8,10 +8,82 @@ use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
-    pin::PinOptions,
+    pin::{Pin, PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
+use std::collections::HashSet;
+
+fn literal_selector(pin: &Pin) -> Option<String> {
+    if !pin.depends_on.is_empty() {
+        return None;
+    }
+    flow_like_types::json::from_slice::<String>(pin.default_value.as_deref()?).ok()
+}
+
+/// Resolve the saved selector without evaluating workflow code. Top-level FlowScript constants
+/// are board variables, so their getter connection must retain the same contract as a literal.
+fn element_selector(board: &Board, input: &Pin) -> Option<String> {
+    let mut pin = input;
+    let mut visited = HashSet::new();
+    loop {
+        if pin.depends_on.is_empty() {
+            return literal_selector(pin);
+        }
+        if pin.depends_on.len() != 1 {
+            return None;
+        }
+        let source_id = pin.depends_on.iter().next()?;
+        if !visited.insert(source_id) || visited.len() > 128 {
+            return None;
+        }
+        let source = board.get_pin_by_id(source_id)?;
+        let producer = board
+            .nodes
+            .values()
+            .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+            .find(|node| node.pins.contains_key(source_id));
+        match producer {
+            Some(node) if node.name == "reroute" && source.name == "route_out" => {
+                pin = node.get_pin_by_name("route_in")?;
+            }
+            Some(node) if node.name == "variable_get" && source.name == "value_ref" => {
+                let variable_id = literal_selector(node.get_pin_by_name("var_ref")?)?;
+                let variable = board.get_any_variable(&variable_id)?;
+                if variable.data_type != VariableType::String
+                    || variable.value_type != ValueType::Normal
+                    || variable.exposed
+                    || variable.secret
+                    || variable.runtime_configured
+                {
+                    return None;
+                }
+                // A default cannot describe the widget contract if workflow code can replace it.
+                let written = board
+                    .nodes
+                    .values()
+                    .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+                    .filter(|node| node.name == "variable_set")
+                    .any(|node| {
+                        node.get_pin_by_name("var_ref")
+                            .and_then(literal_selector)
+                            .is_none_or(|target| target == variable_id)
+                    });
+                if written {
+                    return None;
+                }
+                return flow_like_types::json::from_slice::<String>(
+                    variable.default_value.as_deref()?,
+                )
+                .ok();
+            }
+            // Layer boundary pins relay their upstream source. An unconnected boundary is a
+            // runtime parameter, even when it has a default.
+            None if !source.depends_on.is_empty() => pin = source,
+            _ => return None,
+        }
+    }
+}
 
 /// Gets an element's data from the workflow payload.
 ///
@@ -129,10 +201,7 @@ impl NodeLogic for GetElement {
             }
         };
 
-        let element_id = element_ref.default_value.as_ref().and_then(|v| {
-            let parsed: Value = flow_like_types::json::from_slice(v).ok()?;
-            parsed.as_str().map(String::from)
-        });
+        let element_id = element_selector(board, element_ref);
 
         if let Some(id) = &element_id {
             let short_name = id.rsplit('/').next().unwrap_or(id);
@@ -206,4 +275,235 @@ pub(crate) async fn find_component_in_board(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::{
+        board::{Layer, LayerType},
+        variable::Variable,
+    };
+    use flow_like_storage::object_store::path::Path;
+    use flow_like_types::json::json;
+
+    fn selector_graph() -> (Board, Pin) {
+        let mut board = Board::new_detached(Some("selectors".into()), Path::default());
+        let mut variable = Variable::new("selector", VariableType::String, ValueType::Normal);
+        variable.id = "selector".into();
+        variable.set_default_value(json!("page/chat"));
+        board.variables.insert(variable.id.clone(), variable);
+
+        let mut getter = Node::new("variable_get", "Get selector", "", "Variable");
+        getter.id = "getter".into();
+        getter
+            .add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .set_default_value(Some(json!("selector")));
+        let output = getter
+            .add_output_pin("value_ref", "Value", "", VariableType::String)
+            .id
+            .clone();
+        let mut input = GetElement::new()
+            .get_node()
+            .get_pin_by_name("element_ref")
+            .unwrap()
+            .clone();
+        input.depends_on.insert(output);
+        board.nodes.insert(getter.id.clone(), getter);
+        (board, input)
+    }
+
+    fn setter(target: &str) -> Node {
+        let mut setter = Node::new("variable_set", "Set selector", "", "Variable");
+        setter
+            .add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .set_default_value(Some(json!(target)));
+        setter
+    }
+
+    fn reroute(source_id: &str) -> Node {
+        let mut reroute = Node::new("reroute", "Reroute", "", "Utils");
+        reroute
+            .add_input_pin("route_in", "Input", "", VariableType::String)
+            .depends_on
+            .insert(source_id.to_string());
+        reroute.add_output_pin("route_out", "Output", "", VariableType::String);
+        reroute
+    }
+
+    #[test]
+    fn saved_selector_defaults_refresh_without_replacing_the_connection() {
+        let (mut board, mut input) = selector_graph();
+        input.set_default_value(Some(json!("page/stale")));
+        let original = flow_like_types::json::to_value(&input).unwrap();
+
+        assert_eq!(
+            element_selector(&board, &input).as_deref(),
+            Some("page/chat")
+        );
+        board
+            .variables
+            .get_mut("selector")
+            .unwrap()
+            .set_default_value(json!("page/other"));
+        assert_eq!(
+            element_selector(&board, &input).as_deref(),
+            Some("page/other")
+        );
+        assert_eq!(flow_like_types::json::to_value(&input).unwrap(), original);
+
+        input.depends_on.clear();
+        assert_eq!(
+            element_selector(&board, &input).as_deref(),
+            Some("page/stale")
+        );
+    }
+
+    #[test]
+    fn wired_defaults_cannot_resolve_a_dynamic_selector_or_variable_reference() {
+        let (mut board, mut input) = selector_graph();
+        input.set_default_value(Some(json!("page/stale")));
+        board.nodes.get_mut("getter").unwrap().name = "dynamic_string".into();
+        assert_eq!(element_selector(&board, &input), None);
+
+        let getter = board.nodes.get_mut("getter").unwrap();
+        getter.name = "variable_get".into();
+        getter
+            .get_pin_mut_by_name("var_ref")
+            .unwrap()
+            .depends_on
+            .insert("runtime-variable-id".into());
+        assert_eq!(element_selector(&board, &input), None);
+    }
+
+    #[test]
+    fn overridable_or_non_string_variables_do_not_define_a_widget_contract() {
+        for excluded in [
+            "exposed", "secret", "runtime", "array", "integer", "missing",
+        ] {
+            let (mut board, input) = selector_graph();
+            let variable = board.variables.get_mut("selector").unwrap();
+            match excluded {
+                "exposed" => variable.exposed = true,
+                "secret" => variable.secret = true,
+                "runtime" => variable.runtime_configured = true,
+                "array" => variable.value_type = ValueType::Array,
+                "integer" => variable.data_type = VariableType::Integer,
+                "missing" => variable.default_value = None,
+                _ => unreachable!(),
+            }
+            assert_eq!(element_selector(&board, &input), None, "{excluded}");
+        }
+    }
+
+    #[test]
+    fn matching_and_dynamic_variable_writers_invalidate_the_saved_selector() {
+        let (mut board, input) = selector_graph();
+        let mut writer = setter("unrelated");
+        writer.id = "writer".into();
+        board.nodes.insert(writer.id.clone(), writer);
+        assert_eq!(
+            element_selector(&board, &input).as_deref(),
+            Some("page/chat")
+        );
+
+        board
+            .nodes
+            .get_mut("writer")
+            .unwrap()
+            .get_pin_mut_by_name("var_ref")
+            .unwrap()
+            .set_default_value(Some(json!("selector")));
+        assert_eq!(element_selector(&board, &input), None);
+
+        let reference = board
+            .nodes
+            .get_mut("writer")
+            .unwrap()
+            .get_pin_mut_by_name("var_ref")
+            .unwrap();
+        reference.set_default_value(Some(json!("unrelated")));
+        reference.depends_on.insert("dynamic-target".into());
+        assert_eq!(element_selector(&board, &input), None);
+
+        board.nodes.remove("writer");
+        assert_eq!(
+            element_selector(&board, &input).as_deref(),
+            Some("page/chat")
+        );
+    }
+
+    #[test]
+    fn selector_resolution_checks_variables_and_writers_stored_in_layers() {
+        let (mut board, input) = selector_graph();
+        let mut layer = Layer::new("module".into(), "Module".into(), LayerType::Module);
+        let variable = board.variables.remove("selector").unwrap();
+        layer.variables.insert(variable.id.clone(), variable);
+        let getter = board.nodes.remove("getter").unwrap();
+        layer.nodes.insert(getter.id.clone(), getter);
+        board.layers.insert(layer.id.clone(), layer);
+        assert_eq!(
+            element_selector(&board, &input).as_deref(),
+            Some("page/chat")
+        );
+
+        let writer = setter("selector");
+        board
+            .layers
+            .get_mut("module")
+            .unwrap()
+            .nodes
+            .insert(writer.id.clone(), writer);
+        assert_eq!(element_selector(&board, &input), None);
+    }
+
+    #[test]
+    fn selectors_cross_reroutes_and_connected_layer_boundaries() {
+        let (mut board, mut input) = selector_graph();
+        let source_id = input.depends_on.iter().next().unwrap().clone();
+        let route = reroute(&source_id);
+        let route_out = route.get_pin_by_name("route_out").unwrap().clone();
+        board.nodes.insert(route.id.clone(), route);
+
+        let mut boundary = route_out.clone();
+        boundary.id = "boundary".into();
+        boundary.depends_on.insert(route_out.id);
+        boundary.set_default_value(Some(json!("page/stale-boundary")));
+        let mut layer = Layer::new("layer".into(), "Layer".into(), LayerType::Collapsed);
+        layer.pins.insert(boundary.id.clone(), boundary);
+        board.layers.insert(layer.id.clone(), layer);
+        input.depends_on = ["boundary".to_string()].into();
+        assert_eq!(
+            element_selector(&board, &input).as_deref(),
+            Some("page/chat")
+        );
+
+        board
+            .layers
+            .get_mut("layer")
+            .unwrap()
+            .pins
+            .get_mut("boundary")
+            .unwrap()
+            .depends_on
+            .clear();
+        assert_eq!(element_selector(&board, &input), None);
+    }
+
+    #[test]
+    fn cycles_ambiguous_sources_and_missing_sources_do_not_use_defaults() {
+        let (mut board, mut input) = selector_graph();
+        input.set_default_value(Some(json!("page/stale")));
+        input.depends_on.insert("second-source".into());
+        assert_eq!(element_selector(&board, &input), None);
+        input.depends_on = ["missing-source".to_string()].into();
+        assert_eq!(element_selector(&board, &input), None);
+
+        let mut route = reroute("temporary");
+        let output = route.get_pin_by_name("route_out").unwrap().id.clone();
+        route.get_pin_mut_by_name("route_in").unwrap().depends_on = [output.clone()].into();
+        board.nodes.insert(route.id.clone(), route);
+        input.depends_on = [output].into();
+        assert_eq!(element_selector(&board, &input), None);
+    }
 }

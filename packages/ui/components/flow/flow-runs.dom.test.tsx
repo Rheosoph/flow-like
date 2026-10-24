@@ -185,6 +185,20 @@ async function rerunFirst() {
 	await act(async () => rerun?.click());
 }
 
+test("a run's stored failure reason shows as one line with the full text as its title", async () => {
+	const reason = "Run exceeded grace period without completion event";
+	await render(async () => [
+		{ ...runAt(0), log_level: 4, error_message: reason },
+		{ ...runAt(1), error_message: null },
+	]);
+
+	const lines = container.querySelectorAll<HTMLElement>(`[title="${reason}"]`);
+	expect(lines).toHaveLength(1);
+	expect(lines[0].textContent).toBe(reason);
+	expect(lines[0].querySelector(".truncate")?.textContent).toBe(reason);
+	expect(container.textContent).toContain("run-version-1");
+});
+
 test("rerunning a remote event reads its hub payload and resolved start node", async () => {
 	const run = { ...runAt(0), is_remote: true };
 	const node = { id: "resolved-node", friendly_name: "Inbound email" } as INode;

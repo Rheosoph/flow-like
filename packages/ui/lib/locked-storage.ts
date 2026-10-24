@@ -25,6 +25,7 @@ export type LockedStorageAction =
 	| "download"
 	| "retention"
 	| "legal-hold"
+	| "auto-delete"
 	| "purge";
 
 export interface ILockedStorageRequest {
@@ -204,6 +205,19 @@ export class LockedStorageClient implements ILockedStorageState {
 		});
 	}
 
+	setLockedAutoDelete(
+		appId: string,
+		itemId: string,
+		versionId: string,
+		enabled: boolean,
+	): Promise<ILockedItemVersion> {
+		return this.post(appId, "auto-delete", {
+			item_id: itemId,
+			version_id: versionId,
+			enabled,
+		});
+	}
+
 	purgeLockedItem(
 		appId: string,
 		itemId: string,
@@ -227,6 +241,7 @@ function lockedUploadRequest(
 		size: file.size,
 		sha256: hash,
 		retention_days: options.retentionDays,
+		delete_after_retention: options.deleteAfterRetention || undefined,
 		comment: options.comment?.trim() || undefined,
 		metadata: options.metadata,
 	};

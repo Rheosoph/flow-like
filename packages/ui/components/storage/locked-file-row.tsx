@@ -88,7 +88,7 @@ export function LockedFileRow({
 							</Badge>
 							{latest && (
 								<span className="text-xs text-muted-foreground">
-									{retentionLabel(latest.retain_until, language, t)}
+									{retentionLabel(latest, language, t)}
 								</span>
 							)}
 							{legalHold && (

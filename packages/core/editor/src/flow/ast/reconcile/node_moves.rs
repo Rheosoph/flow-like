@@ -389,6 +389,10 @@ fn collect_statement_anchors(block: &Block, into_handlers: bool, out: &mut Vec<S
                 }
                 continue;
             }
+            Stmt::Collapse(group) => {
+                collect_statement_anchors(&group.body, into_handlers, out);
+                continue;
+            }
             Stmt::Local(_) | Stmt::Comment(_) => continue,
             _ => out.extend(stmt.anchor().map(str::to_string)),
         }

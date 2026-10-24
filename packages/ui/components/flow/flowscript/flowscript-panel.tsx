@@ -52,11 +52,13 @@ import {
 } from "../../../lib/monaco-key-guard";
 import type { IComment } from "../../../lib/schema/flow/board";
 import type { INode } from "../../../lib/schema/flow/node";
+import { holdTabDormancy } from "../../../lib/tab-dormancy";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	IApplyFlowScriptResponse,
 	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
+	IFlowScriptSourceSpan,
 } from "../../../state/backend-state/board-state";
 import { useSuppressFabBubble } from "../../../state/fab-bubble";
 import { useLogAggregation } from "../../../state/log-aggregation-state";
@@ -82,12 +84,16 @@ import {
 	parseFlowScriptAnchors,
 } from "./flowscript-anchors";
 import {
-	type DestructiveCommandSummary,
 	FlowScriptApplyPreviewChip,
 	FlowScriptApplyPreviewList,
 	destructiveCommandSummaries,
+	summarizeApplyImpact,
 	summarizeBoardCommands,
 } from "./flowscript-apply-preview";
+import {
+	type FlowScriptApplyReview,
+	FlowScriptApplyReviewDialog,
+} from "./flowscript-apply-review";
 import {
 	FlowScriptCommentOverlay,
 	type FlowScriptCommentThreadState,
@@ -101,6 +107,12 @@ import {
 	formatFlowScriptCommentPreview,
 	withFlowScriptCommentContent,
 } from "./flowscript-comments";
+import { FlowScriptDiagnosticList } from "./flowscript-diagnostic-list";
+import {
+	FLOWSCRIPT_RECONCILE_DIAGNOSTIC_OWNER,
+	flowScriptDiagnosticEntries,
+	sourceSpanToRange,
+} from "./flowscript-diagnostics";
 import { FlowScriptFileTabs, flowScriptFileTabs } from "./flowscript-file-tabs";
 import {
 	FLOWSCRIPT_DIAGNOSTIC_OWNER,
@@ -125,6 +137,7 @@ import {
 import {
 	type FlowScriptApplyReport,
 	canApplyFlowScript,
+	flowScriptApplyFailureReport,
 	flowScriptApplyReport,
 	isRejectedFlowScriptDraft,
 	resolveFlowScriptScope,
@@ -166,7 +179,10 @@ import {
 	deriveRunTraceLines,
 	runStatsKey,
 } from "./flowscript-run-trace";
-import { computeFlowScriptMarkersPreferWorker } from "./flowscript-worker-client";
+import {
+	computeFlowScriptMarkersPreferWorker,
+	flowScriptWorkerRequests,
+} from "./flowscript-worker-client";
 import type { FlowScriptFileStore } from "./use-flowscript-files";
 
 const DESTRUCTIVE_BLOCK_PREFIX = "FlowScript edit would delete ";
@@ -204,6 +220,7 @@ interface ApplyOptions {
 interface FlowScriptCheckState {
 	/** The exact text the response was computed for — stale responses are ignored. */
 	forText: string;
+	forBaseline: string;
 	response: ICheckFlowScriptReconcileResponse;
 }
 
@@ -290,20 +307,22 @@ function rustDiagnosticToMarker(
 	text: string,
 	diagnostic: IFlowScriptDiagnostic,
 ) {
+	const position = { line: diagnostic.line, column: diagnostic.col };
+	const range = sourceSpanToRange(text, { start: position, end: position });
+	if (!range) return;
 	const lineText = text.split("\n")[diagnostic.line - 1] ?? "";
 	// Underline the token at the error column (an identifier/number run) rather than the whole
 	// remainder of the line; fall back to a single character on a symbol or at end-of-line.
-	const token = /^[\w$]+/.exec(lineText.slice(diagnostic.col - 1))?.[0] ?? "";
+	const token =
+		/^[\w$]+/.exec(lineText.slice(range.startColumn - 1))?.[0] ?? "";
 	return {
 		message: diagnostic.message,
 		severity:
 			diagnostic.severity === "error"
 				? monaco.MarkerSeverity.Error
 				: monaco.MarkerSeverity.Warning,
-		startLineNumber: diagnostic.line,
-		startColumn: diagnostic.col,
-		endLineNumber: diagnostic.line,
-		endColumn: diagnostic.col + Math.max(token.length, 1),
+		...range,
+		endColumn: token ? range.startColumn + token.length : range.endColumn,
 	};
 }
 
@@ -323,6 +342,26 @@ function writeDimAnchorsPreference(dim: boolean): void {
 	} catch {
 		// Preference is a convenience; private mode etc. may block storage.
 	}
+}
+
+function FlowScriptLoadingStatus({
+	label,
+	description,
+}: {
+	label: string;
+	description: string;
+}) {
+	return (
+		<output
+			aria-live="polite"
+			aria-atomic="true"
+			className="flex flex-col items-center gap-2 p-6 text-center text-muted-foreground"
+		>
+			<Loader2Icon className="h-5 w-5 animate-spin" aria-hidden="true" />
+			<span className="text-sm font-medium">{label}</span>
+			<span className="max-w-xs text-xs">{description}</span>
+		</output>
+	);
 }
 
 export function FlowScriptPanel({
@@ -379,12 +418,11 @@ export function FlowScriptPanel({
 		() => getFlowScriptNamesTable() !== undefined,
 	);
 	useEffect(() => onFlowScriptNamesTableLoaded(() => setNamesReady(true)), []);
-	const [destructiveMessage, setDestructiveMessage] = useState<
-		string | undefined
-	>(undefined);
 	const [dimAnchors, setDimAnchors] = useState(readDimAnchorsPreference);
-	// Developer mode only: a live readout of the presence pipeline.
+	// Presence diagnostics require a development build and developer mode.
 	const { developerMode } = useDeveloperMode();
+	const presenceDebugAvailable =
+		process.env.NODE_ENV === "development" && developerMode;
 	const [presenceDebug, setPresenceDebug] = useState(() => {
 		try {
 			return localStorage.getItem(PRESENCE_DEBUG_STORAGE_KEY) === "on";
@@ -413,8 +451,8 @@ export function FlowScriptPanel({
 	const [checking, setChecking] = useState(false);
 	const [previewExpanded, setPreviewExpanded] = useState(false);
 	const [fullScreen, setFullScreen] = useState(false);
-	const [pendingDeletions, setPendingDeletions] = useState<
-		DestructiveCommandSummary[] | undefined
+	const [applyReview, setApplyReview] = useState<
+		FlowScriptApplyReview | undefined
 	>(undefined);
 	const [mergeConflicts, setMergeConflicts] = useState<
 		FlowScriptMergeConflict[]
@@ -448,6 +486,8 @@ export function FlowScriptPanel({
 
 	const dirtyRef = useRef(dirty);
 	dirtyRef.current = dirty;
+	// The draft lives in the board's stash, which a dormant background tab would unmount.
+	useEffect(() => (dirty ? holdTabDormancy() : undefined), [dirty]);
 	const textRef = useRef(text);
 	textRef.current = text;
 	const baselineRef = useRef(baseline);
@@ -548,6 +588,14 @@ export function FlowScriptPanel({
 		null,
 	);
 	const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+	// Whole-document loads bypass the controlled `value`: @monaco-editor/react records each prop
+	// change as a full-document edit on an uncapped undo stack, so every board change kept another
+	// copy of the script while the panel stayed open. `setValue` clears that history instead.
+	const replaceDocument = useCallback((next: string) => {
+		const model = editorRef.current?.getModel();
+		if (model && model.getValue() !== next) model.setValue(next);
+		setText(next);
+	}, []);
 	const monacoRef = useRef<Monaco | null>(null);
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	// Live re-render machinery: typing/composition state feeds the reload
@@ -694,10 +742,11 @@ export function FlowScriptPanel({
 		try {
 			const render = await fetchBoardRender();
 			if (loadTokenRef.current !== token) return undefined;
-			setText(render.flowscript);
+			replaceDocument(render.flowscript);
 			setBaseline(render.flowscript);
 			setScopeAnchors(render.scopeAnchors);
 			setBoardChangedBehindEdits(false);
+			setApplyReport((report) => (report?.failed ? undefined : report));
 			setMergeConflicts([]);
 			setRemoteTouched(new Set());
 			preMergeLocalTextRef.current = undefined;
@@ -713,7 +762,7 @@ export function FlowScriptPanel({
 		} finally {
 			if (loadTokenRef.current === token) setLoading(false);
 		}
-	}, [fetchBoardRender, t]);
+	}, [fetchBoardRender, t, replaceDocument]);
 
 	/** Puts the editor back where the file was left; the model swap lands one frame later. */
 	const restoreViewState = useCallback(
@@ -789,11 +838,11 @@ export function FlowScriptPanel({
 		loadTokenRef.current++;
 		setLoading(false);
 		setLoadError(undefined);
-		setText(buffer.text);
+		replaceDocument(buffer.text);
 		setBaseline(buffer.baseline);
 		setScopeAnchors(buffer.scopeAnchors);
 		restoreViewState(buffer.viewState, buffer.text);
-	}, [load, fileModeFile, restoreViewState]);
+	}, [load, fileModeFile, restoreViewState, replaceDocument]);
 
 	// Live re-render support: capture the cursor/selection/scroll as anchor-
 	// relative offsets before a reload or merge swaps the buffer; the effect on
@@ -1078,10 +1127,13 @@ export function FlowScriptPanel({
 				applying: true,
 			};
 			setApplying(true);
+			setApplyReport(undefined);
 			const draft = {
 				text: textRef.current,
 				baseline: baselineRef.current,
 			};
+			const submittedModel = editorRef.current?.getModel();
+			const submittedLoadToken = loadTokenRef.current;
 			try {
 				const result = await onApplyFlowScript(draft.text, {
 					allowDeletions,
@@ -1091,13 +1143,27 @@ export function FlowScriptPanel({
 					scopeAnchors: scopeAnchorsRef.current,
 					file: applyFileRef.current,
 				});
-				if (!result) return;
+				if (
+					editorRef.current?.getModel() !== submittedModel ||
+					loadTokenRef.current !== submittedLoadToken
+				)
+					return;
+				if (!result) {
+					throw new Error(
+						t("flowscriptApplyNoResult", "Apply returned no result."),
+					);
+				}
 
 				const blocked =
 					result.commands.length === 0 &&
 					result.diagnostics[0]?.startsWith(DESTRUCTIVE_BLOCK_PREFIX);
 				if (blocked) {
-					setDestructiveMessage(result.diagnostics[0]);
+					const impact = summarizeApplyImpact(result.board_commands ?? []);
+					setApplyReview(
+						impact.deletions.length || impact.moves.length
+							? { impact }
+							: { diagnostic: result.diagnostics[0] },
+					);
 					return;
 				}
 
@@ -1106,6 +1172,7 @@ export function FlowScriptPanel({
 						{
 							commandCount: result.commands.length,
 							diagnostics: result.diagnostics,
+							structuredDiagnostics: result.structured_diagnostics,
 						},
 						draft,
 					),
@@ -1119,8 +1186,18 @@ export function FlowScriptPanel({
 				) {
 					await load();
 				}
-			} catch {
-				// applyFlowScript already surfaced the error via toast
+			} catch (error) {
+				if (
+					editorRef.current?.getModel() !== submittedModel ||
+					loadTokenRef.current !== submittedLoadToken
+				)
+					return;
+				setApplyReport(
+					flowScriptApplyFailureReport(
+						error,
+						t("flowscriptApplyUnknownError", "Unknown apply error"),
+					),
+				);
 			} finally {
 				applyStateRef.current = {
 					...applyStateRef.current,
@@ -1157,18 +1234,15 @@ export function FlowScriptPanel({
 		);
 	}, [t]);
 
-	// Apply entry point: when the current reconcile preview shows deletions, ask
-	// first (naming what gets deleted) instead of round-tripping into the server-side
-	// destructive block. A stale/absent preview falls through to that block.
+	// A current deletion preview can be reviewed before applying. Move-only plans
+	// use the server's gate, which knows whether a move only changes visual grouping.
 	const requestApply = useCallback(() => {
 		warnOnClaimCollision();
 		const state = checkStateRef.current;
 		if (state && state.forText === textRef.current) {
-			const destructive = destructiveCommandSummaries(
-				state.response.board_commands ?? [],
-			);
-			if (destructive.length > 0) {
-				setPendingDeletions(destructive);
+			const impact = summarizeApplyImpact(state.response.board_commands ?? []);
+			if (impact.deletions.length > 0) {
+				setApplyReview({ impact });
 				return;
 			}
 		}
@@ -1415,6 +1489,7 @@ export function FlowScriptPanel({
 				? registerFlowScriptRunLens(monaco, {
 						editor,
 						getCatalogNodes: () => catalogRef.current,
+						workerRequests: flowScriptWorkerRequests,
 						getGate: () => runLensGateRef.current,
 						getLabels: () => runLensLabelsRef.current,
 						onRun: (nodeId, mode) => onRunEventNodeRef.current?.(nodeId, mode),
@@ -2239,12 +2314,15 @@ export function FlowScriptPanel({
 	// debounce tick — the reconcile dry-run that powers the apply preview chip.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: editorReady gates the first run once the editor mounts; namesReady re-lints once the names snapshot arrives; scopeAnchors and the board scope are read from refs (boardScopeKey re-lints when the modules actually changed)
 	useEffect(() => {
+		setChecking(false);
 		const monaco = monacoRef.current;
 		const editor = editorRef.current;
-		if (!monaco || !editor) return;
+		if (!monaco || !editor || loading) return;
 		const model = editor.getModel();
 		if (!model) return;
 		const source = text;
+		const sourceBaseline = baseline;
+		let cancelled = false;
 		const handle = setTimeout(async () => {
 			// Computed in the language worker for large documents (in-thread otherwise),
 			// so a keystroke burst never pays for linting on the UI thread.
@@ -2261,16 +2339,22 @@ export function FlowScriptPanel({
 				const lintDiagnostics =
 					await backend.boardState.lintFlowScript?.(source);
 				if (lintDiagnostics) {
-					nativeMarkers = lintDiagnostics.map((diagnostic) =>
-						rustDiagnosticToMarker(monaco, source, diagnostic),
-					);
+					nativeMarkers = lintDiagnostics.flatMap((diagnostic) => {
+						const marker = rustDiagnosticToMarker(monaco, source, diagnostic);
+						return marker ? [marker] : [];
+					});
 				}
 			} catch {
 				// Linting transport is best-effort; ignore failures.
 			}
 			// Bail if the model was swapped, or the text moved on while we awaited the
 			// native lint — otherwise we'd paint stale markers at now-wrong positions.
-			if (editor.getModel() !== model || model.getValue() !== source) return;
+			if (
+				cancelled ||
+				editor.getModel() !== model ||
+				model.getValue() !== source
+			)
+				return;
 			monaco.editor.setModelMarkers(model, FLOWSCRIPT_DIAGNOSTIC_OWNER, [
 				...clientMarkers,
 				...nativeMarkers,
@@ -2281,7 +2365,11 @@ export function FlowScriptPanel({
 			);
 			if (!check || applyStateRef.current.readOnly) return;
 			if (source === baselineRef.current) {
-				setCheckState({ forText: source, response: IN_SYNC_CHECK_RESPONSE });
+				setCheckState({
+					forText: source,
+					forBaseline: sourceBaseline,
+					response: IN_SYNC_CHECK_RESPONSE,
+				});
 				return;
 			}
 			setChecking(true);
@@ -2293,21 +2381,41 @@ export function FlowScriptPanel({
 					scopeAnchorsRef.current,
 					applyModuleIdRef.current,
 				);
-				if (editor.getModel() === model && model.getValue() === source) {
-					setCheckState({ forText: source, response });
+				if (
+					!cancelled &&
+					editor.getModel() === model &&
+					model.getValue() === source
+				) {
+					setCheckState({
+						forText: source,
+						forBaseline: sourceBaseline,
+						response,
+					});
 				}
 			} catch {
-				if (editor.getModel() === model && model.getValue() === source) {
+				if (
+					!cancelled &&
+					editor.getModel() === model &&
+					model.getValue() === source
+				) {
 					setCheckState(undefined);
 				}
 			} finally {
-				setChecking(false);
+				if (!cancelled) setChecking(false);
 			}
 		}, LINT_DEBOUNCE_MS);
-		return () => clearTimeout(handle);
+		return () => {
+			cancelled = true;
+			clearTimeout(handle);
+		};
 	}, [
 		text,
 		baseline,
+		loading,
+		appId,
+		boardId,
+		versionKey,
+		scopeMode,
 		catalogNodes,
 		backend,
 		editorReady,
@@ -2340,6 +2448,23 @@ export function FlowScriptPanel({
 			t("flowscriptCopiedToClipboard", "FlowScript copied to clipboard"),
 		);
 	}, [t]);
+
+	const copyApplyDetails = useCallback(async () => {
+		if (!applyReport) return;
+		try {
+			await navigator.clipboard.writeText(applyReport.diagnostics.join("\n"));
+			toast.success(
+				t("flowscriptApplyDetailsCopied", "Apply details copied to clipboard"),
+			);
+		} catch {
+			toast.error(
+				t(
+					"flowscriptApplyDetailsCopyFailed",
+					"Couldn't copy details. Select and copy the text in the panel.",
+				),
+			);
+		}
+	}, [applyReport, t]);
 
 	const requestReload = useCallback(() => {
 		if (dirtyRef.current) {
@@ -2380,8 +2505,98 @@ export function FlowScriptPanel({
 	const formatSupported = Boolean(backend.boardState.formatFlowScript);
 
 	const previewFresh =
-		typeof checkState !== "undefined" && checkState.forText === text;
+		typeof checkState !== "undefined" &&
+		checkState.forText === text &&
+		checkState.forBaseline === baseline;
 	const previewResponse = previewFresh ? checkState.response : undefined;
+	const applyDiagnosticsFresh =
+		applyReport?.draft?.text === text &&
+		applyReport.draft.baseline === baseline;
+	const applyDiagnosticEntries = useMemo(
+		() =>
+			flowScriptDiagnosticEntries(
+				applyReport?.diagnostics ?? [],
+				applyReport?.structuredDiagnostics,
+			),
+		[applyReport],
+	);
+	const previewDiagnosticEntries = useMemo(
+		() =>
+			flowScriptDiagnosticEntries(
+				previewResponse?.diagnostics ?? [],
+				previewResponse?.structured_diagnostics,
+			),
+		[previewResponse],
+	);
+	const revealDiagnostic = useCallback(
+		(span: IFlowScriptSourceSpan) => {
+			const editor = editorRef.current;
+			const range = sourceSpanToRange(text, span);
+			if (!editor || editor.getModel()?.getValue() !== text || !range) return;
+			canvasSyncAtRef.current = Date.now();
+			editor.setSelection(range);
+			editor.revealRangeInCenter(range);
+			editor.focus();
+		},
+		[text],
+	);
+
+	// Reconcile markers have their own owner so background syntax lint cannot erase them.
+	useEffect(() => {
+		if (!editorReady) return;
+		const monaco = monacoRef.current;
+		const model = editorRef.current?.getModel();
+		if (!monaco || !model) return;
+		const entries = applyDiagnosticsFresh
+			? applyDiagnosticEntries
+			: previewDiagnosticEntries;
+		const severity =
+			applyDiagnosticsFresh && !applyReport?.rejected
+				? monaco.MarkerSeverity.Warning
+				: monaco.MarkerSeverity.Error;
+		const markers =
+			loading || model.getValue() !== text
+				? []
+				: entries.flatMap((entry) =>
+						entry.exact
+							? entry.spans.flatMap((span) => {
+									const range = sourceSpanToRange(text, span);
+									return range
+										? [
+												{
+													...range,
+													severity,
+													message: entry.scope
+														? `${entry.scope}: ${entry.message}`
+														: entry.message,
+												},
+											]
+										: [];
+								})
+							: [],
+					);
+		monaco.editor.setModelMarkers(
+			model,
+			FLOWSCRIPT_RECONCILE_DIAGNOSTIC_OWNER,
+			markers,
+		);
+		return () => {
+			if (!model.isDisposed())
+				monaco.editor.setModelMarkers(
+					model,
+					FLOWSCRIPT_RECONCILE_DIAGNOSTIC_OWNER,
+					[],
+				);
+		};
+	}, [
+		editorReady,
+		loading,
+		text,
+		applyDiagnosticsFresh,
+		applyDiagnosticEntries,
+		applyReport?.rejected,
+		previewDiagnosticEntries,
+	]);
 	const previewCommands = previewResponse?.board_commands;
 	const previewCounts = useMemo(() => {
 		if (!previewResponse) return undefined;
@@ -2519,7 +2734,7 @@ export function FlowScriptPanel({
 								: t("dimAnchorComments", "Dim anchor comments")}
 						</TooltipContent>
 					</Tooltip>
-					{developerMode && (
+					{presenceDebugAvailable && (
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
@@ -2763,6 +2978,9 @@ export function FlowScriptPanel({
 				<FlowScriptApplyPreviewList
 					commands={previewCommands ?? []}
 					diagnostics={previewErrorCount > 0 ? previewResponse.diagnostics : []}
+					diagnosticEntries={previewDiagnosticEntries}
+					source={text}
+					onRevealDiagnostic={revealDiagnostic}
 					remoteTouchedIds={remoteTouched}
 				/>
 			)}
@@ -2770,7 +2988,25 @@ export function FlowScriptPanel({
 			<div className="relative min-h-0 flex-1">
 				{loading && (
 					<div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
-						<Loader2Icon className="h-5 w-5 animate-spin text-muted-foreground" />
+						<FlowScriptLoadingStatus
+							label={t("flowscriptPreparing", "Preparing FlowScript…")}
+							description={
+								scoped
+									? t(
+											"flowscriptLoadingSelection",
+											"Loading the selected nodes as editable text.",
+										)
+									: scopeMode.kind === "file" && !readOnly
+										? t(
+												"flowscriptLoadingFile",
+												"Loading the selected file from the board.",
+											)
+										: t(
+												"flowscriptLoadingBoard",
+												"Loading the board as editable text. Large boards can take longer to prepare.",
+											)
+							}
+						/>
 					</div>
 				)}
 				{loadError ? (
@@ -2788,6 +3024,20 @@ export function FlowScriptPanel({
 						language={FLOWSCRIPT_LANGUAGE_ID}
 						value={text}
 						onChange={(value) => setText(value ?? "")}
+						loading={
+							loading ? null : (
+								<FlowScriptLoadingStatus
+									label={t(
+										"flowscriptStartingEditor",
+										"Starting FlowScript editor…",
+									)}
+									description={t(
+										"flowscriptLoadingEditor",
+										"Preparing syntax highlighting and editor controls.",
+									)}
+								/>
+							)
+						}
 						theme={editorTheme}
 						onMount={handleEditorMount}
 						options={{
@@ -2813,7 +3063,7 @@ export function FlowScriptPanel({
 						}}
 					/>
 				)}
-				{developerMode && presenceDebug && !loadError && (
+				{presenceDebugAvailable && presenceDebug && !loadError && (
 					<FlowScriptPresenceDebug
 						awareness={awareness}
 						snapshot={presenceSnapshot}
@@ -2851,9 +3101,17 @@ export function FlowScriptPanel({
 			</div>
 
 			{applyReport && (
-				<div className="max-h-28 shrink-0 overflow-y-auto border-t px-3 py-2">
-					<div className="mb-1 flex items-center justify-between">
-						{applyReport.rejected ? (
+				<div
+					role={applyReport.failed || applyReport.rejected ? "alert" : "status"}
+					className="min-w-0 shrink-0 border-t px-3 py-2"
+				>
+					<div className="mb-1 flex items-center justify-between gap-2">
+						{applyReport.failed ? (
+							<span className="flex items-center gap-1.5 text-xs font-medium text-destructive">
+								<CircleXIcon className="h-3 w-3" />
+								{t("flowscriptApplyFailed", "Apply failed")}
+							</span>
+						) : applyReport.rejected ? (
 							<span className="flex items-center gap-1.5 text-xs font-medium text-destructive">
 								<CircleXIcon className="h-3 w-3" />
 								{t("flowscriptApplyRejectedErrors", {
@@ -2872,25 +3130,47 @@ export function FlowScriptPanel({
 								})}
 							</span>
 						)}
-						<Button
-							variant="ghost"
-							size="icon"
-							className="h-5 w-5"
-							onClick={() => setApplyReport(undefined)}
-						>
-							<XIcon className="h-3 w-3" />
-						</Button>
-					</div>
-					<ul className="space-y-1">
-						{applyReport.diagnostics.map((diagnostic) => (
-							<li
-								key={diagnostic}
-								className="text-xs text-muted-foreground break-words"
+						<div className="flex shrink-0 items-center gap-1">
+							<Button
+								variant="ghost"
+								size="sm"
+								className="h-6 gap-1 px-2 text-xs"
+								onClick={() => void copyApplyDetails()}
 							>
-								{diagnostic}
-							</li>
-						))}
-					</ul>
+								<CopyIcon className="h-3 w-3" />
+								{t("flowscriptApplyCopyDetails", "Copy details")}
+							</Button>
+							<Button
+								variant="ghost"
+								size="icon"
+								className="h-5 w-5"
+								aria-label={t("dismiss", "Dismiss")}
+								onClick={() => setApplyReport(undefined)}
+							>
+								<XIcon className="h-3 w-3" />
+							</Button>
+						</div>
+					</div>
+					<section
+						aria-label={t("flowscriptApplyDetails", "Apply details")}
+						// biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to scroll long error messages.
+						tabIndex={0}
+						className="max-h-28 select-text overflow-y-auto"
+					>
+						<FlowScriptDiagnosticList
+							entries={applyDiagnosticEntries}
+							source={applyReport.draft?.text}
+							onReveal={applyDiagnosticsFresh ? revealDiagnostic : undefined}
+						/>
+						{applyReport.failed && (
+							<p className="mt-1 text-xs text-muted-foreground">
+								{t(
+									"flowscriptApplyFailedDraftPreserved",
+									"Your draft is preserved. The board may have changed; copy your draft before refreshing.",
+								)}
+							</p>
+						)}
+					</section>
 				</div>
 			)}
 
@@ -2898,7 +3178,7 @@ export function FlowScriptPanel({
 				<div className="flex shrink-0 items-center justify-between gap-2 border-t px-3 py-2">
 					<span
 						className={
-							rejectedDraft &&
+							(rejectedDraft || applyReport?.failed) &&
 							!boardChangedBehindEdits &&
 							mergeConflicts.length === 0
 								? "text-[11px] text-destructive"
@@ -2920,12 +3200,17 @@ export function FlowScriptPanel({
 											"flowscriptApplyBlockedFixErrors",
 											"Apply blocked — fix the errors above",
 										)
-									: dirty
+									: applyReport?.failed
 										? t(
-												"unappliedChangesSToApply",
-												"Unapplied changes — ⌘S to apply",
+												"flowscriptApplyFailedSeeDetails",
+												"Apply failed. See details above.",
 											)
-										: t("inSyncWithBoard", "In sync with board")}
+										: dirty
+											? t(
+													"unappliedChangesSToApply",
+													"Unapplied changes — ⌘S to apply",
+												)
+											: t("inSyncWithBoard", "In sync with board")}
 					</span>
 					<div className="flex items-center gap-2">
 						<Button
@@ -3006,93 +3291,14 @@ export function FlowScriptPanel({
 				</AlertDialogContent>
 			</AlertDialog>
 
-			<AlertDialog
-				open={typeof pendingDeletions !== "undefined"}
-				onOpenChange={(open) => {
-					if (!open) setPendingDeletions(undefined);
+			<FlowScriptApplyReviewDialog
+				review={applyReview}
+				onClose={() => setApplyReview(undefined)}
+				onConfirm={() => {
+					setApplyReview(undefined);
+					void runApply(true);
 				}}
-			>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>
-							{t(
-								"thisEditDeletesExistingBoardItems",
-								"This edit deletes existing board items",
-							)}
-						</AlertDialogTitle>
-						<AlertDialogDescription asChild>
-							<div>
-								<p>
-									{t("flowscriptApplyDeletes", {
-										defaultValue_one:
-											"Applying this FlowScript deletes {{count}} existing board item:",
-										defaultValue_other:
-											"Applying this FlowScript deletes {{count}} existing board items:",
-										count: pendingDeletions?.length ?? 0,
-									})}
-								</p>
-								<ul className="mt-2 max-h-40 list-disc space-y-1 overflow-y-auto pl-5">
-									{pendingDeletions?.map((deletion) => (
-										<li
-											key={`${deletion.kind}-${deletion.label}`}
-											className="break-words"
-										>
-											{deletion.label}
-										</li>
-									))}
-								</ul>
-							</div>
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>
-							{t("keepEverything", "Keep everything")}
-						</AlertDialogCancel>
-						<AlertDialogAction
-							onClick={() => {
-								setPendingDeletions(undefined);
-								void runApply(true);
-							}}
-						>
-							{t("applyWithDeletions", "Apply with deletions")}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
-
-			<AlertDialog
-				open={typeof destructiveMessage !== "undefined"}
-				onOpenChange={(open) => {
-					if (!open) setDestructiveMessage(undefined);
-				}}
-			>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>
-							{t(
-								"thisEditDeletesExistingBoardItems",
-								"This edit deletes existing board items",
-							)}
-						</AlertDialogTitle>
-						<AlertDialogDescription className="break-words">
-							{destructiveMessage}
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>
-							{t("keepEverything", "Keep everything")}
-						</AlertDialogCancel>
-						<AlertDialogAction
-							onClick={() => {
-								setDestructiveMessage(undefined);
-								void runApply(true);
-							}}
-						>
-							{t("applyWithDeletions", "Apply with deletions")}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
+			/>
 		</div>
 	);
 }

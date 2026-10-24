@@ -6,7 +6,10 @@ use crate::{
         },
     },
     notification_images::prepare_notification_icon,
-    routes::app::events::db::decrypt_token,
+    routes::app::{
+        connection::{app_meta_lookup, graph::presign_media},
+        events::db::decrypt_token,
+    },
     state::AppState,
 };
 use flow_like::hub::{PushNotificationProviderType, PushNotificationsConfig};
@@ -94,6 +97,52 @@ impl PushDispatchStatus {
 pub struct DispatchNotificationResult {
     pub id: String,
     pub push_status: PushDispatchStatus,
+}
+
+/// The app a workflow notification comes from. Apple devices show it as the sender,
+/// so each app's notifications stack under its own name instead of Flow Like.
+#[derive(Clone, Debug)]
+struct PushSender {
+    name: String,
+    icon: Option<String>,
+}
+
+const MAX_PUSH_SENDER_NAME_BYTES: usize = 128;
+
+/// Only Apple targets present a sender, so other deliveries skip the lookup.
+async fn push_sender(
+    state: &AppState,
+    input: &DispatchNotificationInput,
+    targets: &[push_notification_target::Model],
+) -> Option<PushSender> {
+    let app_id = input
+        .app_id
+        .as_ref()
+        .filter(|_| matches!(input.notification_type, NotificationType::Workflow))
+        .filter(|_| {
+            targets
+                .iter()
+                .any(|target| target.platform == PushNotificationTargetPlatform::Ios)
+        })?;
+    let mut metas = match app_meta_lookup(state, std::slice::from_ref(app_id)).await {
+        Ok(metas) => metas,
+        Err(error) => {
+            tracing::warn!(%error, %app_id, "Could not load the app name for a push notification");
+            return None;
+        }
+    };
+    let mut meta = metas.remove(app_id)?;
+    let name = meta.name.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    meta.banner = None;
+    let icon = presign_media(state, &HashMap::from([(app_id.clone(), meta)]))
+        .await
+        .remove(app_id)
+        .and_then(|(icon, _)| icon)
+        .filter(|url| is_push_image_url(url));
+    Some(PushSender { name, icon })
 }
 
 const DELIVERY_METADATA_KEY: &str = "_flow_like_push_delivery";
@@ -539,6 +588,8 @@ async fn push_to_user(
         .all(&state.db)
         .await?;
 
+    let sender = push_sender(state, input, &targets).await;
+
     let mut accepted = 0;
     let mut failed = 0;
     for target in targets {
@@ -563,12 +614,21 @@ async fn push_to_user(
 
         let result = match provider {
             PushNotificationTargetProvider::Fcm => {
-                send_via_fcm(state, config, &target, &token, notification_id, input).await
+                send_via_fcm(
+                    state,
+                    config,
+                    &target,
+                    &token,
+                    notification_id,
+                    input,
+                    sender.as_ref(),
+                )
+                .await
             }
             PushNotificationTargetProvider::AwsSns => {
                 #[cfg(feature = "aws")]
                 {
-                    send_via_aws_sns(state, &target, notification_id, input).await
+                    send_via_aws_sns(state, &target, notification_id, input, sender.as_ref()).await
                 }
                 #[cfg(not(feature = "aws"))]
                 {
@@ -580,7 +640,14 @@ async fn push_to_user(
             PushNotificationTargetProvider::AzureNotificationHubs => {
                 #[cfg(feature = "azure")]
                 {
-                    send_via_azure_notification_hubs(config, &target, notification_id, input).await
+                    send_via_azure_notification_hubs(
+                        config,
+                        &target,
+                        notification_id,
+                        input,
+                        sender.as_ref(),
+                    )
+                    .await
                 }
                 #[cfg(not(feature = "azure"))]
                 {
@@ -740,6 +807,12 @@ fn remove_payload_keys(value: &mut serde_json::Value, keys: &[&str]) {
     }
 }
 
+fn has_payload_key(value: &serde_json::Value, key: &str) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.contains_key(key) || object.values().any(|child| has_payload_key(child, key))
+    })
+}
+
 fn shorten_payload_preview(value: &mut serde_json::Value, title_bytes: usize, body_bytes: usize) {
     if let Some(object) = value.as_object_mut() {
         for (key, child) in object.iter_mut() {
@@ -764,10 +837,12 @@ fn fit_push_payload(mut payload: serde_json::Value) -> flow_like_types::Result<s
     if serde_json::to_vec(&payload)?.len() <= MAX_PUSH_PAYLOAD_BYTES {
         return Ok(payload);
     }
-    remove_payload_keys(
-        &mut payload,
-        &["icon", "image", "fcm_options", "mutable-content"],
-    );
+    let mut media = vec!["icon", "image", "fcm_options", "app_icon"];
+    // The service extension still has to run to show the app as sender.
+    if !has_payload_key(&payload, "app_name") {
+        media.push("mutable-content");
+    }
+    remove_payload_keys(&mut payload, &media);
     for (title_bytes, body_bytes) in [(128, 512), (64, 128)] {
         if serde_json::to_vec(&payload)?.len() <= MAX_PUSH_PAYLOAD_BYTES {
             return Ok(payload);
@@ -782,10 +857,29 @@ fn fit_push_payload(mut payload: serde_json::Value) -> flow_like_types::Result<s
     Ok(payload)
 }
 
+/// Fields the iOS notification service extension reads to present the app as sender.
+/// `thread-id` gives each app its own notification stack.
+fn apply_apns_sender(
+    payload: &mut serde_json::Value,
+    input: &DispatchNotificationInput,
+    sender: Option<&PushSender>,
+) {
+    let (Some(sender), Some(app_id)) = (sender, input.app_id.as_deref()) else {
+        return;
+    };
+    payload["aps"]["thread-id"] = serde_json::json!(app_id);
+    payload["aps"]["mutable-content"] = serde_json::json!(1);
+    payload["app_name"] = serde_json::json!(push_text(&sender.name, MAX_PUSH_SENDER_NAME_BYTES));
+    if let Some(icon) = &sender.icon {
+        payload["app_icon"] = serde_json::json!(icon);
+    }
+}
+
 #[cfg(any(feature = "aws", feature = "azure", test))]
 fn apns_payload(
     input: &DispatchNotificationInput,
     data: HashMap<String, String>,
+    sender: Option<&PushSender>,
 ) -> flow_like_types::Result<serde_json::Value> {
     let mut payload = serde_json::json!({
         "aps": {
@@ -805,6 +899,7 @@ fn apns_payload(
         payload["aps"]["mutable-content"] = serde_json::json!(1);
         payload["image"] = serde_json::json!(image);
     }
+    apply_apns_sender(&mut payload, input, sender);
     fit_push_payload(payload)
 }
 
@@ -988,6 +1083,7 @@ async fn send_via_fcm(
     token: &str,
     notification_id: &str,
     input: &DispatchNotificationInput,
+    sender: Option<&PushSender>,
 ) -> flow_like_types::Result<()> {
     let fcm = config
         .fcm
@@ -1002,7 +1098,7 @@ async fn send_via_fcm(
         fcm.project_id
     );
 
-    let body = fcm_message_body(config, target, token, notification_id, input)?;
+    let body = fcm_message_body(config, target, token, notification_id, input, sender)?;
 
     const MAX_RETRIES: u32 = 2;
     let mut attempt = 0;
@@ -1049,6 +1145,7 @@ fn fcm_message_body(
     token: &str,
     notification_id: &str,
     input: &DispatchNotificationInput,
+    sender: Option<&PushSender>,
 ) -> flow_like_types::Result<serde_json::Value> {
     let data = notification_data(notification_id, target, input);
     let apns_data = data.clone();
@@ -1118,6 +1215,7 @@ fn fcm_message_body(
                 "image": image_url,
             });
         }
+        apply_apns_sender(&mut apns["payload"], input, sender);
 
         body["message"]["apns"] = apns;
         // The native client reads custom fields from APNs userInfo. Keeping a
@@ -1258,6 +1356,7 @@ async fn send_via_aws_sns(
     target: &push_notification_target::Model,
     notification_id: &str,
     input: &DispatchNotificationInput,
+    sender: Option<&PushSender>,
 ) -> flow_like_types::Result<()> {
     let endpoint_arn = target
         .endpoint_arn
@@ -1267,6 +1366,7 @@ async fn send_via_aws_sns(
         target,
         input,
         notification_string_data(notification_id, target, input),
+        sender,
     )?;
 
     aws_sdk_sns::Client::new(&state.aws_client)
@@ -1308,6 +1408,7 @@ fn aws_sns_payload(
     target: &push_notification_target::Model,
     input: &DispatchNotificationInput,
     data: HashMap<String, String>,
+    sender: Option<&PushSender>,
 ) -> flow_like_types::Result<String> {
     let default_body = push_text(input.description.as_deref().unwrap_or(&input.title), 1024);
     let payload = match target.platform {
@@ -1333,7 +1434,7 @@ fn aws_sns_payload(
             })
         }
         PushNotificationTargetPlatform::Ios => {
-            let apns = apns_payload(input, data)?;
+            let apns = apns_payload(input, data, sender)?;
 
             serde_json::json!({
                 "default": default_body,
@@ -1419,6 +1520,7 @@ async fn send_via_azure_notification_hubs(
     target: &push_notification_target::Model,
     notification_id: &str,
     input: &DispatchNotificationInput,
+    sender: Option<&PushSender>,
 ) -> flow_like_types::Result<()> {
     let azure = config
         .azure_notification_hubs
@@ -1453,7 +1555,12 @@ async fn send_via_azure_notification_hubs(
             "ServiceBusNotification-Tags",
             format!("device:{}", target.device_id),
         )
-        .body(azure_message_payload(target, notification_id, input)?)
+        .body(azure_message_payload(
+            target,
+            notification_id,
+            input,
+            sender,
+        )?)
         .send()
         .await?;
 
@@ -1475,6 +1582,7 @@ fn azure_message_payload(
     target: &push_notification_target::Model,
     notification_id: &str,
     input: &DispatchNotificationInput,
+    sender: Option<&PushSender>,
 ) -> flow_like_types::Result<String> {
     let data = notification_data(notification_id, target, input);
 
@@ -1501,6 +1609,7 @@ fn azure_message_payload(
             let apns = apns_payload(
                 input,
                 notification_string_data(notification_id, target, input),
+                sender,
             )?;
             Ok(serde_json::to_string(&apns)?)
         }
@@ -1966,6 +2075,7 @@ mod tests {
             "fcm-token",
             "notification-id",
             &notification_input(),
+            None,
         )
         .unwrap();
 
@@ -1987,6 +2097,7 @@ mod tests {
             "fcm-token",
             "notification-id",
             &notification_input(),
+            None,
         )
         .unwrap();
 
@@ -2009,6 +2120,7 @@ mod tests {
             "fcm-token",
             "notification-id",
             &notification_input(),
+            None,
         )
         .unwrap();
 
@@ -2072,7 +2184,7 @@ mod tests {
         input.image = None;
         input.icon = Some(format!("data:image/png;base64,{}", "a".repeat(50_000)));
         let target = target(PushNotificationTargetPlatform::Ios);
-        let body = fcm_message_body(&push_config(), &target, "token", "id", &input).unwrap();
+        let body = fcm_message_body(&push_config(), &target, "token", "id", &input, None).unwrap();
         let encoded = serde_json::to_string(&body).unwrap();
         assert!(!encoded.contains("base64"));
         assert!(body["message"]["data"].get("icon").is_none());
@@ -2089,6 +2201,7 @@ mod tests {
             "token",
             "id",
             &input,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2120,8 +2233,15 @@ mod tests {
             PushNotificationTargetPlatform::Ios,
             PushNotificationTargetPlatform::Android,
         ] {
-            let body =
-                fcm_message_body(&push_config(), &target(platform), "token", "id", &input).unwrap();
+            let body = fcm_message_body(
+                &push_config(),
+                &target(platform),
+                "token",
+                "id",
+                &input,
+                None,
+            )
+            .unwrap();
             assert!(serde_json::to_vec(&body).unwrap().len() <= MAX_PUSH_PAYLOAD_BYTES);
             assert!(
                 !body["message"]["notification"]["title"]
@@ -2136,7 +2256,8 @@ mod tests {
                 &target(PushNotificationTargetPlatform::Ios),
                 &"a".repeat(5000),
                 "id",
-                &input
+                &input,
+                None
             )
             .is_err()
         );
@@ -2155,7 +2276,8 @@ mod tests {
             PushNotificationTargetPlatform::Android,
         ] {
             let target = target(platform.clone());
-            let body = fcm_message_body(&push_config(), &target, "token", "id", &input).unwrap();
+            let body =
+                fcm_message_body(&push_config(), &target, "token", "id", &input, None).unwrap();
             let data = if platform == PushNotificationTargetPlatform::Ios {
                 &body["message"]["apns"]["payload"]
             } else {
@@ -2173,7 +2295,8 @@ mod tests {
                 &target(PushNotificationTargetPlatform::Ios),
                 "token",
                 "id",
-                &input
+                &input,
+                None
             )
             .is_err()
         );
@@ -2184,7 +2307,8 @@ mod tests {
                     "id",
                     &target(PushNotificationTargetPlatform::Ios),
                     &input
-                )
+                ),
+                None
             )
             .is_err()
         );
@@ -2193,10 +2317,106 @@ mod tests {
     #[test]
     fn apns_payload_includes_image_for_native_providers() {
         let input = notification_input();
-        let payload = apns_payload(&input, HashMap::new()).unwrap();
+        let payload = apns_payload(&input, HashMap::new(), None).unwrap();
         assert_eq!(payload["aps"]["mutable-content"], 1);
         assert_eq!(payload["image"], "https://cdn.example.com/image.png");
         assert!(serde_json::to_vec(&payload).unwrap().len() <= MAX_PUSH_PAYLOAD_BYTES);
+    }
+
+    fn sender() -> PushSender {
+        PushSender {
+            name: "Momo".to_string(),
+            icon: Some("https://cdn.example.com/app-icon.webp?signature=abc".to_string()),
+        }
+    }
+
+    #[test]
+    fn app_notifications_name_the_app_as_sender_on_ios() {
+        let mut input = notification_input();
+        input.image = None;
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Ios),
+            "token",
+            "id",
+            &input,
+            Some(&sender()),
+        )
+        .unwrap();
+        let payload = &body["message"]["apns"]["payload"];
+        assert_eq!(payload["app_name"], "Momo");
+        assert_eq!(
+            payload["app_icon"],
+            "https://cdn.example.com/app-icon.webp?signature=abc"
+        );
+        assert_eq!(payload["aps"]["thread-id"], "app-id");
+        assert_eq!(payload["aps"]["mutable-content"], 1);
+        assert_eq!(body["message"]["notification"]["title"], "Build finished");
+
+        let native = apns_payload(&input, HashMap::new(), Some(&sender())).unwrap();
+        assert_eq!(native["app_name"], "Momo");
+        assert_eq!(native["aps"]["thread-id"], "app-id");
+    }
+
+    #[test]
+    fn notifications_without_a_sender_stay_under_flow_like() {
+        let mut input = notification_input();
+        input.image = None;
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Ios),
+            "token",
+            "id",
+            &input,
+            None,
+        )
+        .unwrap();
+        let payload = &body["message"]["apns"]["payload"];
+        assert!(payload.get("app_name").is_none());
+        assert!(payload["aps"].get("thread-id").is_none());
+        assert!(payload["aps"].get("mutable-content").is_none());
+
+        input.app_id = None;
+        let payload = apns_payload(&input, HashMap::new(), Some(&sender())).unwrap();
+        assert!(payload.get("app_name").is_none());
+
+        let android = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Android),
+            "token",
+            "id",
+            &notification_input(),
+            Some(&sender()),
+        )
+        .unwrap();
+        assert!(!serde_json::to_string(&android).unwrap().contains("Momo"));
+    }
+
+    #[test]
+    fn oversized_payloads_drop_media_but_keep_the_sender() {
+        let mut input = notification_input();
+        input.title = "é".repeat(1000);
+        input.description = Some("a".repeat(10_000));
+        input.image = Some(format!("https://cdn.example.com/{}.png", "a".repeat(1800)));
+        input.link = Some(format!("/{}", "a".repeat(1500)));
+        let mut sender = sender();
+        sender.name = "名".repeat(200);
+        let body = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Ios),
+            "token",
+            "id",
+            &input,
+            Some(&sender),
+        )
+        .unwrap();
+        let payload = &body["message"]["apns"]["payload"];
+        assert!(serde_json::to_vec(&body).unwrap().len() <= MAX_PUSH_PAYLOAD_BYTES);
+        assert!(payload.get("app_icon").is_none());
+        assert!(body["message"]["apns"].get("fcm_options").is_none());
+        assert_eq!(payload["aps"]["mutable-content"], 1);
+        let name = payload["app_name"].as_str().unwrap();
+        assert!(!name.is_empty() && name.len() <= MAX_PUSH_SENDER_NAME_BYTES);
     }
 
     #[cfg(feature = "aws")]
@@ -2209,6 +2429,7 @@ mod tests {
                 &target,
                 &input,
                 notification_string_data("id", &target, &input),
+                None,
             )
             .unwrap(),
         )
@@ -2229,6 +2450,7 @@ mod tests {
                 &target(PushNotificationTargetPlatform::Ios),
                 "id",
                 &notification_input(),
+                None,
             )
             .unwrap(),
         )

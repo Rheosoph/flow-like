@@ -12,6 +12,17 @@ Add a **Chat UI** event to an app to expose its flow as a chat interface. See [E
 This capture uses a synthetic conversation to show the message layout, table,
 response controls, and composer. It does not show a live model run.
 
+## Starter suggestions
+
+Each Chat UI event has its own starter suggestions. In the event configuration,
+open **Tools & starters** and edit **Example Messages**. Press Enter after each
+message, then save the event. Use prompts that fit the app's purpose.
+
+The welcome screen initially shows up to four suggestions and filters the configured list
+as the user types. Selecting a suggestion fills the message box so the user can
+edit it before sending. Leave the list empty to hide suggestions. Events with
+no configured messages also hide suggestions.
+
 ## Appearance
 
 The event configuration provides:

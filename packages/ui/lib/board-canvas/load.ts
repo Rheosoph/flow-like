@@ -7,6 +7,17 @@ export interface BoardCanvasHandle {
 	set_lod(enabled: boolean): void;
 	set_layer(layer: "all" | "edges" | "nodes"): void;
 	set_fonts(regular: Uint8Array, medium: Uint8Array): void;
+	set_icon?(
+		key: string,
+		width: number,
+		height: number,
+		rgba: Uint8Array,
+		tint: boolean,
+	): void;
+	/** `{ nodes: Record<id, NodeStatus>, motion }`, see `collectNodeStatus`. */
+	set_status?(status: string): void;
+	/** Each run's last activity text and tone, keyed by run id. */
+	set_activity?(activity: string): void;
 	pulse?(): void;
 	stop_pulse?(): void;
 	stats(): unknown;

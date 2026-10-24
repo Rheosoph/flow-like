@@ -4,7 +4,7 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 
 use crate::web::api::HttpResponse;
 
@@ -64,9 +64,9 @@ impl NodeLogic for ToBytesNode {
         context.deactivate_exec_pin("exec_out").await?;
         let response: HttpResponse = context.evaluate_pin("response").await?;
 
-        let bytes = response.to_bytes();
-
-        context.set_pin_value("bytes", json!(bytes)).await?;
+        context
+            .set_pin_bytes("bytes", response.body.unwrap_or_default())
+            .await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

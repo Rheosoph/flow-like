@@ -83,6 +83,7 @@ pub struct LockedUploadFields {
     pub folder: Option<String>,
     pub name: Option<String>,
     pub retention_days: Option<u32>,
+    pub delete_after_retention: bool,
     pub comment: Option<String>,
     pub metadata: Option<LockedMetadata>,
     pub if_exists: Option<LockedIfExists>,
@@ -108,6 +109,7 @@ impl LockedUploadFields {
             size: file.size,
             sha256: file.sha256.clone(),
             retention_days: self.retention_days,
+            delete_after_retention: self.delete_after_retention,
             comment: self.comment,
             metadata: self.metadata,
             if_exists: self.if_exists,
@@ -462,6 +464,7 @@ mod tests {
             scope: Some(LockedScope::User),
             folder: Some("invoices/2026".to_owned()),
             retention_days: Some(3650),
+            delete_after_retention: true,
             metadata: Some(metadata),
             if_exists: Some(LockedIfExists::NewVersion),
             ..Default::default()
@@ -477,6 +480,7 @@ mod tests {
                 "size": 42,
                 "sha256": "ab".repeat(32),
                 "retention_days": 3650,
+                "delete_after_retention": true,
                 "metadata": { "customer": "ACME" },
                 "if_exists": "new_version",
             })

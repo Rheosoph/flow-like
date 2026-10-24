@@ -63,6 +63,14 @@ async fn ensure_endpoint_allowed(
     .await
 }
 
+/// Product binaries compile rustls with both ring and aws-lc-rs, so rustls cannot pick a
+/// process-wide provider itself, and drivers that build their TLS config internally
+/// panic until one is installed. Mirrors the catalog-web TLS nodes.
+#[cfg(all(feature = "execute", any(feature = "postgres", feature = "mysql")))]
+fn ensure_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 // ============================================================================
 // PostgreSQL Node
 // ============================================================================
@@ -241,12 +249,14 @@ impl NodeLogic for RegisterPostgresNode {
             params.insert("db".to_string(), database.clone());
             params.insert("sslmode".to_string(), ssl_mode.clone());
 
+            ensure_crypto_provider();
             let pool = PostgresConnectionPool::new(to_secret_map(params))
                 .await
                 .map_err(|e| flow_like_types::anyhow!("PostgreSQL connection failed: {}", e))?;
 
             let factory = PostgresTableFactory::new(Arc::new(pool));
-            let table_ref = TableReference::full(database.clone(), schema, source_table.clone());
+            let table_ref =
+                TableReference::full(database.clone(), schema.clone(), source_table.clone());
 
             let table_provider = if readonly {
                 factory.table_provider(table_ref).await
@@ -257,9 +267,17 @@ impl NodeLogic for RegisterPostgresNode {
                 flow_like_types::anyhow!("Failed to create PostgreSQL table provider: {}", e)
             })?;
 
+            // The provider reads columns from the catalog, so a missing table comes back
+            // as a table without columns instead of an error.
+            if table_provider.schema().fields().is_empty() {
+                return Err(flow_like_types::anyhow!(
+                    "PostgreSQL table '{schema}.{source_table}' was not found in database \
+                     '{database}', or none of its columns has a supported type"
+                ));
+            }
+
             cached_session
-                .ctx
-                .register_table(&table_name, table_provider)
+                .replace_table(&table_name, table_provider)
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -464,13 +482,15 @@ impl NodeLogic for RegisterMysqlNode {
             params.insert("connection_string".to_string(), connection_string);
             params.insert("sslmode".to_string(), ssl_mode.clone());
 
+            ensure_crypto_provider();
             let pool = MySQLConnectionPool::new(mysql_to_secret_map(params))
                 .await
                 .map_err(|e| flow_like_types::anyhow!("MySQL connection failed: {}", e))?;
 
+            // The pool is already bound to `database`, and the provider's writer resolves
+            // the table by its full display name, so only a bare name reads and writes.
             let factory = MySQLTableFactory::new(Arc::new(pool));
-            let table_ref =
-                TableReference::full(database.clone(), "".to_string(), source_table.clone());
+            let table_ref = TableReference::bare(source_table.clone());
 
             let table_provider = if readonly {
                 factory.table_provider(table_ref).await
@@ -482,8 +502,7 @@ impl NodeLogic for RegisterMysqlNode {
             })?;
 
             cached_session
-                .ctx
-                .register_table(&table_name, table_provider)
+                .replace_table(&table_name, table_provider)
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -667,8 +686,7 @@ impl NodeLogic for RegisterSqliteNode {
             })?;
 
             cached_session
-                .ctx
-                .register_table(&table_name, table_provider)
+                .replace_table(&table_name, table_provider)
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -847,8 +865,7 @@ impl NodeLogic for RegisterDuckdbNode {
             })?;
 
             cached_session
-                .ctx
-                .register_table(&table_name, table_provider)
+                .replace_table(&table_name, table_provider)
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -1050,15 +1067,20 @@ impl NodeLogic for RegisterClickhouseNode {
             if !password.is_empty() {
                 params.insert("password".to_string(), password);
             }
+            // ClickHouse otherwise ships String columns as Arrow Binary, so text surfaces
+            // in rows as byte arrays.
+            params.insert(
+                "option_output_format_arrow_string_as_string".to_string(),
+                "1".to_string(),
+            );
 
             let pool = ClickHouseConnectionPool::new(clickhouse_to_secret_map(params))
                 .await
                 .map_err(|e| flow_like_types::anyhow!("ClickHouse connection failed: {}", e))?;
 
             let factory = ClickHouseTableFactory::new(Arc::new(pool));
-            let table_ref = flow_like_storage::datafusion::common::TableReference::full(
+            let table_ref = flow_like_storage::datafusion::common::TableReference::partial(
                 database.clone(),
-                "".to_string(),
                 source_table.clone(),
             );
 
@@ -1074,8 +1096,7 @@ impl NodeLogic for RegisterClickhouseNode {
             })?;
 
             cached_session
-                .ctx
-                .register_table(&table_name, table_provider)
+                .replace_table(&table_name, table_provider)
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -1337,8 +1358,7 @@ impl NodeLogic for RegisterOracleNode {
             })?;
 
             cached_session
-                .ctx
-                .register_table(&table_name, table_provider)
+                .replace_table(&table_name, table_provider)
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -1356,6 +1376,270 @@ impl NodeLogic for RegisterOracleNode {
             context.activate_exec_pin("exec_out").await?;
             Ok(())
         }
+    }
+}
+
+// ============================================================================
+// Generic ODBC Node
+// ============================================================================
+
+/// ODBC connection-string values containing `;`, braces or edge whitespace must be
+/// wrapped in braces, with closing braces doubled.
+#[cfg(feature = "odbc")]
+fn odbc_attribute(key: &str, value: &str) -> String {
+    if value.contains([';', '{', '}']) || value.trim() != value {
+        format!("{key}={{{}}}", value.replace('}', "}}"))
+    } else {
+        format!("{key}={value}")
+    }
+}
+
+/// The resolved inputs of Register ODBC Table.
+#[cfg(feature = "execute")]
+#[cfg_attr(not(feature = "odbc"), allow(dead_code))]
+struct OdbcSource {
+    connection_string: String,
+    username: String,
+    password: String,
+    catalog: String,
+    schema: String,
+    source_table: String,
+    table_name: String,
+    max_text_size: i64,
+}
+
+#[cfg(feature = "execute")]
+impl OdbcSource {
+    async fn from_pins(context: &mut ExecutionContext) -> flow_like_types::Result<Self> {
+        Ok(Self {
+            connection_string: context.evaluate_pin("connection_string").await?,
+            username: context.evaluate_pin("username").await.unwrap_or_default(),
+            password: context.evaluate_pin("password").await.unwrap_or_default(),
+            catalog: context.evaluate_pin("catalog").await.unwrap_or_default(),
+            schema: context.evaluate_pin("schema").await.unwrap_or_default(),
+            source_table: context.evaluate_pin("source_table").await?,
+            table_name: context.evaluate_pin("table_name").await?,
+            max_text_size: context.evaluate_pin("max_text_size").await.unwrap_or(65536),
+        })
+    }
+}
+
+#[cfg(all(feature = "execute", feature = "odbc"))]
+impl OdbcSource {
+    fn connection_string(&self) -> String {
+        let mut full = self
+            .connection_string
+            .trim()
+            .trim_end_matches(';')
+            .to_string();
+        for (key, value) in [("UID", &self.username), ("PWD", &self.password)] {
+            if !value.is_empty() {
+                full.push(';');
+                full.push_str(&odbc_attribute(key, value));
+            }
+        }
+        full
+    }
+
+    /// Built from parts rather than parsed, so source identifiers keep their case.
+    fn table_reference(&self) -> flow_like_storage::datafusion::common::TableReference {
+        use flow_like_storage::datafusion::common::TableReference;
+        let table = self.source_table.clone();
+        match (self.catalog.is_empty(), self.schema.is_empty()) {
+            (true, true) => TableReference::bare(table),
+            (true, false) => TableReference::partial(self.schema.clone(), table),
+            (false, _) => TableReference::full(self.catalog.clone(), self.schema.clone(), table),
+        }
+    }
+
+    async fn register(
+        &self,
+        session: &crate::data::datafusion::session::CachedDataFusionSession,
+    ) -> flow_like_types::Result<()> {
+        use datafusion_table_providers::odbc::ODBCTableFactory;
+        use datafusion_table_providers::sql::db_connection_pool::odbcpool::ODBCPool;
+        use datafusion_table_providers::util::secrets::to_secret_map;
+        use std::collections::HashMap;
+
+        if self.max_text_size <= 0 {
+            return Err(flow_like_types::anyhow!(
+                "Max Text Size must be a positive number of bytes, got {}",
+                self.max_text_size
+            ));
+        }
+        let params = HashMap::from([
+            ("connection_string".to_string(), self.connection_string()),
+            ("max_text_size".to_string(), self.max_text_size.to_string()),
+        ]);
+        let pool = ODBCPool::new(to_secret_map(params))
+            .map_err(|e| flow_like_types::anyhow!("ODBC connection failed: {}", e))?;
+
+        let table_ref = self.table_reference();
+        let table_provider = ODBCTableFactory::new(Arc::new(pool))
+            .table_provider(table_ref.clone(), None)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!(
+                    "Failed to create ODBC table provider for '{table_ref}': {e}"
+                )
+            })?;
+        session
+            .replace_table(&self.table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
+
+        tracing::info!(
+            "ODBC table '{}' registered as '{}'",
+            table_ref,
+            self.table_name
+        );
+        Ok(())
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct RegisterOdbcNode {}
+
+impl RegisterOdbcNode {
+    pub fn new() -> Self {
+        RegisterOdbcNode {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for RegisterOdbcNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "df_register_odbc",
+            "Register ODBC Table",
+            "Register a table from any database with an installed ODBC driver (Snowflake, SQL Server, Teradata, …) for federated queries. The driver and an ODBC driver manager must be installed where the flow runs.",
+            "Data/DataFusion/Databases",
+        );
+        node.set_flowscript_name("df", "registerOdbc");
+        node.set_receiver("session");
+        node.add_icon("/flow/icons/database.svg");
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger execution",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "session",
+            "Session",
+            "DataFusion session",
+            VariableType::Struct,
+        )
+        .set_schema::<DataFusionSession>();
+        node.add_input_pin(
+            "connection_string",
+            "Connection String",
+            "ODBC connection string without credentials, e.g. Driver={SnowflakeDSIIDriver};Server=<account>.snowflakecomputing.com;Database=SALES;Warehouse=COMPUTE_WH",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "username",
+            "Username",
+            "Database username, sent as UID (leave empty if the connection string authenticates)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "password",
+            "Password",
+            "Database password, sent as PWD",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "catalog",
+            "Catalog",
+            "Catalog (database) of the source table; empty uses the connection default",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "schema",
+            "Schema",
+            "Schema of the source table; empty uses the connection default",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "source_table",
+            "Source Table",
+            "Table name exactly as the source spells it (case is preserved)",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "table_name",
+            "Table Name",
+            "Name to register in DataFusion",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "max_text_size",
+            "Max Text Size",
+            "Largest text value fetched per cell, in bytes. Drivers report columns like Snowflake VARCHAR or PostgreSQL TEXT as unbounded, so the fetch buffers need a cap; longer values fail the query.",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(65536)));
+
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Table registered",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "session_out",
+            "Session",
+            "DataFusion session",
+            VariableType::Struct,
+        )
+        .set_schema::<DataFusionSession>();
+
+        node.scores = Some(NodeScores {
+            privacy: 5,
+            security: 6,
+            performance: 7,
+            governance: 7,
+            reliability: 7,
+            cost: 6,
+        });
+        node
+    }
+
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let session: DataFusionSession = context.evaluate_pin("session").await?;
+        let source = OdbcSource::from_pins(context).await?;
+        let cached_session = session.load_lazy(context).await?;
+
+        #[cfg(feature = "odbc")]
+        source.register(&cached_session).await?;
+
+        #[cfg(not(feature = "odbc"))]
+        {
+            let _ = (source, cached_session);
+            return Err(flow_like_types::anyhow!(
+                "ODBC support is not enabled. Rebuild with the 'odbc' feature flag."
+            ));
+        }
+
+        context.set_pin_value("session_out", json!(session)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 
@@ -1560,8 +1844,7 @@ impl NodeLogic for RegisterFlightSqlNode {
                 .map_err(|e| flow_like_types::anyhow!("Failed to create FlightSQL table: {}", e))?;
 
             cached_session
-                .ctx
-                .register_table(&table_name, Arc::new(table))
+                .replace_table(&table_name, Arc::new(table))
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -1830,8 +2113,7 @@ impl NodeLogic for RegisterAthenaNode {
             })?;
 
             cached_session
-                .ctx
-                .register_table(&table_name, table_provider)
+                .replace_table(&table_name, table_provider)
                 .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
             tracing::info!(
@@ -2018,6 +2300,7 @@ mod tests {
             Box::new(RegisterClickhouseNode::new()),
             Box::new(RegisterOracleNode::new()),
             Box::new(RegisterFlightSqlNode::new()),
+            Box::new(RegisterOdbcNode::new()),
         ];
 
         for node_logic in nodes {
@@ -2060,6 +2343,7 @@ mod tests {
             Box::new(RegisterClickhouseNode::new()),
             Box::new(RegisterOracleNode::new()),
             Box::new(RegisterFlightSqlNode::new()),
+            Box::new(RegisterOdbcNode::new()),
         ];
 
         for node_logic in nodes {
@@ -2102,6 +2386,7 @@ mod tests {
             Box::new(RegisterClickhouseNode::new()),
             Box::new(RegisterOracleNode::new()),
             Box::new(RegisterFlightSqlNode::new()),
+            Box::new(RegisterOdbcNode::new()),
         ];
 
         for node_logic in nodes {
@@ -2120,6 +2405,7 @@ mod tests {
             Box::new(RegisterClickhouseNode::new()),
             Box::new(RegisterOracleNode::new()),
             Box::new(RegisterFlightSqlNode::new()),
+            Box::new(RegisterOdbcNode::new()),
         ];
 
         for node_logic in nodes {
@@ -2173,6 +2459,76 @@ mod tests {
         assert!(
             input_pins.iter().any(|p| p.name == "service_name"),
             "Oracle should have service_name pin instead of database"
+        );
+    }
+
+    #[test]
+    fn test_register_odbc_node_structure() {
+        let node = RegisterOdbcNode::new().get_node();
+        assert_eq!(node.name, "df_register_odbc");
+        let inputs: Vec<_> = node
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Input)
+            .map(|p| p.name.as_str())
+            .collect();
+        for pin in [
+            "connection_string",
+            "username",
+            "password",
+            "catalog",
+            "schema",
+            "source_table",
+            "table_name",
+            "max_text_size",
+        ] {
+            assert!(inputs.contains(&pin), "Register ODBC Table lacks '{pin}'");
+        }
+    }
+
+    #[cfg(feature = "odbc")]
+    #[test]
+    fn odbc_attribute_braces_values_that_would_split_the_string() {
+        assert_eq!(odbc_attribute("PWD", "plain"), "PWD=plain");
+        assert_eq!(odbc_attribute("PWD", "a;b"), "PWD={a;b}");
+        assert_eq!(odbc_attribute("PWD", "x}y"), "PWD={x}}y}");
+        assert_eq!(odbc_attribute("UID", " padded "), "UID={ padded }");
+    }
+
+    #[cfg(all(feature = "execute", feature = "odbc"))]
+    fn odbc_source(catalog: &str, schema: &str, password: &str) -> OdbcSource {
+        OdbcSource {
+            connection_string: "Driver={Snowflake};Server=acme.snowflakecomputing.com; ".into(),
+            username: "flow".into(),
+            password: password.into(),
+            catalog: catalog.into(),
+            schema: schema.into(),
+            source_table: "Orders".into(),
+            table_name: "orders".into(),
+            max_text_size: 65536,
+        }
+    }
+
+    #[cfg(all(feature = "execute", feature = "odbc"))]
+    #[test]
+    fn odbc_source_appends_credentials_and_keeps_identifier_case() {
+        let source = odbc_source("SALES", "PUBLIC", "p;w");
+        assert_eq!(
+            source.connection_string(),
+            "Driver={Snowflake};Server=acme.snowflakecomputing.com;UID=flow;PWD={p;w}"
+        );
+        let table = source.table_reference();
+        assert_eq!(
+            (table.catalog(), table.schema(), table.table()),
+            (Some("SALES"), Some("PUBLIC"), "Orders")
+        );
+
+        let bare = odbc_source("", "", "");
+        assert!(!bare.connection_string().contains("PWD"));
+        assert_eq!(bare.table_reference().schema(), None);
+        assert_eq!(
+            odbc_source("", "PUBLIC", "").table_reference().schema(),
+            Some("PUBLIC")
         );
     }
 

@@ -77,6 +77,9 @@ function errorText(error: unknown): string {
 	if (typeof error === "string") return error.trim();
 	if (error instanceof Error) return error.message.trim();
 	if (error && typeof error === "object") {
+		// Tauri commands reject with their serialized error, `{ error: string }`.
+		const serialized = (error as { error?: unknown }).error;
+		if (typeof serialized === "string") return serialized.trim();
 		try {
 			return JSON.stringify(error);
 		} catch {
@@ -277,13 +280,13 @@ const BACKEND_KINDS: Record<AgentBackendDiagnostic["kind"], ChatErrorKind> = {
 /**
  * Turn whatever ended a turn into the card the chat renders: a title, one sentence the user can act
  * on, and the raw text kept aside for the details disclosure. Never throws — an unclassifiable
- * failure still gets a usable card.
+ * failure still gets a usable card. `label` names who failed to answer; the provider by default.
  */
 export function buildChatMessageError(
 	provider: AIProvider | string,
 	error: unknown,
+	label = providerLabel(provider),
 ): IChatMessageError {
-	const label = providerLabel(provider);
 	const detail = detailOf(error);
 
 	if (isCancellation(error)) {

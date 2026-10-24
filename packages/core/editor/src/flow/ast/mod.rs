@@ -7,6 +7,7 @@
 //! See `todo/ast.md`.
 
 mod apply;
+mod changes;
 mod diagnostics;
 mod lower;
 mod reconcile;
@@ -21,6 +22,11 @@ pub use apply::{
     destructive_flowscript_command_summaries, ensure_module_layer,
     flowpilot_board_reserved_message, is_destructive_block, is_flowpilot_board_reservation,
     validate_module_apply_params,
+};
+pub use changes::{
+    FlowScriptChangedLayer, FlowScriptChangedNode, FlowScriptChanges, FlowScriptConnection,
+    FlowScriptConnectionKind, FlowScriptDescriptionChange, FlowScriptEndpoint, FlowScriptMovedNode,
+    FlowScriptNameChange, FlowScriptValueChange, planned_changes,
 };
 pub use diagnostics::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
@@ -1485,7 +1491,7 @@ mod lower_tests {
             "event preserves its catalog type, alias, and payload param:\n{text_out}"
         );
         assert!(
-            text_out.contains("log({ text: title })"),
+            text_out.contains("log(title)"),
             "body reads the bare param name:\n{text_out}"
         );
         assert!(
@@ -2124,7 +2130,7 @@ mod lower_tests {
             "two static sites inside a module block still open the namespace:\n{text}"
         );
         assert!(
-            text.contains("        logInfo({ message: \"one\" })"),
+            text.contains("        logInfo(\"one\")"),
             "the opened members render bare inside the module block:\n{text}"
         );
     }
@@ -3397,10 +3403,10 @@ mod scoped_flowscript {
             baseline.diagnostics
         );
 
-        let needle = "name: \"memory\", userScoped: true, batchSize: 1000";
+        let needle = "\"memory\", { userScoped: true, batchSize: 1000 }";
         let edited = scoped
             .text
-            .replace(needle, "name: \"memory\", userScoped: true, batchSize: 500");
+            .replace(needle, "\"memory\", { userScoped: true, batchSize: 500 }");
         assert_ne!(
             edited, scoped.text,
             "literal edit must apply:\n{}",

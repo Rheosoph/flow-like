@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 
 export type BoardRenderer = "react-flow" | "egui";
 
-const STORAGE_KEY = "flow-board-renderer";
+export const BOARD_RENDERER_STORAGE_KEY = "flow-board-renderer";
 const serverSnapshot = {
 	renderer: "react-flow" as BoardRenderer,
 	ready: false,
@@ -23,7 +23,7 @@ function publish(renderer: BoardRenderer) {
 }
 
 function onStorage(event: StorageEvent) {
-	if (event.key !== STORAGE_KEY && event.key !== null) return;
+	if (event.key !== BOARD_RENDERER_STORAGE_KEY && event.key !== null) return;
 	try {
 		if (event.storageArea && event.storageArea !== storageWindow?.localStorage)
 			return;
@@ -40,7 +40,9 @@ function getSnapshot() {
 		storageWindow = window;
 		let renderer: BoardRenderer = "egui";
 		try {
-			renderer = parseRenderer(window.localStorage.getItem(STORAGE_KEY));
+			renderer = parseRenderer(
+				window.localStorage.getItem(BOARD_RENDERER_STORAGE_KEY),
+			);
 		} catch {
 			// Storage access is optional; the current browser session still works.
 		}
@@ -60,7 +62,7 @@ export function setBoardRendererPreference(renderer: BoardRenderer) {
 	if (typeof window === "undefined") return;
 	getSnapshot();
 	try {
-		window.localStorage.setItem(STORAGE_KEY, renderer);
+		window.localStorage.setItem(BOARD_RENDERER_STORAGE_KEY, renderer);
 	} catch {
 		// Keep the explicit choice in memory if persistence is blocked.
 	}

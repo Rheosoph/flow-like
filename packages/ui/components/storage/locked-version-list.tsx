@@ -45,7 +45,7 @@ function VersionState({ version }: Readonly<{ version: ILockedItemVersion }>) {
 	}
 	return (
 		<span className="text-muted-foreground">
-			{retentionLabel(version.retain_until, language, t)}
+			{retentionLabel(version, language, t)}
 		</span>
 	);
 }

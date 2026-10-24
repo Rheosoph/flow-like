@@ -674,9 +674,7 @@ impl NodeLogic for DownloadSharePointFileNode {
                     match content_response {
                         Ok(content_resp) if content_resp.status().is_success() => {
                             let bytes = content_resp.bytes().await?;
-                            context
-                                .set_pin_value("content", json!(bytes.to_vec()))
-                                .await?;
+                            context.set_pin_bytes("content", bytes).await?;
                             context
                                 .set_pin_value("download_url", json!(download_url))
                                 .await?;
