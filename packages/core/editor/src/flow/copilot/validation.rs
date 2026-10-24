@@ -119,6 +119,7 @@ pub fn validate_model_facing_emit_commands_scope(args: &EmitCommandsArgs) -> Emi
                     BoardCommand::UpdateNodePin { .. } => "UpdateNodePin",
                     BoardCommand::UpdateNodePinOptions { .. } => "UpdateNodePinOptions",
                     BoardCommand::RenameNode { .. } => "RenameNode",
+                    BoardCommand::SetNodeDescription { .. } => "SetNodeDescription",
                     BoardCommand::SetNodeFunctionRefs { .. } => "SetNodeFunctionRefs",
                     BoardCommand::SetNodeCodeNames { .. } => "SetNodeCodeNames",
                     BoardCommand::MoveNode { .. } => "MoveNode(target_layer)",
@@ -779,6 +780,16 @@ pub async fn validate_emit_commands(
                             "RenameNode '{}' requires a non-empty friendly_name",
                             node_id
                         ),
+                    ));
+                }
+            }
+            BoardCommand::SetNodeDescription { node_id, .. } => {
+                if !entities.contains_key(node_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-node",
+                        Some(index),
+                        format!("Cannot describe unknown node '{node_id}'"),
                     ));
                 }
             }

@@ -203,6 +203,35 @@ if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false })
 }
 ```
 
+### Variables in loops
+
+Inside a `for` or `while` body, a mutable `let` runs its initializer each time execution reaches
+the declaration. For example, `let count: int = 0` starts at zero on each visit, including
+when the declaration is inside a branch in the loop. A variable declared before the loop keeps
+its value between iterations, so use that placement for a running total.
+
+To reset an outer variable for each iteration, assign its starting value at the beginning of the
+body. This also works with older compiler versions that only stored a loop-local literal as the
+variable's default:
+
+```ts
+function logOccurrences(needles: int[], values: int[]) {
+    let count: int = 0
+    for (const needle of needles) {
+        count = 0
+        for (const value of values) {
+            if (value == needle) {
+                count += 1
+            }
+        }
+        log::info({ message: `${needle}: ${count}`, toast: false })
+    }
+}
+```
+
+Each logged count belongs to one needle. You can also move the loop body into a helper function
+and declare the counter there; function-local variables start from their defaults on each call.
+
 ## Groups (`@collapse`)
 
 `@collapse("Name") { … }` wraps statements in a **group**: a Collapsed layer on the canvas that
@@ -321,6 +350,26 @@ emits one value; the return examples under [Control flow](#control-flow) are han
 A handler such as `eventsGeneric fetchPage(…)` declared inside a function is an entry node that
 agents can invoke with `tools: [fetchPage]`. Its returns belong to that handler, not its enclosing
 function.
+
+### Event and tool descriptions
+
+Place `@description("…")` directly above an event or nested handler to describe what it does:
+
+```ts
+@description("Fetch a web page and return its text for the agent to read.")
+eventsGeneric fetchPage(url: string, payload: Struct) {
+    const response = http::fetch({ request: http::request({ method: "GET", url: url }) })
+    return http::toText({ response: response })
+}
+```
+
+**Apply to board** writes the description to the event's entry node. When an agent uses that
+handler through `tools: [fetchPage]`, its tool definition includes the same description. The
+decorator also works on events inside modules and on handlers nested in functions or events.
+
+Descriptions appear again when the board is rendered as FlowScript. Use `\n` inside the string
+for line breaks and `\"` for quotes. Omitting the decorator keeps the current board description;
+use `@description("")` to clear it. Ordinary comments do not set descriptions.
 
 ## Anchors and editing
 

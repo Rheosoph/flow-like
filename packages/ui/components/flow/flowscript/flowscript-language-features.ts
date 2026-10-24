@@ -2017,6 +2017,7 @@ export interface FlowScriptDocumentSymbol {
 	name: string;
 	detail: string;
 	kind: FlowScriptSymbolKindTag;
+	declarationKind?: FlowScriptDeclaration["kind"];
 	range: RangeLike;
 	selectionRange: RangeLike;
 	children: FlowScriptDocumentSymbol[];
@@ -2030,6 +2031,7 @@ export function buildFlowScriptDocumentSymbols(
 		decl: FlowScriptDeclaration,
 	): FlowScriptDocumentSymbol => ({
 		name: decl.name,
+		declarationKind: decl.kind,
 		detail:
 			decl.kind === "event" || decl.kind === "handler"
 				? [decl.eventType, decl.detail].filter(Boolean).join(" ")

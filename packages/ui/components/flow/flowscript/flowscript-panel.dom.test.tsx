@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act } from "react";
+import { type ReactNode, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { toast } from "sonner";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -9,11 +9,12 @@ import type { BoardCommand } from "../../../lib/schema/flow/copilot";
 import type { IApplyFlowScriptResponse } from "../../../state/backend-state/board-state";
 import { FlowScriptPanel } from "./flowscript-panel";
 
-const { backend } = vi.hoisted(() => ({
+const { backend, editorState } = vi.hoisted(() => ({
 	backend: {
 		boardState: { getFlowScript: vi.fn() },
 		userState: { lookupUser: vi.fn() },
 	},
+	editorState: { loading: false },
 }));
 
 vi.mock("@flow-like/locales", () => ({
@@ -29,13 +30,21 @@ vi.mock("@monaco-editor/react", () => ({
 	default: ({
 		value,
 		onChange,
-	}: { value: string; onChange: (value: string) => void }) => (
-		<textarea
-			aria-label="FlowScript editor"
-			value={value}
-			onChange={(event) => onChange(event.currentTarget.value)}
-		/>
-	),
+		loading,
+	}: {
+		value: string;
+		onChange: (value: string) => void;
+		loading: ReactNode;
+	}) =>
+		editorState.loading ? (
+			loading
+		) : (
+			<textarea
+				aria-label="FlowScript editor"
+				value={value}
+				onChange={(event) => onChange(event.currentTarget.value)}
+			/>
+		),
 }));
 vi.mock("../../ui", async () => ({
 	...(await import("../../ui/alert-dialog")),
@@ -71,13 +80,20 @@ const apply =
 beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	backend.boardState.getFlowScript.mockReset().mockResolvedValue("original");
+	editorState.loading = false;
 	apply.mockReset();
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
+	await renderPanel();
+	await edit("edited draft");
+});
+
+async function renderPanel(key = "panel") {
 	await act(async () => {
 		root.render(
 			<FlowScriptPanel
+				key={key}
 				appId="app"
 				boardId="board"
 				onApplyFlowScript={apply}
@@ -85,8 +101,7 @@ beforeEach(async () => {
 			/>,
 		);
 	});
-	await edit("edited draft");
-});
+}
 
 afterEach(async () => {
 	vi.useRealTimers();
@@ -142,6 +157,60 @@ function blockedApply(
 		],
 	};
 }
+
+test("loading status follows board preparation and editor initialization", async () => {
+	let resolveRender!: (text: string) => void;
+	backend.boardState.getFlowScript.mockReturnValue(
+		new Promise<string>((resolve) => {
+			resolveRender = resolve;
+		}),
+	);
+	editorState.loading = true;
+	await renderPanel("loading");
+
+	expect(container.querySelectorAll('output[aria-live="polite"]')).toHaveLength(
+		1,
+	);
+	expect(
+		container.querySelector('output[aria-live="polite"]')?.textContent,
+	).toContain("Preparing FlowScript…");
+	expect(container.textContent).toContain(
+		"Loading the board as editable text.",
+	);
+	expect(container.textContent).not.toContain("Starting FlowScript editor…");
+
+	await act(async () => resolveRender("loaded board"));
+	expect(container.querySelectorAll('output[aria-live="polite"]')).toHaveLength(
+		1,
+	);
+	expect(
+		container.querySelector('output[aria-live="polite"]')?.textContent,
+	).toContain("Starting FlowScript editor…");
+	expect(container.textContent).not.toContain("Preparing FlowScript…");
+
+	editorState.loading = false;
+	await renderPanel("loading");
+	expect(container.querySelector('output[aria-live="polite"]')).toBeNull();
+	expect(editor().value).toBe("loaded board");
+});
+
+test("a failed render replaces loading status with the retry action", async () => {
+	backend.boardState.getFlowScript.mockRejectedValueOnce(
+		new Error("Board could not be loaded"),
+	);
+	editorState.loading = true;
+	await renderPanel("failed-load");
+
+	expect(container.querySelector('output[aria-live="polite"]')).toBeNull();
+	expect(container.textContent).toContain("Board could not be loaded");
+	expect(button("Retry").disabled).toBe(false);
+
+	await click("Retry");
+	expect(
+		container.querySelector('output[aria-live="polite"]')?.textContent,
+	).toContain("Starting FlowScript editor…");
+	expect(container.textContent).not.toContain("Board could not be loaded");
+});
 
 test("a blocked apply separates deleted items from each moved item before confirmation", async () => {
 	apply

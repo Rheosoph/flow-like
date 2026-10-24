@@ -135,6 +135,9 @@ pub struct CachedBoard {
     pub board: Arc<Board>,
     /// When storage last confirmed `e_tag`.
     verified_at: parking_lot::Mutex<Instant>,
+    /// Start of the storage read that confirmed this entry. Waiting readers can
+    /// share it only if it started after their own request.
+    verification_started_at: parking_lot::Mutex<Option<Instant>>,
     /// Pages of a pinned version, as immutable as the version that owns them.
     version_pages: parking_lot::Mutex<HashMap<String, Arc<flow_like::a2ui::Page>>>,
     /// Exact-ETag `.board` snapshot of a draft (`ensure_draft_board_snapshot`).
@@ -153,6 +156,7 @@ impl CachedBoard {
             e_tag,
             board: Arc::new(board),
             verified_at: parking_lot::Mutex::new(Instant::now()),
+            verification_started_at: parking_lot::Mutex::new(None),
             version_pages: parking_lot::Mutex::new(HashMap::new()),
             draft_snapshot: TrustedUntil::default(),
             draft_authority: TrustedUntil::default(),
@@ -163,8 +167,15 @@ impl CachedBoard {
         self.verified_at.lock().elapsed() < PINNED_BOARD_REVALIDATE_AFTER
     }
 
-    fn mark_verified(&self) {
+    fn mark_verified(&self, started_at: Instant) {
         *self.verified_at.lock() = Instant::now();
+        *self.verification_started_at.lock() = Some(started_at);
+    }
+
+    fn verified_since(&self, requested_at: Instant) -> bool {
+        self.verification_started_at
+            .lock()
+            .is_some_and(|started_at| started_at > requested_at)
     }
 
     /// A page of this pinned version read earlier. Never use it for a draft entry: draft pages
@@ -192,6 +203,17 @@ fn recently_verified_pinned(
     board_cache
         .get(cache_key)
         .filter(|entry| entry.verified_recently())
+}
+
+fn verified_board_after_wait(
+    board_cache: &moka::sync::Cache<String, Arc<CachedBoard>>,
+    cache_key: &str,
+    version: Option<(u32, u32, u32)>,
+    requested_at: Instant,
+) -> Option<Arc<CachedBoard>> {
+    board_cache.get(cache_key).filter(|entry| {
+        (version.is_some() && entry.verified_recently()) || entry.verified_since(requested_at)
+    })
 }
 
 /// Until when an object an entry depends on is known to exist without asking storage.
@@ -1770,9 +1792,9 @@ impl State {
 
     /// Load a board on master credentials, validated against storage but served from memory.
     ///
-    /// The cache is keyed by object identity, not by who wrote last: every call issues one
-    /// `If-None-Match` GET carrying the cached ETag. Storage answering `NotModified` proves the
-    /// cached hydration is still what a fresh load would produce, regardless of which replica,
+    /// Draft reads use an `If-None-Match` GET carrying the cached ETag. Concurrent callers
+    /// share a check only when it started after their request. Storage answering `NotModified`
+    /// proves the cached hydration is still what a fresh load would produce, regardless of which replica,
     /// fork job, CLI, or publish path wrote the object. A changed object arrives in that same
     /// round trip, so a miss costs exactly what the old unconditional load did. Pinned versions
     /// are immutable snapshots, so a confirmed one is served from memory and reconfirmed at most
@@ -1805,20 +1827,26 @@ impl State {
         app_state: Arc<FlowLikeState>,
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<Arc<CachedBoard>> {
+        let requested_at = Instant::now();
         let cache_key = board_cache_key(app_id, board_id, version);
         if let Some(pinned) = self.recently_verified_pinned(&cache_key, version) {
             return pinned;
         }
         let load_lock = keyed_local_lock(&self.board_load_locks, cache_key.clone());
         let _single_flight = load_lock.lock().await;
-        // A concurrent loader may have revalidated the pin while this one waited.
-        if let Some(pinned) = self.recently_verified_pinned(&cache_key, version) {
-            return pinned;
+        // A queued burst shares a fresh check instead of serializing one storage
+        // round trip per action. Later requests still revalidate floating drafts.
+        if let Some(cached) =
+            verified_board_after_wait(&self.board_cache, &cache_key, version, requested_at)
+        {
+            cached.board.ensure_supported_format()?;
+            return Ok(cached);
         }
 
         let cached = self.board_cache.get(&cache_key);
         let store = Board::meta_store(&app_state).await?;
         let storage_root = Path::from("apps").join(app_id.to_string());
+        let verification_started_at = Instant::now();
         let read = Board::load_proto_if_changed(
             store,
             &storage_root,
@@ -1836,7 +1864,7 @@ impl State {
                     )
                 })?;
                 cached.board.ensure_supported_format()?;
-                cached.mark_verified();
+                cached.mark_verified(verification_started_at);
                 return Ok(cached);
             }
             ConditionalRead::Fresh(proto, meta) => (proto, meta),
@@ -1848,6 +1876,7 @@ impl State {
             meta.e_tag.clone().unwrap_or_default(),
             board,
         ));
+        entry.mark_verified(verification_started_at);
         // An object without an ETag can never be validated, so it is never cached.
         if meta.e_tag.is_some() {
             self.board_cache.insert(cache_key, entry.clone());
@@ -2539,8 +2568,100 @@ mod tests {
             - super::PINNED_BOARD_REVALIDATE_AFTER
             - std::time::Duration::from_secs(1);
         assert!(super::recently_verified_pinned(&cache, &pinned_key, Some((1, 2, 3))).is_none());
-        entry.mark_verified();
+        entry.mark_verified(std::time::Instant::now());
         assert!(super::recently_verified_pinned(&cache, &pinned_key, Some((1, 2, 3))).is_some());
+    }
+
+    #[test]
+    fn queued_draft_reads_share_only_checks_started_after_the_request() {
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+        let key = super::board_cache_key("app-1", "board-1", None);
+        let entry = cached_board();
+        cache.insert(key.clone(), entry.clone());
+        let now = std::time::Instant::now();
+        let requested_at = now - std::time::Duration::from_millis(2);
+        let reusable = || super::verified_board_after_wait(&cache, &key, None, requested_at);
+
+        // Seeding after a write is not a fresh read of storage: another replica
+        // may already have written a newer revision.
+        assert!(reusable().is_none());
+
+        // A slow read can finish after this request but still carry an older
+        // snapshot. Completion time alone must never allow that read to be reused.
+        entry.mark_verified(requested_at - std::time::Duration::from_millis(1));
+        assert!(reusable().is_none());
+        entry.mark_verified(requested_at);
+        assert!(reusable().is_none());
+
+        entry.mark_verified(now - std::time::Duration::from_millis(1));
+        assert!(std::sync::Arc::ptr_eq(&reusable().unwrap(), &entry));
+        assert!(super::verified_board_after_wait(&cache, &key, None, now).is_none());
+
+        let other_app = super::board_cache_key("app-2", "board-1", None);
+        let pinned = super::board_cache_key("app-1", "board-1", Some((1, 0, 0)));
+        assert!(super::verified_board_after_wait(&cache, &other_app, None, requested_at).is_none());
+        assert!(
+            super::verified_board_after_wait(&cache, &pinned, Some((1, 0, 0)), requested_at)
+                .is_none()
+        );
+        cache.insert(key.clone(), cached_board());
+        assert!(
+            reusable().is_none(),
+            "a seeded replacement needs its own check"
+        );
+        cache.invalidate(&key);
+        assert!(reusable().is_none());
+    }
+
+    #[tokio::test]
+    async fn queued_draft_burst_reuses_one_revalidation_and_later_read_checks_again() {
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+        let key = super::board_cache_key("app-1", "board-1", None);
+        let entry = cached_board();
+        cache.insert(key.clone(), entry.clone());
+        let locks = parking_lot::Mutex::new(HashMap::new());
+        let load_lock = super::keyed_local_lock(&locks, key.clone());
+        let held = load_lock.lock().await;
+        let (queued, mut waiting) = tokio::sync::mpsc::unbounded_channel();
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..32 {
+            let (cache, key, entry, reads, queued) = (
+                cache.clone(),
+                key.clone(),
+                entry.clone(),
+                reads.clone(),
+                queued.clone(),
+            );
+            let load_lock = super::keyed_local_lock(&locks, key.clone());
+            tasks.push(tokio::spawn(async move {
+                let requested_at = std::time::Instant::now();
+                queued.send(()).unwrap();
+                let _guard = load_lock.lock().await;
+                if let Some(hit) =
+                    super::verified_board_after_wait(&cache, &key, None, requested_at)
+                {
+                    return hit;
+                }
+                let started_at = std::time::Instant::now();
+                reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                entry.mark_verified(started_at);
+                entry
+            }));
+        }
+        for _ in 0..32 {
+            waiting.recv().await.unwrap();
+        }
+        drop(held);
+        for task in tasks {
+            assert!(std::sync::Arc::ptr_eq(&task.await.unwrap(), &entry));
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            super::verified_board_after_wait(&cache, &key, None, std::time::Instant::now())
+                .is_none()
+        );
     }
 
     #[test]

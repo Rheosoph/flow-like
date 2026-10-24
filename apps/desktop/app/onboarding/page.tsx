@@ -144,8 +144,7 @@ export default function Onboarding() {
 	const signInBusy =
 		isSigningIn || auth?.isLoading || Boolean(auth?.activeNavigator);
 	const canSignIn = Boolean(
-		auth?.signinRedirect &&
-			auth.settings?.authority &&
+		auth?.settings?.authority &&
 			auth.settings?.client_id &&
 			!signInBusy &&
 			!isAuthenticated,

@@ -16,7 +16,10 @@ export default defineConfig({
 			name: "raw-json-browser-fixtures",
 			enforce: "pre",
 			transform(code, id) {
-				if (id.endsWith("/components/builder/DevModePanel.tsx")) {
+				if (
+					id.endsWith("/components/builder/DevModePanel.tsx") ||
+					id.endsWith("/components/builder/Toolbar.tsx")
+				) {
 					return code.replace(
 						'from "./BuilderContext"',
 						`from ${JSON.stringify(`${root}builder-fixture.tsx`)}`,

@@ -52,6 +52,7 @@ import {
 	createNativeFlowProjectionCache,
 	prepareNativeSceneNodes,
 } from "./egui-flow-proxy";
+import { LargeGraphNavigation } from "./large-graph-navigation";
 import {
 	StandaloneBoardBackground,
 	StandaloneBoardControls,
@@ -664,7 +665,9 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 						: "react-flow"
 			}
 			data-board-exporting={exporting || undefined}
-			aria-busy={!preferenceReady || nativePending}
+			aria-busy={
+				props.loadingStatus?.busy ?? (!preferenceReady || nativePending)
+			}
 		>
 			{flowMounted && (
 				<CanvasHost
@@ -752,6 +755,13 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 						</CanvasBoundary>
 					)}
 					{props.overlay}
+					{!exporting && !nativePending && !props.loadingStatus && (
+						<LargeGraphNavigation
+							key={props.scopeKey}
+							nodes={props.nodes ?? []}
+							native={renderer === "egui"}
+						/>
+					)}
 					{renderer === "egui" ? (
 						<>
 							<StandaloneBoardControls
@@ -807,13 +817,35 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 					)}
 				</CanvasHost>
 			)}
-			{(!preferenceReady || nativePending) && (
+			{(props.loadingStatus || !preferenceReady || nativePending) && (
 				<output
 					className="absolute inset-0 z-40 flex items-center justify-center bg-background/60"
 					data-board-canvas-loading
+					aria-live="polite"
 				>
 					<span className="rounded-md border border-border bg-card px-3 py-2 text-sm">
-						{t("loading", "Loading…")}
+						{props.loadingStatus?.content ??
+							(!preferenceReady
+								? t("boardLoadingPreferences", "Reading canvas preferences…")
+								: !scene
+									? t(
+											"boardPreparingCanvas",
+											"Preparing {{nodeCount}} nodes…",
+											{
+												nodeCount: (props.nodes?.length ?? 0).toLocaleString(),
+											},
+										)
+									: readyScopes.nodes !== props.scopeKey
+										? t("boardDrawingNodes", "Drawing {{nodeCount}} nodes…", {
+												nodeCount: scene.nodes.length.toLocaleString(),
+											})
+										: t(
+												"boardDrawingConnections",
+												"Drawing {{edgeCount}} connections…",
+												{
+													edgeCount: scene.edges.length.toLocaleString(),
+												},
+											))}
 					</span>
 				</output>
 			)}

@@ -1074,6 +1074,10 @@ impl ExecutionContext {
                 schema,
                 &value,
             )?;
+        } else {
+            variable.validate_value(&value).map_err(|error| {
+                flow_like_types::anyhow!("Cannot assign to variable '{}': {error}", variable.name)
+            })?;
         }
         if let Some(scope) = &self.byte_scope {
             scope.promote(&value).await?;
@@ -1797,7 +1801,7 @@ impl ExecutionContext {
             ChannelOutcome::Responded(reply) => reply,
             ChannelOutcome::Expired => {
                 return Err(flow_like_types::anyhow!(
-                    "Element request [{}] timed out after {}ms — no live surface answered",
+                    "Element request [{}] timed out after {}ms: the app page did not answer. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again.",
                     described,
                     timeout.as_millis()
                 ));
@@ -1810,7 +1814,7 @@ impl ExecutionContext {
             }
             ChannelOutcome::Closed => {
                 return Err(flow_like_types::anyhow!(
-                    "Element request [{}] was dropped without a response",
+                    "Element request [{}] could not complete: the connection closed before the app page answered. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again.",
                     described
                 ));
             }
@@ -1831,11 +1835,16 @@ impl ExecutionContext {
             .get("elements")
             .and_then(Value::as_object)
             .cloned()
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                flow_like_types::anyhow!(
+                    "Element request [{}] returned an invalid response: expected an elements object",
+                    described
+                )
+            })?;
         {
             let mut cache = self.elements.write().await;
             cache.take_unrequested(&selectors);
-            cache.merge(elements.clone());
+            cache.merge_response(&selectors, elements.clone());
         }
         Ok(elements)
     }
@@ -2289,6 +2298,72 @@ mod tests {
 
     fn photo(len: usize) -> Vec<u8> {
         (0..len).map(|index| (index % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn string_assignment_rejects_generic_numeric_fields_before_mutating_either_scope() {
+        for local in [false, true] {
+            let mut context = byte_context(None).await;
+            let variable = Variable::new("size_text", VariableType::String, ValueType::Normal);
+            let variable_id = variable.id.clone();
+            let stored_value = variable.value.clone();
+            *stored_value.lock().await = json!("previous");
+
+            if local {
+                let mut shadowed = variable.clone();
+                shadowed.data_type = VariableType::Generic;
+                shadowed.value = Arc::new(Mutex::new(json!("outer")));
+                context
+                    .variables
+                    .lock()
+                    .await
+                    .insert(variable_id.clone(), shadowed);
+                context.local_variables = Some(Arc::new(Mutex::new(AHashMap::from_iter([(
+                    variable_id.clone(),
+                    variable,
+                )]))));
+            } else {
+                context
+                    .variables
+                    .lock()
+                    .await
+                    .insert(variable_id.clone(), variable);
+            }
+
+            let size_bytes = json!({"size_bytes": 4096})["size_bytes"].clone();
+            context.set_pin_value("generic", size_bytes).await.unwrap();
+            let raw = context.evaluate_pin_raw("generic").await.unwrap();
+            let error = context
+                .set_variable_value(&variable_id, raw)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                error,
+                "Cannot assign to variable 'size_text': Type mismatch: expected String, got Integer"
+            );
+            assert_eq!(*stored_value.lock().await, json!("previous"));
+
+            context
+                .set_variable_value(&variable_id, json!("4096"))
+                .await
+                .unwrap();
+            assert_eq!(*stored_value.lock().await, json!("4096"));
+            if local {
+                let outer = context.variables.lock().await[&variable_id].value.clone();
+                assert_eq!(*outer.lock().await, json!("outer"));
+            }
+
+            let generic = Variable::new("raw_size", VariableType::Generic, ValueType::Normal);
+            let generic_id = generic.id.clone();
+            context.set_variable(generic).await;
+            context
+                .set_variable_value(&generic_id, json!(4096))
+                .await
+                .unwrap();
+            let generic = context.get_variable(&generic_id).await.unwrap();
+            assert_eq!(*generic.value.lock().await, json!(4096));
+        }
     }
 
     #[tokio::test]

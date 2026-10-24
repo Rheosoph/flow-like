@@ -44,6 +44,13 @@ export interface IFlowScriptNameChange {
 	after?: string;
 }
 
+export interface IFlowScriptDescriptionChange {
+	node_id: string;
+	node_type: string;
+	before: string;
+	after: string;
+}
+
 export interface IFlowScriptChangedLayer {
 	id: string;
 	name: string;
@@ -59,6 +66,7 @@ export interface IFlowScriptChanges {
 	connections_removed?: IFlowScriptConnection[];
 	values_changed?: IFlowScriptValueChange[];
 	names_changed?: IFlowScriptNameChange[];
+	descriptions_changed?: IFlowScriptDescriptionChange[];
 	variables_added?: string[];
 	variables_removed?: string[];
 	variables_changed?: string[];
@@ -119,6 +127,11 @@ export function summarizeFlowScriptChanges(
 				after: change.after,
 			})),
 			names_changed: capped(changes.names_changed, limit, (change) => change),
+			descriptions_changed: capped(
+				changes.descriptions_changed,
+				limit,
+				(change) => change,
+			),
 			variables_added: capped(changes.variables_added, limit, (name) => name),
 			variables_removed: capped(
 				changes.variables_removed,

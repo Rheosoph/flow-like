@@ -342,6 +342,9 @@ pub struct EventBlock {
     /// its friendly name. `None` keeps the catalog default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_name: Option<String>,
+    /// Human description of the event or tool, rendered as `@description("…")`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The event's payload outputs, surfaced as a typed parameter list (`name: Type`, or
     /// `name?: Type = literal` for an optional pin with a stored default). These are the entry
     /// node's data output pins (often user-configured) that the body consumes.

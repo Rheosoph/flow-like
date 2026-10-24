@@ -106,6 +106,7 @@ export function DevModePanel({ className }: DevModePanelProps) {
 		<Dialog open={devMode} onOpenChange={setDevMode}>
 			<DialogContent
 				showCloseButton={false}
+				overlayClassName="bg-background"
 				className={cn(
 					"h-[calc(100dvh-2rem)] max-w-[calc(100%-2rem)] gap-0 overflow-hidden rounded-lg bg-background p-0 sm:max-w-[calc(100%-2rem)]",
 					className,

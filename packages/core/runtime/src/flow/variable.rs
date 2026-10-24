@@ -50,6 +50,9 @@ impl Eq for Variable {}
 
 impl Variable {
     pub fn validate_value(&self, value: &Value) -> flow_like_types::Result<()> {
+        if self.data_type == VariableType::String {
+            return validate_string_variable_value(&self.value_type, value);
+        }
         validate_typed_value(
             &self.data_type,
             &self.value_type,
@@ -187,6 +190,55 @@ impl Variable {
         let schema = infer_schema_from_json(raw)?;
         self.schema = Some(schema.clone());
         Ok(schema)
+    }
+}
+
+fn validate_string_variable_value(
+    value_type: &ValueType,
+    value: &Value,
+) -> flow_like_types::Result<()> {
+    let mismatch = |expected: &str, value: &Value| {
+        let actual = match value {
+            Value::Null => "Null",
+            Value::Bool(_) => "Boolean",
+            Value::Number(number) if number.is_i64() || number.is_u64() => "Integer",
+            Value::Number(_) => "Float",
+            Value::String(_) => "String",
+            Value::Array(_) => "Array",
+            Value::Object(_) => "Object",
+        };
+        flow_like_types::anyhow!("Type mismatch: expected {expected}, got {actual}")
+    };
+    let validate_member = |value: &Value| {
+        if value.is_string() {
+            Ok(())
+        } else {
+            Err(mismatch("String", value))
+        }
+    };
+    match value_type {
+        ValueType::Normal => validate_member(value),
+        ValueType::Array | ValueType::HashSet => {
+            let values = value
+                .as_array()
+                .ok_or_else(|| mismatch(&format!("String {value_type:?}"), value))?;
+            for (index, member) in values.iter().enumerate() {
+                validate_member(member).map_err(|error| {
+                    flow_like_types::anyhow!("String {value_type:?} member [{index}]: {error}")
+                })?;
+            }
+            Ok(())
+        }
+        ValueType::HashMap => {
+            let values = value
+                .as_object()
+                .ok_or_else(|| mismatch("String HashMap", value))?;
+            for member in values.values() {
+                validate_member(member)
+                    .map_err(|error| flow_like_types::anyhow!("String HashMap member: {error}"))?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -475,6 +527,40 @@ impl crate::flow::board::Board {
 mod tests {
     use flow_like_types::{FromProto, ToProto};
     use flow_like_types::{Message, tokio};
+
+    #[test]
+    fn string_variables_require_strings_in_the_declared_container() {
+        use super::*;
+        use flow_like_types::json::json;
+
+        for (container, valid, invalid) in [
+            (ValueType::Normal, json!("4096"), json!(4096)),
+            (ValueType::Array, json!(["4096"]), json!(["ok", 4096])),
+            (ValueType::HashSet, json!(["4096"]), json!([false])),
+            (
+                ValueType::HashMap,
+                json!({"size_bytes": "4096"}),
+                json!({"size_bytes": 4096}),
+            ),
+        ] {
+            let variable = Variable::new("size", VariableType::String, container.clone());
+            variable.validate_value(&valid).unwrap();
+            let error = variable.validate_value(&invalid).unwrap_err().to_string();
+            assert!(error.contains("expected String"), "{error}");
+            // Diagnostics describe types without exposing variable contents.
+            assert!(!error.contains("4096"), "{error}");
+            assert!(variable.validate_value(&Value::Null).is_err());
+
+            for wrong_shape in [json!(42), json!(false), json!({}), json!([]), json!("")] {
+                let correct_shape = match container {
+                    ValueType::Normal => wrong_shape.is_string(),
+                    ValueType::Array | ValueType::HashSet => wrong_shape.is_array(),
+                    ValueType::HashMap => wrong_shape.is_object(),
+                };
+                assert_eq!(variable.validate_value(&wrong_shape).is_ok(), correct_shape);
+            }
+        }
+    }
 
     #[test]
     fn geometry_containers_defaults_and_wire_codes_are_checked() {

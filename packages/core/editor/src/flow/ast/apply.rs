@@ -36,7 +36,7 @@ use crate::{
             BoardCommand, NodeMetadata, NodePosition, PlaceholderPinDef, node_to_metadata,
             pin_to_metadata,
         },
-        node::{FnRefs, Node, NodeLogic},
+        node::{FnRefs, Node, NodeLogic, dynamic_pin_source_literal},
         pin::{Pin, PinOptions, PinType, ValueType, resolve_schema},
         variable::{Variable, VariableType, default_value_for_type},
     },
@@ -854,6 +854,10 @@ async fn apply_board_commands_to_staged_board(
         rollback_applied(board, &applied_commands, state.clone(), error).await?;
     }
 
+    if let Err(error) = planner.validate_format_placeholders(board, &board_commands) {
+        rollback_applied(board, &applied_commands, state.clone(), error).await?;
+    }
+
     Ok(ApplyFlowScriptResult {
         commands: applied_commands,
         board_commands,
@@ -1097,6 +1101,66 @@ impl FlowScriptApplyPlanner {
             pending.remove(&index);
         }
         Ok(ready)
+    }
+
+    /// Dynamic placeholders must still have values after node updates and cleanup have settled.
+    /// Limit this check to authored nodes so unrelated incomplete canvas nodes remain editable.
+    fn validate_format_placeholders(
+        &self,
+        board: &Board,
+        commands: &[BoardCommand],
+    ) -> flow_like_types::Result<()> {
+        let touched: BTreeSet<String> = commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    ref_id: Some(node_ref),
+                    ..
+                }
+                | BoardCommand::UpdateNodePin {
+                    node_id: node_ref, ..
+                }
+                | BoardCommand::ConnectPins {
+                    to_node: node_ref, ..
+                }
+                | BoardCommand::DisconnectPins {
+                    to_node: node_ref, ..
+                } => self.resolve_node_id(board, node_ref).ok(),
+                _ => None,
+            })
+            .collect();
+        for node_id in touched {
+            // The planner's staged nodes predate the final connections and derived pin state.
+            let Some(node) = board.nodes.get(&node_id).or_else(|| {
+                board
+                    .layers
+                    .values()
+                    .find_map(|layer| layer.nodes.get(&node_id))
+            }) else {
+                continue;
+            };
+            if node.name != super::template::STRING_FORMAT_NODE_TYPE {
+                continue;
+            }
+            let Some(format) = dynamic_pin_source_literal(node, super::template::FORMAT_STRING_PIN)
+            else {
+                continue;
+            };
+            for placeholder in super::reconcile::format_string_placeholders(&format) {
+                let has_value = node.pins.values().any(|pin| {
+                    pin.pin_type == PinType::Input
+                        && pin.name == placeholder
+                        && (pin.default_value.is_some() || !pin.depends_on.is_empty())
+                });
+                if !has_value {
+                    return Err(flow_like_types::anyhow!(
+                        "string::format placeholder `{{{placeholder}}}` on `{}` has no value or connection after applying FlowScript. Supply a value for `{placeholder}`. No part of this revision was applied.",
+                        node.friendly_name
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_widget_bindings(
@@ -1632,6 +1696,17 @@ impl FlowScriptApplyPlanner {
                     self.staged_nodes.insert(node_id.clone(), node.clone());
                     generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
                 }
+                BoardCommand::SetNodeDescription {
+                    node_id,
+                    description,
+                    ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let mut node = self.resolve_node(board, &node_id)?.clone();
+                    node.description = description.clone();
+                    self.staged_nodes.insert(node_id.clone(), node.clone());
+                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                }
                 BoardCommand::SetNodeCodeNames {
                     node_id,
                     code_names,
@@ -1752,8 +1827,8 @@ impl FlowScriptApplyPlanner {
         }
         let mut fn_refs_initialized = HashSet::new();
         let mut generic_commands = Vec::new();
-        // Every Connect/Disconnect must execute after all whole-node UpdateNode commands and all
-        // moves/removals. Connections are the final persisted graph mutations in this batch.
+        // Rewires follow whole-node updates and moves/removals. Removing nodes first captures
+        // their original neighbors for undo before a replacement connection changes those edges.
         let mut connection_commands = Vec::new();
         // Regrouping into and out of Collapsed groups is presentation over the finished graph:
         // it runs last, so its bridge relays are re-derived from the final wires.
@@ -1768,6 +1843,7 @@ impl FlowScriptApplyPlanner {
                 | BoardCommand::UpdateNodePin { .. }
                 | BoardCommand::UpdateNodePinOptions { .. }
                 | BoardCommand::RenameNode { .. }
+                | BoardCommand::SetNodeDescription { .. }
                 | BoardCommand::SetNodeCodeNames { .. }
                 | BoardCommand::UpdateFunctionSignature { .. }
                 | BoardCommand::RenameLayer { .. }
@@ -2049,11 +2125,32 @@ impl FlowScriptApplyPlanner {
             }
         }
 
+        // Disconnects touching a deleted endpoint must run while that endpoint still exists.
+        // Keep all other edge edits in their authored order after removals.
+        let removed_ids: HashSet<&str> = generic_commands
+            .iter()
+            .filter_map(|command| match command {
+                GenericCommand::RemoveNode(command) => Some(command.node.id.as_str()),
+                GenericCommand::RemoveLayer(command) => Some(command.layer.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let (deletion_disconnects, connection_commands): (Vec<_>, Vec<_>) =
+            connection_commands.into_iter().partition(|command| {
+                matches!(
+                    command,
+                    GenericCommand::DisconnectPin(command)
+                        if removed_ids.contains(command.from_node.as_str())
+                            || removed_ids.contains(command.to_node.as_str())
+                )
+            });
+
         let mut composed_commands = node_update_order
             .into_iter()
             .filter_map(|node_id| node_updates.remove(&node_id))
             .map(|node| GenericCommand::UpdateNode(UpdateNodeCommand::new(node)))
             .collect::<Vec<_>>();
+        composed_commands.extend(deletion_disconnects);
         composed_commands.append(&mut generic_commands);
         let mut generic_commands = composed_commands;
         generic_commands.extend(connection_commands);
@@ -3103,6 +3200,10 @@ fn pin_type_from_str(value: &str) -> PinType {
 }
 
 #[cfg(test)]
+#[path = "apply/deletion_tests.rs"]
+mod deletion_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::flow::board::{ExecutionMode, ExecutionStage, LayerCache, LayerCacheScope};
@@ -3152,12 +3253,116 @@ mod tests {
         node
     }
 
+    #[test]
+    fn format_placeholder_validation_uses_final_values_and_only_authored_nodes() {
+        let mut board = empty_board();
+        let mut format = dynamic_format_catalog_node();
+        format.name = "string_format".into();
+        format.id = "format".into();
+        format
+            .get_pin_mut_by_name("format_string")
+            .unwrap()
+            .set_default_value(Some(json!("{greeting} x")));
+        board.nodes.insert(format.id.clone(), format);
+        let commands = vec![BoardCommand::UpdateNodePin {
+            node_id: "format".into(),
+            pin_id: "format_string".into(),
+            value: json!("{greeting} x"),
+            summary: None,
+        }];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        planner
+            .staged_nodes
+            .insert("format".into(), board.nodes["format"].clone());
+
+        assert!(planner.validate_format_placeholders(&board, &[]).is_ok());
+        assert!(
+            planner
+                .validate_format_placeholders(&board, &commands)
+                .unwrap_err()
+                .to_string()
+                .contains("{greeting}")
+        );
+        board.nodes.get_mut("format").unwrap().add_input_pin(
+            "greeting",
+            "Greeting",
+            "",
+            VariableType::Generic,
+        );
+        assert!(
+            planner
+                .validate_format_placeholders(&board, &commands)
+                .is_err()
+        );
+        let mut unrelated = Node::new("log_info", "Log", "", "test");
+        unrelated.id = "log".into();
+        board.nodes.insert(unrelated.id.clone(), unrelated);
+        assert!(
+            planner
+                .validate_format_placeholders(
+                    &board,
+                    &[BoardCommand::UpdateNodePin {
+                        node_id: "log".into(),
+                        pin_id: "message".into(),
+                        value: json!("unrelated edit"),
+                        summary: None,
+                    }]
+                )
+                .is_ok()
+        );
+        for value in [json!("hi"), json!(null)] {
+            board
+                .nodes
+                .get_mut("format")
+                .unwrap()
+                .get_pin_mut_by_name("greeting")
+                .unwrap()
+                .set_default_value(Some(value));
+            assert!(
+                planner
+                    .validate_format_placeholders(&board, &commands)
+                    .is_ok()
+            );
+        }
+        let format = board.nodes.get_mut("format").unwrap();
+        format
+            .get_pin_mut_by_name("greeting")
+            .unwrap()
+            .default_value = None;
+        format
+            .get_pin_mut_by_name("format_string")
+            .unwrap()
+            .set_default_value(Some(json!("hello")));
+        assert!(
+            planner
+                .validate_format_placeholders(&board, &commands)
+                .is_ok()
+        );
+    }
+
     fn generic_event_catalog_node() -> Node {
         let mut node = Node::new("events_generic", "Generic Event", "", "events");
         node.set_can_be_referenced_by_fns(true);
         node.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
         node.add_output_pin("payload", "Payload", "", VariableType::Struct);
         node
+    }
+
+    fn browser_handler_catalog() -> Vec<Node> {
+        let mut generic = generic_event_catalog_node();
+        generic.set_start(true);
+        let mut catalog = vec![generic, log_catalog_node()];
+        for (name, friendly_name, parameter) in [
+            ("browser_open", "Browser Open", "url"),
+            ("browser_click", "Browser Click", "ref"),
+        ] {
+            let mut node = Node::new(name, friendly_name, "", "browser");
+            node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+            node.add_input_pin(parameter, parameter, "", VariableType::String);
+            node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+            catalog.push(node);
+        }
+        catalog
     }
 
     fn function_ref_consumer_catalog_node() -> Node {
@@ -3529,6 +3734,21 @@ mod tests {
                 HTTPClient::new_without_refetch(),
             ));
 
+            let unchanged =
+                apply_flowscript_to_board(&mut board, &text, &catalog, state.clone(), None, true)
+                    .await
+                    .expect("apply original branch arms");
+            assert!(
+                unchanged.diagnostics.is_empty(),
+                "{:?}",
+                unchanged.diagnostics
+            );
+            assert!(
+                unchanged.board_commands.is_empty(),
+                "{:?}",
+                unchanged.board_commands
+            );
+
             let result =
                 apply_flowscript_to_board(&mut board, &edited, &catalog, state.clone(), None, true)
                     .await
@@ -3553,15 +3773,265 @@ mod tests {
             );
 
             let rendered = super::super::board_to_flowscript(&board, &anchored);
-            let again =
-                apply_flowscript_to_board(&mut board, &rendered, &catalog, state, None, true)
-                    .await
-                    .expect("re-apply swapped branch arms");
+            let again = apply_flowscript_to_board(
+                &mut board,
+                &rendered,
+                &catalog,
+                state.clone(),
+                None,
+                true,
+            )
+            .await
+            .expect("re-apply swapped branch arms");
             assert!(again.diagnostics.is_empty(), "{:?}", again.diagnostics);
             assert!(
                 again.board_commands.is_empty(),
                 "{:?}",
                 again.board_commands
+            );
+
+            let restored =
+                apply_flowscript_to_board(&mut board, &text, &catalog, state, None, true)
+                    .await
+                    .expect("restore original branch arms");
+            assert!(
+                restored.diagnostics.is_empty(),
+                "{:?}",
+                restored.diagnostics
+            );
+            assert_exec_edges(
+                &board,
+                &[
+                    ("event", "exec_out", "branch", "exec_in"),
+                    ("branch", "true", "first", "exec_in"),
+                    ("branch", "false", "second", "exec_in"),
+                ],
+            );
+            assert_eq!(
+                decode_default(board.nodes["branch"].get_pin_by_name("condition").unwrap()),
+                json!(true)
+            );
+            assert_eq!(super::super::board_to_flowscript(&board, &anchored), text);
+        }
+    }
+
+    #[tokio::test]
+    async fn negating_an_existing_single_arm_branch_rewires_and_restores_execution() {
+        let catalog = exec_rewire_catalog();
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        for condition in [false, true] {
+            let mut board = board_with_exec_rewire_nodes(&catalog, true);
+            board.nodes.remove("second");
+            let branch = board.nodes.get_mut("branch").unwrap();
+            branch
+                .get_pin_mut_by_name("false")
+                .unwrap()
+                .connected_to
+                .clear();
+            branch
+                .get_pin_mut_by_name("condition")
+                .unwrap()
+                .default_value = Some(flow_like_types::json::to_vec(&condition).unwrap());
+            let text = super::super::board_to_flowscript(&board, &anchored);
+            let guard = format!("if ({condition})");
+            assert!(text.contains(&guard), "{text}");
+            let negated = text.replace(&guard, &format!("if (!({condition}))"));
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+
+            for (source, output, no_change) in [
+                (&text, "true", true),
+                (&negated, "false", false),
+                (&negated, "false", true),
+                (&text, "true", false),
+                (&text, "true", true),
+            ] {
+                let result = apply_flowscript_to_board(
+                    &mut board,
+                    source,
+                    &catalog,
+                    state.clone(),
+                    None,
+                    true,
+                )
+                .await
+                .expect("apply single-arm branch edit");
+                assert!(
+                    result.diagnostics.is_empty(),
+                    "{:?}\n{source}",
+                    result.diagnostics
+                );
+                if no_change {
+                    assert!(
+                        result.board_commands.is_empty(),
+                        "{:?}",
+                        result.board_commands
+                    );
+                }
+                assert_eq!(board.nodes.len(), 3);
+                assert_exec_edges(
+                    &board,
+                    &[
+                        ("event", "exec_out", "branch", "exec_in"),
+                        ("branch", output, "first", "exec_in"),
+                    ],
+                );
+                assert_eq!(
+                    decode_default(board.nodes["branch"].get_pin_by_name("condition").unwrap()),
+                    json!(condition),
+                    "single-arm negation changes the selected output, preserving the condition"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_or_omitted_branch_arm_disconnects_its_moved_statement_and_restores() {
+        let catalog = exec_rewire_catalog();
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        for omitted_else in [false, true] {
+            let mut board = board_with_exec_rewire_nodes(&catalog, true);
+            let mut other = AddNodeCommand::new(catalog[0].clone()).node;
+            other.id = "other".to_string();
+            other.set_start(true);
+            board.nodes.insert(other.id.clone(), other);
+            let text = super::super::board_to_flowscript(&board, &anchored);
+            let event_header = text
+                .lines()
+                .find(|line| line.contains("//@n:event"))
+                .unwrap();
+            let other_header = text
+                .lines()
+                .find(|line| line.contains("//@n:other"))
+                .unwrap();
+            let else_arm = if omitted_else { "" } else { " else {\n    }" };
+            let edited = format!(
+                "{event_header}\n    if (true) {{   //@n:branch\n        firstStep()   //@n:first\n    }}{else_arm}\n}}\n{other_header}\n    secondStep()   //@n:second\n}}\n"
+            );
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            for (source, moved, no_change) in [
+                (&text, false, true),
+                (&edited, true, false),
+                (&edited, true, true),
+                (&text, false, false),
+                (&text, false, true),
+            ] {
+                let result = apply_flowscript_to_board(
+                    &mut board,
+                    source,
+                    &catalog,
+                    state.clone(),
+                    None,
+                    true,
+                )
+                .await
+                .expect("apply empty branch arm");
+                assert!(
+                    result.diagnostics.is_empty(),
+                    "{:?}\n{source}",
+                    result.diagnostics
+                );
+                if no_change {
+                    assert!(
+                        result.board_commands.is_empty(),
+                        "{:?}",
+                        result.board_commands
+                    );
+                }
+                assert_eq!(board.nodes.len(), 5);
+                let second_source = if moved {
+                    ("other", "exec_out", "second", "exec_in")
+                } else {
+                    ("branch", "false", "second", "exec_in")
+                };
+                assert_exec_edges(
+                    &board,
+                    &[
+                        ("event", "exec_out", "branch", "exec_in"),
+                        ("branch", "true", "first", "exec_in"),
+                        second_source,
+                    ],
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn swapping_existing_branch_arms_preserves_the_shared_successor_on_apply() {
+        use crate::flow::board::commands::pins::connect_pins::connect_pins;
+
+        let mut catalog = exec_rewire_catalog();
+        let mut after = Node::new("after_step", "After Step", "", "test");
+        after.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        after.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        catalog.push(after.clone());
+        after.id = "after".to_string();
+        let input = after.get_pin_by_name("exec_in").unwrap().id.clone();
+        let mut board = board_with_exec_rewire_nodes(&catalog, true);
+        board.nodes.insert(after.id.clone(), after);
+        for source in ["first", "second"] {
+            let output = board.nodes[source]
+                .get_pin_by_name("exec_out")
+                .unwrap()
+                .id
+                .clone();
+            connect_pins(&mut board, source, &output, "after", &input).unwrap();
+        }
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        let text = super::super::board_to_flowscript(&board, &anchored);
+        let edited = swap_anchored_statements(&text, "first", "second");
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+
+        for (source, true_target, false_target, no_change) in [
+            (&text, "first", "second", true),
+            (&edited, "second", "first", false),
+            (&edited, "second", "first", true),
+            (&text, "first", "second", false),
+            (&text, "first", "second", true),
+        ] {
+            let result =
+                apply_flowscript_to_board(&mut board, source, &catalog, state.clone(), None, true)
+                    .await
+                    .expect("apply branch arms with a shared successor");
+            assert!(
+                result.diagnostics.is_empty(),
+                "{:?}\n{source}",
+                result.diagnostics
+            );
+            if no_change {
+                assert!(
+                    result.board_commands.is_empty(),
+                    "{:?}",
+                    result.board_commands
+                );
+            }
+            assert_eq!(board.nodes.len(), 5);
+            assert_exec_edges(
+                &board,
+                &[
+                    ("event", "exec_out", "branch", "exec_in"),
+                    ("branch", "true", true_target, "exec_in"),
+                    ("branch", "false", false_target, "exec_in"),
+                    ("first", "exec_out", "after", "exec_in"),
+                    ("second", "exec_out", "after", "exec_in"),
+                ],
             );
         }
     }
@@ -3866,6 +4336,99 @@ mod tests {
         let serialized = serde_json::to_value(&result).unwrap();
         assert!(!serialized["diagnostics"].as_array().unwrap().is_empty());
         assert!(serialized["structured_diagnostics"].is_array());
+    }
+
+    #[tokio::test]
+    async fn colliding_handler_names_reject_apply_without_parameter_cascades_or_mutation() {
+        let mut board = empty_board();
+        let original = serde_json::to_value(&board).unwrap();
+        let catalog = browser_handler_catalog();
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let source = r#"const untouched: string = "keep this unapplied"
+
+browserOpen(url: string) {
+    logInfo({ message: url })
+}
+
+browserClick(ref: string) {
+    logInfo({ message: ref })
+}
+"#;
+
+        let result = apply_flowscript_to_board(&mut board, source, &catalog, state, None, true)
+            .await
+            .expect("handler collisions return validation diagnostics");
+
+        assert!(result.commands.is_empty());
+        assert!(result.changes.is_empty());
+        assert_eq!(serde_json::to_value(&board).unwrap(), original);
+        assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+        for (handler, node_type) in [
+            ("browserOpen", "browser_open"),
+            ("browserClick", "browser_click"),
+        ] {
+            let diagnostic = result
+                .diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic.contains(&format!(
+                        "handler name `{handler}` collides with built-in node `{node_type}`"
+                    ))
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing collision for {handler}: {:?}", result.diagnostics)
+                });
+            assert!(
+                diagnostic.contains(&format!("eventsGeneric {handler}")),
+                "{diagnostic}"
+            );
+        }
+        assert!(result.diagnostics.iter().all(|diagnostic| {
+            !diagnostic.contains("skipped connection")
+                && !diagnostic.contains("is not defined in this section")
+        }));
+    }
+
+    #[tokio::test]
+    async fn explicit_generic_handler_alias_applies_with_colliding_builtin_and_parameter_wiring() {
+        let mut board = empty_board();
+        let catalog = browser_handler_catalog();
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let source = r#"eventsGeneric browserOpen(url: string) {
+    browserOpen({ url: url })
+}
+"#;
+
+        let result = apply_flowscript_to_board(&mut board, source, &catalog, state, None, false)
+            .await
+            .expect("an explicit event selector disambiguates the handler alias");
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.commands.is_empty());
+        assert_eq!(board.nodes.len(), 2);
+        let entry = board
+            .nodes
+            .values()
+            .find(|node| node.name == "events_generic")
+            .expect("the handler uses the explicit Generic Event type");
+        assert_eq!(entry.friendly_name, "browserOpen");
+        let action = board
+            .nodes
+            .values()
+            .find(|node| node.name == "browser_open")
+            .expect("the handler body can still call the built-in node");
+        for (output_name, input_name) in [("exec_out", "exec_in"), ("url", "url")] {
+            let output = entry.get_pin_by_name(output_name).unwrap();
+            let input = action.get_pin_by_name(input_name).unwrap();
+            assert!(output.connected_to.contains(&input.id));
+            assert!(input.depends_on.contains(&output.id));
+        }
     }
 
     #[tokio::test]
@@ -5645,6 +6208,82 @@ eventsChat() {
         assert!(!pin.is_optional());
         assert!(pin.default_value.is_none());
         assert!(pin.options.is_none());
+    }
+
+    #[tokio::test]
+    async fn event_description_applies_to_new_refs_and_composes_with_other_node_edits() {
+        let mut board = empty_board();
+        let mut event = generic_event_catalog_node();
+        event.set_start(true);
+        let catalog = vec![event];
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let result = apply_board_commands_to_board(
+            &mut board,
+            vec![
+                add_generic_event(vec![generic_event_output_def(
+                    "ticketId", "String", None, false, None,
+                )]),
+                BoardCommand::SetNodeDescription {
+                    node_id: "$0".into(),
+                    description: "Look up a ticket".into(),
+                    summary: None,
+                },
+                BoardCommand::RenameNode {
+                    node_id: "$0".into(),
+                    friendly_name: "lookupTicket".into(),
+                    summary: None,
+                },
+                pin_options("$0", "ticketId", true, Some(json!("T-1"))),
+            ],
+            &catalog,
+            state.clone(),
+            None,
+        )
+        .await
+        .expect("new entry description applies");
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let node = board.nodes.values().next().expect("created event");
+        let id = node.id.clone();
+        assert_eq!(node.friendly_name, "lookupTicket");
+        assert_eq!(
+            crate::flow::pin::resolve_schema(&node.description, &board.refs).unwrap(),
+            "Look up a ticket"
+        );
+        let pin = node.get_pin_by_name("ticketId").unwrap();
+        assert!(pin.is_optional());
+        assert_eq!(decode_default(pin), json!("T-1"));
+
+        for description in ["Look up the latest ticket", ""] {
+            let result = apply_board_commands_to_board(
+                &mut board,
+                vec![BoardCommand::SetNodeDescription {
+                    node_id: id.clone(),
+                    description: description.into(),
+                    summary: None,
+                }],
+                &catalog,
+                state.clone(),
+                None,
+            )
+            .await
+            .expect("existing entry description applies");
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.changes.descriptions_changed.len(), 1);
+            assert_eq!(result.changes.descriptions_changed[0].after, description);
+            let node = &board.nodes[&id];
+            assert_eq!(
+                crate::flow::pin::resolve_schema(&node.description, &board.refs).unwrap(),
+                description
+            );
+            assert_eq!(node.friendly_name, "lookupTicket");
+            assert_eq!(
+                decode_default(node.get_pin_by_name("ticketId").unwrap()),
+                json!("T-1")
+            );
+        }
     }
 
     #[test]

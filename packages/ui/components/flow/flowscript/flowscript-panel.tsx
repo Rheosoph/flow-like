@@ -179,7 +179,10 @@ import {
 	deriveRunTraceLines,
 	runStatsKey,
 } from "./flowscript-run-trace";
-import { computeFlowScriptMarkersPreferWorker } from "./flowscript-worker-client";
+import {
+	computeFlowScriptMarkersPreferWorker,
+	flowScriptWorkerRequests,
+} from "./flowscript-worker-client";
 import type { FlowScriptFileStore } from "./use-flowscript-files";
 
 const DESTRUCTIVE_BLOCK_PREFIX = "FlowScript edit would delete ";
@@ -341,6 +344,26 @@ function writeDimAnchorsPreference(dim: boolean): void {
 	}
 }
 
+function FlowScriptLoadingStatus({
+	label,
+	description,
+}: {
+	label: string;
+	description: string;
+}) {
+	return (
+		<output
+			aria-live="polite"
+			aria-atomic="true"
+			className="flex flex-col items-center gap-2 p-6 text-center text-muted-foreground"
+		>
+			<Loader2Icon className="h-5 w-5 animate-spin" aria-hidden="true" />
+			<span className="text-sm font-medium">{label}</span>
+			<span className="max-w-xs text-xs">{description}</span>
+		</output>
+	);
+}
+
 export function FlowScriptPanel({
 	appId,
 	boardId,
@@ -396,8 +419,10 @@ export function FlowScriptPanel({
 	);
 	useEffect(() => onFlowScriptNamesTableLoaded(() => setNamesReady(true)), []);
 	const [dimAnchors, setDimAnchors] = useState(readDimAnchorsPreference);
-	// Developer mode only: a live readout of the presence pipeline.
+	// Presence diagnostics require a development build and developer mode.
 	const { developerMode } = useDeveloperMode();
+	const presenceDebugAvailable =
+		process.env.NODE_ENV === "development" && developerMode;
 	const [presenceDebug, setPresenceDebug] = useState(() => {
 		try {
 			return localStorage.getItem(PRESENCE_DEBUG_STORAGE_KEY) === "on";
@@ -1464,6 +1489,7 @@ export function FlowScriptPanel({
 				? registerFlowScriptRunLens(monaco, {
 						editor,
 						getCatalogNodes: () => catalogRef.current,
+						workerRequests: flowScriptWorkerRequests,
 						getGate: () => runLensGateRef.current,
 						getLabels: () => runLensLabelsRef.current,
 						onRun: (nodeId, mode) => onRunEventNodeRef.current?.(nodeId, mode),
@@ -2708,7 +2734,7 @@ export function FlowScriptPanel({
 								: t("dimAnchorComments", "Dim anchor comments")}
 						</TooltipContent>
 					</Tooltip>
-					{developerMode && (
+					{presenceDebugAvailable && (
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
@@ -2962,7 +2988,25 @@ export function FlowScriptPanel({
 			<div className="relative min-h-0 flex-1">
 				{loading && (
 					<div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
-						<Loader2Icon className="h-5 w-5 animate-spin text-muted-foreground" />
+						<FlowScriptLoadingStatus
+							label={t("flowscriptPreparing", "Preparing FlowScript…")}
+							description={
+								scoped
+									? t(
+											"flowscriptLoadingSelection",
+											"Loading the selected nodes as editable text.",
+										)
+									: scopeMode.kind === "file" && !readOnly
+										? t(
+												"flowscriptLoadingFile",
+												"Loading the selected file from the board.",
+											)
+										: t(
+												"flowscriptLoadingBoard",
+												"Loading the board as editable text. Large boards can take longer to prepare.",
+											)
+							}
+						/>
 					</div>
 				)}
 				{loadError ? (
@@ -2980,6 +3024,20 @@ export function FlowScriptPanel({
 						language={FLOWSCRIPT_LANGUAGE_ID}
 						value={text}
 						onChange={(value) => setText(value ?? "")}
+						loading={
+							loading ? null : (
+								<FlowScriptLoadingStatus
+									label={t(
+										"flowscriptStartingEditor",
+										"Starting FlowScript editor…",
+									)}
+									description={t(
+										"flowscriptLoadingEditor",
+										"Preparing syntax highlighting and editor controls.",
+									)}
+								/>
+							)
+						}
 						theme={editorTheme}
 						onMount={handleEditorMount}
 						options={{
@@ -3005,7 +3063,7 @@ export function FlowScriptPanel({
 						}}
 					/>
 				)}
-				{developerMode && presenceDebug && !loadError && (
+				{presenceDebugAvailable && presenceDebug && !loadError && (
 					<FlowScriptPresenceDebug
 						awareness={awareness}
 						snapshot={presenceSnapshot}

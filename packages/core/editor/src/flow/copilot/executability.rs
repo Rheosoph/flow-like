@@ -926,6 +926,7 @@ fn project_graph(
             | BoardCommand::UpdateNodePinOptions { .. }
             | BoardCommand::SetNodeFunctionRefs { .. }
             | BoardCommand::SetNodeCodeNames { .. }
+            | BoardCommand::SetNodeDescription { .. }
             | BoardCommand::UpdateFunctionSignature { .. }
             | BoardCommand::AddComment { .. }
             | BoardCommand::RemoveComment { .. } => {}

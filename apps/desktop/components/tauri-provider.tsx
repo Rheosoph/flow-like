@@ -2271,6 +2271,44 @@ export function ProfileSyncer({
 						}
 					}
 
+					if (disposed) return;
+					try {
+						const customBitsResponse = await fetchWithDeadline(
+							`${apiBase}/api/v1/user/bits?device_models=true`,
+							{
+								method: "GET",
+								headers: { Authorization: `Bearer ${accessToken}` },
+							},
+						);
+						if (!customBitsResponse.ok) {
+							throw new Error("Could not check the custom bit library.");
+						}
+						const customBits: unknown = await customBitsResponse.json();
+						if (!Array.isArray(customBits)) {
+							throw new Error("The custom bit library response is invalid.");
+						}
+						const remoteCustomBitIds = customBits.map((bit: unknown) => {
+							if (
+								!isRecord(bit) ||
+								typeof bit.id !== "string" ||
+								!bit.id.trim()
+							) {
+								throw new Error("The custom bit library response is invalid.");
+							}
+							return bit.id;
+						});
+						if (disposed) return;
+						const prunedBits = await invoke<boolean>(
+							"prune_missing_profile_bits",
+							{ hub: apiBase, remoteCustomBitIds },
+						);
+						if (prunedBits && !disposed) {
+							void syncQueueRef.current.request(syncProfiles, true);
+						}
+					} catch (error) {
+						console.warn("Failed to remove missing profile bits:", error);
+					}
+
 					await backend.queryClient?.invalidateQueries({
 						predicate: ({ queryKey }) =>
 							[

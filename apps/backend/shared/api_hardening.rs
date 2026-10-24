@@ -41,12 +41,51 @@ fn cors_for_origins(configured: &str) -> Result<CorsLayer, Box<dyn std::error::E
     Ok(CorsLayer::new()
         .allow_origin(origins)
         .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any))
+        // Authorization requires an explicit header name in the preflight cache.
+        .allow_headers(tower_http::cors::AllowHeaders::mirror_request())
+        .max_age(std::time::Duration::from_secs(600)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::cors_for_origins;
+    use axum::{body::Body, handler::Handler, http::Request};
+
+    #[tokio::test]
+    async fn preflight_cache_preserves_origin_allowlist_and_credentials_policy() {
+        let cors = cors_for_origins("https://app.example.test").unwrap();
+        for (origin, allowed) in [
+            ("https://app.example.test", true),
+            ("https://other.example.test", false),
+        ] {
+            let request = Request::builder()
+                .method("OPTIONS")
+                .uri("/invoke")
+                .header("origin", origin)
+                .header("access-control-request-method", "POST")
+                .header(
+                    "access-control-request-headers",
+                    "authorization,content-type,x-flow-like-test",
+                )
+                .body(Body::empty())
+                .unwrap();
+            let response = (|| async {}).layer(cors.clone()).call(request, ()).await;
+            let headers = response.headers();
+
+            assert_eq!(headers["access-control-max-age"], "600");
+            assert_eq!(headers["access-control-allow-methods"], "*");
+            assert_eq!(
+                headers["access-control-allow-headers"],
+                "authorization,content-type,x-flow-like-test"
+            );
+            assert!(headers.get("access-control-allow-credentials").is_none());
+            if allowed {
+                assert_eq!(headers["access-control-allow-origin"], origin);
+            } else {
+                assert!(headers.get("access-control-allow-origin").is_none());
+            }
+        }
+    }
 
     #[test]
     fn permits_desktop_and_http_origins_without_paths_or_wildcards() {

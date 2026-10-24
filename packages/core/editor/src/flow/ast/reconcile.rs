@@ -36,6 +36,7 @@ use node_moves::{MoveDestination, NodeMovePlan};
 
 mod groups;
 mod node_moves;
+mod orphan_expressions;
 mod signatures;
 use crate::flow::board::{Board, Layer, LayerCache, LayerCacheScope, LayerType};
 use crate::flow::copilot::{
@@ -106,10 +107,9 @@ impl ReconcileOptions<'_> {
 
 /// Diff a parsed FlowScript AST against `existing` and emit the minimal `BoardCommand`s.
 ///
-/// Only nodes carrying a stable anchor (`//@n:<id>`) are eligible for in-place edits or removal,
-/// and removal is further gated on the node being *text-visible* (it appears in the board's own
-/// lowered/rendered form) so inlined/sugared helper nodes are never deleted merely for being
-/// absent from the text. See the module docs for the full contract.
+/// Stable anchors (`//@n:<id>`) identify in-place edits and text-visible statement deletions.
+/// Inlined helpers are removed only when a deletion leaves them unused; absence of an anchor
+/// alone never deletes them. See the module docs for the full contract.
 pub fn reconcile(existing: &Board, new: &BoardAst) -> ReconcileResult {
     reconcile_inner(existing, new, None, None, &ReconcileOptions::default())
 }
@@ -1525,10 +1525,9 @@ fn reconcile_inner(
     opts: &ReconcileOptions,
 ) -> ReconcileResult {
     // Selection-scoped applies see only the board sections their document rendered. Out-of-scope
-    // events/functions are excluded from the deletion diff below (`visible`), which is the ONLY
-    // place reconcile plans node removals — so a scoped document can never delete content it did
-    // not render. Everything else (variables, catalog resolution, structural planning) keeps the
-    // full board as context.
+    // events/functions are excluded from the deletion diff below (`visible`). Expression cleanup
+    // follows affected consumers and keeps helpers still used outside the scope. Variables,
+    // catalog resolution, and structural planning keep the full board as context.
     let mode = opts.mode;
     let scope: Option<HashSet<&str>> = opts
         .scope_anchors
@@ -1589,7 +1588,8 @@ fn reconcile_inner(
             collect_calls(&submitted.ast, &mut written_calls);
             signatures::SignatureMigrations::plan(
                 existing,
-                &submitted.ast,
+                &submitted,
+                &modules,
                 &written_calls.into_keys().collect(),
                 mode != ReconcileMode::Replace || scope.is_some(),
             )
@@ -1599,6 +1599,9 @@ fn reconcile_inner(
     result
         .diagnostics
         .extend(migrations.diagnostics.iter().cloned());
+    if !migrations.diagnostics.is_empty() {
+        return result;
+    }
     result.commands.extend(migrations.commands());
     let migrated_board = migrations.planning_board(existing);
     let existing = migrated_board.as_ref().unwrap_or(existing);
@@ -2067,6 +2070,14 @@ fn reconcile_inner(
     }
 
     keep_variables_the_plan_wires(&mut result.commands);
+
+    if mode == ReconcileMode::Replace {
+        orphan_expressions::remove_orphans(existing, &new_anchors, &mut result.commands);
+        removed_ids.extend(result.commands.iter().filter_map(|command| match command {
+            BoardCommand::RemoveNode { node_id, .. } => Some(node_id.clone()),
+            _ => None,
+        }));
+    }
 
     // Bridge severed exec chains AFTER structural planning merged: when a removed statement was
     // REPLACED, the planner already re-targeted the predecessor's exec output (exec outputs are
@@ -2957,9 +2968,10 @@ const GROUP_ANCHOR_KEY: &str = "\u{0}group:";
 
 /// Re-join execution chains severed by deletions: for each removed segment whose predecessor and
 /// (transitive) successor survive, emit the bridging ConnectPins so the tail keeps running.
-/// Layer boundary pins count as endpoints — deleting the first statement of a function body
-/// re-joins its layer's `exec_in` to the surviving successor. Sources the merged plan already
-/// drives (`occupied_sources`) are skipped: the planner's replacement wiring wins. Ambiguous
+/// Function boundary pins count as endpoints: deleting the first statement of a function body
+/// re-joins its layer's `exec_in` to the surviving successor. Reroutes and presentational layer
+/// pins are transparent. Sources the merged plan already drives (`occupied_sources`) are
+/// skipped: the planner's replacement wiring wins. Ambiguous
 /// shapes (multiple predecessors or successors) get a diagnostic instead of a guess.
 fn bridge_removed_exec_chains(
     existing: &Board,
@@ -3008,10 +3020,26 @@ fn bridge_removed_exec_chains(
             if !seen.insert(pin_id.clone()) {
                 continue;
             }
-            match bridges.get(pin_id.as_str()) {
-                Some(bridge) if upstream => stack.extend(bridge.depends_on.iter().cloned()),
-                Some(bridge) => stack.extend(bridge.connected_to.iter().cloned()),
-                None => out.push(pin_id),
+            if let Some(bridge) = bridges.get(pin_id.as_str()) {
+                if upstream {
+                    stack.extend(bridge.depends_on.iter().cloned());
+                } else {
+                    stack.extend(bridge.connected_to.iter().cloned());
+                }
+            } else if let Some((_, _, Some(node))) = pin_owner.get(pin_id.as_str())
+                && node.name == "reroute"
+            {
+                // Reroutes have no FlowScript anchor. Follow their opposite pins to the real
+                // endpoint, including when their Generic pins carry execution edges.
+                for pin in node.pins.values() {
+                    if upstream && pin.pin_type == PinType::Input {
+                        stack.extend(pin.depends_on.iter().cloned());
+                    } else if !upstream && pin.pin_type == PinType::Output {
+                        stack.extend(pin.connected_to.iter().cloned());
+                    }
+                }
+            } else {
+                out.push(pin_id);
             }
         }
         out
@@ -7356,7 +7384,7 @@ impl CatalogIndex {
         }
 
         Err(format!(
-            "FlowScript call `{display}` does not match a catalog declaration; call `get_declarations` and use the exact function name"
+            "FlowScript call `{display}` does not match a catalog declaration; check the function name and the available node definitions"
         ))
     }
 }
@@ -8900,7 +8928,11 @@ impl<'a> StructuralPlanner<'a> {
         self.seed_top_level_variables(ast);
         // Function layers are created (and their impurity decided) up front so call sites in
         // events and other functions resolve regardless of declaration order.
-        self.prepare_functions(doc);
+        // A rejected signature has no callable layer or outputs. Report that failure before
+        // planning bodies, where its calls and their bindings would otherwise look undefined.
+        if !self.prepare_functions(doc) {
+            return (self.result, self.execution, self.removed_node_ids);
+        }
         self.resolve_node_moves(doc);
         let module_variable_names = super::lower::variable_names(self.existing);
         for (index, event) in ast.events.iter().enumerate() {
@@ -8975,7 +9007,7 @@ impl<'a> StructuralPlanner<'a> {
         (self.result, self.execution, self.removed_node_ids)
     }
 
-    fn prepare_functions(&mut self, doc: &FlatDocument) {
+    fn prepare_functions(&mut self, doc: &FlatDocument) -> bool {
         // The written module block is authoritative: an anchored function written elsewhere
         // moves there (detected in `prepare_function_sigs`).
         let changed_layers: HashSet<String> = self
@@ -9010,6 +9042,7 @@ impl<'a> StructuralPlanner<'a> {
                 .push(format!("Renamed function `{old_name}` to `{new_name}`."));
         }
         let ast = &doc.ast;
+        let mut contracts_valid = true;
         for (index, func) in ast.functions.iter().enumerate() {
             if func
                 .params
@@ -9039,6 +9072,7 @@ impl<'a> StructuralPlanner<'a> {
             let Some((params, returns)) = self.function_contract_metadata(func, &entity, impure)
             else {
                 self.function_sigs.remove(&key);
+                contracts_valid = false;
                 continue;
             };
             if matches!(entity, NodeEntity::Layer { .. })
@@ -9069,6 +9103,7 @@ impl<'a> StructuralPlanner<'a> {
         }
         self.current_module = None;
         self.index_qualified_functions();
+        contracts_valid
     }
 
     /// A module-local function silently wins over a global of the same name on read-back, so a
@@ -9133,6 +9168,16 @@ impl<'a> StructuralPlanner<'a> {
             return Some((expected_params, expected_returns));
         };
         let layer = self.existing.layers.get(layer_id)?;
+        let matching = if func.anchor.is_some() {
+            "identified by its `//@l` anchor"
+        } else {
+            "matched by name"
+        };
+        let recovery = if func.anchor.is_some() {
+            "Keep the existing signature, or remove the function's `//@l` anchor and rename the function and its calls to create a new layer. You can also delete the existing layer before applying again."
+        } else {
+            "Keep the existing signature, rename the function and its calls to create a new layer, or delete the existing layer before applying again."
+        };
         let has_exec_in = layer
             .pins
             .values()
@@ -9144,9 +9189,8 @@ impl<'a> StructuralPlanner<'a> {
         if has_exec_in != impure || has_exec_out != impure {
             // Live layers legitimately diverge from the prescan's ideal boundary shape: legacy
             // layers predate exec pins, and terminal functions carry `exec_in` without
-            // `exec_out`. Reconcile never rewrites anchored boundary pins (the live layer is
-            // authoritative, as in `add_function_call_node`), so the only fatal case is a text
-            // edit that makes a genuinely pure layer impure — its body could never run.
+            // `exec_out`. Signature migration preserves execution pins, so the fatal case is
+            // an edit that makes a pure layer impure: its body could never run.
             let live_body_impure = self
                 .existing
                 .nodes
@@ -9156,7 +9200,7 @@ impl<'a> StructuralPlanner<'a> {
                 .any(|node| exec_input_pin(node).is_some());
             if impure && !has_exec_in && !live_body_impure {
                 self.result.diagnostics.push(format!(
-                    "function `{}` changes the execution-boundary contract of anchored Function layer `{layer_id}`; anchored function signatures cannot be rewritten by FlowScript",
+                    "function `{}` changes the execution-boundary contract of Function layer `{layer_id}`, {matching}; Apply cannot migrate this signature automatically. {recovery}",
                     func.name
                 ));
                 return None;
@@ -9195,7 +9239,7 @@ impl<'a> StructuralPlanner<'a> {
             .collect::<Vec<_>>();
         if !params_match || !returns_match {
             self.result.diagnostics.push(format!(
-                "function `{}` changes the data-boundary contract of anchored Function layer `{layer_id}`; parameter/return names, order, types, containers, and authored schemas must match the live layer",
+                "function `{}` changes the data-boundary contract of Function layer `{layer_id}`, {matching}; Apply cannot migrate this signature automatically. Parameter and return names, order, types, containers, and authored schemas must match the existing layer. {recovery}",
                 func.name
             ));
             return None;
@@ -10354,11 +10398,36 @@ impl<'a> StructuralPlanner<'a> {
                 }),
         };
 
-        self.push_scope();
-        if let Some(entry) = &entry {
-            self.seed_params_from_entity(&event.params, entry);
+        // Entry resolution already reported the failure. Without an entry, parameters cannot
+        // be bound and planning the body would only add misleading connection diagnostics.
+        let Some(entry) = entry else {
+            return;
+        };
+        if let Some(description) = &event.description {
+            let unchanged = match &entry {
+                NodeEntity::Existing(id) => {
+                    find_board_node(self.existing, id).is_some_and(|node| {
+                        resolve_schema(&node.description, &self.existing.refs)
+                            .unwrap_or(&node.description)
+                            == description
+                    })
+                }
+                _ => false,
+            };
+            if !unchanged {
+                self.update_commands.push(BoardCommand::SetNodeDescription {
+                    node_id: entry.node_ref(),
+                    description: description.clone(),
+                    summary: Some(format!(
+                        "Set description of event {}",
+                        event.event_name.as_deref().unwrap_or(&event.name)
+                    )),
+                });
+            }
         }
-        if let (Some(anchor), Some(entry)) = (unavailable_anchor.as_ref(), entry.as_ref()) {
+        self.push_scope();
+        self.seed_params_from_entity(&event.params, &entry);
+        if let Some(anchor) = unavailable_anchor.as_ref() {
             self.recovered_event_anchors
                 .insert(anchor.clone(), entry.clone());
         }
@@ -10369,11 +10438,11 @@ impl<'a> StructuralPlanner<'a> {
         let enclosing_blocks = std::mem::take(&mut self.closed_block_symbols);
         let enclosing_rebinds = std::mem::take(&mut self.closed_branch_rebinds);
         let live_entry = match &entry {
-            Some(NodeEntity::Existing(id)) => Some(id.clone()),
+            NodeEntity::Existing(id) => Some(id.clone()),
             _ => None,
         };
         let enclosing_entry = std::mem::replace(&mut self.current_event_entry, live_entry);
-        self.plan_block(&event.body, entry.map(ExecCursor::new), target_layer);
+        self.plan_block(&event.body, Some(ExecCursor::new(entry)), target_layer);
         self.current_event_entry = enclosing_entry;
         if let Some(anchor) = unavailable_anchor {
             self.recovered_event_anchors.remove(&anchor);
@@ -11438,8 +11507,15 @@ impl<'a> StructuralPlanner<'a> {
                 self.plan_return(values, anchor.as_deref(), target_layer)
             }
             Stmt::Local(var) => {
-                self.register_local_variable_decl(var, target_layer.as_deref());
-                None
+                let variable_id =
+                    self.register_local_variable_decl(var, target_layer.as_deref())?;
+                if !self.plans_reentrant_block() {
+                    return None;
+                }
+                // Typed declarations need the same per-visit reset as inferred locals.
+                let value = Expr::Literal(var.default.clone()?);
+                self.add_variable_set_node(&variable_id, &var.name, &value, target_layer)
+                    .map(PlannedStmt::new)
             }
             // `plan_block` opens every group before its statements are planned.
             Stmt::Collapse(_) | Stmt::Comment(_) => None,
@@ -11451,7 +11527,11 @@ impl<'a> StructuralPlanner<'a> {
     /// The lowered form of a promoted local is this declaration plus an anchored seed
     /// assignment; without the symbol that assignment can no longer resolve as a `variable_set`
     /// and the board's own round-trip stops applying.
-    fn register_local_variable_decl(&mut self, var: &VarDecl, target_layer: Option<&str>) {
+    fn register_local_variable_decl(
+        &mut self,
+        var: &VarDecl,
+        target_layer: Option<&str>,
+    ) -> Option<String> {
         let variable_id = if let Some(anchor) = var.anchor.as_deref() {
             let in_target_scope = match target_layer {
                 Some(layer_id) => self
@@ -11471,7 +11551,7 @@ impl<'a> StructuralPlanner<'a> {
                     locations.join(" and "),
                     variable_target_scope_label(self.existing, target_layer)
                 ));
-                return;
+                return None;
             } else if board_contains_entity_id(self.existing, anchor) {
                 self.result.diagnostics.push(format!(
                     "local variable `{}` keeps anchor `{anchor}`, but that ID identifies {}; a `//@v:` anchor must identify a variable in {}",
@@ -11479,7 +11559,7 @@ impl<'a> StructuralPlanner<'a> {
                     board_entity_location_labels(self.existing, anchor).join(" and "),
                     variable_target_scope_label(self.existing, target_layer)
                 ));
-                return;
+                return None;
             } else {
                 None
             }
@@ -11518,7 +11598,7 @@ impl<'a> StructuralPlanner<'a> {
                             variable_target_scope_label(self.existing, target_layer),
                             quoted_list(many)
                         ));
-                        return;
+                        return None;
                     }
                 },
             }
@@ -11537,8 +11617,13 @@ impl<'a> StructuralPlanner<'a> {
                 var.schema.clone(),
                 target_layer.map(str::to_string),
             );
-            self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
-            return;
+            self.insert_symbol(
+                var.name.clone(),
+                SymbolValue::VariableRef {
+                    variable_id: variable_id.clone(),
+                },
+            );
+            return Some(variable_id);
         };
         self.bind_local_variable(
             &variable_id,
@@ -11546,7 +11631,13 @@ impl<'a> StructuralPlanner<'a> {
             &LocalVariableShape::of_declaration(var),
             target_layer,
         );
-        self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
+        self.insert_symbol(
+            var.name.clone(),
+            SymbolValue::VariableRef {
+                variable_id: variable_id.clone(),
+            },
+        );
+        Some(variable_id)
     }
 
     fn bind_local_variable(
@@ -12396,9 +12487,10 @@ impl<'a> StructuralPlanner<'a> {
 
     /// Resolve an event block's entry node. A non-empty `node_type` is an exact catalog identity
     /// supplied by the typed AST and is therefore authoritative; `display` remains the authored
-    /// handler alias. Text-parsed FlowScript has no `node_type`, so that legacy surface continues
-    /// to resolve by display and then fall back to a Generic/Simple event. A given `event_name`
-    /// (`eventsSimple dashboardLoad() { }`) always becomes the entry node's friendly name.
+    /// handler alias. Text-parsed FlowScript resolves by display, rejects collisions with nodes
+    /// that cannot start an event, and falls back to a Generic/Simple event for unknown names.
+    /// An explicit `event_name` (`eventsSimple dashboardLoad() { }`) always becomes the entry
+    /// node's friendly name.
     fn add_entry_node(
         &mut self,
         display: &str,
@@ -12433,8 +12525,9 @@ impl<'a> StructuralPlanner<'a> {
         match self.catalog.resolve_display(display) {
             Ok(meta) => {
                 if let Some(reason) = event_entry_incompatibility(&meta) {
+                    let handler_name = event_name.unwrap_or(display);
                     self.result.diagnostics.push(format!(
-                        "FlowScript handler `{display}` resolved to `{}`, which cannot be used as an event entry: {reason}",
+                        "FlowScript handler name `{display}` collides with built-in node `{}`, which cannot be used as an event entry: {reason}. Rename the handler or declare it explicitly as `eventsGeneric {handler_name}(...) {{ ... }}`.",
                         meta.name
                     ));
                     return None;
@@ -14175,7 +14268,8 @@ impl<'a> StructuralPlanner<'a> {
         let retained_implicit = self.removed_node_ids.remove(source_node_id);
         self.plan_call_arguments(&call, &entity, &meta, target_layer, true);
         if retained_implicit && self.entity_exec_input_pin(&entity).is_some() {
-            self.retained_implicit_node_ids.insert(source_node_id.clone());
+            self.retained_implicit_node_ids
+                .insert(source_node_id.clone());
             self.pending_exec_splices.push(entity.clone());
         }
 
@@ -14356,7 +14450,8 @@ impl<'a> StructuralPlanner<'a> {
     /// A literal written to an existing input replaces whatever feeds it. The runtime reads a
     /// wired input from its edge, so a default written beneath a surviving edge is silently
     /// ignored — and reconcile re-renders the old source as if the edit never happened. Only the
-    /// direct edge is cut: a reroute it dead-ends is pruned by apply, the producer stays.
+    /// direct edge is cut here. Replace reconciliation prunes unused expression producers, and
+    /// apply removes reroutes left dangling by the edit.
     fn disconnect_input_sources(&mut self, entity: &NodeEntity, pin_ref: &str) {
         let NodeEntity::Existing(node_id) = entity else {
             return;
@@ -20193,6 +20288,10 @@ mod tests {
         include!("reconcile/execution_tests.rs");
     }
 
+    mod orphan_expression_tests {
+        include!("reconcile/orphan_expression_tests.rs");
+    }
+
     use super::*;
     use crate::flow::board::{
         Board, ExecutionMode, ExecutionStage, Layer, LayerCache, LayerCacheScope, LayerType,
@@ -20331,6 +20430,191 @@ mod tests {
             "a second layer named renderThreads would make the board's own readback invalid: {:?}",
             result.commands
         );
+    }
+
+    #[test]
+    fn unanchored_signature_change_migrates_the_matched_layer_and_resolves_its_calls() {
+        for module in [None, Some("history-module")] {
+            let mut board = empty_board();
+            let history = Layer::new(
+                "history-module".to_string(),
+                "history".to_string(),
+                LayerType::Module,
+            );
+            board.layers.insert(history.id.clone(), history);
+            for (id, parent) in [
+                ("root-history-row", None),
+                ("module-history-row", Some("history-module")),
+            ] {
+                let mut layer = Layer::new(
+                    id.to_string(),
+                    "psHistoryRow".to_string(),
+                    LayerType::Function,
+                );
+                layer.parent_id = parent.map(str::to_string);
+                let mut boundary = Node::new("boundary", "Boundary", "", "test");
+                let pin = boundary
+                    .add_output_pin("message", "Message", "", VariableType::String)
+                    .clone();
+                layer.pins.insert(pin.id.clone(), pin);
+                board.layers.insert(layer.id.clone(), layer);
+            }
+            let source = r#"function psHistoryRow(prefix: string): (row: Date) {
+    const value = dateSource()
+    return value.date
+}
+eventsSimple() {
+    const row = psHistoryRow({ prefix: "history" })
+    logDate({ date: row.row })
+}
+"#;
+            let source = if module.is_some() {
+                format!("module history {{\n{source}\n}}")
+            } else {
+                source.to_string()
+            };
+            let catalog = vec![
+                catalog_meta(
+                    "date_source",
+                    "Date Source",
+                    vec![],
+                    vec![pin_meta("date", "Date", PinType::Output)],
+                ),
+                catalog_meta(
+                    "events_simple",
+                    "Simple Event",
+                    vec![],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                catalog_meta(
+                    "log_date",
+                    "Log Date",
+                    vec![
+                        pin_meta("exec_in", "Execution", PinType::Input),
+                        pin_meta("date", "Date", PinType::Input),
+                    ],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                catalog_meta(
+                    "control_call_function",
+                    "Call Function",
+                    vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                    vec![],
+                ),
+            ];
+            let result = reconcile_text_with_catalog(&board, &source, &catalog);
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            let expected_layer = if module.is_some() {
+                "module-history-row"
+            } else {
+                "root-history-row"
+            };
+            let migrations = result
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    BoardCommand::UpdateFunctionSignature { layer_id, pins, .. } => {
+                        Some((layer_id.as_str(), pins))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(migrations.len(), 1, "{:?}", result.commands);
+            assert_eq!(migrations[0].0, expected_layer);
+            assert_eq!(migrations[0].1[0].name, "prefix");
+            assert_eq!(migrations[0].1[1].name, "row");
+            assert_eq!(migrations[0].1[1].data_type, "Date");
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == FUNCTION_LAYER_ID_PIN && value.as_str() == Some(expected_layer)
+                )),
+                "{:?}",
+                result.commands
+            );
+            assert!(!result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::CreateLayer { layer_type: Some(layer_type), .. }
+                    if layer_type == "Function"
+            )));
+        }
+    }
+
+    #[test]
+    fn rejected_function_signature_reports_recovery_without_call_or_binding_cascades() {
+        for anchored in [false, true] {
+            for data_contract in [false, true] {
+                let mut board = empty_board();
+                let mut layer = Layer::new(
+                    "history-row".to_string(),
+                    "psHistoryRow".to_string(),
+                    LayerType::Function,
+                );
+                let mut boundary = Node::new("boundary", "Boundary", "", "test");
+                if data_contract {
+                    let pin = boundary.add_output_pin("row", "Row", "", VariableType::Struct);
+                    pin.schema = Some(r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#.to_string());
+                    pin.options = Some(PinOptions {
+                        enforce_schema: Some(true),
+                        ..PinOptions::default()
+                    });
+                    layer.pins.insert(pin.id.clone(), pin.clone());
+                }
+                board.layers.insert(layer.id.clone(), layer);
+                let anchor = if anchored { " //@l:history-row" } else { "" };
+                let signature = if data_contract { ": (row: Struct)" } else { "" };
+                let body = if data_contract {
+                    "const value = makeRow()\n    return value.row"
+                } else {
+                    "log({ message: \"history\" })"
+                };
+                let source = format!(
+                    "function psHistoryRow(){signature} {{{anchor}\n    {body}\n}}\neventsSimple() {{\n    const row = psHistoryRow()\n    log({{ message: row }})\n}}"
+                );
+                let result = reconcile_text_with_catalog(
+                    &board,
+                    &source,
+                    &[catalog_meta(
+                        "log",
+                        "Log",
+                        vec![
+                            pin_meta("exec_in", "Execution", PinType::Input),
+                            pin_meta("message", "String", PinType::Input),
+                        ],
+                        vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                    )],
+                );
+                assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+                let diagnostic = &result.diagnostics[0];
+                assert!(
+                    diagnostic.contains("function `psHistoryRow`"),
+                    "{diagnostic}"
+                );
+                assert!(
+                    diagnostic.contains(if data_contract {
+                        "changes the data-boundary contract"
+                    } else {
+                        "changes the execution-boundary contract"
+                    }),
+                    "{diagnostic}"
+                );
+                assert!(
+                    diagnostic.contains("rename the function and its calls"),
+                    "{diagnostic}"
+                );
+                assert!(
+                    diagnostic.contains("delete the existing layer"),
+                    "{diagnostic}"
+                );
+                assert_eq!(diagnostic.contains("matched by name"), !anchored);
+                assert_eq!(
+                    diagnostic.contains("remove the function's `//@l` anchor"),
+                    anchored
+                );
+                assert!(result.commands.is_empty(), "{:?}", result.commands);
+            }
+        }
     }
 
     #[test]
@@ -25104,6 +25388,7 @@ eventsSimple() {
                 name: "eventsSimple".to_string(),
                 node_type: "events_generic".to_string(),
                 event_name: None,
+                description: None,
                 params: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt::Call {
@@ -25185,6 +25470,7 @@ eventsSimple() {
                 name: "start".to_string(),
                 node_type: "log".to_string(),
                 event_name: None,
+                description: None,
                 params: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt::Call {
@@ -25218,6 +25504,87 @@ eventsSimple() {
                 BoardCommand::AddNode { node_type, .. } if node_type == "log"
             )
         }));
+    }
+
+    #[test]
+    fn handler_catalog_name_collisions_do_not_plan_the_body() {
+        let mut catalog = member_chain_catalog();
+        for node_type in ["browser_open", "browser_click"] {
+            catalog.push(catalog_meta(
+                node_type,
+                node_type,
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ));
+        }
+        catalog.push(catalog_meta(
+            "pure_value",
+            "Pure Value",
+            Vec::new(),
+            vec![pin_meta("value", "String", PinType::Output)],
+        ));
+
+        for (handler, node_type, param, anchor) in [
+            ("browserOpen", "browser_open", "url", ""),
+            ("BrowserOpen", "browser_open", "url", ""),
+            ("browserClick", "browser_click", "ref", ""),
+            ("pureValue", "pure_value", "value", ""),
+            ("browserOpen", "browser_open", "url", " //@n:stale-entry"),
+        ] {
+            let text = format!(
+                "{handler}({param}: string) {{{anchor}\n    log({{ text: {param} }})\n}}\n"
+            );
+            let result = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
+
+            assert_eq!(result.diagnostics.len(), 1, "{text}: {result:?}");
+            assert!(
+                result.diagnostics[0].contains(&format!(
+                    "handler name `{handler}` collides with built-in node `{node_type}`"
+                )),
+                "{text}: {result:?}"
+            );
+            assert!(
+                result.diagnostics[0].contains(&format!("eventsGeneric {handler}")),
+                "{text}: {result:?}"
+            );
+            assert!(result.commands.is_empty(), "{text}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn handler_collision_does_not_skip_valid_sibling_events() {
+        let catalog = member_chain_catalog();
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"log(text: string) {
+    log({ text: text })
+}
+
+eventsSimple() {
+    log({ text: "sibling" })
+}
+"#,
+            &catalog,
+        );
+
+        assert_eq!(result.diagnostics.len(), 1, "{result:?}");
+        assert!(result.diagnostics[0].contains("collides with built-in node `log`"));
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "log"
+                ))
+                .count(),
+            1,
+            "only the valid sibling's body should be planned: {result:?}"
+        );
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "events_simple"
+        )));
     }
 
     #[test]
@@ -29061,6 +29428,7 @@ other() {
                 name: "wikiExplorerLoad".to_string(),
                 node_type: "events_generic".to_string(),
                 event_name: None,
+                description: None,
                 params: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt::Call {
@@ -29158,6 +29526,7 @@ other() {
                 name: "wikiExplorerLoad".to_string(),
                 node_type: "events_unavailable".to_string(),
                 event_name: None,
+                description: None,
                 params: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt::Call {
@@ -31088,6 +31457,8 @@ function unrelatedPureHelper() {
             result.diagnostics.iter().any(|diagnostic| {
                 diagnostic.contains("missingSmtpSend")
                     && diagnostic.contains("does not match a catalog declaration")
+                    && diagnostic.contains("check the function name")
+                    && !diagnostic.contains("get_declarations")
             }),
             "the exact call repair must remain visible: {:?}",
             result.diagnostics
@@ -32397,6 +32768,143 @@ eventsSimple() {
         ]
     }
 
+    fn insert_exec_reroute(
+        board: &mut Board,
+        id: &str,
+        from_node: &str,
+        from_pin: &str,
+        to_node: &str,
+        to_pin: &str,
+    ) {
+        let source = find_output_pin(&board.nodes[from_node], from_pin)
+            .expect("source output")
+            .id
+            .clone();
+        let target = board.nodes[to_node]
+            .pins
+            .values()
+            .find(|pin| pin.name == to_pin && pin.pin_type == PinType::Input)
+            .expect("target input")
+            .id
+            .clone();
+        crate::flow::board::commands::pins::connect_pins::disconnect_pins(
+            board, from_node, &source, to_node, &target,
+        )
+        .expect("disconnect original edge");
+        let mut reroute = Node::new("reroute", "Reroute", "", "routing");
+        reroute.id = id.to_string();
+        let input = reroute
+            .add_input_pin("route_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let output = reroute
+            .add_output_pin("route_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(id.to_string(), reroute);
+        connect(board, from_node, &source, id, &input);
+        connect(board, id, &output, to_node, &target);
+    }
+
+    fn board_with_rerouted_exec_chain() -> Board {
+        let mut board = board_with_exec_chain();
+        for (id, source, source_pin, target, target_pin) in [
+            ("before_1", "event", "exec_out", "log_mid", "exec_in"),
+            ("before_2", "before_1", "route_out", "log_mid", "exec_in"),
+            ("after_1", "log_mid", "exec_out", "log_tail", "exec_in"),
+            ("after_2", "after_1", "route_out", "log_tail", "exec_in"),
+        ] {
+            insert_exec_reroute(&mut board, id, source, source_pin, target, target_pin);
+        }
+        // A reroute's catalog pins may remain Generic while carrying execution edges.
+        for node in board
+            .nodes
+            .values_mut()
+            .filter(|node| node.name == "reroute")
+        {
+            for pin in node.pins.values_mut() {
+                pin.data_type = VariableType::Generic;
+            }
+        }
+        board
+    }
+
+    #[test]
+    fn deleting_statement_between_exec_reroute_chains_bridges_real_endpoints() {
+        let board = board_with_rerouted_exec_chain();
+        let mut commands = Vec::new();
+        let mut diagnostics = Vec::new();
+        bridge_removed_exec_chains(
+            &board,
+            &HashSet::from(["log_mid".to_string()]),
+            &HashSet::new(),
+            &mut commands,
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(
+            matches!(
+                commands.as_slice(),
+                [BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }]
+                    if from_node == "event" && from_pin == "exec_out"
+                        && to_node == "log_tail" && to_pin == "exec_in"
+            ),
+            "the bridge must skip both reroute chains: {commands:?}"
+        );
+
+        let text = anchored_text(&board);
+        assert!(!text.contains("//@n:before_") && !text.contains("//@n:after_"));
+        let edited = text
+            .lines()
+            .filter(|line| !line.contains("//@n:log_mid"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = reconcile_text_with_catalog(
+            &board,
+            &edited,
+            &with_board_categories(exec_chain_catalog(), &board),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(removed_node_ids(&result), vec!["log_mid"]);
+    }
+
+    #[test]
+    fn replacing_statement_between_exec_reroutes_preserves_planned_wiring() {
+        let board = board_with_rerouted_exec_chain();
+        let edited = anchored_text(&board)
+            .lines()
+            .map(|line| {
+                if line.contains("//@n:log_mid") {
+                    "    log({ text: \"replacement\" })"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = reconcile_text_with_catalog(
+            &board,
+            &edited,
+            &with_board_categories(exec_chain_catalog(), &board),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(removed_node_ids(&result), vec!["log_mid"]);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, to_node, .. }
+                if from_node == "event" && to_node.starts_with('$')
+        )));
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, to_node, .. }
+                    if from_node == "event" && to_node == "log_tail"
+            )),
+            "a deletion bridge must preserve the replacement: {:?}",
+            result.commands
+        );
+    }
+
     #[test]
     fn deleting_mid_chain_statement_bridges_execution() {
         let board = board_with_exec_chain();
@@ -32611,6 +33119,75 @@ eventsSimple() {
             "deletion must re-join event → sink: {:?}",
             result.commands
         );
+    }
+
+    #[test]
+    fn deleting_branch_with_convergent_exec_reroutes_bridges_shared_successor() {
+        let mut board = board_with_literal_assign_branch();
+        for (id, source, source_pin) in [
+            ("then_route", "set_ext", "exec_out"),
+            ("else_route", "branch", "false"),
+        ] {
+            insert_exec_reroute(&mut board, id, source, source_pin, "sink", "exec_in");
+        }
+        let mut commands = Vec::new();
+        let mut diagnostics = Vec::new();
+        bridge_removed_exec_chains(
+            &board,
+            &HashSet::from(["branch".to_string(), "set_ext".to_string()]),
+            &HashSet::new(),
+            &mut commands,
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(
+            matches!(
+                commands.as_slice(),
+                [BoardCommand::ConnectPins { from_node, to_node, .. }]
+                    if from_node == "event" && to_node == "sink"
+            ),
+            "both reroutes lead to the same surviving statement: {commands:?}"
+        );
+
+        let edited = without_anchored_block(&anchored_text(&board), "//@n:branch");
+        let result = reconcile_text_with_catalog(&board, &edited, &board_derived_catalog(&board));
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(removed_node_ids(&result), vec!["branch", "set_ext"]);
+    }
+
+    #[test]
+    fn deleting_branch_with_divergent_exec_reroutes_reports_real_successors() {
+        let mut board = board_with_literal_assign_branch();
+        insert_exec_reroute(
+            &mut board,
+            "then_route",
+            "branch",
+            "true",
+            "set_ext",
+            "exec_in",
+        );
+        insert_exec_reroute(
+            &mut board,
+            "else_route",
+            "branch",
+            "false",
+            "sink",
+            "exec_in",
+        );
+        let mut commands = Vec::new();
+        let mut diagnostics = Vec::new();
+        bridge_removed_exec_chains(
+            &board,
+            &HashSet::from(["branch".to_string()]),
+            &HashSet::new(),
+            &mut commands,
+            &mut diagnostics,
+        );
+        assert!(commands.is_empty(), "{commands:?}");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].contains("multiple execution successors"));
+        assert!(diagnostics[0].contains("`Set extension`") && diagnostics[0].contains("`Log`"));
+        assert!(!diagnostics[0].contains("`Reroute`"), "{diagnostics:?}");
     }
 
     #[test]

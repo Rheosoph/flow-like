@@ -3,6 +3,9 @@ linker = "hoisted"
 exact = true
 minimumReleaseAge = 259200
 minimumReleaseAgeExcludes = [
+	# Allow the pinned Next.js security upgrade before the three-day delay expires.
+	"next",
+	"eslint-config-next",
 	"@flow-like/dexie-tauri-blob-offload",
 	"@flow-like/sdk",
 	"@flow-like/wasm-sdk-assemblyscript",

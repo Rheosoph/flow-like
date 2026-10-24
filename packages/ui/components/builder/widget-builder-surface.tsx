@@ -486,6 +486,7 @@ export function WidgetBuilderSurface({
 					className={`flex-1 min-h-0 min-w-0 ${showSettings ? "lg:mr-80" : ""}`}
 				>
 					<WidgetBuilder
+						fitContent
 						initialComponents={widget.components}
 						widgetId={widget.id}
 						surfaceId={`widget-${widget.id}`}

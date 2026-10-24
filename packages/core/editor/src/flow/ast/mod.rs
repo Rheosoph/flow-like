@@ -25,8 +25,8 @@ pub use apply::{
 };
 pub use changes::{
     FlowScriptChangedLayer, FlowScriptChangedNode, FlowScriptChanges, FlowScriptConnection,
-    FlowScriptConnectionKind, FlowScriptEndpoint, FlowScriptMovedNode, FlowScriptNameChange,
-    FlowScriptValueChange, planned_changes,
+    FlowScriptConnectionKind, FlowScriptDescriptionChange, FlowScriptEndpoint, FlowScriptMovedNode,
+    FlowScriptNameChange, FlowScriptValueChange, planned_changes,
 };
 pub use diagnostics::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,

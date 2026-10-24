@@ -2,13 +2,13 @@
 
 import { Loader2 } from "lucide-react";
 import { DynamicIcon, type IconName } from "lucide-react/dynamic";
-import { useRef } from "react";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { useExecuteAction, useIsComponentTriggering } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { useActivationSnapshot } from "../hooks/use-activation-snapshot";
 import type { AppLinkComponent, BoundValue } from "../types";
 
 const variantMap: Record<
@@ -62,21 +62,18 @@ export function A2UIAppLink({
 	style,
 	componentId,
 }: ComponentProps<AppLinkComponent>) {
-	const pointerActivationAtRef = useRef(0);
-	const keyboardActivationAtRef = useRef(0);
 	const { executeAction } = useExecuteAction();
 	const isTriggering = useIsComponentTriggering(componentId);
 
 	const target = useResolved<string>(component.target) ?? "config";
 	const resolvedLabel = useResolved<string>(component.label);
-	const label =
-		resolvedLabel && resolvedLabel.trim()
-			? resolvedLabel
-			: target === "overview"
-				? "Overview"
-				: target === "settings"
-					? "Settings"
-					: "Configure";
+	const label = resolvedLabel?.trim()
+		? resolvedLabel
+		: target === "overview"
+			? "Overview"
+			: target === "settings"
+				? "Settings"
+				: "Configure";
 	const variantValue = useResolved<string>(component.variant) ?? "outline";
 	const sizeValue = useResolved<string>(component.size) ?? "sm";
 	const disabled = useResolved<boolean>(component.disabled) ?? false;
@@ -92,16 +89,8 @@ export function A2UIAppLink({
 	const actionName =
 		target === "overview" ? "navigate_app_overview" : "navigate_app_config";
 
-	const handleClick = () => {
-		const now = Date.now();
-		const hasPointerIntent = now - pointerActivationAtRef.current < 1000;
-		const hasKeyboardIntent = now - keyboardActivationAtRef.current < 1000;
-		if (!hasPointerIntent && !hasKeyboardIntent) return;
-
-		pointerActivationAtRef.current = 0;
-		keyboardActivationAtRef.current = 0;
-
-		executeAction(
+	const activation = useActivationSnapshot<HTMLButtonElement>(() => {
+		void executeAction(
 			{
 				name: actionName,
 				context: {
@@ -111,7 +100,7 @@ export function A2UIAppLink({
 			},
 			componentId,
 		);
-	};
+	});
 
 	const showIcon = icon && icon.trim() !== "";
 	const iconLeft = iconPosition === "left" && showIcon;
@@ -126,15 +115,7 @@ export function A2UIAppLink({
 			disabled={disabled || isTriggering}
 			className={cn(isTriggering && "cursor-wait", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
-			onPointerDown={() => {
-				pointerActivationAtRef.current = Date.now();
-			}}
-			onKeyDown={(event) => {
-				if (event.key === "Enter" || event.key === " ") {
-					keyboardActivationAtRef.current = Date.now();
-				}
-			}}
-			onClick={handleClick}
+			{...activation}
 		>
 			{isTriggering ? (
 				<Loader2 className="size-4 animate-spin" />

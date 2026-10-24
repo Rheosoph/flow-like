@@ -592,6 +592,110 @@ fn roundtrip_named_event_with_params() {
 }
 
 #[test]
+fn roundtrip_event_description() {
+    let text = "@description(\"Load the dashboard.\\nUse \\\"today\\\" for the current date.\")\neventsGeneric dashboardLoad(date: string) {   //@n:event-1\n}\n";
+    let ast = parse(text).expect("event description should parse");
+    assert_eq!(
+        ast.events[0].description.as_deref(),
+        Some("Load the dashboard.\nUse \"today\" for the current date.")
+    );
+    assert_eq!(ast.events[0].anchor.as_deref(), Some("event-1"));
+    assert_eq!(render(&ast, &anchored_opts()), text);
+}
+
+#[test]
+fn roundtrip_module_event_and_nested_tool_descriptions() {
+    use flow_like_ast::Stmt;
+
+    let text = "module tools {\n    @description(\"Handle an incoming request.\")\n    eventsSimple request() {\n        @description(\"Find a customer by their email address.\")\n        eventsGeneric findCustomer(email?: string = \"\") {\n        }\n    }\n}\n";
+    let ast = parse(text).expect("module event and nested handler descriptions should parse");
+    let event = &ast.modules[0].events[0];
+    assert_eq!(
+        event.description.as_deref(),
+        Some("Handle an incoming request.")
+    );
+    let Stmt::Handler(handler) = &event.body.stmts[0] else {
+        panic!("expected a nested handler");
+    };
+    assert_eq!(
+        handler.description.as_deref(),
+        Some("Find a customer by their email address.")
+    );
+    assert_eq!(render(&ast, &RenderOptions::default()), text);
+}
+
+#[test]
+fn empty_event_description_is_explicit() {
+    let text = "@description(\"\")\neventsSimple() {\n}\n";
+    let ast = parse(text).expect("empty event description should parse");
+    assert_eq!(ast.events[0].description.as_deref(), Some(""));
+    assert_eq!(render(&ast, &RenderOptions::default()), text);
+}
+
+#[test]
+fn event_description_serde_preserves_legacy_documents() {
+    let legacy = serde_json::json!({
+        "name": "eventsSimple",
+        "node_type": "events_simple",
+        "body": { "stmts": [] },
+        "anchor": null
+    });
+    let mut event: flow_like_ast::EventBlock =
+        serde_json::from_value(legacy).expect("legacy event should deserialize");
+    assert_eq!(event.description, None);
+    assert!(
+        serde_json::to_value(&event)
+            .unwrap()
+            .get("description")
+            .is_none()
+    );
+
+    event.description = Some(String::new());
+    let serialized = serde_json::to_value(&event).unwrap();
+    assert_eq!(serialized["description"], "");
+    let restored: flow_like_ast::EventBlock = serde_json::from_value(serialized).unwrap();
+    assert_eq!(restored.description.as_deref(), Some(""));
+}
+
+#[test]
+fn rejects_invalid_event_description_decorators() {
+    for (decorator, message) in [
+        ("@description", "requires a string argument"),
+        ("@description(42)", "expected string decorator argument"),
+        ("@description({})", "expected string decorator argument"),
+        (
+            "@description(\"first\")\n@description(\"second\")",
+            "duplicate `@description` decorator on event",
+        ),
+        ("@secret", "unknown decorator `@secret` on event"),
+    ] {
+        for source in [
+            format!("{decorator}\neventsSimple() {{}}"),
+            format!("module tools {{ {decorator}\neventsSimple() {{}} }}"),
+            format!("eventsSimple() {{ {decorator}\nlookup(query: string) {{}} }}"),
+        ] {
+            let err = parse(&source).expect_err("invalid event decorator should fail");
+            assert!(
+                err.message.contains(message),
+                "unexpected error for {source:?}: {err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn event_description_does_not_attach_to_calls_or_functions() {
+    for source in [
+        "@description(\"lookup\")\nfunction lookup() {}",
+        "eventsSimple() { @description(\"lookup\")\nlookup({ query: \"hello\" }) }",
+        "eventsSimple() { @description(\"lookup\")\nlookup() { done: {} } }",
+        "@description(\"lookup\")\n// note\neventsSimple() {}",
+    ] {
+        assert!(parse(source).is_err(), "unexpectedly accepted {source:?}");
+    }
+}
+
+#[test]
 fn roundtrip_event_optional_params_with_defaults() {
     use flow_like_ast::Literal;
 
@@ -644,6 +748,54 @@ fn unnamed_event_keeps_no_event_name() {
 fn roundtrip_named_nested_handler() {
     let text = "eventsSimple() {\n    eventsSimple cronPass() {\n        logInfo({ message: \"tick\" })\n    }\n}\n";
     assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn roundtrip_nested_handler_optional_params_in_any_position() {
+    use flow_like_ast::{Literal, Stmt};
+
+    for header in ["browserRead", "eventsGeneric browserRead"] {
+        for (params, scope_index, has_default) in [
+            ("scope?: string = \"\"", 0, true),
+            ("scope?: string", 0, false),
+            ("scope?: string = \"\", url: string", 0, true),
+            ("scope?: string = \"\", limit?: int = 10", 0, true),
+            ("url: string, scope?: string = \"\"", 1, true),
+        ] {
+            let text = format!(
+                "eventsSimple() {{\n    {header}({params}) {{\n        logInfo({{ message: scope }})\n    }}\n}}\n"
+            );
+            let ast = parse(&text)
+                .unwrap_or_else(|err| panic!("nested handler {header}({params}) failed: {err}"));
+            let Stmt::Handler(handler) = &ast.events[0].body.stmts[0] else {
+                panic!("expected a nested handler for {header}({params})");
+            };
+            let scope = &handler.params[scope_index];
+            assert_eq!(scope.name, "scope");
+            assert_eq!(scope.ty.base, "string");
+            assert!(scope.optional);
+            if has_default {
+                assert!(matches!(&scope.default, Some(Literal::String(value)) if value.is_empty()));
+            } else {
+                assert!(scope.default.is_none());
+            }
+            assert_eq!(render(&ast, &RenderOptions::default()), text);
+        }
+    }
+}
+
+#[test]
+fn ternary_call_argument_is_not_a_nested_handler() {
+    let text = "eventsSimple() {\n    consume(flag ? yes : no)\n}\n";
+    let ast = parse(text).expect("a positional ternary argument should parse");
+    let flow_like_ast::Stmt::Call { call, .. } = &ast.events[0].body.stmts[0] else {
+        panic!("expected a call statement");
+    };
+    assert!(matches!(
+        &call.positional[0],
+        flow_like_ast::Expr::Ternary { .. }
+    ));
+    assert_eq!(render(&ast, &RenderOptions::default()), text);
 }
 
 #[test]

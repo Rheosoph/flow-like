@@ -72,11 +72,16 @@ pub struct RuntimeLease {
 }
 
 async fn callback(url: &str, token: &str, body: serde_json::Value) -> Result<bool, ExecutorError> {
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| ExecutorError::Callback(e.to_string()))?;
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    let client = CLIENT
+        .get_or_try_init(|| async {
+            reqwest::Client::builder()
+                .user_agent(concat!("flow-like-executor/", env!("CARGO_PKG_VERSION")))
+                .timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|e| ExecutorError::Callback(e.to_string()))
+        })
+        .await?;
     let url = format!("{}/api/v1/execution/quota", url.trim_end_matches('/'));
     let mut last = String::new();
     for attempt in 0..3 {
@@ -178,10 +183,16 @@ impl RuntimeLease {
         let receipt = json!({"phase":"finish","attempt_id":self.attempt_id,"runtime_ms":duration_ms,"status":status});
         let mut stored = false;
         if let Some(url) = &self.receipt_url {
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .map_err(|e| ExecutorError::Callback(e.to_string()))?;
+            static CLIENT: tokio::sync::OnceCell<reqwest::Client> =
+                tokio::sync::OnceCell::const_new();
+            let client = CLIENT
+                .get_or_try_init(|| async {
+                    reqwest::Client::builder()
+                        .timeout(Duration::from_secs(5))
+                        .build()
+                        .map_err(|e| ExecutorError::Callback(e.to_string()))
+                })
+                .await?;
             for _ in 0..3 {
                 if client
                     .put(url)
@@ -244,6 +255,90 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[tokio::test]
+    async fn settlement_reuses_connections_without_reusing_credentials() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let callbacks = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let receipts = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let callback_observations = callbacks.clone();
+        let receipt_observations = receipts.clone();
+        let router = Router::new()
+            .route(
+                "/receipt",
+                put(
+                    move |ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap| {
+                        let observations = receipt_observations.clone();
+                        async move {
+                            assert_eq!(headers[reqwest::header::IF_NONE_MATCH], "*");
+                            assert!(!headers.contains_key(reqwest::header::AUTHORIZATION));
+                            observations.lock().await.push(peer);
+                            StatusCode::NO_CONTENT
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/api/v1/execution/quota",
+                post(
+                    move |ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap| {
+                        let observations = callback_observations.clone();
+                        async move {
+                            assert_eq!(
+                                headers[reqwest::header::USER_AGENT],
+                                concat!("flow-like-executor/", env!("CARGO_PKG_VERSION"))
+                            );
+                            let token = headers[reqwest::header::AUTHORIZATION]
+                                .to_str()
+                                .unwrap()
+                                .to_owned();
+                            observations.lock().await.push((peer, token));
+                            Json(json!({"accepted": true}))
+                        }
+                    },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        for token in ["first-run", "second-run", "third-run"] {
+            let lease = RuntimeLease {
+                token: token.to_string(),
+                callback_url: base.clone(),
+                receipt_url: Some(format!("{base}/receipt")),
+                attempt_id: token.to_string(),
+                started: Instant::now(),
+                cancellation_watch: None,
+                limit: Duration::from_secs(30),
+            };
+            lease.finish(10, "completed").await.unwrap();
+        }
+
+        let callbacks = callbacks.lock().await;
+        let receipts = receipts.lock().await;
+        assert_eq!(callbacks.len(), 3);
+        assert_eq!(receipts.len(), 3);
+        assert!(callbacks.iter().all(|(peer, _)| *peer == callbacks[0].0));
+        assert!(receipts.iter().all(|peer| *peer == receipts[0]));
+        assert_eq!(
+            callbacks
+                .iter()
+                .map(|(_, token)| token.as_str())
+                .collect::<Vec<_>>(),
+            ["Bearer first-run", "Bearer second-run", "Bearer third-run"]
+        );
+        server.abort();
+    }
 
     #[tokio::test]
     async fn durable_receipt_survives_unavailable_settlement_api() {

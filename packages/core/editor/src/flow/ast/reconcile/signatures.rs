@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use flow_like_ast::model::{BoardAst, FnDecl};
+use flow_like_ast::model::FnDecl;
 use flow_like_types::create_id;
 
 use crate::flow::{
@@ -24,9 +24,10 @@ use crate::flow::{
 };
 
 use super::{
-    CALL_FUNCTION_NODE_TYPE, FUNCTION_LAYER_ID_PIN, boundary_pin_metadata,
-    function_boundary_contract_matches, interface_schema_map, node_pin_literal_string,
-    param_carries_pin_options, param_pin_metadata,
+    CALL_FUNCTION_NODE_TYPE, FUNCTION_LAYER_ID_PIN, FlatDocument, ModuleResolution,
+    boundary_pin_metadata, function_boundary_contract_matches, interface_schema_map,
+    matching_function_layer, node_pin_literal_string, param_carries_pin_options,
+    param_pin_metadata,
 };
 
 struct SignatureMigration {
@@ -47,13 +48,27 @@ impl SignatureMigrations {
     /// says whether a call the document leaves out stays on the board (rather than being deleted).
     pub(super) fn plan(
         existing: &Board,
-        ast: &BoardAst,
+        doc: &FlatDocument,
+        modules: &ModuleResolution,
         written_calls: &HashSet<String>,
         unwritten_calls_stay: bool,
     ) -> Self {
-        let interface_schemas = interface_schema_map(ast);
+        let interface_schemas = interface_schema_map(&doc.ast);
+        let claimed_layers = doc
+            .ast
+            .functions
+            .iter()
+            .filter_map(|func| func.anchor.as_ref())
+            .filter(|anchor| {
+                existing
+                    .layers
+                    .get(*anchor)
+                    .is_some_and(|layer| matches!(layer.r#type, LayerType::Function))
+            })
+            .cloned()
+            .collect::<HashSet<_>>();
         let mut planned = Self::default();
-        for func in &ast.functions {
+        for (index, func) in doc.ast.functions.iter().enumerate() {
             if func
                 .params
                 .iter()
@@ -62,7 +77,19 @@ impl SignatureMigrations {
             {
                 continue;
             }
-            let Some(layer) = function_layer(existing, func) else {
+            // Anchored functions retain their identity even when moved into a new module.
+            // An unanchored declaration can only reuse a layer already in its written module.
+            let module = if func.anchor.is_some() {
+                None
+            } else {
+                let Some(module) = modules.board_module(&doc.function_scopes[index]) else {
+                    continue;
+                };
+                module
+            };
+            let Some(layer) =
+                matching_function_layer(existing, func, module.as_deref(), &claimed_layers)
+            else {
                 continue;
             };
             let Some(change) = signature_change(existing, layer, func, &interface_schemas) else {
@@ -149,23 +176,6 @@ impl SignatureMigrations {
         }
         Some(board)
     }
-}
-
-/// The Function layer a written function stands for: its anchor, or the one Function layer that
-/// carries its name.
-fn function_layer<'a>(existing: &'a Board, func: &FnDecl) -> Option<&'a Layer> {
-    if let Some(anchor) = func.anchor.as_deref() {
-        return existing
-            .layers
-            .get(anchor)
-            .filter(|layer| matches!(layer.r#type, LayerType::Function));
-    }
-    let mut named = existing.layers.values().filter(|layer| {
-        matches!(layer.r#type, LayerType::Function)
-            && flow_like_ast::declared_identifier(&layer.name) == func.name
-    });
-    let layer = named.next()?;
-    named.next().is_none().then_some(layer)
 }
 
 struct SignatureChange {
@@ -389,5 +399,149 @@ fn cut_pins(board: &mut Board, pins: &HashSet<String>) {
     }
     for layer in board.layers.values_mut() {
         layer.pins.values_mut().for_each(detach);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::variable::VariableType;
+
+    fn board() -> Board {
+        Board::new_detached(None, flow_like_storage::Path::default())
+    }
+
+    fn add_module(board: &mut Board, id: &str, name: &str) {
+        let layer = Layer::new(id.to_string(), name.to_string(), LayerType::Module);
+        board.layers.insert(layer.id.clone(), layer);
+    }
+
+    fn add_function(board: &mut Board, id: &str, name: &str, module: Option<&str>) {
+        let mut layer = Layer::new(id.to_string(), name.to_string(), LayerType::Function);
+        layer.parent_id = module.map(str::to_string);
+        let mut boundary = Node::new("boundary", "Boundary", "", "test");
+        let pin = boundary
+            .add_output_pin("value", "Value", "", VariableType::String)
+            .clone();
+        layer.pins.insert(pin.id.clone(), pin);
+        board.layers.insert(layer.id.clone(), layer);
+    }
+
+    fn plan(board: &Board, source: &str, base_module: Option<&str>) -> SignatureMigrations {
+        let ast = flow_like_ast::parse(source).expect("valid FlowScript");
+        let doc = FlatDocument::new(&ast, base_module);
+        let modules = super::super::resolve_modules(board, &doc, base_module);
+        assert!(modules.diagnostics.is_empty(), "{:?}", modules.diagnostics);
+        SignatureMigrations::plan(board, &doc, &modules, &HashSet::new(), false)
+    }
+
+    fn assert_boolean_migration(planned: &SignatureMigrations, layer_id: &str) {
+        assert!(planned.diagnostics.is_empty(), "{:?}", planned.diagnostics);
+        let commands = planned.commands();
+        assert!(
+            matches!(commands.as_slice(), [BoardCommand::UpdateFunctionSignature { layer_id: actual, pins, .. }]
+                if actual == layer_id && pins.len() == 1
+                    && pins[0].name == "value" && pins[0].data_type == "Boolean"),
+            "{commands:?}"
+        );
+    }
+
+    #[test]
+    fn unanchored_signature_migration_matches_within_the_written_module() {
+        let mut board = board();
+        add_module(&mut board, "left-module", "left");
+        add_module(&mut board, "right-module", "right");
+        add_function(&mut board, "root-helper", "helper", None);
+        add_function(&mut board, "left-helper", "helper", Some("left-module"));
+        add_function(&mut board, "right-helper", "helper", Some("right-module"));
+
+        let planned = plan(
+            &board,
+            "module left { function helper(): (value: Boolean) { return true } }",
+            None,
+        );
+        assert_boolean_migration(&planned, "left-helper");
+    }
+
+    #[test]
+    fn unanchored_signature_migration_normalizes_both_names() {
+        let mut board = board();
+        add_function(&mut board, "history-row", "psHistoryRow", None);
+
+        let planned = plan(
+            &board,
+            "function ps_history_row(): (value: Boolean) { return true }",
+            None,
+        );
+        assert_boolean_migration(&planned, "history-row");
+    }
+
+    #[test]
+    fn unanchored_signature_migration_respects_the_module_file_scope() {
+        let mut board = board();
+        add_module(&mut board, "history-module", "history");
+        add_function(&mut board, "root-helper", "helper", None);
+        add_function(
+            &mut board,
+            "history-helper",
+            "helper",
+            Some("history-module"),
+        );
+
+        let planned = plan(
+            &board,
+            "function helper(): (value: Boolean) { return true }",
+            Some("history-module"),
+        );
+        assert_boolean_migration(&planned, "history-helper");
+    }
+
+    #[test]
+    fn unanchored_signature_migration_does_not_claim_a_renamed_layer() {
+        let mut board = board();
+        add_function(&mut board, "renamed-helper", "helper", None);
+
+        let planned = plan(
+            &board,
+            "function helper(): (value: Float) { return 1.5 }\n\
+             function renamed(): (value: Boolean) { //@l:renamed-helper\n\
+                 return true\n\
+             }",
+            None,
+        );
+        assert_boolean_migration(&planned, "renamed-helper");
+    }
+
+    #[test]
+    fn only_anchored_functions_can_migrate_into_a_new_module() {
+        let mut board = board();
+        add_function(&mut board, "moved-helper", "moved", None);
+        add_function(&mut board, "root-helper", "helper", None);
+
+        let planned = plan(
+            &board,
+            "module created {\n\
+                 function helper(): (value: Float) { return 1.5 }\n\
+                 function moved(): (value: Boolean) { //@l:moved-helper\n\
+                     return true\n\
+                 }\n\
+             }",
+            None,
+        );
+        assert_boolean_migration(&planned, "moved-helper");
+    }
+
+    #[test]
+    fn unanchored_signature_migration_does_not_guess_between_duplicate_layers() {
+        let mut board = board();
+        add_function(&mut board, "first-helper", "helper", None);
+        add_function(&mut board, "second-helper", "helper", None);
+
+        let planned = plan(
+            &board,
+            "function helper(): (value: Boolean) { return true }",
+            None,
+        );
+        assert!(planned.commands().is_empty());
     }
 }

@@ -185,6 +185,7 @@ function constructPrompt(prompt: string): (out: string) {
     return "{prompt}\n\nCurrent Time: {time}".format({ prompt: prompt, time: date.format("rfc3339") })
 }
 
+@description("A simple Chat event")
 eventsChat chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {
     @collapse("Main Agent") {
         const paths2 = extractAttachments(history, attachments)
@@ -213,6 +214,7 @@ eventsChat chatEvent(history: History, localSession: Struct, globalSession: Stru
     }
 }
 
+@description("Add a new Column to the database")
 eventsGeneric addColumn(table: string, columnName: string, sqlExpression: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -237,6 +239,7 @@ eventsGeneric dropColumn(table: string, columnName: string, payload: Struct) {
     }
 }
 
+@description("A generic event without input or output")
 eventsGeneric indexPath(path: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -296,6 +299,7 @@ eventsGeneric indexPath(path: string, payload: Struct) {
     }
 }
 
+@description("A generic event without input or output")
 eventsGeneric listTables(payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -307,6 +311,7 @@ eventsGeneric listTables(payload: Struct) {
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple loadVariables() {
     @collapse("Load Variables") {
         const preferencesOut2 = make({ multimodal: true }).setWeight("Reasoning", { weight: 1 })
@@ -323,6 +328,7 @@ eventsSimple loadVariables() {
     }
 }
 
+@description("Upserts an Item based on an ID field")
 eventsGeneric upsertDatabaseItem(table: string, idField: string, item: Struct, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -342,6 +348,7 @@ eventsGeneric upsertDatabaseItem(table: string, idField: string, item: Struct, p
     }
 }
 
+@description("Ask User for feedback")
 eventsGeneric askUser(payload: Struct, name: string, description: string, optionA: string, optionB: string, freeform: bool) {
     @collapse("Main Agent") {
         @collapse("Single Choice") {
@@ -377,6 +384,7 @@ eventsGeneric makeColumnOptional(table: string, columnName: string, payload: Str
     }
 }
 
+@description("Fetches the Schema of a Database")
 eventsGeneric getDatabaseSchema(table: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -408,6 +416,7 @@ eventsGeneric batchUpsertDatabaseItems(table: string, idColumn: string, items: S
     }
 }
 
+@description("Query Items in one or over multiple table via join. Datafusion Query Syntax supported.")
 eventsGeneric queryItems(tables: string[], query: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -422,6 +431,7 @@ eventsGeneric queryItems(tables: string[], query: string, payload: Struct) {
     }
 }
 
+@description("For File Management you can call this agent. It has access to the files attached to the message as well as older files and a whole file system")
 eventsGeneric callLibrarian(task: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -453,6 +463,7 @@ eventsGeneric internetSearch(query: string, language: string, page: int, payload
     }
 }
 
+@description("Adds an Item to a Database")
 eventsGeneric insertDatabaseItem(table: string, item: Struct, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -472,6 +483,7 @@ eventsGeneric insertDatabaseItem(table: string, item: Struct, payload: Struct) {
     }
 }
 
+@description("Can research the internet for deep research or simple research (way cheaper and quicker)")
 eventsGeneric internetResearcher(task: string, deep: bool, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Researcher") {
@@ -486,6 +498,7 @@ eventsGeneric internetResearcher(task: string, deep: bool, payload: Struct) {
     }
 }
 
+@description("Builds a search index on the column. If you enable FTS it will be a full text search index, otherwise we will automatically determine the correct one")
 eventsGeneric buildIndex(table: string, column: string, fts: bool, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -506,6 +519,7 @@ eventsGeneric dataScientist(task: string, payload: Struct) {
     }
 }
 
+@description("Add multiple items at once to the Database")
 eventsGeneric batchInsertDatabaseItems(table: string, items: Struct[], payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -525,6 +539,7 @@ eventsGeneric batchInsertDatabaseItems(table: string, items: Struct[], payload: 
     }
 }
 
+@description("Manages structured data for us. Can also create new databases for tasks if needed. (e.g when the user wants to track his eating behaviour)")
 eventsGeneric databaseManager(task: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -539,6 +554,7 @@ eventsGeneric databaseManager(task: string, payload: Struct) {
     }
 }
 
+@description("A generic event without input or output")
 eventsGeneric deleteItems(table: string, filterQuery: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -551,6 +567,7 @@ eventsGeneric deleteItems(table: string, filterQuery: string, payload: Struct) {
     }
 }
 
+@description("Full Text Search a Table")
 eventsGeneric searchItems(table: string, query: string, filter: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Database Manager") {
@@ -563,12 +580,14 @@ eventsGeneric searchItems(table: string, query: string, filter: string, payload:
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple addInterest() {
     @collapse("Config Page") {
         log::info("label: {label}\ngoal: {goal}\nsource: {src}\nweight: {weight}".format({ goal: getElementValue(getElement("nkhigr7q8pwxtfzi729flmte/pa-goal").element).value, src: getElementValue(getElement("nkhigr7q8pwxtfzi729flmte/pa-content").element).value, weight: getElementValue(getElement("nkhigr7q8pwxtfzi729flmte/pa-weight").element).value, label: getElementValue(getElement("nkhigr7q8pwxtfzi729flmte/pa-label").element).value }), { toast: true })
     }
 }
 
+@description("Trying to read a file. Needs the file locally. Cant read attachments like that.")
 eventsGeneric readFile(path: string, summary: bool, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -596,6 +615,7 @@ eventsGeneric readFile(path: string, summary: bool, payload: Struct) {
     }
 }
 
+@description("List files in path. Either recursive or direct.")
 eventsGeneric listFilesInPath(path: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -610,6 +630,7 @@ eventsGeneric listFilesInPath(path: string, payload: Struct) {
     }
 }
 
+@description("Searches through all user files. Returns summary + paths. You can follow-up query a specific file later")
 eventsGeneric searchInFiles(query: string, filter: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -624,6 +645,7 @@ eventsGeneric searchInFiles(query: string, filter: string, payload: Struct) {
     }
 }
 
+@description("If an attachment has to be used in the future, we should save it to storage")
 eventsGeneric storeAttachment(attachmentPath: string, storagePath: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -663,6 +685,7 @@ eventsGeneric searchInFile(query: string, filter: string, path: string, payload:
     }
 }
 
+@description("Read an Attachment. Extracts the content to markdown. You will get the same effect and benefits when storing it locally. This way if the attachment is used later you can move it into a better position.")
 eventsGeneric readAttachment(attachmentPath: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -676,6 +699,7 @@ eventsGeneric readAttachment(attachmentPath: string, payload: Struct) {
     }
 }
 
+@description("Delete Folder or File")
 eventsGeneric removePath(path: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {
@@ -689,6 +713,7 @@ eventsGeneric removePath(path: string, payload: Struct) {
     }
 }
 
+@description("Move a file into a new path. This can be helpful for organizational purposes. Can not move folders")
 eventsGeneric moveFile(oldPath: string, newPath: string, payload: Struct) {
     @collapse("Main Agent") {
         @collapse("Librarian") {

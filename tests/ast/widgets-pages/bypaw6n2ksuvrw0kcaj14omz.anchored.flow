@@ -222,6 +222,7 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
             pushStat(source.label, stats)   //@n:i21zjcs446mtx5m26ae2mvpu
         }
     }
+    @description("Add News to the report")
     eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {   //@n:qtx8zi1adxqna4vd82y9g58u
         const arrayOut = reportEntry.push({ value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })   //@n:lbkgeatcq8gvwe8fye2pq7tr
         reportEntry = arrayOut   //@n:l2fh63vjftwrfgsrqmzlcl0y
@@ -264,6 +265,7 @@ function saveConfig(config: Struct) {   //@l:ssdi5toh4f9nza4w0a35p3rt
     userDir(false).child("config.json").writeString(stringify(config, { pretty: true }))   //@n:h140ef1az7ofufnf2flso6du
 }
 
+@description("A simple event without input or output")
 eventsSimple clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
     const database2 = open("report_overview", { userScoped: true, batchSize: 1000 })   //@n:q10tbt024z0h8ivmx9jr4df4
     const session2 = createSession("default", { targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:juj7x1sv8ngrhec1wbd8a0i9
@@ -272,6 +274,7 @@ eventsSimple clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
     navigateTo("/briefing?report_id={id}".format({ id: rows2[0].report_id }))   //@n:kngou6wcb3yk0b89zop3bbl0
 }
 
+@description("A simple event without input or output")
 eventsSimple loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
     const database = open("report_overview", { userScoped: true, batchSize: 1000 })   //@n:gl0879875qtlwr4lulkx2uux
     const session = createSession("default", { targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:a3fuso8y4ckr2kuz3sn25mfc
@@ -293,10 +296,12 @@ eventsSimple loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
     showScreen()   //@n:tuaeuvu02xlcd81hbhx320n9
 }
 
+@description("Entry point triggered when a widget action is invoked. Provides action context data.")
 eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:pdcl5guw4gvgulosa65xi0hf
     navigateTo("/briefing?report_id={id}".format({ id: widgetInstanceId }))   //@n:li2clmb381ynjcwv12igz58y
 }
 
+@description("A simple event without input or output")
 eventsSimple loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
     @collapse("Load Config") {   //@l:ix0yr3149vhaacpv21mck1kj
         if (exists(userDir(false).child("config.json"))) { // exec_out_exists   //@n:c3yjqmja8bew8bt8qov3o4m9
@@ -309,6 +314,7 @@ eventsSimple loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple generateFeed() {   //@n:mg0wgy131u070iv1cs4xidt5
     @collapse("Generate Briefing") {   //@l:i6ijzhwia2idhl0gg15z332o
         const model2 = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })   //@n:ra3hwylcjaccq0tg2i7pl3yy
@@ -337,12 +343,14 @@ eventsSimple generateFeed() {   //@n:mg0wgy131u070iv1cs4xidt5
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple simpleEvent() {   //@n:vnb84qc8e5e3sfz2oe0ltwo7
     @collapse("Generate Briefing") {   //@l:i6ijzhwia2idhl0gg15z332o
         user("Notification", "", { link: "/briefing?report_id={id}", showDesktop: true })   //@n:m10ar7n0ln7ga6xvd4kid7ln
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple setupNewElement() {   //@n:r1r8h9t64xbt8tt4p2xpoufo
     @collapse("Add Config") {   //@l:gzzua8qx4juznk7w4mdmzgla
         loadConfig()   //@n:x2zjntfxkcmuozxqjg17s7mw
@@ -353,6 +361,7 @@ eventsSimple setupNewElement() {   //@n:r1r8h9t64xbt8tt4p2xpoufo
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple loadConfigDashboard() {   //@n:s85v1o1rezf5cs3el8vhv6qi
     @collapse("Load Config Dashboard") {   //@l:ogi197421wbxvpq5y8ibm19d
         clearChildren(getElement("yg7y9ag1wz4ib8wg95k93erh/pi-list").element)   //@n:ub0bgb5wpynm6yr5jipyfr6q
@@ -365,6 +374,7 @@ eventsSimple loadConfigDashboard() {   //@n:s85v1o1rezf5cs3el8vhv6qi
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
     @collapse("Show Briefing") {   //@l:tvfkkvc67jb3ljcj0n3a0xu3
         const { value, exists: exists2 } = getQueryParam("report_id")   //@n:b1nflz22aqijhrfjcflily63
@@ -395,6 +405,7 @@ eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
     }
 }
 
+@description("A generic event without input or output")
 eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {   //@n:etvo5oyizc9rbdeq0t0lmuhq
     @collapse("Generate Briefing") {   //@l:i6ijzhwia2idhl0gg15z332o
         if (reportCreated) {   //@n:yg4t28sqthqd2bwo3gsbgp8r
@@ -415,6 +426,7 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
     }
 }
 
+@description("Entry point triggered when a widget action is invoked. Provides action context data.")
 eventsWidgetAction widgetActionEvent2(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:fjg1gjwpn3yjke2qa2fz04tn
     @collapse("Load Config Dashboard") {   //@l:ogi197421wbxvpq5y8ibm19d
         loadConfig()   //@n:pnrthxg45xmamey3u4ohy6mn

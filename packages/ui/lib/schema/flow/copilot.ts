@@ -129,6 +129,13 @@ export type BoardCommand =
 			summary?: string;
 	  }
 	| {
+			command_type: "SetNodeDescription";
+			node_id: string;
+			/** An empty string clears the description. */
+			description: string;
+			summary?: string;
+	  }
+	| {
 			/** Merge FlowScript value names into `Node.code_names` (keyed by output pin name; `""` is the node's own binding). */
 			command_type: "SetNodeCodeNames";
 			node_id: string;

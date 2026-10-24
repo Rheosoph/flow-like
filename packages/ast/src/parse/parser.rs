@@ -547,6 +547,27 @@ impl Parser<'_> {
         Ok(())
     }
 
+    fn apply_event_decorators(
+        &self,
+        event: &mut EventBlock,
+        decorators: &[Decorator],
+    ) -> Result<(), ParseError> {
+        for dec in decorators {
+            match dec.name.as_str() {
+                "description" => {
+                    if event.description.is_some() {
+                        return Err(self.err("duplicate `@description` decorator on event"));
+                    }
+                    event.description = Some(self.expect_arg(dec)?);
+                }
+                other => {
+                    return Err(self.err(format!("unknown decorator `@{other}` on event")));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn expect_no_arg(&self, dec: &Decorator) -> Result<(), ParseError> {
         if dec.arg.is_some() {
             return Err(self.err(format!(
@@ -698,16 +719,15 @@ impl Parser<'_> {
                     ));
                 }
                 Tok::Ident(_) => {
-                    if !decorators.is_empty() {
-                        return Err(self.err("decorators on events are not yet supported"));
-                    }
-                    ast.events.push(self.event_block()?);
+                    let mut event = self.event_block()?;
+                    self.apply_event_decorators(&mut event, &decorators)?;
+                    ast.events.push(event);
                 }
                 Tok::Comment(_) => {
                     if !decorators.is_empty() {
-                        return Err(self.err(
-                            "decorators must be immediately followed by a variable declaration",
-                        ));
+                        return Err(
+                            self.err("decorators must be immediately followed by a declaration")
+                        );
                     }
                     // Stray top-level comment (no AST slot): skip.
                     self.bump();
@@ -930,6 +950,7 @@ impl Parser<'_> {
             name,
             node_type: String::new(),
             event_name,
+            description: None,
             params,
             body,
             anchor,
@@ -1047,10 +1068,9 @@ impl Parser<'_> {
                     decl.detached.push(self.detached_block()?);
                 }
                 Tok::Ident(_) => {
-                    if !decorators.is_empty() {
-                        return Err(self.err("decorators on events are not yet supported"));
-                    }
-                    decl.events.push(self.event_block()?);
+                    let mut event = self.event_block()?;
+                    self.apply_event_decorators(&mut event, &decorators)?;
+                    decl.events.push(event);
                 }
                 Tok::Comment(_) => {
                     if !decorators.is_empty() {
@@ -1281,8 +1301,8 @@ impl Parser<'_> {
     }
 
     fn stmt(&mut self) -> Result<Stmt, ParseError> {
-        // Leading decorators bind to a following local `let` declaration, or `@parallel` to a
-        // sugared `for` loop. `@collapse("…") { … }` opens a visual group instead.
+        // Leading decorators bind to a local `let`, a nested handler, or a sugared `for` loop.
+        // `@collapse("…") { … }` opens a visual group instead.
         if matches!(self.cur(), Tok::At) {
             if self.at_collapse_decorator() {
                 return self.collapse_stmt();
@@ -1292,9 +1312,14 @@ impl Parser<'_> {
             if self.is_ident("for") {
                 return self.parallel_for_stmt(&decorators);
             }
+            if self.looks_like_handler() {
+                let mut event = self.event_block()?;
+                self.apply_event_decorators(&mut event, &decorators)?;
+                return Ok(Stmt::Handler(event));
+            }
             if !self.is_ident("let") {
                 return Err(self.err(
-                    "decorators are only supported on `let` declarations and `@parallel for` loops",
+                    "decorators are only supported on `let` declarations, event handlers, and `@parallel for` loops",
                 ));
             }
             let mut var = self.local_decl()?;
@@ -1515,9 +1540,8 @@ impl Parser<'_> {
     }
 
     /// Detect a nested event-handler header (`name(params) { … }`). A call argument is never an
-    /// identifier directly followed by `:` (named arguments live inside `{ … }`), so a bare typed
-    /// parameter list (`name(ident:`) or an empty list whose body is not a branch-arm map
-    /// unambiguously marks a handler.
+    /// identifier directly followed by `:` or `?:` (named arguments live inside `{ … }`), so a
+    /// typed first parameter or an empty list whose body is not a branch-arm map marks a handler.
     fn looks_like_handler(&self) -> bool {
         if !matches!(self.cur(), Tok::Ident(_)) {
             return false;
@@ -1542,11 +1566,18 @@ impl Parser<'_> {
             }
             return !self.brace_opens_branch_arms(lparen + 2);
         }
-        // Typed params `name(ident : …` — never produced by an object-arg call.
+        // Typed params start with `ident :` or `ident ? :`. A ternary call argument has an
+        // expression between `?` and `:`, so it cannot match either form.
         matches!(
             self.toks.get(lparen + 1).map(|t| &t.tok),
             Some(Tok::Ident(_))
-        ) && matches!(self.toks.get(lparen + 2).map(|t| &t.tok), Some(Tok::Colon))
+        ) && matches!(
+            (
+                self.toks.get(lparen + 2).map(|t| &t.tok),
+                self.toks.get(lparen + 3).map(|t| &t.tok),
+            ),
+            (Some(Tok::Colon), _) | (Some(Tok::Question), Some(Tok::Colon))
+        )
     }
 
     /// True if the block opened at `brace_pos` (a `{`) begins a branch-arm map (`label: { … }`),

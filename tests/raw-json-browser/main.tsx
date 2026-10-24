@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Toaster } from "sonner";
 import { DevModePanel } from "../../packages/ui/components/builder/DevModePanel";
+import { Toolbar } from "../../packages/ui/components/builder/Toolbar";
 import { BuilderFixture, qa } from "./builder-fixture";
 import "./style.css";
 
@@ -39,6 +40,7 @@ function App() {
 						<button type="button" onClick={() => qa.open()}>
 							Open Raw JSON
 						</button>
+						<Toolbar />
 					</div>
 				</>,
 				document.body,

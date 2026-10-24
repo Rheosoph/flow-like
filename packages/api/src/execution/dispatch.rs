@@ -623,6 +623,8 @@ pub type WasmPackageResolver = Arc<
 #[derive(Clone)]
 pub struct Dispatcher {
     config: Arc<DispatchConfig>,
+    /// Reuse executor connections across invocations and dispatcher clones.
+    http_client: reqwest::Client,
     staging_bucket: Option<Arc<FlowLikeStore>>,
     artifact_ensurer: std::sync::OnceLock<ArtifactEnsurer>,
     async_wasm_package_resolver: std::sync::OnceLock<WasmPackageResolver>,
@@ -701,6 +703,7 @@ impl Dispatcher {
 
         Self {
             config: Arc::new(config),
+            http_client: reqwest::Client::new(),
             staging_bucket,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -720,6 +723,7 @@ impl Dispatcher {
     pub fn from_config(config: DispatchConfig) -> Self {
         Self {
             config: Arc::new(config),
+            http_client: reqwest::Client::new(),
             staging_bucket: None,
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
@@ -1129,13 +1133,13 @@ impl Dispatcher {
 
         let body = build_executor_payload(job_id, request)?;
 
-        let client = reqwest::Client::new();
-        let response = attach_executor_iam_auth(client.post(format!("{}/execute", url)), url)
-            .await?
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| DispatchError::Network(e.to_string()))?;
+        let response =
+            attach_executor_iam_auth(self.http_client.post(format!("{}/execute", url)), url)
+                .await?
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| DispatchError::Network(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1193,13 +1197,13 @@ impl Dispatcher {
 
         tracing::debug!(job_id = %job_id, "Dispatch payload built");
 
-        let client = reqwest::Client::new();
-        let response = attach_executor_iam_auth(client.post(format!("{}/execute/sse", url)), url)
-            .await?
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| DispatchError::Network(e.to_string()))?;
+        let response =
+            attach_executor_iam_auth(self.http_client.post(format!("{}/execute/sse", url)), url)
+                .await?
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| DispatchError::Network(e.to_string()))?;
 
         let status = response.status();
         tracing::info!(job_id = %job_id, status = %status, "Executor responded");
@@ -4074,6 +4078,83 @@ mod tests {
             shadow: false,
             artifact: None,
         }
+    }
+
+    #[tokio::test]
+    async fn http_dispatch_reuses_connections_across_streams_and_dispatcher_clones() {
+        use axum::{
+            Json, Router,
+            extract::{ConnectInfo, State},
+            http::StatusCode,
+            routing::post,
+        };
+        use std::net::SocketAddr;
+
+        let peers = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        async fn record_peer(
+            State(peers): State<Arc<tokio::sync::Mutex<Vec<SocketAddr>>>>,
+            ConnectInfo(peer): ConnectInfo<SocketAddr>,
+            Json(_payload): Json<serde_json::Value>,
+        ) -> StatusCode {
+            peers.lock().await.push(peer);
+            StatusCode::NO_CONTENT
+        }
+        let app = Router::new()
+            .route("/execute/sse", post(record_peer))
+            .route("/execute", post(record_peer))
+            .with_state(peers.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let dispatcher = Dispatcher::from_config(DispatchConfig {
+            executor_url: Some(url.clone()),
+            ..DispatchConfig::default()
+        });
+        let cloned = dispatcher.clone();
+        crate::backend_jwt::init_for_tests();
+        let mut request = dispatch_request(DispatchTrigger::User);
+        request.jwt = super::super::jwt::sign(super::super::jwt::ExecutionJwtParams {
+            user_id: request.user_id.clone(),
+            technical_user_id: None,
+            run_id: request.run_id.clone(),
+            app_id: request.app_id.clone(),
+            board_id: request.board_id.clone(),
+            event_id: None,
+            app_chain: None,
+            correlation: None,
+            callback_url: request.callback_url.clone(),
+            token_type: crate::backend_jwt::TokenType::Executor,
+            ttl_seconds: Some(3600),
+            shadow: None,
+        })
+        .unwrap();
+
+        for sender in [&dispatcher, &cloned] {
+            sender
+                .send_http_sse(&url, &request)
+                .await
+                .unwrap()
+                .1
+                .bytes()
+                .await
+                .unwrap();
+        }
+        dispatcher
+            .dispatch_http("job-http", &request)
+            .await
+            .unwrap();
+
+        let peers = peers.lock().await;
+        assert_eq!(peers.len(), 3);
+        assert!(peers.iter().all(|peer| peer == &peers[0]));
+        server.abort();
     }
 
     fn request_with_runtime_variables(secret: bool) -> DispatchRequest {

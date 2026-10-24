@@ -6,18 +6,21 @@ use std::{
 
 use crate::{
     bit::{Bit, BitModelPreference, BitTypes},
-    hub::{BitSearchQuery, Hub},
+    hub::{BitSearchQuery, Hub, bit_exists_on_hub, hub_origin},
     models::device::DeviceModelProbe,
     state::CompletionModelCapabilities,
     utils::http::HTTPClient,
 };
 use flow_like_types::{Result, Value, anyhow, tokio::task};
-use futures::future::join_all;
+use futures::{StreamExt, future::join_all};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 mod home;
 pub use home::validate_home_layout;
+
+#[cfg(test)]
+mod bit_sync_tests;
 
 fn split_profile_bit_reference(reference: &str) -> Option<(&str, &str)> {
     let (hub, bit_id) = reference.rsplit_once(':')?;
@@ -765,6 +768,74 @@ impl Profile {
         }
 
         self.find_bit(bit_ref, http_client).await
+    }
+
+    /// References safe to remove during sync. Unreachable hubs, invalid responses,
+    /// and statuses other than 404 leave the reference intact for a later retry.
+    pub async fn missing_bit_references(&self, http_client: Arc<HTTPClient>) -> Vec<String> {
+        let mut hubs = HashSet::new();
+        for hub in std::iter::once(&self.hub).chain(&self.hubs) {
+            if let Some(hub) = hub_origin(hub, self.secure) {
+                hubs.insert(hub);
+            }
+        }
+        for reference in &self.bits {
+            if let Some((hub, _)) = split_profile_bit_reference(reference)
+                && let Some(hub) = hub_origin(hub, self.secure)
+            {
+                hubs.insert(hub);
+            }
+        }
+
+        // Collect before awaiting so the borrowed map closure is not held in the Send future.
+        let checks: Vec<_> = self
+            .bits
+            .iter()
+            .map(|reference| {
+                let hubs = &hubs;
+                let http_client = http_client.clone();
+                async move {
+                    let (source, id) = split_profile_bit_reference(reference)
+                        .map_or((None, reference.as_str()), |(hub, id)| (Some(hub), id));
+                    if id.trim().is_empty() || self.custom_bit(id).is_some() {
+                        return None;
+                    }
+                    let sources = match source {
+                        Some(hub) => hub_origin(hub, self.secure).into_iter().collect(),
+                        None => hubs.iter().cloned().collect::<Vec<_>>(),
+                    };
+                    if sources.is_empty() {
+                        return None;
+                    }
+                    let missing = async {
+                        for hub in sources {
+                            if !matches!(
+                                bit_exists_on_hub(&hub, id, http_client.clone()).await,
+                                Ok(false)
+                            ) {
+                                return false;
+                            }
+                        }
+                        true
+                    };
+                    // A slow hub must not hold profile sync indefinitely.
+                    match flow_like_types::tokio::time::timeout(
+                        std::time::Duration::from_secs(15),
+                        missing,
+                    )
+                    .await
+                    {
+                        Ok(true) => Some(reference.clone()),
+                        _ => None,
+                    }
+                }
+            })
+            .collect();
+        futures::stream::iter(checks)
+            .buffered(8)
+            .filter_map(|missing| async { missing })
+            .collect()
+            .await
     }
 
     pub async fn get_available_hubs(&self, http_client: Arc<HTTPClient>) -> Result<Vec<Hub>> {

@@ -321,6 +321,12 @@ impl Writer<'_> {
     }
 
     fn event_block(&mut self, event: &EventBlock) {
+        if let Some(description) = &event.description {
+            self.indent();
+            self.out.push_str("@description(");
+            self.out.push_str(&quote_string(description));
+            self.out.push_str(")\n");
+        }
         self.indent();
         self.out.push_str(&event.name);
         if let Some(event_name) = event

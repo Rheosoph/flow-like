@@ -217,6 +217,7 @@ function perpareNews(source: Struct) {
         const { stats } = fromModel(model, { maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }).registerFunctionTools({ tools: [fetchPage, addNews] }).invoke(historyOut)
         pushStat(source.label, stats)
     }
+    @description("Add News to the report")
     eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {
         const arrayOut = reportEntry.push({ value: { title: title, uri: uri, summary: summary, interest: label, date: date, report_id: reportID } })
         reportEntry = arrayOut
@@ -259,6 +260,7 @@ function saveConfig(config: Struct) {
     userDir(false).child("config.json").writeString(stringify(config, { pretty: true }))
 }
 
+@description("A simple event without input or output")
 eventsSimple clickLatestOverview() {
     const database2 = open("report_overview", { userScoped: true, batchSize: 1000 })
     const session2 = createSession("default", { targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
@@ -267,6 +269,7 @@ eventsSimple clickLatestOverview() {
     navigateTo("/briefing?report_id={id}".format({ id: rows2[0].report_id }))
 }
 
+@description("A simple event without input or output")
 eventsSimple loadOverview() {
     const database = open("report_overview", { userScoped: true, batchSize: 1000 })
     const session = createSession("default", { targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
@@ -288,10 +291,12 @@ eventsSimple loadOverview() {
     showScreen()
 }
 
+@description("Entry point triggered when a widget action is invoked. Provides action context data.")
 eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     navigateTo("/briefing?report_id={id}".format({ id: widgetInstanceId }))
 }
 
+@description("A simple event without input or output")
 eventsSimple loadConfig() {
     @collapse("Load Config") {
         if (exists(userDir(false).child("config.json"))) { // exec_out_exists
@@ -304,6 +309,7 @@ eventsSimple loadConfig() {
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple generateFeed() {
     @collapse("Generate Briefing") {
         const model2 = ai::findModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })
@@ -332,12 +338,14 @@ eventsSimple generateFeed() {
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple simpleEvent() {
     @collapse("Generate Briefing") {
         user("Notification", "", { link: "/briefing?report_id={id}", showDesktop: true })
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple setupNewElement() {
     @collapse("Add Config") {
         loadConfig()
@@ -348,6 +356,7 @@ eventsSimple setupNewElement() {
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple loadConfigDashboard() {
     @collapse("Load Config Dashboard") {
         clearChildren(getElement("yg7y9ag1wz4ib8wg95k93erh/pi-list").element)
@@ -360,6 +369,7 @@ eventsSimple loadConfigDashboard() {
     }
 }
 
+@description("A simple event without input or output")
 eventsSimple showBriefing() {
     @collapse("Show Briefing") {
         const { value, exists: exists2 } = getQueryParam("report_id")
@@ -390,6 +400,7 @@ eventsSimple showBriefing() {
     }
 }
 
+@description("A generic event without input or output")
 eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {
     @collapse("Generate Briefing") {
         if (reportCreated) {
@@ -410,6 +421,7 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
     }
 }
 
+@description("Entry point triggered when a widget action is invoked. Provides action context data.")
 eventsWidgetAction widgetActionEvent2(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     @collapse("Load Config Dashboard") {
         loadConfig()

@@ -2797,6 +2797,7 @@ impl<'a> Lowering<'a> {
                     name: event_type_name(entry),
                     node_type: entry.name.clone(),
                     event_name,
+                    description: self.event_description(entry),
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -3146,6 +3147,7 @@ impl<'a> Lowering<'a> {
                     name: event_type_name(entry),
                     node_type: entry.name.clone(),
                     event_name,
+                    description: self.event_description(entry),
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -3158,6 +3160,12 @@ impl<'a> Lowering<'a> {
             }
         }
         block
+    }
+
+    fn event_description(&self, entry: &Node) -> Option<String> {
+        let description = crate::flow::pin::resolve_schema(&entry.description, &self.board.refs)
+            .unwrap_or(&entry.description);
+        (!description.is_empty()).then(|| description.to_string())
     }
 
     /// Body of an exec entry (event or function entry): the entry node itself becomes the

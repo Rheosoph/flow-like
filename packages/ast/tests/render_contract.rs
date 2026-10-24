@@ -182,6 +182,7 @@ fn event(name: &str, params: Vec<Param>, stmts: Vec<Stmt>) -> EventBlock {
         name: name.to_string(),
         node_type: "events_simple".to_string(),
         event_name: None,
+        description: None,
         params,
         body: Block { stmts },
         anchor: Some("entry-node".to_string()),
@@ -621,6 +622,24 @@ const POSITIONS: &[Position] = &[
                 variables: vec![v],
                 ..host(Vec::new())
             }
+        },
+    },
+    Position {
+        id: "event-description",
+        camelized: false,
+        build: |s| {
+            let mut entry = event("onTick", Vec::new(), Vec::new());
+            entry.description = Some(s.to_string());
+            doc(vec![entry])
+        },
+    },
+    Position {
+        id: "handler-description",
+        camelized: false,
+        build: |s| {
+            let mut handler = event("lookup", Vec::new(), Vec::new());
+            handler.description = Some(s.to_string());
+            host(vec![Stmt::Handler(handler)])
         },
     },
     Position {

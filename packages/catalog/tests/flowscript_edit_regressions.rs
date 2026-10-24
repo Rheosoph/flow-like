@@ -438,6 +438,316 @@ async fn execution_reroutes_are_invisible_and_leave_with_their_wire() {
     assert_round_trips(&board);
 }
 
+async fn bend_execution_wire(board: &mut Board, from_id: &str, to_id: &str, count: usize) {
+    let nodes = all_nodes(board);
+    let from = nodes.iter().find(|node| node.id == from_id).unwrap();
+    let to = nodes.iter().find(|node| node.id == to_id).unwrap();
+    let input = exec_pin(to, PinType::Input);
+    let output = from
+        .pins
+        .values()
+        .find(|pin| {
+            pin.pin_type == PinType::Output
+                && pin.data_type == VariableType::Execution
+                && pin.connected_to.contains(&input.id)
+        })
+        .expect("the execution wire exists");
+    let mut commands = vec![BoardCommand::DisconnectPins {
+        from_node: from_id.into(),
+        from_pin: output.name.clone(),
+        to_node: to_id.into(),
+        to_pin: input.name.clone(),
+        summary: None,
+    }];
+    let (mut previous_node, mut previous_pin) = (from_id.to_string(), output.name.clone());
+    for index in 0..count {
+        let reroute = format!("$bend{index}");
+        commands.push(BoardCommand::AddNode {
+            node_type: "reroute".into(),
+            ref_id: Some(reroute.clone()),
+            position: Some(NodePosition { x: 0.0, y: 0.0 }),
+            friendly_name: None,
+            additional_pins: None,
+            target_layer: None,
+            summary: None,
+        });
+        commands.push(BoardCommand::ConnectPins {
+            from_node: previous_node,
+            from_pin: previous_pin,
+            to_node: reroute.clone(),
+            to_pin: "route_in".into(),
+            summary: None,
+        });
+        previous_node = reroute;
+        previous_pin = "route_out".into();
+    }
+    commands.push(BoardCommand::ConnectPins {
+        from_node: previous_node,
+        from_pin: previous_pin,
+        to_node: to_id.into(),
+        to_pin: input.name.clone(),
+        summary: None,
+    });
+    apply_commands(board, commands).await;
+}
+
+/// Reroutes on both sides of a removed statement must resolve to the surviving statements.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_or_replacing_a_statement_splices_through_execution_reroutes() {
+    for replace in [false, true] {
+        let mut board = board_from(
+            r#"eventsSimple bent() {
+    log::info({ message: "before", toast: false })
+    log::info({ message: "removed", toast: false })
+    log::info({ message: "after", toast: false })
+}
+"#,
+        )
+        .await;
+        let before = info(&board, "before").id.clone();
+        let removed = info(&board, "removed").id.clone();
+        let after = info(&board, "after").id.clone();
+        bend_execution_wire(&mut board, &before, &removed, 2).await;
+        bend_execution_wire(&mut board, &removed, &after, 2).await;
+        let text = anchored(&board);
+        assert!(!text.contains("reroute"), "{text}");
+        assert_round_trips(&board);
+        let edited = if replace {
+            text.replace(
+                line_with(&text, "\"removed\""),
+                "    log::info({ message: \"replacement\", toast: false })",
+            )
+        } else {
+            without_line(&text, "\"removed\"")
+        };
+
+        apply_edit(&mut board, &edited).await;
+
+        assert!(!all_nodes(&board).iter().any(|node| node.id == removed));
+        assert!(!all_nodes(&board).iter().any(|node| node.name == "reroute"));
+        let next = if replace { "replacement" } else { "after" };
+        assert!(runs_before(
+            &board,
+            info(&board, "before"),
+            info(&board, next)
+        ));
+        if replace {
+            assert!(runs_before(
+                &board,
+                info(&board, "replacement"),
+                info(&board, "after")
+            ));
+        }
+        assert_round_trips(&board);
+    }
+}
+
+/// Branch-arm reroutes must not become extra successors when the branch is unwrapped.
+#[tokio::test(flavor = "multi_thread")]
+async fn unwrapping_an_if_else_splices_through_execution_reroutes() {
+    let mut board = board_from(
+        r#"eventsSimple bentBranch() {
+    log::info({ message: "before", toast: false })
+    if (1 > 0) {
+        log::info({ message: "yes", toast: false })
+    } else {
+        log::info({ message: "no", toast: false })
+    }
+    log::info({ message: "after", toast: false })
+}
+"#,
+    )
+    .await;
+    let before = info(&board, "before").id.clone();
+    let yes = info(&board, "yes").id.clone();
+    let no = info(&board, "no").id.clone();
+    let branch = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "control_branch")
+        .expect("the if is a branch")
+        .id
+        .clone();
+    bend_execution_wire(&mut board, &before, &branch, 2).await;
+    bend_execution_wire(&mut board, &branch, &yes, 2).await;
+    bend_execution_wire(&mut board, &branch, &no, 2).await;
+    assert_round_trips(&board);
+    let edited = unwrap_block(&anchored(&board), "if (");
+
+    apply_edit(&mut board, &edited).await;
+
+    assert!(!all_nodes(&board).iter().any(|node| node.id == branch));
+    assert!(!all_nodes(&board).iter().any(|node| node.name == "reroute"));
+    for (from, to) in [("before", "yes"), ("yes", "no"), ("no", "after")] {
+        assert!(runs_before(&board, info(&board, from), info(&board, to)));
+    }
+    assert_round_trips(&board);
+}
+
+/// Replacing a body removes its inline data producers, including unused reads of deleted variables.
+#[tokio::test(flavor = "multi_thread")]
+async fn replacing_an_event_body_removes_orphaned_expression_chains() {
+    let mut board = board_from(
+        r#"let oldValue: string = "old"
+
+eventsSimple replaceBody() {
+    log::info({ message: oldValue.toUpper().toLower(), toast: false })
+    log::info({ message: json::stringify({ value: struct::make(), pretty: false }), toast: false })
+}
+"#,
+    )
+    .await;
+    let variable = variables_named(&board, "oldValue").pop().unwrap();
+    apply_commands(
+        &mut board,
+        vec![
+            BoardCommand::AddNode {
+                node_type: "variable_get".into(),
+                ref_id: Some("$unusedRead".into()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::UpdateNodePin {
+                node_id: "$unusedRead".into(),
+                pin_id: "var_ref".into(),
+                value: serde_json::json!(variable),
+                summary: None,
+            },
+        ],
+    )
+    .await;
+    let expressions: Vec<String> = all_nodes(&board)
+        .into_iter()
+        .filter(|node| {
+            matches!(
+                node.name.as_str(),
+                "variable_get"
+                    | "string_to_upper"
+                    | "string_to_lower"
+                    | "val_to_string"
+                    | "struct_make"
+            )
+        })
+        .map(|node| node.id.clone())
+        .collect();
+    assert_eq!(expressions.len(), 6, "both reads and four pure helpers");
+    let text = anchored(&board);
+    for id in &expressions {
+        assert!(!text.contains(&format!("//@n:{id}")), "{text}");
+    }
+    let edited = without_line(
+        &replace_body(
+            &text,
+            "eventsSimple replaceBody(",
+            &["    log::info({ message: \"replacement\", toast: false })".into()],
+        ),
+        &format!("//@v:{variable}"),
+    );
+
+    apply_edit(&mut board, &edited).await;
+
+    assert!(!board.variables.contains_key(&variable));
+    for id in expressions {
+        assert!(
+            !all_nodes(&board).iter().any(|node| node.id == id),
+            "orphaned expression {id} survived"
+        );
+    }
+    info(&board, "replacement");
+    assert_round_trips(&board);
+}
+
+/// An inline producer shared with another event stays wired there; unrelated canvas work stays too.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_consumer_preserves_shared_and_unrelated_expressions() {
+    let mut board = board_from(
+        r#"let sharedValue: string = "shared"
+
+eventsSimple replaceBody() {
+    log::info({ message: sharedValue.toUpper(), toast: false })
+}
+
+eventsSimple keepBody() {
+    log::info({ message: "keep", toast: false })
+}
+"#,
+    )
+    .await;
+    let upper = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "string_to_upper")
+        .unwrap()
+        .id
+        .clone();
+    let getter = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "variable_get")
+        .unwrap()
+        .id
+        .clone();
+    let kept_consumer = info(&board, "keep").id.clone();
+    apply_commands(
+        &mut board,
+        vec![
+            BoardCommand::ConnectPins {
+                from_node: upper.clone(),
+                from_pin: "uppercase_string".into(),
+                to_node: kept_consumer.clone(),
+                to_pin: "message".into(),
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "struct_make".into(),
+                ref_id: Some("$unrelated".into()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+        ],
+    )
+    .await;
+    let unrelated = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "struct_make")
+        .unwrap()
+        .id
+        .clone();
+    assert_round_trips(&board);
+    let edited = replace_body(
+        &anchored(&board),
+        "eventsSimple replaceBody(",
+        &["    log::info({ message: \"replacement\", toast: false })".into()],
+    );
+
+    apply_edit(&mut board, &edited).await;
+
+    for id in [&upper, &getter, &unrelated, &kept_consumer] {
+        assert!(
+            all_nodes(&board).iter().any(|node| &node.id == id),
+            "unaffected node {id} lost its identity"
+        );
+    }
+    let nodes = all_nodes(&board);
+    let producer = nodes.iter().find(|node| node.id == upper).unwrap();
+    let consumer = nodes.iter().find(|node| node.id == kept_consumer).unwrap();
+    let message = consumer
+        .pins
+        .values()
+        .find(|pin| pin.name == "message")
+        .unwrap();
+    assert!(
+        producer
+            .pins
+            .values()
+            .any(|pin| { pin.name == "uppercase_string" && message.depends_on.contains(&pin.id) })
+    );
+    assert_round_trips(&board);
+}
+
 /// "assignment to variable … incompatible pin types or schemas": a variable typed with the
 /// interface the editor renders for `Bit` must accept `ai::findModel`'s `Bit`.
 #[tokio::test(flavor = "multi_thread")]
@@ -957,6 +1267,184 @@ async fn a_module_layer_variable_is_declared_and_seen_by_every_section_of_its_mo
     assert_round_trips(&board);
 }
 
+/// A board variable used in a template must feed the format node's dynamic placeholder pin.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_placeholder_reads_its_board_variable() {
+    fn assert_greeting_wired(board: &Board) {
+        let variable = board
+            .variables
+            .values()
+            .find(|variable| variable.name == "greeting")
+            .expect("greeting is a board variable");
+        let nodes = all_nodes(board);
+        let getters: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.name == "variable_get")
+            .collect();
+        assert_eq!(getters.len(), 1, "the template needs one variable getter");
+        let getter = getters[0];
+        let var_ref = getter
+            .get_pin_by_name("var_ref")
+            .expect("variable reference");
+        let expected_ref = format!("\"{}\"", variable.id);
+        assert_eq!(
+            var_ref.default_value.as_deref(),
+            Some(expected_ref.as_bytes())
+        );
+        let output = getter.get_pin_by_name("value_ref").expect("variable value");
+        let formats: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.name == "string_format")
+            .collect();
+        assert_eq!(formats.len(), 1, "the template needs one format node");
+        let placeholder = formats[0]
+            .get_pin_by_name("greeting")
+            .expect("the format node has a greeting placeholder");
+        assert_eq!(placeholder.depends_on.len(), 1);
+        assert!(placeholder.depends_on.contains(&output.id));
+        assert_eq!(output.connected_to.len(), 1);
+        assert!(output.connected_to.contains(&placeholder.id));
+    }
+
+    for (existing_variable, body) in [
+        (
+            false,
+            r#"log::info({ message: `${greeting} x`, toast: false })"#,
+        ),
+        (
+            true,
+            r#"const message = `${greeting} x ${greeting}`
+    log::info({ message: message, toast: false })"#,
+        ),
+    ] {
+        let source =
+            format!("const greeting = \"hi\"\n\neventsSimple greet() {{\n    {body}\n}}\n");
+        let mut board = if existing_variable {
+            board_from("const greeting = \"hi\"\n").await
+        } else {
+            Board::new_detached(Some("template-variable".into()), Path::default())
+        };
+        apply_edit(&mut board, &source).await;
+        assert_greeting_wired(&board);
+        assert_round_trips(&board);
+
+        let text = anchored(&board);
+        apply_edit(&mut board, &text).await;
+        assert_greeting_wired(&board);
+        assert_round_trips(&board);
+
+        let copy = board_from(&anchored(&board)).await;
+        assert_greeting_wired(&copy);
+        assert_round_trips(&copy);
+    }
+}
+
+/// A missing format placeholder must reject Apply without publishing the staged board.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_format_placeholder_without_a_value_rejects_apply() {
+    const VALID_SOURCE: &str = r#"const greeting = "hi"
+
+eventsSimple greet() {
+    log::info({ message: `${greeting} x`, toast: false })
+}
+"#;
+    const INCOMPLETE_FORMAT: &str = r#"string::format({ formatString: "{greeting} x" })"#;
+    const INCOMPLETE_EDIT: &str =
+        r#"string::format({ formatString: "{greeting} x {missing}", greeting: greeting })"#;
+
+    for existing_template in [false, true] {
+        let mut board = if existing_template {
+            board_from(VALID_SOURCE).await
+        } else {
+            Board::new_detached(Some("incomplete-template".into()), Path::default())
+        };
+        let source = if existing_template {
+            anchored(&board)
+        } else {
+            VALID_SOURCE.to_string()
+        };
+        let (replacement, missing_placeholder) = if existing_template {
+            (INCOMPLETE_EDIT, "missing")
+        } else {
+            (INCOMPLETE_FORMAT, "greeting")
+        };
+        let incomplete = source.replace("`${greeting} x`", replacement);
+        assert_ne!(
+            source, incomplete,
+            "the edit introduces a missing placeholder value"
+        );
+        let original = flow_like_types::json::to_value(&board).expect("serialize original board");
+        let applied = apply_flowscript_to_board(
+            &mut board,
+            &incomplete,
+            &CATALOG.nodes,
+            catalog_state().await,
+            None,
+            true,
+        )
+        .await;
+        let rejection = match applied {
+            Err(error) => error.to_string(),
+            Ok(result) => {
+                assert!(result.commands.is_empty(), "invalid formats must not apply");
+                assert!(
+                    !result.diagnostics.is_empty(),
+                    "invalid formats must diagnose"
+                );
+                result.diagnostics.join("\n")
+            }
+        };
+        assert!(rejection.contains(missing_placeholder), "{rejection}");
+        assert!(
+            rejection.contains("missing required inputs")
+                || rejection.contains("no value or connection"),
+            "{rejection}"
+        );
+        assert_eq!(
+            flow_like_types::json::to_value(&board).expect("serialize board after rejection"),
+            original,
+            "rejected Apply must preserve the complete original board"
+        );
+    }
+
+    let mut board = board_from(VALID_SOURCE).await;
+    let original = flow_like_types::json::to_value(&board).expect("serialize original board");
+    let nodes = all_nodes(&board);
+    let getter = nodes
+        .iter()
+        .find(|node| node.name == "variable_get")
+        .expect("the valid template has a variable getter");
+    let format = nodes
+        .iter()
+        .find(|node| node.name == "string_format")
+        .expect("the valid template has a format node");
+    let disconnect = BoardCommand::DisconnectPins {
+        from_node: getter.id.clone(),
+        from_pin: "value_ref".into(),
+        to_node: format.id.clone(),
+        to_pin: "greeting".into(),
+        summary: None,
+    };
+    let rejection = apply_board_commands_to_board(
+        &mut board,
+        vec![disconnect],
+        &CATALOG.nodes,
+        catalog_state().await,
+        None,
+    )
+    .await
+    .err()
+    .expect("disconnecting a template placeholder must reject Apply")
+    .to_string();
+    assert!(rejection.contains("greeting"), "{rejection}");
+    assert!(rejection.contains("no value or connection"), "{rejection}");
+    assert_eq!(
+        flow_like_types::json::to_value(&board).expect("serialize board after rejection"),
+        original,
+        "a rejected disconnection must preserve the original placeholder wire"
+    );
+}
+
 /// How many `variable_set` nodes write variable `variable_id`.
 fn writers_of(board: &Board, variable_id: &str) -> usize {
     let expected = format!("\"{variable_id}\"");
@@ -1451,29 +1939,20 @@ async fn a_chat_history_with_renamed_definitions_round_trips() {
 async fn a_function_typed_with_the_rendered_history_takes_the_chat_history() {
     let mut board = board_with_chat_event().await;
     let text = anchored(&board);
-    let first_event = text
-        .lines()
-        .find(|line| line.starts_with("events"))
-        .expect("events render")
-        .to_string();
     let chat = text
         .lines()
         .find(|line| line.starts_with("eventsChat "))
         .expect("the chat event renders")
         .to_string();
-    let edited = text
-        .replace(
-            &chat,
-            &format!(
-                "{chat}\n    const ready = prep(history)\n    log::info({{ message: ready, toast: false }})"
-            ),
-        )
-        .replace(
-            &first_event,
-            &format!(
-                "function prep(history: History): (ready: bool) {{\n    return true\n}}\n\n{first_event}"
-            ),
-        );
+    let edited = text.replace(
+        &chat,
+        &format!(
+            "{chat}\n    const ready = prep(history)\n    log::info({{ message: ready, toast: false }})"
+        ),
+    );
+    let edited = format!(
+        "function prep(history: History): (ready: bool) {{\n    return true\n}}\n\n{edited}"
+    );
     apply_edit(&mut board, &edited).await;
     assert_round_trips(&board);
 }
@@ -2083,58 +2562,96 @@ fn exec_reaches(board: &Board, from: &Node, to: &Node) -> bool {
     false
 }
 
-/// Beleg: `let total = 0` inside a loop body only became the variable's default value, so the
-/// sum of one outer iteration carried over into the next. A `let` that runs more than once per
-/// run has to reset its variable where it is written.
+/// A literal `let` inside a loop must reset the variable before each accumulation. Typed and
+/// inferred declarations take different compiler paths, in both events and functions.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_let_inside_a_loop_resets_its_variable_on_every_iteration() {
-    let board = board_from(
-        r#"eventsSimple countRows() {
-    for (const row of ["a", "b"]) {
-        let total = 0
-        for (const x of [1, 2]) {
+    for header in ["eventsSimple countRows()", "function countRows()"] {
+        for declaration in ["let total = 0", "let total: int = 0"] {
+            let source = format!(
+                r#"{header} {{
+    for (const row of ["a", "b"]) {{
+        {declaration}
+        for (const x of [1, 2]) {{
             total = total + x
-        }
-        log::info({ message: "row", toast: false })
-    }
-}
+        }}
+        log::info({{ message: "row", toast: false }})
+    }}
+    log::info({{ message: "done", toast: false }})
+}}
 "#,
-    )
-    .await;
-    let variable_id = board
-        .variables
-        .values()
-        .find(|variable| variable.name == "total")
-        .map(|variable| variable.id.clone())
-        .expect("`total` becomes a variable");
-    let expected_ref = format!("\"{variable_id}\"");
-    let writers: Vec<&Node> = all_nodes(&board)
-        .into_iter()
-        .filter(|node| {
-            node.name == "variable_set"
-                && node.pins.values().any(|pin| {
-                    pin.name == "var_ref"
-                        && pin.default_value.as_deref() == Some(expected_ref.as_bytes())
+            );
+            let board = board_from(&source).await;
+            let variable_id = board
+                .variables
+                .values()
+                .chain(
+                    board
+                        .layers
+                        .values()
+                        .flat_map(|layer| layer.variables.values()),
+                )
+                .find(|variable| variable.name == "total")
+                .map(|variable| variable.id.clone())
+                .expect("`total` becomes a variable");
+            let expected_ref = format!("\"{variable_id}\"");
+            let writers: Vec<&Node> = all_nodes(&board)
+                .into_iter()
+                .filter(|node| {
+                    node.name == "variable_set"
+                        && node.pins.values().any(|pin| {
+                            pin.name == "var_ref"
+                                && pin.default_value.as_deref() == Some(expected_ref.as_bytes())
+                        })
                 })
-        })
-        .collect();
-    assert_eq!(writers.len(), 2, "a reset and the accumulation");
-    let (resets, accumulations): (Vec<&Node>, Vec<&Node>) = writers.into_iter().partition(|node| {
-        node.pins.values().any(|pin| {
-            pin.name == "value_in"
-                && pin.depends_on.is_empty()
-                && pin.default_value.as_deref() == Some(b"0".as_slice())
-        })
-    });
-    let (reset, accumulation) = (resets[0], accumulations[0]);
-    assert!(
-        all_nodes(&board)
-            .into_iter()
-            .any(|node| node.name == "control_for_each" && exec_reaches(&board, node, reset)),
-        "the reset runs inside the outer loop"
-    );
-    assert!(exec_reaches(&board, reset, accumulation));
-    assert_round_trips(&board);
+                .collect();
+            assert_eq!(writers.len(), 2, "a reset and the accumulation:\n{source}");
+            let (resets, accumulations): (Vec<&Node>, Vec<&Node>) =
+                writers.into_iter().partition(|node| {
+                    node.pins.values().any(|pin| {
+                        pin.name == "value_in"
+                            && pin.depends_on.is_empty()
+                            && pin.default_value.as_deref() == Some(b"0".as_slice())
+                    })
+                });
+            assert_eq!(resets.len(), 1, "one literal reset:\n{source}");
+            assert_eq!(accumulations.len(), 1, "one accumulation:\n{source}");
+            let (reset, accumulation) = (resets[0], accumulations[0]);
+            let loops: Vec<&Node> = all_nodes(&board)
+                .into_iter()
+                .filter(|node| node.name == "control_for_each")
+                .collect();
+            assert_eq!(loops.len(), 2, "outer and inner loops:\n{source}");
+            let inner = loops
+                .iter()
+                .copied()
+                .find(|node| runs_before(&board, reset, node))
+                .expect("the reset runs immediately before the inner loop");
+            let outer = loops
+                .iter()
+                .copied()
+                .find(|node| node.id != inner.id)
+                .expect("the outer loop");
+            let output_connects_to = |node: &Node, output: &str, next: &Node| {
+                node.pins.values().any(|pin| {
+                    pin.pin_type == PinType::Output
+                        && pin.name == output
+                        && pin
+                            .connected_to
+                            .contains(&exec_pin(next, PinType::Input).id)
+                })
+            };
+            assert!(
+                output_connects_to(outer, "exec_out", reset),
+                "the outer loop body starts with the reset:\n{source}"
+            );
+            assert!(output_connects_to(inner, "exec_out", accumulation));
+            assert!(output_connects_to(inner, "done", info(&board, "row")));
+            assert!(output_connects_to(outer, "done", info(&board, "done")));
+            assert!(exec_reaches(&board, reset, accumulation));
+            assert_round_trips(&board);
+        }
+    }
 }
 
 /// The `control_call_function` nodes that call function `name`.
@@ -2247,12 +2764,17 @@ async fn renaming_a_parameter_rewires_the_body_and_the_call() {
 async fn dropping_a_parameter_with_an_unwritten_call_is_refused() {
     let board = board_from(GREETER).await;
     let text = anchored(&board);
-    let function = text
-        .split("eventsSimple")
-        .next()
-        .expect("the function renders first")
-        .replace("greet(name: string)", "greet()")
-        .replace("info(name,", "info(\"hi\",");
+    let mut ast = flow_like_ast::parse(&text).expect("the board's source parses");
+    ast.events.clear();
+    let function = flow_like_ast::render(
+        &ast,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    )
+    .replace("greet(name: string)", "greet()")
+    .replace("info(name,", "info(\"hi\",");
     let (catalog, enricher) = catalog();
     let diagnostics = reconcile_text_with_catalog_enriched_opts(
         &board,
@@ -2478,5 +3000,143 @@ eventsSimple run() {
     .await;
     let text = anchored(&board);
     assert!(!text.contains("labels.length"), "{text}");
+    assert_round_trips(&board);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn event_descriptions_apply_edit_clear_and_resolve_stored_refs() {
+    let mut board = board_from(
+        r#"@description("Fetch a web page and return its text for the agent to read.")
+eventsGeneric fetchPage(url: string, payload: Struct) {
+    const response = http::fetch({ request: http::request({ method: "GET", url: url }) })
+    return http::toText({ response: response })
+}
+"#,
+    )
+    .await;
+    let entry_id = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "events_generic" && node.friendly_name == "fetchPage")
+        .expect("the described event was created")
+        .id
+        .clone();
+    let assert_description = |board: &Board, expected: &str| {
+        let entry = all_nodes(board)
+            .into_iter()
+            .find(|node| node.id == entry_id)
+            .expect("the event keeps its identity");
+        assert_eq!(
+            flow_like::flow::pin::resolve_schema(&entry.description, &board.refs).unwrap(),
+            expected
+        );
+        if !expected.is_empty() {
+            assert_eq!(
+                board.refs.get(&entry.description).map(String::as_str),
+                Some(expected)
+            );
+        }
+    };
+    let initial = "Fetch a web page and return its text for the agent to read.";
+    assert_description(&board, initial);
+    assert_round_trips(&board);
+
+    let updated = "Fetch the page.\nReturn its \"text\" to the agent.";
+    let edited = anchored(&board).replace(
+        &flow_like_ast::quote_string(initial),
+        &flow_like_ast::quote_string(updated),
+    );
+    apply_edit(&mut board, &edited).await;
+    assert_description(&board, updated);
+    assert_round_trips(&board);
+
+    let omitted = without_line(&anchored(&board), "@description(");
+    let result = apply_edit(&mut board, &omitted).await;
+    assert!(
+        result.commands.is_empty(),
+        "omitting the description is a no-op"
+    );
+    assert_description(&board, updated);
+
+    let cleared = anchored(&board).replace(&flow_like_ast::quote_string(updated), "\"\"");
+    apply_edit(&mut board, &cleared).await;
+    assert_description(&board, "");
+    assert!(!anchored(&board).contains("@description("));
+    assert_round_trips(&board);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tool_descriptions_in_module_functions_keep_agent_references() {
+    let mut board = board_from(
+        r#"module assistants {
+    function configureTools() {
+        const agent = agent::fromModel({ model: ai::findModel({}) }).registerFunctionTools({ tools: [fetchPage] })
+        log::info({ message: json::stringify({ value: agent, pretty: false }), toast: false })
+        @description("Fetch a web page and return its text for the agent to read.")
+        eventsGeneric fetchPage(url: string, payload: Struct) {
+            const response = http::fetch({ request: http::request({ method: "GET", url: url }) })
+            return http::toText({ response: response })
+        }
+    }
+
+    @description("Prepare the assistant tools.")
+    eventsSimple prepare() {
+        configureTools()
+    }
+}
+"#,
+    )
+    .await;
+    let module_id = board
+        .layers
+        .values()
+        .find(|layer| layer.name == "assistants")
+        .expect("the module exists")
+        .id
+        .clone();
+    let tool = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "events_generic" && node.friendly_name == "fetchPage")
+        .expect("the nested tool exists");
+    let tool_id = tool.id.clone();
+    assert_eq!(
+        flow_like::flow::pin::resolve_schema(&tool.description, &board.refs).unwrap(),
+        "Fetch a web page and return its text for the agent to read."
+    );
+    let registration_id = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "agent_register_function_tools")
+        .expect("the tool registration exists")
+        .id
+        .clone();
+    let assert_reference = |board: &Board| {
+        let registration = all_nodes(board)
+            .into_iter()
+            .find(|node| node.id == registration_id)
+            .expect("the tool registration keeps its identity");
+        assert_eq!(
+            registration.fn_refs.as_ref().unwrap().fn_refs,
+            vec![tool_id.clone()]
+        );
+    };
+    assert_reference(&board);
+    assert_round_trips(&board);
+
+    let text = apply_module_file_edit(
+        &mut board,
+        &module_id,
+        "Fetch a web page and return its text for the agent to read.",
+        "Retrieve the requested page as plain text.",
+    )
+    .await;
+    assert!(text.contains("@description("), "{text}");
+    let tool = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.id == tool_id)
+        .expect("the nested tool keeps its identity");
+    assert_eq!(
+        flow_like::flow::pin::resolve_schema(&tool.description, &board.refs).unwrap(),
+        "Retrieve the requested page as plain text."
+    );
+    assert_reference(&board);
     assert_round_trips(&board);
 }

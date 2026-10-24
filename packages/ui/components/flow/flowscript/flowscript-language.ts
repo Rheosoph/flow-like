@@ -2745,9 +2745,21 @@ Groups the nodes its statements create into a visual Collapsed layer. Purely vis
 
 \`"A/B"\` nests group B inside A, \`\\/\` keeps a slash inside one name, and a leading \`/\` starts from the section root (\`"/"\` is the root itself). Write it inside an event, function, handler, \`detached\` block, branch arm or loop body.`;
 
+const DESCRIPTION_DECORATOR_MARKDOWN = `\`\`\`flowscript
+@description("Return the order ID for confirmation.")
+eventsGeneric confirmOrder(orderId: string, payload: Struct) {
+    return orderId
+}
+\`\`\`
+
+Sets a variable or event description. For an agent tool, put it immediately above its top-level or nested \`eventsGeneric\` declaration. Apply to board writes the event description to its node, where agents read tool descriptions.
+
+Omitting the decorator preserves an existing event description. Use \`@description("")\` to clear it.`;
+
 const DECORATOR_HOVER_MARKDOWN = new Map([
 	["cache", CACHE_DECORATOR_MARKDOWN],
 	["collapse", COLLAPSE_DECORATOR_MARKDOWN],
+	["description", DESCRIPTION_DECORATOR_MARKDOWN],
 ]);
 
 /** The `@collapse` block completion, shared by the decorator and statement-snippet providers. */
@@ -3198,6 +3210,18 @@ export function registerFlowScriptCoreProviders(
 										sortText: "1_parallel",
 									},
 									...collapse,
+									{
+										label: '@description("…")',
+										kind: monaco.languages.CompletionItemKind.Keyword,
+										detail: "Describe a variable, event, or agent tool",
+										documentation: { value: DESCRIPTION_DECORATOR_MARKDOWN },
+										insertText: '@description("${1:Description}")',
+										insertTextRules:
+											monaco.languages.CompletionItemInsertTextRule
+												.InsertAsSnippet,
+										range: decoratorRange,
+										sortText: "1_description",
+									},
 								],
 							};
 						}

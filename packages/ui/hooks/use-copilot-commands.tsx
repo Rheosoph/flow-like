@@ -1403,6 +1403,28 @@ export function useCopilotCommands({
 						break;
 					}
 
+					case "SetNodeDescription": {
+						const node = resolveNode(cmd.node_id);
+						if (!node) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot describe node: "${cmd.node_id}" was not found`,
+							);
+							break;
+						}
+						const describedNode: INode = {
+							...node,
+							description: cmd.description,
+						};
+						remainingGenericCommands.push(
+							updateNodeCommand({ node: describedNode, old_node: node }),
+						);
+						latestBoardNodes[describedNode.id] = describedNode;
+						replaceMappedNode(describedNode);
+						break;
+					}
+
 					case "SetNodeCodeNames": {
 						const node = resolveNode(cmd.node_id);
 						if (!node) {

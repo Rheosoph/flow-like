@@ -101,10 +101,11 @@ describe("board shell surfaces", () => {
 						},
 					},
 					{
-						id: "runs",
-						title: "Runs",
+						id: "quality",
+						title: "Quality",
 						icon: null,
-						badge: 3,
+						badge: 143,
+						badgeLabel: "143 errors and warnings",
 						onSelect: () => {},
 					},
 				],
@@ -126,10 +127,13 @@ describe("board shell surfaces", () => {
 		expect(buttons[1].getAttribute("aria-pressed")).toBe("false");
 		expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
 			"Variables",
-			"Runs",
+			"Quality: 143 errors and warnings",
 			"FlowPilot",
 		]);
-		expect(container.textContent).toContain("3");
+		expect(buttons[1].textContent).toBe("99+");
+		expect(buttons[1].querySelector('[aria-hidden="true"]')?.textContent).toBe(
+			"99+",
+		);
 
 		act(() => buttons[0].click());
 		expect(opened).toBe("variables");

@@ -34,7 +34,7 @@ function run(
 	command: string,
 	args: string[],
 	cwd: string,
-	env: NodeJS.ProcessEnv = {},
+	env: Partial<NodeJS.ProcessEnv> = {},
 ) {
 	execFileSync(command, args, {
 		cwd,

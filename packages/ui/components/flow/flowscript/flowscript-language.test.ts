@@ -1168,12 +1168,52 @@ describe("canonical FlowScript event headers", () => {
 	});
 });
 
+describe("FlowScript event description editor support", () => {
+	test("offers the description decorator for events and nested agent tools", () => {
+		for (const text of ["@desc", "eventsGeneric onLoad() {\n\t@desc"]) {
+			const item = completionItem(text, '@description("…")');
+			expect(item?.insertText).toBe('@description("${1:Description}")');
+			expect(item?.documentation?.value).toContain("agent tool");
+		}
+	});
+
+	test("explains how applying and clearing event descriptions work", () => {
+		const markdown = hoverMarkdown('@description("Find orders.")', {
+			lineNumber: 1,
+			column: 3,
+		});
+		expect(markdown).toContain("Apply to board");
+		expect(markdown).toContain("preserves an existing event description");
+		expect(markdown).toContain('`@description("")`');
+	});
+
+	test("keeps described events and nested tools in the outline without diagnostics", () => {
+		const text = `@description("Start the assistant.")
+eventsGeneric onLoad() {   //@n:start
+	@description("Look up an order by its ID.")
+	eventsGeneric findOrder(orderId: string) {   //@n:tool
+	}
+}`;
+		expect(diagnosticMessages(text)).toEqual([]);
+		const [event] = documentSymbols(text);
+		expect(event?.name).toBe("onLoad");
+		expect(event?.range.startLineNumber).toBe(2);
+		expect(event?.children.map((child) => child.name)).toEqual(["findOrder"]);
+		expect(event?.children[0]?.range.startLineNumber).toBe(4);
+	});
+});
+
 describe("FlowScript function cache editor support", () => {
 	test("offers bare and configured cache decorator snippets", () => {
 		const items = completionItems("@ca");
 		const labels = items.map(labelOf);
 
-		expect(labels).toEqual(["@cache", "@cache({ … })", "@parallel"]);
+		expect(labels).toEqual([
+			"@cache",
+			"@cache({ … })",
+			"@parallel",
+			'@description("…")',
+		]);
 		expect(items[1]?.insertText).toBe(
 			'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
 		);

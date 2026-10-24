@@ -274,6 +274,13 @@ pub enum BoardCommand {
         #[serde(default)]
         summary: Option<String>,
     },
+    /// Set an entry node's description. An empty string clears the description.
+    SetNodeDescription {
+        node_id: String,
+        description: String,
+        #[serde(default)]
+        summary: Option<String>,
+    },
     /// Store the FlowScript names the text gave a node's values (`Node.code_names`), merged into
     /// the names it already has. Keys are output pin names; `""` is the node's own binding.
     /// Presentation only: execution never reads them.

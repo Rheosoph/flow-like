@@ -1105,43 +1105,14 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				: createResponseMessage(sessionIdParameter, appId, event.name);
 		};
 
-		// If stream is already complete, save to IndexedDB directly
-		// (chatRef may not be mounted yet since Chat only renders when messages exist).
-		// Its navigation already happened, or concerned a chat the user has since left.
-		if (executionEngine.isStreamComplete(streamId)) {
-			const accumulatedEvents = executionEngine.getAccumulatedEvents(streamId);
-			if (accumulatedEvents.length > 0) {
-				resumeResponseMessage()
-					.then((responseMessage) =>
-						handleStreamCompletion({
-							responseMessage,
-							chatRef,
-							executionEngine,
-							streamId,
-							subscriberId,
-							processedCompletedStreams,
-							events: accumulatedEvents,
-							appId,
-							eventId: event.id,
-							sessionId: sessionIdParameter,
-							onInteractions: (interactions) =>
-								addSessionInteractions(sessionIdParameter, interactions),
-						}),
-					)
-					.catch((error) => {
-						console.error("[Chat] Failed to settle completed stream:", error);
-					});
-			}
-			return;
-		}
-
-		// For active streams, wait for Chat component to be mounted (messages.length > 0)
-		// before subscribing, since we need chatRef to push updates
-		if (!hasMessages) return;
+		// Active streams need Chat mounted for live updates. Completed streams also use
+		// subscription replay so failures before the first event reach their saved reply.
+		if (!hasMessages && !executionEngine.isStreamComplete(streamId)) return;
 
 		// Mark this subscriber as active before subscribing
 		reconnectSubscribed.current.add(subscriberId);
 		let cancelled = false;
+		let subscribed = false;
 
 		resumeResponseMessage()
 			.then((responseMessage) => {
@@ -1163,6 +1134,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				// The first batch replays what earlier listeners already acted on; only later
 				// batches are live, so only they may navigate.
 				let replaying = true;
+				subscribed = true;
 				executionEngine.subscribeToEventStream(
 					streamId,
 					subscriberId,
@@ -1182,6 +1154,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						}
 					},
 					async (events, failure) => {
+						subscribed = false;
 						await handleStreamCompletion({
 							responseMessage,
 							chatRef,
@@ -1211,7 +1184,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 		return () => {
 			cancelled = true;
-			executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
+			if (subscribed)
+				executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
 			reconnectSubscribed.current.delete(subscriberId);
 		};
 	}, [

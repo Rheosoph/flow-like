@@ -606,6 +606,17 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
             "Split the workflow into smaller non-empty functions and call them from the event.",
             None,
         );
+    } else if message.contains("changes the data-boundary contract")
+        || message.contains("changes the execution-boundary contract")
+    {
+        diagnostic.phase = FlowScriptDiagnosticPhase::TypeCheck;
+        set_function_scope(&mut diagnostic, ticks.first());
+        diagnostic.expected = Some("the existing Function layer signature".into());
+        diagnostic.actual = Some("a changed function signature".into());
+        diagnostic.fix = fix(
+            "Keep the existing signature, or remove any `//@l` anchor and rename the function and its calls. You can also delete the existing layer before applying again.",
+            None,
+        );
     } else if message.contains("new function")
         && (message.contains("no executable body nodes")
             || message.contains("no materialized body nodes")
@@ -1752,6 +1763,71 @@ mod tests {
             assert_eq!(diagnostic.phase, expected_phase, "{message}");
             assert!(diagnostic.fix.is_some(), "missing fix for {message}");
         }
+    }
+
+    #[test]
+    fn function_boundary_contract_failures_point_to_the_function_header() {
+        let source = concat!(
+            "function caller() { psHistoryRow({ row: \"hello\" }) }\n",
+            "module history {\n",
+            "    function psHistoryRow(row: String): (value: String) {\n",
+            "        return row\n",
+            "    }\n",
+            "}\n",
+        );
+        for boundary in ["data", "execution"] {
+            let message = format!(
+                "function `psHistoryRow` changes the {boundary}-boundary contract of Function layer `history-row`, matched by name; rename the function or delete the existing layer"
+            );
+            let structured = result(&[&message]).structured_diagnostics_for_source(source);
+            assert_eq!(structured.len(), 1);
+            let diagnostic = &structured[0];
+            assert_eq!(
+                diagnostic.code,
+                FlowScriptDiagnosticCode::FsReconcileUnsupported
+            );
+            assert_eq!(diagnostic.phase, FlowScriptDiagnosticPhase::TypeCheck);
+            assert_eq!(diagnostic.scope.as_deref(), Some("function:psHistoryRow"));
+            assert_eq!(
+                diagnostic.ast_path.as_deref(),
+                Some("functions.psHistoryRow")
+            );
+            assert!(diagnostic.source_span_is_exact);
+            let span = diagnostic.source_span.as_ref().unwrap();
+            assert_eq!((span.start.line, span.start.column), (3, 5));
+            assert_eq!(
+                &source[span.start.offset.unwrap()..span.end.offset.unwrap()],
+                "function psHistoryRow"
+            );
+            let fix = diagnostic.fix.as_ref().unwrap();
+            assert!(fix.summary.contains("rename the function"));
+            assert!(fix.summary.contains("remove any `//@l` anchor"));
+            assert!(fix.summary.contains("delete the existing layer"));
+            assert!(fix.declaration_search.is_none());
+        }
+    }
+
+    #[test]
+    fn function_boundary_contract_failure_keeps_same_named_module_headers_as_candidates() {
+        let source = concat!(
+            "module first {\n",
+            "    function helper(value: String) {}\n",
+            "}\n",
+            "module second {\n",
+            "    function helper(value: String) {}\n",
+            "}\n",
+        );
+        let structured = result(&[
+            "function `helper` changes the data-boundary contract of Function layer `second-helper`, matched by name; rename the function or delete the existing layer",
+        ])
+        .structured_diagnostics_for_source(source);
+
+        assert_eq!(structured.len(), 1);
+        let diagnostic = &structured[0];
+        assert!(!diagnostic.source_span_is_exact);
+        assert_eq!(diagnostic.spans.len(), 2);
+        assert_eq!(diagnostic.spans[0].start.line, 2);
+        assert_eq!(diagnostic.spans[1].start.line, 5);
     }
 
     #[test]

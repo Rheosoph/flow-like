@@ -403,6 +403,7 @@ type ReactFlowProps = ComponentProps<typeof ReactFlow>;
 
 export interface FlowCanvasProps {
 	overlay?: ReactFlowProps["children"];
+	loadingStatus?: { content: ReactFlowProps["children"]; busy: boolean };
 	flowRef: ReactFlowProps["ref"];
 	nodes: ReactFlowProps["nodes"];
 	edges: ReactFlowProps["edges"];
@@ -638,6 +639,12 @@ function FlowBoardContent({
 			? boardQuery
 			: ({ ...boardQuery, data: undefined } as unknown as typeof boardQuery);
 	const boardRef = useRef<IBoard | undefined>(undefined);
+	const boardLoadKey = JSON.stringify([appId, boardId, version]);
+	const [preparedBoardKey, setPreparedBoardKey] = useState<string>();
+	const boardNodeCount = useMemo(
+		() => Object.keys(board.data?.nodes ?? {}).length,
+		[board.data?.nodes],
+	);
 	const boardDiff = useBoardDiffController({
 		appId,
 		boardId,
@@ -3565,6 +3572,7 @@ function FlowBoardContent({
 		setNodes(parsed.nodes);
 		setEdges(parsed.edges);
 		setPinCache(parsed.cache);
+		setPreparedBoardKey(boardLoadKey);
 	}, [
 		board.data,
 		currentLayer,
@@ -3574,6 +3582,7 @@ function FlowBoardContent({
 		hasRemoteExecution,
 		catalogLookup,
 		selectorDataVersion,
+		boardLoadKey,
 	]);
 
 	// Apply remote execution presence indicators to nodes
@@ -5141,6 +5150,20 @@ function FlowBoardContent({
 							: command.id === "quality"
 								? qualityAttention
 								: undefined,
+					badgeLabel:
+						command.id === "comments"
+							? t("commentsBadgeSummary", {
+									defaultValue_one: "{{count}} comment",
+									defaultValue_other: "{{count}} comments",
+									count: Object.keys(board.data?.comments ?? {}).length,
+								})
+							: command.id === "quality"
+								? t("qualityBadgeSummary", {
+										defaultValue_one: "{{count}} error or warning",
+										defaultValue_other: "{{count}} errors and warnings",
+										count: qualityAttention,
+									})
+								: undefined,
 					badgeTone:
 						command.id === "quality"
 							? qualityHasErrors
@@ -5158,6 +5181,7 @@ function FlowBoardContent({
 			board.data?.comments,
 			qualityAttention,
 			qualityHasErrors,
+			t,
 		],
 	);
 
@@ -5532,6 +5556,29 @@ function FlowBoardContent({
 				))}
 			</ul>
 		);
+
+	const boardLoadFailed =
+		!board.data && !board.isFetching && (board.isError || board.isSuccess);
+	const canvasLoadingContent = !board.data ? (
+		boardLoadFailed ? (
+			<span className="flex flex-col items-center gap-2">
+				<span>{t("boardLoadFailed", "The flow could not be loaded.")}</span>
+				<Button
+					size="sm"
+					variant="outline"
+					onClick={() => void board.refetch()}
+				>
+					{t("retry", "Retry")}
+				</Button>
+			</span>
+		) : (
+			t("loadingFlow", "Loading flow…")
+		)
+	) : preparedBoardKey !== boardLoadKey ? (
+		t("preparingFlowNodes", "Preparing {{count}} nodes…", {
+			count: boardNodeCount,
+		})
+	) : undefined;
 
 	const scriptPane =
 		board.data && shell.script ? (
@@ -6098,6 +6145,14 @@ function FlowBoardContent({
 									)}
 									<FlowCanvas
 										overlay={groupOverlay ?? ghostOverlay}
+										loadingStatus={
+											canvasLoadingContent
+												? {
+														content: canvasLoadingContent,
+														busy: !boardLoadFailed,
+													}
+												: undefined
+										}
 										flowRef={flowRef}
 										nodes={previewNodes}
 										edges={previewEdges}

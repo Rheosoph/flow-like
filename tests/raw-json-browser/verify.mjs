@@ -335,6 +335,74 @@ try {
 		{ timeout: 5000 },
 	);
 	passed.push("Close, reopen, restored trigger focus, and Escape behavior");
+
+	await page.setViewport({ width: 1280, height: 800 });
+	const devModeButton = 'button[aria-label="Dev Mode (JSON Editor)"]';
+	const closeDevMode = async () => {
+		await page.waitForFunction(
+			() => window.monaco.editor.getEditors().length === 1,
+		);
+		// Let Monaco's pending word highlighting finish before disposal.
+		await page.evaluate(
+			() => new Promise((resolve) => setTimeout(resolve, 1000)),
+		);
+		await page.click('[role="dialog"] button[aria-label="Close"]');
+		await page.waitForSelector('[role="dialog"]', { hidden: true });
+	};
+	// Hold the entry animation where the tooltip overlaps the button's lower edge.
+	// This makes the first-click regression independent of browser frame timing.
+	const pausedTooltip = await page.addStyleTag({
+		content:
+			'[data-slot="tooltip-content"][data-state$="open"] { animation-play-state: paused !important; }',
+	});
+	for (let attempt = 0; attempt < 3; attempt++) {
+		await page.mouse.move(900, 400);
+		await page.hover(devModeButton);
+		await page.waitForSelector('[data-slot="tooltip-content"]', {
+			visible: true,
+		});
+		const trigger = await page.$(devModeButton);
+		const bounds = await trigger.boundingBox();
+		assert.ok(bounds);
+		const point = {
+			x: bounds.x + bounds.width / 2,
+			y: bounds.y + bounds.height - 2,
+		};
+		await page.waitForFunction(
+			({ x, y }) =>
+				[
+					...document.querySelectorAll(
+						'[data-slot="tooltip-content"], [data-slot="tooltip-content"] *',
+					),
+				].some((node) => {
+					const rect = node.getBoundingClientRect();
+					return (
+						rect.left <= x && x < rect.right && rect.top <= y && y < rect.bottom
+					);
+				}),
+			{},
+			point,
+		);
+		await page.mouse.click(point.x, point.y);
+		await page.waitForSelector('[role="dialog"]', {
+			visible: true,
+			timeout: 2000,
+		});
+		await closeDevMode();
+		await trigger.dispose();
+	}
+	await pausedTooltip.evaluate((node) => node.remove());
+	passed.push(
+		"Every first click opens Dev Mode while its tooltip overlaps the button",
+	);
+
+	for (const key of ["Enter", "Space"]) {
+		await page.focus(devModeButton);
+		await page.keyboard.press(key);
+		await page.waitForSelector('[role="dialog"]', { visible: true });
+		await closeDevMode();
+	}
+	passed.push("Enter and Space still open Dev Mode");
 	assert.deepEqual(errors, [], "No browser exceptions");
 	console.log(JSON.stringify({ passed, pageErrors: errors }, null, 2));
 } finally {

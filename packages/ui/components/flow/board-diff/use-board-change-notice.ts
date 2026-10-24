@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IBoardDiff } from "../../../lib/board-diff";
 import {
 	REMOTE_BOARD_APPLIED_EVENT,
+	type RemoteBoardAppliedDetail,
 	readRemoteBoardApplied,
 } from "../../../lib/flow-history";
 import type { IBoard } from "../../../lib/schema/flow/board";
@@ -34,8 +35,16 @@ export interface IBoardChangeNotice {
 type Phase =
 	| { kind: "idle"; key: string }
 	| { kind: "opening"; key: string }
-	| ({ kind: "pending"; key: string } & IBoardChangeNotice)
+	| ({
+			kind: "pending";
+			key: string;
+			awaitingBoard?: IBoard;
+	  } & IBoardChangeNotice)
 	| { kind: "tracking"; key: string };
+
+type CatchUpMerge = NonNullable<RemoteBoardAppliedDetail["merge"]> & {
+	observed: IBoard | undefined;
+};
 
 interface Opened {
 	key: string;
@@ -82,8 +91,8 @@ export function useBoardChangeNotice({
 	const boardRef = useRef(board);
 	boardRef.current = board;
 	const openedRef = useRef<Opened | undefined>(undefined);
-	const catchUpRef = useRef(false);
-	const [catchUp, setCatchUp] = useState(0);
+	const catchUpRef = useRef<CatchUpMerge[]>([]);
+	const [catchUp, setCatchUp] = useState<CatchUpMerge>();
 	const savedRef = useRef<IBoard | undefined>(undefined);
 	const saveChainRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -104,7 +113,8 @@ export function useBoardChangeNotice({
 
 	useEffect(() => {
 		openedRef.current = undefined;
-		catchUpRef.current = false;
+		catchUpRef.current = [];
+		setCatchUp(undefined);
 		savedRef.current = undefined;
 		setPhase({ kind: "idle", key });
 	}, [key]);
@@ -142,6 +152,9 @@ export function useBoardChangeNotice({
 		});
 	}, [board, boardId, fresh, idle, ids, key, persist, service]);
 
+	const tracking = isEnabled && current?.kind === "tracking";
+	const pending = isEnabled && current?.kind === "pending";
+
 	useEffect(() => {
 		if (!isEnabled) return;
 		const onRemote = (event: Event) => {
@@ -151,53 +164,80 @@ export function useBoardChangeNotice({
 				detail?.appId !== appId ||
 				detail.boardId !== boardId ||
 				detail.reason === "reset" ||
+				!detail.merge ||
+				pending ||
 				opened?.key !== key ||
 				opened.seenAt === undefined ||
 				Date.now() - opened.at > CATCH_UP_WINDOW_MS
 			)
 				return;
-			catchUpRef.current = true;
-			setCatchUp((n) => n + 1);
+			catchUpRef.current.push({ ...detail.merge, observed: boardRef.current });
+			setCatchUp(catchUpRef.current[0]);
 		};
 		window.addEventListener(REMOTE_BOARD_APPLIED_EVENT, onRemote);
 		return () =>
 			window.removeEventListener(REMOTE_BOARD_APPLIED_EVENT, onRemote);
-	}, [appId, boardId, isEnabled, key]);
+	}, [appId, boardId, isEnabled, key, pending]);
 
-	const tracking = isEnabled && current?.kind === "tracking";
-	const pending = isEnabled && current?.kind === "pending";
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: `catchUp` re-runs the check when a merge lands before its board does
+	// Compare the merge itself. The board prop may still be waiting for that merge,
+	// or already include a later local edit such as a FlowScript apply.
 	useEffect(() => {
 		const opened = openedRef.current;
-		if (!tracking || !board || !catchUpRef.current || opened?.key !== key)
-			return;
+		const merge = catchUp;
+		if (!tracking || !merge || opened?.key !== key) return;
 		if (Date.now() - opened.at > CATCH_UP_WINDOW_MS) {
-			catchUpRef.current = false;
+			catchUpRef.current = [];
+			setCatchUp(undefined);
 			return;
 		}
 		let cancelled = false;
-		void service.compare(ids, board, true).then(({ diff, base }) => {
-			if (cancelled || !diff || !base || keyRef.current !== key) return;
-			catchUpRef.current = false;
-			setPhase({
-				kind: "pending",
-				key,
-				base,
-				seenAt: opened.seenAt ?? Date.now(),
-				diff,
+		void service
+			.compare(ids, merge.after, true, merge.before)
+			.then(({ diff, base }) => {
+				if (
+					cancelled ||
+					keyRef.current !== key ||
+					catchUpRef.current[0] !== merge
+				)
+					return;
+				catchUpRef.current.shift();
+				if (!diff || !base) {
+					setCatchUp(catchUpRef.current[0]);
+					return;
+				}
+				// Once a notice is pending, its refresh follows all subsequent merges.
+				catchUpRef.current = [];
+				setCatchUp(undefined);
+				setPhase({
+					kind: "pending",
+					key,
+					base,
+					seenAt: opened.seenAt ?? Date.now(),
+					diff,
+					awaitingBoard: merge.observed,
+				});
 			});
-		});
 		return () => {
 			cancelled = true;
 		};
-	}, [board, catchUp, ids, key, service, tracking]);
+	}, [catchUp, ids, key, service, tracking]);
 
+	const pendingBase = current?.kind === "pending" ? current.base : undefined;
+	const awaitingBoard =
+		current?.kind === "pending" ? current.awaitingBoard : undefined;
 	useEffect(() => {
-		if (!pending || !board) return;
+		if (!pending || !board || !pendingBase || board === awaitingBoard) return;
+		if (awaitingBoard) {
+			setPhase((prev) =>
+				prev.kind === "pending" && prev.key === key
+					? { ...prev, awaitingBoard: undefined }
+					: prev,
+			);
+			return;
+		}
 		let cancelled = false;
 		const timer = setTimeout(() => {
-			void service.compare(ids, board, false).then(({ diff }) => {
+			void service.compare(ids, board, false, pendingBase).then(({ diff }) => {
 				if (cancelled || keyRef.current !== key) return;
 				setPhase((prev) => {
 					if (prev.kind !== "pending" || prev.key !== key) return prev;
@@ -209,7 +249,7 @@ export function useBoardChangeNotice({
 			cancelled = true;
 			clearTimeout(timer);
 		};
-	}, [board, ids, key, pending, service]);
+	}, [awaitingBoard, board, ids, key, pending, pendingBase, service]);
 
 	// The board that belongs to the tracked key. `boardRef` already points at the next
 	// board when a switch's cleanup runs, so saving it would file one board under another.
@@ -261,7 +301,8 @@ export function useBoardChangeNotice({
 
 	const markSeen = useCallback(async () => {
 		if (openedRef.current) openedRef.current.at = Number.NEGATIVE_INFINITY;
-		catchUpRef.current = false;
+		catchUpRef.current = [];
+		setCatchUp(undefined);
 		setPhase({ kind: "tracking", key });
 		await persist(boardRef.current, ids);
 	}, [ids, key, persist]);

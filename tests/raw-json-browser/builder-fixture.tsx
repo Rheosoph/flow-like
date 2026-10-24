@@ -8,7 +8,16 @@ export const qa = {
 };
 
 const initialJson = JSON.stringify({ components: [], widgetRefs: {} }, null, 2);
+const toolbarState = {
+	copy: () => {},
+	cut: () => {},
+	paste: () => {},
+	deleteComponents: (_ids: string[]) => {},
+	clipboard: null,
+	selection: { componentIds: [] as string[] },
+};
 const BuilderContext = createContext({
+	...toolbarState,
 	devMode: true,
 	setDevMode: (_value: boolean) => {},
 	getRawJson: () => initialJson,
@@ -34,7 +43,7 @@ export function BuilderFixture({ children }: { children: ReactNode }) {
 	qa.open = () => setDevMode(true);
 	return (
 		<BuilderContext.Provider
-			value={{ devMode, setDevMode, getRawJson, setRawJson }}
+			value={{ ...toolbarState, devMode, setDevMode, getRawJson, setRawJson }}
 		>
 			{children}
 		</BuilderContext.Provider>

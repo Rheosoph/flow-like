@@ -142,6 +142,7 @@
 	"eventId": "Event ID",
 	"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction": "Event types without interface support handle data automatically without requiring user interaction.",
 	"exampleMessages": "Example Messages",
+	"exampleMessagesHelp": "Starter suggestions for this chat event. Press Enter to add a message. Leave the list empty to hide suggestions.",
 	"exampleRequest": "Example Request",
 	"executionTarget": "Execution Target",
 	"exposeThisEndpointPublicly": "Expose this endpoint publicly",

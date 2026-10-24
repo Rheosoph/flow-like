@@ -1,8 +1,10 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
 import NextLink from "next/link";
 import { useContext, useRef } from "react";
+import { toast } from "sonner";
 import {
 	ClientNavigationContext,
 	useClientHref,
@@ -12,6 +14,8 @@ import {
 	useActionContext,
 	useComponentEventTrigger,
 	useExecuteAction,
+	useIsComponentTriggering,
+	useMarkComponentTriggering,
 } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -51,6 +55,7 @@ export function A2UILink({
 	const clientHref = useClientHref();
 	const pointerActivationAtRef = useRef(0);
 	const keyboardActivationAtRef = useRef(0);
+	const actionInFlightRef = useRef(false);
 	const label = useResolved<string>(component.label) ?? "";
 	const href = useResolved<string>(component.href) ?? "";
 	const route = useResolved<string>(component.route);
@@ -60,6 +65,8 @@ export function A2UILink({
 	const disabled = useResolved<boolean>(component.disabled);
 	const { isPreviewMode } = useExecuteAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
+	const isTriggering = useIsComponentTriggering(componentId);
+	const markComponentTriggering = useMarkComponentTriggering();
 	const { appId } = useActionContext();
 
 	const variant = component.variant ?? "primary";
@@ -72,9 +79,13 @@ export function A2UILink({
 		component.actions,
 	);
 
-	const handleClick = (e: React.MouseEvent) => {
+	const handleClick = async (e: React.MouseEvent) => {
 		// Only handle actions in preview mode
 		if (!isPreviewMode) return;
+		if (disabled || (action && (isTriggering || actionInFlightRef.current))) {
+			e.preventDefault();
+			return;
+		}
 
 		const now = Date.now();
 		const hasPointerIntent = now - pointerActivationAtRef.current < 1000;
@@ -96,7 +107,20 @@ export function A2UILink({
 
 		if (action) {
 			e.preventDefault();
-			void triggerEvent("navigate", component);
+			actionInFlightRef.current = true;
+			// Keep feedback active between the event's ordered actions.
+			markComponentTriggering?.(componentId, true);
+			try {
+				await triggerEvent("navigate", component);
+			} catch (error) {
+				console.error("[A2UI Link] Action failed", error);
+				toast.error(t("somethingWentWrong"), {
+					description: error instanceof Error ? error.message : undefined,
+				});
+			} finally {
+				actionInFlightRef.current = false;
+				markComponentTriggering?.(componentId, false);
+			}
 			return;
 		}
 		if (onAction) {
@@ -148,7 +172,7 @@ export function A2UILink({
 	resolvedHref = clientHref(resolvedHref);
 
 	const baseClasses = cn(
-		`inline-flex items-center transition-colors cursor-pointer`,
+		"inline-flex items-center transition-colors cursor-pointer",
 		variantStyles[variant],
 		underlineStyles[underline],
 		disabled && "pointer-events-none opacity-50",
@@ -161,7 +185,7 @@ export function A2UILink({
 			<button
 				ref={elementRef}
 				type="button"
-				className={baseClasses}
+				className={cn(baseClasses, isTriggering && "cursor-wait")}
 				style={resolveInlineStyle(style)}
 				onPointerDown={() => {
 					pointerActivationAtRef.current = Date.now();
@@ -172,8 +196,12 @@ export function A2UILink({
 					}
 				}}
 				onClick={handleClick}
-				disabled={disabled}
+				disabled={disabled || isTriggering}
+				aria-busy={isTriggering}
 			>
+				{isTriggering && (
+					<Loader2 aria-hidden="true" className="mr-2 size-4 animate-spin" />
+				)}
 				{label}
 			</button>
 		);

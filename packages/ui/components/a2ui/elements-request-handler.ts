@@ -8,7 +8,8 @@ import {
 } from "./element-materializer";
 
 const DEFAULT_ELEMENTS_REQUEST_TIMEOUT_MS = 10_000;
-const NO_LIVE_SURFACE = "no live surface for this run";
+const NO_LIVE_SURFACE =
+	"The app page is no longer available for this action. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again.";
 
 /**
  * Wire shape of the `requestElements` a2ui message (run → frontend live read

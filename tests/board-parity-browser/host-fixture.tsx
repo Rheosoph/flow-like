@@ -435,6 +435,19 @@ function Host() {
 	const reads = useRef<Record<string, number>>({});
 
 	useEffect(() => {
+		const params = new URLSearchParams(window.location.search);
+		const boardReadDelay = Math.max(
+			0,
+			Math.min(Number(params.get("board-read-delay")) || 0, 15_000),
+		);
+		let boardReadFailures = Math.max(
+			0,
+			Number(params.get("board-read-failures")) || 0,
+		);
+		let invalidBoardReads = Math.max(
+			0,
+			Number(params.get("board-read-invalid")) || 0,
+		);
 		const read = (name: string) => {
 			reads.current[name] = (reads.current[name] ?? 0) + 1;
 		};
@@ -504,6 +517,15 @@ function Host() {
 				},
 				async getBoard() {
 					read("getBoard");
+					if (boardReadDelay) await wait(boardReadDelay);
+					if (boardReadFailures > 0) {
+						boardReadFailures -= 1;
+						throw new Error("Fixture could not load the board");
+					}
+					if (invalidBoardReads > 0) {
+						invalidBoardReads -= 1;
+						return { message: "Invalid board response" } as unknown as IBoard;
+					}
 					return structuredClone(model.current);
 				},
 				async getBoardAuthoritative() {

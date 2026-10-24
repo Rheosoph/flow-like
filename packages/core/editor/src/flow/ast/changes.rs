@@ -83,6 +83,15 @@ pub struct FlowScriptNameChange {
     pub after: Option<String>,
 }
 
+/// The resolved description of a node that existed before and after an apply.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FlowScriptDescriptionChange {
+    pub node_id: String,
+    pub node_type: String,
+    pub before: String,
+    pub after: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FlowScriptChangedLayer {
     pub id: String,
@@ -108,6 +117,8 @@ pub struct FlowScriptChanges {
     pub values_changed: Vec<FlowScriptValueChange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names_changed: Vec<FlowScriptNameChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub descriptions_changed: Vec<FlowScriptDescriptionChange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables_added: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -142,6 +153,7 @@ impl FlowScriptChanges {
 }
 
 struct BoardIndex<'a> {
+    refs: &'a HashMap<String, String>,
     nodes: BTreeMap<&'a str, &'a Node>,
     layers: BTreeMap<&'a str, &'a Layer>,
     variables: BTreeMap<&'a str, &'a Variable>,
@@ -201,6 +213,7 @@ impl<'a> BoardIndex<'a> {
             .map(|variable| (variable.id.as_str(), variable))
             .collect();
         Self {
+            refs: &board.refs,
             nodes,
             layers,
             variables,
@@ -266,6 +279,20 @@ fn diff_nodes(before: &BoardIndex, after: &BoardIndex, changes: &mut FlowScriptC
                 to_layer: node.layer.clone(),
             });
         }
+        let old_description = crate::flow::pin::resolve_schema(&old.description, before.refs)
+            .unwrap_or(&old.description);
+        let new_description = crate::flow::pin::resolve_schema(&node.description, after.refs)
+            .unwrap_or(&node.description);
+        if old_description != new_description {
+            changes
+                .descriptions_changed
+                .push(FlowScriptDescriptionChange {
+                    node_id: node.id.clone(),
+                    node_type: node.name.clone(),
+                    before: old_description.to_string(),
+                    after: new_description.to_string(),
+                });
+        }
         let mut inputs: Vec<&Pin> = node
             .pins
             .values()
@@ -311,6 +338,7 @@ fn diff_nodes(before: &BoardIndex, after: &BoardIndex, changes: &mut FlowScriptC
     changes.nodes_removed.sort();
     changes.nodes_moved.sort();
     changes.names_changed.sort();
+    changes.descriptions_changed.sort();
 }
 
 fn diff_connections(before: &BoardIndex, after: &BoardIndex, changes: &mut FlowScriptChanges) {
@@ -436,6 +464,7 @@ pub fn planned_changes(commands: &[BoardCommand], limit: usize) -> Value {
             BoardCommand::UpdateNodePin {
                 node_id, pin_id, ..
             } => ("set_value", format!("{node_id}.{pin_id}")),
+            BoardCommand::SetNodeDescription { node_id, .. } => ("describe_node", node_id.clone()),
             BoardCommand::SetNodeCodeNames {
                 node_id,
                 code_names,
@@ -529,6 +558,45 @@ mod tests {
             .find(|pin| pin.name == name)
             .map(|pin| pin.id.clone())
             .expect("pin")
+    }
+
+    #[test]
+    fn event_description_changes_compare_resolved_text_and_report_clearing() {
+        let mut before = Board::new_detached(None, flow_like_storage::Path::default());
+        let mut node = node_with("events_generic", &[]);
+        node.id = "tool".into();
+        node.description = "description-ref".into();
+        before.nodes.insert(node.id.clone(), node);
+        before
+            .refs
+            .insert("description-ref".into(), "nested-ref".into());
+        before
+            .refs
+            .insert("nested-ref".into(), "Find matching tickets".into());
+
+        let mut after = before.clone();
+        after.nodes.get_mut("tool").unwrap().description = "Find matching tickets".into();
+        assert!(FlowScriptChanges::between(&before, &after).is_empty());
+
+        after.nodes.get_mut("tool").unwrap().description = "Find open tickets".into();
+        let changes = FlowScriptChanges::between(&before, &after);
+        assert_eq!(
+            changes.descriptions_changed,
+            vec![FlowScriptDescriptionChange {
+                node_id: "tool".into(),
+                node_type: "events_generic".into(),
+                before: "Find matching tickets".into(),
+                after: "Find open tickets".into(),
+            }]
+        );
+        assert!(!changes.is_empty());
+
+        let mut cleared = after.clone();
+        cleared.nodes.get_mut("tool").unwrap().description.clear();
+        let changes = FlowScriptChanges::between(&after, &cleared);
+        assert_eq!(changes.descriptions_changed.len(), 1);
+        assert_eq!(changes.descriptions_changed[0].before, "Find open tickets");
+        assert_eq!(changes.descriptions_changed[0].after, "");
     }
 
     fn connect(board: &mut Board, from: (&str, &str), to: (&str, &str)) {

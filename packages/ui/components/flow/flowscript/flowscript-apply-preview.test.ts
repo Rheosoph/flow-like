@@ -70,6 +70,44 @@ describe("FlowScript apply preview summary", () => {
 		expect(summarizeBoardCommands([]).total).toBe(0);
 	});
 
+	test("description-only edits remain visible updates, including clearing", () => {
+		const commands: BoardCommand[] = [
+			{
+				command_type: "SetNodeDescription",
+				node_id: "tool",
+				description: "Look up an order.",
+				summary: "Describe findOrder",
+			},
+			{
+				command_type: "SetNodeDescription",
+				node_id: "event",
+				description: "",
+			},
+		];
+		expect(summarizeBoardCommands(commands)).toMatchObject({
+			updates: 2,
+			total: 2,
+			removedNodes: 0,
+		});
+		expect(summarizeApplyImpact(commands)).toEqual({
+			deletions: [],
+			moves: [],
+		});
+		expect(groupBoardCommands(commands)).toEqual([
+			{
+				type: "SetNodeDescription",
+				items: [
+					{
+						key: "Describe findOrder#1",
+						label: "Describe findOrder",
+						entityId: "tool",
+					},
+					{ key: "event#1", label: "event", entityId: "event" },
+				],
+			},
+		]);
+	});
+
 	test("recognizes both serialized and Rust deletion names", () => {
 		const commands = [
 			command({ command_type: "DeleteVariable", variable_id: "v1" }),
