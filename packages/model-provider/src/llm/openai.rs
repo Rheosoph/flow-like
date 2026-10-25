@@ -418,6 +418,31 @@ impl ModelLogic for OpenAIModel {
         let history = history.as_ref()?;
         let base = history.build_additional_params().ok().flatten();
         let model = self.default_model.as_deref().unwrap_or(&history.model);
+        if matches!(self.client, OpenAIClientType::OpenAIChatCompletions(_)) {
+            let minimax = match model {
+                "MiniMax-M3.1-Flash" => {
+                    // Flash always thinks adaptively. Off keeps its default max effort.
+                    let effort = match history.thinking {
+                        Some(HistoryThinking::Low) => "low",
+                        Some(HistoryThinking::Mid) => "medium",
+                        Some(HistoryThinking::High) => "high",
+                        Some(HistoryThinking::Off) | None => "max",
+                    };
+                    Some(json!({"thinking": {"type": "adaptive"}, "reasoning_effort": effort}))
+                }
+                "MiniMax-M3" => Some(json!({"thinking": {"type":
+                    if matches!(history.thinking, Some(HistoryThinking::Off)) {
+                        "disabled"
+                    } else {
+                        "adaptive"
+                    }
+                }})),
+                _ => None,
+            };
+            if minimax.is_some() {
+                return merge_additional_params(base, minimax);
+            }
+        }
         let reasoning = history
             .thinking
             .and_then(|thinking| OpenAIReasoning::of(model).effort(thinking))
@@ -1691,6 +1716,152 @@ mod tests {
                 ("endpoint".to_string(), serde_json::json!(endpoint)),
             ])),
         }
+    }
+
+    #[tokio::test]
+    async fn minimax_chat_requests_preserve_models_and_supported_thinking() {
+        use crate::llm::test_support::{chat_completion, json_response, serve_once};
+
+        for model_id in [
+            "MiniMax-M3.1-Flash",
+            "MiniMax-M3",
+            "MiniMax-M2.7",
+            "custom-model",
+        ] {
+            for thinking in [
+                None,
+                Some(HistoryThinking::Off),
+                Some(HistoryThinking::Low),
+                Some(HistoryThinking::Mid),
+                Some(HistoryThinking::High),
+            ] {
+                let (endpoint, server) =
+                    serve_once(json_response(chat_completion(model_id, "stop", 1))).await;
+                let surface = ModelApiSurface::ChatCompletions;
+                let model = OpenAIModel::from_provider_with_surface(
+                    &custom_openai(&endpoint, model_id, surface),
+                    surface,
+                )
+                .await
+                .unwrap();
+                let mut history = History::new(
+                    "saved-bit-id".to_string(),
+                    vec![HistoryMessage::from_string(Role::User, "Hello")],
+                );
+                history.stream = Some(false);
+                history.thinking = thinking;
+                history.max_completion_tokens = Some(1024);
+                model.invoke(&history, None).await.unwrap();
+                let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+                assert_eq!(body["model"], model_id);
+                assert_eq!(body["max_tokens"], 1024);
+                assert!(body.get("service_tier").is_none());
+                assert!(body.get("reasoning_split").is_none());
+                match model_id {
+                    "MiniMax-M3.1-Flash" => {
+                        assert_eq!(body["thinking"]["type"], "adaptive");
+                        let effort = match thinking {
+                            Some(HistoryThinking::Low) => "low",
+                            Some(HistoryThinking::Mid) => "medium",
+                            Some(HistoryThinking::High) => "high",
+                            _ => "max",
+                        };
+                        assert_eq!(body["reasoning_effort"], effort);
+                    }
+                    "MiniMax-M3" => {
+                        let mode = if matches!(thinking, Some(HistoryThinking::Off)) {
+                            "disabled"
+                        } else {
+                            "adaptive"
+                        };
+                        assert_eq!(body["thinking"]["type"], mode);
+                        assert!(body.get("reasoning_effort").is_none());
+                    }
+                    _ => {
+                        assert!(body.get("thinking").is_none());
+                        if matches!(thinking, Some(HistoryThinking::Off)) {
+                            assert_eq!(body["reasoning_effort"], "none");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn minimax_flash_stream_keeps_adaptive_thinking() {
+        use crate::llm::test_support::{serve_once, sse_response};
+
+        let (endpoint, server) = serve_once(sse_response(&[json!({
+            "id": "chat-test", "object": "chat.completion.chunk", "created": 1,
+            "model": "MiniMax-M3.1-Flash",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop"}]
+        })]))
+        .await;
+        let surface = ModelApiSurface::ChatCompletions;
+        let model = OpenAIModel::from_provider_with_surface(
+            &custom_openai(&endpoint, "MiniMax-M3.1-Flash", surface),
+            surface,
+        )
+        .await
+        .unwrap();
+        let mut history = History::new(
+            "MiniMax-M3.1-Flash".to_string(),
+            vec![HistoryMessage::from_string(Role::User, "Hello")],
+        );
+        history.thinking = Some(HistoryThinking::Off);
+        model
+            .invoke(&history, Some(Arc::new(|_| Box::pin(async { Ok(()) }))))
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_eq!(body["model"], "MiniMax-M3.1-Flash");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["reasoning_effort"], "max");
+    }
+
+    #[tokio::test]
+    async fn minimax_m3_chat_keeps_image_payloads() {
+        use crate::llm::test_support::{chat_completion, json_response, serve_once};
+
+        let (endpoint, server) =
+            serve_once(json_response(chat_completion("MiniMax-M3", "stop", 1))).await;
+        let surface = ModelApiSurface::ChatCompletions;
+        let model = OpenAIModel::from_provider_with_surface(
+            &custom_openai(&endpoint, "MiniMax-M3", surface),
+            surface,
+        )
+        .await
+        .unwrap();
+        let mut message = HistoryMessage::from_string(Role::User, "Describe the image.");
+        message.content = MessageContent::Contents(vec![
+            Content::Text {
+                content_type: ContentType::Text,
+                text: "Describe the image.".to_string(),
+            },
+            Content::Image {
+                content_type: ContentType::ImageUrl,
+                image_url: ImageUrl {
+                    url: TEST_IMAGE_URL.to_string(),
+                    detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
+                },
+            },
+        ]);
+        let mut history = History::new("MiniMax-M3".to_string(), vec![message]);
+        history.stream = Some(false);
+        model.invoke(&history, None).await.unwrap();
+        let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert!(body["messages"].as_array().unwrap().iter().any(|message| {
+            message["content"].as_array().is_some_and(|parts| {
+                parts
+                    .iter()
+                    .any(|part| part["image_url"]["url"] == TEST_IMAGE_URL)
+            })
+        }));
     }
 
     async fn agent_on(

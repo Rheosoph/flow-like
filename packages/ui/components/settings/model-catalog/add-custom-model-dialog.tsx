@@ -37,7 +37,10 @@ import {
 import { validateSystemOneParameters } from "../../../lib/bit/systemone-model";
 import type { IBit, IMetadata } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
-import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
+import {
+	type ILlmParameters,
+	IModelApiSurface,
+} from "../../../lib/schema/bit/bit/llm-parameters";
 import { humanFileSize } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { useDownloadManager } from "../../../state/download-manager";
@@ -504,7 +507,12 @@ const PROVIDERS: IProviderDef[] = [
 		primary: false,
 		fields: [
 			apiKeyField("MiniMax API key"),
-			modelIdField("MiniMax-M2"),
+			{
+				...modelIdField("MiniMax-M3.1-Flash"),
+				defaultValue: "MiniMax-M3.1-Flash",
+				description:
+					"MiniMax-M3.1-Flash or MiniMax-M3. Custom model IDs are also accepted.",
+			},
 			{
 				key: "endpoint",
 				label: "Endpoint",
@@ -1466,6 +1474,13 @@ function AddCustomModelWizard({
 								: LOCAL_PROVIDER_NAME
 							: (providerDef?.providerName ?? ""),
 						model_id: modelId,
+						...(providerDef?.key === "minimax"
+							? {
+									api_surface:
+										existingProvider.api_surface ??
+										IModelApiSurface.ChatCompletions,
+								}
+							: {}),
 						version,
 						params,
 					},
