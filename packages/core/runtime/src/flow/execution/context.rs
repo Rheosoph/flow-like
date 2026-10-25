@@ -1,6 +1,7 @@
 use super::{
     EventTrigger, ExecutionEnvironment, ExecutionMode, InternalNode, LogLevel, Run, RunPayload,
     byte_store::{self, BYTE_STORE_RESOURCE, ByteScope, ByteStore, INLINE_BYTES_MAX},
+    function_lookup::{FUNCTION_LOOKUP_RESOURCE, RunFunctionLookup},
     internal_pin::InternalPin,
     log::LogMessage,
     trace::Trace,
@@ -10,7 +11,7 @@ use crate::models::llm::ModelUsageContext;
 use crate::{
     credentials::SharedCredentials,
     flow::{
-        board::ExecutionStage,
+        board::{Board, ExecutionStage},
         node::{Node, NodeState},
         oauth::OAuthToken,
         pin::{PinType, ValueType},
@@ -395,6 +396,7 @@ pub struct ExecutionContext {
     execution_mode: ExecutionMode,
     state: NodeState,
     callback: InterComCallback,
+    function_lookup: Option<Arc<RunFunctionLookup>>,
 }
 
 impl ExecutionContext {
@@ -513,6 +515,7 @@ impl ExecutionContext {
             id,
             run_id,
             elements,
+            function_lookup: resources.get(FUNCTION_LOOKUP_RESOURCE),
             resources,
             execution_environment: state.execution_environment,
             execution_mode: ExecutionMode::Sync,
@@ -632,6 +635,7 @@ impl ExecutionContext {
             run_id: run_meta.run_id.clone(),
             elements: run_meta.elements.clone(),
             resources: run_meta.resources.clone(),
+            function_lookup: run_meta.resources.get(FUNCTION_LOOKUP_RESOURCE),
             execution_environment: run_meta.environment,
             execution_mode: run_meta.execution_mode,
             started_by: None,
@@ -675,6 +679,55 @@ impl ExecutionContext {
     #[inline]
     pub fn started_by_first(&self) -> Option<Arc<InternalPin>> {
         self.started_by.as_ref().and_then(|v| v.first().cloned())
+    }
+
+    /// Resolve node pins against shared compiled topology while reading this
+    /// run's live pin instances. Detached contexts retain node-scan semantics.
+    pub fn runtime_pin_by_id(&self, id: &str) -> Option<Arc<InternalPin>> {
+        if let Some(lookup) = &self.function_lookup
+            && lookup.matches_nodes(&self.nodes)
+        {
+            match lookup.topology.runtime_pins.get(id) {
+                Some(Some(index)) => return lookup.pins.get(*index as usize).cloned(),
+                None => return None,
+                // Duplicate IDs at different arena positions must preserve the
+                // first matching node in this run's map iteration order.
+                Some(None) => {}
+            }
+        }
+        self.nodes
+            .values()
+            .find_map(|node| node.get_pin_by_id(id).ok())
+    }
+
+    /// Find the definition owning a function pin, preferring layer-local nodes.
+    pub fn function_pin_owner(
+        &self,
+        board: &Board,
+        layer_id: &str,
+        pin_id: &str,
+    ) -> Option<String> {
+        if let Some(lookup) = &self.function_lookup
+            && std::ptr::eq(board, lookup.topology.board.as_ref())
+        {
+            return lookup
+                .topology
+                .definition_owners
+                .get(layer_id)?
+                .get(pin_id)
+                .map(|owner| owner.to_string());
+        }
+        let layer = board.layers.get(layer_id)?;
+        layer
+            .nodes
+            .values()
+            .find(|node| node.pins.contains_key(pin_id))
+            .or_else(|| {
+                board.nodes.values().find(|node| {
+                    node.layer.as_deref() == Some(layer_id) && node.pins.contains_key(pin_id)
+                })
+            })
+            .map(|node| node.id.clone())
     }
 
     pub fn set_result(&mut self, value: Value) {
@@ -808,6 +861,7 @@ impl ExecutionContext {
             run: self.run.clone(),
             elements: self.elements.clone(),
             resources: self.resources.clone(),
+            function_lookup: self.function_lookup.clone(),
             nodes: self.nodes.clone(),
             profile: self.profile.clone(),
             node: node.clone(),

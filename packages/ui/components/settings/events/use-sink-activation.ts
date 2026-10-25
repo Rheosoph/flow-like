@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
 import {
 	checkOAuthTokens,
+	checkOAuthTokensFromPrerun,
 	hasRequiredScopes,
 	storedTokenToBackendFormat,
-	checkOAuthTokensFromPrerun,
 } from "../../../lib/oauth/helpers";
 import type {
 	IOAuthProvider,

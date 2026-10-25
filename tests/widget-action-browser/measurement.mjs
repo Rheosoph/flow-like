@@ -1,3 +1,17 @@
+import { createHash } from "node:crypto";
+
+/** Groups method/path pairs without retaining paths, credentials, or query values. */
+export function requestRouteKey(rawUrl, method) {
+	try {
+		const url = new URL(rawUrl);
+		return createHash("sha256")
+			.update(JSON.stringify([method, url.pathname]))
+			.digest("hex");
+	} catch {
+		return null;
+	}
+}
+
 export function percentile(values, fraction) {
 	if (!values.length) return null;
 	const sorted = [...values].sort((a, b) => a - b);

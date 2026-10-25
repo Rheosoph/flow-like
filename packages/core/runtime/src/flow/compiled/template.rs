@@ -80,6 +80,85 @@ pub struct TemplateVariable {
     pub parsed_default: Option<Arc<Value>>,
 }
 
+/// Function lookups depend only on the compiled topology, so all runs of a
+/// template share them. Values still come from each run's own pin arena.
+pub(crate) struct FunctionTopology {
+    pub(crate) board: Arc<Board>,
+    // None marks an ambiguous identifier that retains the runtime scan order.
+    pub(crate) runtime_pins: AHashMap<Arc<str>, Option<u32>>,
+    pub(crate) definition_owners: AHashMap<String, AHashMap<String, Arc<str>>>,
+}
+
+impl FunctionTopology {
+    fn new(
+        board: Arc<Board>,
+        nodes: &[TemplateNode],
+        node_idx_by_id: &AHashMap<Arc<str>, u32>,
+        pins: &[TemplatePin],
+    ) -> Self {
+        let mut runtime_pins = AHashMap::with_capacity(pins.len());
+        for (node_idx, node) in nodes.iter().enumerate() {
+            // InternalRun's node map retains the final node with a given ID.
+            if node_idx_by_id.get(node.id.as_ref()) != Some(&(node_idx as u32)) {
+                continue;
+            }
+            for (id, &offset) in &node.lookup.by_id {
+                let arena_idx = node.pins[offset as usize];
+                let pin = &pins[arena_idx as usize];
+                let id = if pin.id.as_ref() == id {
+                    pin.id.clone()
+                } else {
+                    Arc::from(id.as_str())
+                };
+                runtime_pins
+                    .entry(id)
+                    .and_modify(|existing| {
+                        if *existing != Some(arena_idx) {
+                            *existing = None;
+                        }
+                    })
+                    .or_insert(Some(arena_idx));
+            }
+        }
+
+        let mut definition_owners = AHashMap::with_capacity(board.layers.len());
+        for (id, layer) in &board.layers {
+            let mut owners = AHashMap::new();
+            for node in layer.nodes.values() {
+                let owner: Arc<str> = Arc::from(node.id.as_str());
+                for pin_id in node.pins.keys() {
+                    owners
+                        .entry(pin_id.clone())
+                        .or_insert_with(|| owner.clone());
+                }
+            }
+            definition_owners.insert(id.clone(), owners);
+        }
+        // Legacy layouts can keep function nodes in Board.nodes. The layer's
+        // own definitions take precedence, including duplicate identifiers.
+        for node in board.nodes.values() {
+            let Some(owners) = node
+                .layer
+                .as_ref()
+                .and_then(|id| definition_owners.get_mut(id))
+            else {
+                continue;
+            };
+            let owner: Arc<str> = Arc::from(node.id.as_str());
+            for pin_id in node.pins.keys() {
+                owners
+                    .entry(pin_id.clone())
+                    .or_insert_with(|| owner.clone());
+            }
+        }
+        Self {
+            board,
+            runtime_pins,
+            definition_owners,
+        }
+    }
+}
+
 pub struct CompiledRunTemplate {
     pub widget_snapshot: Option<Arc<super::ArtifactWidgetSnapshot>>,
     pub pins: Box<[TemplatePin]>,
@@ -90,6 +169,7 @@ pub struct CompiledRunTemplate {
     pub board: Arc<Board>,
     pub stage: ExecutionStage,
     pub log_level: LogLevel,
+    pub(crate) function_topology: Arc<FunctionTopology>,
 }
 
 impl CompiledRunTemplate {
@@ -265,6 +345,12 @@ impl CompiledRunTemplate {
             });
         }
 
+        let function_topology = Arc::new(FunctionTopology::new(
+            view.clone(),
+            &nodes,
+            &node_idx_by_id,
+            &pins,
+        ));
         Ok(Self {
             widget_snapshot: None,
             pins: pins.into_boxed_slice(),
@@ -274,6 +360,7 @@ impl CompiledRunTemplate {
             stage: view.stage.clone(),
             log_level: view.log_level,
             board: view,
+            function_topology,
         })
     }
 }

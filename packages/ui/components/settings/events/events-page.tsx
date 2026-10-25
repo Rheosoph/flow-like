@@ -55,6 +55,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthConsentStore } from "@flow-like/flow-like-ui/db/oauth-db";
+import { parseDateValue } from "@flow-like/flow-like-ui/lib/date";
 import {
 	isServerOnlyEventType,
 	serverEventBlocker,
@@ -71,9 +72,9 @@ import {
 } from "@flow-like/flow-like-ui/lib/frontend-hosting";
 import {
 	checkOAuthTokens,
+	checkOAuthTokensFromPrerun,
 	hasRequiredScopes,
 	storedTokenToBackendFormat,
-	checkOAuthTokensFromPrerun,
 } from "@flow-like/flow-like-ui/lib/oauth/helpers";
 import type {
 	IOAuthTokenStoreWithPending,
@@ -86,6 +87,10 @@ import {
 	isRuntimeConfigured,
 } from "@flow-like/flow-like-ui/lib/runtime-vars-utils";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import {
+	IPinType,
+	IVariableType,
+} from "@flow-like/flow-like-ui/lib/schema/flow/pin";
 import type { IHub } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import { stableStringify } from "@flow-like/flow-like-ui/lib/stable-stringify";
 import {
@@ -146,6 +151,10 @@ function caseKeyRowsOf(
 	mappings: IEvent["correlation_mappings"],
 ): Array<{ key: string; path: string }> {
 	return Object.entries(mappings ?? {}).map(([key, path]) => ({ key, path }));
+}
+
+function updatedAtMs(event: IEvent): number {
+	return parseDateValue(event.updated_at)?.getTime() ?? 0;
 }
 
 function errorMessage(error: unknown): string {
@@ -331,7 +340,7 @@ export default function EventsPage({
 
 	useEffect(() => {
 		setEditingEvent(eventList.find((event) => event.id === eventId) ?? null);
-	}, [editingEvent, id, eventId, eventList]);
+	}, [eventId, eventList]);
 
 	// A route cannot be orphaned: server-side it is the `route` column on the
 	// event row itself, so it disappears with the event. Reconciling the two
@@ -866,6 +875,15 @@ function EventConfiguration({
 		"Your role cannot create, change or delete this project's events.",
 	);
 	const [formData, setFormData] = useState<IEvent>(event);
+	// What the draft is measured against. The `event` prop comes from the events
+	// list, which every backend assembles differently from an upsert response
+	// (desktop merges its local copy with the hub's), so measuring against it
+	// kept "Unsaved changes" up after every successful save.
+	const [savedEvent, setSavedEvent] = useState<IEvent>(event);
+	const adoptSaved = useCallback((saved: IEvent) => {
+		setSavedEvent(saved);
+		setFormData(saved);
+	}, []);
 	const deviceOnly = isDeviceEventSource(formData);
 	const [confirmLeave, setConfirmLeave] = useState(false);
 	const [showPatDialog, setShowPatDialog] = useState(false);
@@ -886,8 +904,8 @@ function EventConfiguration({
 	>([]);
 
 	useEffect(() => {
-		setCaseKeyRows(caseKeyRowsOf(event.correlation_mappings));
-	}, [event.id, event.correlation_mappings]);
+		setCaseKeyRows(caseKeyRowsOf(savedEvent.correlation_mappings));
+	}, [savedEvent.correlation_mappings]);
 
 	const commitCaseKeyRows = useCallback(
 		(rows: Array<{ key: string; path: string }>) => {
@@ -1066,8 +1084,9 @@ function EventConfiguration({
 
 	const runSave = async (
 		selectedPat?: string,
-		oauthTokens?: Record<string, IOAuthToken>,
+		providedOAuthTokens?: Record<string, IOAuthToken>,
 	) => {
+		let oauthTokens = providedOAuthTokens;
 		setRoutePathError(null);
 		const serverBlocker = isServerOnlyEventType(formData.event_type)
 			? serverEventBlocker(isOffline, board.data?.execution_mode)
@@ -1209,7 +1228,7 @@ function EventConfiguration({
 		// adopting the response the dirty check stays true forever: the bar keeps
 		// claiming unsaved changes right after a successful save, which reads as
 		// "saving is broken" and invites repeated taps.
-		setFormData(saved);
+		adoptSaved(saved);
 		await refreshServerEventSetup(saved.id);
 
 		if (shouldHaveRoute && desiredRoutePath) {
@@ -1322,8 +1341,8 @@ function EventConfiguration({
 	};
 
 	const handleCancel = () => {
-		setFormData(event);
-		setCaseKeyRows(caseKeyRowsOf(event.correlation_mappings));
+		setFormData(savedEvent);
+		setCaseKeyRows(caseKeyRowsOf(savedEvent.correlation_mappings));
 		setRoutePathDraft(storedRoutePath);
 		setRoutePathError(null);
 	};
@@ -1344,7 +1363,7 @@ function EventConfiguration({
 				undefined,
 				undefined,
 			);
-			setFormData(saved);
+			adoptSaved(saved);
 			await invalidate(backend.eventState.getEvents, [appId]);
 			onReload?.();
 			toast.success("Inputs refreshed");
@@ -1365,14 +1384,17 @@ function EventConfiguration({
 
 		// For page-target events (A2UI/generic form), check Input pins
 		// For regular events, check Output pins
-		const targetPinType = event.default_page_id ? "Input" : "Output";
+		const targetPinType = event.default_page_id
+			? IPinType.Input
+			: IPinType.Output;
 
 		const currentPins = Object.values(node.pins ?? {})
 			.filter(
-				(pin: any) =>
-					pin.pin_type === targetPinType && pin.data_type !== "Execution",
+				(pin) =>
+					pin.pin_type === targetPinType &&
+					pin.data_type !== IVariableType.Execution,
 			)
-			.sort((a: any, b: any) => a.index - b.index);
+			.sort((a, b) => a.index - b.index);
 
 		const savedInputs = event.inputs ?? [];
 
@@ -1389,10 +1411,10 @@ function EventConfiguration({
 		}> = [];
 
 		const savedInputsMap = new Map(savedInputs.map((i) => [i.id, i]));
-		const currentPinsMap = new Map(currentPins.map((p: any) => [p.id, p]));
+		const currentPinsMap = new Map(currentPins.map((p) => [p.id, p]));
 
 		// Find added pins (in current but not in saved)
-		for (const pin of currentPins as any[]) {
+		for (const pin of currentPins) {
 			if (!savedInputsMap.has(pin.id)) {
 				added.push({
 					id: pin.id,
@@ -1418,7 +1440,7 @@ function EventConfiguration({
 
 		// Find changed pins
 		for (const input of savedInputs) {
-			const pin = currentPinsMap.get(input.id) as any;
+			const pin = currentPinsMap.get(input.id);
 			if (!pin) continue;
 
 			if (pin.name !== input.name) {
@@ -1519,7 +1541,7 @@ function EventConfiguration({
 			config: savedConfig,
 			updated_at: _savedStamp,
 			...savedRest
-		} = event;
+		} = savedEvent;
 		if (stableStringify(draftRest) !== stableStringify(savedRest)) return true;
 		if (
 			stableStringify(parseUint8ArrayToJson(draftConfig ?? []) ?? {}) !==
@@ -1536,12 +1558,26 @@ function EventConfiguration({
 		return false;
 	}, [
 		formData,
-		event,
+		savedEvent,
 		routePathDraft,
 		storedRoutePath,
 		shouldShowRoutePath,
 		routes.isSuccess,
 	]);
+
+	// A refetched list entry replaces a clean draft, so changes made elsewhere
+	// (canary, quality) show up here. Edits in progress are never overwritten,
+	// and neither is a newer save by a list response that was already in flight.
+	const draftStateRef = useRef({ isDirty, savedEvent });
+	draftStateRef.current = { isDirty, savedEvent };
+	const seenEventRef = useRef(event);
+	useEffect(() => {
+		if (seenEventRef.current === event) return;
+		seenEventRef.current = event;
+		const { isDirty: dirty, savedEvent: saved } = draftStateRef.current;
+		if (dirty || updatedAtMs(event) < updatedAtMs(saved)) return;
+		adoptSaved(event);
+	}, [event, adoptSaved]);
 
 	// The section rail is generated from the event type, so a mailbox shows a
 	// different shape from an MCP server without the layout knowing either exists.
@@ -1923,7 +1959,7 @@ function EventConfiguration({
 							onRefreshToken={onRefreshToken}
 							onOpenRunsOn={() => onOpenRunsOn?.(event.id)}
 							onTakenBack={(saved) => {
-								setFormData(saved);
+								adoptSaved(saved);
 								onReload?.();
 							}}
 						/>
@@ -2049,7 +2085,9 @@ function EventConfiguration({
 									<div>
 										<Label>{t("caseKeys", "Case Keys")}</Label>
 										<p className="mt-0.5 text-xs text-muted-foreground">
-											{`Tie every run to a business object for process mining: each key is read from the payload at the given path (e.g.`}{" "}
+											{
+												"Tie every run to a business object for process mining: each key is read from the payload at the given path (e.g."
+											}{" "}
 											<Trans i18nKey="spanClassnamefontmonoorderidspanAndGroupsRunsIntoCasesAcrossApps">
 												<span className="font-mono">order.id</span>) and groups
 												runs into cases across apps.
@@ -2488,7 +2526,7 @@ function EventConfiguration({
 											) : (
 												<RefreshCw className="h-4 w-4" />
 											)}
-											{`Refresh from Node`}
+											{"Refresh from Node"}
 										</Button>
 									</div>
 									<CardDescription>
@@ -2633,8 +2671,10 @@ function EventConfiguration({
 													</DialogHeader>
 													<div className="space-y-2 max-h-80 overflow-y-auto">
 														{overridableVariables.map(([key, variable]) => {
-															const isAlreadyAdded =
-																formData.variables.hasOwnProperty(key);
+															const isAlreadyAdded = Object.hasOwn(
+																formData.variables,
+																key,
+															);
 															return (
 																<div
 																	key={key}

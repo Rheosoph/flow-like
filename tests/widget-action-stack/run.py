@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import selectors
 import signal
 import socket
 import ssl
@@ -187,7 +188,7 @@ def process_started(pid):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def stop_record(record):
+def stop_record(record, process=None):
     pid = record["pid"]
     if not record.get("started") or process_started(pid) != record["started"]:
         return
@@ -197,6 +198,8 @@ def stop_record(record):
         os.killpg(pid, signal.SIGINT)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
+            if process is not None and process.poll() is not None:
+                return
             if process_started(pid) != record["started"]:
                 return
             time.sleep(0.05)
@@ -241,6 +244,7 @@ class Services:
         self.processes = []
         self.timings = {}
         self.handles = []
+        self.generation = 0
 
     def launch(self, name, command, url, extra_urls=()):
         urls = (url, *extra_urls)
@@ -248,7 +252,8 @@ class Services:
             unused_port(endpoint)
         logs = self.log_directory
         logs.mkdir(mode=0o700, exist_ok=True)
-        handle = (logs / f"{name}.log").open("w")
+        suffix = f"-restart-{self.generation}" if self.generation else ""
+        handle = (logs / f"{name}{suffix}.log").open("w")
         self.handles.append(handle)
         started = time.perf_counter()
         process = subprocess.Popen(command, cwd=stack.REPO, env=self.env, stdout=handle,
@@ -275,7 +280,7 @@ class Services:
                 return
             except (urllib.error.URLError, TimeoutError):
                 pass
-            time.sleep(0.2)
+            time.sleep(getattr(self.args, "readiness_poll_ms", 200) / 1000)
         raise ValueError(f"{name} readiness timed out; see {logs / (name + '.log')}")
 
     def start(self):
@@ -296,6 +301,7 @@ class Services:
             "compute_accounting_memory_mb": 2048, "enforced_memory_limit_mb": None,
             **self.diagnostics,
             "startup_boundary": "Process launch to successful HTTP health response",
+            "readiness_poll_ms": getattr(self.args, "readiness_poll_ms", 200),
             "transport": "Local HTTP API dispatch with production routers and Lambda compute-context accounting",
         }
         imported = self.state / "import-result.json"
@@ -313,13 +319,45 @@ class Services:
                             "--port", "3440", "--api-origin", self.env["API_URL"]],
                     "http://127.0.0.1:3440/__benchmark/health")
 
+    def restart_backend(self):
+        """Restart only this runner's API and executor, leaving its browser and storage alone."""
+        before = [dict(record) for record in self.records if record["name"] in ("api", "runtime")]
+        if {record["name"] for record in before} != {"api", "runtime"}:
+            raise ValueError("A cold action requires this runner's live API and runtime")
+        started = time.perf_counter()
+        for record in reversed(before):
+            process = next(process for process in self.processes if process.pid == record["pid"])
+            if process.poll() is not None or process_started(record["pid"]) != record["started"]:
+                raise ValueError(f"Owned {record['name']} exited before the cold boundary")
+            stop_record(record, process)
+            process.wait(timeout=5)
+            self.records.remove(record)
+            self.processes.remove(process)
+            stack.private_write(self.state / "processes.json", json.dumps({
+                "project": stack.load(self.state)["project"], "processes": self.records,
+            }, indent=2) + "\n")
+        stop_ms = round((time.perf_counter() - started) * 1000, 3)
+        self.generation += 1
+        binary = self.args.binary or built_binary(self.state, self.args.profile)
+        for name, url in (("api", self.env["API_URL"] + "/api/v1/health"),
+                          ("runtime", self.env["EXECUTOR_URL"] + "/health")):
+            self.launch(name, [str(binary.resolve()), name], url)
+        after = [dict(record) for record in self.records if record["name"] in ("api", "runtime")]
+        if any((old["pid"], old["started"]) == (new["pid"], new["started"])
+               for old in before for new in after):
+            raise ValueError("Cold boundary did not create fresh backend processes")
+        return {"stop_ms": stop_ms,
+                "measurements_ms": {name: self.timings[name] for name in ("api", "runtime")},
+                "processes_before": before, "processes_after": after}
+
     def close(self):
         if self.args.trace and any(record["name"] == "api" for record in self.records):
             # The production span exporter flushes every five seconds. Drain after
             # browser measurements finish so the last action's spans reach its log.
             time.sleep(5.1)
         for record in reversed(self.records):
-            stop_record(record)
+            process = next((process for process in self.processes if process.pid == record["pid"]), None)
+            stop_record(record, process)
         for process in self.processes:
             try:
                 process.wait(timeout=1)
@@ -338,13 +376,83 @@ def default_browser_config(state):
     return state / "fixture/browser-config.json"
 
 
-def benchmark(args):
+def controlled_browser(command, env, phase_handler, timeout):
+    """Accept one fixed phase marker from our driver, without running config-supplied commands."""
+    process = subprocess.Popen(command, cwd=stack.REPO, env=env, stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    record = {"pid": process.pid, "started": None}
+    marker_seen = False
+    pending = b""
+    deadline = time.monotonic() + timeout
+    try:
+        record["started"] = process_started(process.pid)
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while selector.get_map():
+                if time.monotonic() >= deadline:
+                    raise ValueError("Cold browser driver exceeded its trial deadline")
+                for key, _ in selector.select(timeout=0.2):
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    pending += chunk
+                    while b"\n" in pending:
+                        line, pending = pending.split(b"\n", 1)
+                        text = line.decode("utf-8", errors="replace")
+                        print(text, flush=True)
+                        try:
+                            message = json.loads(text)
+                        except ValueError:
+                            continue
+                        if not isinstance(message, dict) or message.get("type") != "benchmark_cold_action_ready":
+                            continue
+                        if marker_seen or message.get("worker") != 0 or message.get("navigation") != 0:
+                            raise ValueError("Unexpected or repeated cold-action phase marker")
+                        marker_seen = True
+                        phase_handler()
+                        process.stdin.write(b'{"type":"benchmark_cold_action_continue"}\n')
+                        process.stdin.flush()
+            if pending:
+                print(pending.decode("utf-8", errors="replace"), flush=True)
+        code = process.wait(timeout=max(1, deadline - time.monotonic()))
+        if code:
+            raise subprocess.CalledProcessError(code, command)
+        if not marker_seen:
+            raise ValueError("Cold-action driver finished without its restart boundary")
+    except BaseException:
+        try:
+            process.stdin.write(b'{"type":"benchmark_cold_action_abort","error":"Backend restart failed"}\n')
+            process.stdin.flush()
+            process.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            stop_record(record, process)
+        raise
+    finally:
+        if process.poll() is None:
+            if record["started"]:
+                stop_record(record, process)
+            else:
+                # Process identity collection can fail before the driver starts.
+                # Popen still owns this unreaped child; do not leave it blocked on stdin.
+                process.kill()
+        process.wait(timeout=5)
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+        process.stdout.close()
+
+
+def benchmark(args, phase_handler=None, driver_output=None):
     config = (args.config or default_browser_config(args.state)).resolve()
     if not config.is_file():
         raise ValueError("Provide --config with validated person/history selectors")
     output = (args.output or args.state / "results").resolve()
     command = ["node", str(stack.REPO / "tests/widget-action-browser/run-app.mjs"),
                "--config", str(config), "--output", str(output)]
+    if phase_handler is not None:
+        command.extend(["--cold-action-control", "--cold-action-timeout-ms", str(int(args.timeout * 1000))])
     provenance = {}
     for filename in ("run-manifest.json", "startup-timings.json"):
         source = args.state / filename
@@ -365,7 +473,13 @@ def benchmark(args):
             json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         provenance["run-manifest.json"] = json.dumps(manifest, indent=2) + "\n"
     try:
-        stack.run(command, cwd=stack.REPO, env=stack.environment(args.state))
+        if phase_handler is None:
+            options = {"stdout": driver_output, "stderr": subprocess.STDOUT} if driver_output is not None else {}
+            stack.run(command, cwd=stack.REPO, env=stack.environment(args.state), **options)
+        else:
+            configuration = json.loads(config.read_text())
+            controlled_browser(command, stack.environment(args.state), phase_handler,
+                               configuration.get("timeoutMs", 30000) / 1000 * 3 + args.timeout * 2)
     finally:
         output.mkdir(parents=True, exist_ok=True)
         for filename, contents in provenance.items():

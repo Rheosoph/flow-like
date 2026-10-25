@@ -35,11 +35,13 @@ the expected row count when configured. A stale table cannot satisfy the next
 sample. Visibility checks cover CSS display and visibility; they do not establish
 that every row is inside the viewport. Reports retain individual samples,
 failures, configuration, and machine details. Use at least 100 samples per
-scenario for tail-latency comparisons and repeat runs under the same background load.
+scenario for tail-latency comparisons and repeat runs under the same background
+load.
 
 The application fixture returns through its overview control between person
 clicks. The reset UI, handler, and successful terminal event must arrive before
-the next measured action. Reports retain reset timings separately from the rental-history round trip.
+the next measured action. Reports retain reset timings separately from the
+rental-history round trip.
 The optional browser `reset` configuration selects this control. Reset workflows
 add load outside the timed history-click interval. Accounting callbacks after the
 terminal event can still occupy an executor slot, as they do during normal use.
@@ -56,8 +58,9 @@ automation add overhead; keep the same instrumentation when comparing revisions.
 
 You need Docker Compose, Node.js, Bun, the installed workspace dependencies,
 Rust, Python 3.11 or later, `uv`, `protoc`, OpenSSL, AWS CLI, and an authorized
-metadata export of the investigation app. Keep exports outside the repository. The fixture builder
-recognizes that app's existing page, event, widget, and board identifiers.
+metadata export of the investigation app. Keep exports outside the repository.
+The fixture builder recognizes that app's existing page, event, widget, and
+board identifiers.
 It removes credentials, external destinations, saved widget data, and comments
 before importing source objects into the local stack.
 

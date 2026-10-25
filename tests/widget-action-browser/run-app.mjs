@@ -6,8 +6,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer";
 import { installAppMeasurement, requestCategory } from "./app-measurement.mjs";
+import {
+	assertColdActionConfiguration,
+	waitForColdActionController,
+} from "./cold-action-control.mjs";
 import { observeExecution } from "./execution-evidence.mjs";
-import { summarize } from "./measurement.mjs";
+import { requestRouteKey, summarize } from "./measurement.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = {};
@@ -15,7 +19,7 @@ for (let index = 2; index < process.argv.length; index++) {
 	const [key, inline] = process.argv[index].replace(/^--/, "").split("=", 2);
 	if (key === "help") {
 		console.log(
-			"node tests/widget-action-browser/run-app.mjs --config FILE [--app-url http://127.0.0.1:3001/use/...] [--cdp-url http://127.0.0.1:9222] [--output PATH] [--allow-remote]\nConfig: {appUrl, readySelector?, actions:[{selector,text?,historySelector,expectedText,expectedRows?,rowSelector?}], reset?:{selector,text?},samples:20,warmup:2,navigations:2,concurrency:1,timeoutMs:30000,headed:false,requireActionTrace:true,requireTerminalSuccess:true,storageState?}. samples is the total measured count per navigation across workers; warmup is per worker. Disabling requireTerminalSuccess permits unverified probe results. Use at least two read-only person actions with distinct history markers. Storage-state and selectors are never copied into reports.",
+			"node tests/widget-action-browser/run-app.mjs --config FILE [--app-url http://127.0.0.1:3001/use/...] [--cdp-url http://127.0.0.1:9222] [--output PATH] [--allow-remote] [--cold-action-control --cold-action-timeout-ms 180000]\nConfig: {appUrl, readySelector?, actions:[{selector,text?,historySelector,expectedText,expectedRows?,rowSelector?}], reset?:{selector,text?},samples:20,warmup:2,navigations:2,concurrency:1,timeoutMs:30000,headed:false,requireActionTrace:true,requireTerminalSuccess:true,storageState?}. samples is the total measured count per navigation across workers; warmup is per worker. Disabling requireTerminalSuccess permits unverified probe results. Use at least two read-only person actions with distinct history markers. Storage-state and selectors are never copied into reports. Cold-action control is a fixed stdin/stdout handshake for the local stack runner, with one action and no warmup.",
 		);
 		process.exit(0);
 	}
@@ -23,8 +27,12 @@ for (let index = 2; index < process.argv.length; index++) {
 		args.allowRemote = true;
 		continue;
 	}
+	if (key === "cold-action-control") {
+		args.coldActionControl = true;
+		continue;
+	}
 	assert.ok(
-		["config", "app-url", "cdp-url", "output"].includes(key),
+		["config", "app-url", "cdp-url", "output", "cold-action-timeout-ms"].includes(key),
 		`Unknown option --${key}`,
 	);
 	args[key] = inline ?? process.argv[++index];
@@ -104,6 +112,20 @@ assert.ok(
 	config.concurrency === 1 || (!config.cdpUrl && !config.headed),
 	"Concurrent frame measurements require isolated headless browsers",
 );
+assert.ok(
+	args["cold-action-timeout-ms"] === undefined || args.coldActionControl,
+	"--cold-action-timeout-ms requires --cold-action-control",
+);
+const coldActionTimeoutMs = Number(args["cold-action-timeout-ms"] ?? 180_000);
+if (args.coldActionControl) {
+	assertColdActionConfiguration(config, app, process.stdin);
+	assert.ok(
+		Number.isInteger(coldActionTimeoutMs) &&
+			coldActionTimeoutMs > 0 &&
+			coldActionTimeoutMs <= 2_147_483_647,
+		"Cold-action timeout must be a positive integer within the timer range",
+	);
+}
 const output = resolve(
 	args.output ?? config.output ?? join(root, "tmp/widget-action-benchmark/app"),
 );
@@ -129,6 +151,9 @@ const report = {
 		loadMode: config.concurrency === 1 ? "isolated" : "synchronized-bursts",
 		totalMeasuredActions: config.samples * config.navigations,
 		totalWarmupActions: config.warmup * config.concurrency * config.navigations,
+		...(args.coldActionControl
+			? { coldActionControl: true, coldActionTimeoutMs }
+			: {}),
 	},
 	machine: {
 		platform: os.platform(),
@@ -148,10 +173,14 @@ const report = {
 		"handlerToPatchMs marks the first A2UI update received, which may precede history rows. Only the history DOM/frame fields verify the expected side panel content.",
 		"Terminal success is independently checked in invoke responses observed through CDP. Only status, log level, error flags, and run IDs are retained. Missing evidence fails unless requireTerminalSuccess is explicitly false.",
 		"Network records retain categories, statuses, sizes, and timing only. Tokens, headers, request bodies, query strings, and storage state are omitted.",
+		"routeKey is SHA256(JSON.stringify([method, URL.pathname])). It groups exact method/path pairs without retaining paths; query variants can share a key, and distinct run IDs in paths remain distinct. Repeated keys alone do not establish redundant requests.",
 		"Each concurrent worker has an isolated headless browser and completes normal application bootstrap and warmup before measured bursts. samples is a fixed total per navigation, distributed across workers.",
 		"Mutation observation, 10 ms action polling, and browser automation add measurement overhead. Scheduled-to-click skew is recorded separately from click-to-history latency.",
 		"When configured, a read-only reset control returns to the person cards between actions. Reset DOM/frame timing and successful terminal execution are recorded separately; every reset finishes before the next action burst is scheduled.",
 		"CDP also copies invoke response bytes to inspect terminal metadata. The application consumes its original stream unchanged; terminal validation happens after the browser latency clocks have stopped.",
+		...(args.coldActionControl
+			? ["After successful bootstrap, cold-action control waits for the local runner to confirm its API/runtime restart before clicking in the same document. The runner records process identity and readiness evidence separately. Other infrastructure, browser state and storage artifacts remain warm."]
+			: []),
 	],
 	navigations: [],
 	samples: [],
@@ -284,6 +313,7 @@ async function createWorker(id) {
 			...worker.scope,
 			worker: worker.id,
 			category,
+			routeKey: requestRouteKey(event.request.url, event.request.method),
 			method: event.request.method,
 			startedAtSeconds: event.timestamp,
 			startedAtUnixMs: event.wallTime * 1000,
@@ -550,6 +580,62 @@ async function prepareRound(active, navigation, index, warmup, burst) {
 		"A reset action failed; partial results were retained",
 	);
 }
+async function coldActionBoundary(worker, navigation) {
+	const bootstrap = report.navigations.find(
+		(entry) => entry.worker === worker.id && entry.index === navigation,
+	);
+	assert.equal(bootstrap?.executionSuccessVerified, true);
+	const documentTimeOriginMs = await worker.page.evaluate(
+		() => performance.timeOrigin,
+	);
+	const started = performance.now();
+	const boundary = {
+		mode: "cold-action",
+		status: "waiting",
+		worker: worker.id,
+		navigation,
+		bootstrapExecutionSuccessVerified: true,
+		startedAt: new Date().toISOString(),
+		documentTimeOriginMs,
+	};
+	report.coldBoundary = boundary;
+	worker.scope = { navigation, phase: "cold-boundary", sample: null };
+	await save();
+	try {
+		await waitForColdActionController({ timeoutMs: coldActionTimeoutMs });
+		boundary.controllerRestartConfirmed = true;
+		boundary.confirmedAt = new Date().toISOString();
+		boundary.documentPreserved =
+			(await worker.page.evaluate(() => performance.timeOrigin)) ===
+			documentTimeOriginMs;
+		assert.ok(boundary.documentPreserved, "The browser navigated during the cold-action boundary");
+		const requests = report.network.filter(
+			(record) => record.worker === worker.id && record.phase === "cold-boundary",
+		);
+		boundary.networkRequestCategories = Object.fromEntries(
+			[...new Set(requests.map((record) => record.category))].map((category) => [
+				category,
+				requests.filter((record) => record.category === category).length,
+			]),
+		);
+		boundary.unexpectedExecutionRequests = requests.filter((record) =>
+			["bootstrap", "prerun", "invoke"].includes(record.category),
+		).length;
+		assert.equal(
+			boundary.unexpectedExecutionRequests,
+			0,
+			"The app requested workflow preparation or execution during the cold-action boundary",
+		);
+		boundary.status = "confirmed";
+	} catch (error) {
+		boundary.status = "failed";
+		boundary.error = error.message;
+		throw error;
+	} finally {
+		boundary.elapsedMs = performance.now() - started;
+		await save();
+	}
+}
 try {
 	const health = await fetch(`${app.origin}/__benchmark/health`, {
 		signal: AbortSignal.timeout(config.timeoutMs),
@@ -570,6 +656,7 @@ try {
 			(result) => result.status === "rejected",
 		);
 		if (failedBootstrap) throw failedBootstrap.reason;
+		if (args.coldActionControl) await coldActionBoundary(workers[0], navigation);
 		for (let round = 0; round < config.warmup; round++) {
 			await prepareRound(workers, navigation, round, true, round);
 			const scheduled = Date.now();

@@ -301,9 +301,8 @@ describe("HTTP screenshot fixture validation", () => {
 		expect(fixture.strict).toBe(true);
 		expect(fixture.routes).toHaveLength(10);
 		expect(fixture.blockedOrigins).toEqual([
-			"https://a.basemaps.cartocdn.com",
-			"https://b.basemaps.cartocdn.com",
-			"https://c.basemaps.cartocdn.com",
+			"https://basemaps.cartocdn.com",
+			"https://tiles.basemaps.cartocdn.com",
 			"https://img.youtube.com",
 			"https://www.youtube-nocookie.com",
 			"https://open.spotify.com",

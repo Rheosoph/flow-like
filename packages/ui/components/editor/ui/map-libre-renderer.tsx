@@ -1,6 +1,7 @@
 "use client";
 
 import * as maplibregl from "maplibre-gl";
+import { DEFAULT_MAP_STYLES } from "../../../lib/map-styles";
 import { configureMapLibreWorker } from "../../../lib/maplibre-worker";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "next-themes";
@@ -21,60 +22,6 @@ interface MapLibreRendererProps {
 	fitBounds?: boolean;
 }
 
-function buildStyle(isDark: boolean): maplibregl.StyleSpecification {
-	return isDark
-		? {
-				version: 8,
-				sources: {
-					carto: {
-						type: "raster",
-						tiles: [
-							"https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-							"https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-							"https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-						],
-						tileSize: 256,
-						attribution:
-							'&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
-					},
-				},
-				layers: [
-					{
-						id: "carto-tiles",
-						type: "raster",
-						source: "carto",
-						minzoom: 0,
-						maxzoom: 20,
-					},
-				],
-			}
-		: {
-				version: 8,
-				sources: {
-					carto: {
-						type: "raster",
-						tiles: [
-							"https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-							"https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-							"https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-						],
-						tileSize: 256,
-						attribution:
-							'&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
-					},
-				},
-				layers: [
-					{
-						id: "carto-tiles",
-						type: "raster",
-						source: "carto",
-						minzoom: 0,
-						maxzoom: 20,
-					},
-				],
-			};
-}
-
 function createMarkerElement(
 	color: string,
 	label?: string,
@@ -89,13 +36,13 @@ function createMarkerElement(
 	const pin = document.createElement("div");
 	pin.style.width = "28px";
 	pin.style.height = "28px";
-	pin.style.borderRadius = `50% 50% 50% 0`;
+	pin.style.borderRadius = "50% 50% 50% 0";
 	pin.style.backgroundColor = color;
 	pin.style.transform = "rotate(-45deg)";
 	pin.style.border = `2.5px solid ${isDark ? "rgba(255,255,255,0.9)" : "white"}`;
 	pin.style.boxShadow = isDark
-		? `0 2px 12px rgba(0,0,0,0.6)`
-		: `0 2px 8px rgba(0,0,0,0.35)`;
+		? "0 2px 12px rgba(0,0,0,0.6)"
+		: "0 2px 8px rgba(0,0,0,0.35)";
 	pin.style.position = "relative";
 
 	const dot = document.createElement("div");
@@ -106,7 +53,7 @@ function createMarkerElement(
 	dot.style.position = "absolute";
 	dot.style.top = "50%";
 	dot.style.left = "50%";
-	dot.style.transform = `translate(-50%, -50%) rotate(45deg)`;
+	dot.style.transform = "translate(-50%, -50%) rotate(45deg)";
 	pin.appendChild(dot);
 	wrapper.appendChild(pin);
 
@@ -151,7 +98,7 @@ export function MapLibreRenderer({
 		const map = new maplibregl.Map({
 			zoomLevelsToOverscale: undefined,
 			container: containerRef.current,
-			style: buildStyle(isDark),
+			style: isDark ? DEFAULT_MAP_STYLES.dark : DEFAULT_MAP_STYLES.light,
 			center: [center[1], center[0]],
 			zoom: fitBounds ? 2 : zoom,
 			attributionControl: false,
