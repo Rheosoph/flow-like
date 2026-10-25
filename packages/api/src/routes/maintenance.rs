@@ -12,6 +12,7 @@ use flow_like_types::{
         StateCleanupMaintenanceResult, TelemetryAlertsMaintenanceResult,
     },
 };
+use tracing::Instrument;
 
 use crate::{
     cache::{require_cache_store, sweeper::sweep_once as sweep_cache_once},
@@ -21,6 +22,13 @@ use crate::{
     state::AppState,
     telemetry::alerts::{TelemetryAlertConfig, evaluate_once},
 };
+
+/// One exported span per maintenance task, so a slow pass names its slow step.
+macro_rules! traced {
+    ($name:literal, $task:expr) => {
+        $task.instrument(tracing::info_span!(target: "flow_like::observability", $name))
+    };
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -107,6 +115,9 @@ async fn run_maintenance_job(
             if let Err(error) = crate::locked_storage::sweep_abandoned_uploads(&state).await {
                 tracing::error!(%error, "Scheduled abandoned locked upload sweep failed");
             }
+            if let Err(error) = crate::locked_storage::sweep_expired_versions(&state).await {
+                tracing::error!(%error, "Scheduled locked retention deletion sweep failed");
+            }
 
             let store = require_cache_store(&state.cache).await?;
 
@@ -134,54 +145,9 @@ async fn run_maintenance_job(
                 },
             )))
         }
-        MaintenanceRunRequest::RunSweep => {
-            recover_capacity_and_payloads(&state).await;
-            crate::quota::recover_unstarted_releases(&state.db, state.db_dialect, 100).await?;
-            crate::quota::flag_stale(&state.db, 100).await?;
-            crate::quota::reconcile_runtime_receipts(&state).await?;
-            state.dispatcher.recover_dispatches(&state).await?;
-            crate::routes::chat::hosted_worker::recover_usage_receipts(&state).await?;
-            crate::usage_accounting::reconcile_hosted_invocations(&state, 15).await?;
-            crate::routes::chat::hosted_worker::recover_queued(&state).await?;
-            crate::rolling_usage::maintain(&state).await?;
-            let config = RunSweeperConfig::from_env();
-            let swept = sweep_runs_once(
-                &crate::audit::ExecutionAuditContext::from(&state),
-                config.grace,
-                config.batch_size,
-            )
-            .await
-            .map_err(|error| {
-                tracing::error!(error = %error, "Scheduled run sweep failed");
-                ApiError::internal_error(flow_like_types::anyhow!("Run sweep failed: {}", error))
-            })?;
-
-            tracing::info!(
-                swept,
-                grace_secs = config.grace.as_secs(),
-                batch_size = config.batch_size,
-                batch_full = swept >= config.batch_size,
-                "Maintenance run sweep completed"
-            );
-
-            if let Err(error) = crate::devices::certificates::sweep(&state).await {
-                tracing::warn!(error = %error, "Device certificate reminder pass incomplete");
-            }
-            crate::execution_usage_rollup::run_pass(&state).await;
-            // Last: it walks every project with a lapsed pin, and nothing
-            // above may wait for that.
-            if let Err(error) = crate::package_license::sweep(&state).await {
-                tracing::warn!(error = %error, "Package licence sweep failed");
-            }
-
-            Ok(Json(MaintenanceRunResponse::RunSweep(
-                RunSweepMaintenanceResult {
-                    swept,
-                    grace_secs: config.grace.as_secs(),
-                    batch_size: config.batch_size,
-                },
-            )))
-        }
+        MaintenanceRunRequest::RunSweep => Ok(Json(MaintenanceRunResponse::RunSweep(
+            run_sweep(&state).await?,
+        ))),
         MaintenanceRunRequest::StateCleanup => {
             if state.platform_config.standalone.enabled {
                 match crate::devices::archives::sweep_expired(&state).await {
@@ -191,6 +157,13 @@ async fn run_maintenance_job(
                     Err(error) => {
                         tracing::error!(%error, "Device history retention cleanup failed")
                     }
+                }
+                match crate::devices::archives::offload_inline(&state).await {
+                    Ok(0) => {}
+                    Ok(moved) => {
+                        tracing::info!(moved, "Inline device history moved to content storage")
+                    }
+                    Err(error) => tracing::warn!(%error, "Inline device history offload failed"),
                 }
             }
             // Storage-accounting tombstones are SQL rows rather than execution
@@ -309,15 +282,126 @@ async fn run_maintenance_job(
     }
 }
 
+async fn run_sweep(state: &AppState) -> Result<RunSweepMaintenanceResult, ApiError> {
+    recover_capacity_and_payloads(state).await;
+    traced!(
+        "maintenance.quota_unstarted_releases",
+        crate::quota::recover_unstarted_releases(&state.db, state.db_dialect, 100)
+    )
+    .await?;
+    traced!(
+        "maintenance.quota_flag_stale",
+        crate::quota::flag_stale(&state.db, 100)
+    )
+    .await?;
+    traced!(
+        "maintenance.quota_runtime_receipts",
+        crate::quota::reconcile_runtime_receipts(state)
+    )
+    .await?;
+    traced!(
+        "maintenance.dispatch_recovery",
+        state.dispatcher.recover_dispatches(state)
+    )
+    .await?;
+    traced!(
+        "maintenance.hosted_usage_receipts",
+        crate::routes::chat::hosted_worker::recover_usage_receipts(state)
+    )
+    .await?;
+    traced!(
+        "maintenance.hosted_provider_usage",
+        crate::usage_accounting::reconcile_hosted_invocations(state, 15)
+    )
+    .await?;
+    traced!(
+        "maintenance.hosted_queued",
+        crate::routes::chat::hosted_worker::recover_queued(state)
+    )
+    .await?;
+    traced!(
+        "maintenance.rolling_usage",
+        crate::rolling_usage::maintain(state)
+    )
+    .await?;
+    let config = RunSweeperConfig::from_env();
+    let swept = traced!(
+        "maintenance.run_sweeper",
+        sweep_runs_once(
+            &crate::audit::ExecutionAuditContext::from(state),
+            config.grace,
+            config.batch_size,
+        )
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(error = %error, "Scheduled run sweep failed");
+        ApiError::internal_error(flow_like_types::anyhow!("Run sweep failed: {}", error))
+    })?;
+
+    tracing::info!(
+        swept,
+        grace_secs = config.grace.as_secs(),
+        batch_size = config.batch_size,
+        batch_full = swept >= config.batch_size,
+        "Maintenance run sweep completed"
+    );
+
+    if let Err(error) = traced!(
+        "maintenance.device_certificates",
+        crate::devices::certificates::sweep(state)
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Device certificate reminder pass incomplete");
+    }
+    traced!(
+        "maintenance.execution_usage_rollup",
+        crate::execution_usage_rollup::run_pass(state)
+    )
+    .await;
+    // Last: it walks every project with a lapsed pin, and nothing
+    // above may wait for that.
+    if let Err(error) = traced!(
+        "maintenance.package_licences",
+        crate::package_license::sweep(state)
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "Package licence sweep failed");
+    }
+
+    Ok(RunSweepMaintenanceResult {
+        swept,
+        grace_secs: config.grace.as_secs(),
+        batch_size: config.batch_size,
+    })
+}
+
 /// Each bounded pass continues after an unrelated storage recovery failure.
 async fn recover_capacity_and_payloads(state: &AppState) {
-    if let Err(error) = crate::quota_payloads::cleanup(state, None).await {
+    if let Err(error) = traced!(
+        "maintenance.quota_payloads",
+        crate::quota_payloads::cleanup(state, None)
+    )
+    .await
+    {
         tracing::error!(%error, "Private quota payload retention failed; billing records retained");
     }
-    if let Err(error) = crate::capacity::prepare_pending(state).await {
+    if let Err(error) = traced!(
+        "maintenance.capacity_baselines",
+        crate::capacity::prepare_pending(state)
+    )
+    .await
+    {
         tracing::error!(%error, "Capacity baseline preparation failed; partial allowances remain unavailable");
     }
-    if let Err(error) = crate::capacity::sweep_upload_grants(state).await {
+    if let Err(error) = traced!(
+        "maintenance.upload_grants",
+        crate::capacity::sweep_upload_grants(state)
+    )
+    .await
+    {
         tracing::error!(%error, "Storage upload reservation reconciliation failed; reservations retained");
     }
 }

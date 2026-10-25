@@ -103,6 +103,14 @@ function board(model: string): IBoard {
 const SEEN = board("gpt-4o-mini");
 const CHANGED = board("claude-sonnet-5");
 
+function synced(value: IBoard): IBoard {
+	return {
+		...value,
+		version: [1, 2, 2],
+		updated_at: { secs_since_epoch: 1, nanos_since_epoch: 0 },
+	};
+}
+
 async function stored(value: IBoard): Promise<IStoredBoardSnapshot> {
 	return { ...(await packSnapshot(JSON.stringify(value))), seenAt: 1 };
 }
@@ -166,15 +174,25 @@ function mount(service: ReturnType<typeof memoryService>["service"]) {
 	return { render, unmount };
 }
 
-async function remoteMerge() {
+async function remoteMerge(before: IBoard, after: IBoard) {
 	await act(async () => {
 		window.dispatchEvent(
 			new window.CustomEvent(REMOTE_BOARD_APPLIED_EVENT, {
-				detail: { appId: "app", boardId: "board", reason: "sync" },
+				detail: {
+					appId: "app",
+					boardId: "board",
+					reason: "sync",
+					merge: { before, after },
+				},
 			}) as never,
 		);
 	});
 }
+
+const refreshPending = () =>
+	act(async () => {
+		await new Promise((r) => setTimeout(r, 450));
+	});
 
 describe("useBoardChangeNotice", () => {
 	beforeAll(installDomGlobals);
@@ -209,7 +227,7 @@ describe("useBoardChangeNotice", () => {
 		await view.render(SEEN, true);
 		expect(latest?.notice).toBeUndefined();
 
-		await remoteMerge();
+		await remoteMerge(SEEN, CHANGED);
 		await view.render(CHANGED, true);
 		expect(latest?.notice?.diff.logicCount).toBe(1);
 		await view.unmount();
@@ -222,9 +240,164 @@ describe("useBoardChangeNotice", () => {
 		await view.render(SEEN, true);
 
 		setSystemTime(new Date("2026-09-30T10:05:00Z"));
-		await remoteMerge();
+		await remoteMerge(SEEN, CHANGED);
 		await view.render(CHANGED, true);
 		expect(latest?.notice).toBeUndefined();
+		await view.unmount();
+	});
+
+	test("does not report an own apply when sync only changes metadata", async () => {
+		const { service } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(SEEN, true);
+		await view.render(CHANGED, true);
+
+		const merged = synced(CHANGED);
+		await remoteMerge(CHANGED, merged);
+		await view.render(merged, true);
+		expect(latest?.notice).toBeUndefined();
+		await view.unmount();
+	});
+
+	test("consumes a metadata-only sync before the next own edit", async () => {
+		const { service } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(SEEN, true);
+
+		const merged = synced(SEEN);
+		await remoteMerge(SEEN, merged);
+		await view.render(merged, true);
+		expect(latest?.notice).toBeUndefined();
+
+		await view.render(synced(CHANGED), true);
+		expect(latest?.notice).toBeUndefined();
+		await view.unmount();
+	});
+
+	test("reports only the external delta after an own edit", async () => {
+		const { service } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(SEEN, true);
+		await view.render(CHANGED, true);
+
+		const merged = { ...CHANGED, name: "Remote invoice intake" };
+		await remoteMerge(CHANGED, merged);
+		await view.render(merged, true);
+		expect(latest?.notice?.base).toEqual(CHANGED);
+		expect(latest?.notice?.diff.logicCount).toBe(1);
+		expect(latest?.notice?.diff.changes.map((change) => change.key)).toEqual([
+			"board:settings",
+		]);
+
+		await refreshPending();
+		await settle();
+		expect(latest?.notice?.base).toEqual(CHANGED);
+		expect(latest?.notice?.diff.logicCount).toBe(1);
+		expect(latest?.notice?.diff.changes.map((change) => change.key)).toEqual([
+			"board:settings",
+		]);
+		await view.unmount();
+	});
+
+	test("reopens an own applied board without a notice", async () => {
+		const { service, lastWritten } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(SEEN, true);
+		await view.render(CHANGED, true);
+		const merged = synced(CHANGED);
+		await remoteMerge(CHANGED, merged);
+		await view.render(merged, true);
+		await view.unmount();
+		expect(await lastWritten()).toEqual(merged);
+
+		const reopened = mount(service);
+		await reopened.render(merged, true);
+		expect(latest?.notice).toBeUndefined();
+		await reopened.unmount();
+	});
+
+	test("detects an external change when its event arrives before the cache update", async () => {
+		const { service } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(SEEN, true);
+		await remoteMerge(SEEN, CHANGED);
+		await settle();
+		await refreshPending();
+		await settle();
+		expect(latest?.notice?.diff.logicCount).toBe(1);
+
+		await view.render(CHANGED, true);
+		expect(latest?.notice?.base).toEqual(SEEN);
+		expect(latest?.notice?.diff.logicCount).toBe(1);
+		await refreshPending();
+		await settle();
+		expect(latest?.notice?.diff.logicCount).toBe(1);
+		await view.render(SEEN, true);
+		await refreshPending();
+		await settle();
+		expect(latest?.notice).toBeUndefined();
+		await view.unmount();
+	});
+
+	test("keeps an incoming change when a metadata-only merge follows before comparison finishes", async () => {
+		const { service } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(SEEN, true);
+		const comparison = service.compare;
+		const gate = Promise.withResolvers<void>();
+		service.compare = async (...args) => {
+			await gate.promise;
+			return comparison(...args);
+		};
+
+		await remoteMerge(SEEN, CHANGED);
+		const merged = synced(CHANGED);
+		await remoteMerge(CHANGED, merged);
+		await view.render(merged, true);
+		gate.resolve();
+		await settle();
+		expect(latest?.notice?.base).toEqual(SEEN);
+		expect(latest?.notice?.diff.logicCount).toBe(1);
+		await view.unmount();
+	});
+
+	test("does not restore an in-flight catch-up after marking the board as seen", async () => {
+		const { service } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(SEEN, true);
+		const comparison = service.compare;
+		const gate = Promise.withResolvers<void>();
+		service.compare = async (...args) => {
+			await gate.promise;
+			return comparison(...args);
+		};
+
+		await remoteMerge(SEEN, CHANGED);
+		await view.render(CHANGED, true);
+		await act(async () => {
+			await latest?.markSeen();
+		});
+		gate.resolve();
+		await settle();
+		expect(latest?.notice).toBeUndefined();
+		await view.unmount();
+	});
+
+	test("keeps a pending external change after an own edit and metadata-only sync", async () => {
+		const { service } = memoryService(await stored(SEEN));
+		const view = mount(service);
+		await view.render(CHANGED, true);
+		expect(latest?.notice?.diff.byKey.has("node:ext")).toBe(true);
+
+		const edited = { ...CHANGED, name: "My invoice intake" };
+		await view.render(edited, true);
+		const merged = synced(edited);
+		await remoteMerge(edited, merged);
+		await view.render(merged, true);
+		await refreshPending();
+		await settle();
+		expect(latest?.notice?.base).toEqual(SEEN);
+		expect(latest?.notice?.diff.byKey.has("node:ext")).toBe(true);
 		await view.unmount();
 	});
 
@@ -266,9 +439,7 @@ describe("useBoardChangeNotice", () => {
 		await view.render(CHANGED, true);
 		expect(latest?.notice).toBeDefined();
 		await view.render(structuredClone(SEEN), true);
-		await act(async () => {
-			await new Promise((r) => setTimeout(r, 450));
-		});
+		await refreshPending();
 		await settle();
 		expect(latest?.notice).toBeUndefined();
 		await view.unmount();

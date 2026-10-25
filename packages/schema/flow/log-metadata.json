@@ -73,6 +73,10 @@
 				"maximum": 255
 			}
 		},
+		"error_message": {
+			"description": "Why the run failed when its logs cannot say: a rejected trigger, a\ncrashed executor, a run the sweeper timed out.",
+			"type": ["string", "null"]
+		},
 		"is_remote": {
 			"description": "Runtime-only field - not stored, set based on fetch source",
 			"type": "boolean",

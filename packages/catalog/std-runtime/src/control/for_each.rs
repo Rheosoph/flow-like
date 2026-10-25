@@ -23,7 +23,7 @@ impl NodeLogic for LoopNode {
         let mut node = Node::new(
             "control_for_each",
             "For Each",
-            "Loops over an Array",
+            "Loops over an array and stops on the first unhandled iteration error.",
             "Control",
         );
         node.set_flowscript_name("control", "forEach");
@@ -60,7 +60,7 @@ impl NodeLogic for LoopNode {
         node.add_output_pin(
             "done",
             "Done",
-            "Executes once the array is dealt with.",
+            "Executes after the loop completes successfully.",
             VariableType::Execution,
         );
 
@@ -106,12 +106,13 @@ impl NodeLogic for LoopNode {
                 sub_context.end_trace();
                 context.push_sub_context(&mut sub_context);
 
-                if run.is_err() {
-                    let error = run.err().unwrap();
-                    context.log_message(
-                        &format!("Error: {:?} in iteration {}", error, i),
-                        LogLevel::Error,
-                    );
+                if let Err(error) = run {
+                    context.deactivate_exec_pin_ref(&exec_item).await?;
+                    return Err(flow_like_types::anyhow!(
+                        "For Each failed at iteration {}: {:?}",
+                        i,
+                        error
+                    ));
                 }
             }
         }

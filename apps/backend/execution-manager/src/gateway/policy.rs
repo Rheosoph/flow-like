@@ -254,6 +254,7 @@ impl Policy {
                                 | "locked/download"
                                 | "locked/retention"
                                 | "locked/legal-hold"
+                                | "locked/auto-delete"
                                 | "locked/purge"
                         )
                     }))
@@ -635,6 +636,12 @@ mod tests {
             ),
             (
                 Method::POST,
+                "/api/v1/execution/apps/app-1/locked/auto-delete",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
                 "/api/v1/execution/apps/app-1/locked/purge",
                 true,
                 true,
@@ -798,6 +805,7 @@ mod tests {
             (Method::POST, "locked/download"),
             (Method::POST, "locked/retention"),
             (Method::POST, "locked/legal-hold"),
+            (Method::POST, "locked/auto-delete"),
             (Method::POST, "locked/purge"),
         ] {
             let target = format!("http://callback:8080/api/v1/execution/apps/app-1/{route}");

@@ -173,6 +173,13 @@ export const FLOW_DECORATORS: readonly DecoratorDef[] = [
 		snippet:
 			'@cache({ namespace: "${1:global}", ttlSeconds: ${2:300}, scope: "${3|app,user|}" })',
 	},
+	{
+		name: "collapse",
+		argumentKind: "required-string",
+		detail: '@collapse("…") { … }',
+		doc: 'Groups the nodes its statements create into a visual Collapsed layer; execution and scope are unchanged. `"A/B"` nests B in A, `\\/` keeps a slash in one name, a leading `/` starts from the section root. Only inside an event, function or `detached` body.',
+		snippet: '@collapse("${1:Group}") {\n\t$0\n}',
+	},
 ];
 
 const DECORATOR_BY_NAME = new Map(FLOW_DECORATORS.map((d) => [d.name, d]));

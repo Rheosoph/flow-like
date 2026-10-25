@@ -46,7 +46,7 @@ impl NodeLogic for Base64EncodeBytesNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let input: Vec<u8> = context.evaluate_pin("input").await?;
+        let input = context.evaluate_pin_bytes("input").await?;
         let encoded = general_purpose::STANDARD.encode(&input);
         context.set_pin_value("output", json!(encoded)).await?;
         Ok(())

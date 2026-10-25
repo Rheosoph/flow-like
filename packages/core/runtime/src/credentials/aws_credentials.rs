@@ -8,10 +8,25 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::object_store;
-use flow_like_storage::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, S3CopyIfNotExists};
+use flow_like_storage::object_store::aws::{
+    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, S3CopyIfNotExists,
+};
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
+
+/// Building a client costs a fresh connection pool and TLS handshake, so one
+/// client serves every caller holding the same credentials for the same bucket.
+static STORES: LazyLock<moka::sync::Cache<[u8; 32], Arc<AmazonS3>>> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(256)
+        .time_to_idle(Duration::from_secs(15 * 60))
+        .build()
+});
+
+/// A session this close to expiry gets a private client and is never cached.
+const STORE_CACHE_EXPIRY_MARGIN: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 
 /// Additional bucket configuration for S3-compatible storage
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -199,6 +214,37 @@ impl AwsSharedCredentials {
             StoreType::Tmp => (&self.content_bucket, self.content_config.as_ref()),
         }
     }
+
+    /// Identity of the client built for one bucket: every secret, the session
+    /// and its expiry, the region and the bucket's transport options. Rotated
+    /// or re-scoped credentials therefore always select another client.
+    fn store_cache_key(
+        &self,
+        bucket_name: &str,
+        bucket_config: Option<&BucketConfig>,
+    ) -> Option<[u8; 32]> {
+        if self
+            .expiration
+            .is_some_and(|expiry| expiry <= chrono::Utc::now() + STORE_CACHE_EXPIRY_MARGIN)
+        {
+            return None;
+        }
+        let mut hasher = blake3::Hasher::new();
+        serde_json::to_writer(
+            &mut hasher,
+            &(
+                &self.access_key_id,
+                &self.secret_access_key,
+                &self.session_token,
+                self.expiration,
+                &self.region,
+                bucket_name,
+                bucket_config,
+            ),
+        )
+        .ok()?;
+        Some(*hasher.finalize().as_bytes())
+    }
 }
 
 #[async_trait]
@@ -218,6 +264,10 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
         use flow_like_types::tokio;
 
         let (bucket_name, bucket_config) = self.get_bucket_info(store_type);
+        let cache_key = self.store_cache_key(bucket_name, bucket_config);
+        if let Some(store) = cache_key.and_then(|key| STORES.get(&key)) {
+            return Ok(FlowLikeStore::AWS(store));
+        }
 
         let builder = {
             let mut builder = AmazonS3Builder::new()
@@ -253,10 +303,15 @@ impl SharedCredentialsTrait for AwsSharedCredentials {
             apply_sse_kms(builder, bucket_config)?
         };
 
-        let store = tokio::task::spawn_blocking(move || builder.build())
-            .await
-            .map_err(|e| anyhow!("Failed to spawn blocking task: {}", e))??;
-        Ok(FlowLikeStore::AWS(Arc::new(store)))
+        let store = Arc::new(
+            tokio::task::spawn_blocking(move || builder.build())
+                .await
+                .map_err(|e| anyhow!("Failed to spawn blocking task: {}", e))??,
+        );
+        if let Some(key) = cache_key {
+            STORES.insert(key, store.clone());
+        }
+        Ok(FlowLikeStore::AWS(store))
     }
 
     #[tracing::instrument(name = "AwsSharedCredentials::to_db", skip(self), level = "debug")]
@@ -403,6 +458,53 @@ mod tests {
             .to_store(true)
             .await
             .expect("static API credentials should build a store");
+    }
+
+    fn session_credentials(lifetime: chrono::TimeDelta) -> AwsSharedCredentials {
+        AwsSharedCredentials {
+            session_token: Some(flow_like_types::create_id()),
+            expiration: Some(chrono::Utc::now() + lifetime),
+            meta_config: None,
+            ..sample_credentials()
+        }
+    }
+
+    fn s3_client(store: FlowLikeStore) -> Arc<AmazonS3> {
+        match store {
+            FlowLikeStore::AWS(store) => store,
+            other => panic!("expected an S3 store, got {other:?}"),
+        }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn one_client_serves_each_credential_and_bucket() {
+        let credentials = session_credentials(chrono::TimeDelta::hours(1));
+        let meta = s3_client(credentials.to_store(true).await.unwrap());
+
+        assert!(Arc::ptr_eq(
+            &meta,
+            &s3_client(credentials.to_store(true).await.unwrap())
+        ));
+        assert!(!Arc::ptr_eq(
+            &meta,
+            &s3_client(credentials.to_store(false).await.unwrap())
+        ));
+        let rotated = AwsSharedCredentials {
+            session_token: Some(flow_like_types::create_id()),
+            ..credentials.clone()
+        };
+        assert!(!Arc::ptr_eq(
+            &meta,
+            &s3_client(rotated.to_store(true).await.unwrap())
+        ));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn sessions_near_expiry_get_private_clients() {
+        let credentials = session_credentials(chrono::TimeDelta::minutes(1));
+        let first = s3_client(credentials.to_store(true).await.unwrap());
+        let second = s3_client(credentials.to_store(true).await.unwrap());
+        assert!(!Arc::ptr_eq(&first, &second));
     }
 
     #[test]

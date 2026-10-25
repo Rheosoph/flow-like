@@ -129,6 +129,12 @@ impl ToProto<flow_like_types::proto::Node> for Node {
             receiver: self.receiver.clone(),
             pins_collapsed: self.pins_collapsed,
             auto_reroute: self.auto_reroute,
+            code_names: self
+                .code_names
+                .iter()
+                .flatten()
+                .map(|(key, name)| (key.clone(), name.clone()))
+                .collect(),
         }
     }
 }
@@ -190,6 +196,8 @@ impl FromProto<flow_like_types::proto::Node> for Node {
             receiver: proto.receiver,
             pins_collapsed: proto.pins_collapsed,
             auto_reroute: proto.auto_reroute,
+            code_names: (!proto.code_names.is_empty())
+                .then(|| proto.code_names.into_iter().collect()),
         }
     }
 }
@@ -214,6 +222,28 @@ mod tests {
             let proto =
                 flow_like_types::proto::Node::decode(bytes.as_slice()).expect("decode saved node");
             assert_eq!(Node::from_proto(proto).auto_reroute, marker);
+        }
+    }
+
+    #[test]
+    fn code_names_round_trip_through_json_and_protobuf() {
+        let names = std::collections::BTreeMap::from([
+            (String::new(), "selectedPerson".to_string()),
+            ("value".to_string(), "row".to_string()),
+        ]);
+        for code_names in [None, Some(names)] {
+            let mut node = Node::new("db_get", "Get", "", "Data");
+            node.code_names = code_names.clone();
+
+            let json = serde_json::to_value(&node).expect("node JSON");
+            assert_eq!(json.get("code_names").is_some(), code_names.is_some());
+            let restored: Node = serde_json::from_value(json).expect("restore node JSON");
+            assert_eq!(restored.code_names, code_names);
+
+            let bytes = node.to_proto().encode_to_vec();
+            let proto =
+                flow_like_types::proto::Node::decode(bytes.as_slice()).expect("decode saved node");
+            assert_eq!(Node::from_proto(proto).code_names, code_names);
         }
     }
 }

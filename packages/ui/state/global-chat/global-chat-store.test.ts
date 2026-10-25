@@ -6,6 +6,8 @@ import {
 	expect,
 	test,
 } from "bun:test";
+import type { IChatWidget } from "../../components/interfaces/chat-default/chat-db";
+import type { IMessage } from "./global-chat-db";
 import {
 	type GlobalChatTurnSelection,
 	beginGlobalChatTurnSelection,
@@ -411,5 +413,177 @@ describe("global chat overlay dismissal", () => {
 		expect(readActiveRun()?.runId).toBe("run-1");
 		clearActiveRun("run-1");
 		expect(readActiveRun()).toBeNull();
+	});
+});
+
+describe("global chat inline anchors", () => {
+	const reply = (
+		id: string,
+		content: string,
+		sessionId = "conversation-1",
+	): IMessage => ({
+		id,
+		appId: "global",
+		sessionId,
+		inner: { role: "assistant" as never, content },
+		files: [],
+		timestamp: 0,
+	});
+
+	const stream = (
+		runId: string,
+		content: string,
+		conversationId = "conversation-1",
+	) =>
+		useGlobalChatStore.getState().startRun({
+			runId,
+			conversationId,
+			selection: {
+				runId,
+				provider: "bits",
+				selectedModelId: "",
+				reasoningEffort: "",
+			},
+			label: runId,
+			message: reply(runId, content, conversationId),
+			sourceAttachments: [],
+		});
+
+	const widget = (
+		updates: unknown[],
+		content_offset?: number,
+	): IChatWidget => ({
+		instance_id: "inst-1",
+		widget_id: "w1",
+		surface_id: "inst-1",
+		component: {},
+		updates,
+		content_offset,
+	});
+
+	beforeEach(() => {
+		useGlobalChatStore.setState({
+			activeConversationId: "conversation-1",
+			messages: [],
+			runs: {},
+			isStreaming: false,
+			streamingMessages: [],
+			inlineAppChats: [],
+			inlineAppPages: [],
+			inlineAppSurfaces: [],
+		});
+	});
+
+	test("nested widgets anchor against the parent reply and keep their first-seen anchor", () => {
+		stream("run-1", "Opening the map. ");
+		// The child processor stamps offsets into the nested run's own text; they must not leak.
+		useGlobalChatStore.getState().addSubWidgets("run-1", [widget([], 99)]);
+		useGlobalChatStore
+			.getState()
+			.setRunMessage(
+				"run-1",
+				reply("run-1", "Opening the map. It shows Berlin."),
+			);
+		useGlobalChatStore.getState().addSubWidgets("run-1", [widget(["u"], 3)]);
+
+		const run = useGlobalChatStore.getState().runs["run-1"];
+		expect(run?.subWidgets.map((w) => w.content_offset)).toEqual([
+			"Opening the map. ".length,
+		]);
+		expect(run?.subWidgets[0]?.updates).toEqual(["u"]);
+		expect(run?.message?.widgets?.[0]?.content_offset).toBe(
+			"Opening the map. ".length,
+		);
+	});
+
+	test("a re-publish that adds nothing leaves the run untouched", () => {
+		stream("run-1", "Hi");
+		useGlobalChatStore.getState().addSubWidgets("run-1", [widget(["u"])]);
+		const before = useGlobalChatStore.getState().runs["run-1"];
+		useGlobalChatStore.getState().addSubWidgets("run-1", [widget(["u"])]);
+		expect(useGlobalChatStore.getState().runs["run-1"]).toBe(before);
+	});
+
+	test("inline cards anchor into the only streaming reply at its current text", () => {
+		stream("run-1", "Let me open it. ");
+		const store = useGlobalChatStore.getState();
+		store.addInlineAppPage({
+			appId: "orders",
+			eventId: "list",
+			name: "Orders",
+		});
+		store.addInlineAppSurface({
+			appId: "orders",
+			name: "Orders",
+			surfaces: [{ id: "s1", rootComponentId: "root", components: {} }],
+		});
+		store.addInlineAppChat({ appId: "orders", eventId: "chat", name: "Chat" });
+
+		const anchor = {
+			messageId: "run-1",
+			content_offset: "Let me open it. ".length,
+		};
+		const state = useGlobalChatStore.getState();
+		expect(state.inlineAppPages[0]).toMatchObject(anchor);
+		expect(state.inlineAppSurfaces[0]).toMatchObject(anchor);
+		expect(state.inlineAppChats[0]).toMatchObject(anchor);
+	});
+
+	test("re-adding a page keeps the first card and its anchor", () => {
+		stream("run-1", "First. ");
+		useGlobalChatStore
+			.getState()
+			.addInlineAppPage({ appId: "orders", eventId: "list", name: "Orders" });
+		useGlobalChatStore
+			.getState()
+			.setRunMessage("run-1", reply("run-1", "First. Second."));
+		useGlobalChatStore
+			.getState()
+			.addInlineAppPage({ appId: "orders", eventId: "list", name: "Orders" });
+
+		const pages = useGlobalChatStore.getState().inlineAppPages;
+		expect(pages).toHaveLength(1);
+		expect(pages[0]?.content_offset).toBe("First. ".length);
+	});
+
+	test("cards stay unanchored without exactly one owning reply on screen", () => {
+		useGlobalChatStore
+			.getState()
+			.addInlineAppPage({ appId: "a", eventId: "idle", name: "A" });
+
+		stream("run-1", "one");
+		stream("run-2", "two");
+		useGlobalChatStore
+			.getState()
+			.addInlineAppPage({ appId: "a", eventId: "concurrent", name: "A" });
+
+		useGlobalChatStore.getState().endRun("run-1");
+		useGlobalChatStore.getState().endRun("run-2");
+		stream("run-3", "elsewhere", "conversation-2");
+		useGlobalChatStore
+			.getState()
+			.addInlineAppChat({ appId: "a", eventId: "chat", name: "A" });
+
+		const state = useGlobalChatStore.getState();
+		for (const card of [...state.inlineAppPages, ...state.inlineAppChats]) {
+			expect(card.messageId).toBeUndefined();
+			expect(card.content_offset).toBeUndefined();
+		}
+		expect(state.inlineAppPages).toHaveLength(2);
+	});
+
+	test("a card names its run, so concurrent replies still anchor it", () => {
+		stream("run-1", "one ");
+		stream("run-2", "second reply ");
+		const store = useGlobalChatStore.getState();
+		store.addInlineAppPage({ appId: "a", eventId: "page", name: "A" }, "run-2");
+		store.addInlineAppChat({ appId: "a", eventId: "chat", name: "A" }, "gone");
+
+		const state = useGlobalChatStore.getState();
+		expect(state.inlineAppPages[0]).toMatchObject({
+			messageId: "run-2",
+			content_offset: "second reply ".length,
+		});
+		expect(state.inlineAppChats[0]?.messageId).toBeUndefined();
 	});
 });

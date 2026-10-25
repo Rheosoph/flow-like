@@ -1,0 +1,28 @@
+@import "../../packages/ui/global.css";
+
+html,
+body,
+#root {
+	min-height: 100%;
+	margin: 0;
+}
+
+.fixture-chrome {
+	position: fixed;
+	inset: auto 0 90px;
+	z-index: 30;
+	height: 60px;
+	background: #f4d591;
+	padding: 16px;
+	user-select: text;
+}
+
+.fixture-toolbar {
+	position: fixed;
+	inset: 0 0 auto;
+	z-index: 40;
+	height: 76px;
+	background: #b6d9f3;
+	padding: 16px;
+	user-select: text;
+}

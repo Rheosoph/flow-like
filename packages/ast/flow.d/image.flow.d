@@ -1,8 +1,10 @@
 // Image — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -95,6 +97,19 @@ declare namespace image {
      * @impure has side effects / drives control flow
      */
     function readBarcodes(this: NodeImage, { imageIn: Struct, options?: Struct }): Struct[];
+
+    /**
+     * Reads width, height, format and EXIF orientation from an image file's header without decoding its pixels. Only the leading bytes the header needs are fetched, so it costs a fraction of Read Image + Get Dimensions on large photos.
+     * @node read_image_dimensions @receiver path @alias readImageDimensions
+     * @param path — Image file to inspect (receiver: `this` in `x.readDimensions(...)`)
+     * @param applyExifOrientation (optional) — Report the size of the upright image, swapping width and height when the EXIF orientation turns it by 90 degrees — the values Read Image + Get Dimensions return
+     * @returns width — Image width in pixels
+     * @returns height — Image height in pixels
+     * @returns format — Image format in lowercase, e.g. jpeg, png, webp or tiff
+     * @returns orientation — EXIF orientation tag (1–8); 1 when the file carries none
+     * @impure has side effects / drives control flow
+     */
+    function readDimensions(this: FlowPath, { path: Struct, applyExifOrientation?: bool }): { width: int, height: int, format: string, orientation: int };
 
     /**
      * Read image from path

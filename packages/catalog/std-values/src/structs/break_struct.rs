@@ -127,7 +127,7 @@ impl NodeLogic for BreakStructNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let struct_value: Value = context.evaluate_pin("struct_in").await?;
+        let struct_value = context.evaluate_pin_raw("struct_in").await?;
 
         // Collect output pins first to avoid borrow conflict
         let output_pins: Vec<_> = context

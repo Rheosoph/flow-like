@@ -13,6 +13,8 @@ export interface IBoardRailItem {
 	active?: boolean;
 	/** Rendered as a counter dot; `0` and `undefined` render nothing. */
 	badge?: number;
+	/** Describes the full count and what it measures in the tooltip and accessible name. */
+	badgeLabel?: string;
 	badgeTone?: "default" | "warning" | "danger";
 	shortcut?: string;
 	href?: string;
@@ -28,6 +30,11 @@ const BADGE_TONE: Record<string, string> = {
 const RailButton = memo(function RailButton({
 	item,
 }: Readonly<{ item: IBoardRailItem }>) {
+	const badgeLabel =
+		typeof item.badge === "number" && item.badge > 0
+			? (item.badgeLabel ?? String(item.badge))
+			: undefined;
+	const label = badgeLabel ? `${item.title}: ${badgeLabel}` : item.title;
 	const className = cn(
 		"relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors",
 		"hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-sidebar",
@@ -39,6 +46,7 @@ const RailButton = memo(function RailButton({
 			<span className="[&>svg]:size-4.5">{item.icon}</span>
 			{typeof item.badge === "number" && item.badge > 0 && (
 				<span
+					aria-hidden="true"
 					className={cn(
 						"absolute -right-0.5 -top-0.5 min-w-3.5 rounded-full px-1 text-[9px] font-semibold leading-3.5 tabular-nums ring-2 ring-sidebar",
 						BADGE_TONE[item.badgeTone ?? "default"],
@@ -54,13 +62,13 @@ const RailButton = memo(function RailButton({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				{item.href ? (
-					<Link href={item.href} aria-label={item.title} className={className}>
+					<Link href={item.href} aria-label={label} className={className}>
 						{content}
 					</Link>
 				) : (
 					<button
 						type="button"
-						aria-label={item.title}
+						aria-label={label}
 						aria-pressed={Boolean(item.active)}
 						onClick={item.onSelect}
 						className={className}
@@ -69,13 +77,16 @@ const RailButton = memo(function RailButton({
 					</button>
 				)}
 			</TooltipTrigger>
-			<TooltipContent side="right" className="flex items-center gap-2">
-				{item.title}
-				{item.shortcut && (
-					<span className="font-mono text-[10px] text-muted-foreground">
-						{item.shortcut}
-					</span>
-				)}
+			<TooltipContent side="right" className="flex flex-col gap-1">
+				<span className="flex items-center gap-2">
+					{item.title}
+					{item.shortcut && (
+						<span className="font-mono text-[10px] text-muted-foreground">
+							{item.shortcut}
+						</span>
+					)}
+				</span>
+				{badgeLabel && <span className="text-[11px]">{badgeLabel}</span>}
 			</TooltipContent>
 		</Tooltip>
 	);

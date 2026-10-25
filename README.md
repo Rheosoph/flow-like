@@ -329,7 +329,7 @@ Device-local secret values stay outside the Board and remote payloads.
 ## Build from source
 
 Install Git, [mise](https://mise.jdx.dev/), [Tauri 2 system dependencies](https://v2.tauri.app/start/prerequisites/),
-`protoc`, and a C/C++ toolchain. Then run:
+`protoc`, a C/C++ toolchain, and on Linux the unixODBC headers (`unixodbc-dev`). Then run:
 
 ```bash
 git clone --branch dev https://github.com/Rheosoph/flow-like.git

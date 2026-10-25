@@ -560,9 +560,8 @@ describe("dropStream", () => {
 		});
 		const harness = send({ engine: spy });
 		await harness.settled;
-		expect(engine.getBackgroundStreams().map((s) => s.streamId)).toEqual([
-			"run-1#1",
-		]);
+		expect(engine.hasStream("run-1#1")).toBe(true);
+		expect(engine.getBackgroundStreams()).toEqual([]);
 		expect(dropStream(spy, "run-1#1", "form")).toBe(true);
 		expect(engine.hasStream("run-1#1")).toBe(false);
 		expect(engine.getBackgroundStreams()).toEqual([]);

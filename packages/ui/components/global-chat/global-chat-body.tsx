@@ -26,7 +26,14 @@ import {
 	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import {
@@ -102,6 +109,11 @@ import {
 } from "../../state/global-chat/global-chat-memory";
 import {
 	AGENT_MODEL_KEY,
+	type GlobalChatRun,
+	type InlineAppChat,
+	type InlineAppPage,
+	type InlineAppSurface,
+	type InlineCardAnchor,
 	LAST_CONVERSATION_KEY,
 	MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
 	beginGlobalChatTurnSelection,
@@ -144,6 +156,7 @@ import {
 } from "../interfaces/chat-default/chat";
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
+import type { MessageInlineContent } from "../interfaces/chat-default/message";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
 import { DeviceModelBadge } from "../settings/devices/models/use/device-model-badge";
 import {
@@ -221,6 +234,92 @@ const GLOBAL_CHAT_CONFIG = {
 const GLOBAL_CHAT_TYPING_MOTION = resolveChatPlaceholderTypingMotion(
 	GLOBAL_CHAT_CONFIG.placeholder_typing_motion,
 );
+
+/** Live replies as one string: streamed tokens rewrite `runs` but leave this unchanged. */
+function liveReplyIdsKey(runs: readonly GlobalChatRun[]) {
+	let key = "";
+	for (const run of runs) if (run.message) key += `${run.message.id}\n`;
+	return key;
+}
+
+/** Messages the transcript renders: the settled ones plus the live replies of `liveReplyIdsKey`. */
+function transcriptIds(messages: readonly IMessage[], liveReplies: string) {
+	const ids = new Set(liveReplies.split("\n"));
+	ids.delete("");
+	for (const message of messages) ids.add(message.id);
+	return ids;
+}
+
+interface InlineCardSources {
+	pages: readonly InlineAppPage[];
+	surfaces: readonly InlineAppSurface[];
+	chats: readonly InlineAppChat[];
+	onClosePage: (id: string) => void;
+	onCloseSurface: (id: string) => void;
+	onCloseChat: (id: string) => void;
+	compact: boolean;
+}
+
+interface InlineCardLayout {
+	/** Cards rendered inside a transcript message, at offsets into its text. */
+	byMessage: Map<string, MessageInlineContent[]>;
+	/** Unanchored cards and cards whose reply is not in the transcript. */
+	trailing: ReactNode[];
+}
+
+/** Cards render inside the reply that added them, at its text offset; the rest trail the transcript. */
+function layoutInlineCards(
+	sources: InlineCardSources,
+	messageIds: ReadonlySet<string>,
+) {
+	const layout: InlineCardLayout = { byMessage: new Map(), trailing: [] };
+	const place = (card: InlineCardAnchor & { id: string }, node: ReactNode) => {
+		const { messageId, content_offset: offset } = card;
+		if (!messageId || offset === undefined || !messageIds.has(messageId)) {
+			layout.trailing.push(node);
+			return;
+		}
+		const entry = { key: card.id, offset, node };
+		const entries = layout.byMessage.get(messageId);
+		if (entries) entries.push(entry);
+		else layout.byMessage.set(messageId, [entry]);
+	};
+	const { compact } = sources;
+	for (const page of sources.pages) {
+		place(
+			page,
+			<InlineAppPageCard
+				key={page.id}
+				page={page}
+				onClose={sources.onClosePage}
+				compact={compact}
+			/>,
+		);
+	}
+	for (const surface of sources.surfaces) {
+		place(
+			surface,
+			<InlineAppSurfaceCard
+				key={surface.id}
+				surface={surface}
+				onClose={sources.onCloseSurface}
+				compact={compact}
+			/>,
+		);
+	}
+	for (const chat of sources.chats) {
+		place(
+			chat,
+			<InlineAppChatCard
+				key={chat.id}
+				chat={chat}
+				onClose={sources.onCloseChat}
+				compact={compact}
+			/>,
+		);
+	}
+	return layout;
+}
 
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
@@ -1083,7 +1182,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				);
 			}
 		},
-		[setInteractionResponded],
+		[setInteractionResponded, t],
 	);
 
 	// Queue drain. Installed as a module-level hook (not just an effect) because the run that frees
@@ -1146,7 +1245,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			}
 			return delivered;
 		},
-		[activeRuns],
+		[activeRuns, t],
 	);
 
 	// Auto-send a pending draft exactly once — handed off from the landing hero bar or attached to
@@ -1263,52 +1362,49 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const canSideBySide = layoutWidth >= 768;
 	const showWorkspace = hasFlowscript && !flowscriptHidden;
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
-	const hasInlineArtifacts =
-		inlineAppChats.length > 0 ||
-		inlineAppPages.length > 0 ||
-		inlineAppSurfaces.length > 0 ||
-		pendingComponents !== null;
-	const inlineArtifacts = useMemo(
+	// Keyed by the live reply ids so streamed tokens leave the card placement — and every message
+	// memo comparing it — untouched until a reply starts or settles.
+	const liveReplyIds = liveReplyIdsKey(activeRuns);
+	const transcriptMessageIds = useMemo(
+		() => transcriptIds(messages, liveReplyIds),
+		[messages, liveReplyIds],
+	);
+	const inlineCards = useMemo(
 		() =>
-			hasInlineArtifacts ? (
-				<div className="flex w-full flex-col gap-3 py-1">
-					<PendingComponentsCard />
-					{inlineAppPages.map((page) => (
-						<InlineAppPageCard
-							key={page.id}
-							page={page}
-							onClose={removeInlineAppPage}
-							compact={compact}
-						/>
-					))}
-					{inlineAppSurfaces.map((surface) => (
-						<InlineAppSurfaceCard
-							key={surface.id}
-							surface={surface}
-							onClose={removeInlineAppSurface}
-							compact={compact}
-						/>
-					))}
-					{inlineAppChats.map((chat) => (
-						<InlineAppChatCard
-							key={chat.id}
-							chat={chat}
-							onClose={removeInlineAppChat}
-							compact={compact}
-						/>
-					))}
-				</div>
-			) : undefined,
+			layoutInlineCards(
+				{
+					pages: inlineAppPages,
+					surfaces: inlineAppSurfaces,
+					chats: inlineAppChats,
+					onClosePage: removeInlineAppPage,
+					onCloseSurface: removeInlineAppSurface,
+					onCloseChat: removeInlineAppChat,
+					compact,
+				},
+				transcriptMessageIds,
+			),
 		[
 			compact,
-			hasInlineArtifacts,
 			inlineAppChats,
 			inlineAppPages,
 			inlineAppSurfaces,
 			removeInlineAppChat,
 			removeInlineAppPage,
 			removeInlineAppSurface,
+			transcriptMessageIds,
 		],
+	);
+	const hasInlineArtifacts =
+		inlineCards.trailing.length > 0 || pendingComponents !== null;
+	const inlineArtifacts = useMemo(
+		() =>
+			hasInlineArtifacts ? (
+				<div className="flex w-full flex-col gap-3 py-1">
+					<PendingComponentsCard />
+					{inlineCards.trailing}
+				</div>
+			) : undefined,
+		[hasInlineArtifacts, inlineCards],
 	);
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
@@ -1424,7 +1520,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					</SelectContent>
 				</Select>
 			) : null,
-		[memoryModels, embeddingModelId, handleEmbeddingChange],
+		[memoryModels, embeddingModelId, handleEmbeddingChange, t],
 	);
 	const defaultReasoningEffortName = reasoningEffortOptions.find(
 		(option) => option.id === selectedAgentModel?.defaultReasoningEffort,
@@ -1789,6 +1885,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								onMessageUpdate={handleMessageUpdate}
 								showAiDisclosure
 								inlineContent={inlineArtifacts}
+								messageInlineContent={inlineCards.byMessage}
 								inlinePrompt={
 									toolPrompt ? (
 										<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
@@ -1965,7 +2062,9 @@ function MemoryManagerDialog({
 
 				{!active && (
 					<p className="rounded-md border border-border/50 bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground">
-						{`Memory is off — pick an embedding model in the header to let the assistant recall and save memories. You can still review and delete saved memories here.`}
+						{
+							"Memory is off — pick an embedding model in the header to let the assistant recall and save memories. You can still review and delete saved memories here."
+						}
 					</p>
 				)}
 

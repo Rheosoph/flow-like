@@ -32,6 +32,7 @@ import {
 	type IForkJobView,
 	resolveOnlineFork,
 } from "@flow-like/flow-like-ui/lib/fork-job";
+import type { IAppLegalLinks } from "@flow-like/flow-like-ui/lib/legal-links";
 import { usablePackagePins } from "@flow-like/flow-like-ui/lib/package-license";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
@@ -1269,6 +1270,42 @@ export class AppState implements IAppState {
 				method: "PATCH",
 				body: JSON.stringify({ custom_css: css }),
 			},
+			this.backend.auth,
+		);
+	}
+
+	async getAppLegalLinks(appId: string): Promise<IAppLegalLinks> {
+		return await this.fetchLegalLinks(appId, { method: "GET" });
+	}
+
+	async setAppLegalLinks(
+		appId: string,
+		links: IAppLegalLinks,
+	): Promise<IAppLegalLinks> {
+		return await this.fetchLegalLinks(appId, {
+			method: "PATCH",
+			body: JSON.stringify(links),
+		});
+	}
+
+	private async fetchLegalLinks(
+		appId: string,
+		init: RequestInit,
+	): Promise<IAppLegalLinks> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error(
+				"Legal links are only available for online apps, since only they can be hosted.",
+			);
+		}
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error(
+				`Profile or auth not set. Cannot reach the legal links of app ${appId}.`,
+			);
+		}
+		return await fetcher<IAppLegalLinks>(
+			this.backend.profile,
+			`apps/${appId}/settings/legal`,
+			init,
 			this.backend.auth,
 		);
 	}

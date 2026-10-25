@@ -996,6 +996,69 @@ pub fn hub_api_url(hub: &str, secure: bool, segments: &[&str]) -> Result<Url> {
     Ok(url)
 }
 
+/// Check fresh catalog responses before removing a profile reference. A missing
+/// bit is confirmed only when this hub and every dependency answer HTTP 404.
+pub(crate) async fn bit_exists_on_hub(
+    hub: &str,
+    bit_id: &str,
+    http_client: Arc<HTTPClient>,
+) -> Result<bool> {
+    #[derive(Deserialize)]
+    struct Dependencies {
+        domain: String,
+        hubs: Vec<String>,
+    }
+
+    let mut pending = std::collections::VecDeque::from([hub.to_owned()]);
+    let mut visited = std::collections::HashSet::new();
+    let mut failure = None;
+    while let Some(hub) = pending.pop_front() {
+        let result: Result<Option<Vec<String>>> = async {
+            let metadata_url = hub_api_url(&hub, true, &[])?;
+            if !visited.insert(metadata_url.to_string()) {
+                return Ok(Some(vec![]));
+            }
+            let response = http_client
+                .client()
+                .get(hub_api_url(&hub, true, &["bit", bit_id])?)
+                .send()
+                .await?;
+            if response.status() == flow_like_types::reqwest::StatusCode::NOT_FOUND {
+                // Cached metadata could omit a newly configured dependency.
+                let dependencies = http_client
+                    .client()
+                    .get(metadata_url.clone())
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<Dependencies>()
+                    .await?;
+                let mut hubs = dependencies.hubs;
+                // Hub metadata can direct runtime lookups to a canonical domain.
+                if hub_api_url(&dependencies.domain, true, &[])? != metadata_url {
+                    hubs.push(dependencies.domain);
+                }
+                return Ok(Some(hubs));
+            }
+            let bit = response.error_for_status()?.json::<Bit>().await?;
+            if bit.id != bit_id {
+                return Err(flow_like_types::anyhow!("Hub returned a different bit"));
+            }
+            Ok(None)
+        }
+        .await;
+        match result {
+            Ok(None) => return Ok(true),
+            Ok(Some(dependencies)) => pending.extend(dependencies),
+            Err(error) => failure = Some(error),
+        }
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(false),
+    }
+}
+
 /// Which hub responses [`send_hub_request`] repeats, how often, and how long
 /// it may wait between attempts in total.
 #[derive(Clone, Copy, Debug)]

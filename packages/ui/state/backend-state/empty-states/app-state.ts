@@ -11,6 +11,7 @@ import type {
 	IMetadata,
 	ResolvedExplore,
 } from "@flow-like/flow-like-ui";
+import type { IAppLegalLinks } from "@flow-like/flow-like-ui/lib/legal-links";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -127,6 +128,15 @@ export class EmptyAppState implements IAppState {
 		throw new Error("Method not implemented.");
 	}
 	setAppStylesheet(appId: string, css: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	getAppLegalLinks(appId: string): Promise<IAppLegalLinks> {
+		throw new Error("Method not implemented.");
+	}
+	setAppLegalLinks(
+		appId: string,
+		links: IAppLegalLinks,
+	): Promise<IAppLegalLinks> {
 		throw new Error("Method not implemented.");
 	}
 	changeAppAllowForking(appId: string, allow: boolean): Promise<void> {

@@ -30,6 +30,7 @@ const browser =
 				args: ["--enable-webgl", "--enable-unsafe-swiftshader"],
 			});
 const results = [];
+const DOM_NODE_BUDGET = 400;
 
 async function snapshot(page) {
 	return page.evaluate(() => {
@@ -63,6 +64,7 @@ async function snapshot(page) {
 	});
 }
 
+/** egui fits the whole board. React Flow stops where a screen holds at most its rich-node budget. */
 function assertFits(state) {
 	const { bounds, viewport, size } = state;
 	const screen = {
@@ -71,6 +73,21 @@ function assertFits(state) {
 		right: viewport.x + (bounds.x + bounds.width) * viewport.zoom,
 		bottom: viewport.y + (bounds.y + bounds.height) * viewport.zoom,
 	};
+	if (state.renderer === "react-flow") {
+		assert.ok(
+			viewport.zoom > 0.1,
+			`React Flow's density floor stops a dense fit above 0.1: ${viewport.zoom}`,
+		);
+		assert.ok(
+			state.mountedWrappers <= DOM_NODE_BUDGET,
+			`React Flow mounts at most ${DOM_NODE_BUDGET} rich nodes: ${state.mountedWrappers}`,
+		);
+		return screen;
+	}
+	assert.ok(
+		viewport.zoom < 0.1,
+		"Large fit must zoom below the previous limit",
+	);
 	assert.ok(
 		screen.left >= -2 &&
 			screen.top >= -2 &&
@@ -78,27 +95,52 @@ function assertFits(state) {
 			screen.bottom <= size.height + 2,
 		`Fit view must contain every nonhidden item: ${JSON.stringify({ screen, size, viewport })}`,
 	);
-	if (state.renderer === "egui") {
-		assert.equal(
-			state.emptyProxyWrappers,
-			0,
-			"Native graph items must not mount empty DOM wrappers",
-		);
-		assert.ok(
-			state.mountedWrappers <= state.presentation.domNodes,
-			"Only DOM-owned nodes mount wrappers",
-		);
-		assert.ok(
-			state.visibleNodes > 9900,
-			"The full graph remains available for fit and selection",
-		);
-	} else
-		assert.equal(
-			state.mountedWrappers,
-			state.visibleNodes,
-			"React Flow fits every nonhidden item",
-		);
+	assert.equal(
+		state.emptyProxyWrappers,
+		0,
+		"Native graph items must not mount empty DOM wrappers",
+	);
+	assert.ok(
+		state.mountedWrappers <= state.presentation.domNodes,
+		"Only DOM-owned nodes mount wrappers",
+	);
+	assert.ok(
+		state.visibleNodes > 9900,
+		"The full graph remains available for fit and selection",
+	);
 	return screen;
+}
+
+/**
+ * A renderer switch keeps the camera. Below React Flow's density floor it keeps the board
+ * point at the pane center and raises the zoom to that floor.
+ */
+function assertHandover(from, to, size, renderer) {
+	if (Math.abs(to.zoom - from.zoom) < 0.0001) {
+		assert.ok(
+			Math.abs(to.x - from.x) < 0.1 && Math.abs(to.y - from.y) < 0.1,
+			"Renderer toggle preserves the viewport",
+		);
+		return;
+	}
+	assert.ok(
+		renderer === "react-flow" && to.zoom > from.zoom,
+		`Only React Flow's density floor changes the zoom on a switch: ${JSON.stringify({ from, to, renderer })}`,
+	);
+	// Pane sizes are whole pixels, so each half-pixel axis drifts by up to (ratio - 1) / 4 px.
+	const tolerance = (Math.SQRT2 * (to.zoom / from.zoom - 1)) / 4 + 0.5;
+	const point = [
+		(size.width / 2 - from.x) / from.zoom,
+		(size.height / 2 - from.y) / from.zoom,
+	];
+	const shift = Math.hypot(
+		point[0] * to.zoom + to.x - size.width / 2,
+		point[1] * to.zoom + to.y - size.height / 2,
+	);
+	assert.ok(
+		shift <= tolerance,
+		`Renderer toggle keeps the board point at the pane center: ${shift}px ${JSON.stringify({ from, to })}`,
+	);
 }
 
 async function waitRenderer(page, renderer) {
@@ -144,10 +186,6 @@ try {
 			await page.waitForTimeout(700);
 			const overview = await snapshot(page);
 			assert.equal(overview.domainNodes, 10000);
-			assert.ok(
-				overview.viewport.zoom < 0.1,
-				"Large fit must zoom below the previous limit",
-			);
 			const screenBounds = assertFits(overview);
 			if (renderer === "egui") {
 				assert.equal(overview.canvases.length, 2);
@@ -164,8 +202,8 @@ try {
 			);
 			assert.equal(
 				lowerLimit.zoom,
-				0.02,
-				"User zoom clamps to the shared lower zoom limit",
+				renderer === "egui" ? 0.02 : overview.viewport.zoom,
+				"User zoom clamps to the renderer's lower zoom limit",
 			);
 			assert.ok(
 				await zoomOut.isDisabled(),
@@ -207,6 +245,7 @@ try {
 				renderer,
 				"Renderer remains active after zoom, pan and runtime updates",
 			);
+			let previous = after;
 			for (const next of testToggles
 				? [renderer === "egui" ? "react-flow" : "egui", renderer]
 				: []) {
@@ -215,12 +254,8 @@ try {
 				const toggled = await page.evaluate(
 					() => window.__boardParity.snapshot().viewport,
 				);
-				assert.ok(
-					Math.abs(toggled.x - after.x) < 0.1 &&
-						Math.abs(toggled.y - after.y) < 0.1 &&
-						Math.abs(toggled.zoom - after.zoom) < 0.0001,
-					"Renderer toggle preserves the viewport",
-				);
+				assertHandover(previous, toggled, overview.size, next);
+				previous = toggled;
 			}
 			assert.deepEqual(errors, []);
 			results.push({

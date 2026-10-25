@@ -111,6 +111,8 @@ pub async fn apply_run_summary(
 
 /// Selects every run column except `nodes`, which reads back as NULL, so a
 /// listing that does not render the heatmap never loads the node lists.
+/// The NULL is a JSON-typed parameter rather than `NULL::jsonb`, so the same
+/// statement also runs on the SQLite stand-ins the completion tests use.
 pub fn without_nodes(select: Select<execution_run::Entity>) -> Select<execution_run::Entity> {
     select
         .select_only()
@@ -118,7 +120,7 @@ pub fn without_nodes(select: Select<execution_run::Entity>) -> Select<execution_
             execution_run::Column::iter()
                 .filter(|column| !matches!(column, execution_run::Column::Nodes)),
         )
-        .column_as(Expr::cust("NULL::jsonb"), "nodes")
+        .column_as(Expr::value(sea_orm::Value::Json(None)), "nodes")
 }
 
 /// The `LogMeta` wire shape of a run row, times in unix micros. Rejected rows
@@ -157,6 +159,7 @@ pub fn log_meta_from_run(run: &execution_run::Model) -> LogMeta {
         event_version: run.event_version.clone(),
         event_id: run.event_id.clone().unwrap_or_default(),
         payload: Vec::new(),
+        error_message: run.error_message.clone(),
         is_remote: true,
     }
 }
@@ -329,7 +332,7 @@ mod tests {
         let statement = without_nodes(execution_run::Entity::find())
             .build(sea_orm::DatabaseBackend::Postgres)
             .to_string();
-        assert!(statement.contains("NULL::jsonb AS \"nodes\""));
+        assert!(statement.contains("NULL AS \"nodes\""), "{statement}");
         assert!(!statement.contains("\"ExecutionRun\".\"nodes\""));
         assert!(statement.contains("\"ExecutionRun\".\"logsCount\""));
         assert!(statement.contains("\"ExecutionRun\".\"eventVersion\""));
@@ -355,7 +358,25 @@ mod tests {
         );
         assert_eq!(meta.logs, Some(7));
         assert!(meta.payload.is_empty());
+        assert_eq!(meta.error_message, None);
         assert!(meta.is_remote);
+    }
+
+    #[test]
+    fn log_meta_carries_the_stored_failure_reason() {
+        let mut row = run(true, None, None);
+        row.error_message = Some("Run exceeded grace period without completion event".into());
+        assert_eq!(
+            log_meta_from_run(&row).error_message.as_deref(),
+            Some("Run exceeded grace period without completion event")
+        );
+
+        let mut rejected = run(false, Some("rejected:payload"), None);
+        rejected.error_message = Some("payload does not match the event schema".into());
+        assert_eq!(
+            log_meta_from_run(&rejected).error_message.as_deref(),
+            Some("payload does not match the event schema")
+        );
     }
 
     #[test]

@@ -1,8 +1,10 @@
 // processing — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -42,6 +44,7 @@ declare namespace ai {
          * @param pagesPerBatch (optional) — Number of PDF pages to process in parallel (higher = faster but uses more memory).
          * @param temperature (optional) — LLM temperature (0.0 = deterministic, 1.0 = creative). Lower is better for extraction.
          * @param maxTokens (optional) — Maximum output tokens per LLM call. Leave at 0 for model default. Set lower for unreliable models.
+         * @param thinking (optional) — Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.
          * @param promptPreset (optional) — Prompt contract of the selected model. Document-parsing models only answer to their own trained prompt: • Default — a tuned general prompt for vision models (GPT-4o, Claude, Gemini, Qwen-VL) • Unlimited-OCR — baidu/Unlimited-OCR, self-hosted via vLLM • DeepSeek-OCR — deepseek-ai/DeepSeek-OCR and -OCR-2 • olmOCR — allenai/olmOCR-2, emits YAML front matter • Nanonets-OCR — nanonets/Nanonets-OCR-s and -OCR2 • dots.ocr — plain text extraction; use Page Prompt for its JSON layout mode • Granite-Docling — IBM Granite-Docling and SmolDocling, emits DocTags • PaddleOCR-VL — PaddlePaddle/PaddleOCR-VL  Every preset except Default forces full-page OCR and one image per request. Recommended temperature is 0.0 for all of them except olmOCR (0.1).
          * @param pagePrompt (optional) — Prompt for converting a rendered document page to text. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
          * @param imagePrompt (optional) — Prompt for describing a standalone or embedded image. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
@@ -50,7 +53,7 @@ declare namespace ai {
          * @returns pages — Extracted document pages with AI-generated descriptions and images.
          * @impure has side effects / drives control flow
          */
-        function extractDocumentAi({ file: Struct, model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
+        function extractDocumentAi({ file: Struct, model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, thinking?: string, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
 
         /**
          * Extracts text and content from multiple documents in parallel.
@@ -72,6 +75,7 @@ declare namespace ai {
          * @param pagesPerBatch (optional) — Number of PDF pages to process in parallel (higher = faster but uses more memory).
          * @param temperature (optional) — LLM temperature (0.0 = deterministic, 1.0 = creative). Lower is better for extraction.
          * @param maxTokens (optional) — Maximum output tokens per LLM call. Leave at 0 for model default. Set lower for unreliable models.
+         * @param thinking (optional) — Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.
          * @param promptPreset (optional) — Prompt contract of the selected model. Document-parsing models only answer to their own trained prompt: • Default — a tuned general prompt for vision models (GPT-4o, Claude, Gemini, Qwen-VL) • Unlimited-OCR — baidu/Unlimited-OCR, self-hosted via vLLM • DeepSeek-OCR — deepseek-ai/DeepSeek-OCR and -OCR-2 • olmOCR — allenai/olmOCR-2, emits YAML front matter • Nanonets-OCR — nanonets/Nanonets-OCR-s and -OCR2 • dots.ocr — plain text extraction; use Page Prompt for its JSON layout mode • Granite-Docling — IBM Granite-Docling and SmolDocling, emits DocTags • PaddleOCR-VL — PaddlePaddle/PaddleOCR-VL  Every preset except Default forces full-page OCR and one image per request. Recommended temperature is 0.0 for all of them except olmOCR (0.1).
          * @param pagePrompt (optional) — Prompt for converting a rendered document page to text. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
          * @param imagePrompt (optional) — Prompt for describing a standalone or embedded image. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
@@ -80,7 +84,7 @@ declare namespace ai {
          * @returns results — Array of extracted document pages with AI descriptions for each file.
          * @impure has side effects / drives control flow
          */
-        function extractDocumentsAi({ files: Struct[], model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
+        function extractDocumentsAi({ files: Struct[], model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, thinking?: string, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
 
         /**
          * Extracts keywords from text using an LLM. The AI understands context and semantics, providing high-quality keyword extraction for complex or domain-specific content.
@@ -175,6 +179,7 @@ declare namespace ai {
          * @param parallelRequests (optional) — Maximum number of concurrent model requests.
          * @param temperature (optional) — Model temperature. Models that only accept their default temperature are retried without one automatically.
          * @param maxTokens (optional) — Maximum output tokens per model request. Leave at 0 for the model default; leave headroom for reasoning models, whose thinking counts as output.
+         * @param thinking (optional) — Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.
          * @returns summary — The document summary as markdown prose.
          * @returns keyPoints — The most important points, each citing its pages.
          * @returns notes — Concise notes for every page that was read, in document order.
@@ -182,7 +187,7 @@ declare namespace ai {
          * @returns failedPages — Pages that could not be read completely, so the summary may not cover them. Empty when every page was read.
          * @impure has side effects / drives control flow
          */
-        function summarizeFile({ file: Struct, model: Struct, focus?: string, language?: string, strategy?: string, summaryWords?: int, maxKeyPoints?: int, includeImages?: bool, parallelRequests?: int, temperature?: float, maxTokens?: int }): { summary: string, keyPoints: string[], notes: Struct[], markdown: string, failedPages: int[] };
+        function summarizeFile({ file: Struct, model: Struct, focus?: string, language?: string, strategy?: string, summaryWords?: int, maxKeyPoints?: int, includeImages?: bool, parallelRequests?: int, temperature?: float, maxTokens?: int, thinking?: string }): { summary: string, keyPoints: string[], notes: Struct[], markdown: string, failedPages: int[] };
 
         // === Processing/Privacy ===
 

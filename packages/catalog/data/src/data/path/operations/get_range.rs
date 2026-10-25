@@ -6,7 +6,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 use std::ops::Range;
 
 #[crate::register_node]
@@ -70,8 +70,7 @@ impl NodeLogic for GetRangeNode {
         let path = path.to_runtime(context).await?;
         let generic_store = path.store.as_generic();
         let bytes = generic_store.get_range(&path.path, range).await?;
-        let bytes = bytes.to_vec();
-        context.set_pin_value("bytes", json!(bytes)).await?;
+        context.set_pin_bytes("bytes", bytes).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

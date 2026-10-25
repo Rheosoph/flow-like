@@ -22,6 +22,7 @@ import {
 	ResizablePanel,
 	ResizablePanelGroup,
 } from "../../ui/resizable";
+import { RunErrorBanner, runErrorToShow } from "../run-error-message";
 import { usePanelToolbarSlot } from "../shell/board-panes";
 import {
 	buildBoardGraph,
@@ -475,6 +476,9 @@ export function LogsPanel({
 	);
 
 	const firstError = summary?.first_error ?? undefined;
+	const runError = summaryQuery.isPending
+		? undefined
+		: runErrorToShow(meta.error_message, firstError?.message);
 	const missed = useMemo<IMissedLabel[]>(() => {
 		if (!firstError?.node_id || !summary?.visited) return [];
 		return missedUpstream(
@@ -553,6 +557,7 @@ export function LogsPanel({
 				relative={relative}
 				onRelativeChange={setRelative}
 			/>
+			{runError ? <RunErrorBanner message={runError} /> : null}
 			{firstError ? (
 				<FirstErrorStrip
 					error={firstError}
@@ -596,6 +601,7 @@ export function LogsPanel({
 									<LogEmptyState
 										error={list.error}
 										filtered={filtered}
+										runFailed={!!meta.error_message?.trim()}
 										onRetry={list.retry}
 										onClearFilters={clearFilters}
 									/>

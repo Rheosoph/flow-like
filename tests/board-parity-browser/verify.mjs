@@ -54,6 +54,24 @@ const projectedBounds = async (id) => {
 		height: bounds.height * viewport.zoom,
 	};
 };
+/** Native nodes mount their production editor while the pointer rests on them. */
+const hover = async (id) => {
+	const bounds = await projectedBounds(id);
+	await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 8);
+	await node(id).waitFor();
+	await page.waitForTimeout(250);
+};
+/** Paint statistics of the node plane, whose handle receives the run state. */
+const canvasStatus = async () => {
+	const stats = await page.evaluate(() =>
+		[...(window.__statusHandles ?? [])].map((handle) =>
+			JSON.parse(handle.stats()),
+		),
+	);
+	const nodes = stats.find((entry) => entry.paintLayer === "nodes");
+	assert.ok(nodes, "The native node plane received run state");
+	return nodes;
+};
 const test = async (name, fn) => {
 	phase = name;
 	await fn();
@@ -179,6 +197,15 @@ try {
 				?.getAttribute("data-board-renderer") === "egui",
 	);
 	await settle();
+	await page.evaluate(async () => {
+		const module = await import("/board-canvas/board_canvas.js");
+		const original = module.Handle.prototype.set_status;
+		window.__statusHandles = new Set();
+		module.Handle.prototype.set_status = function (json) {
+			window.__statusHandles.add(this);
+			return original.call(this, json);
+		};
+	});
 	assert.equal(
 		await page.locator(".react-flow__renderer").count(),
 		0,
@@ -201,10 +228,15 @@ try {
 			1,
 		);
 		assert.equal(await node("string-b").locator("img").count(), 1);
+		// Dropdown inputs paint natively at rest and mount the production editor on hover.
+		assert.equal(await node("string-c").count(), 0);
+		await hover("string-c");
 		assert.equal(
 			await node("string-c").getByText("first", { exact: true }).count(),
 			1,
 		);
+		await page.mouse.move(1380, 800);
+		await settle();
 		assert.equal(
 			await page.locator('[data-testid="egui-board-canvas"]').count(),
 			1,
@@ -261,6 +293,7 @@ try {
 	});
 	await test("production pin dropdown saves its value without starting a wire", async () => {
 		const before = (await api("snapshot")).commands.length;
+		await hover("string-c");
 		await node("string-c").getByRole("combobox").click();
 		await api("select", "string-c");
 		await settle();
@@ -280,11 +313,12 @@ try {
 		await api("select", "none");
 	});
 	await test("dragging actual production pin handles commits a validated connection", async () => {
-		const source = await node("string-b")
-			.locator('[data-handleid="string-b.out"]')
-			.boundingBox();
+		await hover("string-c");
 		const target = await node("string-c")
 			.locator('[data-handleid="string-c.in"]')
+			.boundingBox();
+		const source = await node("string-b")
+			.locator('[data-handleid="string-b.out"]')
 			.boundingBox();
 		assert.ok(source && target);
 		await page.mouse.move(
@@ -538,27 +572,36 @@ try {
 		await settle();
 		assert.equal((await api("snapshot")).runs.length, 0);
 	});
-	await test("live runtime, log, heatmap and lint stores update unselected nodes", async () => {
+	await test("run, log, heatmap and lint state is painted without mounting editors", async () => {
+		await api("select", "none");
+		await page.mouse.move(1380, 800);
 		await api("runtime", true);
 		await api("marks", true);
 		await settle();
+		for (const id of ["integer-a", "integer-b", "exec-b"])
+			assert.equal(
+				await node(id).count(),
+				0,
+				`${id} stays on the canvas while the board runs`,
+			);
+		const running = await canvasStatus();
+		assert.ok(running.statusNodes >= 3, "Run, log and lint marks are painted");
+		assert.ok(running.statusAnimating && running.cometsDrawn >= 1);
+		await page.screenshot({ path: `${output}/runtime-egui.png` });
+		// The editor that hovering mounts leaves the marks to the canvas.
+		await hover("integer-a");
 		assert.equal(
 			await node("integer-a").getByText("36×", { exact: true }).count(),
-			1,
+			0,
 		);
-		assert.equal(
-			await node("integer-a").getByText("2!", { exact: true }).count(),
-			1,
-		);
-		assert.ok(
-			await node("exec-b")
-				.getByText("Long running task", { exact: true })
-				.count(),
-		);
-		await page.screenshot({ path: `${output}/runtime-egui.png` });
+		assert.ok((await canvasStatus()).statusNodes >= 3);
+		await page.mouse.move(1380, 800);
 		await api("runtime", false);
 		await api("marks", false);
 		await settle();
+		const idle = await canvasStatus();
+		assert.equal(idle.statusNodes, 0);
+		assert.equal(idle.statusAnimating, false);
 	});
 	await test("peer selection appears on an unselected native node", async () => {
 		await api("presence", true);
@@ -594,41 +637,37 @@ try {
 				.count(),
 			0,
 		);
-		assert.equal(
-			await node("native").locator('[class~="ring-blue-400/60"]').count(),
-			1,
-		);
+		// A collaborator's run glows on the canvas like a local one.
+		assert.equal(await node("native").count(), 0);
+		const remote = await canvasStatus();
+		assert.ok(remote.statusNodes >= 1 && remote.cometsDrawn >= 1);
 		await api("presence", false);
 		await settle();
-		assert.equal(
-			await node("native").locator('[class~="ring-blue-400/60"]').count(),
-			0,
-		);
+		assert.equal((await canvasStatus()).statusNodes, 0);
 	});
 	await test("native nodes retain live activity, completion and log-summary controls", async () => {
 		await api("runtimeNode", "running", 40000);
 		await settle();
+		assert.equal(await node("native").count(), 0, "Running stays native");
+		await hover("native");
 		assert.equal(
 			await node("native")
 				.getByTitle(/^Last activity: 4\ds ago$/)
 				.count(),
 			1,
 		);
-		assert.equal(
-			await node("exec-b")
-				.getByTitle("Long-running node", { exact: true })
-				.count(),
-			1,
-		);
 		await api("runtimeNode", "done");
 		await settle();
+		// The canvas draws the completion badge, over the hovered editor too.
 		assert.equal(
 			await node("native").locator("svg.lucide-square-check").count(),
-			1,
+			0,
 		);
+		assert.ok((await canvasStatus()).statusNodes >= 1);
 		await api("runtimeNode", "none");
 		await api("logState", "summary");
 		await settle();
+		await hover("native");
 		const summary = node("native").getByRole("button", {
 			name: "Show 6 logs from Native node",
 			exact: true,
@@ -640,6 +679,7 @@ try {
 			.waitFor();
 		await api("logState", "visited");
 		await settle();
+		await hover("native");
 		const pendingSummary = node("native").getByRole("button", {
 			name: "Show logs from Native node",
 			exact: true,
@@ -660,6 +700,113 @@ try {
 				.count(),
 			0,
 		);
+	});
+	await test("pans, camera animations and edge auto-pan move the canvases between frames", async () => {
+		await api("select", "none");
+		await api("viewport", 20, 20, 1);
+		// egui's frame callback runs first in every frame, so a camera or node move written
+		// inside a later frame callback is painted a frame after the DOM shows it.
+		await page.evaluate(async () => {
+			const module = await import("/board-canvas/board_canvas.js");
+			let depth = 0;
+			const request = window.requestAnimationFrame;
+			window.__geometryAudit = {
+				request,
+				methods: {},
+				writes: 0,
+				inFrame: [],
+			};
+			window.requestAnimationFrame = (callback) =>
+				request.call(window, (time) => {
+					depth++;
+					try {
+						callback(time);
+					} finally {
+						depth--;
+					}
+				});
+			for (const method of ["set_viewport", "set_positions"]) {
+				const original = module.Handle.prototype[method];
+				window.__geometryAudit.methods[method] = original;
+				module.Handle.prototype[method] = function (...args) {
+					window.__geometryAudit.writes++;
+					if (depth)
+						window.__geometryAudit.inFrame.push(
+							`${method}: ${new Error().stack}`,
+						);
+					return original.apply(this, args);
+				};
+			}
+		});
+		const writes = () => page.evaluate(() => window.__geometryAudit.writes);
+		const panned = (await api("snapshot")).viewport;
+		await page.mouse.move(650, 520);
+		await page.mouse.down();
+		for (let step = 1; step <= 12; step++) {
+			await page.mouse.move(650 + step * 20, 520 - step * 6);
+			await page.waitForTimeout(30);
+		}
+		await page.mouse.up();
+		assert.ok(
+			(await api("snapshot")).viewport.x - panned.x > 200,
+			"The empty-pane drag panned the camera",
+		);
+		const beforeAnimation = await writes();
+		assert.ok(beforeAnimation >= 12, "The pan moved the canvases");
+		await page.evaluate(() =>
+			window.__boardParity.animateViewport(-340, 40, 1, 500),
+		);
+		assert.deepEqual((await api("snapshot")).viewport, {
+			x: -340,
+			y: 40,
+			zoom: 1,
+		});
+		assert.ok(
+			(await writes()) - beforeAnimation > 15,
+			"The camera animation moved the canvases in steps",
+		);
+		const coordinates = (await api("snapshot")).board.nodes.native.coordinates;
+		const node = await projectedBounds("native");
+		const container = await page.locator(".react-flow").boundingBox();
+		assert.ok(container);
+		const grab = { x: node.x + node.width / 2, y: node.y + 12 };
+		await page.mouse.move(grab.x, grab.y);
+		await page.mouse.down();
+		await page.mouse.move(grab.x + 24, grab.y, { steps: 3 });
+		await page.mouse.move(container.x + container.width - 12, grab.y, {
+			steps: 8,
+		});
+		const beforeAutoPan = {
+			writes: await writes(),
+			viewport: (await api("snapshot")).viewport,
+		};
+		await page.waitForTimeout(500);
+		const autoPanned = (await api("snapshot")).viewport;
+		await page.mouse.up();
+		await api("mutate", "native", { coordinates });
+		await api("select", "none");
+		assert.ok(
+			beforeAutoPan.viewport.x - autoPanned.x > 80,
+			"Holding a node drag at the right edge auto-panned the camera",
+		);
+		assert.ok(
+			(await writes()) - beforeAutoPan.writes > 15,
+			"Edge auto-pan moved the canvases in steps",
+		);
+		const inFrame = await page.evaluate(async () => {
+			const module = await import("/board-canvas/board_canvas.js");
+			const audit = window.__geometryAudit;
+			window.requestAnimationFrame = audit.request;
+			Object.assign(module.Handle.prototype, audit.methods);
+			Reflect.deleteProperty(window, "__geometryAudit");
+			return audit.inFrame;
+		});
+		assert.deepEqual(
+			inFrame,
+			[],
+			"No camera or node move is written inside a frame callback",
+		);
+		await api("viewport", 20, 20, 1);
 	});
 	await test("collaboration cursors, drag ghosts and pings track the native viewport and layer", async () => {
 		await api("viewport", 20, 20, 1);
@@ -1094,6 +1241,7 @@ try {
 		assert.ok((await api("nodeBounds", "layer-child")).width > 0);
 		await api("logState", "summary", "layer-child");
 		await settle();
+		await hover("layer-child");
 		await node("layer-child")
 			.getByRole("button", { name: "Show 6 logs from Inside layer" })
 			.click();

@@ -14,9 +14,10 @@ mod types;
 
 pub use component_docs::{
     CHART_DOCUMENTATION, COMPONENT_CATALOG, GAME_COMPONENT_DOCUMENTATION, ML_VISION_DOCUMENTATION,
-    STYLE_GUIDE, get_documentation_section, get_full_documentation,
+    STYLE_GUIDE, UNADVERTISED_COMPONENT_TYPES, component_prop_reference, get_documentation_section,
+    get_full_documentation,
 };
-pub use extract::{ExtractedSurface, extract_surface_from_response};
+pub use extract::{ExtractedSurface, extract_surface_from_response, lower_authored_components};
 pub use tools::*;
 pub use types::*;
 

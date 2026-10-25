@@ -38,6 +38,7 @@ import type {
 	IEventTimelineRun,
 	IRestorePlanResult,
 } from "../../../state/backend-state/event-state";
+import { RunErrorLine } from "../../flow/run-error-message";
 import {
 	Badge,
 	Button,
@@ -1168,6 +1169,9 @@ function HistoryRuns({
 						<small className="leading-none text-muted-foreground">
 							{formatRelativeTime(microsToMs(run.start), "narrow")}
 						</small>
+						{run.error_message ? (
+							<RunErrorLine message={run.error_message} />
+						) : null}
 					</div>
 					<div className="flex shrink-0 flex-row items-center gap-2">
 						<small className="text-muted-foreground">

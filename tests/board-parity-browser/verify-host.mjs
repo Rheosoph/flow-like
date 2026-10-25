@@ -191,6 +191,25 @@ try {
 		assert.equal((await snapshot()).transactions.at(-1).kind, "redo");
 		await undo();
 	});
+	await test("a drag from DOM board chrome does not select page text", async () => {
+		const point = await graphNodePoint("exec-b");
+		await page.mouse.move(point.x, point.y);
+		const separator = node("exec-b")
+			.locator("[data-board-dom-control] .w-px")
+			.first();
+		await separator.waitFor();
+		await page.evaluate(() => getSelection()?.removeAllRanges());
+		await drag(
+			await center(separator),
+			await center(page.locator(".parity-bar")),
+		);
+		assert.notEqual(
+			await page.evaluate(() => getSelection()?.type),
+			"Range",
+			`The toolbar drag selected "${await page.evaluate(() => getSelection()?.toString())}"`,
+		);
+		await page.mouse.move(point.x, point.y + 200);
+	});
 	await test("native and legacy switching preserves the existing viewport", async () => {
 		const expected = { x: 137, y: -82, zoom: 0.73 };
 		await api("viewport", expected.x, expected.y, expected.zoom);

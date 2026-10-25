@@ -89,6 +89,7 @@ export function parseWorkflowScreenshotArgs(
 		viewport: { width: 1624, height: 1060 },
 		dpr: 2,
 		theme: "dark",
+		renderer: "egui",
 		timeoutMs: 120_000,
 		settleMs: 650,
 		json: false,
@@ -149,6 +150,13 @@ export function parseWorkflowScreenshotArgs(
 				throw new Error("--theme must be light or dark.");
 			}
 			options.theme = value;
+		} else if (arg === "--renderer" || arg.startsWith("--renderer=")) {
+			const [value, consumed] = valueAfter(normalizedArgs, index, "--renderer");
+			index = consumed;
+			if (value !== "egui" && value !== "react-flow") {
+				throw new Error("--renderer must be egui or react-flow.");
+			}
+			options.renderer = value;
 		} else if (arg === "--quality" || arg.startsWith("--quality=")) {
 			const [value, consumed] = valueAfter(normalizedArgs, index, "--quality");
 			index = consumed;

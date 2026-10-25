@@ -129,6 +129,14 @@ fn profile_identity(profile: &flow_like::profile::Profile) -> anyhow::Result<Str
     )
 }
 
+/// Runs carry the hub as the scheme-qualified origin they execute against, while synced
+/// profiles persist it bare, so the two only differ in spelling when they name the same hub.
+fn same_profile(run: &flow_like::profile::Profile, active: &flow_like::profile::Profile) -> bool {
+    run.id == active.id
+        && flow_like::hub::hub_origin(&run.hub, run.secure)
+            == flow_like::hub::hub_origin(&active.hub, active.secure)
+}
+
 async fn identity(handler: &AppHandle) -> anyhow::Result<String> {
     let profile = TauriSettingsState::current_profile(handler).await?;
     profile_identity(&profile.hub_profile)
@@ -252,12 +260,15 @@ pub async fn ensure_automation_approved(
         return Ok(());
     }
     ensure_capabilities(required)?;
-    let identity = profile_identity(profile)?;
-    if identity != self::identity(handler).await? {
+    let active = TauriSettingsState::current_profile(handler)
+        .await?
+        .hub_profile;
+    if !same_profile(profile, &active) {
         anyhow::bail!(
             "The active profile changed before automation could start. Run the workflow again."
         );
     }
+    let identity = profile_identity(&active)?;
     if !has_approval(
         handler,
         app_id,
@@ -384,6 +395,27 @@ mod tests {
         let original = profile_identity(&profile).unwrap();
         profile.hub = "https://another-hub.example".into();
         assert_ne!(original, profile_identity(&profile).unwrap());
+    }
+
+    #[test]
+    fn a_bare_hub_matches_the_origin_its_runs_execute_against() {
+        let active = flow_like::profile::Profile {
+            hub: "api.flow-like.com".into(),
+            secure: true,
+            ..Default::default()
+        };
+        let mut run = active.clone();
+        run.hub = "https://api.flow-like.com/".into();
+        assert!(same_profile(&run, &active));
+
+        run.hub = "http://api.flow-like.com".into();
+        assert!(!same_profile(&run, &active));
+        run.hub = "https://another-hub.example".into();
+        assert!(!same_profile(&run, &active));
+
+        let mut other = active.clone();
+        other.id = "another-profile".into();
+        assert!(!same_profile(&other, &active));
     }
 
     #[cfg(desktop)]

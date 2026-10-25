@@ -546,6 +546,11 @@ pub struct CheckFlowScriptReconcileResult {
     pub board_commands: Vec<flow_like::flow::copilot::BoardCommand>,
     pub corrections: Vec<String>,
     pub diagnostics: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub structured_diagnostics: Vec<flow_like::flow::ast::FlowScriptDiagnostic>,
+    /// What applying the source would change, measured on a scratch copy of the board.
+    #[serde(skip_serializing_if = "flow_like::flow::ast::FlowScriptChanges::is_empty")]
+    pub changes: flow_like::flow::ast::FlowScriptChanges,
 }
 
 /// Compile FlowScript against a live board without mutating it. This is deliberately separate
@@ -594,6 +599,12 @@ pub async fn check_flowscript_reconcile(
     let parse_result = flow_like::flow::ast::parse(&flowscript);
     let parse_valid = parse_result.is_ok();
     if let Err(error) = parse_result {
+        let diagnostics = vec![format!(
+            "FlowScript parse error at {}:{}: {}",
+            error.line, error.col, error.message
+        )];
+        let structured_diagnostics =
+            flow_like::flow::ast::structure_reconcile_diagnostics(&diagnostics, Some(&flowscript));
         return Ok(CheckFlowScriptReconcileResult {
             parse_valid: false,
             reconcile_valid: false,
@@ -601,10 +612,9 @@ pub async fn check_flowscript_reconcile(
             command_count: 0,
             board_commands: Vec::new(),
             corrections: Vec::new(),
-            diagnostics: vec![format!(
-                "FlowScript parse error at {}:{}: {}",
-                error.line, error.col, error.message
-            )],
+            changes: Default::default(),
+            diagnostics,
+            structured_diagnostics,
         });
     }
     // Run the exact Apply compiler (including dynamic-pin enrichment) on an in-memory clone. The
@@ -653,7 +663,9 @@ pub async fn check_flowscript_reconcile(
                 command_count: 0,
                 board_commands: Vec::new(),
                 corrections: Vec::new(),
+                changes: Default::default(),
                 diagnostics: vec![format!("FlowScript compiler error: {error}")],
+                structured_diagnostics: Vec::new(),
             });
         }
     };
@@ -669,6 +681,8 @@ pub async fn check_flowscript_reconcile(
         board_commands: result.board_commands,
         corrections: result.corrections,
         diagnostics: result.diagnostics,
+        structured_diagnostics: result.structured_diagnostics,
+        changes: result.changes,
     })
 }
 

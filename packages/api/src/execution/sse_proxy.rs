@@ -15,6 +15,7 @@ use eventsource_stream::Eventsource;
 use flow_like::flow::execution::rejection::REJECTION_OPERATION_PREFIX;
 use flow_like_types::create_id;
 use flow_like_types::http_streaming::{HTTP_RESPONSE_CHUNK, accepts_event_stream};
+use flow_like_types::tokio::task::JoinHandle;
 use futures_util::{Stream, StreamExt};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -23,6 +24,7 @@ use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::Instrument;
 
 pub(crate) fn completed_run_status(status: Option<&str>) -> RunStatus {
     match status.map(str::to_ascii_lowercase).as_deref() {
@@ -75,6 +77,52 @@ pub(crate) fn parse_completed_payload(envelope: &serde_json::Value) -> Completed
 
 pub(crate) fn is_completed_event(envelope: &serde_json::Value) -> bool {
     envelope.get("event_type").and_then(|v| v.as_str()) == Some("completed")
+}
+
+/// Post-run writes for `completed` events. Each runs on its own task, so the
+/// client receives `completed` without waiting for them and a dropped response
+/// body cannot cancel them. The proxy awaits them before its stream ends: on
+/// Lambda the invocation, and with it the unfrozen environment, lasts until
+/// they commit. A run whose writes never finish is timed out by the run sweeper.
+#[derive(Default)]
+pub(crate) struct CompletionWrites(Vec<JoinHandle<()>>);
+
+impl CompletionWrites {
+    pub(crate) fn start(
+        &mut self,
+        context: &ExecutionAuditContext,
+        run_id: &str,
+        envelope: &serde_json::Value,
+    ) {
+        if !is_completed_event(envelope) {
+            return;
+        }
+        let (context, run_id) = (context.clone(), run_id.to_string());
+        let completed = parse_completed_payload(envelope);
+        let span = tracing::info_span!(
+            target: "flow_like::observability",
+            "execution.completion_update",
+            run_id = %run_id
+        );
+        self.0.push(flow_like_types::tokio::spawn(
+            async move {
+                if let Err(error) =
+                    update_run_on_completed_event(&context, &run_id, completed).await
+                {
+                    tracing::error!(run_id = %run_id, %error, "Failed to update run on completion");
+                }
+            }
+            .instrument(span),
+        ));
+    }
+
+    pub(crate) async fn finish(&mut self) {
+        for write in self.0.drain(..) {
+            if let Err(error) = write.await {
+                tracing::error!(%error, "Run completion update stopped before it finished");
+            }
+        }
+    }
 }
 
 /// Records a `completed` executor event on the run row.
@@ -207,6 +255,7 @@ pub(crate) fn stream_http_response(
                 }
                 Ok(Some(Err(error))) => {
                     tracing::warn!(run_id = %run_id, %error, "HTTP response stream failed");
+                    record_executor_failure(db.as_ref(), &run_id, &error).await;
                     break public_http_error("Response stream failed");
                 }
                 Err(_) => {
@@ -314,6 +363,7 @@ fn create_sse_stream(
     let stream = async_stream::stream! {
         let mut es = event_stream;
         let mut event_ordinal = 0_u64;
+        let mut completion = CompletionWrites::default();
 
         while let Some(result) = es.next().await {
             match result {
@@ -355,10 +405,8 @@ fn create_sse_stream(
 
                     if let Some(db) = &db
                         && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
-                        && is_completed_event(&parsed)
-                        && let Err(e) = update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed)).await
                     {
-                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                        completion.start(db, &run_id, &parsed);
                     }
 
                     let event = Event::default()
@@ -381,6 +429,7 @@ fn create_sse_stream(
             }
         }
 
+        completion.finish().await;
         tracing::debug!(run_id = %run_id, "SSE stream ended");
     };
 
@@ -545,6 +594,7 @@ pub async fn collect_generic_result_bytes(
                 Ok(evt) => evt,
                 Err(err) => {
                     tracing::warn!(run_id = %run_id, error = %err, "Lambda SSE parse error while collecting result");
+                    record_executor_failure(db.as_ref(), &run_id, &err).await;
                     break;
                 }
             };
@@ -613,6 +663,107 @@ pub async fn update_run_on_completion(
     .await
 }
 
+/// `LogLevel::Fatal`: the executor died before it reported any outcome.
+const EXECUTOR_FAILED_LOG_LEVEL: i32 = 4;
+
+/// Closes a run whose executor stream broke off without a `completed` event.
+/// The reason lands before the status flips so the audit entry carries it.
+pub(crate) async fn fail_run_on_stream_error(
+    context: &ExecutionAuditContext,
+    run_id: &str,
+    reason: &str,
+) -> Result<(), sea_orm::DbErr> {
+    failure_reason_update(run_id, reason)
+        .exec(context.db.as_ref())
+        .await?;
+    update_run_on_completion(
+        context,
+        run_id,
+        RunStatus::Failed,
+        EXECUTOR_FAILED_LOG_LEVEL,
+    )
+    .await?;
+    leave_failure_log(context, run_id, reason).await;
+    Ok(())
+}
+
+/// Best effort: the run row already carries the reason. Only a run this call closed gets the
+/// entry, so a run that finished on its own never shows a stray fatal line.
+async fn leave_failure_log(context: &ExecutionAuditContext, run_id: &str, reason: &str) {
+    let Some(state) = &context.state else {
+        return;
+    };
+    let run = match without_nodes(ExecutionRun::find_by_id(run_id))
+        .one(context.db.as_ref())
+        .await
+    {
+        Ok(Some(run)) => run,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(run_id = %run_id, %error, "Failed to load the run to log its failure");
+            return;
+        }
+    };
+    if run.status != RunStatus::Failed || run.error_message.as_deref() != Some(reason) {
+        return;
+    }
+    if let Err(error) = crate::execution::rejection::record_failure_log(state, &run, reason).await {
+        tracing::warn!(run_id = %run_id, %error, "Failed to leave the failure reason in the run's log");
+    }
+}
+
+fn failure_reason_update(run_id: &str, reason: &str) -> sea_orm::UpdateMany<execution_run::Entity> {
+    ExecutionRun::update_many()
+        .col_expr(
+            execution_run::Column::ErrorMessage,
+            sea_orm::sea_query::Expr::value(reason),
+        )
+        .filter(execution_run::Column::Id.eq(run_id))
+        .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
+}
+
+/// The executor's own `error` envelope, so every client that ends a run on
+/// `event_type: "error"` also ends it when the API sees the stream fail.
+pub(crate) fn stream_failure_event(message: String) -> Event {
+    let envelope = flow_like_types::intercom::InterComEvent::with_type(
+        "error",
+        serde_json::json!({ "message": message }),
+    );
+    Event::default().event("error").data(
+        serde_json::to_string(&envelope)
+            .unwrap_or_else(|_| r#"{"event_type":"error","payload":{}}"#.to_string()),
+    )
+}
+
+/// Only a platform-reported worker death settles the run here. Any other
+/// transport error says nothing about the outcome: an HTTP executor still
+/// sends its own terminal report.
+async fn record_executor_failure(
+    db: Option<&ExecutionAuditContext>,
+    run_id: &str,
+    error: &eventsource_stream::EventStreamError<DispatchError>,
+) {
+    let (
+        Some(db),
+        eventsource_stream::EventStreamError::Transport(DispatchError::ExecutorFailed(reason)),
+    ) = (db, error)
+    else {
+        return;
+    };
+    if let Err(error) = fail_run_on_stream_error(db, run_id, reason).await {
+        tracing::error!(run_id = %run_id, %error, "Failed to record executor failure");
+    }
+}
+
+fn db_query_span(operation: &'static str, table: &'static str) -> tracing::Span {
+    tracing::info_span!(
+        target: "flow_like::observability",
+        "db.query",
+        db.operation = operation,
+        db.table = table
+    )
+}
+
 pub async fn update_run_on_completion_with_runtime(
     context: &ExecutionAuditContext,
     run_id: &str,
@@ -628,6 +779,7 @@ pub async fn update_run_on_completion_with_runtime(
 
     if let Some(existing) = without_nodes(ExecutionRun::find_by_id(run_id))
         .one(db)
+        .instrument(db_query_span("select", "ExecutionRun"))
         .await?
     {
         if !matches!(existing.status, RunStatus::Pending | RunStatus::Running) {
@@ -673,6 +825,7 @@ pub async fn update_run_on_completion_with_runtime(
         model.updated_at = Set(now);
         let completed = completion_update(run_id, model)
             .exec_with_returning(db)
+            .instrument(db_query_span("update", "ExecutionRun"))
             .await?
             .into_iter()
             .next();
@@ -709,6 +862,7 @@ pub async fn update_run_on_completion_with_runtime(
             &tracking_app_id,
             now,
         )
+        .instrument(db_query_span("insert", "ExecutionUsageTracking"))
         .await?;
         tracing::info!(run_id = %run_id, log_level = log_level, "Updated run status on completion");
     }
@@ -851,6 +1005,9 @@ mod tests {
             Box::pin(futures_util::stream::iter([Err(DispatchError::Network(
                 "private executor URL and token".into(),
             ))])),
+            Box::pin(futures_util::stream::iter([Err(
+                DispatchError::ExecutorFailed("private worker details".into()),
+            )])),
             Box::pin(futures_util::stream::iter([Ok(bytes::Bytes::from_static(
                 b"data: private invalid JSON\n\n",
             ))])),
@@ -1057,6 +1214,37 @@ mod tests {
         .to_string();
         assert!(sql.contains("\"ExecutionRun\".\"id\" = 'run-1'"));
         assert!(sql.contains("\"ExecutionRun\".\"status\" IN ('PENDING', 'RUNNING')"));
+    }
+
+    #[tokio::test]
+    async fn stream_failure_uses_the_executor_error_envelope() {
+        let stream = futures_util::stream::iter([Ok::<_, Infallible>(stream_failure_event(
+            "Executor failed: out of memory".into(),
+        ))]);
+        let body = Sse::new(stream).into_response().into_body();
+        let mut events = body.into_data_stream().eventsource();
+        let event = events.next().await.unwrap().unwrap();
+        assert_eq!(event.event, "error");
+        let envelope: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+        assert_eq!(envelope["event_type"], "error");
+        assert_eq!(
+            envelope["payload"]["message"],
+            "Executor failed: out of memory"
+        );
+    }
+
+    #[test]
+    fn failure_reason_cannot_overwrite_a_finished_run() {
+        use sea_orm::QueryTrait;
+        let sql = failure_reason_update("run-1", "out of memory")
+            .build(sea_orm::DatabaseBackend::Postgres)
+            .to_string();
+        assert!(sql.contains("\"errorMessage\" = 'out of memory'"), "{sql}");
+        assert!(sql.contains("\"ExecutionRun\".\"id\" = 'run-1'"), "{sql}");
+        assert!(
+            sql.contains("\"ExecutionRun\".\"status\" IN ('PENDING', 'RUNNING')"),
+            "{sql}"
+        );
     }
 
     #[test]

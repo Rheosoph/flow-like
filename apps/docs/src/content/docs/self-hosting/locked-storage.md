@@ -552,6 +552,20 @@ evidence with who purged it, when, and the SHA-256, and credits the bytes back. 
 purge of an item is refused with 409, naming the earliest unlock date, while any of
 its versions is still retained.
 
+Without a purge, a version stays stored and keeps counting against the quota after
+its retention ended. To have it deleted automatically instead, pick **Delete
+automatically when retention ends** at upload (`delete_after_retention` in the API,
+**Delete After Retention** on the upload nodes), or switch it on or off later in the
+version's details, with the node **Set Locked File Auto Delete** or the API action
+`auto-delete`. Either way the retention itself stays as
+it is. Only those who may purge the file can choose it: the owner for `user` files, an
+admin for `project` files. Switching it off also cancels a deletion that is due. The maintenance
+sweep then purges the version once its retention has ended and it has no legal hold,
+the same way a manual purge does: the `purged` record names `system:retention` as the
+purger, the audit trail records `locked_file.version.purge` with a system actor, and
+the bytes are credited back. A legal hold postpones the deletion until it is lifted,
+and extending the retention moves it.
+
 There is no early deletion and no bypass. To free space sooner, choose a shorter
 retention at upload, within `LOCKED_BUCKET_MIN_RETENTION_DAYS` and
 `LOCKED_BUCKET_MAX_RETENTION_DAYS`. In bucket mode that choice is ignored and the
@@ -574,6 +588,11 @@ differently per mode:
 - Bucket mode: the bucket rule locked the object when it was written. The sweep
   therefore commits an expired pending upload whose object exists, because the bytes
   are stored and must be charged.
+
+The same job and hourly loop purge the versions uploaded with automatic deletion
+whose retention has ended, up to 1,000 per pass (see
+[Freeing storage](#freeing-storage)). A version the store still refuses to delete is
+logged and retried on the next pass.
 
 Abandoned uploads are left to the sweep. Do not add an age-based rule that deletes
 or expires current objects: it would also delete committed versions as soon as
@@ -648,10 +667,10 @@ default, minimum and maximum retention days, `max_file_bytes`,
 | Action | Who may call it |
 | --- | --- |
 | `list`, `get`, `download` | Members with file read access |
-| `upload` | Members with file write access |
+| `upload` | Members with file write access; with `delete_after_retention`, only those who may `purge` the file |
 | `commit`, `abort` | Members with file write access who uploaded the version, or admins |
 | `retention` (extend only, object mode) and `legal-hold` | Admins |
-| `purge` | Members with file write access: the owner for `user` files, an admin for `project` files |
+| `purge` and `auto-delete` | Members with file write access: the owner for `user` files, an admin for `project` files |
 
 `user` files require a human caller: a signed-in user, a personal access token or
 an execution started by a user. API keys and app connections receive 403.

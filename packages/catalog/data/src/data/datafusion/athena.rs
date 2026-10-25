@@ -561,9 +561,7 @@ impl NodeLogic for MountAthenaQueryNode {
             .await?;
 
         let table = ListingTable::try_new(config)?;
-        cached_session
-            .ctx
-            .register_table(&table_name, Arc::new(table))?;
+        cached_session.replace_table(&table_name, Arc::new(table))?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;

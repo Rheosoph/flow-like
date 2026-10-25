@@ -1,8 +1,10 @@
 // llm — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -30,13 +32,14 @@ declare namespace agent {
      * @param infiniteContext (optional) — Enable automatic context window management to prevent overflow
      * @param maxContextTokens (optional) — Maximum tokens to retain when truncating (default: 32000)
      * @param contextMode (optional) — How to handle context overflow: 'truncate' (drop old messages) or 'summarize' (LLM compresses history)
+     * @param interactiveUi (optional) — Let the agent answer with interactive UI: an `a2ui` code block in its reply renders inline in the chat, and its buttons can send a follow-up message on the user's behalf
      * @returns chunk — Latest streamed agent chunk (final response)
      * @returns response — Final assistant response produced when the agent halts
      * @returns historyOut — Conversation history enriched with all agent/tool turns
      * @returns stats — Token usage, cost, and model statistics
      * @impure has side effects / drives control flow
      */
-    function simple({ model: Struct, history: Struct, maxIter?: int, infiniteContext?: bool, maxContextTokens?: int, contextMode?: string }): { chunk: Struct, response: Struct, historyOut: Struct, stats: Struct };
+    function simple({ model: Struct, history: Struct, maxIter?: int, infiniteContext?: bool, maxContextTokens?: int, contextMode?: string, interactiveUi?: bool }): { chunk: Struct, response: Struct, historyOut: Struct, stats: Struct };
 
     /**
      * Executes an Agent with streaming, emitting chunks in real-time
@@ -66,6 +69,14 @@ declare namespace agent {
      * @impure has side effects / drives control flow
      */
     function addDatafusion(this: Agent, { agent: Struct, session: Struct, description: string, tableDescriptions: Struct, exampleQueries: any, discoverSchemas?: bool }): Struct;
+
+    /**
+     * Lets the agent answer with interactive UI: a reply can contain an `a2ui` code block that the chat renders inline as cards, forms, tables or charts, and its buttons can send a follow-up message on the user's behalf
+     * @node agent_enable_interactive_ui @receiver agent_in @alias agentEnableInteractiveUi
+     * @param agentIn — Agent object to enable interactive UI replies on (receiver: `this` in `x.enableInteractiveUi(...)`)
+     * @returns agentOut — Agent object whose replies may contain inline interactive UI
+     */
+    function enableInteractiveUi(this: Agent, { agentIn: Struct }): Struct;
 
     /**
      * Creates an Agent object from a model Bit with configuration
@@ -248,6 +259,13 @@ declare namespace ai {
      * @impure has side effects / drives control flow
      */
     function findModel({ preferences?: Struct }): Struct;
+
+    /**
+     * System prompt section that teaches a model to answer with interactive UI: an `a2ui` code block in its reply renders inline in the chat, and its buttons can send a follow-up message on the user's behalf. Append it to your own system prompt (Invoke Simple, Set System Message); agents use Enable Interactive UI instead
+     * @node ai_generative_interactive_ui_instructions @alias aiGenerativeInteractiveUiInstructions
+     * @returns instructions — Markdown prompt section with the `a2ui` fence rules, an example and the component reference
+     */
+    function interactiveUiInstructions(): string;
 
     /**
      * Invokes the configured model with the provided chat history. Set history streaming off to preserve and replay structured media responses.

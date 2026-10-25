@@ -27,6 +27,15 @@ export function StandaloneBoardControls({
 		() => runtime.store.getState().nodesDraggable,
 		() => true,
 	);
+	const zoomLimit = useSyncExternalStore(
+		runtime.store.subscribe,
+		() => {
+			const { transform, minZoom, maxZoom } = runtime.store.getState();
+			if (transform[2] <= minZoom) return "min";
+			return transform[2] >= maxZoom ? "max" : undefined;
+		},
+		() => undefined,
+	);
 	const buttonClass =
 		"react-flow__controls-button flex size-8 items-center justify-center border-b border-border bg-card text-foreground hover:bg-accent disabled:opacity-50 [&>svg]:size-4";
 	return (
@@ -39,6 +48,7 @@ export function StandaloneBoardControls({
 				className={`${buttonClass} react-flow__controls-zoomin`}
 				title="zoom in"
 				aria-label="zoom in"
+				disabled={zoomLimit === "max"}
 				onClick={() => void runtime.flow.zoomIn()}
 			>
 				<Plus />
@@ -48,6 +58,7 @@ export function StandaloneBoardControls({
 				className={`${buttonClass} react-flow__controls-zoomout`}
 				title="zoom out"
 				aria-label="zoom out"
+				disabled={zoomLimit === "min"}
 				onClick={() => void runtime.flow.zoomOut()}
 			>
 				<Minus />

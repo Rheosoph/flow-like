@@ -5,7 +5,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import {
 	isSessionRejected,
-	reportUnauthorized,
 	subscribeSessionRejection,
 } from "../lib/auth-session";
 import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
@@ -13,6 +12,7 @@ import { renewWebSession } from "../lib/session-request";
 
 type RecoveryState =
 	| "ready"
+	| "renewing"
 	| "redirecting"
 	| "sign-in-required"
 	| "retry-required";
@@ -29,6 +29,7 @@ export function useSessionRecovery(
 		serverSnapshot,
 	);
 	const latestAuth = useRef(auth);
+	const [, setExpiryRevision] = useState(0);
 	const attempted = useRef<
 		| {
 				signinRedirect: AuthContextProps["signinRedirect"];
@@ -44,6 +45,10 @@ export function useSessionRecovery(
 		(sessionRejected && Boolean(auth.isAuthenticated || accessToken)) ||
 		auth.user?.expired === true ||
 		(auth.isAuthenticated && !accessToken);
+	const pendingState =
+		auth.user?.expired && accessToken && !sessionRejected
+			? "renewing"
+			: "redirecting";
 
 	useEffect(() => {
 		latestAuth.current = auth;
@@ -69,6 +74,11 @@ export function useSessionRecovery(
 	}, [recovery?.state]);
 
 	useEffect(() => {
+		if (recovery?.state === "renewing" && !auth.user) {
+			attempted.current = undefined;
+			setRecovery(undefined);
+			return;
+		}
 		if (
 			recovery &&
 			accessToken &&
@@ -79,22 +89,21 @@ export function useSessionRecovery(
 			attempted.current = undefined;
 			setRecovery(undefined);
 		}
-	}, [recovery, accessToken, auth.isAuthenticated, sessionInvalid]);
+	}, [recovery, accessToken, auth.isAuthenticated, auth.user, sessionInvalid]);
 
 	useEffect(() => {
-		const rejectExpiredSession = () => {
+		const checkExpiredSession = () => {
 			const current = latestAuth.current;
 			if (current.user?.expired) {
-				reportUnauthorized(current, current.user.access_token);
+				setExpiryRevision((revision) => revision + 1);
 			}
 		};
-		// Automatic renewal runs before expiry. If it cannot renew, stop treating
-		// the stored user as a working session when the token expires.
-		auth.events.addAccessTokenExpired(rejectExpiredSession);
-		auth.events.addSilentRenewError(rejectExpiredSession);
+		// Expiry can recover silently without rejecting the current session.
+		auth.events.addAccessTokenExpired(checkExpiredSession);
+		auth.events.addSilentRenewError(checkExpiredSession);
 		return () => {
-			auth.events.removeAccessTokenExpired(rejectExpiredSession);
-			auth.events.removeSilentRenewError(rejectExpiredSession);
+			auth.events.removeAccessTokenExpired(checkExpiredSession);
+			auth.events.removeSilentRenewError(checkExpiredSession);
 		};
 	}, [auth.events]);
 
@@ -115,28 +124,33 @@ export function useSessionRecovery(
 			return;
 		}
 		attempted.current = { signinRedirect: auth.signinRedirect, accessToken };
-		setRecovery({ accessToken, state: "redirecting" });
+		setRecovery({ accessToken, state: pendingState });
 		const returnUrl = currentRelativeUrl();
 		if (returnUrl) saveReturnUrl(returnUrl);
+		const isCurrentSession = () => {
+			const current = latestAuth.current;
+			return (
+				Boolean(current.user) === Boolean(auth.user) &&
+				current.signinRedirect === auth.signinRedirect &&
+				current.user?.access_token === accessToken &&
+				current.user?.profile.iss === auth.user?.profile.iss &&
+				current.user?.profile.sub === auth.user?.profile.sub
+			);
+		};
 
 		void (async () => {
 			try {
 				await renewWebSession(auth, accessToken);
-				setRecovery(undefined);
+				if (isCurrentSession()) setRecovery(undefined);
 				return;
 			} catch (error) {
-				const current = latestAuth.current;
-				if (
-					current.signinRedirect !== auth.signinRedirect ||
-					(current.user?.access_token &&
-						current.user.access_token !== accessToken)
-				)
-					return;
+				if (!isCurrentSession()) return;
 				if (!requiresInteractiveSignIn(error)) {
 					setRecovery({ accessToken, state: "retry-required" });
 					return;
 				}
 			}
+			setRecovery({ accessToken, state: "redirecting" });
 			try {
 				await auth.removeUser();
 			} catch {
@@ -152,15 +166,17 @@ export function useSessionRecovery(
 				setRecovery({ accessToken, state: "sign-in-required" });
 			}
 		})();
-	}, [auth, accessToken, sessionInvalid, isPublicPath, recovery]);
+	}, [auth, accessToken, sessionInvalid, isPublicPath, recovery, pendingState]);
 
 	if (isPublicPath) return "ready";
+	if (recovery?.state === "renewing" && !auth.user) return "ready";
 	if (recovery && (!accessToken || recovery.accessToken === accessToken)) {
+		if (recovery.state === "renewing" && sessionRejected) return "redirecting";
 		// react-oidc-context reports navigator failures through auth.error.
 		if (auth.error?.source === "signinRedirect" && !auth.activeNavigator) {
 			return "sign-in-required";
 		}
 		return recovery.state;
 	}
-	return sessionInvalid ? "redirecting" : "ready";
+	return sessionInvalid ? pendingState : "ready";
 }

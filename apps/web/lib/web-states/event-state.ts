@@ -552,9 +552,6 @@ export class WebEventState implements IEventState {
 		beforeDispatch?: () => void,
 		preparedPrerun?: IPrerunEventResponse,
 	): Promise<ILogMetadata | undefined> {
-		const hub = await timeRunStep("hub_config", () =>
-			getHubConfig(this.backend.profile),
-		);
 		const oauthService = getOAuthService(
 			getOAuthApiBaseUrl(this.backend.profile?.hub),
 		);
@@ -595,31 +592,31 @@ export class WebEventState implements IEventState {
 			);
 		}
 
-		const oauthResult = pagePrerun
-			? await timeRunStep("oauth_tokens", () =>
-					checkOAuthTokensFromPrerun(
-						pagePrerun.oauth_requirements,
-						oauthTokenStore,
-						hub,
-						oauthOptions,
-					),
-				)
+		const requirements = pagePrerun
+			? pagePrerun.oauth_requirements
 			: await (async () => {
 					const event = await timeRunStep("get_event", () =>
 						this.getEvent(appId, eventId),
 					);
-					const requirements = await timeRunStep("prerun", () =>
+					return timeRunStep("prerun", () =>
 						this.eventOAuthRequirements(appId, event),
 					);
-					return timeRunStep("oauth_tokens", () =>
-						checkOAuthTokensFromPrerun(
-							requirements,
-							oauthTokenStore,
-							hub,
-							oauthOptions,
-						),
-					);
 				})();
+		// Provider configuration is needed only by OAuth nodes. Other actions can
+		// dispatch without waiting for a cold or unavailable Hub configuration.
+		const hub = requirements?.length
+			? await timeRunStep("hub_config", () =>
+					getHubConfig(this.backend.profile),
+				)
+			: undefined;
+		const oauthResult = await timeRunStep("oauth_tokens", () =>
+			checkOAuthTokensFromPrerun(
+				requirements,
+				oauthTokenStore,
+				hub,
+				oauthOptions,
+			),
+		);
 
 		console.log("[OAuth] Event check result:", {
 			requiredProviders: oauthResult.requiredProviders.map((p) => p.id),

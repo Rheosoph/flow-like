@@ -33,7 +33,13 @@ impl InternalNodeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_types::{async_trait, tokio};
+    use crate::{
+        flow::board::ExecutionStage,
+        profile::Profile,
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_types::{async_trait, sync::RwLock, tokio};
 
     #[derive(Default)]
     struct NoopLogic;
@@ -50,6 +56,10 @@ mod tests {
     }
 
     fn internal_node(node: Node) -> Arc<InternalNode> {
+        internal_node_with_logic(node, Arc::new(NoopLogic))
+    }
+
+    fn internal_node_with_logic(node: Node, logic: Arc<dyn NodeLogic>) -> Arc<InternalNode> {
         let mut pins = AHashMap::new();
         let mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
 
@@ -62,16 +72,175 @@ mod tests {
             pins.insert(pin.id.clone(), internal_pin);
         }
 
-        let internal = Arc::new(InternalNode::new(
-            node,
-            pins,
-            Arc::new(NoopLogic),
-            name_cache,
-        ));
+        let internal = Arc::new(InternalNode::new(node, pins, logic, name_cache));
         for pin in internal.pins.iter() {
             pin.init_node(Arc::downgrade(&internal));
         }
         internal
+    }
+
+    struct StringInputLogic;
+
+    #[async_trait]
+    impl NodeLogic for StringInputLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("text_consumer", "Text Consumer", "Read text", "Tests");
+            node.add_input_pin("text", "Text", "Text", VariableType::String)
+                .set_default_value(Some(json!(42)));
+            node.add_output_pin("value", "Value", "Value", VariableType::Float);
+            node
+        }
+
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            let _: String = context.evaluate_pin("text").await?;
+            Ok(())
+        }
+    }
+
+    async fn test_context(
+        root: &Arc<InternalNode>,
+        nodes: &[Arc<InternalNode>],
+    ) -> ExecutionContext {
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        ExecutionContext::new(
+            Arc::new(
+                nodes
+                    .iter()
+                    .map(|node| (node.node_id().to_owned(), node.clone()))
+                    .collect(),
+            ),
+            &Weak::new(),
+            &state,
+            root,
+            &Arc::new(Mutex::new(AHashMap::new())),
+            &Arc::new(RwLock::new(AHashMap::new())),
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(vec![])),
+            None,
+            None,
+            Arc::new(AHashMap::new()),
+            None,
+        )
+        .await
+    }
+
+    async fn connect(
+        source: &Arc<InternalNode>,
+        output: &str,
+        target: &Arc<InternalNode>,
+        input: &str,
+    ) {
+        let output = source.get_pin_by_name(output).await.unwrap();
+        let input = target.get_pin_by_name(input).await.unwrap();
+        output.init_connected_to(vec![Arc::downgrade(&input)]);
+        input.init_depends_on(vec![Arc::downgrade(&output)]);
+    }
+
+    #[tokio::test]
+    async fn dependency_failures_preserve_type_errors() {
+        for mapped in [false, true] {
+            for through_successor in [false, true] {
+                let dependency = internal_node_with_logic(
+                    StringInputLogic.get_node(),
+                    Arc::new(StringInputLogic),
+                );
+                let mut consumer = Node::new("consumer", "Consumer", "Consumer", "Tests");
+                consumer.add_input_pin("exec_in", "Run", "Run", VariableType::Execution);
+                consumer.add_input_pin("value", "Value", "Value", VariableType::Float);
+                let consumer = internal_node(consumer);
+                connect(&dependency, "value", &consumer, "value").await;
+
+                let mut entry = Node::new("entry", "Entry", "Entry", "Tests");
+                entry
+                    .add_output_pin("exec_out", "Run", "Run", VariableType::Execution)
+                    .set_default_value(Some(json!(true)));
+                let entry = internal_node(entry);
+                connect(&entry, "exec_out", &consumer, "exec_in").await;
+                let root = if through_successor { &entry } else { &consumer };
+                let mut context =
+                    test_context(root, &[entry.clone(), consumer.clone(), dependency.clone()])
+                        .await;
+                let dependencies =
+                    AHashMap::from([(consumer.node_id().to_owned(), vec![dependency])]);
+
+                let result = if mapped {
+                    InternalNode::trigger_with_dependencies(
+                        &mut context,
+                        &mut None,
+                        through_successor,
+                        &dependencies,
+                    )
+                    .await
+                } else {
+                    InternalNode::trigger(&mut context, &mut None, through_successor).await
+                };
+                let error = result.expect_err("a number cannot be read as text");
+                if !through_successor {
+                    assert!(matches!(error, InternalNodeError::DependencyFailed(_)));
+                }
+                let message = error.into_message();
+                assert!(message.contains("text_consumer"), "{message}");
+                assert!(message.contains("string"), "{message}");
+                assert!(message.contains("42"), "{message}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn error_handlers_receive_dependency_type_errors() {
+        for mapped in [false, true] {
+            let dependency =
+                internal_node_with_logic(StringInputLogic.get_node(), Arc::new(StringInputLogic));
+            let mut consumer = Node::new("consumer", "Consumer", "Consumer", "Tests");
+            consumer.add_input_pin("value", "Value", "Value", VariableType::Float);
+            consumer.add_output_pin(
+                "auto_handle_error",
+                "On Error",
+                "On Error",
+                VariableType::Execution,
+            );
+            consumer.add_output_pin(
+                "auto_handle_error_string",
+                "Error",
+                "Error",
+                VariableType::String,
+            );
+            let consumer = internal_node(consumer);
+            let mut handler = Node::new("handler", "Handler", "Handler", "Tests");
+            handler.add_input_pin("exec_in", "Run", "Run", VariableType::Execution);
+            let handler = internal_node(handler);
+            connect(&dependency, "value", &consumer, "value").await;
+            connect(&consumer, "auto_handle_error", &handler, "exec_in").await;
+            let mut context =
+                test_context(&consumer, &[consumer.clone(), handler, dependency.clone()]).await;
+            let dependencies = AHashMap::from([(consumer.node_id().to_owned(), vec![dependency])]);
+
+            let result = if mapped {
+                InternalNode::trigger_with_dependencies(
+                    &mut context,
+                    &mut None,
+                    false,
+                    &dependencies,
+                )
+                .await
+            } else {
+                InternalNode::trigger(&mut context, &mut None, false).await
+            };
+            result.expect("the error handler should handle the dependency failure");
+            let message: String = context
+                .evaluate_pin("auto_handle_error_string")
+                .await
+                .unwrap();
+            assert!(message.contains("text_consumer"), "{message}");
+            assert!(message.contains("string"), "{message}");
+            assert!(message.contains("42"), "{message}");
+        }
     }
 
     #[tokio::test]
@@ -220,7 +389,7 @@ async fn exec_deps_from_map(
     ctx: &mut ExecutionContext,
     recursion_guard: &mut Option<AHashSet<String>>,
     dependencies: &AHashMap<String, Vec<Arc<InternalNode>>>,
-) -> bool {
+) -> Result<(), InternalNodeError> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Phase {
         Enter,
@@ -247,11 +416,9 @@ async fn exec_deps_from_map(
                     continue;
                 }
                 if !visiting.insert(n_ptr) {
-                    ctx.log_message(
-                        "Cycle detected while resolving mapped dependencies",
-                        LogLevel::Error,
-                    );
-                    return false;
+                    let message = "Cycle detected while resolving mapped dependencies".to_string();
+                    ctx.log_message(&message, LogLevel::Error);
+                    return Err(InternalNodeError::DependencyFailed(message));
                 }
                 stack.push((n.clone(), Phase::Exit));
 
@@ -297,15 +464,13 @@ async fn exec_deps_from_map(
                 ctx.push_sub_context(&mut sub);
 
                 if let Err(err) = res {
-                    ctx.log_message(
-                        &format!(
-                            "Failed to trigger mapped dependency '{}': {}",
-                            n.node_name(),
-                            err.into_message()
-                        ),
-                        LogLevel::Error,
+                    let message = format!(
+                        "Failed to trigger mapped dependency '{}': {}",
+                        n.node_name(),
+                        err.into_message()
                     );
-                    return false;
+                    ctx.log_message(&message, LogLevel::Error);
+                    return Err(InternalNodeError::DependencyFailed(message));
                 }
 
                 scheduled.insert(n_ptr);
@@ -313,7 +478,7 @@ async fn exec_deps_from_map(
         }
     }
 
-    true
+    Ok(())
 }
 
 async fn run_node_logic_only(
@@ -984,6 +1149,15 @@ impl InternalNode {
         recursion_guard: &mut Option<AHashSet<String>>,
         _with_successors: bool, // not used here
     ) -> bool {
+        Self::resolve_missing_dependencies(context, recursion_guard)
+            .await
+            .is_ok()
+    }
+
+    async fn resolve_missing_dependencies(
+        context: &mut ExecutionContext,
+        recursion_guard: &mut Option<AHashSet<String>>,
+    ) -> Result<(), InternalNodeError> {
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum Phase {
             Enter,
@@ -995,9 +1169,10 @@ impl InternalNode {
         // Seed: pure parents of the current node. Dedup by pointer.
         let mut roots = match pure_parents_for_memo(&context.node, &mut parents_memo).await {
             Ok(v) => v,
-            Err(_) => {
-                context.log_message("Failed to collect dependencies", LogLevel::Error);
-                return false;
+            Err(error) => {
+                let message = format!("Failed to collect dependencies: {error:?}");
+                context.log_message(&message, LogLevel::Error);
+                return Err(InternalNodeError::DependencyFailed(message));
             }
         };
         if roots.len() > 1 {
@@ -1023,11 +1198,9 @@ impl InternalNode {
                         continue;
                     }
                     if !visiting.insert(node_ptr) {
-                        context.log_message(
-                            "Cycle detected while resolving dependencies",
-                            LogLevel::Error,
-                        );
-                        return false;
+                        let message = "Cycle detected while resolving dependencies".to_string();
+                        context.log_message(&message, LogLevel::Error);
+                        return Err(InternalNodeError::DependencyFailed(message));
                     }
 
                     // Post-order: revisit on Exit
@@ -1046,11 +1219,9 @@ impl InternalNode {
                             }
                         }
                         Err(e) => {
-                            context.log_message(
-                                &format!("Failed to collect parents: {:?}", e),
-                                LogLevel::Error,
-                            );
-                            return false;
+                            let message = format!("Failed to collect parents: {e:?}");
+                            context.log_message(&message, LogLevel::Error);
+                            return Err(InternalNodeError::DependencyFailed(message));
                         }
                     }
                 }
@@ -1084,15 +1255,13 @@ impl InternalNode {
                     context.push_sub_context(&mut sub);
 
                     if let Err(err) = res {
-                        context.log_message(
-                            &format!(
-                                "Failed to trigger dependency '{}': {}",
-                                node_arc.node_name(),
-                                err.into_message()
-                            ),
-                            LogLevel::Error,
+                        let message = format!(
+                            "Failed to trigger dependency '{}': {}",
+                            node_arc.node_name(),
+                            err.into_message()
                         );
-                        return false;
+                        context.log_message(&message, LogLevel::Error);
+                        return Err(InternalNodeError::DependencyFailed(message));
                     }
 
                     scheduled.insert(node_ptr);
@@ -1100,7 +1269,7 @@ impl InternalNode {
             }
         }
 
-        true
+        Ok(())
     }
 
     /// Route a node failure into the board's `On Error` branch.
@@ -1149,9 +1318,13 @@ impl InternalNode {
             let mut sub = context.create_sub_context(&handler).await;
 
             // Use SAME recursion_guard here (parity with original)
-            if !InternalNode::trigger_missing_dependencies(&mut sub, recursion_guard, false).await {
-                let err_string =
-                    "Failed to trigger missing dependencies for error handler".to_string();
+            if let Err(error) =
+                InternalNode::resolve_missing_dependencies(&mut sub, recursion_guard).await
+            {
+                let err_string = format!(
+                    "Failed to trigger missing dependencies for error handler: {}",
+                    error.into_message()
+                );
                 let _ = sub
                     .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                     .await;
@@ -1197,11 +1370,13 @@ impl InternalNode {
 
                 let mut sub2 = next.to_sub_context(context).await;
 
-                if !InternalNode::trigger_missing_dependencies(&mut sub2, recursion_guard, false)
-                    .await
+                if let Err(error) =
+                    InternalNode::resolve_missing_dependencies(&mut sub2, recursion_guard).await
                 {
-                    let err_string =
-                        "Failed to trigger successor dependencies (error chain)".to_string();
+                    let err_string = format!(
+                        "Failed to trigger successor dependencies (error chain): {}",
+                        error.into_message()
+                    );
                     let _ = sub2
                         .set_pin_value("auto_handle_error_string", json!(err_string.clone()))
                         .await;
@@ -1270,16 +1445,12 @@ impl InternalNode {
         with_successors: bool,
     ) -> flow_like_types::Result<(), InternalNodeError> {
         // deps
-        if !InternalNode::trigger_missing_dependencies(context, recursion_guard, false).await {
-            context.log_message("Failed to trigger missing dependencies", LogLevel::Error);
+        if let Err(error) = Self::resolve_missing_dependencies(context, recursion_guard).await {
+            let message = error.into_message();
             context.end_trace();
-            return InternalNode::handle_error(
-                context,
-                "Failed to trigger missing dependencies",
-                recursion_guard,
-            )
-            .await
-            .map_err(|_| InternalNodeError::DependencyFailed(context.node.node_id().to_string()));
+            return InternalNode::handle_error(context, &message, recursion_guard)
+                .await
+                .map_err(|error| InternalNodeError::DependencyFailed(error.into_message()));
         }
 
         // this node
@@ -1321,12 +1492,13 @@ impl InternalNode {
                 let mut sub = next.to_sub_context(context).await;
                 let mut local_guard: Option<AHashSet<String>> = None;
 
-                if !InternalNode::trigger_missing_dependencies(&mut sub, &mut local_guard, false)
-                    .await
+                if let Err(error) =
+                    Self::resolve_missing_dependencies(&mut sub, &mut local_guard).await
                 {
                     let err_string = format!(
-                        "Failed to trigger dependencies of successor '{}'",
-                        next.node.node_name()
+                        "Failed to trigger dependencies of successor '{}': {}",
+                        next.node.node_name(),
+                        error.into_message()
                     );
                     let handled =
                         InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await;
@@ -1398,11 +1570,11 @@ impl InternalNode {
         }
 
         // 1) Execute precomputed dependencies iteratively (no recursion)
-        if !exec_deps_from_map(context, recursion_guard, dependencies).await {
-            let err = "Failed to trigger mapped dependencies".to_string();
-            return InternalNode::handle_error(context, &err, recursion_guard)
+        if let Err(error) = exec_deps_from_map(context, recursion_guard, dependencies).await {
+            let message = error.into_message();
+            return InternalNode::handle_error(context, &message, recursion_guard)
                 .await
-                .map_err(|_| InternalNodeError::DependencyFailed(node.node_id().to_string()));
+                .map_err(|error| InternalNodeError::DependencyFailed(error.into_message()));
         }
 
         // 2) Run this node (no successors here)
@@ -1465,10 +1637,13 @@ impl InternalNode {
                 let mut local_guard: Option<AHashSet<String>> = None;
 
                 // Execute *its* mapped deps (fresh executed set semantics like before)
-                if !exec_deps_from_map(&mut sub, &mut local_guard, dependencies).await {
+                if let Err(error) =
+                    exec_deps_from_map(&mut sub, &mut local_guard, dependencies).await
+                {
                     let err_string = format!(
-                        "Failed to trigger mapped dependencies of successor '{}'",
-                        next.node.node_name()
+                        "Failed to trigger mapped dependencies of successor '{}': {}",
+                        next.node.node_name(),
+                        error.into_message()
                     );
                     let handled =
                         InternalNode::handle_error(&mut sub, &err_string, &mut local_guard).await;

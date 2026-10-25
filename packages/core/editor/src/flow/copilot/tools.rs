@@ -2084,6 +2084,7 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
             event_version: None,
             event_id: String::new(),
             payload: vec![],
+            error_message: None,
             is_remote: false,
         };
 
@@ -2819,7 +2820,10 @@ fn normalize_candidate_symbol(symbol: &str) -> String {
 
 fn profile_flowscript_block(block: &FlowScriptBlock, profile: &mut FlowScriptCandidateProfile) {
     for statement in &block.stmts {
-        if !matches!(statement, FlowScriptStmt::Comment(_)) {
+        if !matches!(
+            statement,
+            FlowScriptStmt::Comment(_) | FlowScriptStmt::Collapse(_)
+        ) {
             profile.meaningful_statements = profile.meaningful_statements.saturating_add(1);
         }
         match statement {
@@ -2873,6 +2877,7 @@ fn profile_flowscript_block(block: &FlowScriptBlock, profile: &mut FlowScriptCan
                 }
                 profile_flowscript_block(&event.body, profile);
             }
+            FlowScriptStmt::Collapse(group) => profile_flowscript_block(&group.body, profile),
             FlowScriptStmt::Local(_) | FlowScriptStmt::Comment(_) => {}
         }
     }
@@ -2928,6 +2933,9 @@ fn collect_flowscript_block_call_names(block: &FlowScriptBlock, calls: &mut Vec<
             }
             FlowScriptStmt::Handler(event) => {
                 collect_flowscript_block_call_names(&event.body, calls)
+            }
+            FlowScriptStmt::Collapse(group) => {
+                collect_flowscript_block_call_names(&group.body, calls)
             }
             FlowScriptStmt::Local(_) | FlowScriptStmt::Comment(_) => {}
         }

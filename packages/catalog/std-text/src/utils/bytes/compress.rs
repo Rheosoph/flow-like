@@ -52,7 +52,7 @@ impl NodeLogic for BytesGzipCompressNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use std::io::Write;
 
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
         let level: i64 = context.evaluate_pin("level").await?;
 
         let mut encoder = GzEncoder::new(Vec::new(), Compression::new(level.clamp(0, 9) as u32));
@@ -66,7 +66,7 @@ impl NodeLogic for BytesGzipCompressNode {
         };
 
         context.set_pin_value("ratio", json!(ratio)).await?;
-        context.set_pin_value("result", json!(compressed)).await?;
+        context.set_pin_bytes("result", compressed).await?;
         Ok(())
     }
 
@@ -116,7 +116,7 @@ impl NodeLogic for BytesGzipDecompressNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use std::io::Read;
 
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
         let max_size: i64 = context.evaluate_pin("max_size").await?;
         let max_size = max_size.max(0) as u64;
 
@@ -132,7 +132,7 @@ impl NodeLogic for BytesGzipDecompressNode {
             ));
         }
 
-        context.set_pin_value("result", json!(restored)).await?;
+        context.set_pin_bytes("result", restored).await?;
         Ok(())
     }
 

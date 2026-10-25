@@ -637,6 +637,24 @@ A GLiNER classification export contains `decision_config.json`, `model.onnx`, `t
 
 "#;
 
+const WRITE_BYTES_NOTE: &str = "
+Upload sizing is automatic. Files larger than 8 MiB use multipart uploads when the
+storage provider supports them. The node splits content into bounded buffers
+before passing it to storage, including for smaller files that use a single PUT
+request. No extra pins or workflow steps are required. The Content input still
+holds the complete file in memory.
+";
+
+/// Hand-written prose a node page keeps across regeneration: placed before and after the
+/// generated reference.
+fn node_prose(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "onnx_gliner_decision" => (GLINER_DECISION_GUIDE, ""),
+        "write_bytes" => ("", WRITE_BYTES_NOTE),
+        _ => ("", ""),
+    }
+}
+
 fn write_node_pages(
     docs_src: &Path,
     docs_root: &Path,
@@ -655,11 +673,7 @@ fn write_node_pages(
             &docs_src.join("generated/catalog-nodes"),
         );
         let node_prop = format!("{{nodesBySlug[{}]}}", json_string(&node.slug));
-        let guide = if node.name == "onnx_gliner_decision" {
-            GLINER_DECISION_GUIDE
-        } else {
-            ""
-        };
+        let (guide, note) = node_prose(&node.name);
         let title = node_page_title(&node.friendly_name);
         let description = node_seo_description(node);
         let head = frontmatter_head(
@@ -676,7 +690,7 @@ fn write_node_pages(
             "---\ntitle: {}\ndescription: {}\nsidebar:\n  label: {}\n{}---\n\n\
              import {{ NodeReference }} from {};\n\
              import {{ nodesBySlug }} from {};\n\n\
-             {guide}<NodeReference node={} />\n",
+             {guide}<NodeReference node={} />\n{note}",
             json_string(&title),
             json_string(&description),
             json_string(&node.friendly_name),

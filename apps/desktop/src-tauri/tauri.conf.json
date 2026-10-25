@@ -85,10 +85,14 @@
 			}
 		},
 		"linux": {
+			"deb": {
+				"depends": ["libodbc2 | libodbc1"]
+			},
 			"rpm": {
 				"compression": {
 					"type": "none"
-				}
+				},
+				"depends": ["unixODBC"]
 			}
 		},
 		"iOS": {

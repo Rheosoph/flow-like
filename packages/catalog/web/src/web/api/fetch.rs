@@ -4,7 +4,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 
 use super::{GuardedHttpClient, HttpRequest, HttpResponse};
 
@@ -78,8 +78,9 @@ impl NodeLogic for HttpFetchNode {
         let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = request.trigger(&client).await?;
 
-        context.set_pin_value("response", json!(response)).await?;
         let success = response.is_success();
+        let response = response.into_pin_value(context).await;
+        context.set_pin_value("response", response).await?;
 
         if success {
             context.deactivate_exec_pin("exec_error").await?;

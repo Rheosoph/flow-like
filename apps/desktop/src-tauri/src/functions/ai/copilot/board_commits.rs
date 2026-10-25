@@ -60,6 +60,12 @@ pub struct ApplyFlowIrCommitResult {
     /// Exact persisted graph content after this batch, retained unchanged on receipt replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persisted_board_fingerprint: Option<String>,
+    /// What the apply changed on the board, from a before/after comparison.
+    #[serde(
+        default,
+        skip_serializing_if = "flow_like::flow::ast::FlowScriptChanges::is_empty"
+    )]
+    pub changes: flow_like::flow::ast::FlowScriptChanges,
 }
 
 #[derive(Serialize)]
@@ -386,6 +392,7 @@ impl ApplyFlowIrCommitResult {
             diagnostics: Vec::new(),
             final_board_node_count: None,
             persisted_board_fingerprint: None,
+            changes: Default::default(),
         }
     }
 
@@ -405,6 +412,7 @@ impl ApplyFlowIrCommitResult {
             diagnostics,
             final_board_node_count: None,
             persisted_board_fingerprint: None,
+            changes: Default::default(),
         }
     }
 }
@@ -831,6 +839,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
         diagnostics: Vec::new(),
         final_board_node_count: Some(board_total_node_count(&board)),
         persisted_board_fingerprint: Some(persisted_board_fingerprint),
+        changes: apply_result.changes.clone(),
     };
     if let Err(error) = validate_board_edit_delivery_bounds(
         &result,

@@ -101,6 +101,7 @@ pub fn validate_model_facing_emit_commands_scope(args: &EmitCommandsArgs) -> Emi
                     BoardCommand::CreateLayer { .. }
                     | BoardCommand::RemoveLayer { .. }
                     | BoardCommand::RenameLayer { .. }
+                    | BoardCommand::UpdateFunctionSignature { .. }
                     | BoardCommand::MoveToLayer { .. } => {
                         return Some(issue(
                             "error",
@@ -118,7 +119,9 @@ pub fn validate_model_facing_emit_commands_scope(args: &EmitCommandsArgs) -> Emi
                     BoardCommand::UpdateNodePin { .. } => "UpdateNodePin",
                     BoardCommand::UpdateNodePinOptions { .. } => "UpdateNodePinOptions",
                     BoardCommand::RenameNode { .. } => "RenameNode",
+                    BoardCommand::SetNodeDescription { .. } => "SetNodeDescription",
                     BoardCommand::SetNodeFunctionRefs { .. } => "SetNodeFunctionRefs",
+                    BoardCommand::SetNodeCodeNames { .. } => "SetNodeCodeNames",
                     BoardCommand::MoveNode { .. } => "MoveNode(target_layer)",
                     BoardCommand::CreateVariable { .. } => "CreateVariable",
                     BoardCommand::UpdateVariable { .. } => "UpdateVariable",
@@ -780,6 +783,16 @@ pub async fn validate_emit_commands(
                     ));
                 }
             }
+            BoardCommand::SetNodeDescription { node_id, .. } => {
+                if !entities.contains_key(node_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-node",
+                        Some(index),
+                        format!("Cannot describe unknown node '{node_id}'"),
+                    ));
+                }
+            }
             BoardCommand::MoveNode {
                 node_id,
                 target_layer,
@@ -1091,6 +1104,17 @@ pub async fn validate_emit_commands(
             // Function references are additive metadata resolved at apply time (the targets may be
             // `$N` refs for nodes created in the same batch), so nothing to validate structurally.
             BoardCommand::SetNodeFunctionRefs { .. } => {}
+            BoardCommand::UpdateFunctionSignature { .. } => {}
+            BoardCommand::SetNodeCodeNames { node_id, .. } => {
+                if !entities.contains_key(node_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-node",
+                        Some(index),
+                        format!("Cannot name values of unknown node '{node_id}'"),
+                    ));
+                }
+            }
         }
     }
 

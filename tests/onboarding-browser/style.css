@@ -1,0 +1,13 @@
+@import "../../packages/ui/global.css";
+@source "../../apps/desktop/app/onboarding/**/*.{ts,tsx}";
+
+:root {
+	--fl-safe-top: 0px;
+	--fl-safe-bottom: 0px;
+}
+html,
+body,
+#root {
+	min-height: 100%;
+	margin: 0;
+}

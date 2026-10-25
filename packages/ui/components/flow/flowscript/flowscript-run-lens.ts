@@ -29,6 +29,7 @@ import {
 	type FlowScriptDeclaration,
 	analyzeFlowScriptDocument,
 } from "./flowscript-language-features";
+import type { FlowScriptWorkerRequests } from "./flowscript-worker-contract";
 
 export type FlowScriptRunMode = "local" | "remote";
 
@@ -85,17 +86,32 @@ export function deriveFlowScriptRunLenses(
 	anchorIndex: FlowScriptAnchorIndex,
 	gate: FlowScriptRunLensGate,
 ): FlowScriptRunLens[] {
+	return deriveEventLenses(
+		doc.declarations
+			.filter((declaration) => declaration.kind === "event")
+			.map((declaration) => ({
+				line: lineOfOffset(doc.lineStarts, declaration.span.start),
+				name: declaration.name,
+			})),
+		anchorIndex,
+		gate,
+	);
+}
+
+function deriveEventLenses(
+	events: readonly { line: number; name: string }[],
+	anchorIndex: FlowScriptAnchorIndex,
+	gate: FlowScriptRunLensGate,
+): FlowScriptRunLens[] {
 	if (gate.readOnly) return [];
 	const lenses: FlowScriptRunLens[] = [];
-	for (const declaration of doc.declarations) {
-		if (declaration.kind !== "event") continue;
-		const line = lineOfOffset(doc.lineStarts, declaration.span.start);
+	for (const { line, name } of events) {
 		const anchor = anchorAtLine(anchorIndex, line);
 		if (!anchor || anchor.kind !== "node") continue;
 		const base = {
 			line,
 			nodeId: anchor.id,
-			eventName: declaration.name,
+			eventName: name,
 		};
 		if (gate.dirty) {
 			lenses.push({ ...base, kind: "apply-first" });
@@ -144,6 +160,7 @@ interface RunLensEditorLike {
 export interface RegisterFlowScriptRunLensOptions {
 	editor: RunLensEditorLike;
 	getCatalogNodes: () => INode[] | undefined;
+	workerRequests: Pick<FlowScriptWorkerRequests, "requestDocumentSymbols">;
 	getGate: () => FlowScriptRunLensGate;
 	getLabels: () => FlowScriptRunLensLabels;
 	onRun: (nodeId: string, mode: FlowScriptRunMode) => void;
@@ -174,42 +191,80 @@ export function registerFlowScriptRunLens(
 		{
 			// biome-ignore lint/suspicious/noExplicitAny: Emitter<void> vs IEvent<provider> — Monaco only uses it as a change signal
 			onDidChange: emitter.event as any,
-			provideCodeLenses: (model) => {
-				if ((model as unknown) !== options.editor.getModel()) {
+			provideCodeLenses: (model, token) => {
+				if (
+					(model as unknown) !== options.editor.getModel() ||
+					options.getGate().readOnly ||
+					token.isCancellationRequested
+				) {
 					return { lenses: [], dispose: () => {} };
 				}
 				const text = model.getValue();
-				const analysis = analyzeFlowScriptDocument(
-					text,
-					getFlowScriptIndex(options.getCatalogNodes()),
+				const version = model.getVersionId();
+				const catalog = options.getCatalogNodes();
+				const toResult = (derived: FlowScriptRunLens[]) => {
+					const labels = options.getLabels();
+					const lenses = derived.map((lens) => ({
+						range: new monaco.Range(lens.line, 1, lens.line, 1),
+						command:
+							lens.kind === "apply-first"
+								? { id: "", title: labels.applyBeforeRun }
+								: {
+										id: commandId ?? "",
+										title:
+											lens.kind === "run-local"
+												? `▶ ${labels.runEvent}`
+												: `☁ ${labels.runRemote}`,
+										tooltip: lens.eventName,
+										arguments: [
+											{
+												flowscriptRunLens: true,
+												nodeId: lens.nodeId,
+												mode: lens.kind === "run-local" ? "local" : "remote",
+											} satisfies RunLensCommandArg,
+										],
+									},
+					}));
+					return { lenses, dispose: () => {} };
+				};
+				const inThread = () =>
+					toResult(
+						deriveFlowScriptRunLenses(
+							analyzeFlowScriptDocument(text, getFlowScriptIndex(catalog)),
+							parseFlowScriptAnchors(text),
+							options.getGate(),
+						),
+					);
+				// Reuse the worker's outline analysis. CodeLens runs after edits too, so
+				// analyzing here would put large-document work back on the UI thread.
+				const request = options.workerRequests.requestDocumentSymbols(
+					model,
+					catalog,
+					token,
 				);
-				const labels = options.getLabels();
-				const lenses = deriveFlowScriptRunLenses(
-					analysis,
-					parseFlowScriptAnchors(text),
-					options.getGate(),
-				).map((lens) => ({
-					range: new monaco.Range(lens.line, 1, lens.line, 1),
-					command:
-						lens.kind === "apply-first"
-							? { id: "", title: labels.applyBeforeRun }
-							: {
-									id: commandId ?? "",
-									title:
-										lens.kind === "run-local"
-											? `▶ ${labels.runEvent}`
-											: `☁ ${labels.runRemote}`,
-									tooltip: lens.eventName,
-									arguments: [
-										{
-											flowscriptRunLens: true,
-											nodeId: lens.nodeId,
-											mode: lens.kind === "run-local" ? "local" : "remote",
-										} satisfies RunLensCommandArg,
-									],
-								},
-				}));
-				return { lenses, dispose: () => {} };
+				if (!request) return inThread();
+				return request.then((outcome) => {
+					if (
+						outcome.status === "cancelled" ||
+						token.isCancellationRequested ||
+						model !== options.editor.getModel() ||
+						model.getVersionId() !== version
+					)
+						return toResult([]);
+					if (outcome.status === "failed") return inThread();
+					return toResult(
+						deriveEventLenses(
+							outcome.value
+								.filter((symbol) => symbol.declarationKind === "event")
+								.map((symbol) => ({
+									line: symbol.range.startLineNumber,
+									name: symbol.name,
+								})),
+							parseFlowScriptAnchors(text),
+							options.getGate(),
+						),
+					);
+				});
 			},
 		},
 	);

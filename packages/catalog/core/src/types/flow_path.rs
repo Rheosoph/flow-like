@@ -72,8 +72,17 @@ impl FlowPath {
     pub async fn get(
         &self,
         context: &mut ExecutionContext,
-        mut bypass_cache: bool,
+        bypass_cache: bool,
     ) -> flow_like_types::Result<Vec<u8>> {
+        Ok(self.get_bytes(context, bypass_cache).await?.to_vec())
+    }
+
+    /// The object's contents as the store returned them, without copying.
+    pub async fn get_bytes(
+        &self,
+        context: &mut ExecutionContext,
+        mut bypass_cache: bool,
+    ) -> flow_like_types::Result<Bytes> {
         let store: FlowLikeStore = self.to_store(context).await?;
         if let FlowLikeStore::Memory(_) = store {
             bypass_cache = true;
@@ -84,8 +93,7 @@ impl FlowPath {
             let file = file.ok_or_else(|| {
                 flow_like_types::anyhow!("File not found in store: {}", self.path)
             })?;
-            let bytes = file.bytes().await?;
-            return Ok(bytes.to_vec());
+            return Ok(file.bytes().await?);
         }
 
         let (get_results, dirty) = self.get_cached_file(context).await?;
@@ -115,7 +123,6 @@ impl FlowPath {
             }
         }
 
-        let bytes = bytes.to_vec();
         Ok(bytes)
     }
 
@@ -123,10 +130,19 @@ impl FlowPath {
         &self,
         context: &mut ExecutionContext,
         bytes: Vec<u8>,
+        bypass_cache: bool,
+    ) -> flow_like_types::Result<()> {
+        self.put_bytes(context, bytes, bypass_cache).await
+    }
+
+    /// Writes `bytes` without copying them; a `Bytes` shared with a pin stays shared.
+    pub async fn put_bytes(
+        &self,
+        context: &mut ExecutionContext,
+        bytes: impl Into<Bytes>,
         mut bypass_cache: bool,
     ) -> flow_like_types::Result<()> {
-        let bytes = Bytes::from(bytes);
-        let payload = PutPayload::from_bytes(bytes);
+        let payload = PutPayload::from_bytes(bytes.into());
         let store = self.to_store(context).await?;
 
         if let FlowLikeStore::Memory(_) = store {

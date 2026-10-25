@@ -107,7 +107,7 @@ impl Delta {
     }
 }
 
-fn placeholders(start: usize, count: usize) -> String {
+pub(crate) fn placeholders(start: usize, count: usize) -> String {
     (start..start + count)
         .map(|n| format!("${n}"))
         .collect::<Vec<_>>()

@@ -55,6 +55,10 @@ pub(super) fn persist_recovery_snapshot(path: &Path, encoded: &[u8]) -> std::io:
 use super::frontend_tool_bridge::{FrontendToolApproval, FrontendToolBridge};
 pub use copilot_sdk::ToolHandler;
 use copilot_sdk::{Tool, ToolBinaryResult, ToolResultObject};
+use flow_like::a2ui::authoring::{
+    AuthoringError, ComponentSpec, PropKind, PropSpec, component_manifest, component_reference,
+};
+use flow_like::a2ui::copilot::lower_authored_components;
 use flow_like::copilot::FlowIrCommitToken;
 use flow_like::flow::ast::{
     RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
@@ -3414,13 +3418,7 @@ fn emit_ui_schema() -> Value {
     })
 }
 
-/// Emit UI tool - output A2UI JSON components
-fn create_emit_ui_tool(
-    emitted_surfaces: Option<Arc<Mutex<Vec<EmittedSurface>>>>,
-) -> (Tool, ToolHandler) {
-    let tool = Tool::new("emit_ui")
-        .description(
-            r#"Validate and stage A2UI components for the host to apply to the interface.
+const EMIT_UI_DESCRIPTION: &str = r#"Validate and stage A2UI components for the host to apply to the interface.
 
 emit_ui does not persist a page. In a delegated flowpilot_widget run the host saves the target page
 after you return; an open builder receives a pending review. A saved-page inspection during this
@@ -3434,27 +3432,21 @@ OUTPUT FORMAT:
   "components": [...]
 }
 
-COMPONENT FORMAT:
-{
-  "id": "unique-kebab-case-id",
-  "style": { "className": "tailwind classes" },
-  "component": { "type": "componentType", ...props }
-}
+COMPONENT FORMAT (one flat object per component):
+{"id": "unique-kebab-case-id", "type": "componentType", "style": {"className": "tailwind classes"}, ...props}
 
-BOUNDVALUE FORMAT (ALL props use this):
-- String: {"literalString": "text"}
-- Number: {"literalNumber": 42}
-- Boolean: {"literalBool": true}
-- Options: {"literalOptions": [{"value": "v", "label": "L"}]}
-- Data binding: {"path": "$.data.field", "defaultValue": "fallback"}
-
-CHILDREN FORMAT:
-"children": {"explicitList": ["child-id-1", "child-id-2"]}
+VALUES:
+- Props take plain JSON: "text", 42, true, ["a", "b"], {"key": "value"}.
+- Bind live data with {"path": "$.data.field", "defaultValue": "fallback"}; a bare string is always a literal, never a path.
+- children: ["child-id-1", "child-id-2"]; every id must exist in components.
+- options (select, radioGroup): [{"value": "v", "label": "L"}].
+- actions: [{"name": "workflow_event", "context": {"nodeId": "<board event node id>"}}].
+Existing surfaces use the nested form ({"id", "component": {"type", ...}}) with {"literalString": ...} wrappers; it is still accepted.
 
 AVAILABLE COMPONENTS (full docs + selection table in your system prompt):
 Layout: column, row, grid, stack, scrollArea, absolute, aspectRatio, overlay, box, center, spacer
 Display: text, image, icon, video, lottie, badge, avatar, userProfile, progress, spinner, skeleton, divider, markdown, diffView, filePreview, fileEditor, geoMap
-Interactive: button, textField (multiline for textarea), select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, voiceInput (audio recording/dictation), feedback (thumbs rating), appLink, link
+Interactive: button, textField (multiline for textarea), richText (formatted documents), excalidraw (drawing), select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, cameraView (user-started camera preview/capture), voiceInput (audio recording/dictation), feedback (thumbs rating), appLink, link
 Container: card, modal, tabs, accordion, drawer, tooltip, popover
 Data: table, plotlyChart, nivoChart, forecastChart (existing saved prediction, loads itself with viewer permissions), calendar, gantt, graph (own nodes/edges), ontologyGraph (this project's ontology, loads itself)
 Vision: boundingBoxOverlay, imageLabeler, imageHotspot
@@ -3482,120 +3474,115 @@ EXAMPLE - Simple card:
   "rootComponentId": "root",
   "canvasSettings": {"backgroundColor": "bg-background"},
   "components": [
-    {
-      "id": "root",
-      "style": {"className": "p-4"},
-      "component": {
-        "type": "card",
-        "children": {"explicitList": ["title", "content"]}
-      }
-    },
-    {
-      "id": "title",
-      "component": {
-        "type": "text",
-        "content": {"literalString": "Hello"},
-        "variant": {"literalString": "h2"}
-      }
-    },
-    {
-      "id": "content",
-      "component": {
-        "type": "text",
-        "content": {"literalString": "World"}
-      }
-    }
+    {"id": "root", "type": "card", "style": {"className": "p-4"}, "children": ["title", "content"]},
+    {"id": "title", "type": "text", "content": "Hello", "variant": "heading", "size": "xl"},
+    {"id": "content", "type": "text", "content": {"path": "$.data.message", "defaultValue": "World"}}
   ]
-}"#,
-        )
+}"#;
+
+/// Emit UI tool - output A2UI JSON components
+fn create_emit_ui_tool(
+    emitted_surfaces: Option<Arc<Mutex<Vec<EmittedSurface>>>>,
+) -> (Tool, ToolHandler) {
+    let tool = Tool::new("emit_ui")
+        .description(EMIT_UI_DESCRIPTION)
         .schema(emit_ui_schema());
 
-    let handler: ToolHandler = Arc::new(move |_name, args| {
-        let root_id = args
-            .get("rootComponentId")
-            .and_then(|v| v.as_str())
-            .unwrap_or("root");
-        let canvas = args.get("canvasSettings").cloned().unwrap_or(json!({}));
-        let components = args.get("components").cloned().unwrap_or(json!([]));
-
-        // Validate components and collect errors
-        let (validated_components, validation_errors) =
-            validate_ui_components(root_id, &canvas, &components);
-
-        if !validation_errors.is_empty() {
-            let error_list = validation_errors.join("\n- ");
-            // No tree echo: the errors name the offending component ids, and the model already
-            // has the tree it submitted. Echoing 100+ components per retry drowns the loop.
-            let result = json!({
-                "status": "validation_errors",
-                "errors": validation_errors,
-                "rootComponentId": root_id,
-                "message": format!(
-                    "No UI tree was staged. {} validation error(s). Fix these and call emit_ui again with the full corrected tree:\n- {}",
-                    validation_errors.len(),
-                    error_list
-                )
-            });
-            return ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default());
-        }
-
-        let component_count = validated_components
-            .as_array()
-            .map(|components| components.len())
-            .unwrap_or_default();
-
-        // The rendered tree travels through the emitted-surfaces store (the chat loop drains it
-        // into a <components> frame); the model only needs the outcome. Without a store (no
-        // consumer to drain it), fall back to echoing the tree so it is not lost.
-        let result = match &emitted_surfaces {
-            Some(store) => {
-                if let Ok(mut surfaces) = store.lock() {
-                    surfaces.push(EmittedSurface {
-                        root_component_id: root_id.to_string(),
-                        canvas_settings: canvas.clone(),
-                        components: validated_components,
-                    });
-                }
-                json!({
-                    "status": "rendered",
-                    "delivery_status": "staged",
-                    "persisted": false,
-                    "rootComponentId": root_id,
-                    "component_count": component_count,
-                    "message": format!("Validated and staged {component_count} UI component(s). Return your summary so the host can apply them; the host will report whether the page was persisted or staged for review.")
-                })
-            }
-            None => json!({
-                "status": "rendered",
-                "delivery_status": "staged",
-                "persisted": false,
-                "rootComponentId": root_id,
-                "canvasSettings": canvas,
-                "components": validated_components,
-                "message": "Validated UI output is ready for the host to apply. Page persistence is reported by the host after this run returns."
-            }),
-        };
-
-        ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default())
-    });
+    let handler: ToolHandler =
+        Arc::new(move |_name, args| emit_ui_result(args, emitted_surfaces.as_deref()));
 
     (tool, handler)
 }
 
+fn emit_ui_result(
+    args: &Value,
+    emitted_surfaces: Option<&Mutex<Vec<EmittedSurface>>>,
+) -> ToolResultObject {
+    let root_id = args
+        .get("rootComponentId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("root");
+    let canvas = args.get("canvasSettings").cloned().unwrap_or(json!({}));
+    let components = args.get("components").cloned().unwrap_or(json!([]));
+
+    let (validated_components, validation_errors) =
+        validate_ui_components(root_id, &canvas, &components);
+
+    if !validation_errors.is_empty() {
+        return emit_ui_validation_errors(root_id, validation_errors);
+    }
+
+    let component_count = validated_components
+        .as_array()
+        .map(|components| components.len())
+        .unwrap_or_default();
+
+    // The rendered tree travels through the emitted-surfaces store (the chat loop drains it
+    // into a <components> frame); the model only needs the outcome. Without a store (no
+    // consumer to drain it), fall back to echoing the tree so it is not lost.
+    let result = match emitted_surfaces {
+        Some(store) => {
+            if let Ok(mut surfaces) = store.lock() {
+                surfaces.push(EmittedSurface {
+                    root_component_id: root_id.to_string(),
+                    canvas_settings: canvas.clone(),
+                    components: validated_components,
+                });
+            }
+            json!({
+                "status": "rendered",
+                "delivery_status": "staged",
+                "persisted": false,
+                "rootComponentId": root_id,
+                "component_count": component_count,
+                "message": format!("Validated and staged {component_count} UI component(s). Return your summary so the host can apply them; the host will report whether the page was persisted or staged for review.")
+            })
+        }
+        None => json!({
+            "status": "rendered",
+            "delivery_status": "staged",
+            "persisted": false,
+            "rootComponentId": root_id,
+            "canvasSettings": canvas,
+            "components": validated_components,
+            "message": "Validated UI output is ready for the host to apply. Page persistence is reported by the host after this run returns."
+        }),
+    };
+
+    ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default())
+}
+
+/// No tree echo: the errors name the offending component ids, and the model already has the
+/// tree it submitted. Echoing 100+ components per retry drowns the loop.
+fn emit_ui_validation_errors(root_id: &str, validation_errors: Vec<String>) -> ToolResultObject {
+    let message = format!(
+        "No UI tree was staged. {} validation error(s). Fix these and call emit_ui again with the full corrected tree:\n- {}",
+        validation_errors.len(),
+        validation_errors.join("\n- ")
+    );
+    let result = json!({
+        "status": "validation_errors",
+        "errors": validation_errors,
+        "rootComponentId": root_id,
+        "message": message
+    });
+    ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default())
+}
+
+const GET_COMPONENT_SCHEMA_DESCRIPTION: &str = r#"FALLBACK detail lookup for a few A2UI component types. The component documentation embedded in your system prompt is the authoritative reference — do NOT call this for components already documented there.
+
+Returns: Full property list with required props, allowed values, and a working example in the plain authoring form.
+
+DETAILED PAGES EXIST ONLY FOR:
+column, row, grid, text, button, feedback, appLink, card, userProfile, textField, richText, select,
+image, icon, diffView, calendar, gantt, checkbox, switch, tabs, forecastChart, modal
+Style categories: spacing, colors, effects, layout, responsive, typography
+All other types return a pointer back to the embedded documentation."#;
+
 /// Component schema lookup tool
 fn create_get_component_schema_tool() -> (Tool, ToolHandler) {
     let tool = Tool::new("get_component_schema")
-        .description(
-            r#"FALLBACK detail lookup for a few A2UI component types. The component documentation embedded in your system prompt is the authoritative reference — do NOT call this for components already documented there.
-
-Returns: Full property list with types, required fields, BoundValue format, and a working example.
-
-DETAILED PAGES EXIST ONLY FOR:
-column, row, grid, text, button, feedback, appLink, card, userProfile, textField, select, image,
-icon, diffView, calendar, gantt, checkbox, switch, tabs, modal
-Style categories: spacing, colors, effects, layout, responsive, typography
-All other types return a pointer back to the embedded documentation."#,
-        )
+        .description(GET_COMPONENT_SCHEMA_DESCRIPTION)
         .schema(json!({
             "type": "object",
             "properties": {
@@ -3644,706 +3631,50 @@ All other types return a pointer back to the embedded documentation."#,
 // VALIDATION HELPERS
 // =============================================================================
 
-/// Known props per component type (mirrors validateComponents.ts)
-fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]> {
-    match component_type {
-        "row" => Some(&["gap", "align", "justify", "wrap", "reverse"]),
-        "column" => Some(&["gap", "align", "justify", "reverse", "wrap"]),
-        "stack" => Some(&["align", "width", "height"]),
-        "grid" => Some(&["columns", "rows", "gap", "columnGap", "rowGap", "autoFlow"]),
-        "scrollArea" => Some(&["direction"]),
-        "aspectRatio" => Some(&["ratio"]),
-        "absolute" => Some(&["width", "height"]),
-        "box" => Some(&["as"]),
-        "center" => Some(&["inline"]),
-        "spacer" => Some(&["size", "flex"]),
-        "overlay" => Some(&["baseComponentId", "overlays"]),
-        // Mirrors WidgetInstanceComponent in packages/ui/components/a2ui/types.ts plus the
-        // inline-definition form the prompts document (A2UIWidgetInstance.tsx).
-        "widgetInstance" => Some(&[
-            "instanceId",
-            "widgetId",
-            "appId",
-            "inlineWidgetDef",
-            "exposedPropValues",
-            "actionBindings",
-            "styleOverride",
-        ]),
-        // Mirrors MicroWidgetInstanceComponent in packages/ui/components/a2ui/types.ts. Every
-        // identifying field comes from `ui_inspect` — none of them can be invented.
-        "microWidgetInstance" => Some(&[
-            "instanceId",
-            "packageId",
-            "widgetId",
-            "packageVersion",
-            "bundleHash",
-            "contract",
-            "props",
-            "preview",
-            "actionBindings",
-            "styleOverride",
-        ]),
-        "text" => Some(&[
-            "content", "variant", "size", "weight", "color", "align", "truncate", "maxLines",
-        ]),
-        "image" => Some(&["src", "alt", "fit", "fallback", "loading", "aspectRatio"]),
-        "icon" => Some(&["name", "size", "color", "strokeWidth"]),
-        "video" => Some(&[
-            "src", "poster", "autoplay", "loop", "muted", "controls", "width", "height",
-        ]),
-        "lottie" => Some(&["src", "autoplay", "loop", "speed", "width", "height"]),
-        "markdown" => Some(&["content", "allowHtml"]),
-        "diffView" => Some(&[
-            "original",
-            "modified",
-            "mode",
-            "kind",
-            "language",
-            "markdownMode",
-            "showLineNumbers",
-            "wordWrap",
-            "wordLevel",
-            "collapseUnchanged",
-            "contextLines",
-            "showStats",
-            "originalLabel",
-            "modifiedLabel",
-            "ignoreWhitespace",
-            "ignoreCase",
-            "trimTrailingWhitespace",
-            "swapSides",
-        ]),
-        "divider" => Some(&["orientation", "thickness", "color"]),
-        "badge" => Some(&["content", "variant", "color"]),
-        "avatar" => Some(&["src", "fallback", "size"]),
-        "userProfile" => Some(&[
-            "value",
-            "variant",
-            "avatarSize",
-            "showHover",
-            "showEmail",
-            "showDescription",
-            "showUserId",
-            "showProfileLink",
-            "fallbackLabel",
-            "muted",
-        ]),
-        "progress" => Some(&["value", "max", "showLabel", "variant", "color"]),
-        "spinner" => Some(&["size", "color"]),
-        "skeleton" => Some(&["width", "height", "rounded"]),
-        "iframe" => Some(&[
-            "src",
-            "srcdoc",
-            "width",
-            "height",
-            "sandbox",
-            "allow",
-            "title",
-            "referrerPolicy",
-            "border",
-            "loading",
-        ]),
-        "table" => Some(&[
-            "columns",
-            "data",
-            "caption",
-            "striped",
-            "bordered",
-            "hoverable",
-            "compact",
-            "stickyHeader",
-            "sortable",
-            "searchable",
-            "paginated",
-            "pageSize",
-            "selectable",
-            "onRowClick",
-        ]),
-        "tableRow" => Some(&["cells", "selected", "disabled"]),
-        "tableCell" => Some(&["content", "isHeader", "colSpan", "rowSpan", "align"]),
-        "plotlyChart" => Some(&[
-            "chartType",
-            "title",
-            "series",
-            "xAxis",
-            "yAxis",
-            "data",
-            "layout",
-            "config",
-            "width",
-            "height",
-            "responsive",
-            "showLegend",
-            "legendPosition",
-        ]),
-        "forecastChart" => Some(&[
-            "forecastId",
-            "appId",
-            "userScoped",
-            "target",
-            "seriesId",
-            "view",
-            "showCovariates",
-            "showMetrics",
-            "showControls",
-            "showHeader",
-            "compact",
-            "height",
-        ]),
-        "nivoChart" => Some(&[
-            "chartType",
-            "title",
-            "data",
-            "height",
-            "colors",
-            "animate",
-            "showLegend",
-            "legendPosition",
-            "indexBy",
-            "keys",
-            "margin",
-            "axisBottom",
-            "axisLeft",
-            "axisTop",
-            "axisRight",
-            "config",
-            "barStyle",
-            "lineStyle",
-            "pieStyle",
-            "radarStyle",
-            "heatmapStyle",
-            "scatterStyle",
-            "funnelStyle",
-            "treemapStyle",
-            "sankeyStyle",
-            "calendarStyle",
-            "chordStyle",
-        ]),
-        "filePreview" => Some(&[
-            "src",
-            "url",
-            "filename",
-            "mimeType",
-            "fileType",
-            "editable",
-            "initialEditing",
-            "value",
-            "showControls",
-            "fit",
-            "fallbackText",
-            "height",
-            "showDownload",
-            "loading",
-            "variant",
-            "autoPlay",
-        ]),
-        "fileEditor" => Some(&[
-            "editor",
-            "src",
-            "url",
-            "filename",
-            "mimeType",
-            "editable",
-            "initialEditing",
-            "value",
-            "showDownload",
-            "height",
-            "fallbackText",
-        ]),
-        "boundingBoxOverlay" => Some(&[
-            "src",
-            "alt",
-            "boxes",
-            "showLabels",
-            "showConfidence",
-            "strokeWidth",
-            "fontSize",
-            "fit",
-            "normalized",
-            "interactive",
-        ]),
-        "button" => Some(&[
-            "label",
-            "variant",
-            "size",
-            "disabled",
-            "loading",
-            "icon",
-            "iconPosition",
-            "tooltip",
-        ]),
-        "feedback" => Some(&[
-            "mode",
-            "size",
-            "title",
-            "description",
-            "positiveLabel",
-            "negativeLabel",
-            "positiveRating",
-            "negativeRating",
-            "showComment",
-            "commentMode",
-            "commentLabel",
-            "commentPlaceholder",
-            "commentTitle",
-            "commentDescription",
-            "commentSubmitLabel",
-            "commentCancelLabel",
-            "feedbackId",
-            "includeState",
-            "pageContextMode",
-            "pageContextQueryParamAllowlist",
-            "pageContextQueryParamDenylist",
-            "includePageHash",
-            "successMessage",
-            "disabled",
-        ]),
-        "appLink" => Some(&[
-            "target",
-            "label",
-            "variant",
-            "size",
-            "icon",
-            "iconPosition",
-            "appId",
-            "eventId",
-            "disabled",
-        ]),
-        "textField" => Some(&[
-            "value",
-            "placeholder",
-            "label",
-            "helperText",
-            "error",
-            "disabled",
-            "inputType",
-            "multiline",
-            "rows",
-            "maxLength",
-            "required",
-            "debounceMs",
-        ]),
-        "richText" => Some(&[
-            "value",
-            "documentId",
-            "documentRevision",
-            "currentUser",
-            "reviewEnabled",
-            "label",
-            "helperText",
-            "placeholder",
-            "error",
-            "disabled",
-            "readOnly",
-            "uploadPrefix",
-            "uploadScope",
-            "minHeight",
-            "maxHeight",
-            "debounceMs",
-        ]),
-        "select" => Some(&[
-            "value",
-            "options",
-            "placeholder",
-            "label",
-            "disabled",
-            "multiple",
-            "searchable",
-        ]),
-        "slider" => Some(&[
-            "value",
-            "min",
-            "max",
-            "step",
-            "disabled",
-            "showValue",
-            "label",
-            "debounceMs",
-        ]),
-        "checkbox" => Some(&["checked", "label", "disabled", "indeterminate"]),
-        "switch" => Some(&["checked", "label", "disabled"]),
-        "radioGroup" => Some(&["value", "options", "disabled", "orientation", "label"]),
-        "dateTimeInput" => Some(&["value", "mode", "min", "max", "disabled", "label"]),
-        "fileInput" => Some(&[
-            "value",
-            "label",
-            "helperText",
-            "accept",
-            "multiple",
-            "directory",
-            "maxSize",
-            "maxFiles",
-            "disabled",
-            "error",
-        ]),
-        "imageInput" => Some(&[
-            "value",
-            "label",
-            "helperText",
-            "accept",
-            "multiple",
-            "maxSize",
-            "maxFiles",
-            "disabled",
-            "error",
-            "aspectRatio",
-            "showPreview",
-        ]),
-        "voiceInput" => Some(&[
-            "value",
-            "label",
-            "helperText",
-            "maxDuration",
-            "autoStop",
-            "silenceThreshold",
-            "silenceDuration",
-            "disabled",
-            "error",
-            "visualizer",
-            "variant",
-            "size",
-            "mode",
-            "invoke",
-            "color",
-            "recordingColor",
-            "resultMode",
-            "src",
-            "url",
-        ]),
-        "excalidraw" => Some(&[
-            "value",
-            "width",
-            "height",
-            "readOnly",
-            "theme",
-            "autoSave",
-            "autoSaveDelayMs",
-            "autoSaveMinChanges",
-        ]),
-        "imageLabeler" => Some(&[
-            "src",
-            "alt",
-            "boxes",
-            "labels",
-            "disabled",
-            "showLabels",
-            "minBoxSize",
-        ]),
-        "imageHotspot" => Some(&[
-            "src",
-            "alt",
-            "hotspots",
-            "showMarkers",
-            "markerStyle",
-            "fit",
-            "normalized",
-            "showTooltips",
-        ]),
-        "geoMap" => Some(&[
-            "viewport",
-            "markers",
-            "routes",
-            "showControls",
-            "showZoom",
-            "showCompass",
-            "showLocate",
-            "showFullscreen",
-            "interactive",
-            "controlPosition",
-            "clusterMarkers",
-            "clusterRadius",
-            "clusterMaxZoom",
-        ]),
-        "graph" => Some(&[
-            "nodes",
-            "edges",
-            "labelStyles",
-            "showToolbar",
-            "showSearch",
-            "showLegend",
-            "showInspector",
-            "height",
-        ]),
-        "ontologyGraph" => Some(&[
-            "ontologyId",
-            "appId",
-            "limit",
-            "allowExpand",
-            "allowSearch",
-            "allowPaths",
-            "allowActions",
-            "allowCypher",
-            "allowStyleEdit",
-            "allowLimitChange",
-            "showToolbar",
-            "showLegend",
-            "height",
-        ]),
-        "link" => Some(&[
-            "href",
-            "label",
-            "route",
-            "queryParams",
-            "external",
-            "target",
-            "variant",
-            "underline",
-            "disabled",
-        ]),
-        "card" => Some(&[
-            "title",
-            "description",
-            "footer",
-            "hoverable",
-            "clickable",
-            "variant",
-            "padding",
-            "headerImage",
-            "headerIcon",
-        ]),
-        "modal" => Some(&[
-            "open",
-            "title",
-            "description",
-            "closeOnOverlay",
-            "closeOnEscape",
-            "showCloseButton",
-            "size",
-            "centered",
-        ]),
-        "tabs" => Some(&[
-            "value",
-            "tabs",
-            "orientation",
-            "variant",
-            "listStyle",
-            "triggerStyle",
-            "contentStyle",
-        ]),
-        "accordion" => Some(&["items", "multiple", "defaultExpanded", "collapsible"]),
-        "drawer" => Some(&["open", "side", "title", "size", "overlay", "closable"]),
-        "tooltip" => Some(&["content", "side", "delayMs", "maxWidth"]),
-        "popover" => Some(&[
-            "open",
-            "contentComponentId",
-            "side",
-            "trigger",
-            "closeOnClickOutside",
-        ]),
-        "canvas2d" => Some(&["width", "height", "backgroundColor", "pixelPerfect"]),
-        "sprite" => Some(&[
-            "src", "x", "y", "width", "height", "rotation", "scale", "opacity", "flipX", "flipY",
-            "zIndex",
-        ]),
-        "shape" => Some(&[
-            "shapeType",
-            "x",
-            "y",
-            "width",
-            "height",
-            "radius",
-            "points",
-            "fill",
-            "stroke",
-            "strokeWidth",
-        ]),
-        "scene3d" => Some(&[
-            "width",
-            "height",
-            "cameraType",
-            "cameraPosition",
-            "backgroundColor",
-            "controlMode",
-            "fixedView",
-            "autoRotateSpeed",
-            "enableControls",
-            "enableZoom",
-            "enablePan",
-            "fov",
-            "near",
-            "far",
-            "target",
-            "ambientLight",
-            "directionalLight",
-            "showGrid",
-            "showAxes",
-        ]),
-        "model3d" => Some(&[
-            "src",
-            "position",
-            "rotation",
-            "scale",
-            "castShadow",
-            "receiveShadow",
-            "animation",
-            "autoRotate",
-            "rotateSpeed",
-            "viewerHeight",
-            "backgroundColor",
-            "cameraDistance",
-            "fov",
-            "cameraAngle",
-            "cameraPosition",
-            "cameraTarget",
-            "enableControls",
-            "enableZoom",
-            "enablePan",
-            "autoRotateCamera",
-            "cameraRotateSpeed",
-            "ambientLight",
-            "directionalLight",
-            "fillLight",
-            "rimLight",
-            "lightColor",
-            "lightingPreset",
-            "showGround",
-            "groundColor",
-            "enableReflections",
-            "environment",
-            "environmentSource",
-            "useHdrBackground",
-            "polyhavenHdri",
-            "polyhavenResolution",
-            "hdriUrl",
-            "groundSize",
-            "groundOffsetY",
-            "groundFollowCamera",
-        ]),
-        "dialogue" => Some(&[
-            "text",
-            "speakerName",
-            "speakerPortraitId",
-            "typewriter",
-            "typewriterSpeed",
-        ]),
-        "characterPortrait" => Some(&["image", "expression", "position", "size", "dimmed"]),
-        "choiceMenu" => Some(&["choices", "title", "layout"]),
-        "inventoryGrid" => Some(&["items", "columns", "rows", "cellSize"]),
-        "healthBar" => Some(&[
-            "value",
-            "maxValue",
-            "label",
-            "showValue",
-            "fillColor",
-            "backgroundColor",
-            "variant",
-        ]),
-        "miniMap" => Some(&[
-            "mapImage",
-            "width",
-            "height",
-            "markers",
-            "playerX",
-            "playerY",
-            "playerRotation",
-        ]),
-        "calendar" => Some(&[
-            "events",
-            "view",
-            "date",
-            "title",
-            "density",
-            "editable",
-            "selectable",
-            "firstDayOfWeek",
-            "minTime",
-            "maxTime",
-            "slotDuration",
-            "showWeekends",
-            "showNowIndicator",
-            "showAllDay",
-            "showViewSwitcher",
-            "locale",
-            "height",
-            "responsive",
-            "compactBreakpoint",
-        ]),
-        "gantt" => Some(&[
-            "tasks",
-            "view",
-            "title",
-            "density",
-            "editable",
-            "draggable",
-            "resizable",
-            "showDependencies",
-            "showProgress",
-            "showToday",
-            "showViewSwitcher",
-            "showTaskList",
-            "taskListWidth",
-            "shadeWeekends",
-            "rowHeight",
-            "columns",
-            "height",
-            "responsive",
-            "compactBreakpoint",
-        ]),
-        _ => None,
-    }
+/// Props the renderer accepts beyond the typed `*Props` structs the component manifest is
+/// generated from. Mirrors `RUNTIME_ONLY_PROPS` in validateComponents.ts.
+const RUNTIME_ONLY_PROPS: &[(&str, &[&str])] = &[("widgetInstance", &["inlineWidgetDef"])];
+
+fn known_prop_names(spec: &ComponentSpec) -> Vec<&str> {
+    let runtime_only = RUNTIME_ONLY_PROPS
+        .iter()
+        .find(|(component_type, _)| *component_type == spec.component_type)
+        .map(|(_, props)| *props)
+        .unwrap_or_default();
+    spec.props
+        .iter()
+        .map(|prop| prop.name.as_str())
+        .chain(runtime_only.iter().copied())
+        .collect()
 }
 
-/// Required props per component type
-fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
-    match component_type {
-        "overlay" => &["baseComponentId", "overlays"],
-        "text" => &["content"],
-        "image" => &["src"],
-        "icon" => &["name"],
-        "video" => &["src"],
-        "lottie" => &["src"],
-        "fileEditor" => &["editor"],
-        "markdown" => &["content"],
-        "diffView" => &["original", "modified"],
-        "badge" => &["content"],
-        "userProfile" => &["value"],
-        "progress" => &["value"],
-        "button" => &["label"],
-        "textField" => &["value"],
-        "richText" => &["value"],
-        "select" => &["value", "options"],
-        "slider" => &["value"],
-        "checkbox" => &["checked"],
-        "switch" => &["checked"],
-        "radioGroup" => &["value", "options"],
-        "dateTimeInput" => &["value"],
-        "fileInput" => &["value"],
-        "imageInput" => &["value"],
-        "voiceInput" => &["value"],
-        "link" => &["href"],
-        "modal" => &["open"],
-        "tabs" => &["value", "tabs"],
-        "accordion" => &["items"],
-        "drawer" => &["open"],
-        "tooltip" => &["content"],
-        "popover" => &["contentComponentId"],
-        "table" => &["columns", "data"],
-        "tableRow" => &["cells"],
-        "tableCell" => &["content"],
-        "canvas2d" => &["width", "height"],
-        "sprite" => &["src", "x", "y"],
-        "shape" => &["shapeType", "x", "y"],
-        "scene3d" => &["width", "height"],
-        "model3d" => &["src"],
-        "dialogue" => &["text"],
-        "characterPortrait" => &["image"],
-        "choiceMenu" => &["choices"],
-        "inventoryGrid" => &["items"],
-        "healthBar" => &["value", "maxValue"],
-        "miniMap" => &["width", "height"],
-        "aspectRatio" => &["ratio"],
-        "nivoChart" => &["chartType"],
-        "forecastChart" => &["forecastId"],
-        "boundingBoxOverlay" => &["src", "boxes"],
-        "imageLabeler" => &["src", "labels"],
-        "imageHotspot" => &["src", "hotspots"],
-        "widgetInstance" => &["instanceId", "widgetId"],
-        "microWidgetInstance" => &["instanceId", "packageId", "widgetId", "packageVersion"],
-        "calendar" => &["events"],
-        "gantt" => &["tasks"],
-        "graph" => &["nodes"],
-        "ontologyGraph" => &["ontologyId"],
-        _ => &[],
+fn is_structured_prop(prop: &PropSpec) -> bool {
+    matches!(
+        prop.kind,
+        PropKind::List | PropKind::Object | PropKind::Style | PropKind::Opaque
+    )
+}
+
+/// Manifest entry for a component type, also accepting the lowercase and snake_case spellings
+/// `get_component_schema` accepts.
+fn lookup_component_spec(component_type: &str) -> Option<&ComponentSpec> {
+    let manifest = component_manifest();
+    manifest.component(component_type).or_else(|| {
+        let wanted: String = component_type
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        manifest
+            .components
+            .iter()
+            .find(|spec| spec.component_type.eq_ignore_ascii_case(&wanted))
+    })
+}
+
+fn lowering_error_message(error: &AuthoringError) -> String {
+    match &error.id {
+        Some(id) => format!("{id}: {}", error.message),
+        None => format!("components[{}]: {}", error.index, error.message),
     }
 }
 
@@ -4379,7 +3710,9 @@ const BUILTIN_ACTION_NAMES: &[&str] = &[
 const MAX_UI_EVENT_HANDLERS: usize = 64;
 const MAX_UI_EVENT_NAME_CHARS: usize = 128;
 
-/// Validate an array of components and return (validated_components, errors)
+/// Lower the authored components to the canonical shape, validate them, and return
+/// (canonical components, errors). Every check runs on the canonical form, so plain values get
+/// the same scrutiny as BoundValue-wrapped ones.
 fn validate_ui_components(
     root_id: &str,
     canvas: &Value,
@@ -4421,10 +3754,13 @@ fn validate_ui_components(
         ));
     }
 
+    let (lowered, lowering_errors) = lower_authored_components(arr.clone());
+    errors.extend(lowering_errors.iter().map(lowering_error_message));
+
     let mut validated = Vec::new();
     let mut child_graph: HashMap<String, Vec<String>> = HashMap::new();
 
-    for comp in arr {
+    for comp in lowered {
         let id = match comp.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
@@ -4462,15 +3798,14 @@ fn validate_ui_components(
             }
         };
 
-        let known = known_props_for_type(comp_type);
-        if known.is_none() {
+        let Some(spec) = component_manifest().component(comp_type) else {
             errors.push(format!(
                 "{}: unknown component type '{}'. Use one of the component types listed in the component documentation in your system prompt.",
                 id, comp_type
             ));
             continue;
-        }
-        let known_set = known.unwrap();
+        };
+        let known_props = known_prop_names(spec);
 
         if comp_type == "markdown"
             && component
@@ -4502,78 +3837,36 @@ fn validate_ui_components(
         }
 
         if let Some(obj) = component.as_object() {
-            for key in obj.keys() {
+            for (key, value) in obj {
                 let k = key.as_str();
-                if !BASE_PROPS.contains(&k) && !known_set.contains(&k) {
+                if !BASE_PROPS.contains(&k) && !known_props.contains(&k) {
                     errors.push(format!(
                         "{}: unknown prop '{}' on '{}'. Valid props: {}. Check the component documentation in your system prompt.",
                         id,
                         k,
                         comp_type,
-                        known.map(|props| props.join(", ")).unwrap_or_default()
+                        known_props.join(", ")
+                    ));
+                }
+                // Lowering wraps bound props, so a bare scalar left here sits on a prop that
+                // needs a structure (list items, nested object, style, map).
+                if (value.is_string() || value.is_number() || value.is_boolean())
+                    && spec.prop(k).is_some_and(is_structured_prop)
+                {
+                    errors.push(format!(
+                        "{}: prop '{}' on '{}' takes structured JSON (an object or array), not a bare value",
+                        id, k, comp_type
                     ));
                 }
             }
         }
 
-        for required in required_props_for_type(comp_type) {
-            if component.get(*required).is_none() {
+        for required in spec.props.iter().filter(|prop| prop.required) {
+            if component.get(required.name.as_str()).is_none() {
                 errors.push(format!(
                     "{}: missing required prop '{}' on '{}'. This prop is mandatory.",
-                    id, required, comp_type
+                    id, required.name, comp_type
                 ));
-            }
-        }
-
-        // Props that are plain values in a2ui/types.ts (not BoundValue-wrapped).
-        let plain_props: &[&str] = match comp_type {
-            "overlay" => &["baseComponentId"],
-            "popover" => &["contentComponentId"],
-            "widgetInstance" => &["instanceId", "widgetId", "appId"],
-            "microWidgetInstance" => &[
-                "instanceId",
-                "packageId",
-                "widgetId",
-                "packageVersion",
-                "bundleHash",
-                "preview",
-            ],
-            "link" => &["external", "target", "variant", "underline"],
-            _ => &[],
-        };
-
-        if let Some(obj) = component.as_object() {
-            for (key, value) in obj {
-                let k = key.as_str();
-                if BASE_PROPS.contains(&k) || plain_props.contains(&k) {
-                    continue;
-                }
-                if matches!(
-                    k,
-                    "tabs"
-                        | "items"
-                        | "overlays"
-                        | "columns"
-                        | "data"
-                        | "boxes"
-                        | "hotspots"
-                        | "markers"
-                        | "choices"
-                ) {
-                    continue;
-                }
-                if (value.is_string() || value.is_number() || value.is_boolean())
-                    && known_set.contains(&k)
-                    && k != "type"
-                {
-                    errors.push(format!(
-                            "{}: prop '{}' uses a bare value. Wrap it as BoundValue: string→{{\"literalString\": \"{}\"}}, number→{{\"literalNumber\": {}}}, bool→{{\"literalBool\": {}}}",
-                            id, k,
-                            value.as_str().unwrap_or("..."),
-                            value.as_f64().map(|n| n.to_string()).unwrap_or_else(|| "...".to_string()),
-                            value.as_bool().map(|b| b.to_string()).unwrap_or_else(|| "...".to_string()),
-                        ));
-                }
             }
         }
 
@@ -4668,7 +3961,7 @@ fn validate_ui_components(
             child_graph.insert(id.to_string(), component_refs);
         }
 
-        validated.push(comp.clone());
+        validated.push(comp);
     }
 
     if let Some(cycle) = find_child_cycle(&child_graph) {
@@ -5123,30 +4416,18 @@ fn get_component_schema_doc(component_type: &str) -> String {
     use flow_like::a2ui::copilot::get_component_schema;
 
     let base_doc = get_component_schema(component_type);
-
-    // Add BoundValue reminder and known props list
-    if let Some(props) = known_props_for_type(component_type) {
-        let required = required_props_for_type(component_type);
-        let prop_list: Vec<String> = props
-            .iter()
-            .map(|p| {
-                if required.contains(p) {
-                    format!("- {} (REQUIRED)", p)
-                } else {
-                    format!("- {}", p)
-                }
-            })
-            .collect();
-
-        format!(
-            "{}\n\n### Valid Props\n{}\n\n### BoundValue Reminder\nAll props must use BoundValue format:\n- String: {{\"literalString\": \"text\"}}\n- Number: {{\"literalNumber\": 42}}\n- Boolean: {{\"literalBool\": true}}\n- Options: {{\"literalOptions\": [{{\"value\": \"v\", \"label\": \"L\"}}]}}\n- Children: {{\"explicitList\": [\"child-id-1\"]}}",
-            base_doc,
-            prop_list.join("\n")
-        )
-    } else {
-        base_doc
-    }
+    let Some(spec) = lookup_component_spec(component_type) else {
+        return base_doc;
+    };
+    format!(
+        "{base_doc}\n\n### Props (`*` required, `(a|b)` allowed values)\n{}\n\n### Authoring Reminder\n{EMIT_UI_AUTHORING_REMINDER}",
+        component_reference(&[spec.component_type.as_str()])
+    )
 }
+
+const EMIT_UI_AUTHORING_REMINDER: &str = r#"- Props take plain JSON values: "text", 42, true, ["a", "b"], {"key": "value"}.
+- Bind live data with {"path": "$.data.field", "defaultValue": "fallback"}; a bare string is always a literal.
+- children: ["child-id-1", "child-id-2"]; options: [{"value": "v", "label": "L"}]."#;
 
 #[cfg(test)]
 mod tests {
@@ -6761,6 +6042,8 @@ mod tests {
         "checkbox",
         "switch",
         "tabs",
+        "forecastChart",
+        "richText",
         "modal",
     ];
 
@@ -6811,59 +6094,85 @@ mod tests {
         }
     }
 
+    /// The same representative value in the plain authoring form.
+    fn representative_plain_value(prop: &PropSpec) -> Value {
+        match prop.kind {
+            PropKind::List => json!([]),
+            PropKind::Object | PropKind::Style | PropKind::Opaque => json!({}),
+            PropKind::Bound | PropKind::Plain => match prop.name.as_str() {
+                "width" | "height" | "x" | "y" | "ratio" | "maxValue" => json!(100),
+                "checked" | "open" => json!(false),
+                "options" => json!([{"value": "a", "label": "A"}]),
+                "events" | "tasks" => json!([]),
+                _ => prop
+                    .values
+                    .first()
+                    .map_or_else(|| json!("x"), |value| json!(value)),
+            },
+        }
+    }
+
     #[test]
     fn emit_ui_accepts_every_documented_component_type() {
         for comp_type in documented_component_types() {
-            let props = known_props_for_type(&comp_type);
-            assert!(
-                props.is_some(),
-                "documented component type '{comp_type}' is rejected by known_props_for_type — validator drifted from the docs"
-            );
+            let spec = component_manifest().component(&comp_type).unwrap_or_else(|| {
+                panic!(
+                    "documented component type '{comp_type}' is missing from the component manifest — the docs drifted from the renderer"
+                )
+            });
 
-            let mut component = serde_json::Map::new();
-            component.insert("type".to_string(), json!(comp_type));
-            component.insert("hidden".to_string(), json!({"literalBool": false}));
-            for required in required_props_for_type(&comp_type) {
-                component.insert(required.to_string(), representative_prop_value(required));
+            let mut canonical = serde_json::Map::new();
+            canonical.insert("type".to_string(), json!(comp_type));
+            canonical.insert("hidden".to_string(), json!({"literalBool": false}));
+            let mut authored = serde_json::Map::new();
+            authored.insert("id".to_string(), json!("root"));
+            authored.insert("type".to_string(), json!(comp_type));
+            authored.insert("hidden".to_string(), json!(false));
+            for required in spec.props.iter().filter(|prop| prop.required) {
+                canonical.insert(
+                    required.name.clone(),
+                    representative_prop_value(&required.name),
+                );
+                authored.insert(required.name.clone(), representative_plain_value(required));
             }
 
             // Reference-typed required props (e.g. overlay's baseComponentId) use the generic
             // "x" representative value; give them a real component to resolve against.
-            let mut referenced = serde_json::Map::new();
-            referenced.insert("type".to_string(), json!("text"));
-            for required in required_props_for_type("text") {
-                referenced.insert(required.to_string(), representative_prop_value(required));
+            let referenced = json!({ "id": "x", "type": "text", "content": "x" });
+            for components in [
+                json!([
+                    { "id": "root", "component": Value::Object(canonical) },
+                    referenced.clone(),
+                ]),
+                json!([Value::Object(authored), referenced]),
+            ] {
+                let (_, errors) = validate_ui_components("root", &json!({}), &components);
+                assert!(
+                    errors.is_empty(),
+                    "documented component type '{comp_type}' fails emit_ui validation: {errors:?}"
+                );
             }
-            let components = json!([
-                { "id": "root", "component": Value::Object(component) },
-                { "id": "x", "component": Value::Object(referenced) },
-            ]);
-            let (_, errors) = validate_ui_components("root", &json!({}), &components);
-            assert!(
-                errors.is_empty(),
-                "documented component type '{comp_type}' fails emit_ui validation: {errors:?}"
-            );
         }
     }
 
     #[test]
     fn emit_ui_accepts_all_known_props_for_documented_types() {
         for comp_type in documented_component_types() {
-            let Some(props) = known_props_for_type(&comp_type) else {
+            let Some(spec) = component_manifest().component(&comp_type) else {
                 continue;
             };
             let mut component = serde_json::Map::new();
             component.insert("type".to_string(), json!(comp_type));
-            for prop in props {
+            for prop in known_prop_names(spec) {
                 component.insert(prop.to_string(), representative_prop_value(prop));
             }
             // Plain-typed reference props must point at a real component.
             component.remove("baseComponentId");
             component.remove("contentComponentId");
-            for required in required_props_for_type(&comp_type) {
+            for required in spec.props.iter().filter(|prop| prop.required) {
                 component
-                    .entry(required.to_string())
-                    .or_insert_with(|| representative_prop_value(required));
+                    .entry(required.name.clone())
+                    .or_insert_with(|| representative_prop_value(&required.name));
             }
 
             let components = json!([{ "id": "root", "component": Value::Object(component) }]);
@@ -6898,6 +6207,213 @@ mod tests {
         configured[0]["component"]["editor"] = json!({ "literalString": "solidcraft" });
         let (_, errors) = validate_ui_components("root", &json!({}), &configured);
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn emit_ui_lowers_the_plain_authoring_form_to_canonical_components() {
+        let components = json!([
+            {"id": "root", "type": "column", "gap": "12px", "style": {"className": "p-4"}, "children": ["title", "go"]},
+            {"id": "title", "type": "text", "content": "Recipe Remix", "variant": "heading"},
+            {
+                "id": "go",
+                "type": "button",
+                "label": "Run",
+                "disabled": false,
+                "action": {"name": "workflow_event", "context": {"nodeId": "evt-run"}}
+            }
+        ]);
+        let (validated, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            validated,
+            json!([
+                {
+                    "id": "root",
+                    "style": {"className": "p-4"},
+                    "component": {
+                        "type": "column",
+                        "gap": {"literalString": "12px"},
+                        "children": {"explicitList": ["title", "go"]}
+                    }
+                },
+                {
+                    "id": "title",
+                    "component": {
+                        "type": "text",
+                        "content": {"literalString": "Recipe Remix"},
+                        "variant": {"literalString": "heading"}
+                    }
+                },
+                {
+                    "id": "go",
+                    "component": {
+                        "type": "button",
+                        "label": {"literalString": "Run"},
+                        "disabled": {"literalBool": false},
+                        "actions": [{"name": "workflow_event", "context": {"nodeId": "evt-run"}}]
+                    }
+                }
+            ])
+        );
+        let typed: Vec<flow_like::a2ui::SurfaceComponent> =
+            serde_json::from_value(validated).expect("canonical components deserialize");
+        assert_eq!(typed.len(), 3);
+    }
+
+    #[test]
+    fn emit_ui_rejects_unsafe_markdown_and_iframe_props_written_as_plain_values() {
+        let components = json!([
+            {"id": "root", "type": "column", "children": ["doc", "frame"]},
+            {"id": "doc", "type": "markdown", "content": "<b>hi</b>", "allowHtml": true},
+            {
+                "id": "frame",
+                "type": "iframe",
+                "src": "https://example.com",
+                "sandbox": "allow-scripts allow-same-origin"
+            }
+        ]);
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("doc: markdown.allowHtml must be false")),
+            "a bare allowHtml must still be rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("frame: iframe sandbox token 'allow-same-origin'")),
+            "a bare iframe sandbox must still be checked: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_reports_components_that_cannot_be_lowered() {
+        let components = json!([
+            {"id": "root", "type": "column", "children": ["typeless"]},
+            {"id": "typeless", "content": "no type"},
+            "not a component"
+        ]);
+        let (validated, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with("typeless: ") && error.contains("type")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with("components[2]: ")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|error| error.contains("doesn't exist")),
+            "a component that fails lowering is still a known id: {errors:?}"
+        );
+        assert_eq!(validated.as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn emit_ui_rejects_bare_values_on_structured_props() {
+        let components = json!([{"id": "root", "type": "tabs", "value": "a", "tabs": "a"}]);
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("prop 'tabs' on 'tabs' takes structured JSON")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_lowers_inline_widget_definitions() {
+        let components = json!([{
+            "id": "root",
+            "type": "widgetInstance",
+            "widgetId": "card",
+            "instanceId": "card-1",
+            "inlineWidgetDef": {
+                "name": "Card",
+                "rootComponentId": "c-root",
+                "components": [
+                    {"id": "c-root", "type": "column", "children": ["c-title"]},
+                    {"id": "c-title", "type": "text", "content": {"path": "$.item.name"}, "size": "lg"}
+                ]
+            }
+        }]);
+        let (validated, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(errors.is_empty(), "{errors:?}");
+        let inner = &validated[0]["component"]["inlineWidgetDef"]["components"];
+        assert_eq!(
+            inner[0]["component"]["children"],
+            json!({"explicitList": ["c-title"]})
+        );
+        assert_eq!(
+            inner[1]["component"]["size"],
+            json!({"literalString": "lg"})
+        );
+    }
+
+    #[test]
+    fn emit_ui_description_lists_every_component_type() {
+        use flow_like::a2ui::copilot::UNADVERTISED_COMPONENT_TYPES;
+
+        let listed = EMIT_UI_DESCRIPTION
+            .split("AVAILABLE COMPONENTS")
+            .nth(1)
+            .and_then(|rest| rest.split("Pick the purpose-built").next())
+            .expect("the description lists the available components");
+        let words: HashSet<&str> = listed.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+        for spec in &component_manifest().components {
+            let component_type = spec.component_type.as_str();
+            if UNADVERTISED_COMPONENT_TYPES.contains(&component_type) {
+                continue;
+            }
+            assert!(
+                words.contains(component_type),
+                "emit_ui description does not list '{component_type}'"
+            );
+        }
+    }
+
+    #[test]
+    fn emit_ui_description_example_validates() {
+        let example = EMIT_UI_DESCRIPTION
+            .split("EXAMPLE - Simple card:")
+            .nth(1)
+            .expect("the description carries an example");
+        let surface: Value = serde_json::from_str(example.trim()).expect("example JSON parses");
+        let (_, errors) = validate_ui_components(
+            surface["rootComponentId"].as_str().unwrap_or_default(),
+            &surface["canvasSettings"],
+            &surface["components"],
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn component_schema_tool_lists_exactly_the_detailed_pages() {
+        for page_type in SCHEMA_PAGE_TYPES {
+            assert!(
+                GET_COMPONENT_SCHEMA_DESCRIPTION.contains(page_type),
+                "get_component_schema does not advertise its '{page_type}' page"
+            );
+            assert!(
+                !flow_like::a2ui::copilot::get_component_schema(page_type)
+                    .starts_with("No detailed schema page"),
+                "get_component_schema advertises '{page_type}' without a page"
+            );
+        }
+    }
+
+    #[test]
+    fn component_schema_doc_appends_the_generated_reference() {
+        let doc = get_component_schema_doc("textfield");
+        assert!(doc.contains("- textField: value*"), "{doc}");
+        assert!(doc.contains("debounceMs"), "{doc}");
+        assert!(doc.contains("### Authoring Reminder"), "{doc}");
+        assert!(!doc.contains("BoundValue Reminder"), "{doc}");
     }
 
     #[test]
@@ -7052,7 +6568,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_ui_rejects_malformed_named_event_handlers() {
+    fn emit_ui_repairs_handler_shapes_and_rejects_malformed_named_event_handlers() {
         let components = json!([{
             "id": "root",
             "component": {
@@ -7078,17 +6594,23 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("eventHandlers.open must be an array"))
-        );
-        assert!(
-            errors
-                .iter()
                 .any(|error| error.contains("eventHandlers.move[0].name"))
         );
+        // Lowering repairs shape slips — a lone action becomes a one-item list and a missing
+        // context an empty one — so only the workflow contract is left to reject them.
         assert!(
-            errors
+            !errors
                 .iter()
-                .any(|error| error.contains("eventHandlers.move[1].context"))
+                .any(|error| error.contains("must be an array")),
+            "{errors:?}"
         );
+        for handler in ["eventHandlers.open[0]", "eventHandlers.move[1]"] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains(handler) && error.contains("'nodeId'")),
+                "{handler} without nodeId must be rejected: {errors:?}"
+            );
+        }
     }
 }

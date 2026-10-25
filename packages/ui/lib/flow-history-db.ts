@@ -153,25 +153,58 @@ export class DexieHistoryPersistence implements HistoryPersistence {
 		);
 	}
 
-	/**
-	 * Drop the entries of boards untouched since `before`. Delivery markers are kept: they are
-	 * tiny, and a late receipt replay must still be recognised.
-	 */
 	async gc(before: number): Promise<void> {
-		const store = db();
-		const stale = await store.cursors
-			.where("updatedAt")
-			.below(before)
-			.toArray();
-		if (stale.length === 0) return;
-		await store.transaction("rw", store.entries, store.cursors, async () => {
-			for (const cursor of stale) {
-				await store.entries.where("board").equals(cursor.board).delete();
-				await store.cursors.delete(cursor.board);
-			}
-		});
+		await pruneBoardHistories(before);
 	}
 }
 
 export const createHistoryPersistence = (): HistoryPersistence | undefined =>
 	typeof indexedDB === "undefined" ? undefined : new DexieHistoryPersistence();
+
+/**
+ * Drop the entries of boards untouched since `before` and return how many boards lost theirs.
+ * Delivery markers are kept: they are tiny, and a late receipt replay must still be recognised.
+ */
+export async function pruneBoardHistories(before: number): Promise<number> {
+	const store = db();
+	const stale = await store.cursors.where("updatedAt").below(before).toArray();
+	if (stale.length === 0) return 0;
+	await store.transaction("rw", store.entries, store.cursors, async () => {
+		for (const cursor of stale) {
+			await store.entries.where("board").equals(cursor.board).delete();
+			await store.cursors.delete(cursor.board);
+		}
+	});
+	return stale.length;
+}
+
+export interface BoardHistorySummary {
+	/** `boardHistoryKey(appId, boardId)` */
+	key: string;
+	entries: number;
+	bytes: number;
+	updatedAt?: number;
+}
+
+/** One pass over the entry rows, so memory stays at one payload regardless of history size. */
+export async function summarizeBoardHistories(): Promise<
+	BoardHistorySummary[]
+> {
+	const store = db();
+	const summaries = new Map<string, BoardHistorySummary>();
+	await store.entries.each((row) => {
+		const summary = summaries.get(row.board) ?? {
+			key: row.board,
+			entries: 0,
+			bytes: 0,
+		};
+		summary.entries += 1;
+		summary.bytes += row.payload.length + row.id.length + row.board.length + 16;
+		summaries.set(row.board, summary);
+	});
+	for (const cursor of await store.cursors.toArray()) {
+		const summary = summaries.get(cursor.board);
+		if (summary) summary.updatedAt = cursor.updatedAt;
+	}
+	return [...summaries.values()];
+}

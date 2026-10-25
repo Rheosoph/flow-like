@@ -64,6 +64,40 @@ export async function readBoardLastSeen(
 	};
 }
 
+export interface BoardSnapshotSummary {
+	id: string;
+	appId: string;
+	boardId: string;
+	bytes: number;
+	seenAt: number;
+	updatedAt: number;
+}
+
+/** Sizes come from the stored strings, so no snapshot is decoded. */
+export async function summarizeBoardSnapshots(): Promise<
+	BoardSnapshotSummary[]
+> {
+	const summaries: BoardSnapshotSummary[] = [];
+	await boardLastSeenDb.seen.each((record) => {
+		summaries.push({
+			id: record.id,
+			appId: record.appId,
+			boardId: record.boardId,
+			bytes:
+				(typeof record.payload === "string" ? record.payload.length : 0) +
+				record.id.length +
+				32,
+			seenAt: record.seenAt,
+			updatedAt: record.updatedAt,
+		});
+	});
+	return summaries;
+}
+
+export async function deleteBoardSnapshots(ids: readonly string[]) {
+	if (ids.length > 0) await boardLastSeenDb.seen.bulkDelete([...ids]);
+}
+
 export async function writeBoardLastSeen(
 	userKey: string,
 	appId: string,

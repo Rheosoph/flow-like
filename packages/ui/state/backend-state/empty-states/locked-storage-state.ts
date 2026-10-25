@@ -58,6 +58,14 @@ export class EmptyLockedStorageState implements ILockedStorageState {
 	): Promise<ILockedItemVersion> {
 		unavailable();
 	}
+	async setLockedAutoDelete(
+		_appId: string,
+		_itemId: string,
+		_versionId: string,
+		_enabled: boolean,
+	): Promise<ILockedItemVersion> {
+		unavailable();
+	}
 	async purgeLockedItem(
 		_appId: string,
 		_itemId: string,

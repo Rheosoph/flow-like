@@ -495,8 +495,10 @@ fn render_declaration_file(top: &str, sigs: &[&Signature]) -> String {
     out.push_str(
         "// One `function` per catalog node, grouped by FlowScript namespace. Call a node as\n\
          // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and\n\
-         // call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node\n\
-         // is also a method on that value (`x.alias(...)`, remaining inputs positional or named).\n\
+         // call `alias({ pin: value })`. Leading inputs may also be passed positionally, in\n\
+         // declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A\n\
+         // `this: T` parameter marks the receiver pin: such a node is also a method on that value\n\
+         // (`x.alias(...)`, remaining inputs positional or named).\n\
          // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy\n\
          // camelCase spelling (`@alias`), which is still accepted.\n\n",
     );

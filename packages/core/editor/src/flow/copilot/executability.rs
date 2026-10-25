@@ -925,6 +925,9 @@ fn project_graph(
             | BoardCommand::UpdateLayerCache { .. }
             | BoardCommand::UpdateNodePinOptions { .. }
             | BoardCommand::SetNodeFunctionRefs { .. }
+            | BoardCommand::SetNodeCodeNames { .. }
+            | BoardCommand::SetNodeDescription { .. }
+            | BoardCommand::UpdateFunctionSignature { .. }
             | BoardCommand::AddComment { .. }
             | BoardCommand::RemoveComment { .. } => {}
         }
@@ -1280,6 +1283,7 @@ fn executability_diagnostic(
         phase: FlowScriptDiagnosticPhase::Validation,
         message,
         source_span: None,
+        source_span_is_exact: false,
         spans: Vec::new(),
         additional_sites: 0,
         ast_path: None,

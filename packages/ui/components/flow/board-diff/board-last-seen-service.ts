@@ -41,11 +41,12 @@ export type LastSeenOpenResult =
 export interface BoardLastSeenService {
 	/** Reads the stored snapshot and compares it with `board` in the snapshot worker. */
 	open(ids: LastSeenIds, board: IBoard): Promise<LastSeenOpenResult>;
-	/** Compares `board` with the snapshot read at `open`. */
+	/** Compares `board` with `base`, or with the snapshot read at `open` when omitted. */
 	compare(
 		ids: LastSeenIds,
 		board: IBoard,
 		withBase: boolean,
+		base?: IBoard,
 	): Promise<{ diff?: IBoardDiff; base?: IBoard }>;
 	/** Stores `board` unless the stored snapshot already has the same text. Never blocks. */
 	save(ids: LastSeenIds, board: IBoard): Promise<void>;
@@ -97,11 +98,16 @@ export function createBoardLastSeenService(
 			};
 		},
 
-		async compare(ids, board, withBase) {
+		async compare(ids, board, withBase, base) {
+			const [current, comparisonBase] = await Promise.all([
+				serializeBoard(board),
+				base ? serializeBoard(base) : undefined,
+			]);
 			const response = await request({
 				type: "compare",
 				key: keyOf(ids),
-				current: await serializeBoard(board),
+				current,
+				base: comparisonBase,
 				withBase,
 			}).catch((error) => {
 				warn("Comparing with the last seen snapshot", ids, error);

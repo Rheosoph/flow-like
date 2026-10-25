@@ -1,6 +1,6 @@
 pub use flow_like_a2ui_schema::{
-    component, components, data, element_cache, element_key, element_ref, id_refs, page_remap,
-    page_targets, style, surface, widget,
+    authoring, component, components, data, element_cache, element_key, element_ref, id_refs,
+    page_remap, page_targets, style, surface, widget,
 };
 
 pub mod element_demand;

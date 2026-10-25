@@ -61,6 +61,7 @@ const version = (
 	retain_until: "2036-10-21T12:00:00Z",
 	enforcement: "object",
 	legal_hold: number === 2,
+	delete_after_retention: false,
 	comment: null,
 	metadata: null,
 	uploaded_by: "user-1",

@@ -227,6 +227,7 @@ fn reconstruct_node(
         receiver: default_node.and_then(|d| d.receiver.clone()),
         pins_collapsed: None,
         auto_reroute: None,
+        code_names: None,
     })
 }
 

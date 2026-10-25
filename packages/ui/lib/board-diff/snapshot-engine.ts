@@ -14,7 +14,14 @@ import type { IBoardDiff } from "./types";
  */
 export type SnapshotRequest =
 	| { type: "open"; key: string; stored?: PackedSnapshot; current: string }
-	| { type: "compare"; key: string; current: string; withBase?: boolean }
+	| {
+			type: "compare";
+			key: string;
+			current: string;
+			withBase?: boolean;
+			/** The local board just before an incoming merge, including the user's own edits. */
+			base?: string;
+	  }
 	| { type: "pack"; key: string; current: string }
 	/** The packed snapshot never reached storage; the next pack must write again. */
 	| { type: "unmark"; key: string }
@@ -74,7 +81,9 @@ export function createSnapshotEngine(): SnapshotEngine {
 	}
 
 	function compare(request: Of<"compare">): SnapshotResponse {
-		const base = opened.get(request.key);
+		const base = request.base
+			? { board: JSON.parse(request.base) as IBoard, json: request.base }
+			: opened.get(request.key);
 		if (!base) return { type: "compare" };
 		const diff = withNews(
 			diffBoards(base.board, JSON.parse(request.current) as IBoard),

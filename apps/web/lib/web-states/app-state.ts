@@ -34,6 +34,7 @@ import {
 	type IForkJobView,
 	resolveOnlineFork,
 } from "@flow-like/flow-like-ui/lib/fork-job";
+import type { IAppLegalLinks } from "@flow-like/flow-like-ui/lib/legal-links";
 import { usablePackagePins } from "@flow-like/flow-like-ui/lib/package-license";
 import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
@@ -351,6 +352,24 @@ export class WebAppState implements IAppState {
 		await apiPatch(
 			`apps/${appId}/settings/appearance`,
 			{ custom_css: css },
+			this.backend.auth,
+		);
+	}
+
+	async getAppLegalLinks(appId: string): Promise<IAppLegalLinks> {
+		return await apiGet<IAppLegalLinks>(
+			`apps/${appId}/settings/legal`,
+			this.backend.auth,
+		);
+	}
+
+	async setAppLegalLinks(
+		appId: string,
+		links: IAppLegalLinks,
+	): Promise<IAppLegalLinks> {
+		return await apiPatch<IAppLegalLinks>(
+			`apps/${appId}/settings/legal`,
+			links,
 			this.backend.auth,
 		);
 	}

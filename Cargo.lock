@@ -2043,6 +2043,7 @@ dependencies = [
  "flow-like-catalog",
  "flow-like-secrets",
  "flow-like-storage",
+ "flow-like-types",
  "lambda_runtime 1.1.2",
  "mimalloc",
  "serde_json",
@@ -3874,6 +3875,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdd35008169921d80bc60d3d0ab416eecb028c4cd653352907921d95084790be"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -5717,6 +5719,15 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "constcat"
@@ -7923,8 +7934,6 @@ dependencies = [
 [[package]]
 name = "datafusion-federation"
 version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f88162c5f8650eab86bbe23cac990bdca261c95cf52c05b9a0848ad5b8b2b7f8"
 dependencies = [
  "arrow-json",
  "async-stream",
@@ -8299,7 +8308,7 @@ dependencies = [
 [[package]]
 name = "datafusion-table-providers"
 version = "0.10.1"
-source = "git+https://github.com/Rheosoph/datafusion-table-providers.git?rev=5945dfd349bbafdf92612f7824a02e6bb2018368#5945dfd349bbafdf92612f7824a02e6bb2018368"
+source = "git+https://github.com/Rheosoph/datafusion-table-providers.git?rev=2a4428f404f9542184943ccc799a964effd941f3#2a4428f404f9542184943ccc799a964effd941f3"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -8797,6 +8806,7 @@ dependencies = [
  "const-oid 0.10.2",
  "crypto-common 0.2.2",
  "ctutils",
+ "zeroize",
 ]
 
 [[package]]
@@ -10575,7 +10585,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid 1.27.0",
  "webp",
- "zip 8.5.1",
+ "zip 9.0.5",
  "zstd 0.13.3",
 ]
 
@@ -10698,7 +10708,7 @@ dependencies = [
  "uuid 1.27.0",
  "webpki-root-certs",
  "windows-sys 0.61.2",
- "zip 8.5.1",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -10829,7 +10839,9 @@ dependencies = [
  "flow-like-types",
  "futures 0.3.32",
  "jsonschema",
+ "mail-parser",
  "schemars 1.2.1",
+ "scraper",
  "serde",
  "tokio",
  "tracing",
@@ -10879,6 +10891,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rig-core",
+ "rustls 0.23.45",
  "schemars 1.2.1",
  "serde",
  "sha2 0.10.9",
@@ -11177,7 +11190,7 @@ dependencies = [
  "quick-xml 0.39.4",
  "schemars 1.2.1",
  "serde",
- "zip 8.5.1",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -11236,7 +11249,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "video-utils-rs",
- "zip 8.5.1",
 ]
 
 [[package]]
@@ -12059,7 +12071,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
- "zip 8.5.1",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -12283,7 +12295,7 @@ dependencies = [
  "url",
  "utoipa",
  "zeroize",
- "zip 8.5.1",
+ "zip 9.0.5",
  "zstd 0.13.3",
 ]
 
@@ -12625,7 +12637,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
  "utoipa",
- "zip 8.5.1",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -19960,7 +19972,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 [[package]]
 name = "markitdown"
 version = "0.2.0"
-source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=b4387cd6cf7856d3d9773fd9242900604a1d8051#b4387cd6cf7856d3d9773fd9242900604a1d8051"
+source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=450c9714e3be639feaf8c5a1a6206f01f7f05eda#450c9714e3be639feaf8c5a1a6206f01f7f05eda"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -20003,7 +20015,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "url",
  "vcard_parser",
- "zip 8.5.1",
+ "zip 9.0.5",
  "zstd 0.13.3",
 ]
 
@@ -25302,7 +25314,7 @@ dependencies = [
  "serde",
  "tar",
  "thiserror 2.0.18",
- "zip 8.5.1",
+ "zip 9.0.5",
 ]
 
 [[package]]
@@ -37796,25 +37808,26 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.5.1"
+version = "9.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcab981e19633ebcf0b001ddd37dd802996098bc1864f90b7c5d970ce76c1d59"
+checksum = "6e04976da629d3b04204ba8105b396a193af8ad2583b2c79bfb3ab8af580a11e"
 dependencies = [
- "aes 0.8.4",
- "constant_time_eq 0.4.2",
+ "aes 0.9.3",
+ "constant_time_eq 0.6.1",
  "crc32fast",
  "flate2",
  "getrandom 0.4.3",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "indexmap 2.14.0",
  "memchr",
- "pbkdf2 0.12.2",
- "sha1 0.10.6",
+ "nix 0.31.3",
+ "pbkdf2 0.13.0",
+ "sha1 0.11.0",
  "time",
  "typed-path",
  "zeroize",
  "zopfli",
- "zstd 0.13.3",
+ "zstd 0.14.3",
 ]
 
 [[package]]
@@ -37860,6 +37873,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zstd"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
+dependencies = [
+ "zstd-safe 8.2.0",
+]
+
+[[package]]
 name = "zstd-safe"
 version = "5.0.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -37879,10 +37901,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "zstd-sys"
-version = "2.0.16+zstd.1.5.7"
+name = "zstd-safe"
+version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+checksum = "ded520f16b29e1a9b771c722221b2b0a0398c2316d9bb3c42b458a5414d7434b"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.2+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3"
 dependencies = [
  "cc",
  "pkg-config",

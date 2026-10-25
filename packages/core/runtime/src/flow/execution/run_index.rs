@@ -294,8 +294,44 @@ mod tests {
             event_version: Some("1.0.0".to_string()),
             event_id: "evt".to_string(),
             payload: b"{\"a\":1}".to_vec(),
+            error_message: None,
             is_remote: false,
         }
+    }
+
+    #[test]
+    fn summary_rows_keep_the_error_message() {
+        let failed = LogMeta {
+            error_message: Some("Run exceeded grace period".to_string()),
+            ..meta("run", "b1", 10, 4)
+        };
+        for include_nodes in [false, true] {
+            assert_eq!(
+                summary_row(&failed, include_nodes).error_message.as_deref(),
+                Some("Run exceeded grace period")
+            );
+        }
+    }
+
+    #[test]
+    fn error_message_is_optional_on_the_wire() {
+        let row = meta("run", "b1", 10, 1);
+        let encoded = flow_like_types::json::to_value(&row).unwrap();
+        assert!(encoded.get("error_message").is_none());
+
+        let mut legacy = encoded;
+        legacy.as_object_mut().unwrap().remove("is_remote");
+        let decoded: LogMeta = flow_like_types::json::from_value(legacy).unwrap();
+        assert_eq!(decoded.error_message, None);
+
+        let failed = LogMeta {
+            error_message: Some("executor crashed".to_string()),
+            ..row
+        };
+        let decoded: LogMeta =
+            flow_like_types::json::from_value(flow_like_types::json::to_value(&failed).unwrap())
+                .unwrap();
+        assert_eq!(decoded.error_message.as_deref(), Some("executor crashed"));
     }
 
     #[test]

@@ -17,11 +17,7 @@ import { normalizeOptions, toOptionValue } from "./options";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
-	if (!boundValue) return undefined;
-	// Handle literalOptions directly
-	if ("literalOptions" in boundValue) {
-		return boundValue.literalOptions as T;
-	}
+	if (boundValue === undefined || boundValue === null) return undefined;
 	return resolve(boundValue) as T;
 }
 

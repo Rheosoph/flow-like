@@ -5,7 +5,8 @@ import { Maximize2, Minimize2 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { FLOW_KEY_OPT_OUT_CLASS, cn } from "../../lib";
+import { FLOW_KEY_OPT_OUT_CLASS } from "../../lib/monaco-key-guard";
+import { cn } from "../../lib/utils";
 import { Button } from "./button";
 
 function injectMonacoCodeStyles() {
@@ -40,6 +41,7 @@ export interface MonacoCodeEditorProps {
 	showMinimap?: boolean;
 	allowFullscreen?: boolean;
 	autoFocus?: boolean;
+	onMount?: OnMount;
 	ariaLabel?: string;
 	/** Off lets the wheel scroll the surrounding panel once the editor reaches its edge. */
 	consumeMouseWheel?: boolean;
@@ -56,6 +58,7 @@ export function MonacoCodeEditor({
 	showMinimap = false,
 	allowFullscreen = false,
 	autoFocus = true,
+	onMount,
 	ariaLabel,
 	consumeMouseWheel = true,
 }: Readonly<MonacoCodeEditorProps>) {
@@ -94,8 +97,9 @@ export function MonacoCodeEditor({
 		(editor, monaco) => {
 			monacoRef.current = monaco;
 			if (autoFocus && !disabled) editor.focus();
+			onMount?.(editor, monaco);
 		},
-		[autoFocus, disabled],
+		[autoFocus, disabled, onMount],
 	);
 
 	const handleEditorChange = useCallback(

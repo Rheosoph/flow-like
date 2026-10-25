@@ -63,13 +63,9 @@ impl NodeLogic for SetStructFieldNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let mut old_struct = context
-            .evaluate_pin::<flow_like_types::Value>("struct_in")
-            .await?;
+        let mut old_struct = context.evaluate_pin_raw("struct_in").await?;
         let field = context.evaluate_pin::<String>("field").await?;
-        let value = context
-            .evaluate_pin::<flow_like_types::Value>("value")
-            .await?;
+        let value = context.evaluate_pin_raw("value").await?;
 
         set_value_by_path(&mut old_struct, &field, value)?;
 

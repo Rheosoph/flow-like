@@ -147,6 +147,13 @@ const INPUTS: &[Input] = &[
     // has to survive rendering or the second arm of an N-way fan-out cannot be resolved — and
     // `control_par_execution` ships three exec outputs, so no unusual board is needed.
     scoped("pin-occurrence", "exec_out[#2]", &["branch-arm-label"]),
+    // A `@collapse` name is a path: `/` separates groups unless written `\/`, and a leading `/`
+    // means the section root. A layer named with slashes must still come back as ONE group.
+    scoped("slash", "In/Out", &["collapse-group-name"]),
+    scoped("leading-slash", "/root", &["collapse-group-name"]),
+    scoped("lone-slash", "/", &["collapse-group-name"]),
+    scoped("trailing-slash", "a/", &["collapse-group-name"]),
+    scoped("escaped-slash", "a\\/b", &["collapse-group-name"]),
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -175,6 +182,7 @@ fn event(name: &str, params: Vec<Param>, stmts: Vec<Stmt>) -> EventBlock {
         name: name.to_string(),
         node_type: "events_simple".to_string(),
         event_name: None,
+        description: None,
         params,
         body: Block { stmts },
         anchor: Some("entry-node".to_string()),
@@ -233,6 +241,23 @@ fn bind(value: Expr) -> Stmt {
 }
 
 const POSITIONS: &[Position] = &[
+    Position {
+        id: "collapse-group-name",
+        camelized: false,
+        build: |s| {
+            host(vec![Stmt::Collapse(CollapseBlock {
+                path: vec![s.to_string()],
+                absolute: false,
+                body: Block {
+                    stmts: vec![Stmt::Call {
+                        call: call("log"),
+                        anchor: Some("call-node".to_string()),
+                    }],
+                },
+                anchor: Some("group-layer".to_string()),
+            })])
+        },
+    },
     Position {
         id: "event-header-name",
         camelized: true,
@@ -600,6 +625,24 @@ const POSITIONS: &[Position] = &[
         },
     },
     Position {
+        id: "event-description",
+        camelized: false,
+        build: |s| {
+            let mut entry = event("onTick", Vec::new(), Vec::new());
+            entry.description = Some(s.to_string());
+            doc(vec![entry])
+        },
+    },
+    Position {
+        id: "handler-description",
+        camelized: false,
+        build: |s| {
+            let mut handler = event("lookup", Vec::new(), Vec::new());
+            handler.description = Some(s.to_string());
+            host(vec![Stmt::Handler(handler)])
+        },
+    },
+    Position {
         id: "variable-category",
         camelized: false,
         build: |s| {
@@ -830,6 +873,15 @@ fn block_shape(block: &Block, out: &mut String) {
                 block_shape(&event.body, out);
                 out.push('}');
             }
+            Stmt::Collapse(group) => {
+                out.push_str(&format!(
+                    "{}{:?}{{",
+                    if group.absolute { "/" } else { "" },
+                    group.path
+                ));
+                block_shape(&group.body, out);
+                out.push('}');
+            }
             Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
                 out.push_str(&format!("args={}", call.args.len()));
             }
@@ -854,6 +906,7 @@ fn stmt_tag(stmt: &Stmt) -> &'static str {
         Stmt::Return { .. } => "Return",
         Stmt::Local(_) => "Local",
         Stmt::Handler(_) => "Handler",
+        Stmt::Collapse(_) => "Collapse",
         Stmt::Comment(_) => "Comment",
     }
 }
@@ -925,6 +978,12 @@ fn anchors_of(ast: &BoardAst) -> BTreeSet<&String> {
                         out.insert(anchor);
                     }
                     walk(&event.body, out);
+                }
+                Stmt::Collapse(group) => {
+                    if let Some(anchor) = group.anchor.as_ref() {
+                        out.insert(anchor);
+                    }
+                    walk(&group.body, out);
                 }
                 Stmt::Comment(_) => {}
             }

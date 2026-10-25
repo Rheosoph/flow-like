@@ -5,7 +5,7 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -64,9 +64,9 @@ impl NodeLogic for ReadToBytesNode {
 
         let path: FlowPath = context.evaluate_pin("path").await?;
 
-        let bytes = path.get(context, false).await?;
+        let bytes = path.get_bytes(context, false).await?;
 
-        context.set_pin_value("content", json!(bytes)).await?;
+        context.set_pin_bytes("content", bytes).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

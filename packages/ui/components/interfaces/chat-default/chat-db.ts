@@ -48,6 +48,12 @@ export interface IChatWidget {
 		boardId?: string;
 		eventId?: string;
 	};
+	/**
+	 * Offset into the message text when this widget was first pushed (same contract as
+	 * {@link IPlanStep.content_offset}). Frontend-only: stamped on first sight, frozen afterwards;
+	 * widgets without one render after the text.
+	 */
+	content_offset?: number;
 }
 
 export type PlanStepStatus = "planned" | "progress" | "done" | "failed";

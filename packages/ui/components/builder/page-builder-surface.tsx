@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
 	Check,
@@ -10,7 +11,7 @@ import {
 	Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
+import { useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
 import { isMissingResourceError } from "../../lib/api-error";
 import { addNodeCommand } from "../../lib/command/generic-command";
@@ -55,6 +56,16 @@ import {
 
 const AUTO_SAVE_DELAY = 2000; // 2 seconds debounce for components
 const METADATA_SAVE_DELAY = 1000; // 1 second debounce for metadata/canvas settings (shorter to reduce data loss)
+
+function serializePageDraft(page: IPage): string {
+	return JSON.stringify({
+		...page,
+		components: page.components ?? [],
+		widgetRefs: page.widgetRefs ?? {},
+		content: page.content ?? [],
+		updatedAt: undefined,
+	});
+}
 
 const LAYOUT_TYPES: {
 	value: PageLayoutType;
@@ -107,7 +118,7 @@ export function PageBuilderSurface({
 }: Readonly<PageBuilderSurfaceProps>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const invalidate = useInvalidateInvoke();
+	const queryClient = useQueryClient();
 	const [page, setPage] = useState<IPage | null>(null);
 	const effectiveBoardId = resolvePageBoardId(boardId, pageId, page);
 
@@ -246,10 +257,7 @@ export function PageBuilderSurface({
 	const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 	const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
 
-	// Track last saved components for diff comparison
-	const lastSavedComponentsRef = useRef<string>("");
-	const lastSavedWidgetRefsRef = useRef<string>("{}");
-	const lastSavedContentRef = useRef<string>("[]");
+	const lastSavedDraftRef = useRef("");
 	const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 	const pendingSavesRef = useRef(0);
 	const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -280,14 +288,7 @@ export function PageBuilderSurface({
 				};
 				setPage(pageWithBoard);
 				pageRef.current = pageWithBoard;
-				// Store initial state for diff comparison
-				lastSavedComponentsRef.current = JSON.stringify(
-					loadedPage.components ?? [],
-				);
-				lastSavedWidgetRefsRef.current = JSON.stringify(
-					loadedPage.widgetRefs ?? {},
-				);
-				lastSavedContentRef.current = JSON.stringify(loadedPage.content ?? []);
+				lastSavedDraftRef.current = serializePageDraft(pageWithBoard);
 			} catch (error) {
 				// Only a confirmed miss may become a blank page. After any other failure (server
 				// unreachable, payload not on this device) a stand-in would autosave over the
@@ -314,9 +315,7 @@ export function PageBuilderSurface({
 				};
 				setPage(newPage);
 				pageRef.current = newPage;
-				lastSavedComponentsRef.current = "[]";
-				lastSavedWidgetRefsRef.current = "{}";
-				lastSavedContentRef.current = "[]";
+				lastSavedDraftRef.current = serializePageDraft(newPage);
 			} finally {
 				setIsLoading(false);
 			}
@@ -334,13 +333,36 @@ export function PageBuilderSurface({
 				appId,
 				saveQueueRef.current.then(async () => {
 					await backend.pageState.updatePage(appId, pageToSave);
+					// Use App also caches the page inside route and Event bootstraps.
+					const queryKeys = [
+						[
+							backend.pageState.getPage.name || "backendFn",
+							appId,
+							pageToSave.id,
+						],
+						[backend.pageState.getPages.name || "backendFn", appId],
+					];
+					if (backend.pageState.getPageBootstrap) {
+						queryKeys.push([
+							backend.pageState.getPageBootstrap.name || "backendFn",
+							appId,
+						]);
+					}
 					const linkedBoardId = pageToSave.boardId || boardId;
 					if (linkedBoardId) {
-						await invalidate(backend.boardState.getBoard, [
+						queryKeys.push([
+							backend.boardState.getBoard.name || "backendFn",
 							appId,
 							linkedBoardId,
 						]);
 					}
+					await Promise.all(
+						queryKeys.map(async (queryKey) => {
+							// Invalidation alone reuses a pending first read with no cached data.
+							await queryClient.cancelQueries({ queryKey });
+							await queryClient.invalidateQueries({ queryKey });
+						}),
+					);
 				}),
 			);
 			saveQueueRef.current = save.catch(() => {});
@@ -350,7 +372,7 @@ export function PageBuilderSurface({
 				pendingSavesRef.current -= 1;
 			}
 		},
-		[appId, boardId, backend.pageState, backend.boardState, invalidate],
+		[appId, boardId, backend.pageState, backend.boardState, queryClient],
 	);
 
 	// Save pending changes on unmount instead of just cancelling
@@ -404,50 +426,37 @@ export function PageBuilderSurface({
 			widgetRefs?: Record<string, IWidgetRef>,
 			content?: PageContent[],
 			throwOnError = false,
-			force = false,
 		) => {
 			const currentPage = pageRef.current;
 			if (!currentPage || !appId) return;
 
-			const componentsJson = JSON.stringify(components);
-			const nextWidgetRefs = widgetRefs ?? currentPage.widgetRefs ?? {};
-			const widgetRefsJson = JSON.stringify(nextWidgetRefs);
-			const nextContent = content ?? currentPage.content;
-			const contentJson = JSON.stringify(nextContent);
+			const updatedPage = {
+				...currentPage,
+				components,
+				widgetRefs: widgetRefs ?? currentPage.widgetRefs ?? {},
+				content: content ?? currentPage.content,
+				updatedAt: new Date().toISOString(),
+			};
+			const savedDraft = serializePageDraft(updatedPage);
 			// Skip if no changes
 			if (
-				!force &&
 				pendingSavesRef.current === 0 &&
-				componentsJson === lastSavedComponentsRef.current &&
-				widgetRefsJson === lastSavedWidgetRefsRef.current &&
-				contentJson === lastSavedContentRef.current
+				savedDraft === lastSavedDraftRef.current
 			) {
+				setHasUnsavedChanges(false);
 				return;
 			}
 
 			setIsSaving(true);
 			try {
-				const updatedPage = {
-					...currentPage,
-					components,
-					widgetRefs: nextWidgetRefs,
-					content: nextContent,
-					updatedAt: new Date().toISOString(),
-				};
 				pageRef.current = updatedPage;
 				setPage(updatedPage);
 				await savePage(updatedPage);
-				lastSavedComponentsRef.current = componentsJson;
-				lastSavedWidgetRefsRef.current = widgetRefsJson;
-				lastSavedContentRef.current = contentJson;
+				lastSavedDraftRef.current = savedDraft;
 				const latest = pageRef.current;
-				if (
-					latest &&
-					JSON.stringify(latest.components) === componentsJson &&
-					JSON.stringify(latest.widgetRefs ?? {}) === widgetRefsJson &&
-					JSON.stringify(latest.content) === contentJson
-				)
-					setHasUnsavedChanges(false);
+				setHasUnsavedChanges(
+					!!latest && serializePageDraft(latest) !== savedDraft,
+				);
 				setLastSavedAt(new Date());
 			} catch (error) {
 				console.error("Failed to save page:", error);
@@ -468,26 +477,20 @@ export function PageBuilderSurface({
 		) => {
 			// Keep the working copy current for metadata saves and project-wide updates.
 			const currentPage = pageRef.current;
-			if (currentPage) {
-				pageRef.current = {
-					...currentPage,
-					components,
-					widgetRefs: widgetRefs ?? currentPage.widgetRefs,
-				};
-			}
+			if (!currentPage) return;
+			pageRef.current = {
+				...currentPage,
+				components,
+				widgetRefs: widgetRefs ?? currentPage.widgetRefs,
+			};
 			// Check if there are actual changes using ref (avoid state dependency)
-			const componentsJson = JSON.stringify(components);
-			const widgetRefsJson = JSON.stringify(widgetRefs ?? {});
 			if (autoSaveTimeoutRef.current) {
 				clearTimeout(autoSaveTimeoutRef.current);
 				autoSaveTimeoutRef.current = null;
 			}
 			if (
 				pendingSavesRef.current === 0 &&
-				componentsJson === lastSavedComponentsRef.current &&
-				widgetRefsJson === lastSavedWidgetRefsRef.current &&
-				JSON.stringify(pageRef.current?.content ?? []) ===
-					lastSavedContentRef.current
+				serializePageDraft(pageRef.current) === lastSavedDraftRef.current
 			) {
 				setHasUnsavedChanges(false);
 				return; // No changes, skip
@@ -510,10 +513,14 @@ export function PageBuilderSurface({
 			components: SurfaceComponent[],
 			widgetRefs?: Record<string, IWidgetRef>,
 		) => {
-			// Clear any pending auto-save
+			// Apply and toolbar saves include pending canvas and metadata changes.
 			if (autoSaveTimeoutRef.current) {
 				clearTimeout(autoSaveTimeoutRef.current);
 				autoSaveTimeoutRef.current = null;
+			}
+			if (autoSaveMetadataTimeoutRef.current) {
+				clearTimeout(autoSaveMetadataTimeoutRef.current);
+				autoSaveMetadataTimeoutRef.current = null;
 			}
 			await performSave(components, widgetRefs);
 		},
@@ -527,6 +534,10 @@ export function PageBuilderSurface({
 			const updatedPage = { ...currentPage, [key]: value };
 			pageRef.current = updatedPage;
 			setPage(updatedPage);
+			setHasUnsavedChanges(
+				pendingSavesRef.current > 0 ||
+					serializePageDraft(updatedPage) !== lastSavedDraftRef.current,
+			);
 
 			// Schedule auto-save for metadata changes
 			if (autoSaveMetadataTimeoutRef.current) {
@@ -536,55 +547,21 @@ export function PageBuilderSurface({
 				autoSaveMetadataTimeoutRef.current = null;
 				// Read current page from ref at execution time
 				const currentPage = pageRef.current;
-				if (!currentPage || !appId) return;
-
-				setIsSaving(true);
-				try {
-					const pageToSave = {
-						...currentPage,
-						updatedAt: new Date().toISOString(),
-					};
-					await savePage(pageToSave);
-					setLastSavedAt(new Date());
-				} catch (error) {
-					console.error("Failed to save page metadata:", error);
-				} finally {
-					setIsSaving(false);
-				}
+				if (!currentPage) return;
+				await performSave(currentPage.components ?? [], currentPage.widgetRefs);
 			}, METADATA_SAVE_DELAY);
 		},
-		[appId, savePage],
+		[performSave],
 	);
 
 	const handleSaveMetadata = useCallback(async () => {
-		// Clear any pending auto-save
-		if (autoSaveMetadataTimeoutRef.current) {
-			clearTimeout(autoSaveMetadataTimeoutRef.current);
-			autoSaveMetadataTimeoutRef.current = null;
-		}
-
-		// Read current page from ref
 		const currentPage = pageRef.current;
-		if (!currentPage || !appId) return;
-
-		setIsSaving(true);
-		try {
-			const pageToSave = {
-				...currentPage,
-				updatedAt: new Date().toISOString(),
-			};
-			await savePage(pageToSave);
-			setLastSavedAt(new Date());
-		} catch (error) {
-			console.error("Failed to save page metadata:", error);
-		} finally {
-			setIsSaving(false);
-		}
-	}, [appId, savePage]);
+		if (!currentPage) return;
+		await handleSave(currentPage.components ?? [], currentPage.widgetRefs);
+	}, [handleSave]);
 
 	const saveWidgetUpdates = useCallback(
 		async (snapshot: BuilderSnapshot, content: PageContent[]) => {
-			const hasPendingMetadata = autoSaveMetadataTimeoutRef.current !== null;
 			if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
 			if (autoSaveMetadataTimeoutRef.current)
 				clearTimeout(autoSaveMetadataTimeoutRef.current);
@@ -595,7 +572,6 @@ export function PageBuilderSurface({
 				snapshot.widgetRefs,
 				content,
 				true,
-				hasPendingMetadata,
 			);
 		},
 		[performSave],

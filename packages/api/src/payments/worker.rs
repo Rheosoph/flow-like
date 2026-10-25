@@ -52,6 +52,13 @@ pub async fn run_once(state: &AppState, limit: i64) -> Result<PassResult, ApiErr
     if !servicing && !state.platform_config.features.premium {
         return Ok(report);
     }
+    match has_work(state, servicing).await {
+        Ok(false) => return Ok(report),
+        Ok(true) => {}
+        Err(error) => {
+            tracing::warn!(error=%error,"Payment work probe failed; running the full recovery pass")
+        }
+    }
     let deadline = Instant::now() + Duration::from_secs(25);
     // Rotate the first queue so a slow provider cannot indefinitely starve refunds or reconciliation.
     let first = (Utc::now().timestamp() / 5).rem_euclid(7);
@@ -76,6 +83,28 @@ pub async fn run_once(state: &AppState, limit: i64) -> Result<PassResult, ApiErr
         }
     }
     Ok(report)
+}
+
+/// One probe before an idle pass's ~10 phase reads. Each clause is a superset of
+/// what a phase or `report_health` selects, so `false` never hides work or an
+/// alert. Widen the matching clause whenever a phase selects new rows.
+async fn has_work(state: &AppState, servicing: bool) -> Result<bool, ApiError> {
+    let row = state.db.query_one_raw(sql(r#"SELECT (
+            EXISTS(SELECT 1 FROM "LegacyCheckout" WHERE status IN ('OPENING','OPEN','PROCESSING'))
+            OR EXISTS(SELECT 1 FROM "PaymentOutbox" WHERE status IN ('PENDING','MANUAL_REVIEW'))
+            OR ($1 AND (
+                EXISTS(SELECT 1 FROM "PaymentWebhookInbox" WHERE status IN ('PENDING','MANUAL_REVIEW','QUARANTINED'))
+                OR EXISTS(SELECT 1 FROM "StripeOperation" WHERE status IN ('PENDING','INDETERMINATE','MANUAL_REVIEW'))
+                OR EXISTS(SELECT 1 FROM "PaymentRequest" WHERE status IN ('CREATED','OPENING','OPEN','PROCESSING','CANCEL_PENDING') AND "nextCheckAt"<=$2)
+                OR EXISTS(SELECT 1 FROM "PaymentAttempt" WHERE "capturedAmount">0 AND ("nextCheckAt"<=$2 OR orphaned))
+                OR EXISTS(SELECT 1 FROM "PaymentOrder" WHERE "nextCheckAt"<=$2)
+                OR EXISTS(SELECT 1 FROM "ConnectedAccount" WHERE "retiredAt" IS NULL AND "syncNextAt"<=$2)
+            ))
+        ) AS due"#,vec![servicing.into(),Utc::now().timestamp_millis().into()])).await?;
+    Ok(row
+        .map(|row| row.try_get::<bool>("", "due"))
+        .transpose()?
+        .unwrap_or(true))
 }
 
 async fn report_health(state: &AppState) -> Result<(), ApiError> {

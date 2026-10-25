@@ -72,6 +72,51 @@ describe("snapshot codec", () => {
 });
 
 describe("snapshot engine", () => {
+	it("compares an incoming merge against local edits without changing the opening baseline", async () => {
+		const engine = createSnapshotEngine();
+		const original = JSON.stringify(bigBoard(10));
+		const localBoard = bigBoard(10, " locally edited");
+		const local = JSON.stringify(localBoard);
+		await engine.handle({
+			type: "open",
+			key: "k",
+			stored: await packSnapshot(original),
+			current: original,
+		});
+
+		const echo = await engine.handle({
+			type: "compare",
+			key: "k",
+			base: local,
+			current: local,
+			withBase: true,
+		});
+		expect(echo.type === "compare" && echo.diff).toBeUndefined();
+
+		const remoteBoard = structuredClone(localBoard);
+		remoteBoard.nodes.n4.friendly_name = "Edited elsewhere";
+		const incoming = await engine.handle({
+			type: "compare",
+			key: "k",
+			base: local,
+			current: JSON.stringify(remoteBoard),
+			withBase: true,
+		});
+		if (incoming.type !== "compare") throw new Error("Expected comparison");
+		expect(incoming.diff?.logicCount).toBe(1);
+		expect(incoming.base).toBe(local);
+
+		const sinceOpening = await engine.handle({
+			type: "compare",
+			key: "k",
+			current: JSON.stringify(remoteBoard),
+			withBase: true,
+		});
+		if (sinceOpening.type !== "compare") throw new Error("Expected comparison");
+		expect(sinceOpening.diff?.logicCount).toBe(2);
+		expect(sinceOpening.base).toBe(original);
+	});
+
 	it("skips packing a board identical to the stored one", async () => {
 		const engine = createSnapshotEngine();
 		const json = JSON.stringify(bigBoard(10));

@@ -19,10 +19,11 @@ import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
+import { ChatFollowUpProvider } from "./chat-follow-up";
 import { ChatRunControls } from "./chat-run-controls";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
-import { MessageComponent } from "./message";
+import { MessageComponent, type MessageInlineContent } from "./message";
 import { MessageShell } from "./message-shell";
 import { useAnswerPlayback } from "./use-answer-playback";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
@@ -156,6 +157,12 @@ export interface IChatProps {
 	 * taking a second, nested viewport above it.
 	 */
 	inlineContent?: React.ReactNode;
+	/**
+	 * Live content that belongs inside a specific message, keyed by message id and placed at an
+	 * offset into its text like a pushed widget. Each message's list is compared by identity, so
+	 * keep the map and its lists stable while the content is unchanged.
+	 */
+	messageInlineContent?: ReadonlyMap<string, readonly MessageInlineContent[]>;
 	/** App id owning the chat — needed to render + trigger embedded widgets. */
 	appId?: string;
 	/** Board id of the chat event — target for widget action workflows. */
@@ -196,6 +203,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			onRespondToInteraction,
 			inlinePrompt,
 			inlineContent,
+			messageInlineContent,
 			appId,
 			boardId,
 			eventId,
@@ -453,6 +461,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		}, [isAtBottom]);
 
 		// Auto-scroll when new messages arrive or current message updates, but only if should auto-scroll
+		// biome-ignore lint/correctness/useExhaustiveDependencies: the content deps are the re-run triggers; the body only reads the scroll flags.
 		useEffect(() => {
 			if (shouldAutoScroll && hasInitiallyScrolled) {
 				scrollToBottom();
@@ -461,6 +470,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			localMessages,
 			currentMessages,
 			inlineContent,
+			messageInlineContent,
 			shouldAutoScroll,
 			hasInitiallyScrolled,
 			scrollToBottom,
@@ -505,6 +515,19 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			},
 			[handleSendMessage],
 		);
+
+		// A reply's `send_message` takes the composer's send path: it starts a turn or queues
+		// like a typed message, and is unavailable whenever Send is disabled.
+		const handleSendMessageRef = useRef(handleSendMessage);
+		handleSendMessageRef.current = handleSendMessage;
+		const sendFollowUp = useCallback((content: string) => {
+			void handleSendMessageRef.current(
+				content,
+				undefined,
+				chatBox.current?.getActiveTools(),
+			);
+		}, []);
+		const followUpBlocked = !concurrency && (isSending || isStreamActive);
 
 		// Keep the transcript pinned without asking scrollIntoView to pan the
 		// document/visual viewport while iOS is opening its keyboard.
@@ -593,250 +616,258 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		);
 
 		return (
-			<main
-				className="fl-chat-surface flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden bg-transparent"
-				data-fl-chat-surface
-				style={{
-					backgroundColor:
-						"var(--fl-chat-surface-background, var(--background))",
-					WebkitOverflowScrolling: "touch",
-					touchAction: "manipulation",
-				}}
-			>
-				<div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent">
-					{/* Messages Container */}
-					<div
-						ref={scrollContainerRef}
-						onScroll={handleScroll}
-						className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
-						data-fl-chat-messages
-						style={{ WebkitOverflowScrolling: "touch" }}
-					>
-						{chatItems.map((item, index) => (
-							<div
-								className="w-full px-1 sm:px-4"
-								key={`msg-${item.data.id}`}
-								style={{
-									maxWidth:
-										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-								}}
-							>
-								<MessageShell
-									immediate={index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL}
-									root={scrollContainerRef}
+			<ChatFollowUpProvider send={followUpBlocked ? null : sendFollowUp}>
+				<main
+					className="fl-chat-surface flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden bg-transparent"
+					data-fl-chat-surface
+					style={{
+						backgroundColor:
+							"var(--fl-chat-surface-background, var(--background))",
+						WebkitOverflowScrolling: "touch",
+						touchAction: "manipulation",
+					}}
+				>
+					<div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent">
+						{/* Messages Container */}
+						<div
+							ref={scrollContainerRef}
+							onScroll={handleScroll}
+							className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
+							data-fl-chat-messages
+							style={{ WebkitOverflowScrolling: "touch" }}
+						>
+							{chatItems.map((item, index) => (
+								<div
+									className="w-full px-1 sm:px-4"
+									key={`msg-${item.data.id}`}
+									style={{
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+									}}
+								>
+									<MessageShell
+										immediate={
+											index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL
+										}
+										root={scrollContainerRef}
+									>
+										<MessageComponent
+											message={item.data as IMessage}
+											onMessageUpdate={onMessageUpdate}
+											appId={appId}
+											boardId={boardId}
+											eventId={eventId}
+											widgetSnapshots={widgetSnapshots}
+											anchoredContent={messageInlineContent?.get(item.data.id)}
+										/>
+									</MessageShell>
+									<SettledInteractions
+										interactions={settledByMessageId.get(item.data.id)}
+										onRespond={onRespondToInteraction}
+									/>
+								</div>
+							))}
+							{isSending &&
+								!localMessages.some(
+									(m) =>
+										m.inner.role === "user" &&
+										getMessageTextContent(m) === sendingContent,
+								) && (
+									<div
+										className="flex w-full animate-in flex-col items-start space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+										style={{
+											maxWidth:
+												"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+										}}
+									>
+										<div
+											className="w-full border-l-2 py-2 pr-4 pl-3.5"
+											data-fl-chat-message="user"
+											style={{
+												backgroundColor:
+													"var(--fl-chat-ask-background, transparent)",
+												borderLeftColor:
+													"var(--fl-chat-ask-rule, var(--primary))",
+												borderRadius:
+													"0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0",
+												color:
+													"var(--fl-chat-user-message-foreground, var(--foreground))",
+												maxWidth: "var(--fl-chat-measure, 38rem)",
+											}}
+										>
+											<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+												{i18next.t("asked", "Asked")}
+											</span>
+											<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
+												{sendingContent}
+											</p>
+										</div>
+										<div className="flex items-center gap-2 pl-1">
+											<PuffLoader
+												size={16}
+												color={chatTheme === "dark" ? "white" : "black"}
+											/>
+											<span className="text-xs text-muted-foreground">
+												Processing...
+											</span>
+										</div>
+									</div>
+								)}
+							{currentMessages.map((liveMessage) => (
+								<div
+									className="w-full px-4"
+									key={`msg-${liveMessage.id}`}
+									style={{
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+									}}
 								>
 									<MessageComponent
-										message={item.data as IMessage}
-										onMessageUpdate={onMessageUpdate}
+										loading
+										message={liveMessage}
 										appId={appId}
 										boardId={boardId}
 										eventId={eventId}
 										widgetSnapshots={widgetSnapshots}
+										anchoredContent={messageInlineContent?.get(liveMessage.id)}
 									/>
-								</MessageShell>
-								<SettledInteractions
-									interactions={settledByMessageId.get(item.data.id)}
-									onRespond={onRespondToInteraction}
-								/>
-							</div>
-						))}
-						{isSending &&
-							!localMessages.some(
-								(m) =>
-									m.inner.role === "user" &&
-									getMessageTextContent(m) === sendingContent,
-							) && (
+									<SettledInteractions
+										interactions={settledByMessageId.get(liveMessage.id)}
+										onRespond={onRespondToInteraction}
+									/>
+								</div>
+							))}
+							{inlineContent && (
 								<div
-									className="flex w-full animate-in flex-col items-start space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+									className="w-full px-1 sm:px-4"
+									data-fl-chat-inline-content
 									style={{
-										maxWidth:
-											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+										maxWidth: "var(--fl-chat-content-width, 64rem)",
 									}}
 								>
-									<div
-										className="w-full border-l-2 py-2 pr-4 pl-3.5"
-										data-fl-chat-message="user"
-										style={{
-											backgroundColor:
-												"var(--fl-chat-ask-background, transparent)",
-											borderLeftColor:
-												"var(--fl-chat-ask-rule, var(--primary))",
-											borderRadius:
-												"0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0",
-											color:
-												"var(--fl-chat-user-message-foreground, var(--foreground))",
-											maxWidth: "var(--fl-chat-measure, 38rem)",
-										}}
-									>
-										<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-											{i18next.t("asked", "Asked")}
-										</span>
-										<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
-											{sendingContent}
-										</p>
-									</div>
-									<div className="flex items-center gap-2 pl-1">
-										<PuffLoader
-											size={16}
-											color={chatTheme === "dark" ? "white" : "black"}
-										/>
-										<span className="text-xs text-muted-foreground">
-											Processing...
-										</span>
-									</div>
+									{inlineContent}
 								</div>
 							)}
-						{currentMessages.map((liveMessage) => (
+							{interactionItems.map((item) =>
+								item.type === "interaction-group" ? (
+									<div
+										className="flex w-full flex-col items-start px-4"
+										key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
+										style={{
+											maxWidth:
+												"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+										}}
+									>
+										<InteractionGroup
+											interactions={item.data as IInteractionRequest[]}
+											onRespond={onRespondToInteraction ?? (() => {})}
+										/>
+									</div>
+								) : (
+									<div
+										className="flex w-full flex-col items-start px-4"
+										key={`int-${(item.data as IInteractionRequest).id}`}
+										style={{
+											maxWidth:
+												"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+										}}
+									>
+										<Interaction
+											interaction={item.data as IInteractionRequest}
+											onRespond={onRespondToInteraction ?? (() => {})}
+										/>
+									</div>
+								),
+							)}
+							<div aria-hidden="true" />
+						</div>
+
+						{inlinePrompt && (
 							<div
-								className="w-full px-4"
-								key={`msg-${liveMessage.id}`}
+								className="mx-auto w-full shrink-0 px-2 pt-1"
 								style={{
 									maxWidth:
 										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 								}}
 							>
-								<MessageComponent
-									loading
-									message={liveMessage}
-									appId={appId}
-									boardId={boardId}
-									eventId={eventId}
-									widgetSnapshots={widgetSnapshots}
-								/>
-								<SettledInteractions
-									interactions={settledByMessageId.get(liveMessage.id)}
-									onRespond={onRespondToInteraction}
-								/>
-							</div>
-						))}
-						{inlineContent && (
-							<div
-								className="w-full px-1 sm:px-4"
-								data-fl-chat-inline-content
-								style={{
-									maxWidth: "var(--fl-chat-content-width, 64rem)",
-								}}
-							>
-								{inlineContent}
+								{inlinePrompt}
 							</div>
 						)}
-						{interactionItems.map((item) =>
-							item.type === "interaction-group" ? (
-								<div
-									className="flex w-full flex-col items-start px-4"
-									key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
-									style={{
-										maxWidth:
-											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-									}}
-								>
-									<InteractionGroup
-										interactions={item.data as IInteractionRequest[]}
-										onRespond={onRespondToInteraction ?? (() => {})}
-									/>
-								</div>
-							) : (
-								<div
-									className="flex w-full flex-col items-start px-4"
-									key={`int-${(item.data as IInteractionRequest).id}`}
-									style={{
-										maxWidth:
-											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-									}}
-								>
-									<Interaction
-										interaction={item.data as IInteractionRequest}
-										onRespond={onRespondToInteraction ?? (() => {})}
-									/>
-								</div>
-							),
-						)}
-						<div aria-hidden="true" />
-					</div>
 
-					{inlinePrompt && (
+						{/* ChatBox */}
 						<div
-							className="mx-auto w-full shrink-0 px-2 pt-1"
+							className="mx-auto w-full space-y-2 px-3"
+							data-fl-chat-composer-dock
 							style={{
 								maxWidth:
 									"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+								paddingBottom:
+									"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 							}}
 						>
-							{inlinePrompt}
-						</div>
-					)}
-
-					{/* ChatBox */}
-					<div
-						className="mx-auto w-full space-y-2 px-3"
-						data-fl-chat-composer-dock
-						style={{
-							maxWidth:
-								"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-							paddingBottom:
-								"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
-						}}
-					>
-						{concurrency && <ChatRunControls concurrency={concurrency} />}
-						{defaultActiveTools && (
-							<ChatBox
-								ref={chatBox}
-								availableTools={config?.tools ?? []}
-								defaultActiveTools={defaultActiveTools}
-								onSendMessage={handleSendMessage}
-								onContentChange={onDraftChange}
-								fileUpload={config?.allow_file_upload ?? false}
-								audioInput={voiceEnabled}
-								voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
-								voiceInvoke={voiceConfig.invoke}
-								voiceMaxDuration={voiceConfig.maxDuration}
-								// With concurrency the composer never locks: a send starts another
-								// turn or queues. Without it, a live stream still blocks as before.
-								sendDisabled={concurrency ? false : isSending || isStreamActive}
-								sendHint={
-									concurrency?.atCapacity
-										? i18next.t("queueThisMessage", "Queue this message")
-										: concurrency && concurrency.runs.length > 0
-											? i18next.t(
-													"startAnotherResponse",
-													"Start another response",
-												)
+							{concurrency && <ChatRunControls concurrency={concurrency} />}
+							{defaultActiveTools && (
+								<ChatBox
+									ref={chatBox}
+									availableTools={config?.tools ?? []}
+									defaultActiveTools={defaultActiveTools}
+									onSendMessage={handleSendMessage}
+									onContentChange={onDraftChange}
+									fileUpload={config?.allow_file_upload ?? false}
+									audioInput={voiceEnabled}
+									voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
+									voiceInvoke={voiceConfig.invoke}
+									voiceMaxDuration={voiceConfig.maxDuration}
+									// With concurrency the composer never locks: a send starts another
+									// turn or queues. Without it, a live stream still blocks as before.
+									sendDisabled={
+										concurrency ? false : isSending || isStreamActive
+									}
+									sendHint={
+										concurrency?.atCapacity
+											? i18next.t("queueThisMessage", "Queue this message")
+											: concurrency && concurrency.runs.length > 0
+												? i18next.t(
+														"startAnotherResponse",
+														"Start another response",
+													)
+												: undefined
+									}
+									onSteer={
+										concurrency && concurrency.runs.length > 0
+											? concurrency.onSteer
 											: undefined
-								}
-								onSteer={
-									concurrency && concurrency.runs.length > 0
-										? concurrency.onSteer
-										: undefined
-								}
-								onInterrupt={playback.stop}
-								onVoiceModeToggle={
-									voiceEnabled && voiceConfig.invoke === "auto"
-										? () => {
-												playback.stop();
-												setVoiceModeOpen(true);
-											}
-										: undefined
-								}
-							/>
-						)}
-						{showAiDisclosure && (
-							<ChatAiDisclosure text={config.ai_disclosure} />
-						)}
+									}
+									onInterrupt={playback.stop}
+									onVoiceModeToggle={
+										voiceEnabled && voiceConfig.invoke === "auto"
+											? () => {
+													playback.stop();
+													setVoiceModeOpen(true);
+												}
+											: undefined
+									}
+								/>
+							)}
+							{showAiDisclosure && (
+								<ChatAiDisclosure text={config.ai_disclosure} />
+							)}
+						</div>
 					</div>
-				</div>
 
-				{/* Voice Mode Overlay */}
-				<VoiceMode
-					open={voiceModeOpen}
-					onClose={() => setVoiceModeOpen(false)}
-					onSend={handleVoiceModeSend}
-					voice={voiceConfig}
-					busy={isStreamActive || playback.isPlaying}
-					speaking={playback.isPlaying}
-					speakingAnalyser={playback.analyser}
-					onInterrupt={() => playback.stop()}
-				/>
-			</main>
+					{/* Voice Mode Overlay */}
+					<VoiceMode
+						open={voiceModeOpen}
+						onClose={() => setVoiceModeOpen(false)}
+						onSend={handleVoiceModeSend}
+						voice={voiceConfig}
+						busy={isStreamActive || playback.isPlaying}
+						speaking={playback.isPlaying}
+						speakingAnalyser={playback.analyser}
+						onInterrupt={() => playback.stop()}
+					/>
+				</main>
+			</ChatFollowUpProvider>
 		);
 	},
 );

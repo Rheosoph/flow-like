@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { TFunction } from "i18next";
 import type { ILockedItem } from "../../state/backend-state/locked-storage-state";
 import {
 	isLockedEntry,
@@ -6,6 +7,7 @@ import {
 	lockedFolderForPrefix,
 	nextRetentionDay,
 	retentionFromDay,
+	retentionLabel,
 	shortSha256,
 } from "./locked-storage-entries";
 
@@ -64,5 +66,36 @@ describe("retention extension dates", () => {
 	test("short checksums keep both ends", () => {
 		expect(shortSha256(`${"a".repeat(56)}12345678`)).toBe("aaaaaaaa…12345678");
 		expect(shortSha256("abc")).toBe("abc");
+	});
+});
+
+describe("retention labels", () => {
+	const t = ((key: string) => key) as unknown as TFunction<"common">;
+	const label = (
+		retain_until: string,
+		delete_after_retention: boolean,
+		legal_hold = false,
+	) =>
+		retentionLabel(
+			{ retain_until, delete_after_retention, legal_hold },
+			"en",
+			t,
+		);
+	const future = "2999-01-01T00:00:00Z";
+	const past = "2000-01-01T00:00:00Z";
+
+	test("kept versions name the retention date only", () => {
+		expect(label(future, false)).toBe("lockedStorage.retainedUntil");
+		expect(label(past, false)).toBe("lockedStorage.retentionEndedOn");
+	});
+
+	test("versions marked for deletion name the deletion", () => {
+		expect(label(future, true)).toBe("lockedStorage.deletedOn");
+		expect(label(past, true)).toBe("lockedStorage.deletionDue");
+	});
+
+	test("a legal hold keeps a version marked for deletion", () => {
+		expect(label(future, true, true)).toBe("lockedStorage.retainedUntil");
+		expect(label(past, true, true)).toBe("lockedStorage.retentionEndedOn");
 	});
 });

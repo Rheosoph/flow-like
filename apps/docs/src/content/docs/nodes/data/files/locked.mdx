@@ -1,0 +1,30 @@
+---
+title: "Locked Node Catalog"
+description: "Data/Files/Locked Flow-Like node category with 10 generated node references."
+sidebar:
+  order: 0
+  label: "Locked"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Locked nodes, Data/Files/Locked, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/Files/Locked"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Locked Node Catalog\",\"description\":\"Data/Files/Locked Flow-Like node category with 10 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/data/files/locked/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/Files/Locked\",\"keywords\":\"Locked nodes, Data/Files/Locked, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Data/Files/Locked"}
+	label="Locked"
+	nodes={nodesByCategory["Data/Files/Locked"] ?? []}
+	client:load
+/>

@@ -1,3 +1,6 @@
+import { getErrorMessage } from "../../../lib/error-message";
+import type { IFlowScriptStructuredDiagnostic } from "../../../state/backend-state/board-state";
+
 export interface FlowScriptApplyState {
 	readOnly: boolean;
 	dirty: boolean;
@@ -45,6 +48,11 @@ export interface FlowScriptDraft {
 /** What the last apply reported. */
 export interface FlowScriptApplyReport {
 	diagnostics: string[];
+	structuredDiagnostics?: IFlowScriptStructuredDiagnostic[];
+	/** Coordinates are valid only while this submitted draft is still in the editor. */
+	draft?: FlowScriptDraft;
+	/** A failed request leaves the apply outcome unknown and does not reject the draft. */
+	failed?: boolean;
 	/**
 	 * The draft the apply executed nothing for. The backend applies a reconcile
 	 * all-or-nothing, so every diagnostic of a rejected apply is an error.
@@ -52,16 +60,30 @@ export interface FlowScriptApplyReport {
 	rejected?: FlowScriptDraft;
 }
 
+export function flowScriptApplyFailureReport(
+	error: unknown,
+	fallback: string,
+): FlowScriptApplyReport {
+	return { diagnostics: [getErrorMessage(error, fallback)], failed: true };
+}
+
 export function flowScriptApplyReport(
 	{
 		commandCount,
 		diagnostics,
-	}: { commandCount: number; diagnostics: string[] },
+		structuredDiagnostics,
+	}: {
+		commandCount: number;
+		diagnostics: string[];
+		structuredDiagnostics?: IFlowScriptStructuredDiagnostic[];
+	},
 	draft: FlowScriptDraft,
 ): FlowScriptApplyReport | undefined {
 	if (diagnostics.length === 0) return undefined;
 	return {
 		diagnostics,
+		structuredDiagnostics,
+		draft,
 		rejected: commandCount === 0 ? draft : undefined,
 	};
 }

@@ -6,107 +6,101 @@
 // Helper Functions
 // ============================================================================
 
-/// Get component schema documentation
+/// Get component schema documentation. Pages use the plain authoring form: flat components,
+/// plain JSON values, `{ "path": ... }` bindings and child id arrays.
 pub fn get_component_schema(component_type: &str) -> String {
     match component_type.to_lowercase().as_str() {
         "column" => r#"Column - Vertical flex container
 Properties:
 - type: "column" (required)
-- gap: BoundValue string (e.g., { "literalString": "16px" }) - Space between children
-- align: BoundValue string - "start" | "center" | "end" | "stretch" | "baseline"
-- justify: BoundValue string - "start" | "center" | "end" | "between" | "around" | "evenly"
-- wrap: BoundValue boolean - Whether children can wrap
-- children: { explicitList: ["child-id-1", "child-id-2"] }
+- gap: string - Space between children (e.g. "16px")
+- align: "start" | "center" | "end" | "stretch" | "baseline"
+- justify: "start" | "center" | "end" | "between" | "around" | "evenly"
+- wrap: boolean - Whether children can wrap
+- children: array of child component ids
 
 Example:
 {
   "id": "main-column",
-  "style": { "className": "p-4 gap-4" },
-  "component": {
-    "type": "column",
-    "gap": { "literalString": "16px" },
-    "children": { "explicitList": ["header", "content", "footer"] }
-  }
+  "type": "column",
+  "gap": "16px",
+  "style": { "className": "p-4" },
+  "children": ["header", "content", "footer"]
 }"#
         .to_string(),
 
         "row" => r#"Row - Horizontal flex container
 Properties:
 - type: "row" (required)
-- gap: BoundValue string - Space between children
-- align: BoundValue string - "start" | "center" | "end" | "stretch" | "baseline"
-- justify: BoundValue string - "start" | "center" | "end" | "between" | "around" | "evenly"
-- wrap: BoundValue boolean
-- children: { explicitList: [...] }
+- gap: string - Space between children
+- align: "start" | "center" | "end" | "stretch" | "baseline"
+- justify: "start" | "center" | "end" | "between" | "around" | "evenly"
+- wrap: boolean
+- children: array of child component ids
 
 Example:
 {
   "id": "button-row",
-  "style": { "className": "gap-2" },
-  "component": {
-    "type": "row",
-    "gap": { "literalString": "8px" },
-    "justify": { "literalString": "end" },
-    "children": { "explicitList": ["cancel-btn", "submit-btn"] }
-  }
+  "type": "row",
+  "gap": "8px",
+  "justify": "end",
+  "children": ["cancel-btn", "submit-btn"]
 }"#
         .to_string(),
 
         "grid" => r#"Grid - CSS Grid container
 Properties:
 - type: "grid" (required)
-- columns: BoundValue string (e.g., { "literalString": "repeat(3, 1fr)" })
-- rows: BoundValue string (optional)
-- gap: BoundValue string
-- autoFlow: BoundValue string - "row" | "column" | "dense"
-- children: { explicitList: [...] }
+- columns: string (e.g. "repeat(3, 1fr)")
+- rows: string (optional)
+- gap: string
+- autoFlow: "row" | "column" | "dense" | "rowDense" | "columnDense"
+- children: array of child component ids
 
 Example:
 {
   "id": "card-grid",
-  "style": { "className": "gap-4" },
-  "component": {
-    "type": "grid",
-    "columns": { "literalString": "repeat(auto-fill, minmax(250px, 1fr))" },
-    "gap": { "literalString": "16px" },
-    "children": { "explicitList": ["card-1", "card-2", "card-3"] }
-  }
+  "type": "grid",
+  "columns": "repeat(auto-fill, minmax(250px, 1fr))",
+  "gap": "16px",
+  "children": ["card-1", "card-2", "card-3"]
 }"#
         .to_string(),
 
         "text" => r#"Text - Text display component
 Properties:
 - type: "text" (required)
-- content: BoundValue - { literalString: "..." } or { path: "$.data.title" }
-- variant: BoundValue string - "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "body" | "caption" | "code" | "label"
-- size: BoundValue string - "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl"
-- weight: BoundValue string - "normal" | "medium" | "semibold" | "bold"
-- color: BoundValue string (Tailwind color like "text-primary")
-- align: BoundValue string - "left" | "center" | "right"
+- content: string, or { "path": "$.data.title" } to bind data (required)
+- variant: "body" | "heading" | "label" | "caption" | "code"
+- size: "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl"
+- weight: "light" | "normal" | "medium" | "semibold" | "bold"
+- color: string (Tailwind color like "text-primary")
+- align: "left" | "center" | "right" | "justify"
+- truncate: boolean; maxLines: number
 
 Example:
 {
   "id": "page-title",
-  "style": { "className": "text-2xl font-bold text-primary" },
-  "component": {
-    "type": "text",
-    "content": { "literalString": "Welcome" },
-    "variant": { "literalString": "h1" }
-  }
+  "type": "text",
+  "content": "Welcome",
+  "variant": "heading",
+  "size": "3xl",
+  "weight": "bold",
+  "style": { "className": "text-primary" }
 }"#
         .to_string(),
 
         "button" => r#"Button - Interactive button
 Properties:
 - type: "button" (required)
-- label: BoundValue - Button text
-- variant: BoundValue string - "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
-- size: BoundValue string - "sm" | "md" | "lg" | "icon"
-- disabled: BoundValue (boolean)
-- loading: BoundValue (boolean) - Shows loading spinner when true
-- icon: BoundValue (string) - Lucide icon name (e.g., "send", "plus", "trash")
-- iconPosition: BoundValue - "left" | "right" (default: "left")
-- tooltip: BoundValue (string) - Tooltip text on hover
+- label: string - Button text (required)
+- variant: "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
+- size: "sm" | "md" | "lg" | "icon"
+- disabled: boolean
+- loading: boolean - Shows loading spinner when true
+- icon: string - Lucide icon name (e.g., "send", "plus", "trash")
+- iconPosition: "left" | "right" (default: "left")
+- tooltip: string - Tooltip text on hover
 - actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] - legacy default; only actions[0] fires when no named click handler exists
 - eventHandlers: { "click": [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] } - optional ordered actions for this exact component event
 
@@ -116,20 +110,18 @@ Action wiring (same contract for every interactive component):
 - Other built-in names: "navigate_page" (context.route, optional context.queryParams), "external_link" (context.url) and "widget_event" (context.actionId, inside a widget only)
 - The action "name" is one of those FIXED verbs - never a board node name, event name or widget action id; those go in the context. An unrecognized name is dropped at runtime (the control renders and does nothing) and emit_ui rejects it
 - Exact eventHandlers entries override the legacy default; an explicit [] disables that event
-- Events added after a component shipped (textField "input"/"submit"/"focus"/"blur", slider "input", select "open"/"close", table "rowClick"/"cellClick"/"selectionChange"/"sortChange", chart "pointClick", richText "change"/"blur"/"imageUploaded"/"imageUploadError") need an EXACT entry - they ignore both actions[0] and "*"
+- Events added after a component shipped (textField "input"/"submit"/"focus"/"blur", slider "input", select "open"/"close", table "rowClick"/"cellClick"/"selectionChange"/"sortChange", chart "pointClick", richText "change"/"blur"/"imageUploaded"/"imageUploadError", excalidraw "load"/"save"/"autoSave"/"dirtyChange"/"error", cameraView "ready"/"capture"/"frame"/"error"/"overlayClick") need an EXACT entry - they ignore both actions[0] and "*"
 - A board can set or re-point the legacy default or a named event later with Set Element Action (a2uiSetElementAction; optional event_name)
 
 Example:
 {
   "id": "submit-btn",
-  "component": {
-    "type": "button",
-    "label": { "literalString": "Submit" },
-    "variant": { "literalString": "default" },
-    "icon": { "literalString": "send" },
-    "iconPosition": { "literalString": "left" },
-    "actions": [{ "name": "workflow_event", "context": { "nodeId": "evt-submit-form" } }]
-  }
+  "type": "button",
+  "label": "Submit",
+  "variant": "default",
+  "icon": "send",
+  "iconPosition": "left",
+  "actions": [{ "name": "workflow_event", "context": { "nodeId": "evt-submit-form" } }]
 }"#
         .to_string(),
 
@@ -138,28 +130,26 @@ Properties:
 - type: "feedback" (required)
 - mode: "icon" | "compact" | "segmented" | "rating" | "extended"
 - size: "sm" | "md" | "lg"
-- title: BoundValue
-- positiveLabel / negativeLabel: BoundValue
-- showComment: BoundValue (boolean)
+- title: string
+- positiveLabel / negativeLabel: string
+- showComment: boolean
 - commentMode: "none" | "inline" | "modal" (use "modal" to keep compact/icon controls simple while collecting a comment)
-- commentTitle / commentDescription / commentSubmitLabel / commentCancelLabel: BoundValue
-- feedbackId: BoundValue (optional stable id)
-- includeState: BoundValue (boolean; include component/page state in feedback context)
+- commentTitle / commentDescription / commentSubmitLabel / commentCancelLabel: string
+- feedbackId: string (optional stable id)
+- includeState: boolean (include component/page state in feedback context)
 - pageContextMode: "none" | "path" | "query" (default "path"; "query" sends query params)
-- pageContextQueryParamAllowlist / pageContextQueryParamDenylist: BoundValue (comma-separated query param names)
-- includePageHash: BoundValue (boolean; default false)
+- pageContextQueryParamAllowlist / pageContextQueryParamDenylist: string (comma-separated query param names)
+- includePageHash: boolean (default false)
 
 Example:
 {
   "id": "page-feedback",
-  "component": {
-    "type": "feedback",
-    "mode": { "literalString": "segmented" },
-    "title": { "literalString": "Was this helpful?" },
-    "showComment": { "literalBool": true },
-    "commentMode": { "literalString": "modal" },
-    "pageContextMode": { "literalString": "path" }
-  }
+  "type": "feedback",
+  "mode": "segmented",
+  "title": "Was this helpful?",
+  "showComment": true,
+  "commentMode": "modal",
+  "pageContextMode": "path"
 }"#
         .to_string(),
 
@@ -167,124 +157,114 @@ Example:
 Properties:
 - type: "appLink" (required)
 - target: "config" | "settings" | "overview"
-- label: BoundValue (optional; defaults from target)
+- label: string (optional; defaults from target)
 - variant: "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
 - size: "sm" | "md" | "lg" | "icon"
-- icon: BoundValue (Lucide icon name)
+- icon: string (Lucide icon name)
 
 Example:
 {
   "id": "settings-link",
-  "component": {
-    "type": "appLink",
-    "target": { "literalString": "settings" }
-  }
+  "type": "appLink",
+  "target": "settings"
 }"#
         .to_string(),
 
         "card" => r#"Card - Content container with optional header/footer
 Properties:
 - type: "card" (required)
-- title: BoundValue (optional)
-- description: BoundValue (optional)
-- footer: BoundValue (optional footer text)
-- variant: BoundValue - "default" | "bordered" | "elevated"
-- hoverable / clickable: BoundValue (boolean)
-- headerImage / headerIcon: BoundValue
-- children: { explicitList: [...] }
+- title: string (optional)
+- description: string (optional)
+- footer: string (optional footer text)
+- variant: "default" | "bordered" | "elevated"
+- hoverable / clickable: boolean
+- children: array of child component ids
 
 Example:
 {
   "id": "user-card",
-  "style": { "className": "p-6 shadow-md" },
-  "component": {
-    "type": "card",
-    "title": { "literalString": "User Profile" },
-    "children": { "explicitList": ["avatar", "user-info"] }
-  }
+  "type": "card",
+  "title": "User Profile",
+  "style": { "className": "p-6" },
+  "children": ["avatar", "user-info"]
 }"#
         .to_string(),
 
         "userprofile" | "user_profile" => r#"UserProfile - Fetch and display a Flow-Like user by subject/sub ID
 Properties:
 - type: "userProfile" (required)
-- value: BoundValue - user subject/sub ID. Compatible with Set Element Value. The "local" sub of an unauthenticated execution renders the current user.
-- variant: BoundValue - "avatar" | "chip" | "row" | "detailed" | "card"
-- avatarSize: BoundValue - "xs" | "sm" | "md" | "lg" | "xl" | "2xl"
-- showHover: BoundValue (boolean) - enable hover details
-- showEmail: BoundValue (boolean)
-- showDescription: BoundValue (boolean)
-- showUserId: BoundValue (boolean)
-- showProfileLink: BoundValue (boolean)
-- fallbackLabel: BoundValue
+- value: string - user subject/sub ID (required). Compatible with Set Element Value. The "local" sub of an unauthenticated execution renders the current user.
+- variant: "avatar" | "chip" | "row" | "detailed" | "card"
+- avatarSize: "xs" | "sm" | "md" | "lg" | "xl" | "2xl"
+- showHover: boolean - enable hover details
+- showEmail: boolean
+- showDescription: boolean
+- showUserId: boolean
+- showProfileLink: boolean
+- fallbackLabel: string
 
 Example:
 {
   "id": "assignee-profile",
-  "component": {
-    "type": "userProfile",
-    "value": { "path": "$.assigneeSub" },
-    "variant": { "literalString": "row" },
-    "showHover": { "literalBool": true }
-  }
+  "type": "userProfile",
+  "value": { "path": "$.assigneeSub" },
+  "variant": "row",
+  "showHover": true
 }"#
         .to_string(),
 
         "textfield" | "text_field" => r#"TextField - Text input
 Properties:
 - type: "textField" (required)
-- value: BoundValue - Current value
-- placeholder: BoundValue string
-- inputType: BoundValue string - "text" | "email" | "password" | "number" | "tel" | "url"
-- multiline: BoundValue boolean
-- rows: BoundValue number (for multiline)
-- disabled: BoundValue (boolean)
-- error: BoundValue (string, error message)
-- label: BoundValue string
+- value: string, or { "path": "$.form.field" } to persist edits (required)
+- placeholder: string
+- inputType: "text" | "email" | "password" | "number" | "tel" | "url" | "search"
+- multiline: boolean
+- rows: number (for multiline)
+- disabled: boolean
+- error: string (error message)
+- label: string
+- debounceMs: number - pause before the "input" event fires (default 400, min 100)
 - Bind value with { "path": "$.form.email" } to persist edits. Optional on-change actions use the button's workflow_event contract; the event reads the current value with Get Element Value instead of a pushed payload
 
 Example:
 {
   "id": "email-input",
-  "component": {
-    "type": "textField",
-    "value": { "path": "$.form.email" },
-    "placeholder": { "literalString": "Enter email" },
-    "inputType": { "literalString": "email" },
-    "label": { "literalString": "Email Address" }
-  }
+  "type": "textField",
+  "value": { "path": "$.form.email" },
+  "placeholder": "Enter email",
+  "inputType": "email",
+  "label": "Email Address"
 }"#
         .to_string(),
 
         "richtext" | "rich_text" => r#"RichText - Formatted document editor
 Properties:
 - type: "richText" (required)
-- value: BoundValue - The document, a "plate_json::"-prefixed string. NOT markdown: convert with the Rich Text to Markdown (utils_md_plate_to_md) or Rich Text to HTML (utils_md_plate_to_html) node
-- documentId: BoundValue string - stable article identity, included in document and upload event context
-- documentRevision: BoundValue string or number - authoritative revision; changing it replaces local edits with value. Return it with saves to reject stale writes
-- currentUser: BoundValue object - reviewer identity { id, name, avatarUrl? }, supplied by the authenticated host
-- reviewEnabled: BoundValue boolean - enable document comments and tracked suggestions for the current reviewer
-- label / helperText / placeholder: BoundValue string
-- readOnly / disabled: BoundValue boolean
-- error: BoundValue boolean
-- uploadPrefix: BoundValue string - storage folder for pasted or dropped images (default "a2ui/<surface>/<component>")
-- uploadScope: BoundValue string - "app" (shared, default) or "user" (the viewer's private area)
-- minHeight / maxHeight: BoundValue string - CSS lengths
-- debounceMs: BoundValue number - pause before "change" fires (default 600, min 100)
+- value: the document, a "plate_json::"-prefixed string (required). NOT markdown: convert with the Rich Text to Markdown (utils_md_plate_to_md) or Rich Text to HTML (utils_md_plate_to_html) node
+- documentId: string - stable article identity, included in document and upload event context
+- documentRevision: string or number - authoritative revision; changing it replaces local edits with value. Return it with saves to reject stale writes
+- currentUser: object - reviewer identity { id, name, avatarUrl? }, supplied by the authenticated host
+- reviewEnabled: boolean - enable document comments and tracked suggestions for the current reviewer
+- label / helperText / placeholder: string
+- readOnly / disabled: boolean
+- error: boolean
+- uploadPrefix: string - storage folder for pasted or dropped images (default "a2ui/<surface>/<component>")
+- uploadScope: "app" (shared, default) or "user" (the viewer's private area)
+- minHeight / maxHeight: string - CSS lengths
+- debounceMs: number - pause before "change" fires (default 600, min 100)
 - Images are uploaded into app storage and stored in the document as durable "storage://..." paths, so the document keeps working after signed URLs expire
 - Events: "change", "blur", "imageUploaded", "imageUploadError" - all need EXACT eventHandlers entries
 
 Example:
 {
   "id": "article-body",
-  "component": {
-    "type": "richText",
-    "value": { "path": "$.article.body" },
-    "label": { "literalString": "Article" },
-    "uploadPrefix": { "literalString": "articles/images" },
-    "eventHandlers": {
-      "change": [{ "name": "workflow_event", "context": { "event": "save_draft" } }]
-    }
+  "type": "richText",
+  "value": { "path": "$.article.body" },
+  "label": "Article",
+  "uploadPrefix": "articles/images",
+  "eventHandlers": {
+    "change": [{ "name": "workflow_event", "context": { "nodeId": "<save-draft-event-id>" } }]
   }
 }"#
         .to_string(),
@@ -292,294 +272,268 @@ Example:
         "select" => r#"Select - Dropdown selection
 Properties:
 - type: "select" (required)
-- value: BoundValue - Selected value
-- options: BoundValue - { "literalOptions": [{ "value": "...", "label": "..." }] } or { "path": "$.data.options" }
-- placeholder: BoundValue (string)
-- label: BoundValue (string)
-- disabled: BoundValue (boolean)
-- multiple: BoundValue (boolean)
-- searchable: BoundValue (boolean)
+- value: string, or { "path": "$.form.choice" } to persist the selection (required)
+- options: [{ "value": "...", "label": "..." }] or { "path": "$.data.options" } (required)
+- placeholder: string
+- label: string
+- disabled: boolean
 - Bind value with a path to persist the selection. Optional on-change actions use the button's workflow_event contract; the event reads the current selection with Get Element Value instead of a pushed payload
 
 Example:
 {
   "id": "country-select",
-  "component": {
-    "type": "select",
-    "value": { "path": "$.form.country" },
-    "placeholder": { "literalString": "Select country" },
-    "options": { "literalOptions": [
-      { "value": "us", "label": "United States" },
-      { "value": "uk", "label": "United Kingdom" }
-    ] }
-  }
+  "type": "select",
+  "value": { "path": "$.form.country" },
+  "placeholder": "Select country",
+  "options": [
+    { "value": "us", "label": "United States" },
+    { "value": "uk", "label": "United Kingdom" }
+  ]
 }"#
         .to_string(),
 
         "image" => r#"Image - Image display
 Properties:
 - type: "image" (required)
-- src: BoundValue - Image URL
-- alt: BoundValue (string) - Alt text (recommended for accessibility)
-- fit: BoundValue - "contain" | "cover" | "fill" | "none" | "scaleDown"
-- loading: BoundValue - "lazy" | "eager"
-- fallback: BoundValue (string) - Fallback image URL
-- aspectRatio: BoundValue
+- src: string - Image URL (required)
+- alt: string - Alt text (recommended for accessibility)
+- fit: "contain" | "cover" | "fill" | "none" | "scaleDown"
+- loading: "lazy" | "eager"
+- fallback: string - Fallback image URL
 
 Example:
 {
   "id": "profile-avatar",
-  "style": { "className": "w-24 h-24 rounded-full" },
-  "component": {
-    "type": "image",
-    "src": { "path": "$.user.avatar" },
-    "alt": { "literalString": "User avatar" },
-    "fit": { "literalString": "cover" }
-  }
+  "type": "image",
+  "src": { "path": "$.user.avatar" },
+  "alt": "User avatar",
+  "fit": "cover",
+  "style": { "className": "w-24 h-24 rounded-full" }
 }"#
         .to_string(),
 
         "icon" => r#"Icon - Lucide icon
 Properties:
 - type: "icon" (required)
-- name: BoundValue (string) - Lucide icon name (e.g., "user", "settings", "chevron-right")
-- size: BoundValue - "xs" | "sm" | "md" | "lg" | "xl" or number
-- color: BoundValue (string) - Tailwind color class
-- strokeWidth: BoundValue (number)
+- name: string - Lucide icon name (e.g., "user", "settings", "chevron-right") (required)
+- size: "xs" | "sm" | "md" | "lg" | "xl" or a number
+- color: string - Tailwind color class
+- strokeWidth: number
 
 Example:
 {
   "id": "settings-icon",
-  "style": { "className": "text-muted-foreground" },
-  "component": {
-    "type": "icon",
-    "name": { "literalString": "settings" },
-    "size": { "literalString": "md" }
-  }
+  "type": "icon",
+  "name": "settings",
+  "size": "md",
+  "style": { "className": "text-muted-foreground" }
 }"#
         .to_string(),
 
         "diffview" | "diff_view" => r#"DiffView - Side-by-side, unified or inline diff for text, code, markdown & documents
 Properties:
 - type: "diffView" (required)
-- original: BoundValue (required) - Left/old content or document URL
-- modified: BoundValue (required) - Right/new content or document URL
+- original: string (required) - Left/old content or document URL
+- modified: string (required) - Right/new content or document URL
 - mode: "split" | "unified" | "inline" (default "split")
 - kind: "auto" | "text" | "code" | "markdown" | "json" | "document" (default "auto")
-- language: BoundValue (string) - Syntax language e.g. "typescript", "rust", "json", "markdown", "python" (default "plaintext")
+- language: string - Syntax language e.g. "typescript", "rust", "json", "markdown", "python" (default "plaintext")
 - markdownMode: "source" | "rendered" (default "source")
-- showLineNumbers: BoundValue (boolean, default true)
-- wordWrap: BoundValue (boolean, default false)
-- wordLevel: BoundValue (boolean, default true)
-- collapseUnchanged: BoundValue (boolean, default false)
-- contextLines: BoundValue (number, default 3)
-- showStats: BoundValue (boolean, default true)
-- originalLabel: BoundValue (string, default "Original")
-- modifiedLabel: BoundValue (string, default "Modified")
-- ignoreWhitespace: BoundValue (boolean, default false)
-- ignoreCase: BoundValue (boolean, default false)
-- trimTrailingWhitespace: BoundValue (boolean, default false)
-- swapSides: BoundValue (boolean, default false)
+- showLineNumbers: boolean (default true)
+- wordWrap: boolean (default false)
+- wordLevel: boolean (default true)
+- collapseUnchanged: boolean (default false)
+- contextLines: number (default 3)
+- showStats: boolean (default true)
+- originalLabel: string (default "Original")
+- modifiedLabel: string (default "Modified")
+- ignoreWhitespace: boolean (default false)
+- ignoreCase: boolean (default false)
+- trimTrailingWhitespace: boolean (default false)
+- swapSides: boolean (default false)
 
 Example:
 {
   "id": "config-diff",
-  "component": {
-    "type": "diffView",
-    "original": { "literalString": "const port = 3000" },
-    "modified": { "literalString": "const port = 8080" },
-    "mode": { "literalString": "split" },
-    "kind": { "literalString": "code" },
-    "language": { "literalString": "typescript" },
-    "showLineNumbers": { "literalBool": true }
-  }
+  "type": "diffView",
+  "original": "const port = 3000",
+  "modified": "const port = 8080",
+  "mode": "split",
+  "kind": "code",
+  "language": "typescript",
+  "showLineNumbers": true
 }"#
         .to_string(),
 
         "calendar" => r#"Calendar - Interactive calendar for viewing & scheduling events
 Properties:
 - type: "calendar" (required)
-- events: BoundValue (required) - Array of CalendarEvent { id, title, start, end?, allDay?, color?, description?, location?, calendarId?, editable?, link?, metadata? } (link: relative path navigates in-app, absolute URL opens externally)
+- events: array of CalendarEvent { id, title, start, end?, allDay?, color?, description?, location?, calendarId?, editable?, link?, metadata? } (required) (link: relative path navigates in-app, absolute URL opens externally)
 - view: "month" | "week" | "day" | "agenda" (default "month")
-- date: BoundValue (string, ISO 8601) - Focused date
-- editable: BoundValue (boolean, default true) - Allow drag/resize
-- selectable: BoundValue (boolean, default true) - Allow slot selection to create
-- firstDayOfWeek: BoundValue (number, 0=Sunday, default 1)
-- minTime / maxTime: BoundValue (string "HH:MM") - Time-grid bounds
-- slotDuration: BoundValue (number, minutes, default 30)
-- showWeekends / showNowIndicator / showAllDay: BoundValue (boolean)
-- locale: BoundValue (string, e.g. "en-US")
-- title: BoundValue (string) - Header title
+- date: string (ISO 8601) - Focused date
+- editable: boolean (default true) - Allow drag/resize
+- selectable: boolean (default true) - Allow slot selection to create
+- firstDayOfWeek: number (0=Sunday, default 1)
+- minTime / maxTime: string ("HH:MM") - Time-grid bounds
+- slotDuration: number (minutes, default 30)
+- showWeekends / showNowIndicator / showAllDay: boolean
+- locale: string (e.g. "en-US")
+- title: string - Header title
 - density: "compact" | "default" | "comfortable"
-- showViewSwitcher: BoundValue (boolean, default true)
-- height: BoundValue (string, CSS value e.g. "600px")
-- responsive: BoundValue (boolean) - auto agenda on narrow widths
-- compactBreakpoint: BoundValue (number, px)
+- showViewSwitcher: boolean (default true)
+- height: string (CSS value e.g. "600px")
+- responsive: boolean - auto agenda on narrow widths
+- compactBreakpoint: number (px)
 - actions: legacy default action, same contract as button - [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
 - eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete"
 
 Example:
 {
   "id": "planner",
-  "component": {
-    "type": "calendar",
-    "events": { "path": "$.events" },
-    "view": { "literalString": "week" },
-    "editable": { "literalBool": true }
-  }
+  "type": "calendar",
+  "events": { "path": "$.events" },
+  "view": "week",
+  "editable": true
 }"#
         .to_string(),
 
         "gantt" => r#"Gantt - Interactive Gantt timeline for planning tasks
 Properties:
 - type: "gantt" (required)
-- tasks: BoundValue (required) - Array of GanttTask { id, name, start, end, progress?, dependencies?, parent?, color?, assignee?, milestone?, collapsed?, link?, metadata? } (link: relative path navigates in-app, absolute URL opens externally)
+- tasks: array of GanttTask { id, name, start, end, progress?, dependencies?, parent?, color?, assignee?, milestone?, collapsed?, link?, metadata? } (required) (link: relative path navigates in-app, absolute URL opens externally)
 - view: "day" | "week" | "month" | "quarter" | "compact" (default "week")
-- editable: BoundValue (boolean, default true) - Master switch for drag/resize/link
-- draggable / resizable: BoundValue (boolean) - Fine-grained edit controls
-- showDependencies: BoundValue (boolean, default true) - Draw dependency arrows
-- showProgress: BoundValue (boolean, default true) - Bar progress fill
-- showToday: BoundValue (boolean, default true) - Today marker line
-- rowHeight: BoundValue (number, px)
-- columns: BoundValue (array of string) - Extra left-panel columns e.g. ["assignee","progress"]
-- title: BoundValue (string) - Header title
+- editable: boolean (default true) - Master switch for drag/resize/link
+- draggable / resizable: boolean - Fine-grained edit controls
+- showDependencies: boolean (default true) - Draw dependency arrows
+- showProgress: boolean (default true) - Bar progress fill
+- showToday: boolean (default true) - Today marker line
+- rowHeight: number (px)
+- columns: array of string - Extra left-panel columns e.g. ["assignee","progress"]
+- title: string - Header title
 - density: "compact" | "default" | "comfortable"
-- showViewSwitcher: BoundValue (boolean, default true)
-- showTaskList: BoundValue (boolean, default true) - Left task-list panel
-- taskListWidth: BoundValue (number, px)
-- shadeWeekends: BoundValue (boolean, default true)
-- height: BoundValue (string, CSS value e.g. "600px")
-- responsive: BoundValue (boolean) - auto compact on narrow widths
-- compactBreakpoint: BoundValue (number, px)
+- showViewSwitcher: boolean (default true)
+- showTaskList: boolean (default true) - Left task-list panel
+- taskListWidth: number (px)
+- shadeWeekends: boolean (default true)
+- height: string (CSS value e.g. "600px")
+- responsive: boolean - auto compact on narrow widths
+- compactBreakpoint: number (px)
 - actions: legacy default action, same contract as button - [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete"|"link"|"reorder", id?, start?, end?, fromId?, toId? }
 - eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete" | "link" | "reorder"
 
 Example:
 {
   "id": "roadmap",
-  "component": {
-    "type": "gantt",
-    "tasks": { "path": "$.tasks" },
-    "view": { "literalString": "week" },
-    "showDependencies": { "literalBool": true }
-  }
+  "type": "gantt",
+  "tasks": { "path": "$.tasks" },
+  "view": "week",
+  "showDependencies": true
 }"#
         .to_string(),
 
         "checkbox" => r#"Checkbox - Boolean toggle with label
 Properties:
 - type: "checkbox" (required)
-- checked: BoundValue (boolean)
-- label: BoundValue (string)
-- disabled: BoundValue (boolean)
-- indeterminate: BoundValue (boolean)
+- checked: boolean, or { "path": "$.form.flag" } to persist toggles (required)
+- label: string
+- disabled: boolean
 - Bind checked with a path to persist toggles. Optional on-change actions use the button's workflow_event contract; the event reads the current state with Get Element Value instead of a pushed payload
 
 Example:
 {
   "id": "terms-checkbox",
-  "component": {
-    "type": "checkbox",
-    "checked": { "path": "$.form.acceptTerms" },
-    "label": { "literalString": "I accept the terms and conditions" }
-  }
+  "type": "checkbox",
+  "checked": { "path": "$.form.acceptTerms" },
+  "label": "I accept the terms and conditions"
 }"#
         .to_string(),
 
         "switch" => r#"Switch - Toggle switch
 Properties:
 - type: "switch" (required)
-- checked: BoundValue (boolean)
-- label: BoundValue (string)
-- disabled: BoundValue (boolean)
+- checked: boolean, or { "path": "$.settings.flag" } to persist toggles (required)
+- label: string
+- disabled: boolean
 - Bind checked with a path to persist toggles. Optional on-change actions use the button's workflow_event contract; the event reads the current state with Get Element Value instead of a pushed payload
 
 Example:
 {
   "id": "notifications-switch",
-  "component": {
-    "type": "switch",
-    "checked": { "path": "$.settings.notifications" },
-    "label": { "literalString": "Enable notifications" }
-  }
+  "type": "switch",
+  "checked": { "path": "$.settings.notifications" },
+  "label": "Enable notifications"
 }"#
         .to_string(),
 
         "tabs" => r#"Tabs - Tabbed content container
 Properties:
 - type: "tabs" (required)
-- value: BoundValue - Active tab id
-- tabs: raw array of { id: string, label: BoundValue, icon?: BoundValue, disabled?: BoundValue, contentComponentId: string }
+- value: string - Active tab id (required; bind it with { "path": ... } to persist the choice)
+- tabs: array of { id: string, label: string, icon?: string, disabled?: boolean, contentComponentId: string } (required)
   contentComponentId references the component rendered as that tab's panel — without it the tab is empty
-- orientation: BoundValue - "horizontal" | "vertical"
-- variant: BoundValue - "default" | "pills" | "underline"
+- orientation: "horizontal" | "vertical"
+- variant: "default" | "pills" | "underline"
 
 Example:
 {
   "id": "settings-tabs",
-  "component": {
-    "type": "tabs",
-    "value": { "path": "$.ui.activeTab", "defaultValue": "general" },
-    "tabs": [
-      { "id": "general", "label": { "literalString": "General" }, "icon": { "literalString": "settings" }, "contentComponentId": "general-panel" },
-      { "id": "security", "label": { "literalString": "Security" }, "icon": { "literalString": "shield" }, "contentComponentId": "security-panel" }
-    ]
-  }
+  "type": "tabs",
+  "value": { "path": "$.ui.activeTab", "defaultValue": "general" },
+  "tabs": [
+    { "id": "general", "label": "General", "icon": "settings", "contentComponentId": "general-panel" },
+    { "id": "security", "label": "Security", "icon": "shield", "contentComponentId": "security-panel" }
+  ]
 }"#
         .to_string(),
 
         "forecastchart" => r#"ForecastChart - Saved Data Studio prediction
 Properties:
 - type: "forecastChart" (required)
-- forecastId: BoundValue string (required) - Existing saved prediction ID; choose it in the editor or bind a known ID
-- appId: BoundValue string - Owning project; defaults to the running project
-- userScoped: BoundValue boolean - Use the current viewer's personal database (default false); project scope supports collaborator access
-- target / seriesId: BoundValue string - Initially selected target and series
-- view: BoundValue string - "forecast" for outlook or "evaluation" for saved holdout results
-- showCovariates / showMetrics / showControls / showHeader: BoundValue boolean
-- compact: BoundValue boolean - Compact layout for small dashboard cards
-- height: BoundValue number - Plot height in pixels, clamped to 120 through 1200
+- forecastId: string (required) - Existing saved prediction ID; choose it in the editor or bind a known ID
+- appId: string - Owning project; defaults to the running project
+- userScoped: boolean - Use the current viewer's personal database (default false); project scope supports collaborator access
+- target / seriesId: string - Initially selected target and series
+- view: "forecast" for outlook or "evaluation" for saved holdout results
+- showCovariates / showMetrics / showControls / showHeader: boolean
+- compact: boolean - Compact layout for small dashboard cards
+- height: number - Plot height in pixels, clamped to 120 through 1200
 
 The viewer's current database and source-column permissions apply. This component reads a saved result and never runs inference. Do not invent a forecast ID or put fetched chart values into page state. It emits no workflow events.
 
 Example:
 {
   "id": "saved-sales-outlook",
-  "component": {
-    "type": "forecastChart",
-    "forecastId": { "path": "$.data.savedForecastId" },
-    "view": { "literalString": "forecast" },
-    "showMetrics": { "literalBool": true },
-    "height": { "literalNumber": 320 }
-  }
+  "type": "forecastChart",
+  "forecastId": { "path": "$.data.savedForecastId" },
+  "view": "forecast",
+  "showMetrics": true,
+  "height": 320
 }"#
         .to_string(),
 
         "modal" => r#"Modal - Dialog overlay
 Properties:
 - type: "modal" (required)
-- open: BoundValue (boolean) - bind with { "path": "$.ui.showConfirm" } so closing persists
-- title: BoundValue
-- description: BoundValue (optional)
-- closeOnOverlay / closeOnEscape / showCloseButton / centered: BoundValue (boolean)
-- size: BoundValue - "sm" | "md" | "lg" | "xl" | "full"
-- children: { explicitList: [...] }
+- open: boolean - bind with { "path": "$.ui.showConfirm" } so closing persists (required)
+- title: string
+- description: string (optional)
+- closeOnOverlay / closeOnEscape / showCloseButton / centered: boolean
+- size: "sm" | "md" | "lg" | "xl" | "full"
+- children: array of child component ids
 - Optional actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] fire when the modal closes
 
 Example:
 {
   "id": "confirm-modal",
-  "component": {
-    "type": "modal",
-    "open": { "path": "$.ui.showConfirm" },
-    "title": { "literalString": "Confirm Action" },
-    "children": { "explicitList": ["modal-content", "modal-actions"] }
-  }
+  "type": "modal",
+  "open": { "path": "$.ui.showConfirm" },
+  "title": "Confirm Action",
+  "children": ["modal-content", "modal-actions"]
 }"#
         .to_string(),
 
         _ => format!(
-            "No detailed schema page for component type: {}. Detailed pages exist for: column, row, grid, text, button, feedback, appLink, card, userProfile, textField, select, image, icon, diffView, calendar, gantt, checkbox, switch, tabs, forecastChart, modal (plus style categories spacing, colors, effects, layout, responsive, typography). For every other component, use the component documentation embedded in your system prompt. It is the authoritative reference.",
+            "No detailed schema page for component type: {}. Detailed pages exist for: column, row, grid, text, button, feedback, appLink, card, userProfile, textField, richText, select, image, icon, diffView, calendar, gantt, checkbox, switch, tabs, forecastChart, modal (plus style categories spacing, colors, effects, layout, responsive, typography). For every other component, use the component documentation embedded in your system prompt. It is the authoritative reference.",
             component_type
         ),
     }
@@ -741,6 +695,7 @@ mod tests {
         "card",
         "userProfile",
         "textField",
+        "richText",
         "select",
         "image",
         "icon",
@@ -752,6 +707,17 @@ mod tests {
         "tabs",
         "forecastChart",
         "modal",
+    ];
+
+    /// Props every component accepts besides its own (the desktop emit_ui validator's base set).
+    const BASE_PROPS: &[&str] = &[
+        "type",
+        "id",
+        "style",
+        "children",
+        "actions",
+        "eventHandlers",
+        "hidden",
     ];
 
     const STYLE_CATEGORIES: &[&str] = &[
@@ -774,9 +740,34 @@ mod tests {
             .expect("example JSON must parse — the model copies it verbatim")
     }
 
-    /// Props whose runtime contract is a raw (non-BoundValue) structure.
-    fn raw_struct_prop(component_type: &str, key: &str) -> bool {
-        matches!((component_type, key), ("tabs", "tabs"))
+    /// The page's example lowered to the canonical shape every renderer and validator reads.
+    fn lowered_example(component_type: &str) -> serde_json::Value {
+        let example = example_json(&get_component_schema(component_type));
+        crate::a2ui::authoring::lower_component(example)
+            .unwrap_or_else(|error| panic!("{component_type}: example does not lower: {error}"))
+    }
+
+    fn manifest_spec(component_type: &str) -> &'static crate::a2ui::authoring::ComponentSpec {
+        crate::a2ui::authoring::component_manifest()
+            .component(component_type)
+            .unwrap_or_else(|| panic!("{component_type} is not in the component manifest"))
+    }
+
+    /// `(prop names, line)` for every `- name:` / `- a / b:` property line of a page.
+    fn page_prop_lines(page: &str) -> Vec<(Vec<&str>, &str)> {
+        page.lines()
+            .filter_map(|line| {
+                let (names, _) = line.strip_prefix("- ")?.split_once(':')?;
+                let names: Vec<&str> = names.split(" / ").map(str::trim).collect();
+                names
+                    .iter()
+                    .all(|name| {
+                        name.starts_with(|c: char| c.is_ascii_lowercase())
+                            && name.chars().all(|c| c.is_ascii_alphanumeric())
+                    })
+                    .then_some((names, line))
+            })
+            .collect()
     }
 
     #[test]
@@ -865,56 +856,108 @@ mod tests {
     }
 
     #[test]
-    fn example_component_props_are_bound_values() {
-        // The emit_ui validator rejects bare string/number/bool values for
-        // known props; every example must model the BoundValue discipline.
+    fn examples_are_plain_authored_components_the_validator_accepts() {
+        // The model copies these verbatim: each example must be the flat plain-value form, lower
+        // without errors and pass the emit_ui prop allowlist (manifest props + base props).
         for component_type in DETAILED_PAGE_TYPES {
-            let page = get_component_schema(component_type);
-            let example = example_json(&page);
-            let component = example
-                .get("component")
-                .and_then(|c| c.as_object())
-                .unwrap_or_else(|| panic!("{component_type} example must have a component object"));
+            let example = example_json(&get_component_schema(component_type));
+            assert_eq!(
+                example["type"].as_str(),
+                Some(*component_type),
+                "{component_type}: example must be a flat {component_type} component"
+            );
+            assert!(
+                example.get("component").is_none() && !example.to_string().contains("\"literal"),
+                "{component_type}: example must use plain values, not the nested wrapped form"
+            );
+            let spec = manifest_spec(component_type);
+            let lowered = lowered_example(component_type);
+            let component = lowered["component"]
+                .as_object()
+                .expect("a lowered component is an object");
             for (key, value) in component {
-                if key == "type" || raw_struct_prop(component_type, key) {
-                    continue;
-                }
-                if key == "actions" {
-                    let actions = value
-                        .as_array()
-                        .unwrap_or_else(|| panic!("{component_type}: actions must be an array"));
-                    for action in actions {
-                        assert!(
-                            action.get("name").and_then(|n| n.as_str()).is_some(),
-                            "{component_type}: every example action needs a name"
-                        );
-                        assert!(
-                            action.get("context").map(|c| c.is_object()) == Some(true),
-                            "{component_type}: every example action needs a context object"
-                        );
-                    }
-                    continue;
-                }
+                let prop = spec.prop(key);
                 assert!(
-                    value.is_object() || value.is_array(),
-                    "{component_type}: example prop '{key}' is a bare value — wrap it as a BoundValue"
+                    BASE_PROPS.contains(&key.as_str()) || prop.is_some(),
+                    "{component_type}: example prop '{key}' is not a {component_type} prop"
+                );
+                let Some(prop) = prop.filter(|prop| !prop.values.is_empty()) else {
+                    continue;
+                };
+                if let Some(literal) = value
+                    .get("literalString")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| value.as_str())
+                {
+                    assert!(
+                        prop.values.iter().any(|allowed| allowed == literal),
+                        "{component_type}: example {key} '{literal}' is not one of {:?}",
+                        prop.values
+                    );
+                }
+            }
+            for required in spec.props.iter().filter(|prop| prop.required) {
+                assert!(
+                    component.contains_key(&required.name),
+                    "{component_type}: example omits required prop '{}'",
+                    required.name
                 );
             }
         }
     }
 
     #[test]
-    fn example_actions_live_inside_the_component_object() {
-        // SurfaceComponent (Rust + TS) has no top-level `actions` field; an
-        // example placing actions next to `component` teaches a shape that
-        // serde silently drops.
+    fn page_prop_lines_match_the_component_manifest() {
+        // Hand-written property lists drift: renderer-ignored props get advertised and
+        // invented values (text variant "h1") get taught. Every listed prop must exist, none
+        // may be unrendered, and every quoted value of a value-constrained prop must be real.
         for component_type in DETAILED_PAGE_TYPES {
+            let spec = manifest_spec(component_type);
             let page = get_component_schema(component_type);
-            let example = example_json(&page);
+            for (names, line) in page_prop_lines(&page) {
+                for name in names {
+                    if BASE_PROPS.contains(&name) {
+                        continue;
+                    }
+                    let prop = spec.prop(name).unwrap_or_else(|| {
+                        panic!("{component_type} page lists '{name}', which is not a prop: {line}")
+                    });
+                    assert!(
+                        !prop.unrendered,
+                        "{component_type} page advertises '{name}', which the renderer ignores"
+                    );
+                    if prop.values.is_empty() {
+                        continue;
+                    }
+                    for quoted in line.split('"').skip(1).step_by(2) {
+                        assert!(
+                            prop.values.iter().any(|allowed| allowed == quoted),
+                            "{component_type}.{name}: '{quoted}' is not one of {:?}",
+                            prop.values
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn example_actions_land_inside_the_component_object() {
+        // SurfaceComponent (Rust + TS) has no top-level `actions` field. Authored components
+        // carry actions next to their props; lowering must move them into `component`.
+        for component_type in DETAILED_PAGE_TYPES {
+            let authored = example_json(&get_component_schema(component_type));
+            let lowered = lowered_example(component_type);
             assert!(
-                example.get("actions").is_none(),
-                "{component_type}: example puts 'actions' outside 'component' where it is silently dropped"
+                lowered.get("actions").is_none(),
+                "{component_type}: lowered example keeps 'actions' outside 'component'"
             );
+            if authored.get("actions").is_some() {
+                assert!(
+                    lowered["component"]["actions"].is_array(),
+                    "{component_type}: example actions were not lowered into 'component'"
+                );
+            }
         }
     }
 
@@ -937,14 +980,15 @@ mod tests {
     fn tabs_page_matches_tab_definition_contract() {
         // TabDefinition (types.ts) is { id, label: BoundValue, icon?, disabled?,
         // contentComponentId } — tab content is referenced per tab, not matched
-        // by children order, and tabs have `id`, not `value`.
+        // by children order, and tabs have `id`, not `value`. Authored labels are plain
+        // strings; lowering wraps them.
         let page = get_component_schema("tabs");
         assert!(
             page.contains("contentComponentId"),
             "tabs page must document contentComponentId — without it tabs render empty"
         );
         let example = example_json(&page);
-        let tabs = example["component"]["tabs"]
+        let tabs = example["tabs"]
             .as_array()
             .expect("tabs example must include a tabs array");
         for tab in tabs {
@@ -956,8 +1000,22 @@ mod tests {
                 "each example tab needs a contentComponentId"
             );
             assert!(
-                tab.get("label").map(|l| l.is_object()) == Some(true),
-                "tab labels are BoundValues"
+                tab.get("label").is_some_and(serde_json::Value::is_string),
+                "authored tab labels are plain strings"
+            );
+        }
+        let lowered = lowered_example("tabs");
+        for tab in lowered["component"]["tabs"]
+            .as_array()
+            .expect("lowered tabs stay an array")
+        {
+            assert!(
+                tab["label"].get("literalString").is_some(),
+                "lowered tab labels are BoundValues: {tab}"
+            );
+            assert!(
+                tab["contentComponentId"].is_string(),
+                "contentComponentId stays a plain id: {tab}"
             );
         }
     }
@@ -980,10 +1038,16 @@ mod tests {
                     "{component_type} page documents actions without the workflow_event contract"
                 );
             }
-            let example = example_json(&page);
-            let Some(actions) = example["component"]["actions"].as_array() else {
-                continue;
-            };
+            let lowered = lowered_example(component_type);
+            let component = &lowered["component"];
+            let handler_lists = component["eventHandlers"]
+                .as_object()
+                .into_iter()
+                .flat_map(|handlers| handlers.values());
+            let actions = std::iter::once(&component["actions"])
+                .chain(handler_lists)
+                .filter_map(serde_json::Value::as_array)
+                .flatten();
             for action in actions {
                 let name = action["name"].as_str().unwrap_or_default();
                 assert!(
@@ -1026,6 +1090,7 @@ mod tests {
             "`dateTimeInput`",
             "`fileInput`",
             "`imageInput`",
+            "`cameraView`",
             "`voiceInput`",
             "`feedback`",
             "`appLink`",

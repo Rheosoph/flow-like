@@ -1332,6 +1332,7 @@ impl NodeLogic for RestServerNode {
                 .await
                 .or_else(|| context.get_cancellation_token());
             let active_connections = Arc::new(AtomicU32::new(0));
+            let byte_scopes = context.byte_scope();
             // JoinSet aborts handlers if the enclosing workflow future is dropped.
             let mut handles = tokio::task::JoinSet::new();
             let mut cancelled = false;
@@ -1394,6 +1395,7 @@ impl NodeLogic for RestServerNode {
                 let oauth_validator = oauth_validator.clone();
                 let active_connections = active_connections.clone();
                 let parent_node_id = parent_node_id.clone();
+                let byte_scopes = byte_scopes.clone();
                 handles.spawn(async move {
                     let stream = match tls_acceptor.accept(stream).await {
                         Ok(stream) => stream,
@@ -1411,6 +1413,7 @@ impl NodeLogic for RestServerNode {
                         openapi_specs,
                         oauth_validator,
                         parent_node_id,
+                        byte_scopes,
                     )
                     .await;
                     active_connections.fetch_sub(1, Ordering::Relaxed);
@@ -2198,6 +2201,7 @@ async fn handle_connection(
     openapi_specs: std::sync::Arc<Vec<CachedOpenApiRoute>>,
     oauth_validator: std::sync::Arc<Option<super::auth::OAuthValidator>>,
     parent_node_id: String,
+    byte_scopes: flow_like::flow::execution::byte_store::ByteScope,
 ) {
     let response = match super::http_runtime::read_http_request(
         &mut *stream,
@@ -2210,12 +2214,14 @@ async fn handle_connection(
             let streaming = request.headers.get("accept").is_some_and(|accept| {
                 flow_like_types::http_streaming::accepts_event_stream(accept)
             });
+            let scope = byte_scopes.child();
             let prepared = prepare_rest_request(
                 request,
                 &config,
                 &files,
                 &openapi_specs,
                 oauth_validator.as_ref().as_ref(),
+                &scope,
             )
             .await;
             match prepared {
@@ -2225,6 +2231,7 @@ async fn handle_connection(
                         &mut *stream,
                         &route,
                         &args,
+                        &scope,
                         &function_contexts,
                         &parent_node_id,
                     )
@@ -2235,8 +2242,14 @@ async fn handle_connection(
                     return;
                 }
                 Ok((route, args)) => {
-                    run_buffered_rest_functions(&route, &args, &function_contexts, &parent_node_id)
-                        .await
+                    run_buffered_rest_functions(
+                        &route,
+                        &args,
+                        &scope,
+                        &function_contexts,
+                        &parent_node_id,
+                    )
+                    .await
                 }
             }
         }
@@ -2259,9 +2272,20 @@ async fn route_request(
     oauth_validator: Option<&super::auth::OAuthValidator>,
     parent_node_id: &str,
 ) -> super::http_runtime::HttpResponse {
-    match prepare_rest_request(request, config, files, openapi_specs, oauth_validator).await {
+    let scope = flow_like::flow::execution::byte_store::ByteScope::default();
+    match prepare_rest_request(
+        request,
+        config,
+        files,
+        openapi_specs,
+        oauth_validator,
+        &scope,
+    )
+    .await
+    {
         Ok((route, args)) => {
-            run_buffered_rest_functions(&route, &args, function_contexts, parent_node_id).await
+            run_buffered_rest_functions(&route, &args, &scope, function_contexts, parent_node_id)
+                .await
         }
         Err(response) => response,
     }
@@ -2274,6 +2298,7 @@ async fn prepare_rest_request(
     files: &[CachedFileRoute],
     openapi_specs: &[CachedOpenApiRoute],
     oauth_validator: Option<&super::auth::OAuthValidator>,
+    scope: &flow_like::flow::execution::byte_store::ByteScope,
 ) -> Result<(RestFunctionRoute, flow_like_types::Value), super::http_runtime::HttpResponse> {
     let client =
         match super::auth::authorize_client(&config.auth, oauth_validator, &request, "rest") {
@@ -2305,11 +2330,12 @@ async fn prepare_rest_request(
         return Err(super::http_runtime::HttpResponse::text(404, "Not Found"));
     };
 
-    let body = match parse_rest_body_value(&request) {
+    let body = match parse_rest_body_value(&request, scope).await {
         Ok(body) => body,
         Err(response) => return Err(response),
     };
-    let args = rest_arguments(&request, &client, body);
+    let body_bytes = scope.bytes_value(request.body.clone()).await;
+    let args = rest_arguments(&request, &client, body, body_bytes);
     Ok((route.clone(), args))
 }
 
@@ -2317,6 +2343,7 @@ async fn prepare_rest_request(
 async fn run_buffered_rest_functions(
     route: &RestFunctionRoute,
     args: &flow_like_types::Value,
+    scope: &flow_like::flow::execution::byte_store::ByteScope,
     function_contexts: &FunctionContextMap,
     parent_node_id: &str,
 ) -> super::http_runtime::HttpResponse {
@@ -2331,6 +2358,7 @@ async fn run_buffered_rest_functions(
         match super::http_runtime::trigger_shared_function_context(
             ctx,
             args,
+            Some(scope),
             parent_node_id,
             "REST route handler",
         )
@@ -2367,6 +2395,7 @@ async fn stream_rest_functions<S>(
     stream: &mut S,
     route: &RestFunctionRoute,
     args: &flow_like_types::Value,
+    scope: &flow_like::flow::execution::byte_store::ByteScope,
     function_contexts: &FunctionContextMap,
     parent_node_id: &str,
 ) -> flow_like_types::Result<()>
@@ -2394,9 +2423,14 @@ where
             let context = function_contexts
                 .get(function_id)
                 .expect("validated function reference");
-            result =
-                trigger_streaming_function_context(context, args, parent_node_id, chunks.clone())
-                    .await?;
+            result = trigger_streaming_function_context(
+                context,
+                args,
+                Some(scope),
+                parent_node_id,
+                chunks.clone(),
+            )
+            .await?;
         }
         Ok(result
             .as_object()
@@ -2571,11 +2605,13 @@ fn rest_arguments(
     request: &super::http_runtime::HttpRequest,
     client: &flow_like_types::Value,
     body: flow_like_types::Value,
+    body_bytes: flow_like_types::Value,
 ) -> flow_like_types::Value {
     let mut args = rest_args_from_body_and_query(&body, &request.query);
     let payload = super::auth::payload_with_client(body.clone(), client);
     args.insert("payload".to_string(), payload);
-    let request_value = rest_request_to_value_with_client(request, client, &body);
+    let request_value =
+        rest_request_to_value_with_client(request, client, &body, body_bytes.clone());
     args.insert("request".to_string(), request_value);
     args.insert("method".to_string(), json!(request.method));
     args.insert("path".to_string(), json!(request.path));
@@ -2586,7 +2622,7 @@ fn rest_arguments(
         "body_text".to_string(),
         json!(String::from_utf8(request.body.clone()).ok()),
     );
-    args.insert("body_bytes".to_string(), json!(request.body));
+    args.insert("body_bytes".to_string(), body_bytes);
     args.insert("_client".to_string(), client.clone());
     flow_like_types::Value::Object(args)
 }
@@ -2614,8 +2650,9 @@ fn rest_args_from_body_and_query(
 }
 
 #[cfg(all(feature = "execute", not(feature = "remote")))]
-fn parse_rest_body_value(
+async fn parse_rest_body_value(
     request: &super::http_runtime::HttpRequest,
+    scope: &flow_like::flow::execution::byte_store::ByteScope,
 ) -> Result<flow_like_types::Value, super::http_runtime::HttpResponse> {
     let content_type = request
         .headers
@@ -2624,7 +2661,7 @@ fn parse_rest_body_value(
         .unwrap_or_default();
 
     if request.body.is_empty() || !content_type.contains("application/json") {
-        return Ok(super::http_runtime::parse_body_value(request));
+        return Ok(super::http_runtime::parse_body_value(request, scope).await);
     }
 
     json::from_slice::<flow_like_types::Value>(&request.body).map_err(|err| {
@@ -2642,6 +2679,7 @@ fn rest_request_to_value_with_client(
     request: &super::http_runtime::HttpRequest,
     client: &flow_like_types::Value,
     body: &flow_like_types::Value,
+    body_bytes: flow_like_types::Value,
 ) -> flow_like_types::Value {
     let body_text = String::from_utf8(request.body.clone()).ok();
     json!({
@@ -2651,7 +2689,7 @@ fn rest_request_to_value_with_client(
         "headers": request.headers,
         "body": body,
         "body_text": body_text,
-        "body_bytes": request.body,
+        "body_bytes": body_bytes,
         "_client": client
     })
 }
@@ -3001,6 +3039,7 @@ mod tests {
             Arc::new(Vec::new()),
             Arc::new(None),
             "parent".to_string(),
+            Default::default(),
         ));
         client.write_all(format!(
             "POST /stream HTTP/1.1\r\nHost: localhost\r\n{accept}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
@@ -3187,6 +3226,7 @@ mod tests {
             trigger_streaming_function_context(
                 &first_context,
                 &json!({"name": "cancelled"}),
+                None,
                 "parent",
                 first,
             )
@@ -3217,6 +3257,7 @@ mod tests {
             trigger_streaming_function_context(
                 &context,
                 &json!({"name": "second"}),
+                None,
                 "parent",
                 second,
             ),
@@ -3250,6 +3291,7 @@ mod tests {
             trigger_shared_function_context(
                 &context,
                 &json!({"name": "buffered"}),
+                None,
                 "parent",
                 "REST route handler",
             ),

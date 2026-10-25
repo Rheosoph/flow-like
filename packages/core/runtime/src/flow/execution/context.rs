@@ -1,6 +1,9 @@
 use super::{
     EventTrigger, ExecutionEnvironment, ExecutionMode, InternalNode, LogLevel, Run, RunPayload,
-    internal_pin::InternalPin, log::LogMessage, trace::Trace,
+    byte_store::{self, BYTE_STORE_RESOURCE, ByteScope, ByteStore, INLINE_BYTES_MAX},
+    internal_pin::InternalPin,
+    log::LogMessage,
+    trace::Trace,
 };
 use crate::a2ui::ElementCache;
 use crate::models::llm::ModelUsageContext;
@@ -10,7 +13,7 @@ use crate::{
         board::ExecutionStage,
         node::{Node, NodeState},
         oauth::OAuthToken,
-        pin::PinType,
+        pin::{PinType, ValueType},
         utils::evaluate_pin_value,
         variable::{Variable, VariableType},
     },
@@ -20,11 +23,11 @@ use crate::{
 use ahash::{AHashMap, AHashSet};
 use flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like_storage::{files::store::FlowLikeStore, object_store::path::Path};
-use flow_like_types::Value;
 use flow_like_types::channel::{Channel, ChannelOutcome};
 use flow_like_types::intercom::{InterComCallback, InterComEvent};
 use flow_like_types::json::Map;
 use flow_like_types::tokio_util::sync::CancellationToken;
+use flow_like_types::{Bytes, Value};
 use flow_like_types::{
     Cacheable,
     json::from_value,
@@ -378,6 +381,8 @@ pub struct ExecutionContext {
     pub resources: Arc<super::resources::RunResources>,
     /// User context containing information about who triggered the execution
     pub user_context: Option<super::UserExecutionContext>,
+    /// Set while a handler invocation runs in its own byte scope; sub contexts inherit it.
+    byte_scope: Option<Arc<ByteStore>>,
     nodes_executed: Arc<AtomicU64>,
     represented_trace_nodes: AHashSet<Arc<str>>,
     trace_taken: bool,
@@ -539,6 +544,7 @@ impl ExecutionContext {
             channel,
             cancellation_token: None,
             user_context: None,
+            byte_scope: None,
             nodes_executed,
             represented_trace_nodes: AHashSet::new(),
             trace_taken: false,
@@ -656,6 +662,7 @@ impl ExecutionContext {
             channel,
             cancellation_token: None,
             user_context: None,
+            byte_scope: None,
             nodes_executed: run_meta.nodes_executed.clone(),
             represented_trace_nodes: AHashSet::new(),
             trace_taken: false,
@@ -825,6 +832,7 @@ impl ExecutionContext {
             oauth_tokens: self.oauth_tokens.clone(),
             channel: self.channel.clone(),
             user_context: self.user_context.clone(),
+            byte_scope: self.byte_scope.clone(),
             nodes_executed: self.nodes_executed.clone(),
             represented_trace_nodes: AHashSet::new(),
             trace_taken: false,
@@ -1066,6 +1074,13 @@ impl ExecutionContext {
                 schema,
                 &value,
             )?;
+        } else {
+            variable.validate_value(&value).map_err(|error| {
+                flow_like_types::anyhow!("Cannot assign to variable '{}': {error}", variable.name)
+            })?;
+        }
+        if let Some(scope) = &self.byte_scope {
+            scope.promote(&value).await?;
         }
         *variable.value.lock().await = value;
         Ok(())
@@ -1208,16 +1223,21 @@ impl ExecutionContext {
         &self,
         name: &str,
     ) -> flow_like_types::Result<T> {
-        let pin = self.get_pin_by_name(name).await?;
-        let value = evaluate_pin_value(pin, &self.context_pin_overrides).await?;
-        let value = from_value(value)?;
-        Ok(value)
+        let value = self.evaluate_pin_raw(name).await?;
+        self.deserialize_pin_value(value).await
     }
 
+    /// The pin's value with byte handles expanded back into arrays.
     pub async fn evaluate_pin_to_ref(&self, name: &str) -> flow_like_types::Result<Value> {
+        let value = self.evaluate_pin_raw(name).await?;
+        self.materialize_bytes(value).await
+    }
+
+    /// The pin's value as stored. Byte handles stay handles, so a node that only moves a
+    /// value (into a variable, a struct field, another pin) never expands its bytes.
+    pub async fn evaluate_pin_raw(&self, name: &str) -> flow_like_types::Result<Value> {
         let pin = self.get_pin_by_name(name).await?;
-        let value = evaluate_pin_value(pin, &self.context_pin_overrides).await?;
-        Ok(value)
+        evaluate_pin_value(pin, &self.context_pin_overrides).await
     }
 
     pub async fn evaluate_pin_ref<T: DeserializeOwned>(
@@ -1225,8 +1245,113 @@ impl ExecutionContext {
         reference: Arc<InternalPin>,
     ) -> flow_like_types::Result<T> {
         let value = evaluate_pin_value(reference, &self.context_pin_overrides).await?;
-        let value = from_value(value)?;
-        Ok(value)
+        self.deserialize_pin_value(value).await
+    }
+
+    /// A byte pin's buffer, shared with the run's store instead of copied.
+    pub async fn evaluate_pin_bytes(&self, name: &str) -> flow_like_types::Result<Bytes> {
+        let value = self.evaluate_pin_raw(name).await?;
+        if let Some(hash) = byte_store::handle_hash(&value)
+            && let Some(store) = self.byte_store()
+        {
+            return store.get(hash).await;
+        }
+        let bytes: Vec<u8> = self.deserialize_pin_value(value).await?;
+        Ok(Bytes::from(bytes))
+    }
+
+    pub async fn set_pin_bytes(
+        &mut self,
+        pin: &str,
+        bytes: impl Into<Bytes>,
+    ) -> flow_like_types::Result<()> {
+        let pin = self.get_pin_by_name(pin).await?;
+        let value = self.intern_bytes(bytes.into(), pin.sensitive).await;
+        self.set_pin_ref_value(&pin, value).await
+    }
+
+    /// The value a pin or struct field carries for `bytes`: a handle into the run's store,
+    /// or a plain array when the buffer is small or the run has no store.
+    pub async fn bytes_value(&self, bytes: impl Into<Bytes>) -> Value {
+        self.intern_bytes(bytes.into(), false).await
+    }
+
+    async fn intern_bytes(&self, bytes: Bytes, sensitive: bool) -> Value {
+        let store = (bytes.len() > INLINE_BYTES_MAX)
+            .then(|| self.byte_store_or_create())
+            .flatten();
+        byte_store::intern(store.as_ref(), bytes, sensitive).await
+    }
+
+    /// The scope this context writes bytes to. A long-lived server keeps it and takes a
+    /// `child()` per request without locking any handler context.
+    pub fn byte_scope(&self) -> ByteScope {
+        ByteScope(self.byte_store_or_create())
+    }
+
+    /// A byte scope for one handler invocation in this run (a REST request, a socket
+    /// message). Enter it on the handler's context; buffers it creates go away with it.
+    pub fn new_byte_scope(&self) -> ByteScope {
+        self.byte_scope().child()
+    }
+
+    /// Run this context inside `scope`; returns the scope to restore afterwards.
+    pub fn enter_byte_scope(&mut self, scope: &ByteScope) -> ByteScope {
+        ByteScope(std::mem::replace(&mut self.byte_scope, scope.0.clone()))
+    }
+
+    pub fn restore_byte_scope(&mut self, previous: ByteScope) {
+        self.byte_scope = previous.0;
+    }
+
+    /// `value` with byte handles expanded, for anything that leaves the run.
+    pub async fn materialize_bytes(&self, value: Value) -> flow_like_types::Result<Value> {
+        match self.byte_store() {
+            Some(store) => store.materialize(value).await,
+            None => Ok(value),
+        }
+    }
+
+    async fn deserialize_pin_value<T: DeserializeOwned>(
+        &self,
+        value: Value,
+    ) -> flow_like_types::Result<T> {
+        match self.byte_store() {
+            Some(store) => store.deserialize(value).await,
+            None => Ok(from_value(value)?),
+        }
+    }
+
+    fn byte_store(&self) -> Option<Arc<ByteStore>> {
+        self.byte_scope
+            .clone()
+            .or_else(|| self.resources.get::<ByteStore>(BYTE_STORE_RESOURCE))
+    }
+
+    fn byte_store_or_create(&self) -> Option<Arc<ByteStore>> {
+        if let Some(scope) = &self.byte_scope {
+            return Some(scope.clone());
+        }
+        self.resources
+            .get_or_insert_with(BYTE_STORE_RESOURCE, || Arc::new(ByteStore::default()))
+            .ok()
+    }
+
+    /// Producers that still write `json!(bytes)` into a byte pin are moved into the store.
+    async fn intern_byte_array(&self, pin: &InternalPin, value: Value) -> Value {
+        if pin.data_type != VariableType::Byte
+            || pin.value_type != ValueType::Array
+            || value
+                .as_array()
+                .is_none_or(|items| items.len() <= INLINE_BYTES_MAX)
+        {
+            return value;
+        }
+        let Some(bytes) = byte_store::array_to_bytes(&value) else {
+            return value;
+        };
+        drop(value);
+        self.intern_bytes(Bytes::from(bytes), pin.sensitive).await
     }
 
     pub async fn get_pins_by_name(
@@ -1248,6 +1373,7 @@ impl ExecutionContext {
         value: Value,
     ) -> flow_like_types::Result<()> {
         pin.validate_value(&value)?;
+        let value = self.intern_byte_array(pin, value).await;
         let pin_id = pin.id();
 
         // When in an override context, write to BOTH the override map AND the
@@ -1500,7 +1626,10 @@ impl ExecutionContext {
         T: Serialize + DeserializeOwned,
     {
         tracing::debug!(event_type = %event_type, "Streaming response event");
-        let event = InterComEvent::with_type(event_type, event);
+        let mut event = InterComEvent::with_type(event_type, event);
+        event.payload = self
+            .materialize_bytes(std::mem::take(&mut event.payload))
+            .await?;
         if let Err(err) = event.call(&self.callback).await {
             self.log_message(&format!("Failed to send event: {}", err), LogLevel::Error);
             tracing::error!(error = %err, "Failed to send stream event");
@@ -1672,7 +1801,7 @@ impl ExecutionContext {
             ChannelOutcome::Responded(reply) => reply,
             ChannelOutcome::Expired => {
                 return Err(flow_like_types::anyhow!(
-                    "Element request [{}] timed out after {}ms — no live surface answered",
+                    "Element request [{}] timed out after {}ms: the app page did not answer. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again.",
                     described,
                     timeout.as_millis()
                 ));
@@ -1685,7 +1814,7 @@ impl ExecutionContext {
             }
             ChannelOutcome::Closed => {
                 return Err(flow_like_types::anyhow!(
-                    "Element request [{}] was dropped without a response",
+                    "Element request [{}] could not complete: the connection closed before the app page answered. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again.",
                     described
                 ));
             }
@@ -1706,11 +1835,16 @@ impl ExecutionContext {
             .get("elements")
             .and_then(Value::as_object)
             .cloned()
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                flow_like_types::anyhow!(
+                    "Element request [{}] returned an invalid response: expected an elements object",
+                    described
+                )
+            })?;
         {
             let mut cache = self.elements.write().await;
             cache.take_unrequested(&selectors);
-            cache.merge(elements.clone());
+            cache.merge_response(&selectors, elements.clone());
         }
         Ok(elements)
     }
@@ -2090,5 +2224,259 @@ mod tests {
         let (callback, events) = capturing_callback();
         stream_prune_detached(&RwLock::new(AHashMap::new()), &callback).await;
         assert!(events.lock().unwrap().is_empty());
+    }
+
+    struct NoopLogic;
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for NoopLogic {
+        fn get_node(&self) -> Node {
+            Node::new("noop", "Noop", "Noop", "Tests")
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn byte_context(callback: InterComCallback) -> ExecutionContext {
+        let mut node = Node::new("bytes", "Bytes", "Byte pins", "Tests");
+        node.add_output_pin("bytes", "Bytes", "", VariableType::Byte)
+            .set_value_type(ValueType::Array);
+        let mut sensitive = crate::flow::pin::PinOptions::new();
+        sensitive.set_sensitive(true);
+        node.add_output_pin("secret", "Secret", "", VariableType::Byte)
+            .set_value_type(ValueType::Array)
+            .set_options(sensitive);
+        node.add_output_pin("generic", "Generic", "", VariableType::Generic);
+
+        let mut pins = AHashMap::new();
+        let mut names: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
+        for pin in node.pins.values() {
+            let pin = Arc::new(InternalPin::new(pin, false));
+            names
+                .entry(pin.name.to_string())
+                .or_default()
+                .push(pin.clone());
+            pins.insert(pin.id().to_string(), pin);
+        }
+        let internal = Arc::new(InternalNode::new(node, pins, Arc::new(NoopLogic), names));
+        for pin in internal.pins.iter() {
+            pin.init_node(Arc::downgrade(&internal));
+            pin.init_connected_to(Vec::new());
+            pin.init_depends_on(Vec::new());
+        }
+        let nodes = Arc::new(AHashMap::from_iter([(
+            internal.node_id().to_string(),
+            internal.clone(),
+        )]));
+        let state = Arc::new(FlowLikeState::new(
+            crate::state::FlowLikeConfig::new(),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        ));
+        let mut context = ExecutionContext::new(
+            nodes,
+            &Weak::new(),
+            &state,
+            &internal,
+            &Arc::new(Mutex::new(AHashMap::new())),
+            &Arc::new(RwLock::new(AHashMap::new())),
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            callback,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            None,
+            Arc::new(AHashMap::new()),
+            None,
+        )
+        .await;
+        context.resources = Arc::new(super::super::resources::RunResources::default());
+        context
+    }
+
+    fn photo(len: usize) -> Vec<u8> {
+        (0..len).map(|index| (index % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn string_assignment_rejects_generic_numeric_fields_before_mutating_either_scope() {
+        for local in [false, true] {
+            let mut context = byte_context(None).await;
+            let variable = Variable::new("size_text", VariableType::String, ValueType::Normal);
+            let variable_id = variable.id.clone();
+            let stored_value = variable.value.clone();
+            *stored_value.lock().await = json!("previous");
+
+            if local {
+                let mut shadowed = variable.clone();
+                shadowed.data_type = VariableType::Generic;
+                shadowed.value = Arc::new(Mutex::new(json!("outer")));
+                context
+                    .variables
+                    .lock()
+                    .await
+                    .insert(variable_id.clone(), shadowed);
+                context.local_variables = Some(Arc::new(Mutex::new(AHashMap::from_iter([(
+                    variable_id.clone(),
+                    variable,
+                )]))));
+            } else {
+                context
+                    .variables
+                    .lock()
+                    .await
+                    .insert(variable_id.clone(), variable);
+            }
+
+            let size_bytes = json!({"size_bytes": 4096})["size_bytes"].clone();
+            context.set_pin_value("generic", size_bytes).await.unwrap();
+            let raw = context.evaluate_pin_raw("generic").await.unwrap();
+            let error = context
+                .set_variable_value(&variable_id, raw)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                error,
+                "Cannot assign to variable 'size_text': Type mismatch: expected String, got Integer"
+            );
+            assert_eq!(*stored_value.lock().await, json!("previous"));
+
+            context
+                .set_variable_value(&variable_id, json!("4096"))
+                .await
+                .unwrap();
+            assert_eq!(*stored_value.lock().await, json!("4096"));
+            if local {
+                let outer = context.variables.lock().await[&variable_id].value.clone();
+                assert_eq!(*outer.lock().await, json!("outer"));
+            }
+
+            let generic = Variable::new("raw_size", VariableType::Generic, ValueType::Normal);
+            let generic_id = generic.id.clone();
+            context.set_variable(generic).await;
+            context
+                .set_variable_value(&generic_id, json!(4096))
+                .await
+                .unwrap();
+            let generic = context.get_variable(&generic_id).await.unwrap();
+            assert_eq!(*generic.value.lock().await, json!(4096));
+        }
+    }
+
+    #[tokio::test]
+    async fn byte_pins_carry_handles_but_read_like_arrays() {
+        let (callback, events) = capturing_callback();
+        let mut context = byte_context(callback).await;
+        let bytes = photo(300 * 1024);
+
+        context.set_pin_bytes("bytes", bytes.clone()).await.unwrap();
+        let raw = context.evaluate_pin_raw("bytes").await.unwrap();
+        assert_eq!(byte_store::handle_len(&raw), Some(bytes.len() as u64));
+
+        let typed: Vec<u8> = context.evaluate_pin("bytes").await.unwrap();
+        assert_eq!(typed, bytes);
+        let shared = context.evaluate_pin_bytes("bytes").await.unwrap();
+        assert_eq!(&shared[..], &bytes[..]);
+        let generic = context.evaluate_pin_to_ref("bytes").await.unwrap();
+        assert_eq!(generic, byte_store::bytes_to_array(&bytes));
+
+        context
+            .stream_response("generic_result", json!({ "file": raw }))
+            .await
+            .unwrap();
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events[0].payload,
+            json!({ "file": byte_store::bytes_to_array(&bytes) })
+        );
+    }
+
+    #[tokio::test]
+    async fn json_arrays_on_byte_pins_are_interned_and_small_ones_stay_inline() {
+        let mut context = byte_context(None).await;
+        let bytes = photo(64 * 1024);
+
+        context.set_pin_value("bytes", json!(bytes)).await.unwrap();
+        let raw = context.evaluate_pin_raw("bytes").await.unwrap();
+        assert!(byte_store::handle_hash(&raw).is_some());
+
+        context
+            .set_pin_value("generic", json!(bytes))
+            .await
+            .unwrap();
+        let generic = context.evaluate_pin_raw("generic").await.unwrap();
+        assert!(generic.is_array());
+
+        context
+            .set_pin_bytes("bytes", vec![1u8, 2, 3])
+            .await
+            .unwrap();
+        assert_eq!(
+            context.evaluate_pin_raw("bytes").await.unwrap(),
+            json!([1, 2, 3])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_closed_run_keeps_bytes_inline() {
+        let mut context = byte_context(None).await;
+        context.resources.abort();
+        let bytes = photo(64 * 1024);
+        context.set_pin_bytes("bytes", bytes.clone()).await.unwrap();
+        let raw = context.evaluate_pin_raw("bytes").await.unwrap();
+        assert!(raw.is_array());
+        let typed: Vec<u8> = context.evaluate_pin("bytes").await.unwrap();
+        assert_eq!(typed, bytes);
+    }
+
+    #[tokio::test]
+    async fn a_handler_scope_frees_its_bytes_but_keeps_what_reached_a_run_variable() {
+        let mut context = byte_context(None).await;
+        let variable = Variable::new("upload", VariableType::Byte, ValueType::Array);
+        let variable_id = variable.id.clone();
+        context
+            .variables
+            .lock()
+            .await
+            .insert(variable_id.clone(), variable);
+
+        let scope = context.new_byte_scope();
+        let previous = context.enter_byte_scope(&scope);
+        context
+            .set_pin_bytes("bytes", photo(64 * 1024))
+            .await
+            .unwrap();
+        let kept = context.bytes_value(photo(80 * 1024)).await;
+        context
+            .set_variable_value(&variable_id, kept.clone())
+            .await
+            .unwrap();
+        context.restore_byte_scope(previous);
+        drop(scope);
+
+        let stale = context.evaluate_pin::<Vec<u8>>("bytes").await.unwrap_err();
+        assert!(stale.to_string().contains("already finished"), "{stale}");
+        let from_variable: Vec<u8> = context.deserialize_pin_value(kept).await.unwrap();
+        assert_eq!(from_variable, photo(80 * 1024));
+    }
+
+    #[tokio::test]
+    async fn sensitive_byte_pins_stay_in_memory() {
+        let mut context = byte_context(None).await;
+        context
+            .set_pin_bytes("secret", photo(64 * 1024))
+            .await
+            .unwrap();
+        let raw = context.evaluate_pin_raw("secret").await.unwrap();
+        let hash = byte_store::handle_hash(&raw).unwrap();
+        assert!(
+            context.byte_store().unwrap().is_resident(hash),
+            "a sensitive buffer must never be spillable"
+        );
+        let secret = context.evaluate_pin_bytes("secret").await.unwrap();
+        assert_eq!(secret.len(), 64 * 1024);
     }
 }

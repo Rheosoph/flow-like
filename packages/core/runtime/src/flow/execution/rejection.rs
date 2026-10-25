@@ -214,6 +214,7 @@ impl RejectedRun {
             event_version: self.event_version.clone(),
             event_id: self.event_id.clone(),
             payload: self.payload.clone(),
+            error_message: Some(self.reason.clone()),
             is_remote: false,
         }
     }
@@ -241,36 +242,48 @@ impl RejectedRun {
         log_store: Option<&FlowLikeStore>,
         run_index: Option<&Arc<dyn RunIndex>>,
     ) -> flow_like_types::Result<LogMeta> {
-        let batch = LogMessage::into_arrow(vec![self.log_message()])?;
-        let schema = batch.schema();
-        let make_iter = || -> Box<dyn RecordBatchReader + Send> {
-            Box::new(RecordBatchIterator::new(
-                vec![batch.clone()].into_iter().map(Ok),
-                schema.clone(),
-            ))
-        };
-
-        let mut builder = db.create_table(&self.run_id, make_iter());
-        if let Some(opts) = write_options {
-            builder = builder.write_options(opts.clone());
-        }
-        if let Err(create_err) = builder.execute().await {
-            let table = db.open_table(&self.run_id).execute().await.map_err(|e| {
-                flow_like_types::anyhow!(
-                    "create_table failed ({create_err}), then open_table also failed: {e}"
-                )
-            })?;
-            let mut add = table.add(make_iter());
-            if let Some(opts) = write_options {
-                add = add.write_options(opts.clone());
-            }
-            add.execute().await?;
-        }
-
+        append_run_logs(&db, write_options, &self.run_id, vec![self.log_message()]).await?;
         let meta = self.log_meta();
         run_index::record_run(&meta, log_store, run_index).await?;
         Ok(meta)
     }
+}
+
+/// Append `messages` to a run's log table, creating it when the run never flushed. `db` must
+/// already point at the run's board (`runs/{app_id}/{board_id}`).
+#[cfg(feature = "flow-runtime")]
+pub async fn append_run_logs(
+    db: &Connection,
+    write_options: Option<&WriteOptions>,
+    run_id: &str,
+    messages: Vec<LogMessage>,
+) -> flow_like_types::Result<()> {
+    let batch = LogMessage::into_arrow(messages)?;
+    let schema = batch.schema();
+    let make_iter = || -> Box<dyn RecordBatchReader + Send> {
+        Box::new(RecordBatchIterator::new(
+            vec![batch.clone()].into_iter().map(Ok),
+            schema.clone(),
+        ))
+    };
+
+    let mut builder = db.create_table(run_id, make_iter());
+    if let Some(opts) = write_options {
+        builder = builder.write_options(opts.clone());
+    }
+    if let Err(create_err) = builder.execute().await {
+        let table = db.open_table(run_id).execute().await.map_err(|e| {
+            flow_like_types::anyhow!(
+                "create_table failed ({create_err}), then open_table also failed: {e}"
+            )
+        })?;
+        let mut add = table.add(make_iter());
+        if let Some(opts) = write_options {
+            add = add.write_options(opts.clone());
+        }
+        add.execute().await?;
+    }
+    Ok(())
 }
 
 /// Convenience for callers that hold a log-database builder rather than an
@@ -413,5 +426,36 @@ mod tests {
         assert_eq!(logs[0].message, "No active sink found for event evt_1");
         assert_eq!(logs[0].log_level, LogLevel::Fatal.to_u8());
         assert_eq!(logs[0].operation_id.as_deref(), Some("rejected:trigger"));
+    }
+
+    /// A run that died after an earlier flush already has a table; one that never flushed
+    /// does not. Both must end up with the failure as their last entry.
+    #[tokio::test]
+    #[cfg(feature = "flow-runtime")]
+    async fn failure_logs_create_or_extend_the_run_table() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let uri = dir.path().join("runs").join("app").join("board");
+        let db = flow_like_storage::lancedb::connect(uri.to_str().expect("utf-8 path"))
+            .execute()
+            .await
+            .expect("connect to the log database");
+
+        let entry = |message: &str| LogMessage::new(message, LogLevel::Fatal, None);
+        append_run_logs(&db, None, "run-1", vec![entry("partial flush")])
+            .await
+            .expect("create the run table");
+        append_run_logs(&db, None, "run-1", vec![entry("executor failed")])
+            .await
+            .expect("append to the run table");
+
+        let rows = db
+            .open_table("run-1")
+            .execute()
+            .await
+            .expect("open the run table")
+            .count_rows(None)
+            .await
+            .expect("count rows");
+        assert_eq!(rows, 2);
     }
 }

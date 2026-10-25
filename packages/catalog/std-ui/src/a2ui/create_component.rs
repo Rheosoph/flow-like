@@ -1,10 +1,14 @@
+use super::authoring_utils::lower_component_data;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+use flow_like_types::{
+    Value, async_trait,
+    json::{Map, json},
+};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -90,18 +94,13 @@ impl NodeLogic for CreateComponent {
             .await
             .ok();
 
-        let mut component_data = json!({
-            "type": component_type
-        });
-
-        if let Value::Object(prop_map) = props
-            && let Value::Object(ref mut data_map) = component_data
-        {
-            for (key, value) in prop_map {
-                data_map.insert(key, value);
-            }
+        let mut component_data = Map::new();
+        component_data.insert("type".to_string(), Value::String(component_type));
+        if let Value::Object(prop_map) = props {
+            component_data.extend(prop_map);
         }
 
+        let component_data = lower_component_data(Value::Object(component_data))?;
         let mut component = flow_like::a2ui::SurfaceComponent::new(&component_id, component_data);
         if let Some(s) = style {
             component = component.with_style(s);

@@ -68,11 +68,12 @@ targets:
         NSSupportsLiveActivities: true
         NSLocationWhenInUseUsageDescription: Flow Like uses your location when you request it in a workflow or map.
         NSLocationAlwaysAndWhenInUseUsageDescription: Flow Like monitors the regions you enable so location Events can run when you arrive or leave, including while the app is closed.
-        NSUserActivityTypes: [com.flow-like.app.page]
+        NSUserActivityTypes: [com.flow-like.app.page, INSendMessageIntent]
     entitlements:
       path: flow-like-desktop_iOS/flow-like-desktop_iOS.entitlements
       properties:
         aps-environment: development
+        com.apple.developer.usernotifications.communication: true
         com.apple.security.application-groups: [group.com.flow-like.app]
     scheme:
       environmentVariables:

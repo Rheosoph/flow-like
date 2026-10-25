@@ -69,6 +69,18 @@ impl RunResources {
         Ok(value)
     }
 
+    /// A resource this run already holds, without creating it.
+    pub fn get<T: RunResource>(&self, key: &str) -> Option<Arc<T>> {
+        self.state
+            .lock()
+            .entries
+            .get(key)?
+            .value
+            .clone()
+            .downcast::<T>()
+            .ok()
+    }
+
     pub fn is_closed(&self) -> bool {
         self.state.lock().closed
     }

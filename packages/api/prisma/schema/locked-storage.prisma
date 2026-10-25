@@ -35,39 +35,43 @@ model LockedItem {
 /// One immutable object of a locked item. `version` is assigned when the upload
 /// is committed, so abandoned uploads never leave gaps in the numbering.
 model LockedItemVersion {
-  id                String    @id
-  itemId            String
-  appId             String
-  version           Int?
+  id                   String    @id
+  itemId               String
+  appId                String
+  version              Int?
   /// PENDING | LOCKED | PURGED
-  status            String    @default("PENDING")
-  objectKey         String
+  status               String    @default("PENDING")
+  objectKey            String
   /// S3 VersionId, GCS generation or Azure versionid of the stored object.
-  providerVersionId String?
-  fileName          String
-  contentType       String
-  size              BigInt
+  providerVersionId    String?
+  fileName             String
+  contentType          String
+  size                 BigInt
   /// Hex SHA-256 the uploader declared; `checksumVerified` once the store confirmed it.
-  sha256            String
-  checksumVerified  Boolean   @default(false)
+  sha256               String
+  checksumVerified     Boolean   @default(false)
   /// GOVERNANCE | COMPLIANCE
-  retentionMode     String
-  retainUntil       DateTime  @db.Timestamptz(3)
+  retentionMode        String
+  retainUntil          DateTime  @db.Timestamptz(3)
   /// OBJECT (lock set on the object) | BUCKET (bucket-level retention policy)
-  enforcement       String
-  legalHold         Boolean   @default(false)
-  comment           String?
-  metadata          Json?
-  uploadedBy        String
-  uploadExpiresAt   DateTime  @db.Timestamptz(3)
-  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
-  lockedAt          DateTime? @db.Timestamptz(3)
+  enforcement          String
+  legalHold            Boolean   @default(false)
+  /// The maintenance sweep purges the version once retention ends and no legal hold
+  /// remains. Null (rows from before the column) keeps it like false.
+  deleteAfterRetention Boolean?
+  comment              String?
+  metadata             Json?
+  uploadedBy           String
+  uploadExpiresAt      DateTime  @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(3)
+  lockedAt             DateTime? @db.Timestamptz(3)
   /// Set when the object was deleted after its retention ended; the row stays as evidence.
-  purgedAt          DateTime? @db.Timestamptz(3)
-  purgedBy          String?
+  purgedAt             DateTime? @db.Timestamptz(3)
+  purgedBy             String?
 
   @@unique([itemId, version])
   @@index([itemId, status])
   @@index([status, uploadExpiresAt])
   @@index([appId, status, retainUntil])
+  @@index([status, deleteAfterRetention, retainUntil])
 }

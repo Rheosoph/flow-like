@@ -233,10 +233,8 @@ pub(super) fn correlate_stream_frame(frame: &str, parent_request_id: Option<&str
         return frame.to_string();
     };
     let payload = correlated_stream_payload(&payload, Some(parent_request_id));
-    format!(
-        "<{tag}>{}</{tag}>",
-        serde_json::to_string(&payload).unwrap_or_default()
-    )
+    // Re-frame through stream_frame: plain serialization would undo the closing-tag escape.
+    flow_like::flow::copilot::stream::stream_frame(tag, &payload)
 }
 
 /// Build the workspace status frame emitted when a FlowScript lifecycle tool finishes. Retained

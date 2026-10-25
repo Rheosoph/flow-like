@@ -9,7 +9,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Button } from "../../index";
 import type { InlineAppPage } from "../../state/global-chat/global-chat-store";
 import {
@@ -17,6 +17,7 @@ import {
 	getInlineAppPageTarget,
 	subscribeToInlineAppPagePresentation,
 } from "./inline-app-page-runtime";
+import { useInlineCardExpanded } from "./use-inline-card-expanded";
 
 interface InlineAppPageCardProps {
 	page: InlineAppPage;
@@ -36,7 +37,10 @@ export function InlineAppPageCard({
 }: InlineAppPageCardProps) {
 	const { t } = useTranslation("chat");
 	const router = useRouter();
-	const [expanded, setExpanded] = useState(true);
+	const { expanded, setExpanded, remounted } = useInlineCardExpanded(
+		page.id,
+		true,
+	);
 	const contentId = `inline-app-page-content-${page.id}`;
 	const titleId = `inline-app-page-title-${page.id}`;
 
@@ -46,7 +50,7 @@ export function InlineAppPageCard({
 				return;
 			setExpanded(true);
 		});
-	}, [page.appId, page.eventId]);
+	}, [page.appId, page.eventId, setExpanded]);
 
 	const openFullView = () => {
 		const target = getInlineAppPageTarget(page.id) ?? {
@@ -72,7 +76,7 @@ export function InlineAppPageCard({
 			// page inside has no layout of its own to counter-scale with, so expanding the card
 			// visibly squashed and stretched the rendered page for the length of the spring.
 			layout="position"
-			initial={{ opacity: 0, y: 8 }}
+			initial={remounted ? false : { opacity: 0, y: 8 }}
 			animate={{ opacity: 1, y: 0 }}
 			exit={{ opacity: 0, y: 8 }}
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}

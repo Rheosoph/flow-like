@@ -12,6 +12,7 @@ export interface ILogMetadata {
 	run_id: string;
 	start: number;
 	version: string;
+	error_message?: string | null;
 	is_remote?: boolean;
 	[property: string]: any;
 }

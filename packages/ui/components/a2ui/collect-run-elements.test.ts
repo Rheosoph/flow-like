@@ -13,6 +13,7 @@ import {
 	collectRunElements,
 	resetRunElementDemandCache,
 } from "./collect-run-elements";
+import { MAX_ELEMENTS_BYTES } from "./element-materializer";
 import type { SurfaceComponent } from "./types";
 import {
 	flattenSurfaceComponentsForElements,
@@ -231,6 +232,113 @@ describe("collectRunElements with a Page contract's demand", () => {
 	});
 });
 
+describe("collectRunElements with dynamic reads", () => {
+	const lists = Object.fromEntries(
+		["ps-tdoc-list", "ps-history-list", "ps-doc-list"].map((id) => [
+			id,
+			component(id, { type: "column", children: { explicitList: [] } }),
+		]),
+	);
+
+	test("a Page contract sends dynamic list targets and current input values without a Board read", async () => {
+		const { backend, getElementDemand } = backendWith(async () => demandOf([]));
+		const elements = await collect(backend, {
+			boardId: undefined,
+			demand: { selectors: ["title"], dynamic: true },
+			components: { ...manyWidgetRows(200), ...lists },
+		});
+
+		expect(Object.keys(elements).sort()).toEqual([
+			`${SURFACE}/field`,
+			`${SURFACE}/ps-doc-list`,
+			`${SURFACE}/ps-history-list`,
+			`${SURFACE}/ps-tdoc-list`,
+			`${SURFACE}/root`,
+			`${SURFACE}/title`,
+		]);
+		expect(boundValue(elements, `${SURFACE}/field`)).toEqual({
+			literalString: "typed",
+		});
+		expect(getElementDemand).not.toHaveBeenCalled();
+	});
+
+	test("a scoped widget keeps its trigger and explicit selections while adding only page elements", async () => {
+		const { backend } = backendWith(async () => ({
+			...demandOf(["host:host"]),
+			dynamic: true,
+		}));
+		const elements = await collect(backend, {
+			widgetScope: { instanceId: "inst-1" },
+			triggeringComponentId: "child",
+			components: { ...manyWidgetRows(200), ...lists },
+			storedValues: {
+				...storedValues,
+				"row-1/row-child-1": "another instance",
+			},
+		});
+
+		expect(Object.keys(elements).sort()).toEqual([
+			"inst-1/child",
+			`${SURFACE}/field`,
+			`${SURFACE}/host`,
+			`${SURFACE}/ps-doc-list`,
+			`${SURFACE}/ps-history-list`,
+			`${SURFACE}/ps-tdoc-list`,
+			`${SURFACE}/root`,
+			`${SURFACE}/title`,
+		]);
+		expect(boundValue(elements, "inst-1/child")).toEqual({
+			literalString: "inner",
+		});
+		expect(elements[`${SURFACE}/host`]).toBeDefined();
+		expect(elements["row-1/row-child-1"]).toBeUndefined();
+	});
+
+	test("an oversized dynamic snapshot retains the static selection and trigger", async () => {
+		const elements = await collect(
+			{ boardState: {} },
+			{
+				demand: { selectors: ["title"], dynamic: true },
+				triggeringComponentId: "field",
+				components: {
+					...components,
+					large: component("large", {
+						type: "text",
+						content: { literalString: "x".repeat(MAX_ELEMENTS_BYTES) },
+					}),
+				},
+			},
+		);
+		expect(Object.keys(elements).sort()).toEqual([
+			`${SURFACE}/field`,
+			`${SURFACE}/title`,
+		]);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	test("the dynamic snapshot budget counts UTF-8 bytes rather than string length", async () => {
+		const unicode = "界".repeat(Math.floor(MAX_ELEMENTS_BYTES / 2));
+		expect(unicode.length).toBeLessThan(MAX_ELEMENTS_BYTES);
+		expect(new TextEncoder().encode(unicode).byteLength).toBeGreaterThan(
+			MAX_ELEMENTS_BYTES,
+		);
+		const elements = await collect(
+			{ boardState: {} },
+			{
+				demand: { selectors: ["title"], dynamic: true },
+				components: {
+					...components,
+					large: component("large", {
+						type: "text",
+						content: { literalString: unicode },
+					}),
+				},
+			},
+		);
+		expect(Object.keys(elements)).toEqual([`${SURFACE}/title`]);
+	});
+});
+
 describe("collectRunElements fallback", () => {
 	test("a page run sends the page without its widget instances", async () => {
 		const elements = await collect({ boardState: {} });
@@ -362,6 +470,46 @@ describe("collectRunElements cache", () => {
 			`${SURFACE}/field`,
 		]);
 		expect(getElementDemand).toHaveBeenCalledTimes(2);
+	});
+
+	test("actions use cached demand while a background refresh is pending", async () => {
+		let now = 1_000;
+		const clock = spyOn(Date, "now").mockImplementation(() => now);
+		let resolveRefresh!: (demand: IElementDemand) => void;
+		const refresh = new Promise<IElementDemand>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		let attempts = 0;
+		const { backend, getElementDemand } = backendWith(async () => {
+			attempts += 1;
+			return attempts === 1 ? demandOf(["title"]) : refresh;
+		});
+		try {
+			await collect(backend);
+			now += 15_001;
+			expect(Object.keys(await collect(backend))).toEqual([`${SURFACE}/title`]);
+			const blocked = Symbol("waiting for background refresh");
+			const subsequent = await Promise.race([
+				collect(backend),
+				new Promise<typeof blocked>((resolve) =>
+					setTimeout(() => resolve(blocked), 0),
+				),
+			]);
+			expect(subsequent).not.toBe(blocked);
+			expect(Object.keys(subsequent as Record<string, unknown>)).toEqual([
+				`${SURFACE}/title`,
+			]);
+			expect(getElementDemand).toHaveBeenCalledTimes(2);
+
+			const fresh = collect(backend, { refresh: true });
+			resolveRefresh(demandOf(["field"]));
+			expect(Object.keys(await fresh)).toEqual([`${SURFACE}/field`]);
+			expect(Object.keys(await collect(backend))).toEqual([`${SURFACE}/field`]);
+			expect(getElementDemand).toHaveBeenCalledTimes(2);
+		} finally {
+			resolveRefresh(demandOf(["field"]));
+			clock.mockRestore();
+		}
 	});
 
 	test("keys the cache by app, board and version", async () => {

@@ -17,11 +17,11 @@ use crate::{
     routes::app::{
         events::current_inputs::event_with_current_inputs,
         events::db::{
-            filter_event_list_execution, filter_event_secrets, get_event_with_fallback_opt,
-            get_events_for_app, get_events_with_fallback, is_listed_event_type,
-            is_user_facing_event, redact_page_event_board_metadata,
+            filter_event_list_execution, filter_event_secrets, get_event_from_db_opt,
+            get_event_with_fallback_opt, get_events_for_app, get_events_with_fallback,
+            is_listed_event_type, is_user_facing_event, redact_page_event_board_metadata,
         },
-        events::page_trigger::resolve_page_contract_for_bootstrap,
+        events::page_trigger::{ResolvedPageContract, resolve_page_contract_for_bootstrap},
         page::get_page::{if_none_match_matches, page_etag},
     },
     state::AppState,
@@ -34,10 +34,12 @@ use axum::{
 };
 use flow_like::a2ui::ElementDemand;
 use flow_like::a2ui::widget::Page;
+use flow_like::app::App;
 use flow_like::flow::compiled::prerun::{decorate_page_actions, redact_page_execution_routes};
 use flow_like::flow::event::Event;
 use flow_like_types::anyhow;
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use utoipa::{IntoParams, ToSchema};
 
 const BOOTSTRAP_CACHE: &str = "private, no-cache";
@@ -310,69 +312,151 @@ pub async fn bootstrap(
     let permission =
         ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let can_read_events = permission.has_permission(RolePermissions::ReadEvents);
-    let can_use_direct_board = permission.has_permission(RolePermissions::ReadBoards)
-        && permission.has_permission(RolePermissions::ExecuteBoards);
     let principal_id = permission.identifier();
-    let app = state.master_app(&principal_id, &app_id, &state).await?;
     let is_visible_runtime_event = |event: &Event| {
         event.active
             && is_listed_event_type(&event.event_type)
             && (can_read_events || is_user_facing_event(event))
     };
+    let context = ServeContext {
+        state: &state,
+        app_id: &app_id,
+        pin: variant::pin_from_request(&headers, params.variant.clone()),
+        caller_subject: permission.effective_user_id().ok(),
+        can_use_direct_board: permission.has_permission(RolePermissions::ReadBoards)
+            && permission.has_permission(RolePermissions::ExecuteBoards),
+    };
 
-    let (event, route_miss) = if let Some(route) = params.route.as_deref() {
-        // The mirror is already the route index. Its only bucket fallback occurs when the entire
-        // mirror is absent, never by scanning boards or unrelated pages.
-        let mut events = get_events_for_app(&state.db, &app_id).await?;
-        if events.is_empty() {
-            events = get_events_with_fallback(&state.db, state.db_dialect, &app).await?;
+    // The app manifest only feeds the stylesheet and the bucket fallback of an absent event
+    // mirror, so its read overlaps the mirrored lookup and the page contract.
+    let load_app =
+        state
+            .master_app(&principal_id, &app_id, &state)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "bootstrap.app.load"
+            ));
+    let serve_mirrored = async {
+        match mirrored_event(&state, &app_id, &params, &is_visible_runtime_event).await? {
+            Some((event, route_miss)) => Ok(Some((context.serve(event).await?, route_miss))),
+            None => Ok::<_, ApiError>(None),
         }
-        events.retain(&is_visible_runtime_event);
-        let resolution = resolve_route(&events, route);
-        let event = resolution
-            .event_index
-            .and_then(|index| events.into_iter().nth(index))
+    };
+    let (app, served) = flow_like_types::tokio::join!(load_app, serve_mirrored);
+    let app = app?;
+    let (served, route_miss) = match served? {
+        Some(served) => served,
+        None => {
+            let (event, route_miss) =
+                bucket_event(&state, &app, &params, &is_visible_runtime_event).await?;
+            (context.serve(event).await?, route_miss)
+        }
+    };
+
+    bootstrap_response(
+        served.event,
+        served.page,
+        app.frontend
+            .as_ref()
+            .and_then(|frontend| frontend.custom_css.clone()),
+        served.execution_revision,
+        served.element_demand,
+        served.served_variant,
+        served.canonical_route,
+        route_miss,
+        &headers,
+    )
+}
+
+/// The bootstrap Event from the database mirror, or `None` when only the bucket can answer:
+/// the mirror holds no Events for the app, or not the requested one. A mirrored Event the
+/// caller may not see stays a 404 rather than falling through to the bucket.
+async fn mirrored_event(
+    state: &AppState,
+    app_id: &str,
+    params: &BootstrapQuery,
+    is_visible: &impl Fn(&Event) -> bool,
+) -> Result<Option<(Event, bool)>, ApiError> {
+    if let Some(event_id) = direct_event_id(params) {
+        return match get_event_from_db_opt(&state.db, event_id, app_id).await? {
+            Some(event) if is_visible(&event) => Ok(Some((event, false))),
+            Some(_) => Err(ApiError::NOT_FOUND),
+            None => Ok(None),
+        };
+    }
+    let events = get_events_for_app(&state.db, app_id).await?;
+    if events.is_empty() {
+        return Ok(None);
+    }
+    route_event(events, params, is_visible).map(Some)
+}
+
+/// The bootstrap Event when the mirror could not answer. The mirror's only bucket fallback
+/// occurs when the entire mirror is absent, never by scanning boards or unrelated pages.
+async fn bucket_event(
+    state: &AppState,
+    app: &App,
+    params: &BootstrapQuery,
+    is_visible: &impl Fn(&Event) -> bool,
+) -> Result<(Event, bool), ApiError> {
+    if let Some(event_id) = direct_event_id(params) {
+        let event = get_event_with_fallback_opt(&state.db, app, event_id)
+            .await?
+            .filter(|event| is_visible(event))
             .ok_or(ApiError::NOT_FOUND)?;
-        (event, resolution.route_miss)
-    } else if let Some(event_id) = params
+        return Ok((event, false));
+    }
+    let events = get_events_with_fallback(&state.db, state.db_dialect, app).await?;
+    route_event(events, params, is_visible)
+}
+
+/// A route takes precedence over `eventId`; neither selects the app default.
+fn direct_event_id(params: &BootstrapQuery) -> Option<&str> {
+    if params.route.is_some() {
+        return None;
+    }
+    params
         .event_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
-    {
-        let event = get_event_with_fallback_opt(&state.db, &app, event_id)
-            .await?
-            .filter(&is_visible_runtime_event)
-            .ok_or(ApiError::NOT_FOUND)?;
-        (event, false)
-    } else {
-        let mut events = get_events_for_app(&state.db, &app_id).await?;
-        if events.is_empty() {
-            events = get_events_with_fallback(&state.db, state.db_dialect, &app).await?;
-        }
-        events.retain(&is_visible_runtime_event);
-        let resolution = resolve_route(&events, "/");
-        let event = resolution
-            .event_index
-            .and_then(|index| events.into_iter().nth(index))
-            .ok_or(ApiError::NOT_FOUND)?;
-        (event, false)
-    };
+}
 
-    let event = event_with_current_inputs(&state, &app_id, event).await;
-    let canonical_route = canonical_event_route(&event);
-    // Resolve the served variant before any artifact is derived from the Event value: the page,
-    // its execution map and the response projection all describe the same target.
-    let pin = variant::pin_from_request(&headers, params.variant.clone());
-    let caller_subject = permission.effective_user_id().ok();
-    let target = resolve_served_target(&event, pin.as_deref(), caller_subject.as_deref())?;
-    let served_variant = target.variant_name.clone();
-    let event = variant::apply_target(event, &target);
-    // An Event without `default_page_id` is still a valid bootstrap target for generic forms,
-    // chats, and other runnable surfaces. When it declares a custom page, however, that page is
-    // part of the contract and a missing version-bound artifact remains a uniform 404.
-    let (page, execution_revision, element_demand) = if event.default_page_id.is_some() {
-        let contract = resolve_page_contract_for_bootstrap(&state, &app_id, &event).await?;
-        let mut page = decorate_page_actions(
+fn route_event(
+    mut events: Vec<Event>,
+    params: &BootstrapQuery,
+    is_visible: &impl Fn(&Event) -> bool,
+) -> Result<(Event, bool), ApiError> {
+    events.retain(|event| is_visible(event));
+    let resolution = resolve_route(&events, params.route.as_deref().unwrap_or("/"));
+    let event = resolution
+        .event_index
+        .and_then(|index| events.into_iter().nth(index))
+        .ok_or(ApiError::NOT_FOUND)?;
+    Ok((event, resolution.route_miss))
+}
+
+struct ServeContext<'a> {
+    state: &'a AppState,
+    app_id: &'a str,
+    pin: Option<String>,
+    caller_subject: Option<String>,
+    can_use_direct_board: bool,
+}
+
+struct ServedEvent {
+    event: Event,
+    page: Option<Page>,
+    execution_revision: Option<String>,
+    element_demand: Option<ElementDemand>,
+    served_variant: Option<String>,
+    canonical_route: Option<String>,
+}
+
+impl ServeContext<'_> {
+    /// The contract's Page with governed action ids, without execution routes for a viewer
+    /// that may not run the board directly.
+    fn project_page(&self, contract: &ResolvedPageContract) -> Result<Page, ApiError> {
+        let page = decorate_page_actions(
             &contract.page,
             &contract.page_execution,
             &contract.manifest_revision,
@@ -380,34 +464,48 @@ pub async fn bootstrap(
         .map_err(|error| {
             ApiError::internal_error(anyhow!("failed to project governed Page actions: {error}"))
         })?;
-        if !can_use_direct_board {
-            page = redact_page_execution_routes(&page).map_err(ApiError::internal_error)?;
+        if self.can_use_direct_board {
+            return Ok(page);
         }
-        (
-            Some(page),
-            Some(contract.manifest_revision),
-            Some(contract.element_demand),
-        )
-    } else {
-        (None, None, None)
-    };
-    let mut event = bootstrap_event(event);
-    if !can_use_direct_board && event.default_page_id.is_some() {
-        event = redact_page_event_board_metadata(event);
+        redact_page_execution_routes(&page).map_err(ApiError::internal_error)
     }
-    bootstrap_response(
-        event,
-        page,
-        app.frontend
-            .as_ref()
-            .and_then(|frontend| frontend.custom_css.clone()),
-        execution_revision,
-        element_demand,
-        served_variant,
-        canonical_route,
-        route_miss,
-        &headers,
-    )
+
+    async fn serve(&self, event: Event) -> Result<ServedEvent, ApiError> {
+        let event = event_with_current_inputs(self.state, self.app_id, event).await;
+        let canonical_route = canonical_event_route(&event);
+        // Resolve the served variant before any artifact is derived from the Event value: the
+        // page, its execution map and the response projection all describe the same target.
+        let target =
+            resolve_served_target(&event, self.pin.as_deref(), self.caller_subject.as_deref())?;
+        let served_variant = target.variant_name.clone();
+        let event = variant::apply_target(event, &target);
+        // An Event without `default_page_id` is still a valid bootstrap target for generic forms,
+        // chats, and other runnable surfaces. When it declares a custom page, however, that page
+        // is part of the contract and a missing version-bound artifact remains a uniform 404.
+        let (page, execution_revision, element_demand) = if event.default_page_id.is_some() {
+            let contract =
+                resolve_page_contract_for_bootstrap(self.state, self.app_id, &event).await?;
+            (
+                Some(self.project_page(&contract)?),
+                Some(contract.manifest_revision),
+                Some(contract.element_demand),
+            )
+        } else {
+            (None, None, None)
+        };
+        let mut event = bootstrap_event(event);
+        if !self.can_use_direct_board && event.default_page_id.is_some() {
+            event = redact_page_event_board_metadata(event);
+        }
+        Ok(ServedEvent {
+            event,
+            page,
+            execution_revision,
+            element_demand,
+            served_variant,
+            canonical_route,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -471,6 +569,41 @@ mod tests {
                 route_miss: true
             }
         );
+    }
+
+    fn query(route: Option<&str>, event_id: Option<&str>) -> BootstrapQuery {
+        BootstrapQuery {
+            route: route.map(ToString::to_string),
+            event_id: event_id.map(ToString::to_string),
+            variant: None,
+        }
+    }
+
+    #[test]
+    fn a_route_takes_precedence_over_an_event_id_and_blank_ids_select_the_default() {
+        assert_eq!(direct_event_id(&query(None, Some("event"))), Some("event"));
+        assert_eq!(direct_event_id(&query(Some("/x"), Some("event"))), None);
+        assert_eq!(direct_event_id(&query(None, Some("  "))), None);
+        assert_eq!(direct_event_id(&query(None, None)), None);
+    }
+
+    #[test]
+    fn route_events_hide_invisible_events_before_resolving() {
+        let events = || {
+            vec![
+                event("hidden-home", Some("/"), true),
+                event("settings", Some("/settings"), false),
+            ]
+        };
+        let visible = |event: &Event| event.id != "hidden-home";
+
+        let (event, route_miss) =
+            route_event(events(), &query(Some("/settings"), None), &visible).unwrap();
+        assert_eq!(event.id, "settings");
+        assert!(!route_miss);
+
+        let refused = route_event(events(), &query(None, None), &visible).unwrap_err();
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

@@ -3940,6 +3940,7 @@ mod tests {
                         event_version: Some("1.0.0".into()),
                         event_id: "event".into(),
                         payload: b"secret input".to_vec(),
+                        error_message: None,
                         is_remote: false,
                     })
                     .await?;

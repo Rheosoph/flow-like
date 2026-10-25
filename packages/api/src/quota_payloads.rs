@@ -81,8 +81,21 @@ pub async fn cleanup(state: &AppState, scope: Option<Scope<'_>>) -> Result<u64, 
         .as_ref()
         .map(|scope| format!(r#" AND "{}" = $3"#, scope.column()))
         .unwrap_or_default();
+    // One index range per status side: `status != 'finalized'` inside an OR made the
+    // planner walk every operation (7.7 DPU per pass on DSQL against 0.6 split).
+    let due = |status: &str, deadline: &str| {
+        format!(
+            r#"SELECT id,status,deadline FROM (SELECT id,status,deadline FROM "QuotaOperation" WHERE status {status} AND "payloadsDeletedAt" IS NULL AND deadline < {deadline}{filter} ORDER BY deadline LIMIT {MAX_OPERATIONS}) AS d"#
+        )
+    };
     let sql = format!(
-        r#"SELECT id,status FROM "QuotaOperation" WHERE "payloadsDeletedAt" IS NULL AND ((status = 'finalized' AND deadline < $1 AND (kind != 'workflow' OR "createdAt" < $2)) OR (status != 'finalized' AND deadline < $2)){filter} ORDER BY deadline LIMIT {MAX_OPERATIONS}"#
+        r#"SELECT id,status FROM ({} UNION ALL {} UNION ALL {}) AS due ORDER BY deadline LIMIT {MAX_OPERATIONS}"#,
+        due(
+            "= 'finalized'",
+            r#"$1 AND (kind != 'workflow' OR "createdAt" < $2)"#
+        ),
+        due("< 'finalized'", "$2"),
+        due("> 'finalized'", "$2"),
     );
     let mut values = vec![
         (now - READER_GRACE_MS).into(),

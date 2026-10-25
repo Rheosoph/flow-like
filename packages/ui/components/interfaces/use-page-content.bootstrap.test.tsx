@@ -55,6 +55,7 @@ interface Mount {
 
 const mounts: Mount[] = [];
 const executions: Mount[] = [];
+const renderedPages: { id: string }[] = [];
 function CountingPageInterface({
 	page,
 	pageRevision,
@@ -66,6 +67,7 @@ function CountingPageInterface({
 	pageExecutionRevision?: string;
 	executionPending?: boolean;
 }>) {
+	renderedPages.push(page);
 	useEffect(() => {
 		mounts.push({
 			revision: pageRevision,
@@ -481,6 +483,7 @@ afterEach(async () => {
 	host = undefined;
 	mounts.length = 0;
 	executions.length = 0;
+	renderedPages.length = 0;
 	bootstrapCalls.length = 0;
 	metadataReads = 0;
 	online = true;
@@ -574,6 +577,47 @@ describe("page bootstrap validation", () => {
 			]);
 		});
 	}
+
+	test("repeated token renewals keep the live page and its bootstrap object", async () => {
+		await render(await persistedSession());
+		await waitFor(() => onScreen() === "B", "the initial page");
+		const pageElement = host?.querySelector("[data-page-id]");
+		const initialPage = renderedPages.at(-1);
+		renderedPages.length = 0;
+
+		for (let renewal = 0; renewal < 3; renewal++) {
+			const response = deferred<IPageBootstrap>();
+			network = () => response.promise;
+			const callsBeforeRenewal = bootstrapCalls.length;
+			auth.isLoading = true;
+			await rerender();
+			await settle();
+			expect(host?.querySelector("[data-page-id]")).toBe(pageElement);
+
+			auth.user.access_token = `renewed-token-${renewal}`;
+			auth.isLoading = false;
+			await rerender();
+			await waitFor(
+				() => bootstrapCalls.length > callsBeforeRenewal,
+				"the renewal's background bootstrap read",
+			);
+			expect(host?.querySelector("[data-page-id]")).toBe(pageElement);
+			response.resolve(bootstrapAt("B"));
+			await waitFor(
+				() => client?.isFetching({ queryKey: BOOTSTRAP_QUERY_KEY }) === 0,
+				"the renewed bootstrap to settle",
+			);
+			await settle();
+			expect(host?.querySelector("[data-page-id]")).toBe(pageElement);
+		}
+
+		expect(mounts).toEqual([
+			{ revision: "B", executionRevision: "execution-B" },
+		]);
+		expect(executions).toEqual(mounts);
+		expect(renderedPages.length).toBeGreaterThan(0);
+		expect(renderedPages.every((page) => page === initialPage)).toBe(true);
+	});
 
 	for (const scope of ["account", "hub", "profile"] as const) {
 		test(`switching ${scope} cannot show the previous scope's cached page`, async () => {

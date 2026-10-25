@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import Link from "next/link";
+import { FLOW_LIKE_LEGAL_URLS } from "../../../lib/legal-links";
 import { Button } from "../../ui/button";
 import {
 	Card,
@@ -21,7 +22,7 @@ export function TelemetryConsentPrompt({
 	onDecision,
 	privacyHref,
 }: Readonly<TelemetryConsentPromptProps>) {
-	const { t } = useTranslation("settings");
+	const { t } = useTranslation(["settings", "common"]);
 	return (
 		<Card className="fixed bottom-4 right-4 z-50 max-w-sm shadow-lg">
 			<CardHeader>
@@ -43,13 +44,21 @@ export function TelemetryConsentPrompt({
 					{t("noThanks", "No thanks")}
 				</Button>
 			</CardContent>
-			<CardFooter>
+			<CardFooter className="gap-4">
 				<Link
 					href={privacyHref}
 					className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
 				>
 					{t("learnMore", "Learn more")}
 				</Link>
+				<a
+					href={FLOW_LIKE_LEGAL_URLS.privacy}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+				>
+					{t("common:legal.privacy", "Privacy policy")}
+				</a>
 			</CardFooter>
 		</Card>
 	);

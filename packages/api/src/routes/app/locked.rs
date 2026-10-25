@@ -7,7 +7,7 @@ use crate::locked_storage::{
     ExtendLockedRetentionRequest, GetLockedItemRequest, ListLockedItemsRequest,
     ListLockedItemsResponse, LockedDownload, LockedEmpty, LockedItemDetail, LockedItemVersion,
     LockedStorageStatus, LockedUploadTicket, LockedVersionRef, PurgeLockedItemRequest,
-    SetLockedLegalHoldRequest,
+    SetLockedAutoDeleteRequest, SetLockedLegalHoldRequest,
 };
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
@@ -28,6 +28,7 @@ pub fn routes() -> Router<AppState> {
         .route("/download", post(download))
         .route("/retention", post(extend_retention))
         .route("/legal-hold", post(set_legal_hold))
+        .route("/auto-delete", post(set_auto_delete))
         .route("/purge", post(purge))
 }
 
@@ -44,6 +45,7 @@ pub fn executor_routes() -> Router<AppState> {
         .route("/download", post(executor_download))
         .route("/retention", post(executor_extend_retention))
         .route("/legal-hold", post(executor_set_legal_hold))
+        .route("/auto-delete", post(executor_set_auto_delete))
         .route("/purge", post(executor_purge))
 }
 
@@ -228,6 +230,27 @@ pub async fn set_legal_hold(
     let caller = Caller::for_user(&state, &user, &app_id).await?;
     Ok(Json(
         locked::set_legal_hold(&state, &caller, &app_id, request).await?,
+    ))
+}
+
+#[utoipa::path(
+    post, path = "/apps/{app_id}/locked/auto-delete", tag = "locked-storage",
+    description = "Choose whether a version is deleted automatically once its retention ends and no legal hold remains. The retention itself does not change. Owners of personal files and admins of project files only.",
+    params(("app_id" = String, Path, description = "Application ID")),
+    request_body = SetLockedAutoDeleteRequest,
+    responses((status = 200, description = "The updated version", body = LockedItemVersion),
+        (status = 409, description = "The version is not a stored, committed version")),
+    security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
+)]
+pub async fn set_auto_delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(app_id): Path<String>,
+    Json(request): Json<SetLockedAutoDeleteRequest>,
+) -> Result<Json<LockedItemVersion>, ApiError> {
+    let caller = Caller::for_user(&state, &user, &app_id).await?;
+    Ok(Json(
+        locked::set_auto_delete(&state, &caller, &app_id, request).await?,
     ))
 }
 
@@ -421,6 +444,26 @@ pub async fn executor_set_legal_hold(
     let caller = Caller::for_executor(&state, &user, &app_id).await?;
     Ok(Json(
         locked::set_legal_hold(&state, &caller, &app_id, request).await?,
+    ))
+}
+
+#[utoipa::path(
+    post, path = "/execution/apps/{app_id}/locked/auto-delete", tag = "execution",
+    description = "Choose whether a version is deleted automatically once its retention ends, when the run's user may delete the file. Executor only.",
+    params(("app_id" = String, Path, description = "Application ID")),
+    request_body = SetLockedAutoDeleteRequest,
+    responses((status = 200, description = "The updated version", body = LockedItemVersion)),
+    security(("executor_jwt" = []))
+)]
+pub async fn executor_set_auto_delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(app_id): Path<String>,
+    Json(request): Json<SetLockedAutoDeleteRequest>,
+) -> Result<Json<LockedItemVersion>, ApiError> {
+    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    Ok(Json(
+        locked::set_auto_delete(&state, &caller, &app_id, request).await?,
     ))
 }
 

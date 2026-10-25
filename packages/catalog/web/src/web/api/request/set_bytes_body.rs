@@ -4,9 +4,9 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 
-use crate::web::api::{HttpBody, HttpRequest};
+use crate::web::api::HttpRequest;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -60,12 +60,11 @@ impl NodeLogic for SetBytesBodyNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let mut request: HttpRequest = context.evaluate_pin("request").await?;
-        let body: Vec<u8> = context.evaluate_pin("body").await?;
+        let request: HttpRequest = context.evaluate_pin("request").await?;
+        let body = context.evaluate_pin_bytes("body").await?;
 
-        request.body = Some(HttpBody::Bytes(body));
-
-        context.set_pin_value("request_out", json!(request)).await?;
+        let request = request.into_pin_value_with_bytes(context, body).await;
+        context.set_pin_value("request_out", request).await?;
 
         Ok(())
     }

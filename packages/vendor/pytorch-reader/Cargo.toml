@@ -82,7 +82,7 @@ features = ["std"]
 default-features = false
 
 [dependencies.zip]
-version = "=8.5.1"
+version = "9.0.5"
 features = ["deflate-flate2-zlib-rs"]
 default-features = false
 

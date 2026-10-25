@@ -138,6 +138,20 @@ fn parse_attachment(attachment: &Value) -> Option<OutlookAttachment> {
     })
 }
 
+async fn attachments_value(
+    context: &ExecutionContext,
+    attachments: Vec<OutlookAttachment>,
+) -> Value {
+    let mut values = Vec::with_capacity(attachments.len());
+    for mut attachment in attachments {
+        let data = std::mem::take(&mut attachment.data);
+        let mut value = json!(attachment);
+        value["data"] = context.bytes_value(data).await;
+        values.push(value);
+    }
+    Value::Array(values)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OutlookCalendarEvent {
     pub id: String,
@@ -625,9 +639,8 @@ impl NodeLogic for GetOutlookMessageAttachmentsNode {
                     .collect::<Vec<_>>();
 
                 let count = attachments.len() as i64;
-                context
-                    .set_pin_value("attachments", json!(attachments))
-                    .await?;
+                let attachments = attachments_value(context, attachments).await;
+                context.set_pin_value("attachments", attachments).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
@@ -749,9 +762,7 @@ impl NodeLogic for OutlookAttachmentFieldsNode {
         context
             .set_pin_value("attachment_type", json!(attachment.attachment_type))
             .await?;
-        context
-            .set_pin_value("data", json!(attachment.data))
-            .await?;
+        context.set_pin_bytes("data", attachment.data).await?;
 
         Ok(())
     }

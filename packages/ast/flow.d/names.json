@@ -935,6 +935,15 @@
     "class": "Agent",
     "category": "AI/Agents/Builder"
   },
+  "agent_enable_interactive_ui": {
+    "qualified": "agent::enableInteractiveUi",
+    "namespace": "agent",
+    "alias": "enableInteractiveUi",
+    "flat": "agentEnableInteractiveUi",
+    "receiver": "agent_in",
+    "class": "Agent",
+    "category": "AI/Agents/Builder"
+  },
   "agent_from_model": {
     "qualified": "agent::fromModel",
     "namespace": "agent",
@@ -1474,6 +1483,15 @@
     "receiver": null,
     "class": null,
     "category": "AI/Generative/History"
+  },
+  "ai_generative_interactive_ui_instructions": {
+    "qualified": "ai::interactiveUiInstructions",
+    "namespace": "ai",
+    "alias": "interactiveUiInstructions",
+    "flat": "aiGenerativeInteractiveUiInstructions",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative"
   },
   "ai_generative_invoke": {
     "qualified": "ai::invoke",
@@ -8270,6 +8288,15 @@
     "class": "DataFusionSession",
     "category": "Data/DataFusion/Databases"
   },
+  "df_register_odbc": {
+    "qualified": "df::registerOdbc",
+    "namespace": "df",
+    "alias": "registerOdbc",
+    "flat": "dfRegisterOdbc",
+    "receiver": "session",
+    "class": "DataFusionSession",
+    "category": "Data/DataFusion/Databases"
+  },
   "df_register_oracle": {
     "qualified": "df::registerOracle",
     "namespace": "df",
@@ -9574,6 +9601,15 @@
     "receiver": null,
     "class": null,
     "category": "AI/ML/ONNX"
+  },
+  "file_get_metadata": {
+    "qualified": "files::getMetadata",
+    "namespace": "files",
+    "alias": "getMetadata",
+    "flat": "fileGetMetadata",
+    "receiver": "path",
+    "class": "FlowPath",
+    "category": "Data/Files/Operations"
   },
   "filename": {
     "qualified": "path::filename",
@@ -14219,6 +14255,15 @@
     "class": null,
     "category": "Data/Files/Locked"
   },
+  "locked_set_auto_delete": {
+    "qualified": "lockedFiles::setAutoDelete",
+    "namespace": "lockedFiles",
+    "alias": "setAutoDelete",
+    "flat": "lockedSetAutoDelete",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
   "locked_set_legal_hold": {
     "qualified": "lockedFiles::setLegalHold",
     "namespace": "lockedFiles",
@@ -17043,6 +17088,15 @@
     "flat": "readImage",
     "receiver": null,
     "class": null,
+    "category": "Image/Content"
+  },
+  "read_image_dimensions": {
+    "qualified": "image::readDimensions",
+    "namespace": "image",
+    "alias": "readDimensions",
+    "flat": "readImageDimensions",
+    "receiver": "path",
+    "class": "FlowPath",
     "category": "Image/Content"
   },
   "read_image_url": {

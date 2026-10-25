@@ -2,7 +2,8 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { MonitorX } from "lucide-react";
-import { Suspense, lazy, useSyncExternalStore } from "react";
+import { Suspense, lazy } from "react";
+import { useWebGlSupport } from "../../../hooks/use-webgl-support";
 import { cn } from "../../../lib/utils";
 import type { GraphCanvasProps } from "./graph-canvas";
 
@@ -11,26 +12,6 @@ import type { GraphCanvasProps } from "./graph-canvas";
 const SigmaGraphCanvas = lazy(() =>
 	import("./graph-canvas").then((module) => ({ default: module.GraphCanvas })),
 );
-
-let webGlSupported: boolean | undefined;
-
-function detectWebGl(): boolean {
-	if (webGlSupported !== undefined) return webGlSupported;
-	try {
-		const gl = document.createElement("canvas").getContext("webgl");
-		gl?.getExtension("WEBGL_lose_context")?.loseContext();
-		webGlSupported = gl !== null;
-	} catch {
-		webGlSupported = false;
-	}
-	return webGlSupported;
-}
-
-const subscribeNever = () => () => {};
-
-function useWebGlSupport(): boolean | null {
-	return useSyncExternalStore(subscribeNever, detectWebGl, () => null);
-}
 
 function WebGlUnavailable({ className }: { className?: string }) {
 	const { t } = useTranslation("common");
@@ -56,7 +37,7 @@ function WebGlUnavailable({ className }: { className?: string }) {
 }
 
 export function GraphCanvas(props: GraphCanvasProps) {
-	const webGl = useWebGlSupport();
+	const webGl = useWebGlSupport("webgl");
 
 	if (webGl === false) return <WebGlUnavailable className={props.className} />;
 

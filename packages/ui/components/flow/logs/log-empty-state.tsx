@@ -39,11 +39,14 @@ function EmptyMessage({
 export const LogEmptyState = memo(function LogEmptyState({
 	error,
 	filtered,
+	runFailed = false,
 	onRetry,
 	onClearFilters,
 }: Readonly<{
 	error?: Error;
 	filtered: boolean;
+	/** The run carries a stored failure reason, shown above the list. */
+	runFailed?: boolean;
 	onRetry: () => void;
 	onClearFilters: () => void;
 }>) {
@@ -64,6 +67,17 @@ export const LogEmptyState = memo(function LogEmptyState({
 				title={t("logViewNoMatches", "No logs match these filters")}
 				action={t("logViewClearFilters", "Clear filters")}
 				onAction={onClearFilters}
+			/>
+		);
+	}
+	if (runFailed) {
+		return (
+			<EmptyMessage
+				title={t("logViewNoRunLogs", "This run wrote no logs")}
+				detail={t(
+					"logViewNoRunLogsHint",
+					"It stopped before logging anything. The reason is shown above.",
+				)}
 			/>
 		);
 	}

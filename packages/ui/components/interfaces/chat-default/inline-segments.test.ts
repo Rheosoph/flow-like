@@ -1,13 +1,36 @@
 import { describe, expect, it, test } from "bun:test";
-import type { IPlanStep } from "./chat-db";
+import type { IChatWidget, IPlanStep } from "./chat-db";
 import {
+	type InlineChatSegment,
 	buildInlineSegments,
 	joinContentText,
 	safeSplitOffset,
+	unanchoredWidgets,
 } from "./inline-segments";
 
 function step(id: string, content_offset?: number): IPlanStep {
 	return { id, title: `Using ${id}`, status: "done", content_offset };
+}
+
+function widget(id: string, content_offset?: number): IChatWidget {
+	return {
+		instance_id: id,
+		widget_id: "w",
+		surface_id: id,
+		component: {},
+		content_offset,
+	};
+}
+
+function outline(segments: InlineChatSegment[] | null) {
+	return segments?.map(
+		(s) =>
+			s.text ??
+			(s.steps && `steps:${s.steps.map((x) => x.id).join(",")}`) ??
+			(s.widgets &&
+				`widgets:${s.widgets.map((x) => x.instance_id).join(",")}`) ??
+			`content:${s.content?.key}`,
+	);
 }
 
 describe("buildInlineSegments", () => {
@@ -93,6 +116,101 @@ describe("buildInlineSegments", () => {
 		expect(first.match(/```/g)).toHaveLength(2);
 		expect(segments?.[1]?.steps?.[0]?.id).toBe("tool");
 		expect(segments?.[2]?.text).toBe("tail");
+	});
+});
+
+describe("buildInlineSegments with widgets and host content", () => {
+	it("stays null while no widget is anchored, and step output is unchanged by them", () => {
+		expect(buildInlineSegments("hello", [], [widget("w")])).toBeNull();
+		const steps = [step("a", 2), step("b")];
+		expect(buildInlineSegments("hello", steps, [widget("w")])).toEqual(
+			buildInlineSegments("hello", steps),
+		);
+	});
+
+	it("places an anchored widget between the text it interrupted", () => {
+		const segments = buildInlineSegments(
+			"before after",
+			[],
+			[widget("map", 6)],
+		);
+		expect(outline(segments)).toEqual(["before", "widgets:map", " after"]);
+		expect(segments?.[1]?.key).toBe("widgets-map");
+	});
+
+	it("leaves unanchored steps to the legacy block and unanchored widgets out", () => {
+		const segments = buildInlineSegments(
+			"text here",
+			[step("legacy")],
+			[widget("loose"), widget("pinned", 4)],
+		);
+		expect(outline(segments)).toEqual(["text", "widgets:pinned", " here"]);
+	});
+
+	it("renders steps before widgets at one offset and groups those widgets", () => {
+		const segments = buildInlineSegments(
+			"intro",
+			[step("tool", 5)],
+			[widget("first", 5), widget("second", 5)],
+		);
+		expect(outline(segments)).toEqual([
+			"intro",
+			"steps:tool",
+			"widgets:first,second",
+		]);
+	});
+
+	it("gives every host entry its own segment after widgets at the same offset", () => {
+		const segments = buildInlineSegments(
+			"ab",
+			[],
+			[widget("w", 1)],
+			[
+				{ key: "page", offset: 1 },
+				{ key: "chat", offset: 1 },
+			],
+		);
+		expect(outline(segments)).toEqual([
+			"a",
+			"widgets:w",
+			"content:page",
+			"content:chat",
+			"b",
+		]);
+		expect(segments?.map((s) => s.key)).toEqual([
+			"text-0",
+			"widgets-w",
+			"content-page",
+			"content-chat",
+			"text-1",
+		]);
+	});
+
+	it("keeps a widget anchored inside an open fence after the fence", () => {
+		const text = "intro\n```js\nconst a = 1;\n```\ntail";
+		const segments = buildInlineSegments(
+			text,
+			[],
+			[widget("w", text.indexOf("const"))],
+		);
+		expect(segments?.[0]?.text?.split("```")).toHaveLength(3);
+		expect(outline(segments)?.slice(1)).toEqual(["widgets:w", "tail"]);
+	});
+});
+
+describe("unanchoredWidgets", () => {
+	test("returns the same array when no widget is anchored", () => {
+		const widgets = [widget("a"), widget("b")];
+		expect(unanchoredWidgets(widgets)).toBe(widgets);
+		expect(unanchoredWidgets(undefined)).toBeUndefined();
+	});
+
+	test("drops the anchored ones", () => {
+		expect(
+			unanchoredWidgets([widget("a", 0), widget("b")])?.map(
+				(w) => w.instance_id,
+			),
+		).toEqual(["b"]);
 	});
 });
 

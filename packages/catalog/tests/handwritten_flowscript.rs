@@ -231,6 +231,7 @@ async fn clean_handwritten_fixtures_apply_and_copy_roundtrip() {
     // lower/apply gaps and cannot yet satisfy this stronger lifecycle invariant.
     let fixtures = [
         "t0-positional-args.flow",
+        "t1-collapse-groups.flow",
         "t1-datetime-window.flow",
         "t1-faker-seed.flow",
         "t1-hash-encode.flow",
@@ -344,6 +345,20 @@ async fn clean_handwritten_fixtures_apply_and_copy_roundtrip() {
                 "{name}: copied Board reused source entity IDs: {reused_ids:?}"
             ));
             continue;
+        }
+
+        // `@collapse` groups are presentation the anchors do not carry across boards: the copy
+        // must rebuild the same groups, nesting and membership from the text alone.
+        if source.contains("@collapse(") {
+            let plain = RenderOptions::default();
+            let source_text = board_to_flowscript(&source_board, &plain);
+            let copied_text = board_to_flowscript(&copied_board, &plain);
+            if source_text != copied_text || !source_text.contains("@collapse(") {
+                failures.push(format!(
+                    "{name}: copied Board does not render the source's groups:\n{source_text}\n---\n{copied_text}"
+                ));
+                continue;
+            }
         }
 
         let anchored_copy = board_to_flowscript(&copied_board, &render_options);

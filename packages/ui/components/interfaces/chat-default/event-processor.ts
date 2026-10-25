@@ -144,16 +144,32 @@ export function finalizePlanSteps(responseMessage: IMessage) {
 	responseMessage.current_step_id = undefined;
 }
 
+function withContentOffset(
+	widget: IChatWidget,
+	contentOffset: number | undefined,
+): IChatWidget {
+	if (widget.content_offset === contentOffset) return widget;
+	const { content_offset: _replaced, ...rest } = widget;
+	return contentOffset === undefined
+		? rest
+		: { ...rest, content_offset: contentOffset };
+}
+
 /**
  * Upsert `incoming` widgets into `existing` by instance id. chat_out /
  * chat_stream re-send each widget as snapshotted at push time, without updates
  * that streamed live after the push. Both update arrays are prefixes of the
  * same emission-ordered sequence, so the longer one is the more complete
  * state — never regress it.
+ *
+ * Anchors are frozen at first sight: a widget already on the message keeps its
+ * `content_offset` (or the lack of one) whatever the re-send carries, and only
+ * a first-seen widget takes `anchor` when one is given.
  */
 export function mergeChatWidgets(
 	existing: IChatWidget[] | undefined,
 	incoming: IChatWidget[] | undefined,
+	anchor?: number,
 ): IChatWidget[] {
 	const byId = new Map(
 		(existing ?? []).map((widget) => [widget.instance_id, widget]),
@@ -169,7 +185,10 @@ export function mergeChatWidgets(
 		// re-registrations ride the updates array, so an equal-or-shorter
 		// incoming widget carries nothing new.
 		if (prior && priorUpdates.length >= incomingUpdates.length) continue;
-		byId.set(widget.instance_id, widget);
+		const contentOffset = prior
+			? prior.content_offset
+			: (anchor ?? widget.content_offset);
+		byId.set(widget.instance_id, withContentOffset(widget, contentOffset));
 		changed = true;
 	}
 	// Same rule for the array: a re-send that adds nothing must not re-render
@@ -467,6 +486,29 @@ function detachPlanAnchors(responseMessage: IMessage): boolean {
 	return true;
 }
 
+/** Same rule for widgets: detached ones fall back to the block after the text. */
+function detachWidgetAnchors(responseMessage: IMessage): boolean {
+	const widgets = responseMessage.widgets;
+	if (!widgets?.some((widget) => typeof widget.content_offset === "number")) {
+		return false;
+	}
+	responseMessage.widgets = widgets.map((widget) => {
+		const detached = withContentOffset(widget, undefined);
+		const targets = widgetTargetsCache.get(widget);
+		if (detached !== widget && targets) {
+			widgetTargetsCache.set(detached, targets);
+		}
+		return detached;
+	});
+	return true;
+}
+
+function detachAnchors(responseMessage: IMessage): boolean {
+	const steps = detachPlanAnchors(responseMessage);
+	const widgets = detachWidgetAnchors(responseMessage);
+	return steps || widgets;
+}
+
 export function processChatEvents(
 	events: any[],
 	initialState: {
@@ -506,11 +548,19 @@ export function processChatEvents(
 		responseMessage.files = Array.from(attachments.values());
 	};
 
-	const addWidgets = (newWidgets: IChatWidget[] | undefined) => {
+	// A live push anchors where the text stood (like applyBackendPlan's first sight); the final
+	// flush carries no position, so widgets it introduces stay in the after-text block.
+	const addWidgets = (
+		newWidgets: IChatWidget[] | undefined,
+		anchored: boolean,
+	) => {
 		if (!newWidgets?.length) return;
 		responseMessage.widgets = mergeChatWidgets(
 			responseMessage.widgets,
 			newWidgets,
+			anchored
+				? joinContentText(responseMessage.inner.content).length
+				: undefined,
 		);
 	};
 
@@ -592,7 +642,7 @@ export function processChatEvents(
 
 			// Handle embedded widgets
 			if (ev.payload.widgets) {
-				addWidgets(ev.payload.widgets);
+				addWidgets(ev.payload.widgets, true);
 				shouldUpdate = true;
 			}
 			continue;
@@ -616,7 +666,7 @@ export function processChatEvents(
 					shouldUpdate = true;
 				}
 				// Push Response replaced the text: every anchor stamped so far is void.
-				if (detachPlanAnchors(responseMessage)) {
+				if (detachAnchors(responseMessage)) {
 					shouldUpdate = true;
 				}
 			}
@@ -626,7 +676,7 @@ export function processChatEvents(
 				shouldUpdate = true;
 			}
 			if (ev.payload.widgets) {
-				addWidgets(ev.payload.widgets);
+				addWidgets(ev.payload.widgets, true);
 				shouldUpdate = true;
 			}
 			continue;
@@ -653,7 +703,7 @@ export function processChatEvents(
 					!joinContentText(responseMessage.inner.content).startsWith(
 						streamedText,
 					) &&
-					detachPlanAnchors(responseMessage)
+					detachAnchors(responseMessage)
 				) {
 					shouldUpdate = true;
 				}
@@ -673,7 +723,7 @@ export function processChatEvents(
 			}
 
 			if (ev.payload.widgets) {
-				addWidgets(ev.payload.widgets);
+				addWidgets(ev.payload.widgets, false);
 				shouldUpdate = true;
 			}
 

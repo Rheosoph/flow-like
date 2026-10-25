@@ -547,16 +547,15 @@ async fn apply_incoming_message_to_handler(
             }
         }
         Message::Binary(data) => {
-            let data = data.to_vec();
+            let data = context.bytes_value(data.clone()).await;
             if single_byte {
                 matched_message |=
-                    set_first_typed_output_pin(context, VariableType::Byte, json!(data.clone()))
-                        .await;
+                    set_first_typed_output_pin(context, VariableType::Byte, data.clone()).await;
             }
 
             if !single_byte && has_payload_pin {
                 matched_message |=
-                    set_named_output_pin(context, "payload", wrap_payload_value(json!(data))).await;
+                    set_named_output_pin(context, "payload", wrap_payload_value(data)).await;
             }
         }
         _ => {}
@@ -679,6 +678,8 @@ async fn spawn_message_reader(
             for entry in handler_context.connected_nodes.iter() {
                 let (_id, ctx) = entry.pair();
                 let mut ctx = ctx.lock().await;
+                let scope = ctx.new_byte_scope();
+                let previous_scope = ctx.enter_byte_scope(&scope);
                 let matched_message = apply_incoming_message_to_handler(
                     &mut ctx,
                     &msg,
@@ -715,6 +716,7 @@ async fn spawn_message_reader(
                 if let Err(e) = run {
                     tracing::warn!("WebSocket on_message handler error: {:?}", e);
                 }
+                ctx.restore_byte_scope(previous_scope);
             }
         }
 

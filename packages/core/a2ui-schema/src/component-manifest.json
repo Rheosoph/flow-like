@@ -1,0 +1,3916 @@
+{
+  "version": 1,
+  "components": [
+    {
+      "type": "row",
+      "props": [
+        {
+          "name": "gap",
+          "kind": "bound"
+        },
+        {
+          "name": "align",
+          "kind": "bound",
+          "values": [
+            "start",
+            "center",
+            "end",
+            "stretch",
+            "baseline"
+          ]
+        },
+        {
+          "name": "justify",
+          "kind": "bound",
+          "values": [
+            "start",
+            "center",
+            "end",
+            "between",
+            "around",
+            "evenly"
+          ]
+        },
+        {
+          "name": "wrap",
+          "kind": "bound"
+        },
+        {
+          "name": "reverse",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "column",
+      "props": [
+        {
+          "name": "gap",
+          "kind": "bound"
+        },
+        {
+          "name": "align",
+          "kind": "bound",
+          "values": [
+            "start",
+            "center",
+            "end",
+            "stretch",
+            "baseline"
+          ]
+        },
+        {
+          "name": "justify",
+          "kind": "bound",
+          "values": [
+            "start",
+            "center",
+            "end",
+            "between",
+            "around",
+            "evenly"
+          ]
+        },
+        {
+          "name": "reverse",
+          "kind": "bound"
+        },
+        {
+          "name": "wrap",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "stack",
+      "props": [
+        {
+          "name": "align",
+          "kind": "bound",
+          "values": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ]
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "grid",
+      "props": [
+        {
+          "name": "columns",
+          "kind": "bound"
+        },
+        {
+          "name": "rows",
+          "kind": "bound"
+        },
+        {
+          "name": "gap",
+          "kind": "bound"
+        },
+        {
+          "name": "columnGap",
+          "kind": "bound"
+        },
+        {
+          "name": "rowGap",
+          "kind": "bound"
+        },
+        {
+          "name": "autoFlow",
+          "kind": "bound",
+          "values": [
+            "row",
+            "column",
+            "dense",
+            "rowDense",
+            "columnDense"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "scrollArea",
+      "props": [
+        {
+          "name": "direction",
+          "kind": "bound",
+          "values": [
+            "vertical",
+            "horizontal",
+            "both"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "aspectRatio",
+      "props": [
+        {
+          "name": "ratio",
+          "kind": "bound",
+          "required": true
+        }
+      ]
+    },
+    {
+      "type": "overlay",
+      "props": [
+        {
+          "name": "baseComponentId",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "overlays",
+          "kind": "list",
+          "required": true,
+          "fields": [
+            {
+              "name": "componentId",
+              "kind": "plain",
+              "required": true
+            },
+            {
+              "name": "anchor",
+              "kind": "bound"
+            },
+            {
+              "name": "offsetX",
+              "kind": "bound"
+            },
+            {
+              "name": "offsetY",
+              "kind": "bound"
+            },
+            {
+              "name": "zIndex",
+              "kind": "bound"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "absolute",
+      "props": [
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "box",
+      "props": [
+        {
+          "name": "as",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "center",
+      "props": [
+        {
+          "name": "inline",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "spacer",
+      "props": [
+        {
+          "name": "size",
+          "kind": "bound"
+        },
+        {
+          "name": "flex",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "widgetInstance",
+      "props": [
+        {
+          "name": "instanceId",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "widgetId",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "appId",
+          "kind": "plain"
+        },
+        {
+          "name": "exposedPropValues",
+          "kind": "opaque"
+        },
+        {
+          "name": "actionBindings",
+          "kind": "opaque"
+        },
+        {
+          "name": "styleOverride",
+          "kind": "style",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "microWidgetInstance",
+      "description": "A package-shipped widget rendered in a sandboxed iframe. Self-contained: the contract and current props ride on the component, so an instance replays from component data alone. `bundle_hash` is what desktop serves from (`flow-widget://`) a…",
+      "props": [
+        {
+          "name": "instanceId",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "packageId",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "widgetId",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "packageVersion",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "bundleHash",
+          "kind": "plain"
+        },
+        {
+          "name": "contract",
+          "kind": "opaque"
+        },
+        {
+          "name": "props",
+          "kind": "opaque"
+        },
+        {
+          "name": "preview",
+          "kind": "plain"
+        },
+        {
+          "name": "actionBindings",
+          "kind": "opaque"
+        },
+        {
+          "name": "styleOverride",
+          "kind": "style",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "props": [
+        {
+          "name": "content",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "body",
+            "heading",
+            "label",
+            "caption",
+            "code"
+          ]
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "xs",
+            "sm",
+            "md",
+            "lg",
+            "xl",
+            "2xl",
+            "3xl",
+            "4xl"
+          ]
+        },
+        {
+          "name": "weight",
+          "kind": "bound",
+          "values": [
+            "light",
+            "normal",
+            "medium",
+            "semibold",
+            "bold"
+          ]
+        },
+        {
+          "name": "color",
+          "kind": "bound"
+        },
+        {
+          "name": "align",
+          "kind": "bound",
+          "values": [
+            "left",
+            "center",
+            "right",
+            "justify"
+          ]
+        },
+        {
+          "name": "truncate",
+          "kind": "bound"
+        },
+        {
+          "name": "maxLines",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "image",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "alt",
+          "kind": "bound"
+        },
+        {
+          "name": "fit",
+          "kind": "bound",
+          "values": [
+            "contain",
+            "cover",
+            "fill",
+            "none",
+            "scaleDown"
+          ]
+        },
+        {
+          "name": "fallback",
+          "kind": "bound"
+        },
+        {
+          "name": "loading",
+          "kind": "bound",
+          "values": [
+            "lazy",
+            "eager"
+          ]
+        },
+        {
+          "name": "aspectRatio",
+          "kind": "bound",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "icon",
+      "props": [
+        {
+          "name": "name",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "size",
+          "kind": "bound"
+        },
+        {
+          "name": "color",
+          "kind": "bound"
+        },
+        {
+          "name": "strokeWidth",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "video",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "poster",
+          "kind": "bound"
+        },
+        {
+          "name": "autoplay",
+          "kind": "bound"
+        },
+        {
+          "name": "loop",
+          "kind": "bound"
+        },
+        {
+          "name": "muted",
+          "kind": "bound"
+        },
+        {
+          "name": "controls",
+          "kind": "bound"
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "lottie",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "autoplay",
+          "kind": "bound"
+        },
+        {
+          "name": "loop",
+          "kind": "bound"
+        },
+        {
+          "name": "speed",
+          "kind": "bound"
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "markdown",
+      "props": [
+        {
+          "name": "content",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "allowHtml",
+          "kind": "bound",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "divider",
+      "props": [
+        {
+          "name": "orientation",
+          "kind": "bound",
+          "values": [
+            "horizontal",
+            "vertical"
+          ]
+        },
+        {
+          "name": "thickness",
+          "kind": "bound"
+        },
+        {
+          "name": "color",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "badge",
+      "props": [
+        {
+          "name": "content",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "default",
+            "secondary",
+            "destructive",
+            "outline"
+          ]
+        },
+        {
+          "name": "color",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "avatar",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound"
+        },
+        {
+          "name": "fallback",
+          "kind": "bound"
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "sm",
+            "md",
+            "lg",
+            "xl"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "userProfile",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true,
+          "description": "User subject/sub ID. Compatible with Set Element Value via component.value."
+        },
+        {
+          "name": "variant",
+          "kind": "bound"
+        },
+        {
+          "name": "avatarSize",
+          "kind": "bound"
+        },
+        {
+          "name": "showHover",
+          "kind": "bound"
+        },
+        {
+          "name": "showEmail",
+          "kind": "bound"
+        },
+        {
+          "name": "showDescription",
+          "kind": "bound"
+        },
+        {
+          "name": "showUserId",
+          "kind": "bound"
+        },
+        {
+          "name": "showProfileLink",
+          "kind": "bound"
+        },
+        {
+          "name": "fallbackLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "muted",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "progress",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "max",
+          "kind": "bound"
+        },
+        {
+          "name": "showLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "default",
+            "success",
+            "warning",
+            "error"
+          ]
+        },
+        {
+          "name": "color",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "spinner",
+      "props": [
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        {
+          "name": "color",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "skeleton",
+      "props": [
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        },
+        {
+          "name": "rounded",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "props": [
+        {
+          "name": "columns",
+          "kind": "bound",
+          "required": true,
+          "shape": "[{id,header,accessor}]"
+        },
+        {
+          "name": "data",
+          "kind": "bound",
+          "required": true,
+          "shape": "[{accessor: value}]"
+        },
+        {
+          "name": "caption",
+          "kind": "bound"
+        },
+        {
+          "name": "striped",
+          "kind": "bound"
+        },
+        {
+          "name": "bordered",
+          "kind": "bound"
+        },
+        {
+          "name": "hoverable",
+          "kind": "bound"
+        },
+        {
+          "name": "compact",
+          "kind": "bound"
+        },
+        {
+          "name": "stickyHeader",
+          "kind": "bound"
+        },
+        {
+          "name": "sortable",
+          "kind": "bound"
+        },
+        {
+          "name": "searchable",
+          "kind": "bound"
+        },
+        {
+          "name": "paginated",
+          "kind": "bound"
+        },
+        {
+          "name": "pageSize",
+          "kind": "bound"
+        },
+        {
+          "name": "selectable",
+          "kind": "bound"
+        },
+        {
+          "name": "onRowClick",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "tableRow",
+      "props": [
+        {
+          "name": "cells",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "selected",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "tableCell",
+      "props": [
+        {
+          "name": "content",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "isHeader",
+          "kind": "bound"
+        },
+        {
+          "name": "colSpan",
+          "kind": "bound"
+        },
+        {
+          "name": "rowSpan",
+          "kind": "bound"
+        },
+        {
+          "name": "align",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "filePreview",
+      "description": "File Preview component for displaying various file types",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "description": "File URL or data URI"
+        },
+        {
+          "name": "url",
+          "kind": "bound",
+          "description": "Alias for `src`; media-source update nodes write both fields."
+        },
+        {
+          "name": "filename",
+          "kind": "bound",
+          "description": "File name (used for type detection if not specified)"
+        },
+        {
+          "name": "mimeType",
+          "kind": "bound",
+          "description": "MIME type used for preview selection when available."
+        },
+        {
+          "name": "fileType",
+          "kind": "bound",
+          "description": "File type override: \"pdf\", \"image\", \"video\", \"audio\", \"code\", \"text\", \"document\". \"document\" selects the matching WASM viewer from the filename or MIME type.",
+          "values": [
+            "pdf",
+            "image",
+            "video",
+            "audio",
+            "code",
+            "text",
+            "document"
+          ]
+        },
+        {
+          "name": "editable",
+          "kind": "bound",
+          "description": "Enable the matching WASM editor. Requires an exact save workflow handler. Defaults to false."
+        },
+        {
+          "name": "initialEditing",
+          "kind": "bound",
+          "description": "Start in edit mode when editable is enabled. Defaults to false."
+        },
+        {
+          "name": "value",
+          "kind": "bound",
+          "description": "Last exported temporary file metadata, written before the save workflow runs."
+        },
+        {
+          "name": "showControls",
+          "kind": "bound"
+        },
+        {
+          "name": "fit",
+          "kind": "bound",
+          "values": [
+            "contain",
+            "cover",
+            "fill",
+            "none",
+            "scaleDown"
+          ]
+        },
+        {
+          "name": "fallbackText",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "description": "Height of the preview area"
+        },
+        {
+          "name": "showDownload",
+          "kind": "bound",
+          "description": "Show download button"
+        },
+        {
+          "name": "loading",
+          "kind": "bound",
+          "values": [
+            "lazy",
+            "eager"
+          ]
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "description": "Audio only: animated visualizer style (\"conservative\" | \"waveform\" | \"orb\" | \"vortex\" | \"shader\" | \"aurora\" | \"pulse\"). When set, renders an animated player instead of the default controls."
+        },
+        {
+          "name": "autoPlay",
+          "kind": "bound",
+          "description": "Audio (animated `variant`) only: auto-play when the source is set, e.g. a conversation reply. Default false."
+        }
+      ]
+    },
+    {
+      "type": "fileEditor",
+      "description": "A document editor that opens an optional file or starts a new document.",
+      "props": [
+        {
+          "name": "editor",
+          "kind": "bound",
+          "required": true,
+          "description": "Editor ID: wordcraft, pdfcraft, deckcraft, gridcraft, vectorcraft, photocraft, soundcraft, filmcraft, designcraft, cadcraft, or solidcraft."
+        },
+        {
+          "name": "src",
+          "kind": "bound",
+          "description": "Optional initial file URL or storage path. Omit to create a new document."
+        },
+        {
+          "name": "url",
+          "kind": "bound",
+          "description": "Alias for src; media-source update nodes write both fields."
+        },
+        {
+          "name": "filename",
+          "kind": "bound",
+          "description": "Input filename, or the name for a new document."
+        },
+        {
+          "name": "mimeType",
+          "kind": "bound"
+        },
+        {
+          "name": "editable",
+          "kind": "bound",
+          "description": "Allow editing when an exact save workflow handler is configured. Defaults to true."
+        },
+        {
+          "name": "initialEditing",
+          "kind": "bound",
+          "description": "Start in edit mode. Defaults to true."
+        },
+        {
+          "name": "value",
+          "kind": "bound",
+          "description": "Exported temporary file metadata, written before the save workflow runs."
+        },
+        {
+          "name": "showDownload",
+          "kind": "bound",
+          "description": "Allow downloading the current document. Defaults to true."
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        },
+        {
+          "name": "fallbackText",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "diffView",
+      "description": "Diff viewer component for text, code, markdown and documents",
+      "props": [
+        {
+          "name": "original",
+          "kind": "bound",
+          "required": true,
+          "description": "Left / old content, or a document URL"
+        },
+        {
+          "name": "modified",
+          "kind": "bound",
+          "required": true,
+          "description": "Right / new content, or a document URL"
+        },
+        {
+          "name": "mode",
+          "kind": "bound",
+          "description": "Layout: \"split\" | \"unified\" | \"inline\"",
+          "values": [
+            "split",
+            "unified",
+            "inline"
+          ]
+        },
+        {
+          "name": "kind",
+          "kind": "bound",
+          "description": "Content kind: \"auto\" | \"text\" | \"code\" | \"markdown\" | \"json\" | \"document\"",
+          "values": [
+            "auto",
+            "text",
+            "code",
+            "markdown",
+            "json",
+            "document"
+          ]
+        },
+        {
+          "name": "language",
+          "kind": "bound",
+          "description": "Syntax language for code/json (e.g. \"typescript\", \"rust\")"
+        },
+        {
+          "name": "markdownMode",
+          "kind": "bound",
+          "description": "Markdown rendering: \"source\" | \"rendered\"",
+          "values": [
+            "source",
+            "rendered"
+          ]
+        },
+        {
+          "name": "showLineNumbers",
+          "kind": "bound"
+        },
+        {
+          "name": "wordWrap",
+          "kind": "bound"
+        },
+        {
+          "name": "wordLevel",
+          "kind": "bound",
+          "description": "Intra-line word-level highlighting"
+        },
+        {
+          "name": "collapseUnchanged",
+          "kind": "bound"
+        },
+        {
+          "name": "contextLines",
+          "kind": "bound",
+          "description": "Context lines kept around changes when collapsing"
+        },
+        {
+          "name": "showStats",
+          "kind": "bound"
+        },
+        {
+          "name": "originalLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "modifiedLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "ignoreWhitespace",
+          "kind": "bound"
+        },
+        {
+          "name": "ignoreCase",
+          "kind": "bound"
+        },
+        {
+          "name": "trimTrailingWhitespace",
+          "kind": "bound"
+        },
+        {
+          "name": "swapSides",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "boundingBoxOverlay",
+      "description": "Bounding Box Overlay component for displaying detection results",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true,
+          "description": "Image source URL"
+        },
+        {
+          "name": "alt",
+          "kind": "bound",
+          "description": "Alternative text for accessibility"
+        },
+        {
+          "name": "boxes",
+          "kind": "bound",
+          "required": true,
+          "description": "Array of bounding boxes to display"
+        },
+        {
+          "name": "showLabels",
+          "kind": "bound",
+          "description": "Show labels on boxes"
+        },
+        {
+          "name": "showConfidence",
+          "kind": "bound",
+          "description": "Show confidence scores"
+        },
+        {
+          "name": "strokeWidth",
+          "kind": "bound",
+          "description": "Stroke width for boxes"
+        },
+        {
+          "name": "fontSize",
+          "kind": "bound",
+          "description": "Font size for labels"
+        },
+        {
+          "name": "fit",
+          "kind": "bound",
+          "description": "Image fit: \"contain\", \"cover\", \"fill\"",
+          "values": [
+            "contain",
+            "cover",
+            "fill"
+          ]
+        },
+        {
+          "name": "normalized",
+          "kind": "bound",
+          "description": "Use normalized coordinates (0-1)"
+        },
+        {
+          "name": "interactive",
+          "kind": "bound",
+          "description": "Enable click events on boxes"
+        }
+      ]
+    },
+    {
+      "type": "button",
+      "props": [
+        {
+          "name": "label",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "default",
+            "secondary",
+            "outline",
+            "ghost",
+            "destructive",
+            "link"
+          ]
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "sm",
+            "md",
+            "lg",
+            "icon"
+          ]
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "loading",
+          "kind": "bound"
+        },
+        {
+          "name": "icon",
+          "kind": "bound"
+        },
+        {
+          "name": "iconPosition",
+          "kind": "bound",
+          "values": [
+            "left",
+            "right"
+          ]
+        },
+        {
+          "name": "tooltip",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "feedback",
+      "props": [
+        {
+          "name": "mode",
+          "kind": "bound",
+          "values": [
+            "icon",
+            "compact",
+            "segmented",
+            "rating",
+            "extended"
+          ]
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        {
+          "name": "title",
+          "kind": "bound"
+        },
+        {
+          "name": "description",
+          "kind": "bound"
+        },
+        {
+          "name": "positiveLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "negativeLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "positiveRating",
+          "kind": "bound"
+        },
+        {
+          "name": "negativeRating",
+          "kind": "bound"
+        },
+        {
+          "name": "showComment",
+          "kind": "bound"
+        },
+        {
+          "name": "commentMode",
+          "kind": "bound",
+          "values": [
+            "none",
+            "inline",
+            "modal"
+          ]
+        },
+        {
+          "name": "commentLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "commentPlaceholder",
+          "kind": "bound"
+        },
+        {
+          "name": "commentTitle",
+          "kind": "bound"
+        },
+        {
+          "name": "commentDescription",
+          "kind": "bound"
+        },
+        {
+          "name": "commentSubmitLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "commentCancelLabel",
+          "kind": "bound"
+        },
+        {
+          "name": "feedbackId",
+          "kind": "bound"
+        },
+        {
+          "name": "includeState",
+          "kind": "bound"
+        },
+        {
+          "name": "pageContextMode",
+          "kind": "bound",
+          "values": [
+            "none",
+            "path",
+            "query"
+          ]
+        },
+        {
+          "name": "pageContextQueryParamAllowlist",
+          "kind": "bound"
+        },
+        {
+          "name": "pageContextQueryParamDenylist",
+          "kind": "bound"
+        },
+        {
+          "name": "includePageHash",
+          "kind": "bound"
+        },
+        {
+          "name": "successMessage",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "appLink",
+      "props": [
+        {
+          "name": "target",
+          "kind": "bound",
+          "values": [
+            "config",
+            "settings",
+            "overview"
+          ]
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "default",
+            "secondary",
+            "outline",
+            "ghost",
+            "destructive",
+            "link"
+          ]
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "sm",
+            "md",
+            "lg",
+            "icon"
+          ]
+        },
+        {
+          "name": "icon",
+          "kind": "bound"
+        },
+        {
+          "name": "iconPosition",
+          "kind": "bound",
+          "values": [
+            "left",
+            "right"
+          ]
+        },
+        {
+          "name": "appId",
+          "kind": "bound"
+        },
+        {
+          "name": "eventId",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "textField",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "placeholder",
+          "kind": "bound"
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "helperText",
+          "kind": "bound"
+        },
+        {
+          "name": "error",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "inputType",
+          "kind": "bound",
+          "values": [
+            "text",
+            "email",
+            "password",
+            "number",
+            "tel",
+            "url",
+            "search"
+          ]
+        },
+        {
+          "name": "multiline",
+          "kind": "bound"
+        },
+        {
+          "name": "rows",
+          "kind": "bound"
+        },
+        {
+          "name": "maxLength",
+          "kind": "bound"
+        },
+        {
+          "name": "required",
+          "kind": "bound"
+        },
+        {
+          "name": "debounceMs",
+          "kind": "bound",
+          "description": "Pause before the \"input\" event fires, in milliseconds."
+        }
+      ]
+    },
+    {
+      "type": "richText",
+      "description": "Rich text authoring surface. `value` carries the editor's `plate_json::` document, which the `utils_md_plate_to_md` / `utils_md_plate_to_html` nodes convert for downstream use.",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "documentId",
+          "kind": "bound",
+          "description": "Stable document identity, included in document and upload events."
+        },
+        {
+          "name": "documentRevision",
+          "kind": "bound",
+          "description": "Authoritative revision. Changing it replaces local edits with `value`."
+        },
+        {
+          "name": "currentUser",
+          "kind": "bound",
+          "description": "Reviewer identity: { id, name, avatarUrl? }."
+        },
+        {
+          "name": "reviewEnabled",
+          "kind": "bound",
+          "description": "Enable document comments and tracked suggestions for the current reviewer."
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "helperText",
+          "kind": "bound"
+        },
+        {
+          "name": "placeholder",
+          "kind": "bound"
+        },
+        {
+          "name": "error",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "readOnly",
+          "kind": "bound"
+        },
+        {
+          "name": "uploadPrefix",
+          "kind": "bound",
+          "description": "Storage folder that pasted or dropped images are uploaded into."
+        },
+        {
+          "name": "uploadScope",
+          "kind": "bound",
+          "description": "\"app\" (shared storage, default) or \"user\" (the viewer's private area)."
+        },
+        {
+          "name": "minHeight",
+          "kind": "bound"
+        },
+        {
+          "name": "maxHeight",
+          "kind": "bound"
+        },
+        {
+          "name": "debounceMs",
+          "kind": "bound",
+          "description": "Pause before the \"change\" event fires, in milliseconds."
+        }
+      ]
+    },
+    {
+      "type": "excalidraw",
+      "description": "Drawing editor with exact load, save, autoSave, dirtyChange and error event handlers.",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "description": "Scene object or serialized Excalidraw JSON. Replacing it loads a drawing."
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        },
+        {
+          "name": "readOnly",
+          "kind": "bound",
+          "description": "Disable editing. Defaults to false."
+        },
+        {
+          "name": "theme",
+          "kind": "bound",
+          "description": "Editor theme: \"light\" or \"dark\"."
+        },
+        {
+          "name": "autoSave",
+          "kind": "bound",
+          "description": "Dispatch autoSave after edits settle. Requires an exact handler; defaults to true."
+        },
+        {
+          "name": "autoSaveDelayMs",
+          "kind": "bound",
+          "description": "Inactivity interval before autoSave, in milliseconds. Defaults to 1500."
+        },
+        {
+          "name": "autoSaveMinChanges",
+          "kind": "bound",
+          "description": "Minimum meaningful scene changes before autoSave. Defaults to 1."
+        }
+      ]
+    },
+    {
+      "type": "select",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "options",
+          "kind": "bound",
+          "required": true,
+          "shape": "[{value,label}]"
+        },
+        {
+          "name": "placeholder",
+          "kind": "bound"
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "multiple",
+          "kind": "bound",
+          "unrendered": true
+        },
+        {
+          "name": "searchable",
+          "kind": "bound",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "slider",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "min",
+          "kind": "bound"
+        },
+        {
+          "name": "max",
+          "kind": "bound"
+        },
+        {
+          "name": "step",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "showValue",
+          "kind": "bound"
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "debounceMs",
+          "kind": "bound",
+          "description": "Pause before the \"input\" event fires, in milliseconds."
+        }
+      ]
+    },
+    {
+      "type": "checkbox",
+      "props": [
+        {
+          "name": "checked",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "indeterminate",
+          "kind": "bound",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "switch",
+      "props": [
+        {
+          "name": "checked",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "radioGroup",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "options",
+          "kind": "bound",
+          "required": true,
+          "shape": "[{value,label}]"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "orientation",
+          "kind": "bound",
+          "values": [
+            "horizontal",
+            "vertical"
+          ]
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "dateTimeInput",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "kind": "bound",
+          "values": [
+            "date",
+            "time",
+            "datetime"
+          ]
+        },
+        {
+          "name": "min",
+          "kind": "bound"
+        },
+        {
+          "name": "max",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "fileInput",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "helperText",
+          "kind": "bound"
+        },
+        {
+          "name": "accept",
+          "kind": "bound"
+        },
+        {
+          "name": "multiple",
+          "kind": "bound"
+        },
+        {
+          "name": "directory",
+          "kind": "bound",
+          "description": "Offer picking a whole folder; implies `multiple`."
+        },
+        {
+          "name": "maxSize",
+          "kind": "bound"
+        },
+        {
+          "name": "maxFiles",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "error",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "imageInput",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "helperText",
+          "kind": "bound"
+        },
+        {
+          "name": "accept",
+          "kind": "bound"
+        },
+        {
+          "name": "multiple",
+          "kind": "bound"
+        },
+        {
+          "name": "maxSize",
+          "kind": "bound"
+        },
+        {
+          "name": "maxFiles",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "error",
+          "kind": "bound"
+        },
+        {
+          "name": "aspectRatio",
+          "kind": "bound"
+        },
+        {
+          "name": "showPreview",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "cameraView",
+      "description": "A user-started camera whose lifetime is bounded by its visible screen.",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound"
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "facingMode",
+          "kind": "bound"
+        },
+        {
+          "name": "deviceId",
+          "kind": "bound"
+        },
+        {
+          "name": "mirrored",
+          "kind": "bound"
+        },
+        {
+          "name": "fit",
+          "kind": "bound"
+        },
+        {
+          "name": "intervalMs",
+          "kind": "bound"
+        },
+        {
+          "name": "maxWidth",
+          "kind": "bound"
+        },
+        {
+          "name": "quality",
+          "kind": "bound"
+        },
+        {
+          "name": "audioEnabled",
+          "kind": "bound",
+          "description": "Offer microphone capture on an explicit user start. Defaults to false."
+        },
+        {
+          "name": "audioBufferSeconds",
+          "kind": "bound",
+          "description": "Recent audio retained in memory, in whole seconds from 1 to 300. Defaults to 60."
+        },
+        {
+          "name": "overlays",
+          "kind": "bound"
+        },
+        {
+          "name": "effects",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "voiceInput",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "helperText",
+          "kind": "bound"
+        },
+        {
+          "name": "maxDuration",
+          "kind": "bound"
+        },
+        {
+          "name": "autoStop",
+          "kind": "bound"
+        },
+        {
+          "name": "silenceThreshold",
+          "kind": "bound"
+        },
+        {
+          "name": "silenceDuration",
+          "kind": "bound"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        },
+        {
+          "name": "error",
+          "kind": "bound"
+        },
+        {
+          "name": "visualizer",
+          "kind": "bound",
+          "description": "Deprecated alias for `variant` (\"waveform\" | \"bars\")."
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "description": "Visual style: \"conservative\" | \"waveform\" | \"orb\" | \"vortex\" | \"shader\" | \"aurora\" | \"pulse\"."
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "description": "Element size: \"sm\" | \"md\" | \"lg\"."
+        },
+        {
+          "name": "mode",
+          "kind": "bound",
+          "description": "Capture mode: \"record\" (send audio) | \"stt\" (send transcript text)."
+        },
+        {
+          "name": "invoke",
+          "kind": "bound",
+          "description": "Invoke mode: \"manual\" (click) | \"hold\" (press-and-hold) | \"auto\" (pause detection)."
+        },
+        {
+          "name": "color",
+          "kind": "bound",
+          "description": "Base accent color (CSS color string)."
+        },
+        {
+          "name": "recordingColor",
+          "kind": "bound",
+          "description": "Accent color while recording (CSS color string)."
+        },
+        {
+          "name": "resultMode",
+          "kind": "bound",
+          "description": "Post-input look: \"player\" (animated playback) | \"autoplay\" (player that plays the result immediately, for conversations) | \"summary\" (compact info + delete). Default \"player\"."
+        },
+        {
+          "name": "src",
+          "kind": "bound",
+          "description": "Backend-set response media URL, used by result modes such as \"autoplay\"."
+        },
+        {
+          "name": "url",
+          "kind": "bound",
+          "description": "Alias for `src`; media-source update nodes write both fields."
+        }
+      ]
+    },
+    {
+      "type": "link",
+      "props": [
+        {
+          "name": "href",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "route",
+          "kind": "bound"
+        },
+        {
+          "name": "queryParams",
+          "kind": "bound"
+        },
+        {
+          "name": "external",
+          "kind": "plain"
+        },
+        {
+          "name": "target",
+          "kind": "plain",
+          "values": [
+            "_blank",
+            "_self",
+            "_parent",
+            "_top"
+          ]
+        },
+        {
+          "name": "variant",
+          "kind": "plain",
+          "values": [
+            "default",
+            "muted",
+            "primary",
+            "destructive"
+          ]
+        },
+        {
+          "name": "underline",
+          "kind": "plain",
+          "values": [
+            "always",
+            "hover",
+            "none"
+          ]
+        },
+        {
+          "name": "disabled",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "imageLabeler",
+      "description": "Image Labeler component for drawing and managing bounding boxes",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true,
+          "description": "Image source URL"
+        },
+        {
+          "name": "alt",
+          "kind": "bound",
+          "description": "Alternative text for accessibility"
+        },
+        {
+          "name": "boxes",
+          "kind": "bound",
+          "description": "Initial bounding boxes"
+        },
+        {
+          "name": "labels",
+          "kind": "bound",
+          "required": true,
+          "description": "Available labels to choose from"
+        },
+        {
+          "name": "disabled",
+          "kind": "bound",
+          "description": "Disable editing"
+        },
+        {
+          "name": "showLabels",
+          "kind": "bound",
+          "description": "Show labels on boxes"
+        },
+        {
+          "name": "minBoxSize",
+          "kind": "bound",
+          "description": "Minimum box size in pixels"
+        }
+      ]
+    },
+    {
+      "type": "imageHotspot",
+      "description": "Image Hotspot component for interactive point-and-click images",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true,
+          "description": "Image source URL"
+        },
+        {
+          "name": "alt",
+          "kind": "bound",
+          "description": "Alternative text for accessibility"
+        },
+        {
+          "name": "hotspots",
+          "kind": "bound",
+          "required": true,
+          "description": "Array of hotspots"
+        },
+        {
+          "name": "showMarkers",
+          "kind": "bound",
+          "description": "Show marker indicators"
+        },
+        {
+          "name": "markerStyle",
+          "kind": "bound",
+          "description": "Marker style: \"pulse\", \"dot\", \"ring\", \"square\", \"diamond\", \"none\"",
+          "values": [
+            "pulse",
+            "dot",
+            "ring",
+            "square",
+            "diamond",
+            "none"
+          ]
+        },
+        {
+          "name": "fit",
+          "kind": "bound",
+          "description": "Image fit: \"contain\", \"cover\", \"fill\"",
+          "values": [
+            "contain",
+            "cover",
+            "fill"
+          ]
+        },
+        {
+          "name": "normalized",
+          "kind": "bound",
+          "description": "Use normalized coordinates (0-1) instead of pixels"
+        },
+        {
+          "name": "showTooltips",
+          "kind": "bound",
+          "description": "Show tooltips on hover"
+        }
+      ]
+    },
+    {
+      "type": "card",
+      "props": [
+        {
+          "name": "title",
+          "kind": "bound"
+        },
+        {
+          "name": "description",
+          "kind": "bound"
+        },
+        {
+          "name": "footer",
+          "kind": "bound"
+        },
+        {
+          "name": "hoverable",
+          "kind": "bound"
+        },
+        {
+          "name": "clickable",
+          "kind": "bound"
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "default",
+            "bordered",
+            "elevated"
+          ]
+        },
+        {
+          "name": "padding",
+          "kind": "bound"
+        },
+        {
+          "name": "headerImage",
+          "kind": "bound",
+          "unrendered": true
+        },
+        {
+          "name": "headerIcon",
+          "kind": "bound",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "modal",
+      "props": [
+        {
+          "name": "open",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "title",
+          "kind": "bound"
+        },
+        {
+          "name": "description",
+          "kind": "bound"
+        },
+        {
+          "name": "closeOnOverlay",
+          "kind": "bound"
+        },
+        {
+          "name": "closeOnEscape",
+          "kind": "bound"
+        },
+        {
+          "name": "showCloseButton",
+          "kind": "bound"
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "sm",
+            "md",
+            "lg",
+            "xl",
+            "full"
+          ]
+        },
+        {
+          "name": "centered",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "tabs",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "tabs",
+          "kind": "list",
+          "required": true,
+          "fields": [
+            {
+              "name": "id",
+              "kind": "plain",
+              "required": true
+            },
+            {
+              "name": "label",
+              "kind": "bound",
+              "required": true
+            },
+            {
+              "name": "icon",
+              "kind": "bound"
+            },
+            {
+              "name": "disabled",
+              "kind": "bound"
+            },
+            {
+              "name": "contentComponentId",
+              "kind": "plain",
+              "required": true
+            }
+          ]
+        },
+        {
+          "name": "orientation",
+          "kind": "bound",
+          "values": [
+            "horizontal",
+            "vertical"
+          ]
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "default",
+            "pills",
+            "underline"
+          ]
+        },
+        {
+          "name": "listStyle",
+          "kind": "style"
+        },
+        {
+          "name": "triggerStyle",
+          "kind": "style"
+        },
+        {
+          "name": "contentStyle",
+          "kind": "style"
+        }
+      ]
+    },
+    {
+      "type": "accordion",
+      "props": [
+        {
+          "name": "items",
+          "kind": "list",
+          "required": true,
+          "fields": [
+            {
+              "name": "id",
+              "kind": "plain",
+              "required": true
+            },
+            {
+              "name": "title",
+              "kind": "bound",
+              "required": true
+            },
+            {
+              "name": "contentComponentId",
+              "kind": "plain",
+              "required": true
+            }
+          ]
+        },
+        {
+          "name": "multiple",
+          "kind": "bound"
+        },
+        {
+          "name": "defaultExpanded",
+          "kind": "bound"
+        },
+        {
+          "name": "collapsible",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "drawer",
+      "props": [
+        {
+          "name": "open",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "side",
+          "kind": "bound",
+          "values": [
+            "left",
+            "right",
+            "top",
+            "bottom"
+          ]
+        },
+        {
+          "name": "title",
+          "kind": "bound"
+        },
+        {
+          "name": "size",
+          "kind": "bound"
+        },
+        {
+          "name": "overlay",
+          "kind": "bound"
+        },
+        {
+          "name": "closable",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "tooltip",
+      "props": [
+        {
+          "name": "content",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "side",
+          "kind": "bound",
+          "values": [
+            "top",
+            "right",
+            "bottom",
+            "left"
+          ]
+        },
+        {
+          "name": "delayMs",
+          "kind": "bound"
+        },
+        {
+          "name": "maxWidth",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "popover",
+      "props": [
+        {
+          "name": "open",
+          "kind": "bound"
+        },
+        {
+          "name": "contentComponentId",
+          "kind": "plain",
+          "required": true
+        },
+        {
+          "name": "side",
+          "kind": "bound",
+          "values": [
+            "top",
+            "right",
+            "bottom",
+            "left"
+          ]
+        },
+        {
+          "name": "trigger",
+          "kind": "bound",
+          "values": [
+            "click",
+            "hover"
+          ]
+        },
+        {
+          "name": "closeOnClickOutside",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "canvas2d",
+      "props": [
+        {
+          "name": "width",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "backgroundColor",
+          "kind": "bound"
+        },
+        {
+          "name": "pixelPerfect",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "sprite",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "x",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "y",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        },
+        {
+          "name": "rotation",
+          "kind": "bound"
+        },
+        {
+          "name": "scale",
+          "kind": "bound"
+        },
+        {
+          "name": "opacity",
+          "kind": "bound"
+        },
+        {
+          "name": "flipX",
+          "kind": "bound"
+        },
+        {
+          "name": "flipY",
+          "kind": "bound"
+        },
+        {
+          "name": "zIndex",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "shape",
+      "props": [
+        {
+          "name": "shapeType",
+          "kind": "bound",
+          "required": true,
+          "values": [
+            "rectangle",
+            "circle",
+            "ellipse",
+            "polygon",
+            "line",
+            "path"
+          ]
+        },
+        {
+          "name": "x",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "y",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        },
+        {
+          "name": "radius",
+          "kind": "bound"
+        },
+        {
+          "name": "points",
+          "kind": "bound"
+        },
+        {
+          "name": "fill",
+          "kind": "bound"
+        },
+        {
+          "name": "stroke",
+          "kind": "bound"
+        },
+        {
+          "name": "strokeWidth",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "scene3d",
+      "props": [
+        {
+          "name": "width",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "cameraType",
+          "kind": "bound",
+          "values": [
+            "perspective",
+            "orthographic"
+          ]
+        },
+        {
+          "name": "cameraPosition",
+          "kind": "bound"
+        },
+        {
+          "name": "backgroundColor",
+          "kind": "bound"
+        },
+        {
+          "name": "controlMode",
+          "kind": "bound"
+        },
+        {
+          "name": "fixedView",
+          "kind": "bound"
+        },
+        {
+          "name": "autoRotateSpeed",
+          "kind": "bound"
+        },
+        {
+          "name": "enableControls",
+          "kind": "bound"
+        },
+        {
+          "name": "enableZoom",
+          "kind": "bound"
+        },
+        {
+          "name": "enablePan",
+          "kind": "bound"
+        },
+        {
+          "name": "fov",
+          "kind": "bound"
+        },
+        {
+          "name": "near",
+          "kind": "bound"
+        },
+        {
+          "name": "far",
+          "kind": "bound"
+        },
+        {
+          "name": "target",
+          "kind": "bound"
+        },
+        {
+          "name": "ambientLight",
+          "kind": "bound"
+        },
+        {
+          "name": "directionalLight",
+          "kind": "bound"
+        },
+        {
+          "name": "showGrid",
+          "kind": "bound"
+        },
+        {
+          "name": "showAxes",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "model3d",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "position",
+          "kind": "bound"
+        },
+        {
+          "name": "rotation",
+          "kind": "bound"
+        },
+        {
+          "name": "scale",
+          "kind": "bound"
+        },
+        {
+          "name": "castShadow",
+          "kind": "bound"
+        },
+        {
+          "name": "receiveShadow",
+          "kind": "bound"
+        },
+        {
+          "name": "animation",
+          "kind": "bound"
+        },
+        {
+          "name": "autoRotate",
+          "kind": "bound"
+        },
+        {
+          "name": "rotateSpeed",
+          "kind": "bound"
+        },
+        {
+          "name": "viewerHeight",
+          "kind": "bound",
+          "description": "Height of the standalone model viewer."
+        },
+        {
+          "name": "backgroundColor",
+          "kind": "bound"
+        },
+        {
+          "name": "cameraDistance",
+          "kind": "bound"
+        },
+        {
+          "name": "fov",
+          "kind": "bound"
+        },
+        {
+          "name": "cameraAngle",
+          "kind": "bound"
+        },
+        {
+          "name": "cameraPosition",
+          "kind": "bound"
+        },
+        {
+          "name": "cameraTarget",
+          "kind": "bound"
+        },
+        {
+          "name": "enableControls",
+          "kind": "bound"
+        },
+        {
+          "name": "enableZoom",
+          "kind": "bound"
+        },
+        {
+          "name": "enablePan",
+          "kind": "bound"
+        },
+        {
+          "name": "autoRotateCamera",
+          "kind": "bound"
+        },
+        {
+          "name": "cameraRotateSpeed",
+          "kind": "bound"
+        },
+        {
+          "name": "ambientLight",
+          "kind": "bound"
+        },
+        {
+          "name": "directionalLight",
+          "kind": "bound"
+        },
+        {
+          "name": "fillLight",
+          "kind": "bound"
+        },
+        {
+          "name": "rimLight",
+          "kind": "bound"
+        },
+        {
+          "name": "lightColor",
+          "kind": "bound"
+        },
+        {
+          "name": "lightingPreset",
+          "kind": "bound"
+        },
+        {
+          "name": "showGround",
+          "kind": "bound"
+        },
+        {
+          "name": "groundColor",
+          "kind": "bound"
+        },
+        {
+          "name": "enableReflections",
+          "kind": "bound"
+        },
+        {
+          "name": "environment",
+          "kind": "bound"
+        },
+        {
+          "name": "environmentSource",
+          "kind": "bound"
+        },
+        {
+          "name": "useHdrBackground",
+          "kind": "bound"
+        },
+        {
+          "name": "polyhavenHdri",
+          "kind": "bound"
+        },
+        {
+          "name": "polyhavenResolution",
+          "kind": "bound"
+        },
+        {
+          "name": "hdriUrl",
+          "kind": "bound"
+        },
+        {
+          "name": "groundSize",
+          "kind": "bound"
+        },
+        {
+          "name": "groundOffsetY",
+          "kind": "bound"
+        },
+        {
+          "name": "groundFollowCamera",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "dialogue",
+      "props": [
+        {
+          "name": "text",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "speakerName",
+          "kind": "bound"
+        },
+        {
+          "name": "speakerPortraitId",
+          "kind": "bound"
+        },
+        {
+          "name": "typewriter",
+          "kind": "bound"
+        },
+        {
+          "name": "typewriterSpeed",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "characterPortrait",
+      "props": [
+        {
+          "name": "image",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "expression",
+          "kind": "bound"
+        },
+        {
+          "name": "position",
+          "kind": "bound",
+          "values": [
+            "left",
+            "right",
+            "center"
+          ]
+        },
+        {
+          "name": "size",
+          "kind": "bound",
+          "values": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        {
+          "name": "dimmed",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "choiceMenu",
+      "props": [
+        {
+          "name": "choices",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "title",
+          "kind": "bound"
+        },
+        {
+          "name": "layout",
+          "kind": "bound",
+          "values": [
+            "vertical",
+            "horizontal",
+            "grid"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "inventoryGrid",
+      "props": [
+        {
+          "name": "items",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "columns",
+          "kind": "bound"
+        },
+        {
+          "name": "rows",
+          "kind": "bound"
+        },
+        {
+          "name": "cellSize",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "healthBar",
+      "props": [
+        {
+          "name": "value",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "maxValue",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "label",
+          "kind": "bound"
+        },
+        {
+          "name": "showValue",
+          "kind": "bound"
+        },
+        {
+          "name": "fillColor",
+          "kind": "bound"
+        },
+        {
+          "name": "backgroundColor",
+          "kind": "bound"
+        },
+        {
+          "name": "variant",
+          "kind": "bound",
+          "values": [
+            "bar",
+            "segmented",
+            "circular"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "miniMap",
+      "props": [
+        {
+          "name": "mapImage",
+          "kind": "bound"
+        },
+        {
+          "name": "width",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "required": true
+        },
+        {
+          "name": "markers",
+          "kind": "bound"
+        },
+        {
+          "name": "playerX",
+          "kind": "bound"
+        },
+        {
+          "name": "playerY",
+          "kind": "bound"
+        },
+        {
+          "name": "playerRotation",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "geoMap",
+      "props": [
+        {
+          "name": "viewport",
+          "kind": "bound"
+        },
+        {
+          "name": "markers",
+          "kind": "bound"
+        },
+        {
+          "name": "routes",
+          "kind": "bound"
+        },
+        {
+          "name": "showControls",
+          "kind": "bound"
+        },
+        {
+          "name": "showZoom",
+          "kind": "bound"
+        },
+        {
+          "name": "showCompass",
+          "kind": "bound"
+        },
+        {
+          "name": "showLocate",
+          "kind": "bound"
+        },
+        {
+          "name": "showFullscreen",
+          "kind": "bound"
+        },
+        {
+          "name": "interactive",
+          "kind": "bound"
+        },
+        {
+          "name": "controlPosition",
+          "kind": "bound"
+        },
+        {
+          "name": "clusterMarkers",
+          "kind": "bound",
+          "unrendered": true
+        },
+        {
+          "name": "clusterRadius",
+          "kind": "bound",
+          "unrendered": true
+        },
+        {
+          "name": "clusterMaxZoom",
+          "kind": "bound",
+          "unrendered": true
+        }
+      ]
+    },
+    {
+      "type": "iframe",
+      "props": [
+        {
+          "name": "src",
+          "kind": "bound"
+        },
+        {
+          "name": "srcdoc",
+          "kind": "bound"
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        },
+        {
+          "name": "sandbox",
+          "kind": "bound"
+        },
+        {
+          "name": "allow",
+          "kind": "bound"
+        },
+        {
+          "name": "title",
+          "kind": "bound"
+        },
+        {
+          "name": "loading",
+          "kind": "bound",
+          "values": [
+            "lazy",
+            "eager"
+          ]
+        },
+        {
+          "name": "referrerPolicy",
+          "kind": "bound"
+        },
+        {
+          "name": "border",
+          "kind": "bound"
+        }
+      ]
+    },
+    {
+      "type": "plotlyChart",
+      "props": [
+        {
+          "name": "chartType",
+          "kind": "bound"
+        },
+        {
+          "name": "title",
+          "kind": "bound"
+        },
+        {
+          "name": "series",
+          "kind": "list",
+          "fields": [
+            {
+              "name": "name",
+              "kind": "plain",
+              "required": true
+            },
+            {
+              "name": "type",
+              "kind": "plain",
+              "required": true
+            },
+            {
+              "name": "dataSource",
+              "kind": "opaque",
+              "required": true
+            },
+            {
+              "name": "color",
+              "kind": "plain"
+            },
+            {
+              "name": "mode",
+              "kind": "plain"
+            }
+          ]
+        },
+        {
+          "name": "xAxis",
+          "kind": "object",
+          "fields": [
+            {
+              "name": "title",
+              "kind": "plain"
+            },
+            {
+              "name": "type",
+              "kind": "plain"
+            },
+            {
+              "name": "min",
+              "kind": "plain"
+            },
+            {
+              "name": "max",
+              "kind": "plain"
+            },
+            {
+              "name": "showGrid",
+              "kind": "plain"
+            },
+            {
+              "name": "tickFormat",
+              "kind": "plain"
+            }
+          ]
+        },
+        {
+          "name": "yAxis",
+          "kind": "object",
+          "fields": [
+            {
+              "name": "title",
+              "kind": "plain"
+            },
+            {
+              "name": "type",
+              "kind": "plain"
+            },
+            {
+              "name": "min",
+              "kind": "plain"
+            },
+            {
+              "name": "max",
+              "kind": "plain"
+            },
+            {
+              "name": "showGrid",
+              "kind": "plain"
+            },
+            {
+              "name": "tickFormat",
+              "kind": "plain"
+            }
+          ]
+        },
+        {
+          "name": "data",
+          "kind": "bound"
+        },
+        {
+          "name": "layout",
+          "kind": "bound"
+        },
+        {
+          "name": "config",
+          "kind": "bound"
+        },
+        {
+          "name": "width",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound"
+        },
+        {
+          "name": "responsive",
+          "kind": "bound"
+        },
+        {
+          "name": "showLegend",
+          "kind": "bound"
+        },
+        {
+          "name": "legendPosition",
+          "kind": "bound",
+          "values": [
+            "top",
+            "bottom",
+            "left",
+            "right"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "nivoChart",
+      "description": "Nivo Chart component props - supports 25+ chart types from the Nivo library Chart types: bar, line, pie, radar, heatmap, scatter, funnel, treemap, sunburst, calendar, bump, areaBump, circlePacking, network, sankey, stream, swarmplot, voron…",
+      "props": [
+        {
+          "name": "chartType",
+          "kind": "bound",
+          "required": true,
+          "description": "The chart type (bar, line, pie, radar, etc.)",
+          "values": [
+            "bar",
+            "line",
+            "pie",
+            "radar",
+            "scatter",
+            "heatmap",
+            "funnel",
+            "treemap",
+            "sunburst",
+            "waffle",
+            "bump",
+            "areaBump",
+            "stream",
+            "radialBar",
+            "bullet",
+            "boxplot",
+            "swarmplot",
+            "calendar",
+            "chord",
+            "sankey",
+            "circlePacking",
+            "network",
+            "voronoi",
+            "marimekko",
+            "parallelCoordinates"
+          ]
+        },
+        {
+          "name": "title",
+          "kind": "bound",
+          "description": "Chart title displayed above the chart"
+        },
+        {
+          "name": "data",
+          "kind": "bound",
+          "description": "Chart data in Nivo format (varies by chart type)",
+          "shape": "[{indexBy field, one number per key}]"
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "description": "Chart height (e.g., \"400px\")"
+        },
+        {
+          "name": "colors",
+          "kind": "bound",
+          "description": "Color scheme name (e.g., \"nivo\", \"paired\") or array of colors"
+        },
+        {
+          "name": "animate",
+          "kind": "bound",
+          "description": "Enable animations"
+        },
+        {
+          "name": "showLegend",
+          "kind": "bound",
+          "description": "Show legend"
+        },
+        {
+          "name": "legendPosition",
+          "kind": "bound",
+          "description": "Legend position: \"top\", \"bottom\", \"left\", \"right\"",
+          "values": [
+            "top",
+            "bottom",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "name": "indexBy",
+          "kind": "bound",
+          "description": "Key for indexing data (bar, radar charts)"
+        },
+        {
+          "name": "keys",
+          "kind": "bound",
+          "description": "Data keys to display (bar, radar, stream charts)",
+          "shape": "[series field]"
+        },
+        {
+          "name": "margin",
+          "kind": "bound",
+          "description": "Chart margins { top, right, bottom, left }"
+        },
+        {
+          "name": "axisBottom",
+          "kind": "bound",
+          "description": "Bottom axis configuration"
+        },
+        {
+          "name": "axisLeft",
+          "kind": "bound",
+          "description": "Left axis configuration"
+        },
+        {
+          "name": "axisTop",
+          "kind": "bound",
+          "description": "Top axis configuration"
+        },
+        {
+          "name": "axisRight",
+          "kind": "bound",
+          "description": "Right axis configuration"
+        },
+        {
+          "name": "barStyle",
+          "kind": "bound",
+          "description": "Bar chart specific style options"
+        },
+        {
+          "name": "lineStyle",
+          "kind": "bound",
+          "description": "Line chart specific style options"
+        },
+        {
+          "name": "pieStyle",
+          "kind": "bound",
+          "description": "Pie/donut chart specific style options"
+        },
+        {
+          "name": "radarStyle",
+          "kind": "bound",
+          "description": "Radar chart specific style options"
+        },
+        {
+          "name": "heatmapStyle",
+          "kind": "bound",
+          "description": "Heatmap chart specific style options"
+        },
+        {
+          "name": "scatterStyle",
+          "kind": "bound",
+          "description": "Scatter chart specific style options"
+        },
+        {
+          "name": "funnelStyle",
+          "kind": "bound",
+          "description": "Funnel chart specific style options"
+        },
+        {
+          "name": "treemapStyle",
+          "kind": "bound",
+          "description": "Treemap chart specific style options"
+        },
+        {
+          "name": "sankeyStyle",
+          "kind": "bound",
+          "description": "Sankey diagram specific style options"
+        },
+        {
+          "name": "calendarStyle",
+          "kind": "bound",
+          "description": "Calendar chart specific style options"
+        },
+        {
+          "name": "chordStyle",
+          "kind": "bound",
+          "description": "Chord diagram specific style options"
+        },
+        {
+          "name": "config",
+          "kind": "bound",
+          "description": "Full Nivo config override for advanced customization"
+        }
+      ]
+    },
+    {
+      "type": "forecastChart",
+      "description": "Displays a saved forecast using the viewer's project or personal database access.",
+      "props": [
+        {
+          "name": "forecastId",
+          "kind": "bound",
+          "required": true,
+          "description": "Existing saved forecast ID. Rendering does not run inference."
+        },
+        {
+          "name": "appId",
+          "kind": "bound",
+          "description": "Owning project, defaulting to the running project."
+        },
+        {
+          "name": "userScoped",
+          "kind": "bound",
+          "description": "Read the current viewer's personal scope instead of project scope."
+        },
+        {
+          "name": "target",
+          "kind": "bound"
+        },
+        {
+          "name": "seriesId",
+          "kind": "bound"
+        },
+        {
+          "name": "view",
+          "kind": "bound",
+          "description": "\"forecast\" for the outlook or \"evaluation\" for saved holdout results.",
+          "values": [
+            "forecast",
+            "evaluation"
+          ]
+        },
+        {
+          "name": "showCovariates",
+          "kind": "bound"
+        },
+        {
+          "name": "showMetrics",
+          "kind": "bound"
+        },
+        {
+          "name": "showControls",
+          "kind": "bound"
+        },
+        {
+          "name": "showHeader",
+          "kind": "bound"
+        },
+        {
+          "name": "compact",
+          "kind": "bound"
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "description": "Chart height in pixels, clamped to 120 through 1200."
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "description": "Node/edge network graph rendered with the WebGL canvas used by the ontology explorer. Nodes and edges use the subgraph wire shape, so the output of a graph or ontology query can be bound straight to this component.",
+      "props": [
+        {
+          "name": "nodes",
+          "kind": "bound",
+          "required": true,
+          "description": "Nodes: `[{ id, label, caption?, props? }]`"
+        },
+        {
+          "name": "edges",
+          "kind": "bound",
+          "description": "Edges: `[{ id, source, target, label, props? }]`"
+        },
+        {
+          "name": "labelStyles",
+          "kind": "bound",
+          "description": "Per-label style overrides: `{ \"<label>\": { color, icon, size } }`"
+        },
+        {
+          "name": "showToolbar",
+          "kind": "bound",
+          "description": "Toolbar with node/edge counts and the search box (default true)"
+        },
+        {
+          "name": "showSearch",
+          "kind": "bound",
+          "description": "Search box over the loaded nodes (default true)"
+        },
+        {
+          "name": "showLegend",
+          "kind": "bound",
+          "description": "Floating label legend (default true)"
+        },
+        {
+          "name": "showInspector",
+          "kind": "bound",
+          "description": "Node/edge detail drawer on selection (default true)"
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "description": "Component height, e.g. \"480px\" (default \"480px\")"
+        }
+      ]
+    },
+    {
+      "type": "ontologyGraph",
+      "description": "Embeds an existing project ontology exactly as the Data Studio shows it: live data, neighbour expansion, search, path finding and governed actions. Access is enforced by the same permissions as the Data Studio itself.",
+      "props": [
+        {
+          "name": "ontologyId",
+          "kind": "bound",
+          "required": true,
+          "description": "Id of the ontology (graph overlay) to display"
+        },
+        {
+          "name": "appId",
+          "kind": "bound",
+          "description": "Project the ontology belongs to (defaults to the running project)"
+        },
+        {
+          "name": "limit",
+          "kind": "bound",
+          "description": "Node budget for the initial load (defaults to the ontology's own limit)"
+        },
+        {
+          "name": "allowExpand",
+          "kind": "bound",
+          "description": "Neighbour and child expansion (default true)"
+        },
+        {
+          "name": "allowSearch",
+          "kind": "bound",
+          "description": "Search across the loaded graph and the full ontology (default true)"
+        },
+        {
+          "name": "allowPaths",
+          "kind": "bound",
+          "description": "Shortest-path finding between two nodes (default true)"
+        },
+        {
+          "name": "allowActions",
+          "kind": "bound",
+          "description": "Running governed ontology actions on a node (default true)"
+        },
+        {
+          "name": "allowCypher",
+          "kind": "bound",
+          "description": "Cypher query panel (default false)"
+        },
+        {
+          "name": "allowStyleEdit",
+          "kind": "bound",
+          "description": "Legend style edits, persisted onto the shared ontology (default false)"
+        },
+        {
+          "name": "allowLimitChange",
+          "kind": "bound",
+          "description": "Node-limit selector in the toolbar (default true)"
+        },
+        {
+          "name": "showToolbar",
+          "kind": "bound",
+          "description": "Toolbar with counts, search and limit selector (default true)"
+        },
+        {
+          "name": "showLegend",
+          "kind": "bound",
+          "description": "Floating label legend (default true)"
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "description": "Component height, e.g. \"480px\" (default \"480px\")"
+        }
+      ]
+    },
+    {
+      "type": "calendar",
+      "description": "Interactive calendar for viewing and scheduling events. `events` binds an array of `CalendarEvent` objects; interactions (create/update/move/resize/ open/delete) fire the element's bound `workflow_event` action. Clicking an event opens a d…",
+      "props": [
+        {
+          "name": "events",
+          "kind": "bound",
+          "required": true,
+          "description": "Array of calendar events (see `CalendarEvent`)."
+        },
+        {
+          "name": "view",
+          "kind": "bound",
+          "description": "Active view: \"month\" | \"week\" | \"day\" | \"agenda\"."
+        },
+        {
+          "name": "date",
+          "kind": "bound",
+          "description": "Focused date (ISO 8601) the view centers on."
+        },
+        {
+          "name": "title",
+          "kind": "bound",
+          "description": "Optional header title shown next to the navigation."
+        },
+        {
+          "name": "density",
+          "kind": "bound",
+          "description": "Visual density: \"compact\" | \"default\" | \"comfortable\"."
+        },
+        {
+          "name": "editable",
+          "kind": "bound",
+          "description": "Allow moving/resizing events by dragging."
+        },
+        {
+          "name": "selectable",
+          "kind": "bound",
+          "description": "Allow selecting empty slots to create events."
+        },
+        {
+          "name": "firstDayOfWeek",
+          "kind": "bound",
+          "description": "First day of week (0 = Sunday, 1 = Monday)."
+        },
+        {
+          "name": "minTime",
+          "kind": "bound",
+          "description": "Earliest time shown in week/day views (e.g. \"06:00\")."
+        },
+        {
+          "name": "maxTime",
+          "kind": "bound",
+          "description": "Latest time shown in week/day views (e.g. \"22:00\")."
+        },
+        {
+          "name": "slotDuration",
+          "kind": "bound",
+          "description": "Time-slot granularity in minutes (week/day views)."
+        },
+        {
+          "name": "showWeekends",
+          "kind": "bound",
+          "description": "Show Saturday/Sunday columns."
+        },
+        {
+          "name": "showNowIndicator",
+          "kind": "bound",
+          "description": "Show the current-time indicator line."
+        },
+        {
+          "name": "showAllDay",
+          "kind": "bound",
+          "description": "Show the all-day row above the time grid."
+        },
+        {
+          "name": "showViewSwitcher",
+          "kind": "bound",
+          "description": "Show the month/week/day view switcher in the header."
+        },
+        {
+          "name": "locale",
+          "kind": "bound",
+          "description": "BCP-47 locale for date formatting (e.g. \"en-US\", \"de-DE\")."
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "description": "Explicit height (e.g. \"640px\")."
+        },
+        {
+          "name": "responsive",
+          "kind": "bound",
+          "description": "Enable automatic compact/agenda fallback on narrow containers."
+        },
+        {
+          "name": "compactBreakpoint",
+          "kind": "bound",
+          "description": "Width in px below which the calendar collapses to the agenda view."
+        }
+      ]
+    },
+    {
+      "type": "gantt",
+      "description": "Interactive Gantt timeline for planning tasks. `tasks` binds an array of `GanttTask` objects; interactions (create/update/move/resize/open/delete/ link/reorder) fire the element's bound `workflow_event` action. Clicking a bar opens a detai…",
+      "props": [
+        {
+          "name": "tasks",
+          "kind": "bound",
+          "required": true,
+          "description": "Array of tasks (see `GanttTask`)."
+        },
+        {
+          "name": "view",
+          "kind": "bound",
+          "description": "Timeline zoom: \"day\" | \"week\" | \"month\" | \"quarter\" | \"compact\"."
+        },
+        {
+          "name": "title",
+          "kind": "bound",
+          "description": "Header title (default \"Timeline\")."
+        },
+        {
+          "name": "density",
+          "kind": "bound",
+          "description": "Visual density: \"compact\" | \"default\" | \"comfortable\"."
+        },
+        {
+          "name": "editable",
+          "kind": "bound",
+          "description": "Master switch for editing (drag/resize/link). Falls back to `draggable` / `resizable` when unset."
+        },
+        {
+          "name": "draggable",
+          "kind": "bound",
+          "description": "Allow moving task bars horizontally."
+        },
+        {
+          "name": "resizable",
+          "kind": "bound",
+          "description": "Allow resizing task bars by their edges."
+        },
+        {
+          "name": "showDependencies",
+          "kind": "bound",
+          "description": "Draw dependency arrows between tasks."
+        },
+        {
+          "name": "showProgress",
+          "kind": "bound",
+          "description": "Render the progress fill inside each bar."
+        },
+        {
+          "name": "showToday",
+          "kind": "bound",
+          "description": "Draw the \"today\" marker line."
+        },
+        {
+          "name": "showViewSwitcher",
+          "kind": "bound",
+          "description": "Show the day/week/month/quarter view switcher in the header."
+        },
+        {
+          "name": "showTaskList",
+          "kind": "bound",
+          "description": "Show the left task-list panel."
+        },
+        {
+          "name": "taskListWidth",
+          "kind": "bound",
+          "description": "Width in px of the left task-list panel."
+        },
+        {
+          "name": "shadeWeekends",
+          "kind": "bound",
+          "description": "Shade Saturday/Sunday columns in day/week views."
+        },
+        {
+          "name": "rowHeight",
+          "kind": "bound",
+          "description": "Row height in px."
+        },
+        {
+          "name": "columns",
+          "kind": "bound",
+          "description": "Extra left-panel columns (e.g. [\"assignee\", \"progress\"])."
+        },
+        {
+          "name": "height",
+          "kind": "bound",
+          "description": "Explicit height (e.g. \"640px\")."
+        },
+        {
+          "name": "responsive",
+          "kind": "bound",
+          "description": "Enable automatic compact fallback on narrow containers."
+        },
+        {
+          "name": "compactBreakpoint",
+          "kind": "bound",
+          "description": "Width in px below which the timeline collapses to the compact view."
+        }
+      ]
+    }
+  ],
+  "chat": {
+    "components": [
+      "column",
+      "row",
+      "grid",
+      "stack",
+      "box",
+      "center",
+      "spacer",
+      "scrollArea",
+      "aspectRatio",
+      "text",
+      "markdown",
+      "image",
+      "icon",
+      "badge",
+      "avatar",
+      "progress",
+      "divider",
+      "skeleton",
+      "card",
+      "tabs",
+      "accordion",
+      "tooltip",
+      "button",
+      "link",
+      "textField",
+      "select",
+      "slider",
+      "checkbox",
+      "switch",
+      "radioGroup",
+      "dateTimeInput",
+      "table",
+      "nivoChart"
+    ],
+    "actions": [
+      "send_message",
+      "external_link"
+    ]
+  }
+}

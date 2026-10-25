@@ -190,6 +190,7 @@ describe("handleElementsRequestMessage", () => {
 		expect(materialize.mock.calls[0]).toEqual([
 			source,
 			["title", "type:Button"],
+			undefined,
 		]);
 		expect(reply).toHaveBeenCalledTimes(1);
 		expect(reply.mock.calls[0]).toEqual([
@@ -198,13 +199,17 @@ describe("handleElementsRequestMessage", () => {
 		]);
 	});
 
-	it("replies an error when there is no live surface", async () => {
+	it("explains how to retry when the app page is unavailable", async () => {
 		handleElementsRequestMessage(uniqueRequest(), () => null, options);
 		await flush();
 		expect(materialize).not.toHaveBeenCalled();
 		expect(reply.mock.calls[0]).toEqual([
 			channel,
-			{ ok: false, error: "no live surface for this run" },
+			{
+				ok: false,
+				error:
+					"The app page is no longer available for this action. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again.",
+			},
 		]);
 	});
 

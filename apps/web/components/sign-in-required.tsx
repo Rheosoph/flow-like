@@ -1,5 +1,6 @@
 "use client";
 
+import { LegalLinkRow } from "@flow-like/flow-like-ui/components/legal/legal-links";
 import { Button } from "@flow-like/flow-like-ui/components/ui/button";
 import { useTranslation } from "@flow-like/locales";
 import {
@@ -171,6 +172,7 @@ export function SignInRequired() {
 												rel="noopener noreferrer"
 											>
 												<svg
+													aria-hidden="true"
 													className="mr-1 h-3.5 w-3.5"
 													viewBox="0 0 24 24"
 													fill="currentColor"
@@ -192,6 +194,7 @@ export function SignInRequired() {
 												rel="noopener noreferrer"
 											>
 												<svg
+													aria-hidden="true"
 													className="mr-1 h-3.5 w-3.5"
 													viewBox="0 0 24 24"
 													fill="currentColor"
@@ -282,6 +285,7 @@ export function SignInRequired() {
 												rel="noopener noreferrer"
 											>
 												<svg
+													aria-hidden="true"
 													className="mr-1.5 h-4 w-4"
 													viewBox="0 0 24 24"
 													fill="currentColor"
@@ -303,6 +307,7 @@ export function SignInRequired() {
 												rel="noopener noreferrer"
 											>
 												<svg
+													aria-hidden="true"
 													className="mr-1.5 h-4 w-4"
 													viewBox="0 0 24 24"
 													fill="currentColor"
@@ -346,6 +351,7 @@ export function SignInRequired() {
 							</div>
 						))}
 					</div>
+					<LegalLinkRow className="mt-6 sm:mt-8" />
 				</div>
 			</div>
 		</div>

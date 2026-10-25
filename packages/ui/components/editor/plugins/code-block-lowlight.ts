@@ -8,6 +8,7 @@ import { RICH_MEDIA_LANGUAGES } from "../ui/rich-media-data";
  * unregistered language floods the console with one warning per pass.
  */
 const CUSTOM_FENCE_LANGUAGES = [
+	"a2ui",
 	"nivo",
 	"plotly",
 	"embed",

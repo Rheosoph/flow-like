@@ -147,6 +147,16 @@ function ensureCatalog(w: Worker, nodes: INode[] | undefined): number {
 	return id;
 }
 
+/** Editors mount a fresh `inmemory://` model each time, so a disposed one is never asked about again. */
+function forgetDoc(uriKey: string): void {
+	if (!sentDocs.delete(uriKey)) return;
+	try {
+		worker?.postMessage({ kind: "forget-doc", uri: uriKey });
+	} catch {
+		// The worker is gone; state was reset by onerror.
+	}
+}
+
 function cancelRequestId(id: number): void {
 	const entry = pending.get(id);
 	if (!entry) return;
@@ -200,6 +210,7 @@ function requestFromWorker(
 		version,
 		text: sentDocs.get(uriKey) === version ? undefined : text,
 	};
+	if (!sentDocs.has(uriKey)) model.onWillDispose?.(() => forgetDoc(uriKey));
 	sentDocs.set(uriKey, version);
 	const promise = new Promise<FlowScriptWorkerOutcome<FlowScriptWorkerResult>>(
 		(resolve) => {

@@ -58,6 +58,8 @@ macro_rules! dispatch {
             LockedBackend::Azure($backend) => $body,
             #[cfg(test)]
             LockedBackend::Memory($backend) => $body,
+            #[cfg(not(any(feature = "aws", feature = "gcp", feature = "azure", test)))]
+            backend => match *backend {},
         }
     };
 }

@@ -171,6 +171,63 @@ async fn api_json(
     Ok(response.json().await?)
 }
 
+async fn find_report(
+    client: &reqwest::Client,
+    region: &str,
+    attempt: &Attempt,
+) -> Result<Option<Report>, Error> {
+    let mut page_token: Option<String> = None;
+    for _ in 0..2 {
+        let mut request = json!({"logGroupName":format!("/aws/lambda/{}",attempt.function_name),"filterPattern":format!("\"{}\"",attempt.request_id),"startTime":attempt.started_at.timestamp_millis()-60_000,"endTime":attempt.started_at.timestamp_millis()+1_200_000,"limit":1000});
+        if let Some(value) = &page_token {
+            request["nextToken"] = Value::String(value.clone());
+        }
+        let response = aws_json(
+            client,
+            region,
+            "logs",
+            "Logs_20140328.FilterLogEvents",
+            request,
+        )
+        .await?;
+        let found = response["events"].as_array().and_then(|events| {
+            events.iter().find_map(|event| {
+                event["message"]
+                    .as_str()
+                    .and_then(parse_report)
+                    .filter(|report| report.request_id == attempt.request_id)
+            })
+        });
+        let next_token = response["nextToken"].as_str().map(str::to_owned);
+        if found.is_some() || next_token.is_none() || next_token == page_token {
+            return Ok(found);
+        }
+        page_token = next_token;
+    }
+    Ok(None)
+}
+
+fn report_estimate(attempt: &Attempt, report: &Report) -> Result<Value, Error> {
+    let revision = blake3::hash(&serde_json::to_vec(report)?)
+        .to_hex()
+        .to_string();
+    let mut payload = serde_json::to_value(attempt)?;
+    payload.as_object_mut().unwrap().remove("id");
+    payload["billedDurationMs"] = json!(report.billed_ms);
+    payload["costMicroUsd"] = Value::Null;
+    payload["evidence"] = json!("aws_report_estimate");
+    payload["rateVersion"] = json!("aws-lambda-reference-2026-09");
+    payload["revision"] = json!(format!("aws-report-native:{revision}"));
+    payload["status"] = json!(
+        if report.status == "unknown" && attempt.status != "started" {
+            &attempt.status
+        } else {
+            &report.status
+        }
+    );
+    Ok(payload)
+}
+
 pub async fn reconcile(client: &reqwest::Client, base: &str, token: &str) -> Result<(), Error> {
     let region = env::var("AWS_REGION")?;
     let parameter = env::var("COMPUTE_REPORT_CURSOR_PARAMETER")?;
@@ -214,6 +271,8 @@ pub async fn reconcile(client: &reqwest::Client, base: &str, token: &str) -> Res
             });
             break;
         }
+        examined += 1;
+        // A bad row is skipped, never queried, so it cannot pin the cursor.
         if attempt.region != region
             || !allowlist.contains(&attempt.function_name)
             || !attempt
@@ -221,65 +280,42 @@ pub async fn reconcile(client: &reqwest::Client, base: &str, token: &str) -> Res
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'-')
         {
-            return Err("Compute attempt is outside the configured AWS function allowlist".into());
+            tracing::error!(
+                attempt_id = %attempt.id,
+                function_name = %attempt.function_name,
+                region = %attempt.region,
+                "Compute attempt is outside the configured AWS function allowlist; skipped"
+            );
+            continue;
         }
-        examined += 1;
         if (chrono::Utc::now() - attempt.started_at).num_seconds() < 1200 {
             continue;
         }
-        let mut page_token: Option<String> = None;
-        let mut found = None;
-        for _ in 0..2 {
-            let mut request = json!({"logGroupName":format!("/aws/lambda/{}",attempt.function_name),"filterPattern":format!("\"{}\"",attempt.request_id),"startTime":attempt.started_at.timestamp_millis()-60_000,"endTime":attempt.started_at.timestamp_millis()+1_200_000,"limit":1000});
-            if let Some(value) = &page_token {
-                request["nextToken"] = Value::String(value.clone());
+        // CloudWatch Logs times out under load. The attempt stays pending and is
+        // looked up again when the cursor wraps; it never blocks later attempts.
+        let found = match find_report(client, &region, attempt).await {
+            Ok(found) => found,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    attempt_id = %attempt.id,
+                    function_name = %attempt.function_name,
+                    "Lambda REPORT lookup failed; retried when the cursor wraps"
+                );
+                continue;
             }
-            let response = aws_json(
-                client,
-                &region,
-                "logs",
-                "Logs_20140328.FilterLogEvents",
-                request,
-            )
-            .await?;
-            if let Some(events) = response["events"].as_array() {
-                for event in events {
-                    if let Some(report) = event["message"].as_str().and_then(parse_report)
-                        && report.request_id == attempt.request_id
-                    {
-                        found = Some(report);
-                        break;
-                    }
-                }
-            }
-            let next_token = response["nextToken"].as_str().map(str::to_owned);
-            if found.is_some() || next_token.is_none() || next_token == page_token {
-                break;
-            }
-            page_token = next_token;
-        }
+        };
         if let Some(report) = found {
             if report.memory_mb != attempt.memory_mb {
-                return Err("AWS REPORT memory differs from the trusted Lambda context".into());
+                tracing::error!(
+                    attempt_id = %attempt.id,
+                    report_memory_mb = report.memory_mb,
+                    attempt_memory_mb = attempt.memory_mb,
+                    "AWS REPORT memory differs from the trusted Lambda context; skipped"
+                );
+                continue;
             }
-            let revision = blake3::hash(&serde_json::to_vec(&report)?)
-                .to_hex()
-                .to_string();
-            let mut payload = serde_json::to_value(attempt)?;
-            payload.as_object_mut().unwrap().remove("id");
-            payload["billedDurationMs"] = json!(report.billed_ms);
-            payload["costMicroUsd"] = Value::Null;
-            payload["evidence"] = json!("aws_report_estimate");
-            payload["rateVersion"] = json!("aws-lambda-reference-2026-09");
-            payload["revision"] = json!(format!("aws-report-native:{revision}"));
-            payload["status"] = json!(
-                if report.status == "unknown" && attempt.status != "started" {
-                    &attempt.status
-                } else {
-                    &report.status
-                }
-            );
-            reports.push(payload);
+            reports.push(report_estimate(attempt, &report)?);
         }
     }
     let matched = reports.len();

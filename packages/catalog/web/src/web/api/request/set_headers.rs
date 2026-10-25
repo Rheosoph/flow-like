@@ -85,7 +85,8 @@ impl NodeLogic for SetHeadersNode {
             request.headers = Some(headers);
         }
 
-        context.set_pin_value("request_out", json!(request)).await?;
+        let request = request.into_pin_value(context).await;
+        context.set_pin_value("request_out", request).await?;
 
         Ok(())
     }

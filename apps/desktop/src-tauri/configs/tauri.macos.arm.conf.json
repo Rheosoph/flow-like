@@ -5,6 +5,12 @@
 		"beforeBuildCommand": "bun ./scripts/prepare-stablediffusion.ts --platform mac-arm && bun ./scripts/prepare-mlx.ts --configuration Release && bun run build"
 	},
 	"bundle": {
+		"macOS": {
+			"frameworks": [
+				"binaries/apple-native/FlowLikeNative.framework",
+				"binaries/odbc/aarch64-apple-darwin/libodbc.2.dylib"
+			]
+		},
 		"externalBin": [
 			"binaries/mac/arm/libllama-server-impl.dylib",
 			"binaries/mac/arm/libllama-common.dylib",

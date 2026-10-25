@@ -231,6 +231,7 @@ mod tests {
             event_id: "event".into(),
             event_version: None,
             payload: b"private input".to_vec(),
+            error_message: Some("executor crashed".into()),
             is_remote: false,
         };
         index.record(&meta).await?;
@@ -239,6 +240,7 @@ mod tests {
         let row = reopened.get("project", "run").await?.unwrap();
         assert!(row.payload.is_empty());
         assert_eq!(row.nodes, meta.nodes);
+        assert_eq!(row.error_message, meta.error_message);
         assert!(reopened.get("elsewhere", "run").await?.is_none());
         assert_eq!(
             reopened.list(&RunQuery::new("project")).await?[0].nodes,

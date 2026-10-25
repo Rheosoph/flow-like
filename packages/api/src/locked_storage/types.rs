@@ -49,6 +49,8 @@ pub struct LockedItemVersion {
     #[schema(value_type = String, example = "object")]
     pub enforcement: LockedEnforcement,
     pub legal_hold: bool,
+    /// Purged automatically once retention ends and no legal hold remains.
+    pub delete_after_retention: bool,
     pub comment: Option<String>,
     #[schema(value_type = Option<Object>)]
     pub metadata: Option<serde_json::Value>,
@@ -146,6 +148,10 @@ pub struct CreateLockedUploadRequest {
     /// Lowercase hex SHA-256 of the exact bytes that will be uploaded.
     pub sha256: String,
     pub retention_days: Option<u32>,
+    /// Purge this version automatically once its retention ends. Project files need
+    /// an admin, as for any purge.
+    #[serde(default)]
+    pub delete_after_retention: bool,
     pub comment: Option<String>,
     #[schema(value_type = Option<Object>)]
     pub metadata: Option<serde_json::Value>,
@@ -210,6 +216,14 @@ pub struct SetLockedLegalHoldRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, ToSchema)]
+pub struct SetLockedAutoDeleteRequest {
+    pub item_id: String,
+    pub version_id: String,
+    /// Purge the version automatically once its retention ends and no legal hold remains.
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct PurgeLockedItemRequest {
     pub item_id: String,
     /// Purge one version; every expired version of the item when omitted.
@@ -240,6 +254,7 @@ impl LockedItemVersion {
             retain_until,
             enforcement: model.enforcement,
             legal_hold: model.legal_hold,
+            delete_after_retention: model.delete_after_retention.unwrap_or(false),
             comment: model.comment,
             metadata: model.metadata,
             uploaded_by: model.uploaded_by,

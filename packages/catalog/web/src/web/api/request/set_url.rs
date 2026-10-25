@@ -4,7 +4,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 
 use crate::web::api::HttpRequest;
 
@@ -59,7 +59,8 @@ impl NodeLogic for SetUrlNode {
 
         request.url = url;
 
-        context.set_pin_value("request_out", json!(request)).await?;
+        let request = request.into_pin_value(context).await;
+        context.set_pin_value("request_out", request).await?;
 
         Ok(())
     }

@@ -1,9 +1,16 @@
 import { type IBoard, ICommentType } from "@flow-like/flow-like-ui";
-import type {
-	IBoardSyncRequest,
-	IBoardSyncResponse,
+import { diffBoards } from "@flow-like/flow-like-ui/lib/board-diff";
+import {
+	type IBoardSyncRequest,
+	type IBoardSyncResponse,
+	ROOT_SEGMENT,
 } from "@flow-like/flow-like-ui/lib/board-sync";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import {
+	REMOTE_BOARD_APPLIED_EVENT,
+	type RemoteBoardAppliedDetail,
+	readRemoteBoardApplied,
+} from "@flow-like/flow-like-ui/lib/flow-history";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	invoke: vi.fn(),
@@ -127,6 +134,158 @@ function nativeInvoke(disk: FakeDisk, response = syncResponse()) {
 beforeEach(() => {
 	mocks.invoke.mockReset();
 	mocks.fetcher.mockReset();
+});
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
+
+function ownApplySyncResponse(): IBoardSyncResponse {
+	const response = syncResponse();
+	if (!response.meta || !response.manifest)
+		throw new Error("Missing fixture metadata");
+	response.meta.name = "Applied FlowScript";
+	response.manifest.meta = "own-apply-meta";
+	response.manifest.segments = { [ROOT_SEGMENT]: "own-apply" };
+	response.segments = {
+		[ROOT_SEGMENT]: {
+			hash: "own-apply",
+			nodes: {
+				applied: {
+					id: "applied",
+					name: "ai_extract",
+					friendly_name: "Applied extractor",
+					coordinates: [80, 90, 0],
+					pins: {},
+				},
+			},
+		},
+	};
+	return response;
+}
+
+describe("remote merge notifications after an own apply", () => {
+	test.each([
+		{ mode: "forced refresh", forceFresh: true },
+		{ mode: "background sync", forceFresh: false },
+	])(
+		"$mode publishes the actual local and merged boards",
+		async ({ forceFresh }) => {
+			const localResponse = ownApplySyncResponse();
+			const remoteResponse = structuredClone(localResponse);
+			if (!remoteResponse.meta || !remoteResponse.manifest)
+				throw new Error("Missing fixture metadata");
+			remoteResponse.meta.version = [0, 0, 2];
+			remoteResponse.meta.updated_at = {
+				secs_since_epoch: 20,
+				nanos_since_epoch: 0,
+			};
+			remoteResponse.manifest.meta = "meta-2";
+			mocks.invoke.mockImplementation(
+				nativeInvoke({ present: true }, localResponse),
+			);
+			mocks.fetcher.mockResolvedValue(remoteResponse);
+			const backend = fakeBackend({ offline: false });
+			const state = new BoardState(backend as never);
+			const local = await state.getBoard(APP, BOARD, [0, 0, 1]);
+			const events: RemoteBoardAppliedDetail[] = [];
+			const target = new EventTarget();
+			vi.stubGlobal("window", target);
+			target.addEventListener(REMOTE_BOARD_APPLIED_EVENT, (event) => {
+				const detail = readRemoteBoardApplied(event);
+				if (detail) events.push(detail);
+			});
+
+			const returned = await state.getBoard(APP, BOARD, undefined, forceFresh);
+			if (!forceFresh) {
+				expect(returned).toEqual(local);
+				await backend.backgroundTaskHandler.mock.calls[0][0];
+			}
+
+			expect(events).toHaveLength(1);
+			expect(events[0]).toMatchObject({
+				appId: APP,
+				boardId: BOARD,
+				reason: "sync",
+			});
+			const merge = events[0].merge;
+			if (!merge) throw new Error("Missing before and after boards");
+			expect(merge.before).toEqual(local);
+			expect(merge.before.nodes.applied.friendly_name).toBe(
+				"Applied extractor",
+			);
+			expect(merge.before.version).toEqual([0, 0, 1]);
+			expect(merge.after.version).toEqual([0, 0, 2]);
+			expect(merge.after.updated_at).toEqual(remoteResponse.meta.updated_at);
+			expect(merge.after).toBe(
+				backend.queryClient.setQueryData.mock.calls.at(-1)?.[1],
+			);
+			expect(diffBoards(merge.before, merge.after).logicCount).toBe(0);
+			if (forceFresh) expect(returned).toBe(merge.after);
+		},
+	);
+
+	test.each([
+		{ mode: "after local readback", readBack: true },
+		{ mode: "before local readback", readBack: false },
+	])(
+		"background sync compares against an own apply $mode",
+		async ({ readBack }) => {
+			let localResponse = syncResponse();
+			mocks.invoke.mockImplementation((command: string, args?: unknown) =>
+				nativeInvoke({ present: true }, localResponse)(command, args),
+			);
+			let resolveRemote!: (response: IBoardSyncResponse) => void;
+			mocks.fetcher.mockReturnValue(
+				new Promise<IBoardSyncResponse>((resolve) => {
+					resolveRemote = resolve;
+				}),
+			);
+			const backend = fakeBackend({ offline: false });
+			const state = new BoardState(backend as never);
+			const events: RemoteBoardAppliedDetail[] = [];
+			const target = new EventTarget();
+			vi.stubGlobal("window", target);
+			target.addEventListener(REMOTE_BOARD_APPLIED_EVENT, (event) => {
+				const detail = readRemoteBoardApplied(event);
+				if (detail) events.push(detail);
+			});
+			const original = await state.getBoard(APP, BOARD);
+			expect(original.nodes).toEqual({});
+
+			localResponse = ownApplySyncResponse();
+			let applied: IBoard | undefined;
+			if (readBack) {
+				backend.isOffline.mockResolvedValueOnce(true);
+				applied = await state.getBoard(APP, BOARD);
+				expect(applied.nodes.applied.friendly_name).toBe("Applied extractor");
+			}
+			expect(events).toHaveLength(0);
+
+			const remoteResponse = structuredClone(localResponse);
+			if (!remoteResponse.meta || !remoteResponse.manifest)
+				throw new Error("Missing fixture metadata");
+			remoteResponse.meta.version = [0, 0, 2];
+			remoteResponse.manifest.meta = "remote-after-apply";
+			resolveRemote(remoteResponse);
+			await backend.backgroundTaskHandler.mock.calls[0][0];
+
+			expect(events).toHaveLength(1);
+			const merge = events[0].merge;
+			if (!merge) throw new Error("Missing before and after boards");
+			if (readBack) expect(merge.before).toEqual(applied);
+			expect(merge.before.name).toBe("Applied FlowScript");
+			expect(merge.before.nodes.applied.friendly_name).toBe(
+				"Applied extractor",
+			);
+			expect(merge.before.version).toEqual([0, 0, 1]);
+			expect(merge.after).toBe(
+				backend.queryClient.setQueryData.mock.calls.at(-1)?.[1],
+			);
+			expect(merge.after.version).toEqual([0, 0, 2]);
+			expect(diffBoards(merge.before, merge.after).logicCount).toBe(0);
+		},
+	);
 });
 
 function mediaSyncResponse(): IBoardSyncResponse {

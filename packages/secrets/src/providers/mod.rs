@@ -13,6 +13,7 @@ use crate::error::Result;
 use crate::{SecretProviderKind, SecretRef, SecretValue};
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use env::EnvSecretProvider;
 pub use file::FileSecretProvider;
@@ -38,7 +39,12 @@ pub trait SecretProvider: Send + Sync {
     }
 }
 
-pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn SecretProvider>> {
+/// `negative_cache_ttl` is how long the store trusts a miss; providers that list their
+/// secrets trust a listing's misses no longer.
+pub(crate) async fn build_provider(
+    config: &ProviderConfig,
+    negative_cache_ttl: Duration,
+) -> Result<Arc<dyn SecretProvider>> {
     match config {
         ProviderConfig::Env(config) => Ok(Arc::new(EnvSecretProvider::new(config.clone()))),
         ProviderConfig::File(config) => Ok(Arc::new(FileSecretProvider::new(config.clone()))),
@@ -46,12 +52,12 @@ pub(crate) async fn build_provider(config: &ProviderConfig) -> Result<Arc<dyn Se
             #[cfg(feature = "aws")]
             {
                 Ok(Arc::new(
-                    AwsParameterStoreProvider::new(config.clone()).await?,
+                    AwsParameterStoreProvider::new(config.clone(), negative_cache_ttl).await?,
                 ))
             }
             #[cfg(not(feature = "aws"))]
             {
-                let _ = config;
+                let _ = (config, negative_cache_ttl);
                 Err(crate::SecretError::ProviderDisabled(
                     SecretProviderKind::AwsParameterStore,
                 ))

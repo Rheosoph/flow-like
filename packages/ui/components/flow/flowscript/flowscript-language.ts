@@ -2735,6 +2735,82 @@ const CACHE_FIELD_MARKDOWN: Record<string, string> = {
 		'`scope: "app" | "user"` — `app` shares entries across the app; `user` isolates entries by triggering user.',
 };
 
+const COLLAPSE_DECORATOR_MARKDOWN = `\`\`\`flowscript
+@collapse("Validation") {
+	// statements
+}
+\`\`\`
+
+Groups the nodes its statements create into a visual Collapsed layer. Purely visual: execution order is unchanged and the block is no scope — bindings declared inside stay visible after it.
+
+\`"A/B"\` nests group B inside A, \`\\/\` keeps a slash inside one name, and a leading \`/\` starts from the section root (\`"/"\` is the root itself). Write it inside an event, function, handler, \`detached\` block, branch arm or loop body.`;
+
+const DESCRIPTION_DECORATOR_MARKDOWN = `\`\`\`flowscript
+@description("Return the order ID for confirmation.")
+eventsGeneric confirmOrder(orderId: string, payload: Struct) {
+    return orderId
+}
+\`\`\`
+
+Sets a variable or event description. For an agent tool, put it immediately above its top-level or nested \`eventsGeneric\` declaration. Apply to board writes the event description to its node, where agents read tool descriptions.
+
+Omitting the decorator preserves an existing event description. Use \`@description("")\` to clear it.`;
+
+const DECORATOR_HOVER_MARKDOWN = new Map([
+	["cache", CACHE_DECORATOR_MARKDOWN],
+	["collapse", COLLAPSE_DECORATOR_MARKDOWN],
+	["description", DESCRIPTION_DECORATOR_MARKDOWN],
+]);
+
+/** The `@collapse` block completion, shared by the decorator and statement-snippet providers. */
+export const COLLAPSE_COMPLETION = {
+	label: '@collapse("…")',
+	detail: "Group the statements into a visual Collapsed layer",
+	documentation: { value: COLLAPSE_DECORATOR_MARKDOWN },
+	insertText: '@collapse("${1:Group}") {\n\t$0\n}',
+} as const;
+
+function startsStatement(masked: string, offset: number) {
+	let i = offset;
+	while (i > 0 && (masked[i - 1] === " " || masked[i - 1] === "\t")) i--;
+	return i === 0 || "\n;{}".includes(masked[i - 1]);
+}
+
+/** Offset of the innermost bracket still open at `offset`, or -1 at the top level. */
+function innermostOpenBracket(masked: string, offset: number) {
+	const open: number[] = [];
+	const end = Math.min(offset, masked.length);
+	for (let i = 0; i < end; i++) {
+		if ("([{".includes(masked[i])) open.push(i);
+		else if (")]}".includes(masked[i])) open.pop();
+	}
+	return open.length > 0 ? open[open.length - 1] : -1;
+}
+
+/** Whether the `{` at `brace` opens statements: after a `(…)` header, an arm label, `else` or
+ * `detached` — not after a `module`/`interface` name, an exec-arm binding or a `use` path. */
+function opensStatements(masked: string, brace: number) {
+	let end = brace;
+	while (end > 0 && /\s/.test(masked[end - 1])) end--;
+	const last = masked[end - 1];
+	if (last === ")") return true;
+	if (last === ":") return masked[end - 2] !== ":";
+	let start = end;
+	while (start > 0 && /[\w$]/.test(masked[start - 1])) start--;
+	const word = masked.slice(start, end);
+	return word === "else" || word === DETACHED_KEYWORD;
+}
+
+/**
+ * Whether `offset` (masked text) sits directly in a block of statements: an event, function,
+ * handler, `detached`, branch-arm, loop or `@collapse` body. The top level, `module`/`interface`
+ * bodies, exec-arm lists (`r { … }`) and expression brackets are not statement blocks.
+ */
+export function inStatementBlock(masked: string, offset: number): boolean {
+	const brace = innermostOpenBracket(masked, offset);
+	return masked[brace] === "{" && opensStatements(masked, brace);
+}
+
 interface CacheDecoratorContext {
 	existingKeys: string[];
 	mode: "key" | "value";
@@ -3084,6 +3160,23 @@ export function registerFlowScriptCoreProviders(
 								...range,
 								startColumn: position.column - decoratorToken[0].length,
 							};
+							const decoratorStart = offset - decoratorToken[0].length;
+							// A group block is a statement: never offered at the top level or in a module.
+							const collapse =
+								startsStatement(maskedBefore, decoratorStart) &&
+								inStatementBlock(maskedBefore, decoratorStart)
+									? [
+											{
+												...COLLAPSE_COMPLETION,
+												kind: monaco.languages.CompletionItemKind.Keyword,
+												insertTextRules:
+													monaco.languages.CompletionItemInsertTextRule
+														.InsertAsSnippet,
+												range: decoratorRange,
+												sortText: "1_collapse",
+											},
+										]
+									: [];
 							return {
 								suggestions: [
 									{
@@ -3115,6 +3208,19 @@ export function registerFlowScriptCoreProviders(
 										insertText: "@parallel",
 										range: decoratorRange,
 										sortText: "1_parallel",
+									},
+									...collapse,
+									{
+										label: '@description("…")',
+										kind: monaco.languages.CompletionItemKind.Keyword,
+										detail: "Describe a variable, event, or agent tool",
+										documentation: { value: DESCRIPTION_DECORATOR_MARKDOWN },
+										insertText: '@description("${1:Description}")',
+										insertTextRules:
+											monaco.languages.CompletionItemInsertTextRule
+												.InsertAsSnippet,
+										range: decoratorRange,
+										sortText: "1_description",
 									},
 								],
 							};
@@ -3402,11 +3508,9 @@ export function registerFlowScriptCoreProviders(
 						lineNumber: position.lineNumber,
 						column: word.startColumn,
 					});
-					if (
-						word.word === "cache" &&
-						value.slice(0, wordStartOffset).endsWith("@")
-					) {
-						return { range, contents: [{ value: CACHE_DECORATOR_MARKDOWN }] };
+					const decoratorHover = DECORATOR_HOVER_MARKDOWN.get(word.word);
+					if (decoratorHover && value.slice(0, wordStartOffset).endsWith("@")) {
+						return { range, contents: [{ value: decoratorHover }] };
 					}
 					if (
 						CACHE_FIELD_MARKDOWN[word.word] &&

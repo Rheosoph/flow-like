@@ -3,6 +3,7 @@
 //! A2UI schemas, state helpers, and protobuf conversions shared by runtime and editor consumers.
 //! This crate has no dependency on the Flow runtime, model providers, or storage clients.
 
+pub mod authoring;
 pub mod component;
 pub mod components;
 pub mod data;

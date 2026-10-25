@@ -7,5 +7,6 @@ bin
 tmp
 GoogleService-Info.plist
 /binaries/apple-native/
+/binaries/odbc/
 /apple/FlowLikeNative/.build/
 /gen/apple/assets/frontend-wasm/

@@ -13,6 +13,7 @@ pub mod extend_retention;
 pub mod get_item;
 pub mod list_items;
 pub mod purge;
+pub mod set_auto_delete;
 pub mod set_legal_hold;
 pub mod storage_status;
 pub mod transfer;
@@ -37,7 +38,7 @@ pub(crate) fn locked_node(
     performance: u8,
 ) -> Node {
     let mut node = Node::new(name, label, description, "Data/Files/Locked");
-    node.set_version(1);
+    node.set_version(2);
     node.set_flowscript_name("lockedFiles", alias);
     node.set_receiver("");
     node.add_icon("/flow/icons/lock.svg");
@@ -111,6 +112,13 @@ pub(crate) fn add_upload_option_pins(node: &mut Node) {
         VariableType::Integer,
     )
     .set_default_value(Some(json!(0)));
+    node.add_input_pin(
+        "delete_after_retention",
+        "Delete After Retention",
+        "Delete the version automatically once its retention ends and no legal hold remains; otherwise it stays stored until someone deletes it. Project files need app admin rights",
+        VariableType::Boolean,
+    )
+    .set_default_value(Some(json!(false)));
     add_text_pin(
         node,
         "comment",
@@ -216,6 +224,9 @@ pub(crate) async fn read_upload_options(
             "Retention Days",
             context.evaluate_pin::<i64>("retention_days").await?,
         )?,
+        delete_after_retention: context
+            .evaluate_pin::<bool>("delete_after_retention")
+            .await?,
         comment: optional_text(context.evaluate_pin::<String>("comment").await?),
         metadata: metadata_object(context.evaluate_pin::<Value>("metadata").await?)?,
         ..Default::default()

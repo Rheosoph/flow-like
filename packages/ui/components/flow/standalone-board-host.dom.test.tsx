@@ -358,7 +358,7 @@ test("selected workflow nodes keep stable parents, focus, and input selection", 
 	const editor = first.querySelector("input") as HTMLInputElement;
 	const initialParent = first.parentElement;
 	expect(second.parentElement).toBe(initialParent);
-	expect(first.style.willChange).toBe("transform");
+	expect(initialParent?.hasAttribute("data-board-editor-stratum")).toBe(true);
 	editor.value = "Unsaved text";
 	editor.focus();
 	editor.setSelectionRange(2, 7);
@@ -388,6 +388,46 @@ test("selected workflow nodes keep stable parents, focus, and input selection", 
 	expect(first.parentElement).toBe(initialParent);
 	expect(window.document.activeElement).toBe(editor);
 	expect(editor.value).toBe("Unsaved text");
+});
+
+test("workflow editors share the untransformed stratum and get layers only while the camera moves", async () => {
+	const { container, runtime } = await mount([], {
+		nodes: nodes.map((node, index) => ({
+			...node,
+			type: index ? "comment" : "node",
+			zIndex: index ? 1 : 20,
+			data: { __flowNativeDom: true },
+		})),
+		nodeTypes: {
+			node: () => <div>Node</div>,
+			comment: () => <div>Comment</div>,
+		},
+	});
+	const editor = container.querySelector(
+		'[data-board-rich-node][data-id="0"]',
+	) as unknown as HTMLElement;
+	const comment = container.querySelector(
+		'[data-board-rich-node][data-id="1"]',
+	) as unknown as HTMLElement;
+	const stratum = editor.parentElement;
+	expect(stratum?.hasAttribute("data-board-editor-stratum")).toBe(true);
+	expect(stratum?.style.transform).toBe("");
+	expect(stratum?.style.zIndex).toBe("19");
+	expect(comment.parentElement?.hasAttribute("data-board-world-content")).toBe(
+		true,
+	);
+	expect(editor.style.willChange).toBe("");
+	await act(async () => {
+		await runtime.setViewport({ x: 10, y: 20, zoom: 2 }, { notify: false });
+	});
+	expect(editor.style.transform).toBe(
+		"translate(10px, 20px) scale(2) translate(0px, 0px)",
+	);
+	expect(editor.style.willChange).toBe("transform");
+	expect(comment.style.willChange).toBe("");
+	await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+	expect(editor.style.willChange).toBe("");
+	expect(editor.parentElement).toBe(stratum);
 });
 
 test("media keeps its DOM parent through selected elevation and connection changes", async () => {

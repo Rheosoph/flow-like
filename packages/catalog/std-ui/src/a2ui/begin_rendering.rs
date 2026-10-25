@@ -1,3 +1,4 @@
+use super::authoring_utils::lower_surface_components;
 use flow_like::{
     a2ui::{DataModel, Surface, SurfaceComponent},
     flow::{
@@ -72,7 +73,7 @@ impl NodeLogic for BeginRendering {
         context.deactivate_exec_pin("exec_out").await?;
 
         let surface: Surface = context.evaluate_pin("surface").await?;
-        let components: Vec<SurfaceComponent> = context.evaluate_pin("components").await?;
+        let components = lower_surface_components(context.evaluate_pin("components").await?)?;
         let data_model: DataModel = context
             .evaluate_pin::<DataModel>("data_model")
             .await

@@ -20,7 +20,8 @@ export type CopilotStreamEventType =
 	| "commands"
 	| "components"
 	| "canvas_settings"
-	| "usage_stat";
+	| "usage_stat"
+	| "ui_draft";
 
 export interface CopilotStreamEvent {
 	type: CopilotStreamEventType;
@@ -43,8 +44,41 @@ const TAG_TYPES: CopilotStreamEventType[] = [
 	"components",
 	"canvas_settings",
 	"usage_stat",
+	"ui_draft",
 ];
 const OPEN_TAGS = TAG_TYPES.map((type) => ({ type, tag: `<${type}>` }));
+
+/**
+ * Live `emit_ui` preview delta: only the components whose JSON closed since the previous frame of
+ * the same tool call. The completed tool call's `components` frame stays authoritative.
+ */
+export interface UiDraftFrame {
+	toolCallId: string;
+	sequence: number;
+	components: unknown[];
+	rootComponentId?: string;
+	canvasSettings?: Record<string, unknown>;
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+export const readUiDraftFrame = (data: unknown): UiDraftFrame | null => {
+	if (!isPlainObject(data)) return null;
+	const toolCallId = data.tool_call_id;
+	const components = data.components;
+	if (typeof toolCallId !== "string" || !toolCallId) return null;
+	if (!Array.isArray(components)) return null;
+	const rootComponentId = data.root_component_id;
+	const canvasSettings = data.canvas_settings;
+	return {
+		toolCallId,
+		sequence: typeof data.sequence === "number" ? data.sequence : 0,
+		components,
+		...(typeof rootComponentId === "string" ? { rootComponentId } : {}),
+		...(isPlainObject(canvasSettings) ? { canvasSettings } : {}),
+	};
+};
 
 function earliestOpeningTag(input: string, from: number) {
 	let match: {

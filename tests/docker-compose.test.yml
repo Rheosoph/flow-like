@@ -68,6 +68,48 @@ services:
       CLICKHOUSE_HOST: clickhouse
     network_mode: "service:clickhouse"
 
+  # Reached through the PostgreSQL node (wire compatible); no DataFusion provider of its own
+  cockroachdb:
+    image: cockroachdb/cockroach:latest-v25.2
+    container_name: flowlike-test-cockroachdb
+    command: start-single-node --insecure
+    ports:
+      - "26270:26257" # SQL
+      - "26280:8080" # DB console
+    healthcheck:
+      test: ["CMD", "cockroach", "sql", "--insecure", "-e", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Reached through the MySQL node (wire compatible)
+  mariadb:
+    image: mariadb:11.4
+    container_name: flowlike-test-mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: root_test
+      MARIADB_USER: flowlike
+      MARIADB_PASSWORD: flowlike_test
+      MARIADB_DATABASE: flowlike_test
+    ports:
+      - "33070:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Arrow Flight SQL server (DuckDB engine) for the Flight SQL node
+  gizmosql:
+    image: gizmodata/gizmosql:latest
+    container_name: flowlike-test-gizmosql
+    environment:
+      GIZMOSQL_USERNAME: flowlike
+      GIZMOSQL_PASSWORD: flowlike_test
+      TLS_ENABLED: "0"
+    ports:
+      - "31337:31337"
+
   oracle:
     image: gvenzl/oracle-free:23-slim
     container_name: flowlike-test-oracle

@@ -378,6 +378,31 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
+    async fn prebuilt_requests_carry_the_history_thinking() {
+        use crate::history::HistoryThinking;
+        use crate::llm::lenient_settings::LenientSettings;
+        use rig::completion::CompletionModel;
+
+        let (endpoint, server) = serve_once(json_response(chat_completion(MODEL, "stop", 1))).await;
+        let model = model(&endpoint).await;
+        let mut history = History::new(MODEL.to_string(), vec![]);
+        history.thinking = Some(HistoryThinking::Low);
+        let params = model.agent_settings(&Some(history)).unwrap().params;
+        let handle = model.completion_model_handle(None).await.unwrap();
+
+        LenientSettings::new(handle, params)
+            .completion_request("Read this page.")
+            .send()
+            .await
+            .unwrap();
+
+        let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_eq!(body["reasoning"]["effort"], "low");
+        assert_eq!(body["usage"]["include"], true);
+    }
+
+    #[tokio::test]
     async fn linked_audio_becomes_a_note_and_keeps_the_budget() {
         let (endpoint, server) = serve_once(json_response(chat_completion(MODEL, "stop", 1))).await;
         let mut history = budgeted_history();

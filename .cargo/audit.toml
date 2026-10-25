@@ -21,4 +21,18 @@ ignore = [
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0049",
+
+    # zip < 9.0.0 — `extract()` follows symlink targets, applies permissions through
+    # symlinks and preserves SUID/SGID bits (RUSTSEC-2026-0367, RUSTSEC-2026-0368,
+    # RUSTSEC-2026-0369). First-party crates and our markitdown fork use zip 9. The older
+    # copies are pinned by third parties: tch/torch-sys (0.6), umya-spreadsheet (2),
+    # utoipa-swagger-ui (3), docx-rust and tauri-plugin-updater (4), libduckdb-sys and
+    # rbook (6), calamine, candle-core and any-tts (7). Of those, only calamine 0.37 and
+    # rbook 0.7 have releases on zip 9; neither is adopted yet. Only two of them
+    # call `extract()`: tauri-plugin-updater on a minisign-verified update payload, and
+    # libduckdb-sys in build.rs on the source archive it ships. The rest read archives
+    # in memory, which the advisories do not affect.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]

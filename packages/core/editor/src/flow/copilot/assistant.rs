@@ -14,6 +14,7 @@ use serde::Deserialize;
 use super::memory::AssistantMemory;
 use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge};
 use super::types::{ChatImage, ChatMessage};
+use crate::a2ui::authoring::chat_ui_prompt_section;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -259,9 +260,12 @@ For early streaming previews: gallery `src` then `alt` before captions; recommen
 - Optional details: `||hidden text||`, or `:::spoiler Details`, body, closing `:::` on separate lines. Callout types: `info`, `tip`, `warning`, `error`, `success`. Bodies are plain text; keep answers and material caveats visible.
 - Media: `<video src="URL" />`, `<audio src="URL" />`, `<file src="URL" name="report.pdf" />`. An `embed` fence takes a public media URL, or `url: URL` with optional `start: seconds`, `autoplay: false` lines.
 - Geography: `map` fence JSON `{"type":"markers","markers":[{"lat":52.52,"lng":13.405,"label":"Berlin"}]}`. Optional `title`, `center: [lat,lng]`, `zoom`, marker `color`. Routes use `type: "route"`, `mode: "driving"|"walking"|"cycling"`. Verify coordinates.
-- Documents: `<toc />`, `<callout>Text</callout>`, `<date>2026-01-15</date>`, `<column_group><column width="50%">Left</column><column width="50%">Right</column></column_group>`. Prefer prose in narrow chat. `[Node](focus://node-id)`/`[Person](user://user-id)` need real supplied IDs and host context.
+- Documents: `<toc />`, `<callout>Text</callout>`, `<date>2026-01-15</date>`, `<column_group><column width="50%">Left</column><column width="50%">Right</column></column_group>`. Prefer prose in narrow chat. `[Node](focus://node-id)`/`[Person](user://user-id)` need real supplied IDs and host context."#;
 
-Use supported formats and ordinary Markdown; never arbitrary HTML/CSS, scripts, or JSX expressions for chat layout."#;
+/// Closes the formatting contract after the generated `a2ui` fence section.
+const CHAT_REPLY_CLOSING: &str = "Visual answers, in order of preference: an installed app that already shows this (its page inline via `open_app_page`, its chat via `call_app_chat`); else an `a2ui` fence built from the data you gathered, whenever it reads better than prose; else Markdown. Inline `a2ui` UI lives in this message only; pages and widgets the user keeps are built and saved through `flowpilot_widget`.
+
+Use supported formats, `a2ui` fences, and ordinary Markdown; never arbitrary HTML/CSS, scripts, or JSX expressions for chat layout.";
 
 /// System prompt for the global (platform-level) FlowPilot assistant, for backends that delegate
 /// public-web research to the `research_agent` specialist.
@@ -292,6 +296,7 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
     let routing = TASK_ROUTING_PLAYBOOK
         .replace("{routing_intro}", routing_intro)
         .replace("{public_web_route}", public_web_route);
+    let chat_ui = chat_ui_prompt_section();
     [
         FLOWPILOT_CORE,
         routing.as_str(),
@@ -301,6 +306,8 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
         BUILD_PLAYBOOK,
         web,
         CHAT_REPLY_FORMATTING,
+        chat_ui.as_str(),
+        CHAT_REPLY_CLOSING,
     ]
     .join("\n\n")
 }
@@ -1101,6 +1108,7 @@ mod tests {
         for name in [
             "list_apps",
             "call_app_chat",
+            "open_app_page",
             "flowpilot_board",
             "flowpilot_board_review",
             "flowpilot_widget",
@@ -1116,6 +1124,29 @@ mod tests {
             assert!(shared.contains(name), "missing shared tool {name}");
         }
         assert!(shared.contains("research_agent"));
+    }
+
+    #[test]
+    fn chat_formatting_teaches_inline_ui_and_its_scope() {
+        let section = chat_ui_prompt_section();
+        for capability in [
+            WebResearchCapability::Delegated,
+            WebResearchCapability::Inline,
+            WebResearchCapability::Native,
+        ] {
+            let prompt = global_assistant_system_prompt_for(capability);
+            assert!(
+                prompt.ends_with(&format!(
+                    "{CHAT_REPLY_FORMATTING}\n\n{section}\n\n{CHAT_REPLY_CLOSING}"
+                )),
+                "the a2ui section must follow the chat formatting contract and close it"
+            );
+            assert_eq!(prompt.matches("```a2ui").count(), 1);
+        }
+        assert!(CHAT_REPLY_CLOSING.contains("`flowpilot_widget`"));
+        assert!(CHAT_REPLY_CLOSING.contains("`open_app_page`"));
+        assert!(CHAT_REPLY_CLOSING.contains("`call_app_chat`"));
+        assert!(CHAT_REPLY_CLOSING.contains("never arbitrary HTML/CSS"));
     }
 
     #[test]
@@ -1137,15 +1168,17 @@ mod tests {
                 1,
                 "every backend needs the same chat formatting contract exactly once"
             );
-            // The cached prefix includes routing, build intake, and the renderer's compact
-            // format reference. Keep schemas here; leave extensive examples in the docs.
+            // The cached prefix includes routing, build intake, the renderer's compact format
+            // reference, and the generated inline-UI (`a2ui` fence) section, which alone is
+            // ≈4.4 KB / 390 words of rules plus component signatures. Keep schemas here; leave
+            // extensive examples in the docs.
             assert!(
-                first.len() <= 25_500,
-                "standard prompt grew beyond the reviewed 25.5 KB budget: {} bytes",
+                first.len() <= 30_000,
+                "standard prompt grew beyond the reviewed 30 KB budget: {} bytes",
                 first.len()
             );
             assert!(
-                first.split_whitespace().count() <= 3_600,
+                first.split_whitespace().count() <= 3_980,
                 "standard prompt grew beyond the reviewed word budget: {} words",
                 first.split_whitespace().count()
             );

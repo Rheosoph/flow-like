@@ -754,7 +754,8 @@ mod download_tests {
             for _ in 0..2 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0_u8; 2048];
-                socket.read(&mut request).await.unwrap();
+                let received = socket.read(&mut request).await.unwrap();
+                assert!(received > 0, "the client closed before sending a request");
                 socket.write_all(response.as_bytes()).await.unwrap();
                 socket.shutdown().await.unwrap();
             }

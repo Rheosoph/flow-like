@@ -8,9 +8,10 @@ mod support;
 
 use flow_like_types::{
     Value,
-    channel::{ChannelPush, ChannelPushKind, InProcessChannel, InProcessPushResult},
+    channel::{Channel, ChannelPush, ChannelPushKind, InProcessChannel, InProcessPushResult},
     intercom::{InterComCallback, InterComEvent},
     json::json,
+    tokio_util::sync::CancellationToken,
 };
 use std::sync::{
     Arc,
@@ -141,7 +142,7 @@ async fn read_element_asks_once_per_id_in_demand_mode() {
 }
 
 #[tokio::test]
-async fn page_side_errors_and_silence_surface_as_errors() {
+async fn page_side_errors_surface_as_errors() {
     let requests = Arc::new(AtomicUsize::new(0));
     let reply = json!({ "ok": false, "error": "no live surface for this run" });
     let (mut context, _channel) =
@@ -151,12 +152,65 @@ async fn page_side_errors_and_silence_surface_as_errors() {
         .await
         .expect_err("a page-side error must fail the request");
     assert!(err.to_string().contains("no live surface"), "got: {err}");
+}
 
+#[tokio::test]
+async fn unanswered_element_requests_explain_how_to_retry_after_a_reload() {
     let silent: InterComCallback = Some(Arc::new(|_event| Box::pin(async { Ok(()) })));
     let (mut context, _channel) = context_with_callback("er-run-5", silent).await;
     let err = context
         .request_elements(vec!["page/title".to_string()], Duration::from_secs(1))
         .await
         .expect_err("no responder must yield a timeout error");
-    assert!(err.to_string().contains("timed out"), "got: {err}");
+    assert_eq!(
+        err.to_string(),
+        "Element request [page/title] timed out after 1000ms: the app page did not answer. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again."
+    );
+}
+
+#[tokio::test]
+async fn closed_element_requests_explain_how_to_retry_after_a_reload() {
+    let requested = Arc::new(tokio::sync::Notify::new());
+    let page_requested = requested.clone();
+    let silent: InterComCallback = Some(Arc::new(move |event| {
+        let page_requested = page_requested.clone();
+        Box::pin(async move {
+            if event.event_type == "a2ui"
+                && event.payload.get("type").and_then(Value::as_str) == Some("requestElements")
+            {
+                page_requested.notify_one();
+            }
+            Ok(())
+        })
+    }));
+    let (mut context, channel) = context_with_callback("er-run-6", silent).await;
+    let request = context.request_elements(vec!["page/title".to_string()], Duration::from_secs(5));
+    let close = async {
+        requested.notified().await;
+        channel.close().await;
+    };
+    let (result, ()) = tokio::join!(request, close);
+    let err = result.expect_err("closing the connection must fail the request");
+    assert_eq!(
+        err.to_string(),
+        "Element request [page/title] could not complete: the connection closed before the app page answered. It may be reloading or closed. Open Use App, wait for the page to finish loading, then try the action again."
+    );
+}
+
+#[tokio::test]
+async fn cancelled_element_requests_remain_distinct_from_a_missing_page() {
+    let silent: InterComCallback = Some(Arc::new(|_event| Box::pin(async { Ok(()) })));
+    let (mut context, _channel) = context_with_callback("er-run-7", silent).await;
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    context.set_cancellation_token(cancellation);
+
+    let err = context
+        .request_elements(vec!["page/title".to_string()], Duration::from_secs(5))
+        .await
+        .expect_err("a cancelled run must stop waiting for the page");
+    assert_eq!(
+        err.to_string(),
+        "Element request [page/title] was cancelled"
+    );
 }

@@ -4,7 +4,7 @@
 // requests on its end, but a client-side cache eliminates the round-trip
 // entirely on rapid re-checks (think: user clicks Run, then Run again, or
 // switches between two workflow tabs). Each cached entry carries the
-// server's signature — when a background revalidation returns a different
+// server's signature. When a background revalidation returns a different
 // signature, listeners are notified so the UI can prompt the user.
 
 import { isRecord } from "../../lib/response-shape";
@@ -16,7 +16,6 @@ interface PrerunLike {
 interface CacheEntry<T extends PrerunLike> {
 	data: T;
 	fetchedAt: number;
-	inflight?: Promise<T>;
 }
 
 interface PrerunSwrOptions<T extends PrerunLike> {
@@ -29,11 +28,10 @@ interface PrerunSwrOptions<T extends PrerunLike> {
 }
 
 const cache = new Map<string, CacheEntry<PrerunLike>>();
+const inflight = new Map<string, Promise<PrerunLike>>();
 
-// Revalidate after 15s of cached age. Anything fresher than that is served
-// straight from cache without spawning a background fetch — keeps burst
-// re-renders cheap. The server-side cache invalidates instantly on board
-// saves, so 15s of staleness is the worst case in practice.
+// Entries younger than 15 seconds skip revalidation. Older entries remain
+// available while one request refreshes them.
 const REVALIDATE_AFTER_MS = 15_000;
 
 export function prerunBoardKey(
@@ -56,9 +54,9 @@ export function prerunEventKey(
 
 /**
  * Run `fetcher` through a stale-while-revalidate cache. On cache hit, the
- * cached value is returned synchronously; if it's older than the revalidate
- * threshold, a background fetch is kicked off and `onDrift` fires when the
- * resulting signature differs from the cached one.
+ * cached value is returned without waiting for a fetch. If it's older than
+ * the revalidate threshold, a background fetch starts and `onDrift` fires
+ * when the resulting signature differs from the cached one.
  */
 export async function prerunSwr<T extends PrerunLike>(
 	key: string,
@@ -67,58 +65,60 @@ export async function prerunSwr<T extends PrerunLike>(
 ): Promise<T> {
 	const now = Date.now();
 	const entry = cache.get(key) as CacheEntry<T> | undefined;
+	const pending = inflight.get(key) as Promise<T> | undefined;
 
-	if (entry) {
-		const age = now - entry.fetchedAt;
-		if (age > REVALIDATE_AFTER_MS && !entry.inflight) {
-			const inflight = fetcher()
-				.then((fresh) => {
-					if (!isRecord(fresh)) {
-						throw new Error(
-							`Prerun revalidation for ${key} returned no record`,
-						);
-					}
-					const previous = cache.get(key) as CacheEntry<T> | undefined;
-					cache.set(key, { data: fresh, fetchedAt: Date.now() });
-					if (
-						opts?.onDrift &&
-						previous &&
-						fresh.signature &&
-						previous.data.signature &&
-						fresh.signature !== previous.data.signature
-					) {
-						opts.onDrift(key, previous.data, fresh);
-					}
-					return fresh;
-				})
-				.catch((err) => {
-					// Transient failure — keep the existing cache entry intact,
-					// just clear the inflight marker so the next call retries.
-					// Nobody awaits this promise, so rethrowing would only surface
-					// every offline revalidation as an unhandled rejection.
-					const existing = cache.get(key) as CacheEntry<T> | undefined;
-					if (existing) {
-						cache.set(key, { ...existing, inflight: undefined });
-					}
-					console.warn(`[prerunSwr] Revalidating ${key} failed:`, err);
-					return entry.data;
-				});
-			cache.set(key, { ...entry, inflight: inflight as Promise<PrerunLike> });
-		}
+	if (entry && (now - entry.fetchedAt <= REVALIDATE_AFTER_MS || pending)) {
 		return entry.data;
 	}
+	if (pending) return pending;
 
-	const data = await fetcher();
-	// A malformed answer is handed back once, never served again from cache.
-	if (isRecord(data)) cache.set(key, { data, fetchedAt: now });
-	return data;
+	// Register the request before invoking the fetcher, including synchronous failures.
+	const request: Promise<T> = Promise.resolve()
+		.then(fetcher)
+		.then((fresh) => {
+			if (!isRecord(fresh)) {
+				if (entry) {
+					throw new Error(`Prerun revalidation for ${key} returned no record`);
+				}
+				// A malformed cold response is returned to its callers, never cached.
+				return fresh;
+			}
+			// Invalidation detaches old requests so they cannot repopulate the cache.
+			if (inflight.get(key) !== request) return fresh;
+			cache.set(key, { data: fresh, fetchedAt: Date.now() });
+			if (
+				entry &&
+				opts?.onDrift &&
+				fresh.signature &&
+				entry.data.signature &&
+				fresh.signature !== entry.data.signature
+			) {
+				opts.onDrift(key, entry.data, fresh);
+			}
+			return fresh;
+		})
+		.finally(() => {
+			if (inflight.get(key) === request) inflight.delete(key);
+		});
+	inflight.set(key, request);
+
+	if (entry) {
+		// Revalidation failures leave the stale data available and allow a retry.
+		void request.catch((err) => {
+			console.warn(`[prerunSwr] Revalidating ${key} failed:`, err);
+		});
+		return entry.data;
+	}
+	return request;
 }
 
 /** Drop a single key (or the whole cache). Use after explicit board edits. */
 export function invalidatePrerunCache(key?: string): void {
 	if (key === undefined) {
 		cache.clear();
+		inflight.clear();
 	} else {
 		cache.delete(key);
+		inflight.delete(key);
 	}
 }

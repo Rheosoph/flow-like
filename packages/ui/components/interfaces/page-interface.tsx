@@ -77,6 +77,7 @@ import {
 	createLoadRun,
 } from "./page-load-run";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
+import { usePageTransitionHold } from "./page-transition-context";
 import { revealsPageLoad } from "./progressive-page-reveal";
 import { usePageSurfaceCache } from "./use-page-surface-cache";
 
@@ -290,12 +291,16 @@ function PageInterfaceInner({
 	const isScreenRevealed = Boolean(
 		loadEventExecutionKey && revealedLoadEventKey === loadEventExecutionKey,
 	);
-	// A noCache page shows no layout that its onLoad run would replace.
-	const isAwaitingFreshOutput = Boolean(
-		page.noCache &&
-			loadEventExecutionKey &&
+	const isLoadOutputPending = Boolean(
+		loadEventExecutionKey &&
 			!isScreenRevealed &&
 			completedLoadEventKey !== loadEventExecutionKey,
+	);
+	// Once the page has shown something, a later run (new query parameters) updates it in place.
+	const [hasPresented, setHasPresented] = useState(false);
+	// A noCache page shows no layout that its onLoad run would replace.
+	const isAwaitingFreshOutput = Boolean(
+		page.noCache && isLoadOutputPending && !hasPresented,
 	);
 
 	// Runs always build on the static layout: onLoad is written against it, not against its own
@@ -327,6 +332,7 @@ function PageInterfaceInner({
 
 	const {
 		staleSurface,
+		restoring,
 		applyToStale,
 		noteLoadOutput,
 		releaseStale,
@@ -775,7 +781,18 @@ function PageInterfaceInner({
 		runtimeCanvasSettings?.backgroundImage,
 	);
 
-	if (isGovernedPage && !pageExecutionRevision && !executionPending) {
+	const isAuthorizationMissing =
+		isGovernedPage && !pageExecutionRevision && !executionPending;
+	const isPresentable =
+		hasPresented ||
+		isAuthorizationMissing ||
+		(!isAwaitingFreshOutput &&
+			!(restoring && isLoadOutputPending) &&
+			(activeSurface !== null || !(executionPending || isLoadOutputPending)));
+	if (isPresentable && !hasPresented) setHasPresented(true);
+	const offscreen = usePageTransitionHold(!isPresentable);
+
+	if (isAuthorizationMissing) {
 		return (
 			<div className="flex items-center justify-center h-full text-muted-foreground">
 				<p>
@@ -787,6 +804,7 @@ function PageInterfaceInner({
 	}
 
 	if (isAwaitingFreshOutput) {
+		if (offscreen) return null;
 		return (
 			<PageLoadingSkeleton title={t("runningWorkflow", "Running workflow")} />
 		);

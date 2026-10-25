@@ -13,6 +13,7 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 	Button,
+	Checkbox,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -50,12 +51,14 @@ function LockedUploadDialog({ controller }: ControllerProps) {
 	const objectMode = status?.enforcement === "object";
 	const [files, setFiles] = useState<File[]>([]);
 	const [days, setDays] = useState("");
+	const [deleteAfter, setDeleteAfter] = useState(false);
 	const [comment, setComment] = useState("");
 
 	useEffect(() => {
 		if (!open) return;
 		setFiles([]);
 		setComment("");
+		setDeleteAfter(false);
 		setDays(String(status?.default_retention_days ?? ""));
 	}, [open, status?.default_retention_days]);
 
@@ -102,6 +105,7 @@ function LockedUploadDialog({ controller }: ControllerProps) {
 						if (files.length === 0 || daysError) return;
 						controller.submitUpload(files, {
 							retentionDays: objectMode ? Number(days) : undefined,
+							deleteAfterRetention: controller.canPurge && deleteAfter,
 							comment,
 						});
 					}}
@@ -165,6 +169,30 @@ function LockedUploadDialog({ controller }: ControllerProps) {
 							</p>
 						)}
 					</div>
+					{controller.canPurge && (
+						<div className="flex items-start gap-3">
+							<Checkbox
+								id={`${id}-delete`}
+								className="mt-0.5"
+								checked={deleteAfter}
+								onCheckedChange={(checked) => setDeleteAfter(checked === true)}
+							/>
+							<div className="space-y-1">
+								<Label htmlFor={`${id}-delete`} className="cursor-pointer">
+									{t(
+										"lockedStorage.deleteAfterRetention",
+										"Delete automatically when retention ends",
+									)}
+								</Label>
+								<p className="text-xs text-muted-foreground">
+									{t(
+										"lockedStorage.deleteAfterRetentionHint",
+										"Otherwise it stays stored and counts against your storage until someone deletes it. A legal hold postpones the deletion.",
+									)}
+								</p>
+							</div>
+						</div>
+					)}
 					<div className="space-y-2">
 						<Label htmlFor={`${id}-comment`}>
 							{t("lockedStorage.comment", "Comment")}

@@ -3,7 +3,7 @@ use highway::{HighwayHash, HighwayHasher};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -214,6 +214,11 @@ pub struct Node {
     /// The editor generated this reroute and may replace it during automatic layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_reroute: Option<bool>,
+    /// FlowScript names the text gave this node's values, keyed by output pin name; `""` is the
+    /// node's own binding (`const name = …`). Presentation only: identity stays `id`, and the
+    /// renderer falls back to a generated name when a stored one is invalid or already taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_names: Option<BTreeMap<String, String>>,
 }
 
 impl Node {
@@ -247,6 +252,7 @@ impl Node {
             receiver: None,
             pins_collapsed: None,
             auto_reroute: None,
+            code_names: None,
         }
     }
 
@@ -850,6 +856,16 @@ impl Node {
         if let Some(auto_reroute) = &self.auto_reroute {
             hasher.append(b"auto_reroute");
             hasher.append(&[*auto_reroute as u8]);
+        }
+
+        if let Some(code_names) = &self.code_names {
+            hasher.append(b"code_names");
+            for (key, name) in code_names {
+                hasher.append(key.as_bytes());
+                hasher.append(&[0]);
+                hasher.append(name.as_bytes());
+                hasher.append(&[0]);
+            }
         }
 
         self.hash = Some(hasher.finalize64());

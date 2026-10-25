@@ -40,6 +40,8 @@ export interface PageSurfaceCache {
 	 * from the layout it was written against. Null once the run's output takes over.
 	 */
 	readonly staleSurface: Surface | null;
+	/** The saved surface for this load run is still being read. */
+	readonly restoring: boolean;
 	/** Mirrors a message from anything but the load run onto the saved surface on screen. */
 	readonly applyToStale: (message: A2UIServerMessage) => void;
 	/** The saved surface yields once load output settles or the run shows its screen. */
@@ -69,6 +71,7 @@ export function usePageSurfaceCache({
 		readonly loadKey: string;
 		readonly surface: Surface;
 	} | null>(null);
+	const [readLoadKey, setReadLoadKey] = useState<string | null>(null);
 	// Set as the load run renders or ends, not at render, so a read landing in between still sees it.
 	const supersededLoadKeyRef = useRef<string | null>(null);
 	const settleTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -90,8 +93,9 @@ export function usePageSurfaceCache({
 		}
 		let cancelled = false;
 		void readPageSurfaceCache(identity).then((surface) => {
-			if (cancelled || !surface) return;
-			if (supersededLoadKeyRef.current === loadKey) return;
+			if (cancelled) return;
+			setReadLoadKey(loadKey);
+			if (!surface || supersededLoadKeyRef.current === loadKey) return;
 			setStale({ loadKey, surface });
 		});
 		return () => {
@@ -142,6 +146,9 @@ export function usePageSurfaceCache({
 	return {
 		staleSurface:
 			enabled && stale && stale.loadKey === loadKey ? stale.surface : null,
+		restoring: Boolean(
+			enabled && identity && loadKey && readLoadKey !== loadKey,
+		),
 		applyToStale,
 		noteLoadOutput,
 		releaseStale,

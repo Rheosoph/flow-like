@@ -4,7 +4,7 @@
 //! authentication. A dynamic action capability is deliberately verified here
 //! and never enters the authentication middleware.
 
-use std::{collections::HashSet, future::Future};
+use std::{collections::HashSet, future::Future, sync::Arc};
 
 use flow_like::{
     a2ui::{ElementDemand, Page},
@@ -17,6 +17,7 @@ use flow_like::{
     },
 };
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use utoipa::ToSchema;
 
 use crate::{
@@ -31,7 +32,7 @@ use crate::{
         PrerunPayload, ensure_draft_board_snapshot, ensure_draft_prerun_manifest,
         ensure_versioned_page_prerun_manifest, load_exact_prerun_manifest, load_prerun_manifest,
     },
-    state::AppState,
+    state::{AppState, CachedBoard},
 };
 
 /// A Page lifecycle hook. These names live outside the user-authored action
@@ -183,6 +184,97 @@ pub async fn resolve_page_contract_for_bootstrap(
     resolve_page_contract_inner(state, app_id, event, true).await
 }
 
+/// The Event's Board and configured Page. A draft Page is read beside the
+/// board's revalidation. The Page result is returned unjudged so the caller's
+/// board checks keep precedence over a Page failure.
+async fn load_board_and_page(
+    state: &AppState,
+    app_id: &str,
+    event: &Event,
+    page_id: &str,
+    invalid: impl Fn() -> ApiError,
+) -> Result<(Arc<CachedBoard>, Result<Page, ApiError>), ApiError> {
+    let board_failed = |error: flow_like_types::Error| {
+        tracing::warn!(
+            app_id,
+            event_id = %event.id,
+            board_id = %event.board_id,
+            error = %error,
+            "Page Event board could not be loaded"
+        );
+        invalid()
+    };
+    let load_board = state
+        .master_board_shared(app_id, &event.board_id, state, event.board_version)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "page.board.load"
+        ));
+    match event.board_version {
+        Some(version) => {
+            let cached = load_board.await.map_err(board_failed)?;
+            let page = pinned_page(&cached, page_id, version).await;
+            Ok((cached, page.map_err(|_| invalid())))
+        }
+        None => {
+            let (cached, page) = flow_like_types::tokio::join!(
+                load_board,
+                draft_page(state, app_id, &event.board_id, page_id)
+            );
+            Ok((cached.map_err(board_failed)?, page.map_err(|_| invalid())))
+        }
+    }
+}
+
+fn page_load_span() -> tracing::Span {
+    tracing::info_span!(target: "flow_like::observability", "page.page.load")
+}
+
+/// A pinned version's Page is as immutable as the version, so it stays with
+/// the cached board.
+async fn pinned_page(
+    cached: &CachedBoard,
+    page_id: &str,
+    version: (u32, u32, u32),
+) -> flow_like_types::Result<Page> {
+    if let Some(page) = cached.version_page(page_id) {
+        return Ok(page);
+    }
+    let page = cached
+        .board
+        .load_versioned_page(page_id, version, None)
+        .instrument(page_load_span())
+        .await?;
+    cached.remember_version_page(&page);
+    Ok(page)
+}
+
+/// A draft Page is saved independently of the board's ETag, so it is read on
+/// every call. Its path depends only on the board id, not on the board value.
+async fn draft_page(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    page_id: &str,
+) -> flow_like_types::Result<Page> {
+    async {
+        let master = state.master_state(state).await?;
+        let store = Board::meta_store(&master).await?;
+        let storage_root = flow_like_storage::Path::from("apps").join(app_id.to_string());
+        Board::new_detached(Some(board_id.to_string()), storage_root)
+            .load_page(page_id, Some(store))
+            .await
+    }
+    .instrument(page_load_span())
+    .await
+}
+
+#[tracing::instrument(
+    target = "flow_like::observability",
+    name = "page.contract.resolve",
+    skip_all,
+    fields(board_id = %event.board_id, pinned = event.board_version.is_some())
+)]
 async fn resolve_page_contract_inner(
     state: &AppState,
     app_id: &str,
@@ -192,24 +284,16 @@ async fn resolve_page_contract_inner(
     let configured_page_id = event.default_page_id.as_deref().ok_or_else(|| {
         ApiError::bad_request("Page triggers can only invoke Events that own a Page")
     })?;
+    let invalid = || {
+        if missing_as_not_found {
+            ApiError::NOT_FOUND
+        } else {
+            ApiError::bad_request("The Page Event configuration is invalid")
+        }
+    };
 
-    let cached = state
-        .master_board_shared(app_id, &event.board_id, state, event.board_version)
-        .await
-        .map_err(|error| {
-            tracing::warn!(
-                app_id,
-                event_id = %event.id,
-                board_id = %event.board_id,
-                error = %error,
-                "Page Event board could not be loaded"
-            );
-            if missing_as_not_found {
-                ApiError::NOT_FOUND
-            } else {
-                ApiError::bad_request("The Page Event configuration is invalid")
-            }
-        })?;
+    let (cached, page) =
+        load_board_and_page(state, app_id, event, configured_page_id, invalid).await?;
     let board = cached.board.clone();
     if board.id != event.board_id
         || event
@@ -233,21 +317,7 @@ async fn resolve_page_contract_inner(
         )));
     }
 
-    let page = match event.board_version {
-        Some(version) => {
-            board
-                .load_versioned_page(configured_page_id, version, None)
-                .await
-        }
-        None => board.load_page(configured_page_id, None).await,
-    }
-    .map_err(|_| {
-        if missing_as_not_found {
-            ApiError::NOT_FOUND
-        } else {
-            ApiError::bad_request("The Page Event configuration is invalid")
-        }
-    })?;
+    let page = page?;
     if page.id != configured_page_id
         || page
             .board_id
@@ -287,11 +357,20 @@ async fn resolve_page_contract_inner(
         }
         None => {
             // Storage stays the authority for both artifacts; their checks
-            // only overlap. The snapshot error still wins, as it did in series.
-            let (snapshot, authority) = flow_like_types::tokio::join!(
-                ensure_draft_board_snapshot(state, app_id, &event.board_id, &cached),
-                ensure_draft_prerun_manifest(state, app_id, &event.board_id, &cached),
-            );
+            // only overlap, and each is skipped while this board entry knows its
+            // artifact outlives lifecycle cleanup. The snapshot error still
+            // wins, as it did in series.
+            let (snapshot, authority) = async {
+                flow_like_types::tokio::join!(
+                    ensure_draft_board_snapshot(state, app_id, &event.board_id, &cached),
+                    ensure_draft_prerun_manifest(state, app_id, &event.board_id, &cached),
+                )
+            }
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "page.contract.authority"
+            ))
+            .await;
             snapshot?;
             let authority = authority?;
             let entry_node_ids = authority
@@ -931,6 +1010,23 @@ mod tests {
         );
         let page = flow_like::a2ui::Page::new("page-1", "Page", "/");
         PrerunPageExecution::from_page(&board, &page).unwrap()
+    }
+
+    #[tokio::test]
+    async fn pinned_pages_come_from_the_cached_version_without_storage() {
+        // A detached board has no store: any read would fail.
+        let cached = CachedBoard::new(
+            "\"etag-1\"".to_string(),
+            Board::new_detached(
+                Some("board-1".into()),
+                flow_like_storage::Path::from("apps").join("app-1"),
+            ),
+        );
+        assert!(pinned_page(&cached, "page-1", (1, 2, 3)).await.is_err());
+
+        cached.remember_version_page(&flow_like::a2ui::Page::new("page-1", "Page", "/"));
+        let page = pinned_page(&cached, "page-1", (1, 2, 3)).await.unwrap();
+        assert_eq!(page.id, "page-1");
     }
 
     #[test]

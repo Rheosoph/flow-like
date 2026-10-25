@@ -133,7 +133,14 @@ fn env_filter_defaulting_to(level: &str) -> EnvFilter {
 }
 
 pub fn construct_router(state: Arc<State>) -> Router {
-    construct_router_with_cors(state, CorsLayer::permissive())
+    construct_router_with_cors(state, default_cors())
+}
+
+fn default_cors() -> CorsLayer {
+    CorsLayer::permissive()
+        // Authorization requires an explicit header name in the preflight cache.
+        .allow_headers(tower_http::cors::AllowHeaders::mirror_request())
+        .max_age(std::time::Duration::from_secs(600))
 }
 
 /// Construct the API router with an explicit CORS policy.
@@ -357,6 +364,38 @@ fn public_hub_value(mut hub_value: Value) -> Value {
     }
 
     hub_value
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::default_cors;
+    use axum::{body::Body, handler::Handler, http::Request};
+
+    #[tokio::test]
+    async fn default_preflight_is_cached_without_changing_allowance_or_credentials() {
+        let request = Request::builder()
+            .method("OPTIONS")
+            .uri("/invoke")
+            .header("origin", "https://app.example.test")
+            .header("access-control-request-method", "POST")
+            .header(
+                "access-control-request-headers",
+                "authorization,content-type,x-flow-like-test",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let response = (|| async {}).layer(default_cors()).call(request, ()).await;
+        let headers = response.headers();
+
+        assert_eq!(headers["access-control-max-age"], "600");
+        assert_eq!(headers["access-control-allow-origin"], "*");
+        assert_eq!(headers["access-control-allow-methods"], "*");
+        assert_eq!(
+            headers["access-control-allow-headers"],
+            "authorization,content-type,x-flow-like-test"
+        );
+        assert!(headers.get("access-control-allow-credentials").is_none());
+    }
 }
 
 #[cfg(test)]

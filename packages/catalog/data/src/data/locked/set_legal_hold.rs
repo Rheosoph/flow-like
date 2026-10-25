@@ -2,7 +2,7 @@ use super::{
     add_exec_out, add_item_id_pin, add_text_pin, add_version_output,
     client::{LockedAccess, LockedAction, LockedApi},
     locked_node, optional_text, read_required, resolve_version_id,
-    types::{LockedItemVersion, LockedLegalHoldRequest},
+    types::{LockedItemVersion, LockedVersionFlagRequest},
 };
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -62,7 +62,7 @@ impl NodeLogic for LockedSetLegalHoldNode {
             .post(
                 context,
                 LockedAction::LegalHold,
-                &LockedLegalHoldRequest {
+                &LockedVersionFlagRequest {
                     item_id: &item_id,
                     version_id: &version_id,
                     enabled,

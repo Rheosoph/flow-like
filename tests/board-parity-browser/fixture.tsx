@@ -124,6 +124,8 @@ function Board() {
 	const [dragStore] = useState(() => createSignalStore<PeerDrag[]>([]));
 	const [pingStore] = useState(() => createSignalStore<PeerPing[]>([]));
 	const history = useRef<IBoard[]>([]);
+	// Every renderer calls onInit when it mounts, so a renderer switch would reset the camera.
+	const cameraPlaced = useRef(false);
 	const future = useRef<IBoard[]>([]);
 	const publishRef = useRef<() => void>(noop);
 	const execute = useCallback(async (batch: IGenericCommand[]) => {
@@ -186,9 +188,11 @@ function Board() {
 		setEdges(parsed.edges);
 	}, [enter, run, executeOne]);
 	publishRef.current = publish;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: publish reads them through current, so a change must re-publish.
 	useEffect(() => {
 		publish();
 	}, [publish, layer, readOnly]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: capture the unconfigured backend once; this fixture owns its isolated origin.
 	useEffect(() => {
 		const backend = {
 			...baseBackend,
@@ -229,7 +233,6 @@ function Board() {
 		};
 		useBackendStore.getState().setBackend(backend);
 		return () => useBackendStore.setState({ backend: null });
-		// Capture the unconfigured backend once; this fixture owns its isolated origin.
 	}, []);
 	const connect = useCallback(
 		async (connection: Connection, oldEdge?: Edge) => {
@@ -550,6 +553,12 @@ function Board() {
 					await flow.setViewport({ x, y, zoom });
 					await wait(100);
 				},
+				animateViewport: (
+					x: number,
+					y: number,
+					zoom: number,
+					duration: number,
+				) => flow.setViewport({ x, y, zoom }, { duration }),
 				select: (id: string) =>
 					setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id }))),
 				mutate: (id: string, change: Partial<INode>) => {
@@ -636,6 +645,8 @@ function Board() {
 						setMessage("Context menu requested");
 					}}
 					onInit={(instance) => {
+						if (cameraPlaced.current) return;
+						cameraPlaced.current = true;
 						setTimeout(
 							() => void instance.setViewport({ x: 20, y: 20, zoom: 1 }),
 							250,

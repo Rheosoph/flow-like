@@ -37876,6 +37876,24 @@ export const catalogNodes: CatalogNode[] = [
         "index": 8
       },
       {
+        "name": "thinking",
+        "friendlyName": "Thinking",
+        "description": "Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "low",
+        "index": 9,
+        "options": {
+          "validValues": [
+            "off",
+            "low",
+            "mid",
+            "high"
+          ]
+        }
+      },
+      {
         "name": "prompt_preset",
         "friendlyName": "Prompt Preset",
         "description": "Prompt contract of the selected model. Document-parsing models only answer to their own trained prompt:\n• Default — a tuned general prompt for vision models (GPT-4o, Claude, Gemini, Qwen-VL)\n• Unlimited-OCR — baidu/Unlimited-OCR, self-hosted via vLLM\n• DeepSeek-OCR — deepseek-ai/DeepSeek-OCR and -OCR-2\n• olmOCR — allenai/olmOCR-2, emits YAML front matter\n• Nanonets-OCR — nanonets/Nanonets-OCR-s and -OCR2\n• dots.ocr — plain text extraction; use Page Prompt for its JSON layout mode\n• Granite-Docling — IBM Granite-Docling and SmolDocling, emits DocTags\n• PaddleOCR-VL — PaddlePaddle/PaddleOCR-VL\n\nEvery preset except Default forces full-page OCR and one image per request. Recommended temperature is 0.0 for all of them except olmOCR (0.1).",
@@ -37883,7 +37901,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "Default",
-        "index": 9,
+        "index": 10,
         "options": {
           "validValues": [
             "Default",
@@ -37905,7 +37923,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "",
-        "index": 10
+        "index": 11
       },
       {
         "name": "image_prompt",
@@ -37915,7 +37933,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "",
-        "index": 11
+        "index": 12
       },
       {
         "name": "batch_prompt",
@@ -37925,7 +37943,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "",
-        "index": 12
+        "index": 13
       },
       {
         "name": "force_ocr",
@@ -37935,7 +37953,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "Boolean",
         "valueType": "Normal",
         "defaultValue": false,
-        "index": 13
+        "index": 14
       },
       {
         "name": "exec_out",
@@ -37960,12 +37978,12 @@ export const catalogNodes: CatalogNode[] = [
         }
       }
     ],
-    "inputCount": 13,
+    "inputCount": 14,
     "outputCount": 2,
     "flags": [
       "Long running"
     ],
-    "version": 4,
+    "version": 5,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -38078,6 +38096,24 @@ export const catalogNodes: CatalogNode[] = [
         "index": 8
       },
       {
+        "name": "thinking",
+        "friendlyName": "Thinking",
+        "description": "Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "low",
+        "index": 9,
+        "options": {
+          "validValues": [
+            "off",
+            "low",
+            "mid",
+            "high"
+          ]
+        }
+      },
+      {
         "name": "prompt_preset",
         "friendlyName": "Prompt Preset",
         "description": "Prompt contract of the selected model. Document-parsing models only answer to their own trained prompt:\n• Default — a tuned general prompt for vision models (GPT-4o, Claude, Gemini, Qwen-VL)\n• Unlimited-OCR — baidu/Unlimited-OCR, self-hosted via vLLM\n• DeepSeek-OCR — deepseek-ai/DeepSeek-OCR and -OCR-2\n• olmOCR — allenai/olmOCR-2, emits YAML front matter\n• Nanonets-OCR — nanonets/Nanonets-OCR-s and -OCR2\n• dots.ocr — plain text extraction; use Page Prompt for its JSON layout mode\n• Granite-Docling — IBM Granite-Docling and SmolDocling, emits DocTags\n• PaddleOCR-VL — PaddlePaddle/PaddleOCR-VL\n\nEvery preset except Default forces full-page OCR and one image per request. Recommended temperature is 0.0 for all of them except olmOCR (0.1).",
@@ -38085,7 +38121,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "Default",
-        "index": 9,
+        "index": 10,
         "options": {
           "validValues": [
             "Default",
@@ -38107,7 +38143,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "",
-        "index": 10
+        "index": 11
       },
       {
         "name": "image_prompt",
@@ -38117,7 +38153,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "",
-        "index": 11
+        "index": 12
       },
       {
         "name": "batch_prompt",
@@ -38127,7 +38163,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "",
-        "index": 12
+        "index": 13
       },
       {
         "name": "force_ocr",
@@ -38137,7 +38173,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "Boolean",
         "valueType": "Normal",
         "defaultValue": false,
-        "index": 13
+        "index": 14
       },
       {
         "name": "exec_out",
@@ -38162,12 +38198,12 @@ export const catalogNodes: CatalogNode[] = [
         }
       }
     ],
-    "inputCount": 13,
+    "inputCount": 14,
     "outputCount": 2,
     "flags": [
       "Long running"
     ],
-    "version": 4,
+    "version": 5,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -39228,6 +39264,24 @@ export const catalogNodes: CatalogNode[] = [
         "index": 12
       },
       {
+        "name": "thinking",
+        "friendlyName": "Thinking",
+        "description": "Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "low",
+        "index": 13,
+        "options": {
+          "validValues": [
+            "off",
+            "low",
+            "mid",
+            "high"
+          ]
+        }
+      },
+      {
         "name": "exec_out",
         "friendlyName": "Output",
         "description": "Execution output after summarization completes.",
@@ -39286,11 +39340,12 @@ export const catalogNodes: CatalogNode[] = [
         "index": 6
       }
     ],
-    "inputCount": 12,
+    "inputCount": 13,
     "outputCount": 6,
     "flags": [
       "Long running"
     ],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -42563,7 +42618,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 5,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
@@ -54963,7 +55020,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 3,
     "outputCount": 3,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55022,7 +55081,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55145,7 +55206,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 7,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55258,7 +55321,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 8,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55336,7 +55401,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 4,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55405,7 +55472,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 3,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55648,7 +55717,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 5,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55717,7 +55788,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 3,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55817,7 +55890,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 6,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -55995,6 +56070,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 10,
     "outputCount": 5,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -56145,6 +56221,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 8,
     "outputCount": 4,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -56305,6 +56382,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 8,
     "outputCount": 5,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -56485,6 +56563,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 10,
     "outputCount": 4,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 6,
@@ -56646,6 +56725,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 8,
     "outputCount": 5,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -56769,6 +56849,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 5,
     "outputCount": 4,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -56901,6 +56982,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 7,
     "outputCount": 3,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -57014,6 +57096,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 6,
     "outputCount": 2,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -57147,6 +57230,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 7,
     "outputCount": 3,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 5,
@@ -57281,6 +57365,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 6,
     "outputCount": 4,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 6,
@@ -57434,6 +57519,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 8,
     "outputCount": 4,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 6,
@@ -57567,6 +57653,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 7,
     "outputCount": 3,
     "flags": [
+      "Local only",
       "Long running"
     ],
     "version": 6,
@@ -59760,7 +59847,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 3,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -59864,7 +59953,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 5,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -59914,7 +60005,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 1,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -59992,7 +60085,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 4,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -60061,7 +60156,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 3,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -60121,7 +60218,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -60181,7 +60280,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 2,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -60258,7 +60359,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 4,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -60335,7 +60438,9 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 4,
-    "flags": [],
+    "flags": [
+      "Local only"
+    ],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -86903,6 +87008,1122 @@ export const catalogNodes: CatalogNode[] = [
     "permissions": []
   },
   {
+    "slug": "nodes/data/files/locked/locked-purge",
+    "packageName": "data",
+    "name": "locked_purge",
+    "friendlyName": "Delete Expired Locked File",
+    "description": "Deletes the stored bytes of a locked file and frees its storage quota. Only works after the retention period ended and without a legal hold; the server refuses while any selected version is still retained. The record itself, including its SHA-256, is kept as evidence",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 5,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "item_id",
+        "friendlyName": "Locked File ID",
+        "description": "ID of the locked file",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 2
+      },
+      {
+        "name": "version_id",
+        "friendlyName": "Version ID",
+        "description": "ID of the one version to delete; empty deletes every version of the file",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The expired bytes were deleted",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "file",
+        "friendlyName": "Locked File",
+        "description": "The locked file after the deletion, with its remaining stored size",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedFile\",\"description\":\"A locked (write-once, revision-safe) file: the file's identity together with one of its\\nversions, flattened into a single record.\",\"type\":\"object\",\"properties\":{\"item_id\":{\"description\":\"Locked file ID, used by the other Locked File nodes.\",\"type\":\"string\"},\"app_id\":{\"description\":\"App the file belongs to.\",\"type\":\"string\"},\"scope\":{\"description\":\"Whether the file is shared by the project or private to a user.\",\"$ref\":\"#/$defs/LockedScope\"},\"owner_id\":{\"description\":\"Owning user for user-scoped files; null for project files.\",\"type\":[\"string\",\"null\"]},\"name\":{\"description\":\"Display name, unique within its folder.\",\"type\":\"string\"},\"folder\":{\"description\":\"Virtual folder without leading or trailing slash; empty for the root.\",\"type\":\"string\"},\"path\":{\"description\":\"Folder and name joined with \\\"/\\\", without a leading slash.\",\"type\":\"string\"},\"file_name\":{\"description\":\"File name the bytes of this version were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of this version.\",\"type\":[\"string\",\"null\"]},\"size\":{\"description\":\"Size of this version.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"version\":{\"description\":\"Version number starting at 1; null while pending or when the file has no version.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"version_id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":[\"string\",\"null\"]},\"status\":{\"description\":\"Lifecycle state of this version: pending, locked or purged.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedVersionStatus\"},{\"type\":\"null\"}]},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":[\"string\",\"null\"]},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedRetentionMode\"},{\"type\":\"null\"}]},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedEnforcement\"},{\"type\":\"null\"}]},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes this version's bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\"},\"purgeable\":{\"description\":\"Whether this version's bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\"},\"comment\":{\"description\":\"Comment given when this version was uploaded.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata of the file.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"version_metadata\":{\"description\":\"Metadata given when this version was uploaded.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of whoever uploaded this version.\",\"type\":[\"string\",\"null\"]},\"locked_at\":{\"description\":\"When this version was committed and locked (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When this version's bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"latest_version\":{\"description\":\"Highest committed version number of the file.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_versions\":{\"description\":\"Number of committed versions whose bytes are still stored.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_size\":{\"description\":\"Bytes of all stored versions, charged to the storage quota.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"created_by\":{\"description\":\"User ID of whoever created the file.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the file was created (RFC 3339).\",\"type\":\"string\"},\"updated_at\":{\"description\":\"When the file last changed (RFC 3339).\",\"type\":\"string\"}},\"required\":[\"item_id\",\"app_id\",\"scope\",\"name\",\"folder\",\"path\",\"file_name\",\"size\",\"checksum_verified\",\"legal_hold\",\"delete_after_retention\",\"purgeable\",\"latest_version\",\"live_versions\",\"live_size\",\"created_by\",\"created_at\",\"updated_at\"],\"$defs\":{\"LockedScope\":{\"description\":\"Who a locked file belongs to.\",\"oneOf\":[{\"description\":\"Shared by the whole project.\",\"type\":\"string\",\"const\":\"project\"},{\"description\":\"Private to one user.\",\"type\":\"string\",\"const\":\"user\"}]},\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      },
+      {
+        "name": "versions",
+        "friendlyName": "Versions",
+        "description": "Every version of the file, newest first, including purged ones",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedItemVersion\",\"description\":\"One immutable, write-once version of a locked file.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":\"string\"},\"item_id\":{\"description\":\"ID of the locked file this version belongs to.\",\"type\":\"string\"},\"version\":{\"description\":\"Version number starting at 1, assigned at commit; null while pending.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"status\":{\"description\":\"Lifecycle state: pending, locked or purged.\",\"$ref\":\"#/$defs/LockedVersionStatus\"},\"file_name\":{\"description\":\"File name the bytes were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of the stored bytes.\",\"type\":\"string\"},\"size\":{\"description\":\"Size of the stored bytes.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":\"string\"},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":\"string\"},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"$ref\":\"#/$defs/LockedEnforcement\"},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\",\"default\":false},\"comment\":{\"description\":\"Comment given at upload.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata given at upload.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of the uploader.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the upload was started (RFC 3339).\",\"type\":\"string\"},\"locked_at\":{\"description\":\"When the version was committed and locked (RFC 3339); null while pending.\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When the stored bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_by\":{\"description\":\"User ID of whoever deleted the stored bytes.\",\"type\":[\"string\",\"null\"]},\"purgeable\":{\"description\":\"Whether the bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"item_id\",\"status\",\"file_name\",\"content_type\",\"size\",\"sha256\",\"checksum_verified\",\"retention_mode\",\"retain_until\",\"enforcement\",\"legal_hold\",\"uploaded_by\",\"created_at\"],\"$defs\":{\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 3
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 3,
+    "flags": [],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-download-item",
+    "packageName": "data",
+    "name": "locked_download_item",
+    "friendlyName": "Download Locked File",
+    "description": "Downloads one version of a write-once, revision-safe file into the run's cache and checks its size and SHA-256 against the record",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 6,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "item_id",
+        "friendlyName": "Locked File ID",
+        "description": "ID of the locked file to download",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 2
+      },
+      {
+        "name": "version",
+        "friendlyName": "Version",
+        "description": "Version number to download; 0 downloads the newest locked version",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 0,
+        "index": 3,
+        "options": {
+          "range": [
+            0.0,
+            4294967295.0
+          ]
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The file was downloaded and its checksum matched",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "path",
+        "friendlyName": "File",
+        "description": "The downloaded bytes in the run's cache",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2
+      },
+      {
+        "name": "file",
+        "friendlyName": "Locked File",
+        "description": "The downloaded version with its lock details",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedFile\",\"description\":\"A locked (write-once, revision-safe) file: the file's identity together with one of its\\nversions, flattened into a single record.\",\"type\":\"object\",\"properties\":{\"item_id\":{\"description\":\"Locked file ID, used by the other Locked File nodes.\",\"type\":\"string\"},\"app_id\":{\"description\":\"App the file belongs to.\",\"type\":\"string\"},\"scope\":{\"description\":\"Whether the file is shared by the project or private to a user.\",\"$ref\":\"#/$defs/LockedScope\"},\"owner_id\":{\"description\":\"Owning user for user-scoped files; null for project files.\",\"type\":[\"string\",\"null\"]},\"name\":{\"description\":\"Display name, unique within its folder.\",\"type\":\"string\"},\"folder\":{\"description\":\"Virtual folder without leading or trailing slash; empty for the root.\",\"type\":\"string\"},\"path\":{\"description\":\"Folder and name joined with \\\"/\\\", without a leading slash.\",\"type\":\"string\"},\"file_name\":{\"description\":\"File name the bytes of this version were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of this version.\",\"type\":[\"string\",\"null\"]},\"size\":{\"description\":\"Size of this version.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"version\":{\"description\":\"Version number starting at 1; null while pending or when the file has no version.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"version_id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":[\"string\",\"null\"]},\"status\":{\"description\":\"Lifecycle state of this version: pending, locked or purged.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedVersionStatus\"},{\"type\":\"null\"}]},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":[\"string\",\"null\"]},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedRetentionMode\"},{\"type\":\"null\"}]},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedEnforcement\"},{\"type\":\"null\"}]},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes this version's bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\"},\"purgeable\":{\"description\":\"Whether this version's bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\"},\"comment\":{\"description\":\"Comment given when this version was uploaded.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata of the file.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"version_metadata\":{\"description\":\"Metadata given when this version was uploaded.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of whoever uploaded this version.\",\"type\":[\"string\",\"null\"]},\"locked_at\":{\"description\":\"When this version was committed and locked (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When this version's bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"latest_version\":{\"description\":\"Highest committed version number of the file.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_versions\":{\"description\":\"Number of committed versions whose bytes are still stored.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_size\":{\"description\":\"Bytes of all stored versions, charged to the storage quota.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"created_by\":{\"description\":\"User ID of whoever created the file.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the file was created (RFC 3339).\",\"type\":\"string\"},\"updated_at\":{\"description\":\"When the file last changed (RFC 3339).\",\"type\":\"string\"}},\"required\":[\"item_id\",\"app_id\",\"scope\",\"name\",\"folder\",\"path\",\"file_name\",\"size\",\"checksum_verified\",\"legal_hold\",\"delete_after_retention\",\"purgeable\",\"latest_version\",\"live_versions\",\"live_size\",\"created_by\",\"created_at\",\"updated_at\"],\"$defs\":{\"LockedScope\":{\"description\":\"Who a locked file belongs to.\",\"oneOf\":[{\"description\":\"Shared by the whole project.\",\"type\":\"string\",\"const\":\"project\"},{\"description\":\"Private to one user.\",\"type\":\"string\",\"const\":\"user\"}]},\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 3
+      },
+      {
+        "name": "verified",
+        "friendlyName": "Verified",
+        "description": "True when the storage provider also confirmed the SHA-256 when the version was locked; the downloaded bytes always match the recorded SHA-256",
+        "pinType": "Output",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "index": 4
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 4,
+    "flags": [
+      "Long running"
+    ],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-extend-retention",
+    "packageName": "data",
+    "name": "locked_extend_retention",
+    "friendlyName": "Extend Locked File Retention",
+    "description": "Moves the retention date of a locked version further into the future. Retention can only be extended, never shortened; needs app admin rights and per-object locks",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 5,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "item_id",
+        "friendlyName": "Locked File ID",
+        "description": "ID of the locked file",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 2
+      },
+      {
+        "name": "version_id",
+        "friendlyName": "Version ID",
+        "description": "ID of the version to extend; empty extends the newest locked version",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "retain_until",
+        "friendlyName": "Retain Until",
+        "description": "New retention date as RFC 3339 date-time (2036-12-31T00:00:00Z) or date (2036-12-31); leave empty when using Retain Days From Now",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "extend_days",
+        "friendlyName": "Retain Days From Now",
+        "description": "Retain until this many days from now instead of a fixed date; 0 uses Retain Until",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 0,
+        "index": 5
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The retention was extended",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "version",
+        "friendlyName": "Version",
+        "description": "The version with its new retention date",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedItemVersion\",\"description\":\"One immutable, write-once version of a locked file.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":\"string\"},\"item_id\":{\"description\":\"ID of the locked file this version belongs to.\",\"type\":\"string\"},\"version\":{\"description\":\"Version number starting at 1, assigned at commit; null while pending.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"status\":{\"description\":\"Lifecycle state: pending, locked or purged.\",\"$ref\":\"#/$defs/LockedVersionStatus\"},\"file_name\":{\"description\":\"File name the bytes were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of the stored bytes.\",\"type\":\"string\"},\"size\":{\"description\":\"Size of the stored bytes.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":\"string\"},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":\"string\"},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"$ref\":\"#/$defs/LockedEnforcement\"},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\",\"default\":false},\"comment\":{\"description\":\"Comment given at upload.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata given at upload.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of the uploader.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the upload was started (RFC 3339).\",\"type\":\"string\"},\"locked_at\":{\"description\":\"When the version was committed and locked (RFC 3339); null while pending.\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When the stored bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_by\":{\"description\":\"User ID of whoever deleted the stored bytes.\",\"type\":[\"string\",\"null\"]},\"purgeable\":{\"description\":\"Whether the bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"item_id\",\"status\",\"file_name\",\"content_type\",\"size\",\"sha256\",\"checksum_verified\",\"retention_mode\",\"retain_until\",\"enforcement\",\"legal_hold\",\"uploaded_by\",\"created_at\"],\"$defs\":{\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      }
+    ],
+    "inputCount": 5,
+    "outputCount": 2,
+    "flags": [],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-get-item",
+    "packageName": "data",
+    "name": "locked_get_item",
+    "friendlyName": "Get Locked File",
+    "description": "Looks up a write-once, revision-safe file by its ID, or by scope, folder and name, with every version and its lock details",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 5,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "item_id",
+        "friendlyName": "Locked File ID",
+        "description": "ID of the locked file; leave empty to look it up by scope, folder and name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 2
+      },
+      {
+        "name": "scope",
+        "friendlyName": "Scope",
+        "description": "project: shared with everyone in the project; user: private to the user running the flow",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "project",
+        "index": 3,
+        "options": {
+          "validValues": [
+            "project",
+            "user"
+          ]
+        }
+      },
+      {
+        "name": "folder",
+        "friendlyName": "Folder",
+        "description": "Folder of the file when looking it up by name; empty for the root",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "name",
+        "friendlyName": "Name",
+        "description": "Name of the file when looking it up without an ID",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The lookup finished, whether or not the file exists",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "file",
+        "friendlyName": "Locked File",
+        "description": "The file with its newest locked version",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedFile\",\"description\":\"A locked (write-once, revision-safe) file: the file's identity together with one of its\\nversions, flattened into a single record.\",\"type\":\"object\",\"properties\":{\"item_id\":{\"description\":\"Locked file ID, used by the other Locked File nodes.\",\"type\":\"string\"},\"app_id\":{\"description\":\"App the file belongs to.\",\"type\":\"string\"},\"scope\":{\"description\":\"Whether the file is shared by the project or private to a user.\",\"$ref\":\"#/$defs/LockedScope\"},\"owner_id\":{\"description\":\"Owning user for user-scoped files; null for project files.\",\"type\":[\"string\",\"null\"]},\"name\":{\"description\":\"Display name, unique within its folder.\",\"type\":\"string\"},\"folder\":{\"description\":\"Virtual folder without leading or trailing slash; empty for the root.\",\"type\":\"string\"},\"path\":{\"description\":\"Folder and name joined with \\\"/\\\", without a leading slash.\",\"type\":\"string\"},\"file_name\":{\"description\":\"File name the bytes of this version were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of this version.\",\"type\":[\"string\",\"null\"]},\"size\":{\"description\":\"Size of this version.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"version\":{\"description\":\"Version number starting at 1; null while pending or when the file has no version.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"version_id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":[\"string\",\"null\"]},\"status\":{\"description\":\"Lifecycle state of this version: pending, locked or purged.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedVersionStatus\"},{\"type\":\"null\"}]},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":[\"string\",\"null\"]},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedRetentionMode\"},{\"type\":\"null\"}]},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedEnforcement\"},{\"type\":\"null\"}]},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes this version's bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\"},\"purgeable\":{\"description\":\"Whether this version's bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\"},\"comment\":{\"description\":\"Comment given when this version was uploaded.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata of the file.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"version_metadata\":{\"description\":\"Metadata given when this version was uploaded.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of whoever uploaded this version.\",\"type\":[\"string\",\"null\"]},\"locked_at\":{\"description\":\"When this version was committed and locked (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When this version's bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"latest_version\":{\"description\":\"Highest committed version number of the file.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_versions\":{\"description\":\"Number of committed versions whose bytes are still stored.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_size\":{\"description\":\"Bytes of all stored versions, charged to the storage quota.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"created_by\":{\"description\":\"User ID of whoever created the file.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the file was created (RFC 3339).\",\"type\":\"string\"},\"updated_at\":{\"description\":\"When the file last changed (RFC 3339).\",\"type\":\"string\"}},\"required\":[\"item_id\",\"app_id\",\"scope\",\"name\",\"folder\",\"path\",\"file_name\",\"size\",\"checksum_verified\",\"legal_hold\",\"delete_after_retention\",\"purgeable\",\"latest_version\",\"live_versions\",\"live_size\",\"created_by\",\"created_at\",\"updated_at\"],\"$defs\":{\"LockedScope\":{\"description\":\"Who a locked file belongs to.\",\"oneOf\":[{\"description\":\"Shared by the whole project.\",\"type\":\"string\",\"const\":\"project\"},{\"description\":\"Private to one user.\",\"type\":\"string\",\"const\":\"user\"}]},\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      },
+      {
+        "name": "versions",
+        "friendlyName": "Versions",
+        "description": "Every version of the file, newest first, including purged ones",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedItemVersion\",\"description\":\"One immutable, write-once version of a locked file.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":\"string\"},\"item_id\":{\"description\":\"ID of the locked file this version belongs to.\",\"type\":\"string\"},\"version\":{\"description\":\"Version number starting at 1, assigned at commit; null while pending.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"status\":{\"description\":\"Lifecycle state: pending, locked or purged.\",\"$ref\":\"#/$defs/LockedVersionStatus\"},\"file_name\":{\"description\":\"File name the bytes were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of the stored bytes.\",\"type\":\"string\"},\"size\":{\"description\":\"Size of the stored bytes.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":\"string\"},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":\"string\"},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"$ref\":\"#/$defs/LockedEnforcement\"},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\",\"default\":false},\"comment\":{\"description\":\"Comment given at upload.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata given at upload.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of the uploader.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the upload was started (RFC 3339).\",\"type\":\"string\"},\"locked_at\":{\"description\":\"When the version was committed and locked (RFC 3339); null while pending.\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When the stored bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_by\":{\"description\":\"User ID of whoever deleted the stored bytes.\",\"type\":[\"string\",\"null\"]},\"purgeable\":{\"description\":\"Whether the bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"item_id\",\"status\",\"file_name\",\"content_type\",\"size\",\"sha256\",\"checksum_verified\",\"retention_mode\",\"retain_until\",\"enforcement\",\"legal_hold\",\"uploaded_by\",\"created_at\"],\"$defs\":{\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 3
+      },
+      {
+        "name": "found",
+        "friendlyName": "Found",
+        "description": "Whether the file exists and is visible to this run",
+        "pinType": "Output",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "index": 4
+      }
+    ],
+    "inputCount": 5,
+    "outputCount": 4,
+    "flags": [],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-list-items",
+    "packageName": "data",
+    "name": "locked_list_items",
+    "friendlyName": "List Locked Files",
+    "description": "Lists the write-once, revision-safe files of this app in a folder, with their newest locked version",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 5,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "scope",
+        "friendlyName": "Scope",
+        "description": "project: shared with everyone in the project; user: private to the user running the flow",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "project",
+        "index": 2,
+        "options": {
+          "validValues": [
+            "project",
+            "user"
+          ]
+        }
+      },
+      {
+        "name": "folder",
+        "friendlyName": "Folder",
+        "description": "Folder to list, such as invoices/2026; empty lists the root",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "recursive",
+        "friendlyName": "Recursive",
+        "description": "Also list files in all subfolders",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 4
+      },
+      {
+        "name": "search",
+        "friendlyName": "Search",
+        "description": "Only files whose name contains this text, ignoring case; empty lists all",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "limit",
+        "friendlyName": "Limit",
+        "description": "Maximum number of files to return",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 100,
+        "index": 6,
+        "options": {
+          "range": [
+            1.0,
+            10000.0
+          ]
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The files were listed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "files",
+        "friendlyName": "Locked Files",
+        "description": "Files in the folder, ordered by name",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedFile\",\"description\":\"A locked (write-once, revision-safe) file: the file's identity together with one of its\\nversions, flattened into a single record.\",\"type\":\"object\",\"properties\":{\"item_id\":{\"description\":\"Locked file ID, used by the other Locked File nodes.\",\"type\":\"string\"},\"app_id\":{\"description\":\"App the file belongs to.\",\"type\":\"string\"},\"scope\":{\"description\":\"Whether the file is shared by the project or private to a user.\",\"$ref\":\"#/$defs/LockedScope\"},\"owner_id\":{\"description\":\"Owning user for user-scoped files; null for project files.\",\"type\":[\"string\",\"null\"]},\"name\":{\"description\":\"Display name, unique within its folder.\",\"type\":\"string\"},\"folder\":{\"description\":\"Virtual folder without leading or trailing slash; empty for the root.\",\"type\":\"string\"},\"path\":{\"description\":\"Folder and name joined with \\\"/\\\", without a leading slash.\",\"type\":\"string\"},\"file_name\":{\"description\":\"File name the bytes of this version were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of this version.\",\"type\":[\"string\",\"null\"]},\"size\":{\"description\":\"Size of this version.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"version\":{\"description\":\"Version number starting at 1; null while pending or when the file has no version.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"version_id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":[\"string\",\"null\"]},\"status\":{\"description\":\"Lifecycle state of this version: pending, locked or purged.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedVersionStatus\"},{\"type\":\"null\"}]},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":[\"string\",\"null\"]},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedRetentionMode\"},{\"type\":\"null\"}]},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedEnforcement\"},{\"type\":\"null\"}]},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes this version's bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\"},\"purgeable\":{\"description\":\"Whether this version's bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\"},\"comment\":{\"description\":\"Comment given when this version was uploaded.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata of the file.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"version_metadata\":{\"description\":\"Metadata given when this version was uploaded.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of whoever uploaded this version.\",\"type\":[\"string\",\"null\"]},\"locked_at\":{\"description\":\"When this version was committed and locked (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When this version's bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"latest_version\":{\"description\":\"Highest committed version number of the file.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_versions\":{\"description\":\"Number of committed versions whose bytes are still stored.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_size\":{\"description\":\"Bytes of all stored versions, charged to the storage quota.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"created_by\":{\"description\":\"User ID of whoever created the file.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the file was created (RFC 3339).\",\"type\":\"string\"},\"updated_at\":{\"description\":\"When the file last changed (RFC 3339).\",\"type\":\"string\"}},\"required\":[\"item_id\",\"app_id\",\"scope\",\"name\",\"folder\",\"path\",\"file_name\",\"size\",\"checksum_verified\",\"legal_hold\",\"delete_after_retention\",\"purgeable\",\"latest_version\",\"live_versions\",\"live_size\",\"created_by\",\"created_at\",\"updated_at\"],\"$defs\":{\"LockedScope\":{\"description\":\"Who a locked file belongs to.\",\"oneOf\":[{\"description\":\"Shared by the whole project.\",\"type\":\"string\",\"const\":\"project\"},{\"description\":\"Private to one user.\",\"type\":\"string\",\"const\":\"user\"}]},\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      },
+      {
+        "name": "folders",
+        "friendlyName": "Folders",
+        "description": "Names of the folder's direct subfolders; empty for recursive listings",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Array",
+        "index": 3
+      }
+    ],
+    "inputCount": 6,
+    "outputCount": 3,
+    "flags": [],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-storage-status",
+    "packageName": "data",
+    "name": "locked_storage_status",
+    "friendlyName": "Locked Storage Status",
+    "description": "Reads whether this server offers write-once, revision-safe storage and its retention limits",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 5,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The status was read",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "status",
+        "friendlyName": "Status",
+        "description": "Provider, enforcement, retention bounds and size limit of locked storage",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedStorageStatus\",\"description\":\"Locked storage configuration of the server.\",\"type\":\"object\",\"properties\":{\"enabled\":{\"description\":\"Whether the server has locked storage configured.\",\"type\":\"boolean\"},\"provider\":{\"description\":\"Storage provider: s3, r2, gcs or azure; null when disabled.\",\"type\":[\"string\",\"null\"]},\"enforcement\":{\"description\":\"Whether locks are set per object or by a bucket-wide policy; null when disabled.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedEnforcement\"},{\"type\":\"null\"}]},\"retention_mode\":{\"description\":\"Retention mode applied to new versions.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"default_retention_days\":{\"description\":\"Retention in days applied when an upload asks for none.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"min_retention_days\":{\"description\":\"Shortest retention in days an upload may ask for.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"max_retention_days\":{\"description\":\"Longest retention in days an upload may ask for.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"max_file_bytes\":{\"description\":\"Largest size of one version.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"supports_legal_hold\":{\"description\":\"Whether versions can be put under legal hold.\",\"type\":\"boolean\"},\"supports_retention_extension\":{\"description\":\"Whether the retention of a locked version can be extended.\",\"type\":\"boolean\"}},\"required\":[\"enabled\",\"retention_mode\",\"default_retention_days\",\"min_retention_days\",\"max_retention_days\",\"max_file_bytes\",\"supports_legal_hold\",\"supports_retention_extension\"],\"$defs\":{\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]}}}",
+        "index": 2
+      },
+      {
+        "name": "enabled",
+        "friendlyName": "Enabled",
+        "description": "Whether locked storage is configured on this server",
+        "pinType": "Output",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "index": 3
+      }
+    ],
+    "inputCount": 1,
+    "outputCount": 3,
+    "flags": [],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-set-auto-delete",
+    "packageName": "data",
+    "name": "locked_set_auto_delete",
+    "friendlyName": "Set Locked File Auto Delete",
+    "description": "Chooses whether a locked version is deleted automatically once its retention ends and no legal hold remains. The retention itself does not change; project files need app admin rights",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 5,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "item_id",
+        "friendlyName": "Locked File ID",
+        "description": "ID of the locked file",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 2
+      },
+      {
+        "name": "version_id",
+        "friendlyName": "Version ID",
+        "description": "ID of the version to change; empty uses the newest locked version",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "enabled",
+        "friendlyName": "Delete After Retention",
+        "description": "True deletes the version once its retention ends, false keeps it until someone deletes it; false also cancels a deletion that is due",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": true,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "Automatic deletion was updated",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "version",
+        "friendlyName": "Version",
+        "description": "The version with its automatic deletion state",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedItemVersion\",\"description\":\"One immutable, write-once version of a locked file.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":\"string\"},\"item_id\":{\"description\":\"ID of the locked file this version belongs to.\",\"type\":\"string\"},\"version\":{\"description\":\"Version number starting at 1, assigned at commit; null while pending.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"status\":{\"description\":\"Lifecycle state: pending, locked or purged.\",\"$ref\":\"#/$defs/LockedVersionStatus\"},\"file_name\":{\"description\":\"File name the bytes were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of the stored bytes.\",\"type\":\"string\"},\"size\":{\"description\":\"Size of the stored bytes.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":\"string\"},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":\"string\"},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"$ref\":\"#/$defs/LockedEnforcement\"},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\",\"default\":false},\"comment\":{\"description\":\"Comment given at upload.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata given at upload.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of the uploader.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the upload was started (RFC 3339).\",\"type\":\"string\"},\"locked_at\":{\"description\":\"When the version was committed and locked (RFC 3339); null while pending.\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When the stored bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_by\":{\"description\":\"User ID of whoever deleted the stored bytes.\",\"type\":[\"string\",\"null\"]},\"purgeable\":{\"description\":\"Whether the bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"item_id\",\"status\",\"file_name\",\"content_type\",\"size\",\"sha256\",\"checksum_verified\",\"retention_mode\",\"retain_until\",\"enforcement\",\"legal_hold\",\"uploaded_by\",\"created_at\"],\"$defs\":{\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 2,
+    "flags": [],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-set-legal-hold",
+    "packageName": "data",
+    "name": "locked_set_legal_hold",
+    "friendlyName": "Set Locked File Legal Hold",
+    "description": "Places or lifts a legal hold on a locked version. A held version cannot be deleted even after its retention ends; needs app admin rights and a provider with legal hold support",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 5,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "item_id",
+        "friendlyName": "Locked File ID",
+        "description": "ID of the locked file",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 2
+      },
+      {
+        "name": "version_id",
+        "friendlyName": "Version ID",
+        "description": "ID of the version to hold; empty uses the newest locked version",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "enabled",
+        "friendlyName": "Hold",
+        "description": "True places the legal hold, false lifts it",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": true,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The legal hold was updated",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "version",
+        "friendlyName": "Version",
+        "description": "The version with its legal hold state",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedItemVersion\",\"description\":\"One immutable, write-once version of a locked file.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":\"string\"},\"item_id\":{\"description\":\"ID of the locked file this version belongs to.\",\"type\":\"string\"},\"version\":{\"description\":\"Version number starting at 1, assigned at commit; null while pending.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"status\":{\"description\":\"Lifecycle state: pending, locked or purged.\",\"$ref\":\"#/$defs/LockedVersionStatus\"},\"file_name\":{\"description\":\"File name the bytes were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of the stored bytes.\",\"type\":\"string\"},\"size\":{\"description\":\"Size of the stored bytes.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":\"string\"},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":\"string\"},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"$ref\":\"#/$defs/LockedEnforcement\"},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\",\"default\":false},\"comment\":{\"description\":\"Comment given at upload.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata given at upload.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of the uploader.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the upload was started (RFC 3339).\",\"type\":\"string\"},\"locked_at\":{\"description\":\"When the version was committed and locked (RFC 3339); null while pending.\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When the stored bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_by\":{\"description\":\"User ID of whoever deleted the stored bytes.\",\"type\":[\"string\",\"null\"]},\"purgeable\":{\"description\":\"Whether the bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"item_id\",\"status\",\"file_name\",\"content_type\",\"size\",\"sha256\",\"checksum_verified\",\"retention_mode\",\"retain_until\",\"enforcement\",\"legal_hold\",\"uploaded_by\",\"created_at\"],\"$defs\":{\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 2,
+    "flags": [],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-upload-item",
+    "packageName": "data",
+    "name": "locked_upload_item",
+    "friendlyName": "Upload Locked File",
+    "description": "Stores a file write-once and revision-safe: once committed nobody can change or delete it until its retention ends. Fails when storage is full",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 6,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "path",
+        "friendlyName": "File",
+        "description": "File to lock; it is read twice, once to hash and once to upload",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "scope",
+        "friendlyName": "Scope",
+        "description": "project: shared with everyone in the project; user: private to the user running the flow",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "project",
+        "index": 3,
+        "options": {
+          "validValues": [
+            "project",
+            "user"
+          ]
+        }
+      },
+      {
+        "name": "folder",
+        "friendlyName": "Folder",
+        "description": "Folder to store the file in, such as invoices/2026; empty for the root",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "name",
+        "friendlyName": "Name",
+        "description": "Display name of the locked file; empty uses the file's name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "retention_days",
+        "friendlyName": "Retention Days",
+        "description": "Days the version stays write-once and undeletable; 0 uses the server default. The server clamps it to its allowed range and ignores it under a bucket-wide policy",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 0,
+        "index": 6
+      },
+      {
+        "name": "delete_after_retention",
+        "friendlyName": "Delete After Retention",
+        "description": "Delete the version automatically once its retention ends and no legal hold remains; otherwise it stays stored until someone deletes it. Project files need app admin rights",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 7
+      },
+      {
+        "name": "comment",
+        "friendlyName": "Comment",
+        "description": "Note stored with this version, such as why it was archived",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 8
+      },
+      {
+        "name": "metadata",
+        "friendlyName": "Metadata",
+        "description": "Optional JSON object stored with this version",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
+        "defaultValue": {},
+        "index": 9
+      },
+      {
+        "name": "if_exists",
+        "friendlyName": "If Exists",
+        "description": "error: fail when a file with this name already exists in the folder; new_version: add the upload as its next version",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "error",
+        "index": 10,
+        "options": {
+          "validValues": [
+            "error",
+            "new_version"
+          ]
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The file was uploaded, verified and locked",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "file",
+        "friendlyName": "Locked File",
+        "description": "The locked file with the uploaded version",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedFile\",\"description\":\"A locked (write-once, revision-safe) file: the file's identity together with one of its\\nversions, flattened into a single record.\",\"type\":\"object\",\"properties\":{\"item_id\":{\"description\":\"Locked file ID, used by the other Locked File nodes.\",\"type\":\"string\"},\"app_id\":{\"description\":\"App the file belongs to.\",\"type\":\"string\"},\"scope\":{\"description\":\"Whether the file is shared by the project or private to a user.\",\"$ref\":\"#/$defs/LockedScope\"},\"owner_id\":{\"description\":\"Owning user for user-scoped files; null for project files.\",\"type\":[\"string\",\"null\"]},\"name\":{\"description\":\"Display name, unique within its folder.\",\"type\":\"string\"},\"folder\":{\"description\":\"Virtual folder without leading or trailing slash; empty for the root.\",\"type\":\"string\"},\"path\":{\"description\":\"Folder and name joined with \\\"/\\\", without a leading slash.\",\"type\":\"string\"},\"file_name\":{\"description\":\"File name the bytes of this version were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of this version.\",\"type\":[\"string\",\"null\"]},\"size\":{\"description\":\"Size of this version.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"version\":{\"description\":\"Version number starting at 1; null while pending or when the file has no version.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"version_id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":[\"string\",\"null\"]},\"status\":{\"description\":\"Lifecycle state of this version: pending, locked or purged.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedVersionStatus\"},{\"type\":\"null\"}]},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":[\"string\",\"null\"]},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedRetentionMode\"},{\"type\":\"null\"}]},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedEnforcement\"},{\"type\":\"null\"}]},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes this version's bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\"},\"purgeable\":{\"description\":\"Whether this version's bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\"},\"comment\":{\"description\":\"Comment given when this version was uploaded.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata of the file.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"version_metadata\":{\"description\":\"Metadata given when this version was uploaded.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of whoever uploaded this version.\",\"type\":[\"string\",\"null\"]},\"locked_at\":{\"description\":\"When this version was committed and locked (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When this version's bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"latest_version\":{\"description\":\"Highest committed version number of the file.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_versions\":{\"description\":\"Number of committed versions whose bytes are still stored.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_size\":{\"description\":\"Bytes of all stored versions, charged to the storage quota.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"created_by\":{\"description\":\"User ID of whoever created the file.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the file was created (RFC 3339).\",\"type\":\"string\"},\"updated_at\":{\"description\":\"When the file last changed (RFC 3339).\",\"type\":\"string\"}},\"required\":[\"item_id\",\"app_id\",\"scope\",\"name\",\"folder\",\"path\",\"file_name\",\"size\",\"checksum_verified\",\"legal_hold\",\"delete_after_retention\",\"purgeable\",\"latest_version\",\"live_versions\",\"live_size\",\"created_by\",\"created_at\",\"updated_at\"],\"$defs\":{\"LockedScope\":{\"description\":\"Who a locked file belongs to.\",\"oneOf\":[{\"description\":\"Shared by the whole project.\",\"type\":\"string\",\"const\":\"project\"},{\"description\":\"Private to one user.\",\"type\":\"string\",\"const\":\"user\"}]},\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      },
+      {
+        "name": "version",
+        "friendlyName": "Version",
+        "description": "The uploaded version with its lock details",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedItemVersion\",\"description\":\"One immutable, write-once version of a locked file.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":\"string\"},\"item_id\":{\"description\":\"ID of the locked file this version belongs to.\",\"type\":\"string\"},\"version\":{\"description\":\"Version number starting at 1, assigned at commit; null while pending.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"status\":{\"description\":\"Lifecycle state: pending, locked or purged.\",\"$ref\":\"#/$defs/LockedVersionStatus\"},\"file_name\":{\"description\":\"File name the bytes were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of the stored bytes.\",\"type\":\"string\"},\"size\":{\"description\":\"Size of the stored bytes.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":\"string\"},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":\"string\"},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"$ref\":\"#/$defs/LockedEnforcement\"},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\",\"default\":false},\"comment\":{\"description\":\"Comment given at upload.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata given at upload.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of the uploader.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the upload was started (RFC 3339).\",\"type\":\"string\"},\"locked_at\":{\"description\":\"When the version was committed and locked (RFC 3339); null while pending.\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When the stored bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_by\":{\"description\":\"User ID of whoever deleted the stored bytes.\",\"type\":[\"string\",\"null\"]},\"purgeable\":{\"description\":\"Whether the bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"item_id\",\"status\",\"file_name\",\"content_type\",\"size\",\"sha256\",\"checksum_verified\",\"retention_mode\",\"retain_until\",\"enforcement\",\"legal_hold\",\"uploaded_by\",\"created_at\"],\"$defs\":{\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 3
+      }
+    ],
+    "inputCount": 10,
+    "outputCount": 3,
+    "flags": [
+      "Long running"
+    ],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/locked/locked-upload-version",
+    "packageName": "data",
+    "name": "locked_upload_version",
+    "friendlyName": "Upload Locked File Version",
+    "description": "Adds a new write-once version to an existing locked file; earlier versions stay unchanged. Fails when storage is full",
+    "category": "Data/Files/Locked",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Locked"
+    ],
+    "categorySlug": "nodes/data/files/locked",
+    "icon": "/flow/icons/lock.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 3,
+      "performance": 6,
+      "governance": 2,
+      "reliability": 3,
+      "cost": 4
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Start the request",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "item_id",
+        "friendlyName": "Locked File ID",
+        "description": "ID of the locked file to add a version to",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 2
+      },
+      {
+        "name": "path",
+        "friendlyName": "File",
+        "description": "File to lock; it is read twice, once to hash and once to upload",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "retention_days",
+        "friendlyName": "Retention Days",
+        "description": "Days the version stays write-once and undeletable; 0 uses the server default. The server clamps it to its allowed range and ignores it under a bucket-wide policy",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 0,
+        "index": 4
+      },
+      {
+        "name": "delete_after_retention",
+        "friendlyName": "Delete After Retention",
+        "description": "Delete the version automatically once its retention ends and no legal hold remains; otherwise it stays stored until someone deletes it. Project files need app admin rights",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 5
+      },
+      {
+        "name": "comment",
+        "friendlyName": "Comment",
+        "description": "Note stored with this version, such as why it was archived",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 6
+      },
+      {
+        "name": "metadata",
+        "friendlyName": "Metadata",
+        "description": "Optional JSON object stored with this version",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
+        "defaultValue": {},
+        "index": 7
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "The version was uploaded, verified and locked",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "file",
+        "friendlyName": "Locked File",
+        "description": "The locked file with the uploaded version",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedFile\",\"description\":\"A locked (write-once, revision-safe) file: the file's identity together with one of its\\nversions, flattened into a single record.\",\"type\":\"object\",\"properties\":{\"item_id\":{\"description\":\"Locked file ID, used by the other Locked File nodes.\",\"type\":\"string\"},\"app_id\":{\"description\":\"App the file belongs to.\",\"type\":\"string\"},\"scope\":{\"description\":\"Whether the file is shared by the project or private to a user.\",\"$ref\":\"#/$defs/LockedScope\"},\"owner_id\":{\"description\":\"Owning user for user-scoped files; null for project files.\",\"type\":[\"string\",\"null\"]},\"name\":{\"description\":\"Display name, unique within its folder.\",\"type\":\"string\"},\"folder\":{\"description\":\"Virtual folder without leading or trailing slash; empty for the root.\",\"type\":\"string\"},\"path\":{\"description\":\"Folder and name joined with \\\"/\\\", without a leading slash.\",\"type\":\"string\"},\"file_name\":{\"description\":\"File name the bytes of this version were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of this version.\",\"type\":[\"string\",\"null\"]},\"size\":{\"description\":\"Size of this version.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"version\":{\"description\":\"Version number starting at 1; null while pending or when the file has no version.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"version_id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":[\"string\",\"null\"]},\"status\":{\"description\":\"Lifecycle state of this version: pending, locked or purged.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedVersionStatus\"},{\"type\":\"null\"}]},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":[\"string\",\"null\"]},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedRetentionMode\"},{\"type\":\"null\"}]},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"anyOf\":[{\"$ref\":\"#/$defs/LockedEnforcement\"},{\"type\":\"null\"}]},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes this version's bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\"},\"purgeable\":{\"description\":\"Whether this version's bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\"},\"comment\":{\"description\":\"Comment given when this version was uploaded.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata of the file.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"version_metadata\":{\"description\":\"Metadata given when this version was uploaded.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of whoever uploaded this version.\",\"type\":[\"string\",\"null\"]},\"locked_at\":{\"description\":\"When this version was committed and locked (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When this version's bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"latest_version\":{\"description\":\"Highest committed version number of the file.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_versions\":{\"description\":\"Number of committed versions whose bytes are still stored.\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"live_size\":{\"description\":\"Bytes of all stored versions, charged to the storage quota.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"created_by\":{\"description\":\"User ID of whoever created the file.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the file was created (RFC 3339).\",\"type\":\"string\"},\"updated_at\":{\"description\":\"When the file last changed (RFC 3339).\",\"type\":\"string\"}},\"required\":[\"item_id\",\"app_id\",\"scope\",\"name\",\"folder\",\"path\",\"file_name\",\"size\",\"checksum_verified\",\"legal_hold\",\"delete_after_retention\",\"purgeable\",\"latest_version\",\"live_versions\",\"live_size\",\"created_by\",\"created_at\",\"updated_at\"],\"$defs\":{\"LockedScope\":{\"description\":\"Who a locked file belongs to.\",\"oneOf\":[{\"description\":\"Shared by the whole project.\",\"type\":\"string\",\"const\":\"project\"},{\"description\":\"Private to one user.\",\"type\":\"string\",\"const\":\"user\"}]},\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 2
+      },
+      {
+        "name": "version",
+        "friendlyName": "Version",
+        "description": "The uploaded version with its lock details",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LockedItemVersion\",\"description\":\"One immutable, write-once version of a locked file.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Version ID, used to download, extend, hold or purge this exact version.\",\"type\":\"string\"},\"item_id\":{\"description\":\"ID of the locked file this version belongs to.\",\"type\":\"string\"},\"version\":{\"description\":\"Version number starting at 1, assigned at commit; null while pending.\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"status\":{\"description\":\"Lifecycle state: pending, locked or purged.\",\"$ref\":\"#/$defs/LockedVersionStatus\"},\"file_name\":{\"description\":\"File name the bytes were uploaded as.\",\"type\":\"string\"},\"content_type\":{\"description\":\"MIME type of the stored bytes.\",\"type\":\"string\"},\"size\":{\"description\":\"Size of the stored bytes.\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"sha256\":{\"description\":\"Lowercase hex SHA-256 of the stored bytes.\",\"type\":\"string\"},\"checksum_verified\":{\"description\":\"Whether the storage provider or the server confirmed the SHA-256 of the stored bytes.\",\"type\":\"boolean\"},\"provider_version_id\":{\"description\":\"Storage provider's version identifier (S3 VersionId, GCS generation or Azure version ID).\",\"type\":[\"string\",\"null\"]},\"retention_mode\":{\"description\":\"Retention mode: governance or compliance.\",\"$ref\":\"#/$defs/LockedRetentionMode\"},\"retain_until\":{\"description\":\"Date until which the object cannot be modified or deleted (RFC 3339).\",\"type\":\"string\"},\"enforcement\":{\"description\":\"Whether the lock is set on the object or by a bucket-wide policy.\",\"$ref\":\"#/$defs/LockedEnforcement\"},\"legal_hold\":{\"description\":\"Whether a legal hold blocks deletion regardless of the retention date.\",\"type\":\"boolean\"},\"delete_after_retention\":{\"description\":\"Whether the server deletes the bytes automatically once the retention ends and no legal hold remains.\",\"type\":\"boolean\",\"default\":false},\"comment\":{\"description\":\"Comment given at upload.\",\"type\":[\"string\",\"null\"]},\"metadata\":{\"description\":\"Metadata given at upload.\",\"type\":[\"object\",\"null\"],\"additionalProperties\":true},\"uploaded_by\":{\"description\":\"User ID of the uploader.\",\"type\":\"string\"},\"created_at\":{\"description\":\"When the upload was started (RFC 3339).\",\"type\":\"string\"},\"locked_at\":{\"description\":\"When the version was committed and locked (RFC 3339); null while pending.\",\"type\":[\"string\",\"null\"]},\"purged_at\":{\"description\":\"When the stored bytes were deleted after the retention ended (RFC 3339).\",\"type\":[\"string\",\"null\"]},\"purged_by\":{\"description\":\"User ID of whoever deleted the stored bytes.\",\"type\":[\"string\",\"null\"]},\"purgeable\":{\"description\":\"Whether the bytes may be deleted now: locked, retention ended and no legal hold.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"item_id\",\"status\",\"file_name\",\"content_type\",\"size\",\"sha256\",\"checksum_verified\",\"retention_mode\",\"retain_until\",\"enforcement\",\"legal_hold\",\"uploaded_by\",\"created_at\"],\"$defs\":{\"LockedVersionStatus\":{\"description\":\"Lifecycle state of a locked file version.\",\"oneOf\":[{\"description\":\"Upload started but not committed yet.\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Committed and protected by its retention lock.\",\"type\":\"string\",\"const\":\"locked\"},{\"description\":\"Bytes deleted after the retention ended; the record is kept as evidence.\",\"type\":\"string\",\"const\":\"purged\"}]},\"LockedRetentionMode\":{\"description\":\"How strictly the retention lock is enforced by the storage provider.\",\"oneOf\":[{\"description\":\"Privileged storage administrators could lift the lock.\",\"type\":\"string\",\"const\":\"governance\"},{\"description\":\"Nobody, including the storage account owner, can lift the lock before it ends.\",\"type\":\"string\",\"const\":\"compliance\"}]},\"LockedEnforcement\":{\"description\":\"Where the write-once guarantee is enforced.\",\"oneOf\":[{\"description\":\"A retention lock set on the stored object version itself.\",\"type\":\"string\",\"const\":\"object\"},{\"description\":\"A retention policy of the whole bucket or container.\",\"type\":\"string\",\"const\":\"bucket\"}]}}}",
+        "index": 3
+      }
+    ],
+    "inputCount": 7,
+    "outputCount": 3,
+    "flags": [
+      "Long running"
+    ],
+    "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
     "slug": "nodes/data/files/operations/storage-copy",
     "packageName": "data",
     "name": "storage_copy",
@@ -87233,6 +88454,141 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "inputCount": 2,
     "outputCount": 2,
+    "flags": [],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/files/operations/file-get-metadata",
+    "packageName": "media",
+    "name": "file_get_metadata",
+    "friendlyName": "Get File Metadata",
+    "description": "Reports a file's name, size, timestamps, media type and kind, plus what its format says about it: dimensions for images, pages and document properties for PDFs and Office files. Type detection and image headers use ranged reads of the first bytes only; PDFs and Office files are read whole.",
+    "category": "Data/Files/Operations",
+    "categoryPath": [
+      "Data",
+      "Files",
+      "Operations"
+    ],
+    "categorySlug": "nodes/data/files/operations",
+    "icon": "/flow/icons/path.svg",
+    "scores": {
+      "privacy": 8,
+      "security": 8,
+      "performance": 8,
+      "governance": 9,
+      "reliability": 8,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Initiate Execution",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "path",
+        "friendlyName": "Path",
+        "description": "File to inspect",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Output",
+        "description": "Done with the Execution",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "name",
+        "friendlyName": "Name",
+        "description": "File name including its extension",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "extension",
+        "friendlyName": "Extension",
+        "description": "Text after the last dot of the name, without the dot; empty when there is none",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 3
+      },
+      {
+        "name": "size",
+        "friendlyName": "Size",
+        "description": "Size in bytes",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "last_modified",
+        "friendlyName": "Last Modified",
+        "description": "When the file was last written",
+        "pinType": "Output",
+        "dataType": "Date",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "e_tag",
+        "friendlyName": "ETag",
+        "description": "Entity tag the store reports; it changes whenever the content changes",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 6
+      },
+      {
+        "name": "mime_type",
+        "friendlyName": "MIME Type",
+        "description": "Media type detected from the file's leading bytes, falling back to its extension",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 7
+      },
+      {
+        "name": "kind",
+        "friendlyName": "Kind",
+        "description": "One of image, pdf, office, audio, video, archive, text or other",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 8
+      },
+      {
+        "name": "details",
+        "friendlyName": "Details",
+        "description": "Metadata the file's format carries. image: width, height (upright, EXIF orientation applied), format, orientation. pdf: page_count, pdf_version, encrypted and whichever Info fields exist (title, author, subject, keywords, creator, producer, creation_date, modification_date as ISO 8601). office (docx, xlsx, pptx): title, creator, subject, keywords, created, modified, last_modified_by, pages, words, slides when present. Empty for every other kind or when the format cannot be parsed.",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
+        "index": 9
+      }
+    ],
+    "inputCount": 2,
+    "outputCount": 9,
     "flags": [],
     "oauthProviders": [],
     "requiredOauthScopes": {},
@@ -130536,6 +131892,16 @@ export const catalogNodes: CatalogNode[] = [
         }
       },
       {
+        "name": "sender_name",
+        "friendlyName": "Sender Name",
+        "description": "Name recipients see as the sender, at most 64 characters; empty uses the email event's name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 7
+      },
+      {
         "name": "exec_out",
         "friendlyName": "Out",
         "description": "The mail provider accepted the email",
@@ -130564,10 +131930,10 @@ export const catalogNodes: CatalogNode[] = [
         "index": 3
       }
     ],
-    "inputCount": 6,
+    "inputCount": 7,
     "outputCount": 3,
     "flags": [],
-    "version": 2,
+    "version": 3,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -130690,6 +132056,16 @@ export const catalogNodes: CatalogNode[] = [
         }
       },
       {
+        "name": "sender_name",
+        "friendlyName": "Sender Name",
+        "description": "Name recipients see as the sender, at most 64 characters; empty uses the email event's name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 10
+      },
+      {
         "name": "exec_out",
         "friendlyName": "Out",
         "description": "The mail provider accepted the email",
@@ -130718,10 +132094,10 @@ export const catalogNodes: CatalogNode[] = [
         "index": 3
       }
     ],
-    "inputCount": 9,
+    "inputCount": 10,
     "outputCount": 3,
     "flags": [],
-    "version": 3,
+    "version": 4,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -137056,6 +138432,113 @@ export const catalogNodes: CatalogNode[] = [
     "outputCount": 2,
     "flags": [],
     "version": 2,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/image/content/read-image-dimensions",
+    "packageName": "media",
+    "name": "read_image_dimensions",
+    "friendlyName": "Read Image Dimensions",
+    "description": "Reads width, height, format and EXIF orientation from an image file's header without decoding its pixels. Only the leading bytes the header needs are fetched, so it costs a fraction of Read Image + Get Dimensions on large photos.",
+    "category": "Image/Content",
+    "categoryPath": [
+      "Image",
+      "Content"
+    ],
+    "categorySlug": "nodes/image/content",
+    "icon": "/flow/icons/image.svg",
+    "scores": {
+      "privacy": 9,
+      "security": 9,
+      "performance": 10,
+      "governance": 9,
+      "reliability": 9,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Initiate Execution",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "path",
+        "friendlyName": "Path",
+        "description": "Image file to inspect",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "apply_exif_orientation",
+        "friendlyName": "Apply Exif Orientation",
+        "description": "Report the size of the upright image, swapping width and height when the EXIF orientation turns it by 90 degrees — the values Read Image + Get Dimensions return",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": true,
+        "index": 3
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Output",
+        "description": "Done with the Execution",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "width",
+        "friendlyName": "Width",
+        "description": "Image width in pixels",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "height",
+        "friendlyName": "Height",
+        "description": "Image height in pixels",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 3
+      },
+      {
+        "name": "format",
+        "friendlyName": "Format",
+        "description": "Image format in lowercase, e.g. jpeg, png, webp or tiff",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "orientation",
+        "friendlyName": "Orientation",
+        "description": "EXIF orientation tag (1–8); 1 when the file carries none",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 5,
+    "flags": [],
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -155658,13 +157141,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Element",
         "description": "Reference to the element (ID string or element object from Get Element)",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ElementRef\",\"description\":\"The handle every a2ui node passes around to say \\\"this element, on this\\nsurface\\\". Producers fill in what they know: a widget instantiation carries the\\nwidget and surface it belongs to, while a plain element only carries its id.\\nConsumers read `instance_id` and fall back to `id`.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Identifier of the element or widget instance.\",\"type\":\"string\"},\"instanceId\":{\"description\":\"Instance the element lives in. Absent for elements addressed directly.\",\"type\":[\"string\",\"null\"]},\"widgetId\":{\"description\":\"Widget this instance was created from.\",\"type\":[\"string\",\"null\"]},\"surfaceId\":{\"description\":\"Surface the element is rendered on.\",\"type\":[\"string\",\"null\"]},\"component\":{\"description\":\"The component itself, whose props are defined by the component type.\"}},\"required\":[\"id\"]}",
-        "index": 2,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 2
       },
       {
         "name": "event_name",
@@ -155745,7 +157224,7 @@ export const catalogNodes: CatalogNode[] = [
     "flags": [
       "Long running"
     ],
-    "version": 1,
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -155778,13 +157257,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Element",
         "description": "Element ID string or element object from Get Element",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ButtonProps\",\"type\":\"object\",\"properties\":{\"label\":{\"$ref\":\"#/$defs/BoundValue\"},\"variant\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"size\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"disabled\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"loading\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"icon\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"iconPosition\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"tooltip\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]}},\"required\":[\"label\"],\"$defs\":{\"BoundValue\":{\"description\":\"Represents a value that can be either a literal or a data path binding\",\"anyOf\":[{\"$ref\":\"#/$defs/PathBinding\"},{\"type\":\"object\",\"properties\":{\"literalString\":{\"type\":\"string\"}},\"required\":[\"literalString\"]},{\"type\":\"object\",\"properties\":{\"literalNumber\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"literalNumber\"]},{\"type\":\"object\",\"properties\":{\"literalBool\":{\"type\":\"boolean\"}},\"required\":[\"literalBool\"]},{\"type\":\"object\",\"properties\":{\"literalOptions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/SelectOption\"}}},\"required\":[\"literalOptions\"]},{\"type\":\"object\",\"properties\":{\"literalJson\":{\"type\":\"string\"}},\"required\":[\"literalJson\"]}]},\"PathBinding\":{\"description\":\"Path binding with optional default value for preview\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"defaultValue\":{\"anyOf\":[{\"$ref\":\"#/$defs/PathDefault\"},{\"type\":\"null\"}]}},\"required\":[\"path\"]},\"PathDefault\":{\"description\":\"Default value for path bindings - stores the preview value\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"boolean\"}]},\"SelectOption\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"value\",\"label\"]}}}",
-        "index": 2,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 2
       },
       {
         "name": "disabled",
@@ -155810,6 +157285,7 @@ export const catalogNodes: CatalogNode[] = [
     "flags": [
       "Long running"
     ],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156029,13 +157505,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Element",
         "description": "Element ID string or element object from Get Element",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TextFieldProps\",\"type\":\"object\",\"properties\":{\"value\":{\"$ref\":\"#/$defs/BoundValue\"},\"placeholder\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"label\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"helperText\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"error\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"disabled\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"inputType\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"multiline\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"rows\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"maxLength\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"required\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]}},\"required\":[\"value\"],\"$defs\":{\"BoundValue\":{\"description\":\"Represents a value that can be either a literal or a data path binding\",\"anyOf\":[{\"$ref\":\"#/$defs/PathBinding\"},{\"type\":\"object\",\"properties\":{\"literalString\":{\"type\":\"string\"}},\"required\":[\"literalString\"]},{\"type\":\"object\",\"properties\":{\"literalNumber\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"literalNumber\"]},{\"type\":\"object\",\"properties\":{\"literalBool\":{\"type\":\"boolean\"}},\"required\":[\"literalBool\"]},{\"type\":\"object\",\"properties\":{\"literalOptions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/SelectOption\"}}},\"required\":[\"literalOptions\"]},{\"type\":\"object\",\"properties\":{\"literalJson\":{\"type\":\"string\"}},\"required\":[\"literalJson\"]}]},\"PathBinding\":{\"description\":\"Path binding with optional default value for preview\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"defaultValue\":{\"anyOf\":[{\"$ref\":\"#/$defs/PathDefault\"},{\"type\":\"null\"}]}},\"required\":[\"path\"]},\"PathDefault\":{\"description\":\"Default value for path bindings - stores the preview value\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"boolean\"}]},\"SelectOption\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"value\",\"label\"]}}}",
-        "index": 2,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 2
       },
       {
         "name": "value",
@@ -156061,6 +157533,7 @@ export const catalogNodes: CatalogNode[] = [
     "flags": [
       "Long running"
     ],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156290,13 +157763,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Button",
         "description": "Element ID string or element object from Get Element",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ButtonProps\",\"type\":\"object\",\"properties\":{\"label\":{\"$ref\":\"#/$defs/BoundValue\"},\"variant\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"size\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"disabled\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"loading\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"icon\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"iconPosition\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"tooltip\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]}},\"required\":[\"label\"],\"$defs\":{\"BoundValue\":{\"description\":\"Represents a value that can be either a literal or a data path binding\",\"anyOf\":[{\"$ref\":\"#/$defs/PathBinding\"},{\"type\":\"object\",\"properties\":{\"literalString\":{\"type\":\"string\"}},\"required\":[\"literalString\"]},{\"type\":\"object\",\"properties\":{\"literalNumber\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"literalNumber\"]},{\"type\":\"object\",\"properties\":{\"literalBool\":{\"type\":\"boolean\"}},\"required\":[\"literalBool\"]},{\"type\":\"object\",\"properties\":{\"literalOptions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/SelectOption\"}}},\"required\":[\"literalOptions\"]},{\"type\":\"object\",\"properties\":{\"literalJson\":{\"type\":\"string\"}},\"required\":[\"literalJson\"]}]},\"PathBinding\":{\"description\":\"Path binding with optional default value for preview\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"defaultValue\":{\"anyOf\":[{\"$ref\":\"#/$defs/PathDefault\"},{\"type\":\"null\"}]}},\"required\":[\"path\"]},\"PathDefault\":{\"description\":\"Default value for path bindings - stores the preview value\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"boolean\"}]},\"SelectOption\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"value\",\"label\"]}}}",
-        "index": 2,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 2
       },
       {
         "name": "label",
@@ -156320,6 +157789,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 3,
     "outputCount": 1,
     "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -156549,13 +158019,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Chart",
         "description": "Reference to the chart element (ID or element object)",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"PlotlyChartProps\",\"type\":\"object\",\"properties\":{\"chartType\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"title\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"series\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/ChartSeries\"}},\"xAxis\":{\"anyOf\":[{\"$ref\":\"#/$defs/ChartAxis\"},{\"type\":\"null\"}]},\"yAxis\":{\"anyOf\":[{\"$ref\":\"#/$defs/ChartAxis\"},{\"type\":\"null\"}]},\"data\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"layout\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"config\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"width\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"height\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"responsive\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"showLegend\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"legendPosition\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]}},\"$defs\":{\"BoundValue\":{\"description\":\"Represents a value that can be either a literal or a data path binding\",\"anyOf\":[{\"$ref\":\"#/$defs/PathBinding\"},{\"type\":\"object\",\"properties\":{\"literalString\":{\"type\":\"string\"}},\"required\":[\"literalString\"]},{\"type\":\"object\",\"properties\":{\"literalNumber\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"literalNumber\"]},{\"type\":\"object\",\"properties\":{\"literalBool\":{\"type\":\"boolean\"}},\"required\":[\"literalBool\"]},{\"type\":\"object\",\"properties\":{\"literalOptions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/SelectOption\"}}},\"required\":[\"literalOptions\"]},{\"type\":\"object\",\"properties\":{\"literalJson\":{\"type\":\"string\"}},\"required\":[\"literalJson\"]}]},\"PathBinding\":{\"description\":\"Path binding with optional default value for preview\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"defaultValue\":{\"anyOf\":[{\"$ref\":\"#/$defs/PathDefault\"},{\"type\":\"null\"}]}},\"required\":[\"path\"]},\"PathDefault\":{\"description\":\"Default value for path bindings - stores the preview value\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"boolean\"}]},\"SelectOption\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"value\",\"label\"]},\"ChartSeries\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"dataSource\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}},\"color\":{\"type\":[\"string\",\"null\"]},\"mode\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"name\",\"type\",\"dataSource\"]},\"ChartAxis\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":[\"string\",\"null\"]},\"type\":{\"type\":[\"string\",\"null\"]},\"min\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"max\":{\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"showGrid\":{\"type\":[\"boolean\",\"null\"]},\"tickFormat\":{\"type\":[\"string\",\"null\"]}}}}}",
-        "index": 2,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 2
       },
       {
         "name": "layout",
@@ -156581,6 +158047,7 @@ export const catalogNodes: CatalogNode[] = [
     "flags": [
       "Long running"
     ],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -157750,13 +159217,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Element",
         "description": "File or voice input element ID or element object from Get Element",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ElementRef\",\"description\":\"The handle every a2ui node passes around to say \\\"this element, on this\\nsurface\\\". Producers fill in what they know: a widget instantiation carries the\\nwidget and surface it belongs to, while a plain element only carries its id.\\nConsumers read `instance_id` and fall back to `id`.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Identifier of the element or widget instance.\",\"type\":\"string\"},\"instanceId\":{\"description\":\"Instance the element lives in. Absent for elements addressed directly.\",\"type\":[\"string\",\"null\"]},\"widgetId\":{\"description\":\"Widget this instance was created from.\",\"type\":[\"string\",\"null\"]},\"surfaceId\":{\"description\":\"Surface the element is rendered on.\",\"type\":[\"string\",\"null\"]},\"component\":{\"description\":\"The component itself, whose props are defined by the component type.\"}},\"required\":[\"id\"]}",
-        "index": 1,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 1
       },
       {
         "name": "files",
@@ -157806,6 +159269,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 1,
     "outputCount": 4,
     "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -158711,13 +160175,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Input",
         "description": "Element ID string or element object from Get Element",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TextFieldProps\",\"type\":\"object\",\"properties\":{\"value\":{\"$ref\":\"#/$defs/BoundValue\"},\"placeholder\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"label\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"helperText\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"error\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"disabled\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"inputType\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"multiline\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"rows\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"maxLength\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"required\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]}},\"required\":[\"value\"],\"$defs\":{\"BoundValue\":{\"description\":\"Represents a value that can be either a literal or a data path binding\",\"anyOf\":[{\"$ref\":\"#/$defs/PathBinding\"},{\"type\":\"object\",\"properties\":{\"literalString\":{\"type\":\"string\"}},\"required\":[\"literalString\"]},{\"type\":\"object\",\"properties\":{\"literalNumber\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"literalNumber\"]},{\"type\":\"object\",\"properties\":{\"literalBool\":{\"type\":\"boolean\"}},\"required\":[\"literalBool\"]},{\"type\":\"object\",\"properties\":{\"literalOptions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/SelectOption\"}}},\"required\":[\"literalOptions\"]},{\"type\":\"object\",\"properties\":{\"literalJson\":{\"type\":\"string\"}},\"required\":[\"literalJson\"]}]},\"PathBinding\":{\"description\":\"Path binding with optional default value for preview\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"defaultValue\":{\"anyOf\":[{\"$ref\":\"#/$defs/PathDefault\"},{\"type\":\"null\"}]}},\"required\":[\"path\"]},\"PathDefault\":{\"description\":\"Default value for path bindings - stores the preview value\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"boolean\"}]},\"SelectOption\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"value\",\"label\"]}}}",
-        "index": 2,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 2
       },
       {
         "name": "placeholder",
@@ -158741,6 +160201,7 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 3,
     "outputCount": 1,
     "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -159619,13 +161080,9 @@ export const catalogNodes: CatalogNode[] = [
         "friendlyName": "Select",
         "description": "Element ID string or element object from Get Element",
         "pinType": "Input",
-        "dataType": "Struct",
+        "dataType": "Generic",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"SelectProps\",\"type\":\"object\",\"properties\":{\"value\":{\"$ref\":\"#/$defs/BoundValue\"},\"options\":{\"$ref\":\"#/$defs/BoundValue\"},\"placeholder\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"label\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"disabled\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"multiple\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]},\"searchable\":{\"anyOf\":[{\"$ref\":\"#/$defs/BoundValue\"},{\"type\":\"null\"}]}},\"required\":[\"value\",\"options\"],\"$defs\":{\"BoundValue\":{\"description\":\"Represents a value that can be either a literal or a data path binding\",\"anyOf\":[{\"$ref\":\"#/$defs/PathBinding\"},{\"type\":\"object\",\"properties\":{\"literalString\":{\"type\":\"string\"}},\"required\":[\"literalString\"]},{\"type\":\"object\",\"properties\":{\"literalNumber\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"literalNumber\"]},{\"type\":\"object\",\"properties\":{\"literalBool\":{\"type\":\"boolean\"}},\"required\":[\"literalBool\"]},{\"type\":\"object\",\"properties\":{\"literalOptions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/SelectOption\"}}},\"required\":[\"literalOptions\"]},{\"type\":\"object\",\"properties\":{\"literalJson\":{\"type\":\"string\"}},\"required\":[\"literalJson\"]}]},\"PathBinding\":{\"description\":\"Path binding with optional default value for preview\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"defaultValue\":{\"anyOf\":[{\"$ref\":\"#/$defs/PathDefault\"},{\"type\":\"null\"}]}},\"required\":[\"path\"]},\"PathDefault\":{\"description\":\"Default value for path bindings - stores the preview value\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"boolean\"}]},\"SelectOption\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"value\",\"label\"]}}}",
-        "index": 2,
-        "options": {
-          "enforceSchema": false
-        }
+        "index": 2
       },
       {
         "name": "value",
@@ -159651,6 +161108,7 @@ export const catalogNodes: CatalogNode[] = [
     "flags": [
       "Long running"
     ],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -183301,7 +184759,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 2,
         "options": {
           "enforceSchema": true
@@ -183369,7 +184827,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 2,
         "options": {
           "enforceSchema": true
@@ -183441,7 +184899,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 2,
         "options": {
           "enforceSchema": true
@@ -183523,7 +184981,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183586,7 +185044,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183631,7 +185089,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183676,7 +185134,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183749,7 +185207,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -183782,7 +185240,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183805,7 +185263,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -183838,7 +185296,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183860,7 +185318,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -183893,7 +185351,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183915,7 +185373,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -183948,7 +185406,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -183971,7 +185429,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -184004,7 +185462,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -184038,7 +185496,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -184071,7 +185529,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -184102,7 +185560,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -184135,7 +185593,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -184167,7 +185625,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -184200,7 +185658,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -184232,7 +185690,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -184265,7 +185723,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -184287,7 +185745,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -184320,7 +185778,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -184343,7 +185801,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -184376,7 +185834,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1,
         "options": {
           "enforceSchema": true
@@ -184398,7 +185856,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 1
       }
     ],
@@ -185267,7 +186725,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"anyOf\":[true,{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}},{\"type\":\"string\"}]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"HttpRequest\",\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"method\":{\"$ref\":\"#/$defs/Method\"},\"headers\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"type\":\"string\"}},\"body\":{\"anyOf\":[{\"$ref\":\"#/$defs/HttpBody\"},{\"type\":\"null\"}]}},\"required\":[\"url\",\"method\"],\"$defs\":{\"Method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"DELETE\",\"PATCH\"]},\"HttpBody\":{\"description\":\"Serialized externally tagged: `{\\\"Json\\\": value}`, `{\\\"Bytes\\\": [..]}`, `{\\\"String\\\": \\\"..\\\"}`.\\nAny other shape is a body written before the tag existed and still reads as `Json`.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"Json\":true},\"required\":[\"Json\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Bytes\":{\"type\":\"array\",\"items\":{\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255}}},\"required\":[\"Bytes\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"String\":{\"type\":\"string\"}},\"required\":[\"String\"],\"additionalProperties\":false}]}}}",
         "index": 2,
         "options": {
           "enforceSchema": true
@@ -198193,8 +199651,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Data",
     "slug": "nodes/data",
     "depth": 1,
-    "count": 521,
-    "description": "Browse 521 generated Flow-Like node references in Data with pin details and available schema, package, and risk-rating metadata."
+    "count": 532,
+    "description": "Browse 532 generated Flow-Like node references in Data with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Data Studio",
@@ -198473,8 +199931,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Data/Files",
     "slug": "nodes/data/files",
     "depth": 2,
-    "count": 43,
-    "description": "Browse 43 generated Flow-Like node references in Data/Files with pin details and available schema, package, and risk-rating metadata."
+    "count": 54,
+    "description": "Browse 54 generated Flow-Like node references in Data/Files with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Content",
@@ -198501,12 +199959,20 @@ export const catalogCategories: CatalogCategory[] = [
     "description": "Browse 6 generated Flow-Like node references in Data/Files/External with pin details and available schema, package, and risk-rating metadata."
   },
   {
+    "label": "Locked",
+    "path": "Data/Files/Locked",
+    "slug": "nodes/data/files/locked",
+    "depth": 3,
+    "count": 10,
+    "description": "Browse 10 generated Flow-Like node references in Data/Files/Locked with pin details and available schema, package, and risk-rating metadata."
+  },
+  {
     "label": "Operations",
     "path": "Data/Files/Operations",
     "slug": "nodes/data/files/operations",
     "depth": 3,
-    "count": 18,
-    "description": "Browse 18 generated Flow-Like node references in Data/Files/Operations with pin details and available schema, package, and risk-rating metadata."
+    "count": 19,
+    "description": "Browse 19 generated Flow-Like node references in Data/Files/Operations with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Path",
@@ -198929,8 +200395,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Image",
     "slug": "nodes/image",
     "depth": 1,
-    "count": 18,
-    "description": "Browse 18 generated Flow-Like node references in Image with pin details and available schema, package, and risk-rating metadata."
+    "count": 19,
+    "description": "Browse 19 generated Flow-Like node references in Image with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Annotate",
@@ -198945,8 +200411,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Image/Content",
     "slug": "nodes/image/content",
     "depth": 2,
-    "count": 4,
-    "description": "Browse 4 generated Flow-Like node references in Image/Content with pin details and available schema, package, and risk-rating metadata."
+    "count": 5,
+    "description": "Browse 5 generated Flow-Like node references in Image/Content with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Metadata",

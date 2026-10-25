@@ -2,7 +2,12 @@
 
 import { useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { SearchIcon, WorkflowIcon, XIcon } from "lucide-react";
+import {
+	LoaderCircleIcon,
+	SearchIcon,
+	WorkflowIcon,
+	XIcon,
+} from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { useSearch } from "../../../hooks/use-search-index";
@@ -177,6 +182,7 @@ export interface FlowsOverviewPageProps {
 
 export function FlowsOverviewPage({
 	appId,
+	app,
 	boards,
 	boardCreation,
 	setBoardCreation,
@@ -190,6 +196,10 @@ export function FlowsOverviewPage({
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
 	const enabled = appId.length > 0;
+	const loading = boards.isLoading && boards.data === undefined;
+	const loadingBoardIds =
+		app?.id === appId ? Array.from(new Set(asArray(app.boards))) : [];
+	const hasLoadingFlows = loading && loadingBoardIds.length > 0;
 
 	// One app-wide call each, rather than one per card.
 	const pages = useInvoke(
@@ -376,28 +386,50 @@ export function FlowsOverviewPage({
 							</p>
 						) : null}
 					</div>
+				) : hasLoadingFlows ? (
+					<Skeleton aria-hidden className="h-9 w-full max-w-2xl" />
 				) : null}
 			</header>
 
 			<div className="flex min-h-0 flex-1 flex-col gap-6 min-[1120px]:flex-row min-[1120px]:items-start">
 				<div className="flex min-w-0 flex-1 flex-col gap-7 pb-6">
-					{boards.isLoading ? (
-						<div
-							className="grid items-start gap-3"
-							style={{
-								gridTemplateColumns: "repeat(auto-fill, minmax(348px, 1fr))",
-							}}
-						>
-							{[0, 1, 2, 3].map((index) => (
-								<Card
-									key={`skeleton-${index}`}
-									className="gap-3 border-border/60 bg-card/80 p-3"
-								>
-									<Skeleton className="h-9 w-3/4" />
-									<Skeleton className="h-8 w-full" />
-									<Skeleton className="h-4 w-1/2" />
-								</Card>
-							))}
+					{loading ? (
+						<div className="flex flex-col gap-2.5">
+							<output
+								className={
+									hasLoadingFlows
+										? "sr-only"
+										: "flex items-center gap-2 py-3 text-sm text-muted-foreground"
+								}
+							>
+								<LoaderCircleIcon aria-hidden className="size-4 animate-spin" />
+								{t("loadingFlows", "Loading flows…")}
+							</output>
+							{hasLoadingFlows ? (
+								<div aria-hidden className="flex flex-col gap-2.5">
+									<Skeleton className="h-4 w-48" />
+									<div
+										className="grid items-start gap-3"
+										style={{
+											gridTemplateColumns:
+												"repeat(auto-fill, minmax(min(348px, 100%), 1fr))",
+										}}
+									>
+										{loadingBoardIds.map((boardId) => (
+											<Card
+												key={boardId}
+												className="gap-3 border-border/60 bg-card/80 p-3"
+											>
+												<Skeleton className="h-9 w-3/4" />
+												<Skeleton className="h-10 w-full" />
+												<Skeleton className="h-4 w-1/2" />
+												<Skeleton className="h-6 w-2/3" />
+												<Skeleton className="h-8 w-full" />
+											</Card>
+										))}
+									</div>
+								</div>
+							) : null}
 						</div>
 					) : rows.length === 0 ? (
 						<EmptyFlows
@@ -421,7 +453,7 @@ export function FlowsOverviewPage({
 										className="grid items-start gap-3"
 										style={{
 											gridTemplateColumns:
-												"repeat(auto-fill, minmax(348px, 1fr))",
+												"repeat(auto-fill, minmax(min(348px, 100%), 1fr))",
 										}}
 									>
 										{bandRows.map((row) => (
@@ -455,6 +487,10 @@ export function FlowsOverviewPage({
 						events={eventList}
 						onSelectRun={handleSelectRun}
 					/>
+				) : hasLoadingFlows ? (
+					<div aria-hidden className="w-full shrink-0 min-[1120px]:w-84">
+						<Skeleton className="h-48 w-full rounded-xl" />
+					</div>
 				) : null}
 			</div>
 		</div>

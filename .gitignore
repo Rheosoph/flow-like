@@ -135,3 +135,4 @@ output
 # Generated local production-component browser fixture
 /tests/board-parity-browser/.next/
 /tests/board-parity-browser/public
+host-drag.png

@@ -170,7 +170,7 @@ impl CachedDBRefresher for ViewRefresher {
         let _guard = self.lock.lock().await;
         let (source, generation) = self
             .source
-            .load_with_generation(&mut context.clone())
+            .load_unflushed_with_generation(&mut context.clone())
             .await?;
         if self.source_generation.load(Ordering::Acquire) == generation {
             return Ok(());
@@ -209,7 +209,7 @@ pub(super) async fn cache_view(
     source: NodeDBConnection,
     store: LanceDBVectorStore,
 ) -> Result<NodeDBConnection> {
-    let (_, source_generation) = source.load_with_generation(context).await?;
+    let (_, source_generation) = source.load_unflushed_with_generation(context).await?;
     let cache_key = format!("db::view::{}", uuid::Uuid::new_v4());
     let cached = CachedDB {
         db: Arc::new(RwLock::new(BufferedVectorStore::new(store, 0))),
@@ -527,7 +527,11 @@ fn definition(operation: Operation) -> Node {
 async fn execute(operation: Operation, context: &mut ExecutionContext) -> Result<()> {
     context.deactivate_exec_pin("exec_out").await?;
     let source: NodeDBConnection = context.evaluate_pin("database").await?;
-    let cached = source.load(context).await?;
+    let cached = if matches!(operation, Operation::Reference) {
+        source.load_unflushed_with_generation(context).await?.0
+    } else {
+        source.load(context).await?
+    };
     if matches!(
         operation,
         Operation::Snapshot

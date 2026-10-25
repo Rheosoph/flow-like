@@ -7,13 +7,18 @@ import {
 	type ReactNode,
 	useEffect,
 	useMemo,
-	useRef,
 	useState,
 } from "react";
 import {
 	CHAT_CHART_PALETTE_VARS,
 	getNivoChartTheme,
 } from "../../../lib/chart-theme";
+import {
+	FittedLegendSymbol,
+	NIVO_LEGEND_SYMBOL_SIZE,
+	fitNivoLegendItemWidth,
+	useNivoTooltipBounds,
+} from "../../../lib/nivo-chart-fit";
 import { cn } from "../../../lib/utils";
 import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
@@ -133,6 +138,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "bar":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -175,10 +181,11 @@ function ChartSilhouette({ type }: { type: string }) {
 				</svg>
 			);
 		case "line":
-		case `areaBump`:
+		case "areaBump":
 		case "bump":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -202,6 +209,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "sunburst":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -242,6 +250,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "radar":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -263,6 +272,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "swarmplot":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -277,6 +287,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "calendar":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -300,6 +311,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "circlePacking":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -344,6 +356,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "funnel":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -356,6 +369,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "chord":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -405,6 +419,7 @@ function ChartSilhouette({ type }: { type: string }) {
 		case "waffle":
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -428,6 +443,7 @@ function ChartSilhouette({ type }: { type: string }) {
 			// Generic chart placeholder
 			return (
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 100 60"
 					className="w-full h-full text-muted-foreground"
 				>
@@ -504,14 +520,13 @@ type ChartInfo = {
 	loader: () => Promise<ChartModule | null>;
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const loadChart = async (
 	component: string,
-	importFn: () => Promise<any>,
+	importFn: () => Promise<unknown>,
 ): Promise<ChartModule | null> => {
 	try {
-		const mod = await importFn();
-		return (mod[component] as ChartModule) ?? null;
+		const mod = (await importFn()) as Record<string, ChartModule | undefined>;
+		return mod[component] ?? null;
 	} catch {
 		return null;
 	}
@@ -659,6 +674,108 @@ const CHART_PACKAGES: Record<string, ChartInfo> = {
 	},
 };
 
+const CHARTS_WITH_LEGENDS = [
+	"bar",
+	"line",
+	"pie",
+	"radar",
+	"heatmap",
+	"scatter",
+	"stream",
+	"waffle",
+];
+const LEGEND_ITEM_HEIGHT = 20;
+
+const CHARTS_WITH_SMALL_MARGINS = [
+	"funnel",
+	"pie",
+	"treemap",
+	"sunburst",
+	"circlePacking",
+	"waffle",
+	"chord",
+	"voronoi",
+	"network",
+];
+
+type ChartMargin = { top: number; right: number; bottom: number; left: number };
+type MarginPreset = "edge" | "compact" | "regular";
+
+const MARGIN_SIDES = ["top", "right", "bottom", "left"] as const;
+
+/** `edge` charts fill their box; `compact` is for containers under 400px. */
+const MARGIN_PRESETS: Readonly<Record<MarginPreset, ChartMargin>> = {
+	edge: { top: 5, right: 5, bottom: 5, left: 5 },
+	compact: { top: 20, right: 20, bottom: 30, left: 35 },
+	regular: { top: 30, right: 30, bottom: 50, left: 50 },
+};
+
+/** The regular preset's bottom margin already leaves room for a legend row. */
+function presetMargin(preset: MarginPreset, hasBottomLegend: boolean) {
+	const margin = MARGIN_PRESETS[preset];
+	if (!hasBottomLegend || preset === "regular") return margin;
+	return { ...margin, bottom: margin.bottom + LEGEND_ITEM_HEIGHT };
+}
+
+function withMarginDefaults(
+	margin: Partial<ChartMargin> | undefined,
+	defaults: ChartMargin,
+) {
+	return Object.fromEntries(
+		MARGIN_SIDES.map((side) => [side, margin?.[side] ?? defaults[side]]),
+	) as ChartMargin;
+}
+
+type LegendLabelSource = "keys" | "id" | "label";
+type LegendDatum = { id?: unknown; label?: unknown };
+type HorizontalMargin = { left?: number; right?: number };
+
+/** Where each chart's box legend takes its labels from, mirroring nivo. */
+const LEGEND_LABEL_SOURCE: Readonly<Record<string, LegendLabelSource>> = {
+	bar: "keys",
+	radar: "keys",
+	stream: "keys",
+	line: "id",
+	scatter: "id",
+	pie: "label",
+	waffle: "label",
+};
+
+function datumLabel(datum: LegendDatum, preferLabel: boolean) {
+	return String((preferLabel ? datum.label : undefined) ?? datum.id ?? "");
+}
+
+function legendLabel(item: unknown, source: LegendLabelSource) {
+	if (source === "keys") return String(item);
+	return datumLabel((item ?? {}) as LegendDatum, source === "label");
+}
+
+function legendLabels(chartType: string, props: Record<string, unknown>) {
+	const source = LEGEND_LABEL_SOURCE[chartType];
+	const items = source === "keys" ? props.keys : props.data;
+	if (!source || !Array.isArray(items)) return [];
+	return items.map((item) => legendLabel(item, source));
+}
+
+function fitLegendWidths(
+	legends: readonly Record<string, unknown>[],
+	chartType: string,
+	props: Record<string, unknown>,
+	chartWidth: number,
+) {
+	const labels = legendLabels(chartType, props);
+	if (labels.length === 0) return legends;
+	const margin = props.margin as HorizontalMargin | undefined;
+	const innerWidth = chartWidth - (margin?.left ?? 0) - (margin?.right ?? 0);
+	return legends.map((legend) => ({
+		...legend,
+		itemWidth: fitNivoLegendItemWidth(
+			labels,
+			legend.direction === "row" ? innerWidth : 0,
+		),
+	}));
+}
+
 export function A2UINivoChart({
 	elementRef,
 	component,
@@ -667,8 +784,8 @@ export function A2UINivoChart({
 }: ComponentProps<NivoChartComponent>) {
 	const { t } = useTranslation("common");
 	const triggerEvent = useComponentEventTrigger(componentId);
-	const containerRef = useRef<HTMLDivElement>(null);
-	const rootRef = useElementRef(elementRef, containerRef);
+	const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
+	const rootRef = useElementRef<HTMLDivElement>(elementRef, setRootElement);
 	const [chartModule, setChartModule] = useState<ChartModule | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -731,8 +848,7 @@ export function A2UINivoChart({
 	}, [chartType]);
 
 	useEffect(() => {
-		const container = containerRef.current;
-		if (!container) return;
+		if (!rootElement) return;
 		const observer = new ResizeObserver((entries) => {
 			const entry = entries[0];
 			if (entry)
@@ -741,9 +857,11 @@ export function A2UINivoChart({
 					height: entry.contentRect.height,
 				});
 		});
-		observer.observe(container);
+		observer.observe(rootElement);
 		return () => observer.disconnect();
-	}, []);
+	}, [rootElement]);
+
+	useNivoTooltipBounds(rootElement);
 
 	const data = useMemo(() => {
 		const fallbackData = NIVO_SAMPLE_DATA[chartType] ?? NIVO_SAMPLE_DATA.bar;
@@ -783,7 +901,7 @@ export function A2UINivoChart({
 
 				case "line":
 				case "bump":
-				case `areaBump`:
+				case "areaBump":
 				case "radialBar":
 					// Expects array of { id, data: [{ x, y }] }
 					return (
@@ -926,31 +1044,22 @@ export function A2UINivoChart({
 		return [...CHAT_CHART_PALETTE_VARS];
 	}, [colors]);
 
-	// Responsive margins based on container size
 	const isSmallContainer = containerSize.width > 0 && containerSize.width < 400;
-	const chartsWithSmallMargins = [
-		"funnel",
-		"pie",
-		"treemap",
-		"sunburst",
-		"circlePacking",
-		"waffle",
-		"chord",
-		"voronoi",
-		"network",
-	];
-	const isSmallMarginChart = chartsWithSmallMargins.includes(chartType);
-	const defaultMargin = useMemo(() => {
-		const baseMargin = isSmallMarginChart ? 5 : isSmallContainer ? 20 : 30;
-		const bottomMargin = isSmallMarginChart ? 5 : isSmallContainer ? 30 : 50;
-		const leftMargin = isSmallMarginChart ? 5 : isSmallContainer ? 35 : 50;
-		return {
-			top: margin?.top ?? baseMargin,
-			right: margin?.right ?? baseMargin,
-			bottom: margin?.bottom ?? bottomMargin,
-			left: margin?.left ?? leftMargin,
-		};
-	}, [margin, isSmallMarginChart, isSmallContainer]);
+	const isSmallMarginChart = CHARTS_WITH_SMALL_MARGINS.includes(chartType);
+	const hasBottomLegend =
+		showLegend &&
+		legendPosition === "bottom" &&
+		CHARTS_WITH_LEGENDS.includes(chartType);
+	const marginPreset: MarginPreset = isSmallMarginChart
+		? "edge"
+		: isSmallContainer
+			? "compact"
+			: "regular";
+	const defaultMargin = useMemo(
+		() =>
+			withMarginDefaults(margin, presetMargin(marginPreset, hasBottomLegend)),
+		[margin, marginPreset, hasBottomLegend],
+	);
 
 	const legends = useMemo(() => {
 		if (!showLegend) return [];
@@ -970,15 +1079,16 @@ export function A2UINivoChart({
 			{
 				anchor: anchorMap[legendPosition] ?? "bottom",
 				direction: directionMap[legendPosition] ?? "row",
-				translateY: legendPosition === "bottom" ? 50 : 0,
+				// Flush with the SVG's bottom edge, inside the reserved margin.
+				translateY: legendPosition === "bottom" ? defaultMargin.bottom : 0,
 				translateX: legendPosition === "right" ? 100 : 0,
 				itemWidth: 80,
-				itemHeight: 20,
-				symbolSize: 12,
-				symbolShape: "circle",
+				itemHeight: LEGEND_ITEM_HEIGHT,
+				symbolSize: NIVO_LEGEND_SYMBOL_SIZE,
+				symbolShape: FittedLegendSymbol,
 			},
 		];
-	}, [showLegend, legendPosition]);
+	}, [showLegend, legendPosition, defaultMargin.bottom]);
 
 	const chartProps = useMemo(() => {
 		const baseProps: Record<string, unknown> = {
@@ -989,17 +1099,7 @@ export function A2UINivoChart({
 			margin: defaultMargin,
 			colors: colorScheme,
 		};
-		const chartsWithLegends = [
-			"bar",
-			"line",
-			"pie",
-			"radar",
-			"heatmap",
-			"scatter",
-			"stream",
-			"waffle",
-		];
-		if (chartsWithLegends.includes(chartType)) baseProps.legends = legends;
+		if (CHARTS_WITH_LEGENDS.includes(chartType)) baseProps.legends = legends;
 
 		switch (chartType) {
 			case "bar":
@@ -1195,7 +1295,7 @@ export function A2UINivoChart({
 				};
 			}
 			case "bump":
-			case `areaBump`:
+			case "areaBump":
 				return {
 					...baseProps,
 					xPadding: 0.5,
@@ -1419,6 +1519,10 @@ export function A2UINivoChart({
 		const merged = rawConfig ? { ...chartProps, ...rawConfig } : chartProps;
 		return {
 			...merged,
+			legends:
+				merged.legends === legends
+					? fitLegendWidths(legends, chartType, merged, containerSize.width)
+					: merged.legends,
 			// Every nivo chart calls `onClick(datum, event)`, but the datum shape
 			// is per-chart and carries live scales and parent back-references.
 			onClick: (datum: unknown) => {
@@ -1430,7 +1534,15 @@ export function A2UINivoChart({
 				);
 			},
 		};
-	}, [chartProps, chartType, component, rawConfig, triggerEvent]);
+	}, [
+		chartProps,
+		chartType,
+		component,
+		containerSize.width,
+		legends,
+		rawConfig,
+		triggerEvent,
+	]);
 
 	if (loading) {
 		return (

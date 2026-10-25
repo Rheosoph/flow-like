@@ -14,11 +14,23 @@ use crate::{
 use super::record::{self, AuditRecordInput, WriteMode};
 
 /// Retain the audit policy when a response stream outlives its request handler.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ExecutionAuditContext {
     pub db: Arc<DatabaseConnection>,
     pub dialect: DbDialect,
     pub enabled: bool,
+    /// Lets run bookkeeping reach the run's log store, e.g. to leave the reason a run's
+    /// executor died as its last log entry. `None` in tests that only need the database.
+    pub state: Option<AppState>,
+}
+
+impl std::fmt::Debug for ExecutionAuditContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutionAuditContext")
+            .field("dialect", &self.dialect)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
 }
 
 impl From<&AppState> for ExecutionAuditContext {
@@ -27,6 +39,7 @@ impl From<&AppState> for ExecutionAuditContext {
             db: Arc::new(state.db.clone()),
             dialect: state.db_dialect,
             enabled: super::records_executions(&state.platform_config.audit),
+            state: Some(state.clone()),
         }
     }
 }
@@ -272,6 +285,7 @@ mod tests {
             db: Arc::new(DatabaseConnection::default()),
             dialect: DbDialect::default(),
             enabled: false,
+            state: None,
         };
         record_execution_result(
             &context,
@@ -294,6 +308,7 @@ mod tests {
             db: Arc::new(db),
             dialect: DbDialect::default(),
             enabled: true,
+            state: None,
         };
         let request = super::super::request::RequestAuditContext::default();
         let failures = request.failures.clone();

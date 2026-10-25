@@ -47,13 +47,13 @@ impl NodeLogic for BytesToTextNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
         let lossy: bool = context.evaluate_pin("lossy").await?;
 
-        let text = match String::from_utf8(bytes.clone()) {
+        let text = match std::str::from_utf8(&bytes) {
             Ok(text) => {
                 context.set_pin_value("was_valid", json!(true)).await?;
-                text
+                text.to_string()
             }
             Err(_) if lossy => {
                 context.set_pin_value("was_valid", json!(false)).await?;
@@ -98,9 +98,7 @@ impl NodeLogic for TextToBytesNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let text: String = context.evaluate_pin("text").await?;
-        context
-            .set_pin_value("bytes", json!(text.into_bytes()))
-            .await?;
+        context.set_pin_bytes("bytes", text.into_bytes()).await?;
         Ok(())
     }
 }

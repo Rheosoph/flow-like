@@ -24,6 +24,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { useBoardRenderer } from "../../hooks/use-board-renderer";
+import { useWebGlSupport } from "../../hooks/use-webgl-support";
 import { domRendererMinZoom } from "../../lib/board-canvas/dom-visibility";
 import {
 	type MeasuredNodeGeometry,
@@ -31,6 +32,7 @@ import {
 	isNativeCanvasNode,
 	sceneFromFlow,
 } from "../../lib/board-canvas/scene";
+import { collectNodeStatus } from "../../lib/board-canvas/status";
 import { readCanvasTheme } from "../../lib/board-canvas/theme";
 import { isWebkitLite } from "../../lib/platform";
 import { useBoardQualityStore } from "../../state/board-quality-state";
@@ -50,17 +52,34 @@ import {
 	createNativeFlowProjectionCache,
 	prepareNativeSceneNodes,
 } from "./egui-flow-proxy";
+import { LargeGraphNavigation } from "./large-graph-navigation";
 import {
 	StandaloneBoardBackground,
 	StandaloneBoardControls,
 	StandaloneBoardMiniMap,
 } from "./standalone-board-chrome";
-import { StandaloneBoardHost } from "./standalone-board-host";
+import {
+	NATIVE_EDGE_PLANE_Z,
+	NATIVE_NODE_PLANE_Z,
+	StandaloneBoardHost,
+} from "./standalone-board-host";
 
 import type { FlowCanvasProps } from "./flow-board";
 
 const MAX_ZOOM = 3;
 const NATIVE_MIN_ZOOM = 0.02;
+
+function isTextEditingTarget(target: EventTarget | null) {
+	const element =
+		target instanceof Element
+			? target
+			: target instanceof globalThis.Node
+				? target.parentElement
+				: null;
+	return !!element?.closest(
+		"input, textarea, [contenteditable]:not([contenteditable='false'])",
+	);
+}
 
 function NativeViewportPlane({
 	zIndex,
@@ -132,8 +151,18 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 		preference: typeof preferenceSession;
 		message: string;
 	}>();
+	// Without WebGL2 egui can only fail, after loading its WASM and parsing the whole scene.
+	const webGl2 = useWebGlSupport("webgl2");
+	const unsupported =
+		preferredRenderer === "egui" && webGl2 === false
+			? t(
+					"boardRendererNoWebGl2",
+					"This browser has no WebGL2, which the WASM renderer needs.",
+				)
+			: undefined;
 	const failure =
-		fallback?.preference === preferenceSession ? fallback.message : undefined;
+		unsupported ??
+		(fallback?.preference === preferenceSession ? fallback.message : undefined);
 	const renderer = failure ? "react-flow" : preferredRenderer;
 	const paneWidth = useStore((state) => state.width);
 	const paneHeight = useStore((state) => state.height);
@@ -198,10 +227,23 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 	const qualityMarks = useBoardQualityStore((state) =>
 		renderer === "egui" ? state.marks : undefined,
 	);
-	const previousDomIds = useRef<Set<string>>(new Set());
-	const domNodeIds = useMemo(() => {
-		if (renderer !== "egui") return new Set<string>();
-		const ids = collectDomNodeIds(props.nodes ?? [], {
+	const nodeStatus = useMemo(
+		() =>
+			renderer === "egui"
+				? collectNodeStatus(props.nodes ?? [], {
+						runs,
+						currentMetadata,
+						currentSummary,
+						currentSummaryRunId,
+						heatmapEnabled,
+						heatmap,
+						qualityInline,
+						qualityMarks,
+					})
+				: undefined,
+		[
+			renderer,
+			props.nodes,
 			runs,
 			currentMetadata,
 			currentSummary,
@@ -210,6 +252,12 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 			heatmap,
 			qualityInline,
 			qualityMarks,
+		],
+	);
+	const previousDomIds = useRef<Set<string>>(new Set());
+	const domNodeIds = useMemo(() => {
+		if (renderer !== "egui") return new Set<string>();
+		const ids = collectDomNodeIds(props.nodes ?? [], {
 			forceDomText: theme?.nativeFontCompatible === false,
 		});
 		for (const id of retainedDomIds) ids.add(id);
@@ -220,20 +268,7 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 			return previousDomIds.current;
 		previousDomIds.current = ids;
 		return ids;
-	}, [
-		renderer,
-		props.nodes,
-		runs,
-		currentMetadata,
-		currentSummary,
-		currentSummaryRunId,
-		heatmapEnabled,
-		heatmap,
-		qualityInline,
-		qualityMarks,
-		retainedDomIds,
-		theme?.nativeFontCompatible,
-	]);
+	}, [renderer, props.nodes, retainedDomIds, theme?.nativeFontCompatible]);
 	const nativePalette = useMemo(
 		() =>
 			theme
@@ -334,6 +369,17 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 			window.removeEventListener("blur", release);
 		};
 	}, [renderer]);
+	useEffect(() => {
+		const element = host.current;
+		if (!element) return;
+		// WebKit grows a press on board chrome the canvas leaves to the DOM (toolbar gaps,
+		// the loading overlay) into a page-wide selection, even under `user-select: none`.
+		const blockSelection = (event: Event) => {
+			if (!isTextEditingTarget(event.target)) event.preventDefault();
+		};
+		element.addEventListener("selectstart", blockSelection);
+		return () => element.removeEventListener("selectstart", blockSelection);
+	}, []);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Hover editors belong to the active board and renderer session.
 	useEffect(() => {
 		clearTimeout(hoverIntent.current.timer);
@@ -488,6 +534,7 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 				geometry,
 				pinColors: theme.pinColors,
 				referenceColor: theme.referenceColor,
+				headerColors: theme.headerColors,
 				domNodeIds,
 				webkitLite: isWebkitLite(),
 				rootFontSize: theme.rootFontSize,
@@ -618,7 +665,9 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 						: "react-flow"
 			}
 			data-board-exporting={exporting || undefined}
-			aria-busy={!preferenceReady || nativePending}
+			aria-busy={
+				props.loadingStatus?.busy ?? (!preferenceReady || nativePending)
+			}
 		>
 			{flowMounted && (
 				<CanvasHost
@@ -675,7 +724,7 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 				>
 					{renderer === "egui" && scene && nativePalette && !exporting && (
 						<CanvasBoundary key={props.scopeKey} onError={fail}>
-							<NativeViewportPlane zIndex={18}>
+							<NativeViewportPlane zIndex={NATIVE_EDGE_PLANE_Z}>
 								<EguiCanvasLayer
 									scene={scene}
 									palette={nativePalette}
@@ -684,11 +733,12 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 									onReady={onEdgesReady}
 									lod
 									paintLayer="edges"
+									status={nodeStatus}
 									active={active}
 									interactive={false}
 								/>
 							</NativeViewportPlane>
-							<NativeViewportPlane zIndex={20}>
+							<NativeViewportPlane zIndex={NATIVE_NODE_PLANE_Z}>
 								<EguiCanvasLayer
 									scene={scene}
 									palette={nativePalette}
@@ -697,12 +747,21 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 									onReady={onNodesReady}
 									lod
 									paintLayer="nodes"
+									status={nodeStatus}
+									runs={runs}
 									onHoverNode={onHoverNode}
 								/>
 							</NativeViewportPlane>
 						</CanvasBoundary>
 					)}
 					{props.overlay}
+					{!exporting && !nativePending && !props.loadingStatus && (
+						<LargeGraphNavigation
+							key={props.scopeKey}
+							nodes={props.nodes ?? []}
+							native={renderer === "egui"}
+						/>
+					)}
 					{renderer === "egui" ? (
 						<>
 							<StandaloneBoardControls
@@ -758,13 +817,35 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 					)}
 				</CanvasHost>
 			)}
-			{(!preferenceReady || nativePending) && (
+			{(props.loadingStatus || !preferenceReady || nativePending) && (
 				<output
 					className="absolute inset-0 z-40 flex items-center justify-center bg-background/60"
 					data-board-canvas-loading
+					aria-live="polite"
 				>
 					<span className="rounded-md border border-border bg-card px-3 py-2 text-sm">
-						{t("loading", "Loading…")}
+						{props.loadingStatus?.content ??
+							(!preferenceReady
+								? t("boardLoadingPreferences", "Reading canvas preferences…")
+								: !scene
+									? t(
+											"boardPreparingCanvas",
+											"Preparing {{nodeCount}} nodes…",
+											{
+												nodeCount: (props.nodes?.length ?? 0).toLocaleString(),
+											},
+										)
+									: readyScopes.nodes !== props.scopeKey
+										? t("boardDrawingNodes", "Drawing {{nodeCount}} nodes…", {
+												nodeCount: scene.nodes.length.toLocaleString(),
+											})
+										: t(
+												"boardDrawingConnections",
+												"Drawing {{edgeCount}} connections…",
+												{
+													edgeCount: scene.edges.length.toLocaleString(),
+												},
+											))}
 					</span>
 				</output>
 			)}
@@ -782,7 +863,7 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 										: "react-flow"
 					}
 					error={failure}
-					onRetry={failure ? retry : undefined}
+					onRetry={failure && !unsupported ? retry : undefined}
 				/>
 			</div>
 		</div>

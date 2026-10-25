@@ -85,6 +85,11 @@ pub fn routes() -> Router<AppState> {
                 .get(internal::change_appearance::get_appearance),
         )
         .route(
+            "/{app_id}/settings/legal",
+            patch(internal::change_legal::change_legal_links)
+                .get(internal::change_legal::get_legal_links),
+        )
+        .route(
             "/{app_id}/settings/forking",
             patch(internal::change_forking::change_forking)
                 .get(internal::change_forking::get_forking),

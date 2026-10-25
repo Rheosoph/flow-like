@@ -7,6 +7,8 @@
  * never receives invalid data.
  */
 
+import { lowerAuthoredComponent } from "../a2ui/authoring/lower";
+import { propSpec } from "../a2ui/authoring/manifest";
 import {
 	type A2UIComponentType,
 	COMPONENT_BASE_PROPS,
@@ -22,6 +24,7 @@ import type {
 	Action,
 	BoundValue,
 	CanvasSettings,
+	Style,
 	SurfaceComponent,
 } from "../a2ui/types";
 
@@ -53,15 +56,18 @@ export const KNOWN_PROPS: Record<
 	]),
 );
 
-/** Props that are plain values in types.ts (NOT BoundValue-wrapped) and must
- *  never be coerced — the renderers read them verbatim. */
-const PLAIN_PROPS: Partial<Record<A2UIComponentType, ReadonlySet<string>>> = {
-	overlay: new Set(["baseComponentId"]),
-	popover: new Set(["contentComponentId"]),
-	tabs: new Set(["listStyle", "triggerStyle", "contentStyle"]),
-	link: new Set(["external", "target", "variant", "underline"]),
-	plotlyChart: new Set(["series", "xAxis", "yAxis"]),
-};
+/** Structured props the generated manifest does not describe keep their value verbatim. */
+const UNDESCRIBED_STRUCTURED_PROPS: ReadonlySet<string> = new Set([
+	"tabs",
+	"items",
+	"overlays",
+	"columns",
+	"data",
+	"boxes",
+	"hotspots",
+	"markers",
+	"choices",
+]);
 
 /** Shared base props all component types have. */
 export const BASE_PROPS = new Set<string>(["type", ...COMPONENT_BASE_PROPS]);
@@ -151,25 +157,29 @@ const DEFAULT_BOUND_VALUES: Record<string, BoundValue> = {
 	ontologyId: { literalString: "" },
 };
 
+/** Required structured props that default to an empty array of items. */
+const EMPTY_LIST_DEFAULTS: ReadonlySet<string> = new Set([
+	"overlay.overlays",
+	"tabs.tabs",
+	"accordion.items",
+]);
+
+/** Required bound props that default to an empty JSON list. */
+const EMPTY_JSON_LIST_DEFAULTS: ReadonlySet<string> = new Set([
+	"columns",
+	"data",
+	"cells",
+	"choices",
+	"items",
+	"boxes",
+	"labels",
+	"hotspots",
+	"nodes",
+]);
+
 function defaultRequiredProp(type: string, prop: string): unknown {
-	if (
-		prop === "overlays" ||
-		(type === "tabs" && prop === "tabs") ||
-		(type === "accordion" && prop === "items")
-	) {
-		return [];
-	}
-	if (
-		prop === "columns" ||
-		prop === "data" ||
-		prop === "cells" ||
-		prop === "choices" ||
-		prop === "items" ||
-		prop === "boxes" ||
-		prop === "labels" ||
-		prop === "hotspots" ||
-		prop === "nodes"
-	) {
+	if (EMPTY_LIST_DEFAULTS.has(`${type}.${prop}`)) return [];
+	if (EMPTY_JSON_LIST_DEFAULTS.has(prop)) {
 		return { literalJson: "[]" } satisfies BoundValue;
 	}
 	return DEFAULT_BOUND_VALUES[prop];
@@ -292,7 +302,7 @@ function sanitizeIframeSandbox(value: unknown): BoundValue | undefined {
 
 function validateChildren(
 	children: unknown,
-	validIds: Set<string>,
+	isKnownId: (id: string) => boolean,
 ): { explicitList: string[] } | { template: unknown } | undefined {
 	if (children == null || typeof children !== "object") return undefined;
 
@@ -300,7 +310,7 @@ function validateChildren(
 
 	if ("explicitList" in c && Array.isArray(c.explicitList)) {
 		const filtered = (c.explicitList as unknown[]).filter(
-			(id): id is string => typeof id === "string" && validIds.has(id),
+			(id): id is string => typeof id === "string" && isKnownId(id),
 		);
 		return filtered.length > 0 ? { explicitList: filtered } : undefined;
 	}
@@ -309,7 +319,7 @@ function validateChildren(
 		const template = c.template as Record<string, unknown>;
 		if (
 			typeof template.templateComponentId === "string" &&
-			validIds.has(template.templateComponentId) &&
+			isKnownId(template.templateComponentId) &&
 			typeof template.dataPath === "string"
 		) {
 			return {
@@ -390,10 +400,10 @@ function warnUnroutableAction(
 }
 
 /**
- * Legacy `actions` stay verbatim — the list is an intentionally permissive extension point, so
- * entries that are not `{name, context}` objects are left alone. Only named actions the runtime
- * cannot route are reported, and even those are kept: dropping one would turn a mis-wired control
- * into a silently action-less one and lose the evidence a human needs to repair it.
+ * Legacy `actions` arrive normalized by the authoring lowering (a bare name becomes
+ * `{name, context: {}}`, entries without a name drop) and are otherwise kept as written. Only named
+ * actions the runtime cannot route are reported, and even those are kept: dropping one would turn a
+ * mis-wired control into a silently action-less one and lose the evidence a human needs to repair it.
  */
 function reportLegacyActions(
 	value: unknown,
@@ -510,211 +520,228 @@ export interface ValidationResult {
 	warnings: string[];
 }
 
+export interface SanitizeComponentOptions {
+	/** Child ids that survive; every id by default, for callers that prune against their own set. */
+	readonly isKnownId?: (id: string) => boolean;
+	/** Accepted component types; the registered renderer types by default. */
+	readonly registeredTypes?: ReadonlySet<string>;
+}
+
+const acceptAnyId = () => true;
+
+/** The trimmed id an authored component (flat or canonical) carries. */
+export function authoredComponentId(raw: unknown) {
+	if (!isPlainObject(raw) || typeof raw.id !== "string") return undefined;
+	const id = raw.id.trim();
+	return id.length > 0 ? id : undefined;
+}
+
+function sanitizeBoxTag(
+	value: unknown,
+	componentId: string,
+	warnings: string[],
+): BoundValue {
+	const boxTag = coerceToBoundValue(value);
+	// A path keeps its binding: A2UIBox applies the same allowlist after resolving it.
+	if (boxTag && "path" in boxTag) return boxTag;
+	if (
+		boxTag &&
+		"literalString" in boxTag &&
+		isSemanticBoxTag(boxTag.literalString)
+	) {
+		return boxTag;
+	}
+	const unsafeTag =
+		boxTag && "literalString" in boxTag ? ` "${boxTag.literalString}"` : "";
+	warnings.push(
+		`${componentId}: replaced unsafe box tag${unsafeTag} with "div"`,
+	);
+	return { literalString: normalizeSemanticBoxTag(undefined) };
+}
+
+/** One declared prop of a lowered component; `undefined` drops it. */
+function sanitizeKnownProp(
+	type: string,
+	key: string,
+	value: unknown,
+	componentId: string,
+	warnings: string[],
+): unknown {
+	// Widget-instance props are raw wiring data (ids, the inline widget definition,
+	// per-instance param/action values), and a package widget's contract/props/bundleHash
+	// must survive byte-for-byte to render.
+	if (type === "widgetInstance" || type === "microWidgetInstance") return value;
+	if (type === "markdown" && key === "allowHtml") {
+		warnings.push(`${componentId}: disabled HTML rendering for markdown`);
+		return { literalBool: false };
+	}
+	if (type === "iframe" && key === "sandbox")
+		return sanitizeIframeSandbox(value);
+	if (type === "box" && key === "as") {
+		return sanitizeBoxTag(value, componentId, warnings);
+	}
+	// Lowering already shaped every prop the manifest describes: bound values only need
+	// clipping, everything else is kept as lowered.
+	const spec = propSpec(type, key);
+	if (spec) {
+		return spec.kind === "bound" ? (coerceToBoundValue(value) ?? value) : value;
+	}
+	return UNDESCRIBED_STRUCTURED_PROPS.has(key)
+		? value
+		: (coerceToBoundValue(value) ?? value);
+}
+
 /**
- * Validate and sanitise an array of AI-generated SurfaceComponents.
- *
- * - Strips unknown component types
- * - Removes hallucinated props
- * - Coerces bare primitives → BoundValue
- * - Injects defaults for required props
- * - Prunes stale children references
- * - Ensures every component has an `id`
+ * Sanitise one AI-authored component, flat plain-value form or canonical:
+ * lowers it, strips unknown props and types, coerces bound values and injects
+ * defaults for required props. Child references are validated structurally and
+ * kept when `isKnownId` accepts them. Returns null when the component is skipped.
+ */
+export function sanitizeComponent(
+	raw: unknown,
+	warnings: string[],
+	options: SanitizeComponentOptions = {},
+): SurfaceComponent | null {
+	const componentId = authoredComponentId(raw);
+	if (!componentId) {
+		warnings.push("Skipped component with missing id");
+		return null;
+	}
+	if (componentId.length > MAX_COMPONENT_ID_CHARS) {
+		warnings.push(`${componentId.slice(0, 32)}: component id is too long`);
+		return null;
+	}
+	const lowered = lowerAuthoredComponent(raw);
+	if (!lowered.ok) {
+		warnings.push(`${componentId}: ${lowered.error}`);
+		return null;
+	}
+	const rawComponent = lowered.component.component;
+	const type = rawComponent.type as string;
+	const registeredTypes =
+		options.registeredTypes ?? new Set(getRegisteredTypes());
+	if (!registeredTypes.has(type)) {
+		warnings.push(`${componentId}: unknown component type "${type}"`);
+		return null;
+	}
+
+	const knownForType = KNOWN_PROPS[type] ?? new Set<string>();
+	const cleaned: Record<string, unknown> = { type };
+	for (const [key, value] of Object.entries(rawComponent)) {
+		if (key === "type" || key === "id" || key === "children") continue;
+		if (BASE_PROPS.has(key)) {
+			// Legacy actions pass through verbatim. Named handlers are additive but
+			// structurally validated before they can suppress the legacy fallback.
+			if (key === "eventHandlers") {
+				const handlers = sanitizeEventHandlers(value, componentId, warnings);
+				if (handlers !== undefined) cleaned[key] = handlers;
+			} else {
+				if (key === "actions") {
+					reportLegacyActions(value, componentId, warnings);
+				}
+				cleaned[key] = value;
+			}
+			continue;
+		}
+		if (!knownForType.has(key)) {
+			warnings.push(
+				`${componentId}: stripped unknown prop "${key}" on ${type}`,
+			);
+			continue;
+		}
+		const sanitized = sanitizeKnownProp(
+			type,
+			key,
+			value,
+			componentId,
+			warnings,
+		);
+		if (sanitized !== undefined) cleaned[key] = sanitized;
+	}
+
+	const required = REQUIRED_PROPS[type];
+	let missingUnfixableRequiredProp = false;
+	for (const prop of required ?? []) {
+		if (prop in cleaned) continue;
+		const defaultVal = defaultRequiredProp(type, prop);
+		if (defaultVal !== undefined) {
+			cleaned[prop] = defaultVal;
+			warnings.push(
+				`${componentId}: injected default for required prop "${prop}" on ${type}`,
+			);
+		} else {
+			missingUnfixableRequiredProp = true;
+			warnings.push(
+				`${componentId}: skipped ${type} because required prop "${prop}" is missing`,
+			);
+		}
+	}
+	if (missingUnfixableRequiredProp) return null;
+
+	const rawChildren = rawComponent.children;
+	const validatedChildren = validateChildren(
+		rawChildren,
+		options.isKnownId ?? acceptAnyId,
+	);
+	if (validatedChildren) {
+		cleaned.children = validatedChildren;
+	} else if (rawChildren != null) {
+		warnings.push(`${componentId}: removed invalid children reference`);
+	}
+
+	return normalizeSurfaceComponentForPersistence({
+		id: componentId,
+		style: lowered.component.style as Style | undefined,
+		component: cleaned as unknown as SurfaceComponent["component"],
+	});
+}
+
+/**
+ * Validate and sanitise an array of AI-generated components (see
+ * {@link sanitizeComponent}): skips duplicate ids and prunes child references
+ * to components that were skipped.
  */
 export function validateComponents(
-	raw: SurfaceComponent[],
+	raw: readonly unknown[],
 	canvasSettings?: CanvasSettings,
 ): ValidationResult {
 	const warnings: string[] = [];
-	const registeredTypes = new Set(getRegisteredTypes());
+	const registeredTypes: ReadonlySet<string> = new Set(getRegisteredTypes());
 	const input = raw.slice(0, MAX_COMPONENTS);
 	if (raw.length > MAX_COMPONENTS) {
 		warnings.push(`Only the first ${MAX_COMPONENTS} components were kept`);
 	}
 
-	// Build a set of all IDs for children validation
-	const allIds = new Set(
+	const authoredIds = new Set(
 		input
-			.map((c) => c.id)
-			.filter((id): id is string => typeof id === "string" && id.length > 0),
+			.map(authoredComponentId)
+			.filter((id): id is string => id !== undefined),
 	);
+	const isKnownId = (id: string) => authoredIds.has(id);
 	const seenIds = new Set<string>();
-
 	const validated: SurfaceComponent[] = [];
 
-	for (const comp of input) {
-		// Must have an id
-		if (!comp.id || typeof comp.id !== "string") {
-			warnings.push("Skipped component with missing id");
-			continue;
-		}
-		const componentId = comp.id.trim();
-		if (componentId.length > MAX_COMPONENT_ID_CHARS) {
-			warnings.push(`${componentId.slice(0, 32)}: component id is too long`);
-			continue;
-		}
-		if (seenIds.has(componentId)) {
-			warnings.push(`${componentId}: skipped duplicate component id`);
-			continue;
-		}
-		seenIds.add(componentId);
-
-		const rawComponent = comp.component as unknown as Record<string, unknown>;
-		if (!rawComponent || typeof rawComponent !== "object") {
-			warnings.push(`${componentId}: missing component data`);
-			continue;
-		}
-
-		const type = rawComponent.type as string | undefined;
-		if (!type || !registeredTypes.has(type)) {
-			warnings.push(`${componentId}: unknown component type "${type}"`);
-			continue;
-		}
-
-		// Build cleaned component object
-		const knownForType = KNOWN_PROPS[type] ?? new Set<string>();
-		const cleaned: Record<string, unknown> = { type };
-
-		// Copy known props, coercing bare values to BoundValue
-		for (const [key, value] of Object.entries(rawComponent)) {
-			if (key === "type" || key === "id" || key === "children") continue; // handled separately
-			if (BASE_PROPS.has(key)) {
-				// Legacy actions pass through verbatim. Named handlers are additive but
-				// structurally validated before they can suppress the legacy fallback.
-				if (key === "eventHandlers") {
-					const handlers = sanitizeEventHandlers(value, componentId, warnings);
-					if (handlers !== undefined) cleaned[key] = handlers;
-				} else {
-					if (key === "actions") {
-						reportLegacyActions(value, componentId, warnings);
-					}
-					cleaned[key] = value;
-				}
+	for (const item of input) {
+		const componentId = authoredComponentId(item);
+		if (componentId && componentId.length <= MAX_COMPONENT_ID_CHARS) {
+			if (seenIds.has(componentId)) {
+				warnings.push(`${componentId}: skipped duplicate component id`);
 				continue;
 			}
-
-			if (knownForType.has(key)) {
-				if (PLAIN_PROPS[type as A2UIComponentType]?.has(key)) {
-					cleaned[key] = value;
-					continue;
-				}
-				// Widget-instance props are raw wiring data (ids, the inline widget definition,
-				// per-instance param/action values) — NOT BoundValue-wrapped component props, so
-				// keep them verbatim instead of coercing. The same holds for a package widget,
-				// whose contract/props/bundleHash must survive byte-for-byte to render.
-				if (type === "widgetInstance" || type === "microWidgetInstance") {
-					cleaned[key] = value;
-					continue;
-				}
-				if (type === "markdown" && key === "allowHtml") {
-					cleaned[key] = { literalBool: false };
-					warnings.push(`${componentId}: disabled HTML rendering for markdown`);
-					continue;
-				}
-				if (type === "iframe" && key === "sandbox") {
-					const sandbox = sanitizeIframeSandbox(value);
-					if (sandbox) cleaned[key] = sandbox;
-					continue;
-				}
-				if (type === "box" && key === "as") {
-					const boxTag = coerceToBoundValue(value);
-					if (boxTag && "path" in boxTag) {
-						// Keep data binding semantics. A2UIBox applies the same allowlist
-						// after resolving the path, including its default value.
-						cleaned[key] = boxTag;
-					} else if (
-						boxTag &&
-						"literalString" in boxTag &&
-						isSemanticBoxTag(boxTag.literalString)
-					) {
-						cleaned[key] = boxTag;
-					} else {
-						const unsafeTag =
-							boxTag && "literalString" in boxTag
-								? ` "${boxTag.literalString}"`
-								: "";
-						cleaned[key] = {
-							literalString: normalizeSemanticBoxTag(undefined),
-						};
-						warnings.push(
-							`${componentId}: replaced unsafe box tag${unsafeTag} with "div"`,
-						);
-					}
-					continue;
-				}
-				// Props that hold structured data (arrays/objects) should not be blindly coerced
-				if (
-					key === "tabs" ||
-					key === "items" ||
-					key === "overlays" ||
-					key === "columns" ||
-					key === "data" ||
-					key === "boxes" ||
-					key === "hotspots" ||
-					key === "markers" ||
-					key === "choices" ||
-					key === "options"
-				) {
-					// Options specifically expects BoundValue
-					if (key === "options") {
-						cleaned[key] = coerceToBoundValue(value) ?? value;
-					} else {
-						cleaned[key] = value;
-					}
-				} else {
-					cleaned[key] = coerceToBoundValue(value) ?? value;
-				}
-			} else {
-				warnings.push(
-					`${componentId}: stripped unknown prop "${key}" on ${type}`,
-				);
-			}
+			seenIds.add(componentId);
 		}
-
-		// Inject defaults for missing required props
-		const required = REQUIRED_PROPS[type];
-		let missingUnfixableRequiredProp = false;
-		if (required) {
-			for (const prop of required) {
-				if (!(prop in cleaned)) {
-					const defaultVal = defaultRequiredProp(type, prop);
-					if (defaultVal !== undefined) {
-						cleaned[prop] = defaultVal;
-						warnings.push(
-							`${componentId}: injected default for required prop "${prop}" on ${type}`,
-						);
-					} else {
-						missingUnfixableRequiredProp = true;
-						warnings.push(
-							`${componentId}: skipped ${type} because required prop "${prop}" is missing`,
-						);
-					}
-				}
-			}
-		}
-		if (missingUnfixableRequiredProp) continue;
-
-		// Validate children references
-		const rawChildren = rawComponent.children;
-		const validatedChildren = validateChildren(rawChildren, allIds);
-		if (validatedChildren) {
-			(cleaned as Record<string, unknown>).children = validatedChildren;
-		} else if (rawChildren != null) {
-			warnings.push(`${componentId}: removed invalid children reference`);
-		}
-
-		validated.push(
-			normalizeSurfaceComponentForPersistence({
-				id: componentId,
-				style: comp.style,
-				component: cleaned as unknown as SurfaceComponent["component"],
-			}),
-		);
+		const component = sanitizeComponent(item, warnings, {
+			isKnownId,
+			registeredTypes,
+		});
+		if (component) validated.push(component);
 	}
 
 	const validIds = new Set(validated.map((component) => component.id));
+	const isValidId = (id: string) => validIds.has(id);
 	for (const comp of validated) {
 		const component = comp.component as unknown as Record<string, unknown>;
-		const validatedChildren = validateChildren(component.children, validIds);
+		const validatedChildren = validateChildren(component.children, isValidId);
 		if (validatedChildren) {
 			component.children = validatedChildren;
 		} else if (component.children != null) {

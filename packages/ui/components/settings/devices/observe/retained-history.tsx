@@ -556,7 +556,7 @@ function NotRetained({
 				title={t("observe.retained.nothingYet", "Nothing sealed yet")}
 				text={t(
 					"observe.retained.nothingYetText",
-					"{{device}} records the {{kind}} of {{subject}} and seals them every 30 s. The first chunk appears shortly.",
+					"{{device}} records the {{kind}} of {{subject}} and seals them within 5 minutes. The first chunk appears shortly.",
 					{ device: name, kind: kindText, subject },
 				)}
 			/>
@@ -622,11 +622,11 @@ function retainedFoot(
 	return target.serviceId
 		? t(
 				"observe.retained.footService",
-				"Retained records are sealed every 30 s and encrypted for the readers you pick. Readers are set in Activity & logs › History for this service.",
+				"Retained records are sealed within 5 minutes and encrypted for the readers you pick. Readers are set in Activity & logs › History for this service.",
 			)
 		: t(
 				"observe.retained.footDevice",
-				"Retained records are sealed every 30 s and encrypted for the readers you pick. Readers are set in Activity & logs › History settings.",
+				"Retained records are sealed within 5 minutes and encrypted for the readers you pick. Readers are set in Activity & logs › History settings.",
 			);
 }
 

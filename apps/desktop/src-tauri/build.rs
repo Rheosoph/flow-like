@@ -322,6 +322,30 @@ fn emit_workflow_benchmark_build_identity() {
     );
 }
 
+/// ODBC nodes link the unixODBC driver manager. macOS builds use a pinned source build that
+/// the bundle carries in Contents/Frameworks, so the app needs no Homebrew install and the
+/// Intel build, cross-compiled on Apple silicon, gets a library of its own architecture.
+fn link_bundled_odbc() {
+    let target = std::env::var("TARGET").unwrap();
+    let directory = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("binaries/odbc")
+        .join(&target);
+    println!("cargo:rerun-if-changed=../scripts/prepare-odbc.ts");
+    println!(
+        "cargo:rerun-if-changed={}",
+        directory.join("libodbc.2.dylib").display()
+    );
+    let status = std::process::Command::new("bun")
+        .args(["../scripts/prepare-odbc.ts", "--target", &target])
+        .status()
+        .expect("bun is required to build the bundled unixODBC driver manager");
+    assert!(status.success(), "Preparing unixODBC for {target} failed");
+    // Searched before the Homebrew directory odbc-sys adds, so this build is the one linked.
+    println!("cargo:rustc-link-search=native={}", directory.display());
+    // `tauri dev` runs the binary outside an application bundle.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", directory.display());
+}
+
 fn main() {
     emit_workflow_benchmark_build_identity();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -358,6 +382,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
         // `tauri dev` runs the binary outside an application bundle.
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", frameworks.display());
+        link_bundled_odbc();
     }
 
     // Flow-Like's worker-heavy desktop runtime needs an 8 MiB main-thread

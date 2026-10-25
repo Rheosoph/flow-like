@@ -16,6 +16,7 @@ import {
 	cleanupLegacyQueryCacheBlob,
 	createSmartQueryPersister,
 } from "@flow-like/flow-like-ui/lib/query-persister";
+import { trackTabActivity } from "@flow-like/flow-like-ui/lib/tab-dormancy";
 import { I18nProvider } from "@flow-like/locales";
 import dynamic from "next/dynamic";
 import { useEffect } from "react";
@@ -99,6 +100,8 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 		}, 5_000);
 		return () => clearTimeout(timer);
 	}, []);
+	// Every page announces when it is shown, so a hidden board tab knows it was left for another.
+	useEffect(() => trackTabActivity(), []);
 
 	return (
 		<QueryClientProvider client={queryClient}>

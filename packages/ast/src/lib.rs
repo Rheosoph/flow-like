@@ -45,4 +45,4 @@ pub use signatures::{
     declarations_by_category, declarations_by_package, is_signature_line, render_signatures,
     schema_sidecar,
 };
-pub use text::{is_valid_identifier, quote_string, to_camel_case};
+pub use text::{collapse_path_literal, is_valid_identifier, quote_string, to_camel_case};

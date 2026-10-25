@@ -143,6 +143,67 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+describe("event dispatch Hub configuration", () => {
+	test.each(["page action", "direct event"])(
+		"a %s without OAuth does not wait for Hub configuration",
+		async (kind) => {
+			const backend = backendRef();
+			backend.profile.hub = "hub.test";
+			const state = new WebEventState(backend as unknown as WebBackendRef);
+			mocks.apiGet.mockImplementation(async (path: string) =>
+				path.endsWith("/prerun")
+					? prerun()
+					: { id: "event-1", board_id: "board-1" },
+			);
+			vi.mocked(fetch).mockImplementation((url) =>
+				String(url).endsWith("/api/v1")
+					? new Promise<Response>(() => {})
+					: Promise.resolve(new Response(null)),
+			);
+
+			if (kind === "page action") {
+				await execute(state);
+			} else {
+				await state.executeEvent("app-1", "event-1", { id: "node" });
+			}
+
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+				"https://api.test/api/v1/apps/app-1/events/event-1/invoke",
+			);
+			expect(
+				mocks.checkOAuthTokensFromPrerun.mock.calls[0]?.[2],
+			).toBeUndefined();
+		},
+	);
+
+	test("an OAuth action still loads provider configuration before checking tokens", async () => {
+		const backend = backendRef();
+		backend.profile.hub = "hub.test";
+		const state = new WebEventState(backend as unknown as WebBackendRef);
+		const requirements = [{ provider_id: "google", scopes: ["mail"] }];
+		const hub = { oauth_providers: { google: { id: "google" } } };
+		mocks.apiPost.mockResolvedValue({
+			...prerun(),
+			oauth_requirements: requirements,
+		});
+		vi.mocked(fetch).mockImplementation(async (url) =>
+			String(url).endsWith("/api/v1") ? Response.json(hub) : new Response(null),
+		);
+
+		await execute(state);
+
+		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+			"https://hub.test/api/v1",
+			"https://api.test/api/v1/apps/app-1/events/event-1/invoke",
+		]);
+		expect(mocks.checkOAuthTokensFromPrerun.mock.calls[0]?.[0]).toEqual(
+			requirements,
+		);
+		expect(mocks.checkOAuthTokensFromPrerun.mock.calls[0]?.[2]).toEqual(hub);
+	});
+});
+
 describe("web Page prerun handoff", () => {
 	test("reuses its dispatch's response once while preserving revision, OAuth and invocation credentials", async () => {
 		const backend = backendRef();

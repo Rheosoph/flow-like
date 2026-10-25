@@ -2,6 +2,8 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { type ReactNode, act, useEffect } from "react";
 import { type Root, createRoot } from "react-dom/client";
+import type { IIntercomEvent } from "../../lib";
+import type { IChannelHandle } from "../../lib/schema/channel";
 import type { IEvent } from "../../lib/schema/flow/event";
 import type {
 	IPage,
@@ -71,8 +73,8 @@ mock.module("../../lib/use-runtime-tailwind", () => ({
 	...actual.runtimeTailwind,
 	useRuntimeTailwindStyles: noop,
 }));
-const executeEvent = mock(async () => undefined);
-const backend = { eventState: { executeEvent } };
+const executeEvent = mock(async (..._args: unknown[]) => undefined);
+const backend = { boardState: {}, eventState: { executeEvent } };
 mock.module("../../state/backend-state", () => ({
 	...actual.backendState,
 	useBackend: () => backend,
@@ -104,9 +106,24 @@ mock.module("../a2ui/hooks/use-element-storage", () => ({
 	...actual.elementStorage,
 	useElementStorage: () => elementStorage,
 }));
+let answerElementRequests = false;
+const replyElements = mock(
+	async (_channel: IChannelHandle, _value: unknown) => {},
+);
 mock.module("../a2ui/elements-request-handler", () => ({
 	...actual.elementsRequestHandler,
-	handleElementsRequestMessage: () => false,
+	handleElementsRequestMessage: (
+		...args: Parameters<
+			typeof actual.elementsRequestHandler.handleElementsRequestMessage
+		>
+	) =>
+		answerElementRequests
+			? actual.elementsRequestHandler.handleElementsRequestMessage(
+					args[0],
+					args[1],
+					{ reply: replyElements },
+				)
+			: false,
 }));
 mock.module("../a2ui/widget-query-handler", () => ({
 	...actual.widgetQueryHandler,
@@ -164,6 +181,8 @@ afterEach(async () => {
 	restoreGlobals?.();
 	restoreGlobals = undefined;
 	executeEvent.mockClear();
+	answerElementRequests = false;
+	replyElements.mockClear();
 });
 afterAll(() => {
 	mock.restore();
@@ -347,6 +366,125 @@ describe("PageInterface live Page integration", () => {
 		expect(
 			findLivePage("intake-app", { eventId: "page-event", pageId: page.id }),
 		).toBeUndefined();
+	});
+
+	test("a pending action keeps its surface and answers element requests across parent renders", async () => {
+		answerElementRequests = true;
+		let receiveEvents: (events: IIntercomEvent[]) => void = () => {};
+		let finishRun: () => void = () => {};
+		const runFinished = new Promise<undefined>((resolve) => {
+			finishRun = () => resolve(undefined);
+		});
+		executeEvent.mockImplementationOnce(async (...args: unknown[]) => {
+			receiveEvents = args[5] as typeof receiveEvents;
+			(args[4] as (runId: string) => void)("pending-page-action");
+			return runFinished;
+		});
+		const host = await mount("execution-v1");
+		const target = { eventId: "page-event", pageId: page.id };
+		const handle = findLivePage("intake-app", target);
+		if (!handle) throw new Error("The Page did not register its live surface.");
+		const input = host.querySelector("input");
+		const button = host.querySelector("button");
+		if (!input || !button) throw new Error("The Page controls did not render.");
+		await act(() => handle.setElementValue("summary_input", "Keep this draft"));
+		let action: ReturnType<typeof handle.triggerComponentEvent> | undefined;
+		await act(async () => {
+			action = handle.triggerComponentEvent("submit_ticket", "click");
+		});
+		expect(executeEvent).toHaveBeenCalledTimes(1);
+		expect(button.disabled).toBe(true);
+		await act(() =>
+			receiveEvents([
+				{
+					event_type: "a2ui",
+					payload: {
+						type: "upsertElement",
+						element_id: "intake-page/queue_result",
+						value: { type: "setText", text: "Action is running" },
+					},
+				} as IIntercomEvent,
+			]),
+		);
+		const result = host.querySelector(
+			'[data-a2ui-element-ref="intake-page/queue_result"]',
+		);
+		if (!result) throw new Error("The Page result did not render.");
+		expect(result.textContent).toBe("Action is running");
+
+		for (let render = 0; render < 3; render++) {
+			await act(async () => {
+				root?.render(
+					<PageInterface
+						appId="intake-app"
+						event={{ ...bootstrap().event }}
+						page={page}
+						pageExecutionRevision="execution-v1"
+						route="/intake"
+						queryParams={{}}
+					/>,
+				);
+			});
+			expect(findLivePage("intake-app", target)).toBe(handle);
+			expect(host.querySelector("input")).toBe(input);
+			expect(host.querySelector("button")).toBe(button);
+			expect(
+				host.querySelector(
+					'[data-a2ui-element-ref="intake-page/queue_result"]',
+				),
+			).toBe(result);
+			expect(input.value).toBe("Keep this draft");
+			expect(result.textContent).toBe("Action is running");
+			expect(button.disabled).toBe(true);
+		}
+
+		const channel: IChannelHandle = {
+			channel_id: "pending-page-action",
+			request_id: "live-page-rerender-elements",
+			expires_at: 4_102_444_800,
+			transport: { type: "in_process" },
+		};
+		await act(async () => {
+			receiveEvents([
+				{
+					event_type: "a2ui",
+					payload: {
+						type: "requestElements",
+						request_id: channel.request_id,
+						selectors: [
+							"intake-page/summary_input",
+							"intake-page/queue_result",
+						],
+						timeout_ms: 5000,
+						channel,
+					},
+				} as IIntercomEvent,
+			]);
+		});
+		expect(replyElements).toHaveBeenCalledWith(
+			channel,
+			expect.objectContaining({
+				ok: true,
+				elements: expect.objectContaining({
+					"intake-page/summary_input": expect.objectContaining({
+						component: expect.objectContaining({
+							value: { literalString: "Keep this draft" },
+						}),
+					}),
+					"intake-page/queue_result": expect.objectContaining({
+						component: expect.objectContaining({
+							content: "Action is running",
+						}),
+					}),
+				}),
+			}),
+		);
+		await act(async () => {
+			finishRun();
+			await action;
+		});
+		expect(button.disabled).toBe(false);
+		expect(input.value).toBe("Keep this draft");
 	});
 
 	test("does not register a governed Page before execution authorization exists", async () => {

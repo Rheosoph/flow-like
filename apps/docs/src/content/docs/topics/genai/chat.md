@@ -137,6 +137,27 @@ Use a structured interaction when required input should not be guessed from free
 
 Structured interactions are useful for configuration, approvals, and collecting missing fields before a tool call.
 
+## Interactive answers
+
+A model can answer with an interface instead of plain text: option cards, a small dashboard, a table, a chart, or a short form. It writes an `a2ui` code block in its reply, and the chat renders the block inside the message while the reply streams.
+
+Buttons in these interfaces do one of two things:
+
+- send a follow-up message on the user's behalf (`send_message`). `{{id}}` inserts the current value of the input with that id;
+- open an https link (`external_link`).
+
+No other action runs. A generated interface cannot start your workflows, open app pages, or load custom CSS, scripts, or frames.
+
+To let a model write these blocks:
+
+| Model setup | What to add |
+|-------------|-------------|
+| Agent built with the agent builder nodes | **Enable Interactive UI** |
+| [Simple Agent](/nodes/ai/agents/simple-agent/) | Turn on its **Interactive UI** input |
+| Your own system prompt, for example with Invoke Model | Append the output of **Interactive UI Instructions** |
+
+Widgets your workflow pushes with [Push Widget](/nodes/events/chat/events-chat-push-widget/) appear at the point in the reply where they were pushed, so text, steps, and widgets read in the order they happened.
+
 ## Add retrieval or tools
 
 - Use [RAG and knowledge bases](/topics/genai/rag/) when answers must be grounded in a controlled document corpus.

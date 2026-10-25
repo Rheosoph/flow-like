@@ -25,8 +25,13 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 
 #[cfg(feature = "execute")]
-use flow_like_model_provider::summarization::{
-    ChunkingMethod, DensificationStrategy, SummarizationConfig, SummarizationStrategy, TextChunk,
+use flow_like_model_provider::{
+    history::{History, HistoryThinking},
+    llm::lenient_settings::{LenientSettings, RejectedSettings},
+    summarization::{
+        ChunkingMethod, DensificationStrategy, SummarizationConfig, SummarizationStrategy,
+        TextChunk,
+    },
 };
 
 /// Represents a single page extracted from a document
@@ -368,12 +373,46 @@ fn apply_preset_to_pins(node: &mut Node) {
     sync_prompt_pin(node, "batch_prompt", batch, |preset| preset.batch);
 }
 
+const THINKING_LEVELS: [&str; 4] = ["off", "low", "mid", "high"];
+
+fn add_thinking_pin(node: &mut Node) {
+    node.add_input_pin(
+        "thinking",
+        "Thinking",
+        "Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.",
+        VariableType::String,
+    )
+    .set_options(
+        PinOptions::new()
+            .set_valid_values(THINKING_LEVELS.map(String::from).to_vec())
+            .build(),
+    )
+    .set_default_value(Some(json!("low")));
+}
+
+#[cfg(feature = "execute")]
+async fn evaluate_thinking(
+    context: &mut ExecutionContext,
+) -> flow_like_types::Result<HistoryThinking> {
+    let thinking: String = context.evaluate_pin("thinking").await?;
+    thinking.parse().map_err(|err| {
+        flow_like_types::anyhow!(
+            "{err}; Thinking must be one of {}",
+            THINKING_LEVELS.join(", ")
+        )
+    })
+}
+
+/// markitdown builds its own requests, so the provider's thinking parameters are mapped from a
+/// History once and merged into every request it sends. Temperature, thinking and max tokens
+/// are each dropped once the provider rejects them; the returned handle lists what was dropped.
 #[cfg(feature = "execute")]
 async fn build_llm_client(
-    context: &ExecutionContext,
+    context: &mut ExecutionContext,
     model_bit: &Bit,
+    thinking: HistoryThinking,
     config: LlmConfig,
-) -> flow_like_types::Result<SharedLlmClient> {
+) -> flow_like_types::Result<(SharedLlmClient, RejectedSettings)> {
     let model_factory = context.app_state.model_factory.clone();
     let model = model_factory
         .build(
@@ -384,10 +423,39 @@ async fn build_llm_client(
         )
         .await?;
 
+    let mut history = History::new(model_bit.id.clone(), Vec::new());
+    history.thinking = Some(thinking);
+    let params = match model.agent_settings(&Some(history)) {
+        Ok(settings) => settings.params,
+        Err(error) => {
+            context.log_message(
+                &format!("The model takes no Thinking setting, so it is left out: {error}"),
+                flow_like::flow::execution::LogLevel::Warn,
+            );
+            None
+        }
+    };
+
     #[allow(deprecated)]
     let completion_handle = model.completion_model_handle(None).await?;
+    let model = LenientSettings::new(completion_handle, params);
+    let rejected = model.rejected();
 
-    Ok(create_llm_client_with_config(completion_handle, config))
+    Ok((create_llm_client_with_config(model, config), rejected))
+}
+
+#[cfg(feature = "execute")]
+fn log_rejected_settings(context: &mut ExecutionContext, rejected: &RejectedSettings) {
+    for rejected in rejected.take_unreported() {
+        context.log_message(
+            &format!(
+                "The model rejected the {} setting, so it is left out of this and later requests: {}",
+                rejected.setting.label(),
+                rejected.error
+            ),
+            flow_like::flow::execution::LogLevel::Warn,
+        );
+    }
 }
 
 #[cfg(feature = "execute")]
@@ -639,7 +707,7 @@ impl NodeLogic for ExtractDocumentAiNode {
         );
         node.set_flowscript_name("ai.processing", "extractDocumentAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -717,6 +785,7 @@ impl NodeLogic for ExtractDocumentAiNode {
         )
         .set_default_value(Some(json!(0)));
 
+        add_thinking_pin(&mut node);
         add_prompt_pins(&mut node);
 
         node.add_output_pin(
@@ -752,6 +821,7 @@ impl NodeLogic for ExtractDocumentAiNode {
         let pages_per_batch: i64 = context.evaluate_pin("pages_per_batch").await?;
         let temperature: f64 = context.evaluate_pin("temperature").await?;
         let max_tokens: i64 = context.evaluate_pin("max_tokens").await?;
+        let thinking = evaluate_thinking(context).await?;
 
         let extension = file_extension(&file);
         let file_buffer = file.get(context, false).await?;
@@ -769,7 +839,8 @@ impl NodeLogic for ExtractDocumentAiNode {
 
         let (llm_config, force_ocr) = apply_prompt_pins(context, llm_config).await?;
 
-        let llm_client = build_llm_client(context, &model_bit, llm_config).await?;
+        let (llm_client, rejected) =
+            build_llm_client(context, &model_bit, thinking, llm_config).await?;
 
         let md = MarkItDown::new();
         let file_path_clone = file.path.clone();
@@ -781,7 +852,9 @@ impl NodeLogic for ExtractDocumentAiNode {
             .with_llm(llm_client);
         options.url = Some(file_path_clone);
 
-        let result = safe_convert_bytes(&md, bytes, Some(options)).await?;
+        let result = safe_convert_bytes(&md, bytes, Some(options)).await;
+        log_rejected_settings(context, &rejected);
+        let result = result?;
 
         let pages = document_to_pages(&result, context).await?;
 
@@ -948,7 +1021,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
         );
         node.set_flowscript_name("ai.processing", "extractDocumentsAi");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -1027,6 +1100,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
         )
         .set_default_value(Some(json!(4096)));
 
+        add_thinking_pin(&mut node);
         add_prompt_pins(&mut node);
 
         node.add_output_pin(
@@ -1062,6 +1136,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
         let pages_per_batch: i64 = context.evaluate_pin("pages_per_batch").await?;
         let temperature: f64 = context.evaluate_pin("temperature").await?;
         let max_tokens: i64 = context.evaluate_pin("max_tokens").await?;
+        let thinking = evaluate_thinking(context).await?;
 
         let llm_config = LlmConfig::default()
             .with_images_per_message(images_per_message.max(1) as usize)
@@ -1075,7 +1150,8 @@ impl NodeLogic for ExtractDocumentsAiNode {
 
         let (llm_config, force_ocr) = apply_prompt_pins(context, llm_config).await?;
 
-        let llm_client = build_llm_client(context, &model_bit, llm_config).await?;
+        let (llm_client, rejected) =
+            build_llm_client(context, &model_bit, thinking, llm_config).await?;
 
         let md = MarkItDown::new();
         let mut all_results: Vec<Vec<DocumentPage>> = Vec::with_capacity(files.len());
@@ -1092,7 +1168,9 @@ impl NodeLogic for ExtractDocumentsAiNode {
                 .with_force_llm_ocr(force_ocr)
                 .with_llm(llm_client.clone());
 
-            let result = safe_convert_bytes(&md, bytes, Some(options)).await?;
+            let result = safe_convert_bytes(&md, bytes, Some(options)).await;
+            log_rejected_settings(context, &rejected);
+            let result = result?;
 
             let pages = document_to_pages(&result, context).await?;
             all_results.push(pages);
@@ -1289,6 +1367,7 @@ impl NodeLogic for SummarizeFileNode {
         );
         node.set_flowscript_name("ai.processing", "summarizeFile");
         node.add_icon("/flow/icons/book-key.svg");
+        node.set_version(1);
 
         node.set_scores(
             NodeScores::new()
@@ -1406,6 +1485,8 @@ impl NodeLogic for SummarizeFileNode {
         )
         .set_default_value(Some(json!(0)));
 
+        add_thinking_pin(&mut node);
+
         node.add_output_pin(
             "exec_out",
             "Output",
@@ -1466,12 +1547,14 @@ impl NodeLogic for SummarizeFileNode {
         let model_bit = context.evaluate_pin::<Bit>("model").await?;
         let temperature: f64 = context.evaluate_pin("temperature").await?;
         let max_tokens: i64 = context.evaluate_pin("max_tokens").await?;
+        let thinking = evaluate_thinking(context).await?;
         let summary_config = summary_config_from_pins(context).await?;
 
         let llm_config = LlmConfig::default()
             .with_temperature(temperature)
             .with_max_tokens((max_tokens > 0).then_some(max_tokens as u64));
-        let llm_client = build_llm_client(context, &model_bit, llm_config).await?;
+        let (llm_client, rejected) =
+            build_llm_client(context, &model_bit, thinking, llm_config).await?;
 
         let extension = file_extension(&file);
         let bytes = Bytes::from(file.get(context, false).await?);
@@ -1485,7 +1568,9 @@ impl NodeLogic for SummarizeFileNode {
         options.url = Some(file.path.clone());
 
         let md = MarkItDown::new();
-        let document = safe_convert_bytes(&md, bytes, Some(options)).await?;
+        let document = safe_convert_bytes(&md, bytes, Some(options)).await;
+        log_rejected_settings(context, &rejected);
+        let document = document?;
         let summary = document.summary.clone().ok_or_else(|| {
             flow_like_types::anyhow!(
                 "Summarizing `{}` returned no summary; the converter ignored summarization mode",
@@ -2649,5 +2734,32 @@ mod summarize_file_tests {
             );
         }
         assert!(parse_summary_strategy("Refine").is_err());
+    }
+
+    #[test]
+    fn every_ai_reader_offers_parsable_thinking_levels_defaulting_to_low() {
+        let nodes = [
+            ExtractDocumentAiNode::new().get_node(),
+            ExtractDocumentsAiNode::new().get_node(),
+            SummarizeFileNode::new().get_node(),
+        ];
+
+        for node in nodes {
+            let pin = node
+                .get_pin_by_name("thinking")
+                .unwrap_or_else(|| panic!("{} has no thinking pin", node.name));
+            let options = pin
+                .options
+                .as_ref()
+                .and_then(|options| options.valid_values.clone())
+                .expect("thinking pin lists its valid values");
+            for option in options {
+                assert!(
+                    option.parse::<HistoryThinking>().is_ok(),
+                    "thinking option `{option}` is not parsed"
+                );
+            }
+            assert_eq!(pin_literal(&node, "thinking"), "low", "{}", node.name);
+        }
     }
 }

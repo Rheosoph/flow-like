@@ -244,7 +244,9 @@ fn preflight_archive(bytes: &[u8], maximum_bytes: u64) -> Result<u64> {
         let entry = archive
             .by_index(index)
             .map_err(|error| Error::Record(format!("Invalid PyTorch ZIP member: {error}")))?;
-        let name = entry.name();
+        let name = entry
+            .name()
+            .map_err(|error| Error::Record(format!("Invalid PyTorch ZIP member name: {error}")))?;
         if !names.insert(name.to_string()) || entry.is_dir() || entry.encrypted() {
             return Err(Error::Invalid(
                 "PyTorch ZIP has duplicate, directory or encrypted entries".into(),

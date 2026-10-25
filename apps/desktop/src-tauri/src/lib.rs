@@ -8,5 +8,7 @@
 //! `staticlib` and `cdylib` during normal desktop development.
 
 #![cfg(mobile)]
+// Same auto-trait budget as the desktop binary, which includes the same implementation.
+#![recursion_limit = "256"]
 
 include!("application.rs");

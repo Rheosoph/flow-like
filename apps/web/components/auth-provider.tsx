@@ -159,7 +159,16 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const pathname = usePathname();
-	const [profileLoaded, setProfileLoaded] = useState(false);
+	const account = JSON.stringify([
+		auth.user?.profile.iss,
+		auth.user?.profile.sub,
+	]);
+	const [loadedProfile, setLoadedProfile] = useState<{
+		backend: typeof backend;
+		account: string;
+	} | null>(null);
+	const profileLoaded =
+		loadedProfile?.backend === backend && loadedProfile.account === account;
 	const [authPushed, setAuthPushed] = useState(false);
 
 	const isPublicPath =
@@ -169,8 +178,11 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	const sessionRecovery = useSessionRecovery(auth, isPublicPath);
 
 	useEffect(() => {
-		if (!auth.isAuthenticated || sessionRecovery !== "ready") {
-			setProfileLoaded(false);
+		if (
+			!auth.isAuthenticated ||
+			(sessionRecovery !== "ready" && sessionRecovery !== "renewing")
+		) {
+			setLoadedProfile(null);
 		}
 	}, [auth.isAuthenticated, sessionRecovery]);
 
@@ -242,6 +254,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	// Ensure user exists in DB, then fetch and push profile
 	useEffect(() => {
 		if (
+			profileLoaded ||
 			!authPushed ||
 			!auth?.isAuthenticated ||
 			!auth?.user?.access_token ||
@@ -321,7 +334,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 							persister: undefined,
 						}),
 					]);
-					setProfileLoaded(true);
+					setLoadedProfile({ backend, account });
 				}
 			} catch (error) {
 				if (cancelled) return;
@@ -329,7 +342,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 				console.error("Failed to fetch profile:", error);
 				if (backend instanceof WebBackend) {
 					backend.pushProfile(defaultProfile());
-					setProfileLoaded(true);
+					setLoadedProfile({ backend, account });
 				}
 			}
 		})();
@@ -338,6 +351,8 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			cancelled = true;
 		};
 	}, [
+		account,
+		profileLoaded,
 		authPushed,
 		auth?.isAuthenticated,
 		auth?.user?.access_token,
@@ -361,8 +376,15 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		isPublicPath,
 	]);
 
-	// Show loading state while auth is initializing
-	if (auth.isLoading && !isPublicPath) {
+	// Silent renewal also sets isLoading. Keep the current account's workspace
+	// mounted so token rotation cannot discard editor state or rerun page onLoad.
+	const renewingLoadedSession =
+		auth.isAuthenticated &&
+		profileLoaded &&
+		(!auth.activeNavigator || auth.activeNavigator === "signinSilent") &&
+		(sessionRecovery === "renewing" ||
+			(auth.activeNavigator === "signinSilent" && sessionRecovery === "ready"));
+	if (auth.isLoading && !isPublicPath && !renewingLoadedSession) {
 		return <LoadingScreen progress={95} />;
 	}
 
@@ -390,6 +412,9 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		);
 	}
 	if (sessionRecovery === "redirecting") return <LoadingScreen progress={98} />;
+	if (sessionRecovery === "renewing" && !renewingLoadedSession) {
+		return <LoadingScreen progress={98} />;
+	}
 
 	// Show loading state while redirecting to sign-in
 	if (!auth.isAuthenticated && auth.activeNavigator && !isPublicPath) {

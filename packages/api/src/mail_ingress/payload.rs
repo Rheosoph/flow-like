@@ -439,7 +439,9 @@ fn parse(raw: &[u8], prefix: &str) -> Result<(InboundEmail, Objects), ApiError> 
         .ok_or_else(|| ApiError::bad_request("Invalid MIME message"))?;
     let promoted = promoted_text_parts(&mail);
     let promoted_ids = promoted.iter().copied().collect::<HashSet<_>>();
-    let text = joined_body(&mail.text_body, &promoted_ids, |i| mail.body_text(i));
+    let text = joined_body(&mail.text_body, &promoted_ids, |i| {
+        flow_like_catalog_core::mail::body_text(&mail, i)
+    });
     let html = joined_body(&mail.html_body, &promoted_ids, |i| mail.body_html(i));
     let lowercase_html = html
         .as_deref()
@@ -669,6 +671,69 @@ mod tests {
         let raw = b"Content-Type: text/html; charset=utf-8\r\n\r\n<p>Hello</p>";
         let (email, _) = parse(raw, "tmp/test").unwrap();
         assert_eq!(email.html_path.as_ref().unwrap().path, "tmp/test/body.html");
+    }
+
+    #[test]
+    fn html_links_survive_text_preview_and_file_without_changing_html() {
+        let html = "<p>Open <a href=\"https://example.com/order?id=42&amp;view=full\"><strong>the order</strong></a>.</p>";
+        let raw = format!("Content-Type: text/html; charset=utf-8\r\n\r\n{html}");
+        let (email, objects) = parse(raw.as_bytes(), "tmp/test").unwrap();
+        let text = email.text.as_deref().unwrap();
+        assert!(text.contains("the order"), "{text}");
+        assert!(
+            text.contains("https://example.com/order?id=42&view=full"),
+            "{text}"
+        );
+        assert!(!text.contains("&amp;"), "{text}");
+        assert_eq!(body(&objects, "txt"), text);
+        assert_eq!(email.html.as_deref(), Some(html));
+        assert_eq!(body(&objects, "html"), html);
+        assert!(!email.text_truncated && !email.html_truncated);
+    }
+
+    #[test]
+    fn multipart_plain_text_is_preserved_when_html_has_other_links() {
+        let plain = "Keep  this spacing.\r\nhttps://example.com/plain?id=42&view=full";
+        let html = "<p><a href=\"https://example.com/html\">HTML version</a></p>";
+        let raw = format!(
+            "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=x\r\n\r\n\
+             --x\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{plain}\r\n\
+             --x\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n\
+             --x--\r\n"
+        );
+        let (email, objects) = parse(raw.as_bytes(), "tmp/test").unwrap();
+        assert_eq!(email.text.as_deref(), Some(plain));
+        assert_eq!(body(&objects, "txt"), plain);
+        assert_eq!(email.html.as_deref(), Some(html));
+        assert_eq!(body(&objects, "html"), html);
+    }
+
+    #[test]
+    fn html_fragment_links_are_kept_without_inline_attachment_content() {
+        let first = "<p><a href=\"https://example.com/first\">First</a></p>";
+        let notes = "<p><a href=\"https://example.com/notes\">Attached notes</a></p>";
+        let last = "<p><a href=\"https://example.com/last\">Last</a></p>";
+        let raw = format!(
+            "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n\
+             --x\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{first}\r\n\
+             --x\r\nContent-Type: text/html; charset=utf-8\r\n\
+             Content-Disposition: inline; filename=notes.html\r\n\r\n{notes}\r\n\
+             --x\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{last}\r\n\
+             --x--\r\n"
+        );
+        let (email, objects) = parse(raw.as_bytes(), "tmp/test").unwrap();
+        let text = email.text.as_deref().unwrap();
+        for url in ["https://example.com/first", "https://example.com/last"] {
+            assert!(text.contains(url), "{text}");
+        }
+        assert!(!text.contains("https://example.com/notes"), "{text}");
+        assert_eq!(body(&objects, "txt"), text);
+        let html = format!("{first}\n{last}");
+        assert_eq!(email.html.as_deref(), Some(html.as_str()));
+        assert_eq!(body(&objects, "html"), html);
+        assert_eq!(email.attachments.len(), 1);
+        assert_eq!(email.attachments[0].filename.as_deref(), Some("notes.html"));
+        assert_eq!(stored(&objects, &email.attachments[0]), notes.as_bytes());
     }
 
     #[test]

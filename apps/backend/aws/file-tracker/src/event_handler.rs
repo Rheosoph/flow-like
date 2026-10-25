@@ -1,13 +1,14 @@
-use crate::accounting::{self, Observation};
+use crate::accounting::{self, Failure, Observation};
 use aws_lambda_events::{
     s3::{S3Event, S3EventRecord},
-    sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent},
+    sqs::{BatchItemFailure, SqsBatchResponse, SqsEvent, SqsMessage},
 };
 use aws_sdk_dynamodb::{types::AttributeValue, Client as DynamoClient};
 use aws_sdk_s3::Client as S3Client;
 use flow_like_db::DbDialect;
 use lambda_runtime::{tracing, Error, LambdaEvent};
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, DbErr};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 pub struct LegacyBaseline {
@@ -34,6 +35,79 @@ fn decode(key: &str) -> Result<String, Error> {
     Ok(urlencoding::decode(&key)?.into_owned())
 }
 
+/// The batch's object observations, each with the index of the message it came from, and the
+/// first error of every message that could not be read.
+struct Batch {
+    observations: Vec<Observation>,
+    messages: Vec<usize>,
+    errors: BTreeMap<usize, String>,
+}
+
+impl Batch {
+    fn parse(records: &[SqsMessage]) -> Self {
+        let mut batch = Self {
+            observations: Vec::new(),
+            messages: Vec::new(),
+            errors: BTreeMap::new(),
+        };
+        for (message, record) in records.iter().enumerate() {
+            let event = record
+                .body
+                .as_deref()
+                .ok_or_else(|| Error::from("Record body is missing"))
+                .and_then(|body| serde_json::from_str::<S3Event>(body).map_err(Error::from));
+            let event = match event {
+                Ok(event) => event,
+                Err(error) => {
+                    batch.errors.entry(message).or_insert(error.to_string());
+                    continue;
+                }
+            };
+            for s3_record in &event.records {
+                match observe(s3_record) {
+                    Ok(Some(observation)) => {
+                        batch.observations.push(observation);
+                        batch.messages.push(message);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        batch.errors.entry(message).or_insert(error.to_string());
+                    }
+                }
+            }
+        }
+        batch
+    }
+
+    /// A message fails when any of its records failed, so SQS redelivers only those messages.
+    fn failures(
+        self,
+        records: &[SqsMessage],
+        results: Vec<Result<(), Failure>>,
+    ) -> Vec<BatchItemFailure> {
+        let Self {
+            messages,
+            mut errors,
+            ..
+        } = self;
+        for (result, message) in results.into_iter().zip(messages) {
+            if let Err(failure) = result {
+                errors.entry(message).or_insert_with(|| failure.to_string());
+            }
+        }
+        errors
+            .into_iter()
+            .map(|(message, error)| {
+                let message_id = records[message].message_id.clone();
+                tracing::error!(%error, ?message_id, "file accounting event failed");
+                BatchItemFailure {
+                    item_identifier: message_id.unwrap_or_default(),
+                }
+            })
+            .collect()
+    }
+}
+
 pub(crate) async fn function_handler(
     event: LambdaEvent<SqsEvent>,
     dynamo: DynamoClient,
@@ -42,47 +116,54 @@ pub(crate) async fn function_handler(
     db: DatabaseConnection,
     dialect: DbDialect,
 ) -> Result<SqsBatchResponse, Error> {
-    let mut batch_item_failures = Vec::new();
-    for record in event.payload.records {
-        let result = async {
-            let body = record.body.as_ref().ok_or("Record body is missing")?;
-            let event: S3Event = serde_json::from_str(body)?;
-            for s3_record in event.records {
-                process_s3_event(&s3_record, &dynamo, &s3, legacy.as_ref(), &db, dialect).await?;
+    let records = event.payload.records;
+    let batch = Batch::parse(&records);
+    // HEAD runs outside SQL transactions. Accounting checks its object snapshot
+    // before committing and samples again if another event changed that snapshot.
+    let results = accounting::apply_batch(
+        &db,
+        dialect,
+        &batch.observations,
+        |observation| {
+            let dynamo = dynamo.clone();
+            let legacy = legacy.clone();
+            let observation = observation.clone();
+            async move {
+                read_legacy_size(
+                    &dynamo,
+                    legacy.as_ref(),
+                    &observation.bucket,
+                    &observation.app_id,
+                    &observation.key,
+                )
+                .await
+                .map_err(|error| {
+                    DbErr::Custom(format!(
+                        "legacy object size read for {} failed: {error}",
+                        observation.key
+                    ))
+                })
             }
-            Ok::<(), Error>(())
-        }
-        .await;
-        if let Err(error) = result {
-            tracing::error!(%error, message_id = ?record.message_id, "file accounting event failed");
-            batch_item_failures.push(BatchItemFailure {
-                item_identifier: record.message_id.unwrap_or_default(),
-            });
-        }
-    }
+        },
+        |observation| {
+            head_size(
+                s3.clone(),
+                observation.bucket.clone(),
+                observation.key.clone(),
+            )
+        },
+    )
+    .await;
     Ok(SqsBatchResponse {
-        batch_item_failures,
+        batch_item_failures: batch.failures(&records, results),
     })
 }
 
-async fn process_s3_event(
-    event: &S3EventRecord,
-    dynamo: &DynamoClient,
-    s3: &S3Client,
-    legacy: Option<&LegacyBaseline>,
-    db: &DatabaseConnection,
-    dialect: DbDialect,
-) -> Result<(), Error> {
+fn observe(event: &S3EventRecord) -> Result<Option<Observation>, Error> {
     let name = event.event_name.as_deref().ok_or("Event name is missing")?;
     if !name.starts_with("ObjectCreated:") && !name.starts_with("ObjectRemoved:") {
-        return Ok(());
+        return Ok(None);
     }
-    let bucket = event
-        .s3
-        .bucket
-        .name
-        .as_deref()
-        .ok_or("Object bucket is missing")?;
     let key = decode(
         event
             .s3
@@ -93,80 +174,55 @@ async fn process_s3_event(
     )?;
     // DeviceArchive metadata accounts for these server-owned payloads separately.
     if key.starts_with("device-archives/") {
-        return Ok(());
+        return Ok(None);
     }
-    let (user_id, app_id) = parse_key_identity(&key)?;
-    let sequencer = accounting::normalize_sequencer(
-        event
-            .s3
-            .object
-            .sequencer
-            .as_deref()
-            .ok_or("Object sequencer is missing")?,
-    )?;
+    observation(event, key).map(Some)
+}
 
-    let observation = Observation {
-        bucket: bucket.to_owned(),
+fn observation(event: &S3EventRecord, key: String) -> Result<Observation, Error> {
+    let bucket = event
+        .s3
+        .bucket
+        .name
+        .clone()
+        .ok_or("Object bucket is missing")?;
+    let (user_id, app_id) = parse_key_identity(&key)?;
+    let sequencer = event
+        .s3
+        .object
+        .sequencer
+        .as_deref()
+        .ok_or("Object sequencer is missing")?;
+    Ok(Observation {
+        bucket,
         key,
         app_id,
         user_id,
-        sequencer,
+        sequencer: accounting::normalize_sequencer(sequencer)?,
         legacy_size: 0,
-    };
-    let bucket = bucket.to_owned();
-    let key = observation.key.clone();
-    let read_legacy = {
-        let dynamo = dynamo.clone();
-        let legacy = legacy.cloned();
-        let bucket = bucket.clone();
-        let app_id = observation.app_id.clone();
-        let key = key.clone();
-        move || {
-            let dynamo = dynamo.clone();
-            let legacy = legacy.clone();
-            let bucket = bucket.clone();
-            let app_id = app_id.clone();
-            let key = key.clone();
-            async move {
-                read_legacy_size(&dynamo, legacy.as_ref(), &bucket, &app_id, &key)
-                    .await
-                    .map_err(|error| {
-                        sea_orm::DbErr::Custom(format!("legacy object size read failed: {error}"))
-                    })
-            }
-        }
-    };
-    // HEAD runs outside SQL transactions. Accounting checks its object snapshot
-    // before committing and samples again if another event changed that snapshot.
-    let s3 = s3.clone();
-    accounting::apply_with_baseline(db, dialect, observation, read_legacy, move || {
-        let s3 = s3.clone();
-        let bucket = bucket.clone();
-        let key = key.clone();
-        async move {
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(8),
-                s3.head_object().bucket(&bucket).key(&key).send(),
-            )
-            .await
-            .map_err(|_| sea_orm::DbErr::Custom("S3 HEAD timed out".into()))?;
-            match result {
-                Ok(object) => object.content_length().ok_or_else(|| {
-                    sea_orm::DbErr::Custom("S3 HEAD response has no content length".into())
-                }),
-                Err(error)
-                    if error
-                        .as_service_error()
-                        .is_some_and(|error| error.is_not_found()) =>
-                {
-                    Ok(0)
-                }
-                Err(error) => Err(sea_orm::DbErr::Custom(format!("S3 HEAD failed: {error}"))),
-            }
-        }
     })
-    .await?;
-    Ok(())
+}
+
+async fn head_size(s3: S3Client, bucket: String, key: String) -> Result<i64, DbErr> {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        s3.head_object().bucket(&bucket).key(&key).send(),
+    )
+    .await
+    .map_err(|_| DbErr::Custom(format!("S3 HEAD of {key} timed out")))?;
+    match result {
+        Ok(object) => object
+            .content_length()
+            .ok_or_else(|| DbErr::Custom(format!("S3 HEAD of {key} returned no content length"))),
+        Err(error)
+            if error
+                .as_service_error()
+                .is_some_and(|error| error.is_not_found()) =>
+        {
+            Ok(0)
+        }
+        Err(error) => Err(DbErr::Custom(format!("S3 HEAD of {key} failed: {error}"))),
+    }
 }
 
 async fn read_legacy_size(
@@ -214,34 +270,87 @@ fn parse_key_identity(key: &str) -> Result<(Option<String>, String), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
-    #[tokio::test]
-    async fn archive_notifications_are_acknowledged_without_storage_or_database_access() {
-        let config = aws_config::SdkConfig::builder()
-            .behavior_version(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new("eu-west-1"))
-            .build();
-        let dynamo = DynamoClient::new(&config);
-        let s3 = S3Client::new(&config);
-        let db = DatabaseConnection::default();
+    fn record(event_name: &str, key: &str, sequencer: &str) -> S3EventRecord {
+        let mut event = S3EventRecord::default();
+        event.event_name = Some(event_name.into());
+        event.s3.bucket.name = Some("content".into());
+        event.s3.object.key = Some(key.into());
+        event.s3.object.sequencer = Some(sequencer.into());
+        event
+    }
 
+    fn message(id: &str, records: Vec<S3EventRecord>) -> SqsMessage {
+        SqsMessage {
+            message_id: Some(id.into()),
+            body: Some(serde_json::to_string(&S3Event { records }).unwrap()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn archive_notifications_are_acknowledged_without_storage_or_database_access() {
         for event_name in ["ObjectCreated:Put", "ObjectRemoved:Delete"] {
             let mut event = S3EventRecord::default();
             event.event_name = Some(event_name.into());
             event.s3.bucket.name = Some("content".into());
             event.s3.object.key = Some("device-archives%2Fowner%2Farchive.json".into());
-            // A missing sequencer and disconnected clients would fail accounting.
-            process_s3_event(&event, &dynamo, &s3, None, &db, DbDialect::Postgres)
-                .await
-                .unwrap();
+            // A missing sequencer would fail accounting.
+            assert!(observe(&event).unwrap().is_none());
 
             event.s3.object.key = Some("device-archives-other/owner/archive.json".into());
-            assert!(
-                process_s3_event(&event, &dynamo, &s3, None, &db, DbDialect::Postgres)
-                    .await
-                    .is_err()
-            );
+            assert!(observe(&event).is_err());
         }
+    }
+
+    #[test]
+    fn batch_failures_name_only_messages_with_a_failed_record() {
+        let records = vec![
+            message("valid", vec![record("ObjectCreated:Put", "apps/a/x", "01")]),
+            SqsMessage {
+                message_id: Some("unreadable".into()),
+                body: Some("not json".into()),
+                ..Default::default()
+            },
+            message(
+                "archive",
+                vec![record("ObjectCreated:Put", "device-archives/owner/a", "1")],
+            ),
+            message(
+                "mixed",
+                vec![
+                    record("ObjectRemoved:Delete", "apps/b/y", "2"),
+                    record("ObjectCreated:Put", "users/u/apps/a/z", "3"),
+                ],
+            ),
+            message(
+                "partly-invalid",
+                vec![
+                    record("ObjectCreated:Put", "apps/c/w", "4"),
+                    record("ObjectCreated:Put", "elsewhere/w", "5"),
+                ],
+            ),
+        ];
+        let batch = Batch::parse(&records);
+        assert_eq!(batch.messages, vec![0, 3, 3, 4]);
+        assert_eq!(
+            batch
+                .observations
+                .iter()
+                .map(|observation| (observation.app_id.as_str(), observation.sequencer.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("a", "1"), ("b", "2"), ("a", "3"), ("c", "4")]
+        );
+        let failed = Arc::new(DbErr::Custom("app b chunk failed".into()));
+        let failures = batch.failures(&records, vec![Ok(()), Err(failed), Ok(()), Ok(())]);
+        assert_eq!(
+            failures
+                .iter()
+                .map(|failure| failure.item_identifier.as_str())
+                .collect::<Vec<_>>(),
+            vec!["unreadable", "mixed", "partly-invalid"]
+        );
     }
 
     #[test]

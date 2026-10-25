@@ -53,7 +53,6 @@ import type {
 import type { IRouteMapping } from "../../state/backend-state/route-state";
 import type { ISettingsProfile } from "../../types";
 import { ScopedCustomCss } from "../scoped-custom-css";
-import { LoadingScreen } from "../ui/loading-screen";
 import { Container } from "./container";
 import {
 	isSafeEmbeddedExternalHref,
@@ -68,7 +67,7 @@ import type {
 	IUseInterfaceProps,
 } from "./interfaces";
 import { NoDefaultInterface } from "./no-default";
-import { PageInterface } from "./page-interface";
+import { PageTransition, type PageView } from "./page-transition";
 
 export {
 	type IRouteResolution,
@@ -112,6 +111,12 @@ export function isTransientReadFailure(error: unknown): boolean {
 	const status = (error as { status?: unknown } | null)?.status;
 	if (typeof status !== "number") return false;
 	return status >= 500 || TRANSIENT_READ_STATUS.has(status);
+}
+
+const LOADING_VIEW: PageView = { kind: "loading" };
+
+function contentView(node: ReactNode): PageView {
+	return { kind: "content", node };
 }
 
 const unsupportedPageBootstrap = async (): Promise<IPageBootstrap> => {
@@ -1490,71 +1495,72 @@ export function UsePageContent({
 		pageEvent,
 	]);
 
+	const pageTransitionScope = JSON.stringify([...bootstrapScope, appId]);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef and sidebarRef are stable refs
-	const inner = useMemo(() => {
-		if (!appId) return notFound ?? <NoDefaultInterface appId="" />;
+	const view = useMemo((): PageView => {
+		if (!appId) return contentView(notFound ?? <NoDefaultInterface appId="" />);
 		if (
 			accessGateBlocking ||
 			routeLoading ||
 			isRoutePending ||
 			isDirectEventPending
 		) {
-			return <LoadingScreen />;
+			return LOADING_VIEW;
 		}
 
 		// Page-target event (from route or event fallback)
 		if (pageEvent) {
-			if (bootstrapPending) return <LoadingScreen />;
+			if (bootstrapPending) return LOADING_VIEW;
 			if (pageExecutionAuthorityUnavailable) {
-				return (
+				return contentView(
 					<InterfaceLoadError
 						message={pageExecutionAuthorityMessage}
 						offline={!isOnline}
 						retrying={bootstrapRetrying}
 						onRetry={retryCatalog}
-					/>
+					/>,
 				);
 			}
 			if (resolvedPageData && !isPagePending) {
-				return (
-					<div className="flex flex-col grow h-full w-full max-h-full overflow-hidden">
-						<PageInterface
-							key={`${JSON.stringify(bootstrapScope)}:${pageKey}:${pageContentRevision ?? resolvedPageData.updatedAt}:${pageExecutionRevision ?? "unresolved"}`}
-							appId={appId}
-							event={pageEvent}
-							config={parseUint8ArrayToJson(pageEvent.config) ?? {}}
-							route={effectiveRouteMapping?.path ?? routePath}
-							page={resolvedPageData}
-							pageRevision={pageContentRevision}
-							pageExecutionRevision={pageExecutionRevision}
-							pageElementDemand={pageElementDemand}
-							executionPending={awaitingNetworkBootstrap}
-							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
-							active={active}
-							onNavigationMessage={
-								embedded ? handleEmbeddedNavigation : undefined
-							}
-							toolbarRef={headerRef}
-							sidebarRef={sidebarRef}
-						/>
-					</div>
-				);
+				return {
+					kind: "page",
+					key: `${pageTransitionScope}:${pageKey}:${pageContentRevision ?? resolvedPageData.updatedAt}:${pageExecutionRevision ?? "unresolved"}`,
+					props: {
+						appId,
+						event: pageEvent,
+						config: parseUint8ArrayToJson(pageEvent.config) ?? {},
+						route: effectiveRouteMapping?.path ?? routePath,
+						page: resolvedPageData,
+						pageRevision: pageContentRevision,
+						pageExecutionRevision,
+						pageElementDemand,
+						executionPending: awaitingNetworkBootstrap,
+						queryParams: embedded ? (queryParamsProp ?? {}) : undefined,
+						active,
+						onNavigationMessage: embedded
+							? handleEmbeddedNavigation
+							: undefined,
+						toolbarRef: headerRef,
+						sidebarRef,
+					},
+				};
 			}
-			if (pageLoading || isPagePending) return <LoadingScreen />;
+			if (pageLoading || isPagePending) return LOADING_VIEW;
 			// The event does declare an interface, but it could not be read here. Saying
 			// "no interface" would send the user to event configuration to fix data
 			// that is already correct.
 			if (pageError)
-				return (
+				return contentView(
 					<InterfaceLoadError
 						message={pageError}
 						offline={!isOnline}
 						retrying={pageRetryPending}
 						onRetry={retryPage}
-					/>
+					/>,
 				);
-			return (
-				<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />
+			return contentView(
+				<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />,
 			);
 		}
 
@@ -1567,7 +1573,7 @@ export function UsePageContent({
 				effectiveRouteEvent.event_type,
 			);
 			if (InterfaceComponent) {
-				return (
+				return contentView(
 					<div
 						key={effectiveRouteEvent.id}
 						className="flex flex-col grow h-full w-full max-h-full overflow-hidden"
@@ -1580,7 +1586,7 @@ export function UsePageContent({
 							sidebarRef={sidebarRef}
 							presentation={embedded ? "tile" : "page"}
 						/>
-					</div>
+					</div>,
 				);
 			}
 		}
@@ -1588,13 +1594,13 @@ export function UsePageContent({
 		// No route config - fall back to event-based interface
 		if (!activeEvent) {
 			if ((bootstrapPending || events.isFetching) && !catalogEvents)
-				return <LoadingScreen />;
+				return LOADING_VIEW;
 			const hasUsableEvents = sortedEvents.some((e) => canUseEvent(e));
-			if (hasUsableEvents && !eventId) return <LoadingScreen />;
+			if (hasUsableEvents && !eventId) return LOADING_VIEW;
 			// Nothing cached and no way to fetch it. The app is not misconfigured, this
 			// device simply has not seen its events yet.
 			if (!catalogEvents && (events.isError || bootstrap.isError || !isOnline))
-				return (
+				return contentView(
 					<InterfaceLoadError
 						message={
 							isOnline
@@ -1607,17 +1613,17 @@ export function UsePageContent({
 						offline={!isOnline}
 						retrying={bootstrapPending || events.isFetching}
 						onRetry={retryCatalog}
-					/>
+					/>,
 				);
-			return (
-				<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />
+			return contentView(
+				<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />,
 			);
 		}
 
 		if (usableEvents.has(activeEvent.event_type)) {
 			const InterfaceComponent = usableEvents.get(activeEvent.event_type);
 			if (InterfaceComponent)
-				return (
+				return contentView(
 					<div
 						key={activeEvent.id}
 						className="flex flex-col grow h-full w-full max-h-full overflow-hidden"
@@ -1630,11 +1636,13 @@ export function UsePageContent({
 							sidebarRef={sidebarRef}
 							presentation={embedded ? "tile" : "page"}
 						/>
-					</div>
+					</div>,
 				);
 		}
 
-		return <NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />;
+		return contentView(
+			<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />,
+		);
 	}, [
 		appId,
 		routeLoading,
@@ -1673,6 +1681,7 @@ export function UsePageContent({
 		bootstrapPending,
 		awaitingNetworkBootstrap,
 		bootstrapTargetKey,
+		pageTransitionScope,
 		catalogEvents,
 		notFound,
 		accessGateBlocking,
@@ -1716,7 +1725,7 @@ export function UsePageContent({
 							switchEvent={switchEvent}
 						/>
 					) : null}
-					{inner}
+					<PageTransition scope={pageTransitionScope} view={view} />
 				</div>
 			</Container>
 		</Root>

@@ -21,7 +21,7 @@ sha2 = "0.10"
 toml = { workspace = true, optional = true }
 unicode-normalization = "0.1.25"
 utoipa = { version = "5", optional = true }
-zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+zip = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
