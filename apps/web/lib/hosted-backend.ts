@@ -7,6 +7,7 @@ import {
 	parseWidgetPolicyDescriptor,
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
+import type { IAppLegalLinks } from "@flow-like/flow-like-ui/lib/legal-links";
 import {
 	HUB_REFRESH_TIMEOUT_MS,
 	requestTimeoutMs,
@@ -26,6 +27,7 @@ import {
 	EmptyBoardState,
 	EmptyDatabaseState,
 	EmptyGraphState,
+	EmptyLockedStorageState,
 	EmptyQueryState,
 	EmptyRoleState,
 	EmptyStorageState,
@@ -70,6 +72,8 @@ export interface HostedBootstrap {
 	app_id: string;
 	kind: HostedKind;
 	auth_proxy: boolean;
+	/** The publisher's links; absent from an API older than this field. */
+	legal?: IAppLegalLinks;
 	bootstrap: IPageBootstrap;
 }
 
@@ -446,6 +450,7 @@ export function createHostedBackend(
 		teamState: new EmptyTeamState(),
 		roleState: new EmptyRoleState(),
 		storageState: new HostedStorageState(data.app_id, request),
+		lockedStorageState: new EmptyLockedStorageState(),
 		templateState: new EmptyTemplateState(),
 		aiState: new EmptyAIState(),
 		dbState: new EmptyDatabaseState(),

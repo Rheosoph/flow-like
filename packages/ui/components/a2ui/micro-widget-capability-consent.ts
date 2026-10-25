@@ -161,7 +161,7 @@ function isCspKey(value: unknown): value is WidgetCspKey {
 /**
  * Capabilities a page-JSON contract asks for. Only used when the backend
  * cannot describe the widget and the host falls back to the legacy frame.
- * Preview surfaces never capture or play audio.
+ * Preview surfaces never capture or play audio, nor upload files.
  */
 export function readRequestedCapabilities(
 	contract: WidgetContract | null | undefined,
@@ -176,7 +176,11 @@ export function readRequestedCapabilities(
 		return [];
 	}
 	return MICRO_WIDGET_CAPABILITIES.filter((name) => {
-		if (preview && (name === "microphone" || name === "media")) return false;
+		if (
+			preview &&
+			(name === "microphone" || name === "media" || name === "uploads")
+		)
+			return false;
 		return (
 			Object.prototype.hasOwnProperty.call(capabilities, name) &&
 			(capabilities as Record<string, unknown>)[name] === true

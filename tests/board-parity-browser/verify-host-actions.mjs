@@ -85,6 +85,13 @@ async function drag(from, to) {
 	await settle();
 }
 async function pin(id, direction) {
+	// A native node mounts its production handles while the pointer rests on it.
+	if (!(await node(id).count())) {
+		const p = await header(id);
+		await page.mouse.move(p.x, p.y);
+		await node(id).waitFor();
+		await settle();
+	}
 	const locator = node(id).locator(`[data-handleid="${id}.${direction}"]`);
 	const box = await locator.boundingBox();
 	assert.ok(box);

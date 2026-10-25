@@ -41,6 +41,7 @@ import {
 	EmptyEventState,
 	EmptyGraphState,
 	EmptyHelperState,
+	EmptyLockedStorageState,
 	EmptyQueryState,
 	EmptyRoleState,
 	EmptyRouteState,
@@ -58,6 +59,7 @@ import type {
 	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 } from "./backend-state/helper-state";
+import type { ILockedStorageState } from "./backend-state/locked-storage-state";
 import type { IOfflineWritesState } from "./backend-state/offline-writes-state";
 import type { IPageState } from "./backend-state/page-state";
 import type { IQueryState } from "./backend-state/query-state";
@@ -77,7 +79,10 @@ export type {
 } from "./backend-state/storage-state";
 import type { ITeamState } from "./backend-state/team-state";
 import type { ITemplateState } from "./backend-state/template-state";
-import type { IUsageState } from "./backend-state/usage-state";
+import type {
+	IUsageRequestOptions,
+	IUsageState,
+} from "./backend-state/usage-state";
 import type { IUserState } from "./backend-state/user-state";
 import type { IWidgetState } from "./backend-state/widget-state";
 
@@ -87,6 +92,7 @@ export * from "./backend-state/api-state";
 export * from "./backend-state/empty-states/index";
 export * from "./backend-state/registry-state";
 export * from "./backend-state/idb-route-state";
+export * from "./backend-state/locked-storage-state";
 export * from "./backend-state/offline-writes-state";
 export * from "./backend-state/sales-state";
 export type {
@@ -123,6 +129,7 @@ export type {
 	ITemplateState,
 	IUserState,
 	IWidgetState,
+	IUsageRequestOptions,
 	IUsageState,
 	IAnalyticsState,
 	IGraphState,
@@ -251,6 +258,8 @@ export interface IBackendState {
 	teamState: ITeamState;
 	roleState: IRoleState;
 	storageState: IStorageState;
+	/** Write-once versioned files; disabled for offline apps and hosts without a locked bucket. */
+	lockedStorageState: ILockedStorageState;
 	templateState: ITemplateState;
 	helperState: IHelperState;
 	eventState: IEventState;
@@ -334,6 +343,7 @@ const serverBackend: IBackendState = {
 	teamState: new EmptyTeamState(),
 	roleState: new EmptyRoleState(),
 	storageState: new EmptyStorageState(),
+	lockedStorageState: new EmptyLockedStorageState(),
 	templateState: new EmptyTemplateState(),
 	helperState: new EmptyHelperState(),
 	eventState: new EmptyEventState(),

@@ -1144,14 +1144,35 @@ pub struct PublishArtifacts {
 #[tauri::command]
 pub async fn developer_find_publish_artifacts(
     project_path: String,
+    include_wasm: Option<bool>,
 ) -> Result<PublishArtifacts, TauriFunctionError> {
-    let project = PathBuf::from(&project_path);
-    let widget_bundle = find_widget_bundle(&project);
+    find_publish_artifacts(Path::new(&project_path), include_wasm)
+}
 
-    let wasm = match find_wasm_for_publish(&project) {
+fn find_publish_artifacts(
+    project: &Path,
+    include_wasm: Option<bool>,
+) -> Result<PublishArtifacts, TauriFunctionError> {
+    let widget_bundle = find_widget_bundle(project);
+
+    // Publish only the artifacts shown in review, even if the project reserves
+    // a node path or a node binary appeared after inspection.
+    if include_wasm == Some(false) {
+        let widget_bundle = widget_bundle.ok_or_else(|| {
+            TauriFunctionError::new(
+                "No widget bundle found. Build your widgets and review the package before publishing.",
+            )
+        })?;
+        return Ok(PublishArtifacts {
+            wasm: None,
+            widget_bundle: Some(widget_bundle.to_string_lossy().to_string()),
+        });
+    }
+
+    let wasm = match find_wasm_for_publish(project) {
         Ok(path) => Some(path),
         Err(error) => {
-            let declares_node = load_manifest_typed(&project)
+            let declares_node = load_manifest_typed(project)
                 .ok()
                 .and_then(|m| m.wasm_path)
                 .is_some_and(|p| !p.is_empty())
@@ -2088,4 +2109,142 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
     tracing::info!("Developer nodes loaded into catalog");
 
     register_all_developer_packages(app_handle).await;
+}
+
+#[cfg(test)]
+mod publish_artifact_tests {
+    use super::*;
+
+    struct ProjectFixture(PathBuf);
+
+    impl ProjectFixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "flow-like-publish-artifacts-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(path.join("node")).unwrap();
+            std::fs::write(
+                path.join("flow-like.toml"),
+                r#"manifest_version = 2
+id = "com.example.widgets"
+name = "Widgets"
+version = "0.1.0"
+description = "Widgets with a reserved node project"
+wasm_path = "node.wasm"
+widget_bundle_path = "widgets.flwb"
+"#,
+            )
+            .unwrap();
+            Self(path)
+        }
+
+        fn write(&self, name: &str) {
+            std::fs::write(self.0.join(name), b"artifact").unwrap();
+        }
+    }
+
+    impl Drop for ProjectFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn widgets_publish_with_a_reserved_unbuilt_node() {
+        let project = ProjectFixture::new();
+        project.write("widgets.flwb");
+
+        let artifacts = find_publish_artifacts(&project.0, Some(false)).unwrap();
+
+        assert!(artifacts.wasm.is_none());
+        assert_eq!(
+            artifacts.widget_bundle.as_deref(),
+            project.0.join("widgets.flwb").to_str()
+        );
+    }
+
+    #[test]
+    fn widgets_publish_excludes_a_node_built_after_review() {
+        let project = ProjectFixture::new();
+        project.write("widgets.flwb");
+        project.write("node.wasm");
+
+        let artifacts = find_publish_artifacts(&project.0, Some(false)).unwrap();
+
+        assert!(artifacts.wasm.is_none());
+        assert!(artifacts.widget_bundle.is_some());
+    }
+
+    #[test]
+    fn widgets_publish_requires_the_reviewed_bundle() {
+        let project = ProjectFixture::new();
+        project.write("node.wasm");
+
+        let error = find_publish_artifacts(&project.0, Some(false)).unwrap_err();
+
+        assert!(error.to_string().contains("No widget bundle found"));
+    }
+
+    #[test]
+    fn default_and_node_publish_require_the_declared_binary() {
+        let project = ProjectFixture::new();
+        project.write("widgets.flwb");
+
+        for include_wasm in [None, Some(true)] {
+            let error = find_publish_artifacts(&project.0, include_wasm).unwrap_err();
+            assert!(error.to_string().contains("No built .wasm file found"));
+        }
+    }
+
+    #[test]
+    fn default_and_node_publish_include_the_binary() {
+        let project = ProjectFixture::new();
+        project.write("widgets.flwb");
+        project.write("node.wasm");
+
+        for include_wasm in [None, Some(true)] {
+            let artifacts = find_publish_artifacts(&project.0, include_wasm).unwrap();
+            assert_eq!(
+                artifacts.wasm.as_deref(),
+                project.0.join("node.wasm").to_str()
+            );
+            assert!(artifacts.widget_bundle.is_some());
+        }
+    }
+
+    #[test]
+    fn default_and_node_publish_reject_a_stale_release() {
+        let project = ProjectFixture::new();
+        project.write("widgets.flwb");
+        std::fs::write(
+            project.0.join("Cargo.toml"),
+            "[package]\nname = \"publish-fixture\"\nversion = \"0.1.0\"\n[lib]\npath = \"lib.rs\"\n",
+        )
+        .unwrap();
+        std::fs::write(project.0.join("lib.rs"), "").unwrap();
+        for (profile, timestamp) in [("release", 10), ("debug", 20)] {
+            let target = project.0.join("target/wasm32-wasip2").join(profile);
+            std::fs::create_dir_all(&target).unwrap();
+            std::fs::File::create(target.join("node.wasm"))
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(timestamp),
+                ))
+                .unwrap();
+        }
+
+        for include_wasm in [None, Some(true)] {
+            let error = find_publish_artifacts(&project.0, include_wasm).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Release build is older than debug build")
+            );
+        }
+    }
 }

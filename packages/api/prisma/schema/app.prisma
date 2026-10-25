@@ -71,11 +71,12 @@ model App {
   ownedGroups      AppGroup[]       @relation("ownedGroups")
   groupMemberships AppGroupMember[] @relation("appGroupMemberships")
 
-  llmUsage       LLMUsageTracking[]
-  usageLimits    AppUsageLimit[]
-  executionUsage ExecutionUsageTracking[]
-  executionRuns  ExecutionRun[]
-  executionMode  String                   @default("ANY")
+  llmUsage            LLMUsageTracking[]
+  usageLimits         AppUsageLimit[]
+  executionUsage      ExecutionUsageTracking[]
+  executionUsageDaily ExecutionUsageDaily[]
+  executionRuns       ExecutionRun[]
+  executionMode       String                   @default("ANY")
 
   syncs       BoardSync[]
   boardScores AppBoardScore[]
@@ -185,10 +186,11 @@ model TechnicalUser {
   creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
   creatorMembershipId String?
 
-  llmUsage       LLMUsageTracking[]
-  embeddingUsage EmbeddingUsageTracking[]
-  executionUsage ExecutionUsageTracking[]
-  executionRuns  ExecutionRun[]
+  llmUsage            LLMUsageTracking[]
+  embeddingUsage      EmbeddingUsageTracking[]
+  executionUsage      ExecutionUsageTracking[]
+  executionUsageDaily ExecutionUsageDaily[]
+  executionRuns       ExecutionRun[]
 
   validUntil DateTime? @db.Timestamptz(3)
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)

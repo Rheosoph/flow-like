@@ -5229,6 +5229,11 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
                 AstStmt::Loop { body, .. } => {
                     self.project_handlers_in_block(body, &format!("{statement_path}/body"), modules)
                 }
+                AstStmt::Collapse(group) => self.project_handlers_in_block(
+                    &group.body,
+                    &format!("{statement_path}/group/body"),
+                    modules,
+                ),
                 AstStmt::Let { .. }
                 | AstStmt::Destructure { .. }
                 | AstStmt::Call { .. }
@@ -5246,7 +5251,9 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
         for (index, statement) in block.stmts.iter().enumerate() {
             let statement_path = format!("{path}/stmts/{index}");
             match statement {
-                AstStmt::Let { name, call, anchor } => {
+                AstStmt::Let {
+                    name, call, anchor, ..
+                } => {
                     let step = self.project_call_step(
                         call,
                         name.clone(),
@@ -5435,6 +5442,10 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
                             },
                         });
                     }
+                }
+                // A group is presentation: its statements are steps of this block.
+                AstStmt::Collapse(group) => {
+                    self.project_block(&group.body, &format!("{statement_path}/group/body"), steps)
                 }
                 // Nested handlers are projected as independent Event roots above. Comments have
                 // no runtime semantics for request acceptance.
@@ -5876,6 +5887,7 @@ fn project_acceptance_diagnostic_for_flowscript(
         phase: FlowScriptDiagnosticPhase::Validation,
         message,
         source_span: None,
+        source_span_is_exact: false,
         spans: Vec::new(),
         additional_sites: 0,
         ast_path: Some(if diagnostic.code.starts_with("IR_REQUEST_APPROVAL_") {
@@ -10331,6 +10343,12 @@ impl FlowScriptDraftResponse {
                 continue;
             }
             projected.insert(key, value);
+        }
+        if !self.commands.is_empty() {
+            projected.insert(
+                "planned_changes".to_string(),
+                crate::flow::ast::planned_changes(&self.commands, 25),
+            );
         }
         serde_json::to_string(&serde_json::Value::Object(projected))
             .unwrap_or_else(|_| self.message.clone())

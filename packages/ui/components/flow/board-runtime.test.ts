@@ -427,3 +427,25 @@ test("legacy bridge delegates while attached and preserves the latest camera on 
 	legacy.configure({ nodes: [] });
 	expect(runtime.flow.getNodes()).toHaveLength(1);
 });
+
+test("legacy cameras below React Flow's zoom floor are clamped about the screen centre", async () => {
+	const runtime = createBoardRuntime();
+	const legacy = createBoardRuntime();
+	legacy.configure({ width: 800, height: 600, minZoom: 0.1, maxZoom: 3 });
+	const detach = runtime.attachLegacy(
+		legacy.flow,
+		legacy.store as unknown as Parameters<BoardRuntime["attachLegacy"]>[1],
+	);
+	// A native camera restored at 0.02 would otherwise mount the whole board in DOM.
+	await runtime.flow.setViewport({ x: 0, y: 0, zoom: 0.02 });
+	expect(legacy.flow.getViewport()).toEqual({ x: -1600, y: -1200, zoom: 0.1 });
+	expect(legacy.flow.screenToFlowPosition({ x: 400, y: 300 })).toEqual({
+		x: 20_000,
+		y: 15_000,
+	});
+	await runtime.flow.setCenter(0, 0, { zoom: 8 });
+	expect(legacy.flow.getViewport().zoom).toBe(3);
+	await runtime.flow.setViewport({ x: 5, y: 6, zoom: 0.5 });
+	expect(legacy.flow.getViewport()).toEqual({ x: 5, y: 6, zoom: 0.5 });
+	detach();
+});

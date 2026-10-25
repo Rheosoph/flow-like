@@ -31,8 +31,8 @@ spec:
           command: [python, /opt/object-store/conformance.py]
           envFrom:
             - secretRef: {name: {{ include "flow-like.storageSecretName" . }}}
-            {{- if .Values.audit.bucket }}
-            # Only a principal allowed to delete versions proves the audit bucket lock.
+            {{- if or .Values.audit.bucket .Values.lockedStorage.bucket }}
+            # Lock probes need a principal that may delete retained versions and bypass governance.
             - secretRef: {name: {{ .Values.rustfs.existingSecret }}}
             {{- end }}
           env:
@@ -52,6 +52,10 @@ spec:
               value: {{ .Values.storage.s3.logBucket | quote }}
             {{- with .Values.audit.bucket }}
             - name: AUDIT_BUCKET
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.lockedStorage.bucket }}
+            - name: LOCKED_BUCKET
               value: {{ . | quote }}
             {{- end }}
           securityContext:

@@ -647,10 +647,10 @@ fn signed_number_can_start_after(previous: Option<&Token>) -> bool {
 
 // Unicode-aware: `to_camel_case` keeps any alphanumeric char, so rendered identifiers
 // (from user-named boards/variables/events) can carry non-ASCII letters.
-fn is_ident_start(c: char) -> bool {
+pub(crate) fn is_ident_start(c: char) -> bool {
     c.is_alphabetic() || c == '_' || c == '$'
 }
 
-fn is_ident_continue(c: char) -> bool {
+pub(crate) fn is_ident_continue(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '$'
 }

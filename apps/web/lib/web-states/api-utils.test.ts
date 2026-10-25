@@ -13,7 +13,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/request-deadline";
 import type { AuthContextProps } from "react-oidc-context";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { apiFetch, apiPost } from "./api-utils";
+import { apiFetch, apiGet, apiPost } from "./api-utils";
 
 const auth = { user: { access_token: "client-token" } } as AuthContextProps;
 
@@ -67,6 +67,23 @@ test("board requests advertise the client format alongside authentication", asyn
 	expect(sentHeaders?.get("x-request-id")).toBe("format-negotiation");
 	expect(sentHeaders?.has("x-flow-like-capabilities")).toBe(false);
 	expect(result).toEqual({ board_format_version: 2 });
+});
+
+test("GET options forward cache bypass headers with authentication", async () => {
+	let sentHeaders: Headers | undefined;
+	vi.stubGlobal(
+		"fetch",
+		async (_url: RequestInfo | URL, init?: RequestInit) => {
+			sentHeaders = new Headers(init?.headers);
+			expect(init?.method).toBe("GET");
+			return Response.json({ total: 2 });
+		},
+	);
+	await apiGet("usage/executions/activity?days=7", auth, {
+		headers: { "Cache-Control": "no-cache" },
+	});
+	expect(sentHeaders?.get("Cache-Control")).toBe("no-cache");
+	expect(sentHeaders?.get("Authorization")).toBe("Bearer client-token");
 });
 
 test.each([

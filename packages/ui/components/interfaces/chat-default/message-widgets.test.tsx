@@ -289,3 +289,99 @@ describe("widget snapshot pre-capture", () => {
 		await act(async () => root.unmount());
 	});
 });
+
+describe("anchored widgets", () => {
+	const order = (container: HTMLElement) =>
+		Array.from(
+			container.querySelectorAll(
+				"[data-fl-chat-prose], [data-probe], [data-card]",
+			),
+		).map((el) =>
+			el.hasAttribute("data-probe")
+				? "widget"
+				: el.hasAttribute("data-card")
+					? "card"
+					: el.textContent?.trim(),
+		);
+
+	test("render where they were pushed, and only there", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const message = liveMessage("Before after", [
+			{ ...widget(), content_offset: 6 },
+		]);
+
+		await act(async () => {
+			root.render(<MessageComponent message={message} />);
+		});
+		expect(order(container)).toEqual(["Before", "widget", "after"]);
+		await act(async () => root.unmount());
+	});
+
+	test("streamed text around an anchored widget does not re-render it", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const widgets = [{ ...widget(), content_offset: 6 }];
+
+		for (const content of ["Before", "Before after", "Before after more"]) {
+			await act(async () => {
+				root.render(
+					<MessageComponent loading message={liveMessage(content, widgets)} />,
+				);
+			});
+		}
+		expect(rendered.length).toBe(1);
+		expect(order(container)).toEqual(["Before", "widget", "after more"]);
+		await act(async () => root.unmount());
+	});
+
+	test("stay after the text when think blocks were extracted", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const message = liveMessage("<think>plan</think>Answer text", [
+			{ ...widget(), content_offset: 3 },
+		]);
+
+		await act(async () => {
+			root.render(<MessageComponent message={message} />);
+		});
+		expect(order(container)).toEqual(["Answer text", "widget"]);
+		await act(async () => root.unmount());
+	});
+
+	test("a widget-only live turn still shows the thinking dots", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+
+		await act(async () => {
+			root.render(
+				<MessageComponent
+					loading
+					message={liveMessage("", [{ ...widget(), content_offset: 0 }])}
+				/>,
+			);
+		});
+		expect(container.textContent).toContain("Thinking");
+		expect(order(container)).toEqual(["widget"]);
+		await act(async () => root.unmount());
+	});
+
+	test("host content lands at its anchor beside the text", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const anchoredContent = [
+			{ key: "card", offset: 6, node: <div data-card="page" /> },
+		];
+
+		await act(async () => {
+			root.render(
+				<MessageComponent
+					message={liveMessage("Before after", [])}
+					anchoredContent={anchoredContent}
+				/>,
+			);
+		});
+		expect(order(container)).toEqual(["Before", "card", "after"]);
+		await act(async () => root.unmount());
+	});
+});

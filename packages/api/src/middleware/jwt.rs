@@ -627,36 +627,8 @@ impl AppUser {
             return Err(self.app_permission_denial());
         }
 
-        let sub = self.sub();
-        if let Ok(sub) = sub {
-            let role_model = role::Entity::find()
-                .join(JoinType::InnerJoin, role::Relation::Membership.def())
-                .filter(
-                    membership::Column::UserId
-                        .eq(&sub)
-                        .and(membership::Column::AppId.eq(app_id)),
-                )
-                .one(&state.db)
-                .await?
-                .ok_or_else(|| {
-                    tracing::debug!("Role not found for user {} in app {}", sub, app_id);
-                    ApiError::FORBIDDEN
-                })?;
-
-            let permissions = RolePermissions::from_bits(role_model.permissions)
-                .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
-
-            return Ok(AppPermissionResponse {
-                state: state.clone(),
-                permissions,
-                role: Arc::new(role_model),
-                sub: Some(sub.clone()),
-                effective_user_id: Some(sub.clone()),
-                technical_user_id: None,
-                identifier: sub,
-                principal: ExecutionPrincipal::User,
-                origin_app_id: None,
-            });
+        if let Ok(sub) = self.sub() {
+            return user_app_permission_uncached(&sub, app_id, state).await;
         }
 
         if let AppUser::ConnectedApp(connected_app) = self {
@@ -676,6 +648,7 @@ impl AppUser {
                         .and(technical_user::Column::Id.eq(&api_key.key_id)),
                 )
                 .one(&state.db)
+                .instrument(role_query_span())
                 .await?;
             let Some(role_model) = role_model else {
                 state.auth_cache.invalidate(&hash_token(&api_key.api_key));
@@ -779,6 +752,7 @@ impl AppUser {
                         .and(membership::Column::AppId.eq(app_id)),
                 )
                 .one(&state.db)
+                .instrument(role_query_span())
                 .await?
                 .ok_or_else(|| {
                     tracing::debug!(
@@ -962,6 +936,15 @@ pub(crate) async fn fresh_user_role<C: sea_orm::ConnectionTrait>(
         .ok_or_else(|| ApiError::internal("Invalid role permission bits"))
 }
 
+fn role_query_span() -> tracing::Span {
+    tracing::info_span!(
+        target: "flow_like::observability",
+        "db.query",
+        db.operation = "select",
+        db.table = "Role"
+    )
+}
+
 async fn user_app_permission_uncached(
     sub: &str,
     app_id: &str,
@@ -975,6 +958,7 @@ async fn user_app_permission_uncached(
                 .and(membership::Column::AppId.eq(app_id)),
         )
         .one(&state.db)
+        .instrument(role_query_span())
         .await?
         .ok_or_else(|| {
             tracing::debug!(sub, app_id, "Current app membership role was not found");
@@ -1032,6 +1016,12 @@ async fn connected_app_permission_uncached(
         )
         .find_also_related(role::Entity)
         .one(&state.db)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "db.query",
+            db.operation = "select",
+            db.table = "AppConnection"
+        ))
         .await?
         .ok_or_else(|| {
             tracing::debug!(

@@ -6,6 +6,7 @@ import {
 	ChevronRightIcon,
 	ExternalLinkIcon,
 	FileTextIcon,
+	InfoIcon,
 	ShieldIcon,
 	Trash2Icon,
 } from "lucide-react";
@@ -30,6 +31,8 @@ import {
 import { Button } from "../../ui/button";
 import { Card } from "../../ui/card";
 import { Collapsible, CollapsibleContent } from "../../ui/collapsible";
+import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { FlowCardBindings, FlowCardEntryPoints } from "./flow-card-bindings";
 import type { IFlowRow } from "./flows-overview-model";
 import {
@@ -140,15 +143,57 @@ function MetaLine({ row }: Readonly<{ row: IFlowRow }>) {
 		{
 			id: "coverage",
 			node: row.scores ? (
-				<span
-					className={cn(
-						"font-mono tabular-nums",
-						lowCoverage && "text-amber-600 dark:text-amber-400",
-					)}
-				>
-					{lowCoverage ? "only " : ""}
-					{`${row.coverage.scoredNodeCount}/${row.coverage.nodeCount} scored`}
-				</span>
+				<Popover>
+					<PopoverTrigger asChild>
+						<button
+							type="button"
+							className={cn(
+								"inline-flex items-center gap-1 rounded-sm font-mono tabular-nums underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+								lowCoverage && "text-amber-600 dark:text-amber-400",
+							)}
+						>
+							{t(
+								"nodesScoredCoverage",
+								"{{scoredNodeCount}}/{{nodeCount}} nodes scored",
+								{
+									scoredNodeCount: row.coverage.scoredNodeCount,
+									nodeCount: row.coverage.nodeCount,
+								},
+							)}
+							<InfoIcon aria-hidden="true" className="size-3 shrink-0" />
+						</button>
+					</PopoverTrigger>
+					<PopoverContent
+						align="start"
+						aria-label={t("scoreCoverage", "Score coverage")}
+						className="w-80 max-w-[calc(100vw-2rem)] space-y-2 text-xs"
+					>
+						<p className="font-semibold">
+							{t("scoreCoverage", "Score coverage")}
+						</p>
+						<p className="leading-relaxed text-muted-foreground">
+							{t(
+								"scoreCoverageExplanation",
+								"{{scoredNodeCount}} of {{nodeCount}} nodes declare scores. Each category shows the lowest declared node score. Nodes without scores do not affect the ratings. Reroute nodes are not counted.",
+								{
+									scoredNodeCount: row.coverage.scoredNodeCount,
+									nodeCount: row.coverage.nodeCount,
+								},
+							)}
+						</p>
+						{lowCoverage ? (
+							<p className="leading-relaxed text-amber-600 dark:text-amber-400">
+								{t(
+									"lowScoreCoverageExplanation",
+									"Fewer than {{percent}}% of nodes have scores, so these ratings cover only a small part of this flow.",
+									{
+										percent: LOW_COVERAGE_RATIO * 100,
+									},
+								)}
+							</p>
+						) : null}
+					</PopoverContent>
+				</Popover>
 			) : (
 				<span className="font-mono tabular-nums">
 					{t("countNodes", {
@@ -207,8 +252,8 @@ function PageChip({
 	const className = cn(
 		"inline-flex min-w-0 max-w-[60%] items-center gap-1 rounded border px-1.5 py-0.5 transition-colors",
 		route && !unavailable
-			? `border-border/60 bg-muted/40 hover:border-border`
-			: `border-dashed border-amber-500/50 bg-amber-500/5`,
+			? "border-border/60 bg-muted/40 hover:border-border"
+			: "border-dashed border-amber-500/50 bg-amber-500/5",
 	);
 	const title = unavailable
 		? t(
@@ -453,6 +498,9 @@ export function FlowScoreCard({
 	registerCard,
 }: Readonly<FlowScoreCardProps>) {
 	const { t } = useTranslation("flow");
+	const openEditorLabel = t("openNameInEditor", "Open {{name}} in editor", {
+		name: row.board.name,
+	});
 	const weakest = row.worstDimension
 		? t(row.worstDimension, DIMENSION_LABEL[row.worstDimension])
 		: undefined;
@@ -469,19 +517,26 @@ export function FlowScoreCard({
 		<Card
 			ref={(element) => registerCard?.(row.board.id, element)}
 			className={cn(
-				"gap-0 overflow-hidden border-border/60 bg-card/80 py-0 backdrop-blur-sm transition-colors",
+				"relative gap-0 overflow-hidden border-border/60 bg-card/80 py-0 backdrop-blur-sm transition-colors",
 				"dark:border-white/10 dark:bg-muted/40",
 				"hover:border-border",
 				highlighted && "ring-2 ring-primary/60",
 			)}
 		>
-			<Collapsible open={expanded}>
+			<Collapsible open={expanded} className="[&_a]:relative [&_a]:z-20">
 				<div className="flex items-start gap-2.5 px-3 pt-3">
 					<ScoreShield row={row} />
 					<div className="min-w-0 flex-1">
-						<p className="truncate text-sm font-semibold leading-tight">
+						<button
+							type="button"
+							className="block w-full truncate rounded-sm text-left text-sm font-semibold leading-tight underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							title={openEditorLabel}
+							data-href={boardHref}
+							data-title={row.board.name}
+							onClick={() => onOpenBoard(row.board.id)}
+						>
 							{row.board.name}
-						</p>
+						</button>
 						<p className="mt-0.5 truncate text-[11px] text-muted-foreground">
 							{weakest ? (
 								<>
@@ -501,26 +556,28 @@ export function FlowScoreCard({
 						</p>
 					</div>
 					<div className="flex shrink-0 items-center gap-0.5">
-						<Button
-							variant="ghost"
-							size="icon"
-							className="size-7"
-							title={t("openName", "Open {{name}}", { name: row.board.name })}
-							data-href={boardHref}
-							data-title={row.board.name}
-							onClick={() => onOpenBoard(row.board.id)}
-						>
-							<ExternalLinkIcon className="size-3.5" />
-							<span className="sr-only">
-								{t("openName", "Open {{name}}", { name: row.board.name })}
-							</span>
-						</Button>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="size-7"
+									aria-label={openEditorLabel}
+									data-href={boardHref}
+									data-title={row.board.name}
+									onClick={() => onOpenBoard(row.board.id)}
+								>
+									<ExternalLinkIcon aria-hidden="true" className="size-3.5" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>{openEditorLabel}</TooltipContent>
+						</Tooltip>
 						<AlertDialog>
 							<AlertDialogTrigger asChild>
 								<Button
 									variant="ghost"
 									size="icon"
-									className="size-7 text-muted-foreground hover:text-destructive"
+									className="relative z-20 size-7 text-muted-foreground hover:text-destructive"
 									title={t("deleteName", "Delete {{name}}", {
 										name: row.board.name,
 									})}
@@ -582,7 +639,7 @@ export function FlowScoreCard({
 					type="button"
 					aria-expanded={expanded}
 					onClick={() => onToggle(row.board.id)}
-					className="mt-2 flex w-full items-center gap-1.5 border-t border-border/50 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+					className="relative z-20 mt-2 flex w-full items-center gap-1.5 border-t border-border/50 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
 				>
 					{expanded ? (
 						<ChevronDownIcon className="size-3.5 shrink-0" />

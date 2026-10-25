@@ -66,6 +66,20 @@ pub fn quote_string(s: &str) -> String {
     out
 }
 
+/// The string literal of a `@collapse` group path: names joined by `/`, a leading `/` for an
+/// absolute path, and every slash inside a name written `\/` so the parser keeps it in that name.
+pub fn collapse_path_literal(absolute: bool, path: &[String]) -> String {
+    let names = path
+        .iter()
+        .map(|name| {
+            let quoted = quote_string(name);
+            quoted[1..quoted.len() - 1].replace('/', "\\/")
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("\"{}{names}\"", if absolute { "/" } else { "" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

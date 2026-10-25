@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { isCancelledError } from "@tanstack/react-query";
 import {
 	FilesIcon,
@@ -8,6 +9,7 @@ import {
 	LayoutGridIcon,
 	LinkIcon,
 	ListIcon,
+	LockIcon,
 	MaximizeIcon,
 	MinimizeIcon,
 	PencilIcon,
@@ -32,7 +34,6 @@ import { toast } from "sonner";
 import {
 	BulkUploadPartialFailureError,
 	type BulkUploadProgressCallback,
-	type IBulkUploadProgress,
 	type IStorageItem,
 	type IStorageListOptions,
 	type IStorageUploadOptions,
@@ -43,7 +44,7 @@ import {
 } from "../..";
 import { asArray } from "../../lib/response-shape";
 import { normalizeStorageLocation } from "../../lib/storage-tree";
-import { humanFileSize } from "../../lib/utils";
+import type { ILockedItem } from "../../state/backend-state/locked-storage-state";
 import {
 	Badge,
 	Button,
@@ -57,7 +58,6 @@ import {
 	EmptyState,
 	FilePreviewer,
 	Input,
-	Progress,
 	ResizableHandle,
 	ResizablePanel,
 	ResizablePanelGroup,
@@ -65,6 +65,7 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
+	canPreview,
 	isAudio,
 	isCode,
 	isImage,
@@ -73,11 +74,25 @@ import {
 	isVideo,
 } from "../ui";
 import { craftViewer } from "./craft-viewers";
+import { LockedFileRow } from "./locked-file-row";
+import { LockedStorageLayer } from "./locked-storage-dialogs";
+import {
+	type ILockedStorageEntry,
+	isLockedEntry,
+} from "./locked-storage-entries";
+import { LockedVersionList } from "./locked-version-list";
+import { saveUrlAsFile } from "./save-download";
 import { StorageBreadcrumbs } from "./storage-breadcrumbs";
 import { createStorageCraftFile, storageCraftSaveName } from "./storage-craft";
 import { isStorageDocx } from "./storage-docx";
 import { useStorageDocxHistory } from "./storage-docx-history";
 import { FileOrFolder } from "./storage-file-or-folder";
+import {
+	IDLE_UPLOAD_PROGRESS,
+	type IUploadProgressState,
+	UploadProgressPanel,
+} from "./storage-upload-progress";
+import { useLockedStorage } from "./use-locked-storage";
 
 const CraftDocument = lazy(() =>
 	import("./craft-document").then((module) => ({
@@ -96,6 +111,10 @@ const EMPTY_PREVIEW = {
 	folder: "",
 	appId: "",
 	storageScopeKey: "",
+	/** Display name when `file` is not a storage path. */
+	name: "",
+	/** Locked files preview read-only and never open an editor. */
+	locked: false,
 };
 
 function hasInlineMediaPreview(file: string) {
@@ -115,16 +134,6 @@ interface StorageOperationResult {
 }
 
 const NO_VIRTUAL_FOLDERS: string[] = [];
-
-/** Compact "time remaining" for the upload panel. */
-function formatEta(seconds?: number): string | null {
-	if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) {
-		return null;
-	}
-	if (seconds < 60) return `${Math.ceil(seconds)}s left`;
-	if (seconds < 3600) return `${Math.round(seconds / 60)}m left`;
-	return `${(seconds / 3600).toFixed(1)}h left`;
-}
 
 /**
  * File list.
@@ -252,6 +261,7 @@ export function StorageSystem({
 		return isSmall;
 	};
 	const isSmallScreen = useIsSmallScreen();
+	const { t } = useTranslation("common");
 	const fileReference = useRef<HTMLInputElement>(null);
 	const folderReference = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
@@ -412,18 +422,8 @@ export function StorageSystem({
 			document.removeEventListener("click", protectLinkNavigation, true);
 		};
 	}, [confirmPreviewLeave]);
-	const [uploadProgress, setUploadProgress] = useState<{
-		isUploading: boolean;
-		progress: number;
-		fileCount: number;
-		currentFile: string;
-		detail?: IBulkUploadProgress;
-	}>({
-		isUploading: false,
-		progress: 0,
-		fileCount: 0,
-		currentFile: "",
-	});
+	const [uploadProgress, setUploadProgress] =
+		useState<IUploadProgressState>(IDLE_UPLOAD_PROGRESS);
 	const uploadAbort = useRef<AbortController | null>(null);
 	const files = useInvoke(
 		storageApi.listStorageItems,
@@ -581,9 +581,18 @@ export function StorageSystem({
 		],
 	);
 
-	// Merge backend items with virtual folders for current prefix
+	const locked = useLockedStorage({
+		appId,
+		prefix,
+		storageScopeKey,
+		canWrite,
+		storageItems: files.data,
+		writeStorageItems: storageApi.writeStorageItems,
+	});
+
+	// Merge backend items with locked entries and virtual folders for current prefix
 	const filesWithVirtual = useMemo<IStorageItem[]>(() => {
-		const base = asArray(files.data).slice();
+		const base = [...asArray(files.data), ...locked.entries];
 		const have = new Set(base.map((file) => storageDisplayName(file.location)));
 		const basePrefixNorm = normalizePrefix(prefix);
 		const locFor = (name: string) =>
@@ -600,7 +609,7 @@ export function StorageSystem({
 					}) as IStorageItem,
 			);
 		return [...base, ...virtualItems];
-	}, [files.data, virtualFoldersHere, prefix, normalizePrefix]);
+	}, [files.data, locked.entries, virtualFoldersHere, prefix, normalizePrefix]);
 
 	const renameInputId = useId();
 	const renameContext = JSON.stringify([appId, storageScopeKey, prefix]);
@@ -847,13 +856,7 @@ export function StorageSystem({
 				currentFile: fileList[0]?.name || "",
 			});
 
-			const settle = () =>
-				setUploadProgress({
-					isUploading: false,
-					progress: 0,
-					fileCount: 0,
-					currentFile: "",
-				});
+			const settle = () => setUploadProgress(IDLE_UPLOAD_PROGRESS);
 
 			try {
 				await storageApi.uploadStorageItems(
@@ -935,6 +938,7 @@ export function StorageSystem({
 			setInlineEditorOpen(false);
 			conversionTarget.current = { source: file, id: crypto.randomUUID() };
 			setPreview({
+				...EMPTY_PREVIEW,
 				url: fileUrl,
 				file,
 				folder: prefix,
@@ -1024,11 +1028,13 @@ export function StorageSystem({
 	}, []);
 
 	const previewName = useMemo(
-		() => storageDisplayName(preview.file),
-		[preview.file],
+		() => preview.name || storageDisplayName(preview.file),
+		[preview.file, preview.name],
 	);
-	const previewViewer = editorFor(preview.file);
-	const hasInlinePreview = hasInlineMediaPreview(preview.file);
+	const previewViewer = preview.locked ? undefined : editorFor(preview.file);
+	const hasInlinePreview = hasInlineMediaPreview(previewName);
+	const previewEditable =
+		!preview.locked && isFileEditable(preview.url, preview.file);
 	const isEditorPreview =
 		!!previewViewer && (!hasInlinePreview || inlineEditorOpen);
 	const inlineEditAction = canWrite && previewViewer && hasInlinePreview && (
@@ -1064,23 +1070,107 @@ export function StorageSystem({
 				return;
 			}
 
-			const fileUrl = signedUrl[0].url;
-			const fileName = storageDisplayName(file) || "downloaded_file";
-			const fileContent = await fetch(fileUrl).then((res) => res.blob());
-			const blob = new Blob([fileContent], {
-				type: "application/octet-stream",
-			});
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = fileName;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
+			await saveUrlAsFile(
+				signedUrl[0].url,
+				storageDisplayName(file) || "downloaded_file",
+			);
 		},
 		[appId, closePreview, preview, storageApi],
 	);
+
+	const openLockedFile = useCallback(
+		async (entry: ILockedStorageEntry) => {
+			const item = entry.lockedItem;
+			const fileName = item.latest?.file_name ?? item.name;
+			if (preview.file === entry.location) {
+				closePreview();
+				return;
+			}
+			if (!canPreview(fileName)) {
+				locked.openDetails(item.id);
+				return;
+			}
+			if (!confirmPreviewLeave()) return;
+			const request = ++previewRequest.current;
+			try {
+				const ticket = await locked.downloadUrl(item);
+				if (request !== previewRequest.current) return;
+				if (!(await closeHistory())) return;
+				docxDirty.current = false;
+				setInlineEditorOpen(false);
+				setPreview({
+					...EMPTY_PREVIEW,
+					url: ticket.url,
+					file: entry.location,
+					folder: prefix,
+					appId,
+					storageScopeKey,
+					name: ticket.file_name,
+					locked: true,
+				});
+			} catch (error) {
+				console.error(`Previewing locked file ${item.id} failed:`, error);
+				locked.openDetails(item.id);
+			}
+		},
+		[
+			appId,
+			closeHistory,
+			closePreview,
+			confirmPreviewLeave,
+			locked.downloadUrl,
+			locked.openDetails,
+			prefix,
+			preview.file,
+			storageScopeKey,
+		],
+	);
+
+	const lockedRowActions = useMemo(() => {
+		const latestTarget = (item: ILockedItem) =>
+			item.latest ? { item, version: item.latest } : null;
+		return {
+			onDownload: (item: ILockedItem) => void locked.download(item),
+			onShowVersions: (item: ILockedItem) => locked.openDetails(item.id),
+			onUploadVersion: canWrite
+				? (item: ILockedItem) => locked.openUpload({ item })
+				: undefined,
+			onExtendRetention: locked.canExtendRetention
+				? (item: ILockedItem) => {
+						const target = latestTarget(item);
+						if (target) locked.openRetention(target);
+					}
+				: undefined,
+			onToggleLegalHold: locked.canSetLegalHold
+				? (item: ILockedItem) => {
+						const target = latestTarget(item);
+						if (target) void locked.toggleLegalHold(target);
+					}
+				: undefined,
+			renderVersions: (item: ILockedItem) => (
+				<LockedVersionList
+					appId={locked.appId}
+					item={item}
+					queries={locked.queries}
+					onDownload={(target, version) =>
+						void locked.download(target, version)
+					}
+					onOpenDetails={locked.openDetails}
+				/>
+			),
+		};
+	}, [
+		canWrite,
+		locked.appId,
+		locked.canExtendRetention,
+		locked.canSetLegalHold,
+		locked.download,
+		locked.openDetails,
+		locked.openRetention,
+		locked.openUpload,
+		locked.queries,
+		locked.toggleLegalHold,
+	]);
 
 	const filteredFiles = useMemo(
 		() =>
@@ -1131,59 +1221,71 @@ export function StorageSystem({
 	);
 
 	const renderFile = useCallback(
-		(file: IStorageItem, clearPreviewOnNavigate: boolean) => (
-			<FileOrFolder
-				appId={appId}
-				highlight={preview.file === file.location}
-				file={file}
-				previewable={editorFor(file.location) ? true : undefined}
-				changePrefix={(newPrefix) => {
-					if (isEditorPreview || clearPreviewOnNavigate) {
-						navigatePrefix(`${prefix}/${newPrefix}`);
-					} else {
-						updatePrefix(`${prefix}/${newPrefix}`);
-					}
-				}}
-				loadFile={loadFile}
-				revealInExplorer={revealInExplorer}
-				openWithApp={openWithApp}
-				listAppsForFile={listAppsForFile}
-				renameFile={canWrite ? startRename : undefined}
-				deleteFile={async (target) => {
-					const deletingPreview = storageDisplayName(preview.file) === target;
-					if (deletingPreview && !confirmPreviewLeave()) return;
-					try {
-						await storageApi.deleteStorageItems(appId, [`${prefix}/${target}`]);
-						if (deletingPreview) {
-							docxDirty.current = false;
-							await closePreview();
+		(file: IStorageItem, clearPreviewOnNavigate: boolean) =>
+			isLockedEntry(file) ? (
+				<LockedFileRow
+					item={file.lockedItem}
+					highlight={preview.file === file.location}
+					actions={{
+						...lockedRowActions,
+						onOpen: () => void openLockedFile(file),
+					}}
+				/>
+			) : (
+				<FileOrFolder
+					appId={appId}
+					highlight={preview.file === file.location}
+					file={file}
+					previewable={editorFor(file.location) ? true : undefined}
+					changePrefix={(newPrefix) => {
+						if (isEditorPreview || clearPreviewOnNavigate) {
+							navigatePrefix(`${prefix}/${newPrefix}`);
+						} else {
+							updatePrefix(`${prefix}/${newPrefix}`);
 						}
-						toast.success("Deleted successfully");
-					} catch (error) {
-						console.error(error);
-						toast.error("Failed to delete");
-					} finally {
-						await refreshFiles();
-					}
-				}}
-				shareFile={async (target) => {
-					const downloadLinks = await storageApi.downloadStorageItems(appId, [
-						target,
-					]);
-					const firstItem = downloadLinks[0];
-					if (!firstItem?.url) return;
-					try {
-						await navigator.clipboard.writeText(firstItem.url);
-						toast.success("Copied download link to clipboard");
-					} catch (error) {
-						console.error("Failed to copy link to clipboard:", error);
-					}
-				}}
-				downloadFile={(target) => {
-					downloadFile(target);
-				}}
-			/>
-		),
+					}}
+					loadFile={loadFile}
+					revealInExplorer={revealInExplorer}
+					openWithApp={openWithApp}
+					listAppsForFile={listAppsForFile}
+					renameFile={canWrite ? startRename : undefined}
+					deleteFile={async (target) => {
+						const deletingPreview = storageDisplayName(preview.file) === target;
+						if (deletingPreview && !confirmPreviewLeave()) return;
+						try {
+							await storageApi.deleteStorageItems(appId, [
+								`${prefix}/${target}`,
+							]);
+							if (deletingPreview) {
+								docxDirty.current = false;
+								await closePreview();
+							}
+							toast.success("Deleted successfully");
+						} catch (error) {
+							console.error(error);
+							toast.error("Failed to delete");
+						} finally {
+							await refreshFiles();
+						}
+					}}
+					shareFile={async (target) => {
+						const downloadLinks = await storageApi.downloadStorageItems(appId, [
+							target,
+						]);
+						const firstItem = downloadLinks[0];
+						if (!firstItem?.url) return;
+						try {
+							await navigator.clipboard.writeText(firstItem.url);
+							toast.success("Copied download link to clipboard");
+						} catch (error) {
+							console.error("Failed to copy link to clipboard:", error);
+						}
+					}}
+					downloadFile={(target) => {
+						downloadFile(target);
+					}}
+				/>
+			),
 		[
 			appId,
 			canWrite,
@@ -1195,7 +1297,9 @@ export function StorageSystem({
 			listAppsForFile,
 			isEditorPreview,
 			loadFile,
+			lockedRowActions,
 			navigatePrefix,
+			openLockedFile,
 			openWithApp,
 			prefix,
 			preview.file,
@@ -1314,55 +1418,19 @@ export function StorageSystem({
 				}}
 			/>
 
-			{/* Upload Progress Indicator */}
 			{uploadProgress.isUploading && (
-				<div className="mx-4 mt-4 p-4 border rounded-lg bg-card shrink-0">
-					<div className="flex items-center justify-between gap-4 mb-2">
-						<div className="flex items-center gap-2 min-w-0">
-							<UploadIcon className="h-4 w-4 text-primary animate-pulse shrink-0" />
-							<span className="text-sm font-medium truncate">
-								{uploadProgress.detail
-									? `Uploading ${uploadProgress.detail.completedFiles.toLocaleString()} of ${uploadProgress.detail.totalFiles.toLocaleString()} files`
-									: `Uploading ${uploadProgress.fileCount.toLocaleString()} file${uploadProgress.fileCount !== 1 ? "s" : ""}`}
-							</span>
-						</div>
-						<div className="flex items-center gap-2 shrink-0">
-							<span className="text-sm text-muted-foreground tabular-nums">
-								{uploadProgress.progress.toFixed(1)}%
-							</span>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 px-2"
-								onClick={cancelUpload}
-							>
-								<XIcon className="h-3.5 w-3.5 mr-1" />
-								Cancel
-							</Button>
-						</div>
-					</div>
-					<Progress value={uploadProgress.progress} className="mb-2" />
-					<div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
-						<p className="truncate">{uploadProgress.currentFile}</p>
-						{uploadProgress.detail && (
-							<p className="shrink-0 tabular-nums">
-								{[
-									`${humanFileSize(uploadProgress.detail.uploadedBytes)} / ${humanFileSize(uploadProgress.detail.totalBytes)}`,
-									uploadProgress.detail.bytesPerSecond > 0
-										? `${humanFileSize(uploadProgress.detail.bytesPerSecond)}/s`
-										: null,
-									formatEta(uploadProgress.detail.etaSeconds),
-									uploadProgress.detail.failedFiles > 0
-										? `${uploadProgress.detail.failedFiles.toLocaleString()} failed`
-										: null,
-								]
-									.filter(Boolean)
-									.join(" · ")}
-							</p>
-						)}
-					</div>
-				</div>
+				<UploadProgressPanel
+					label={
+						uploadProgress.detail
+							? `Uploading ${uploadProgress.detail.completedFiles.toLocaleString()} of ${uploadProgress.detail.totalFiles.toLocaleString()} files`
+							: `Uploading ${uploadProgress.fileCount.toLocaleString()} file${uploadProgress.fileCount !== 1 ? "s" : ""}`
+					}
+					state={uploadProgress}
+					cancelLabel="Cancel"
+					onCancel={cancelUpload}
+				/>
 			)}
+			<LockedStorageLayer controller={locked} />
 
 			{/* Header Section */}
 			<div className="flex flex-col gap-4 px-4 pt-4 shrink-0">
@@ -1525,6 +1593,29 @@ export function StorageSystem({
 							</TooltipTrigger>
 							<TooltipContent>Upload files to current folder</TooltipContent>
 						</Tooltip>
+
+						{locked.enabled && canWrite && (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										variant="outline"
+										className="gap-2"
+										onClick={() => locked.openUpload()}
+									>
+										<LockIcon className="h-4 w-4" />
+										<span className="hidden sm:inline">
+											{t("lockedStorage.uploadLocked", "Upload Locked")}
+										</span>
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent>
+									{t(
+										"lockedStorage.uploadLockedHint",
+										"Store write-once, versioned files that cannot be changed or deleted during retention",
+									)}
+								</TooltipContent>
+							</Tooltip>
+						)}
 
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -1743,7 +1834,7 @@ export function StorageSystem({
 											<FilePreviewer
 												url={preview.url}
 												filename={previewName}
-												editable={isFileEditable(preview.url, preview.file)}
+												editable={previewEditable}
 												onSave={saveFile}
 											/>
 										</div>
@@ -1806,7 +1897,7 @@ export function StorageSystem({
 												<FilePreviewer
 													url={preview.url}
 													filename={previewName}
-													editable={isFileEditable(preview.url, preview.file)}
+													editable={previewEditable}
 													onSave={saveFile}
 												/>
 											</div>

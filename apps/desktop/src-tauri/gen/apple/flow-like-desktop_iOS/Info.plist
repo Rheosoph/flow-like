@@ -107,6 +107,7 @@
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>com.flow-like.app.page</string>
+		<string>INSendMessageIntent</string>
 	</array>
 	<key>NSLocationUsageDescription</key>
 	<string>Flow Like uses your location when you request it in a workflow or map.</string>

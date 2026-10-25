@@ -44,10 +44,14 @@ impl ZoomQuality {
 pub struct TextCache<T> {
     raster_key: Option<(u32, u32)>,
     displayed_zoom: u32,
+    title_room: Option<u32>,
     pub title: Option<T>,
     pub pins: Vec<T>,
+    /// The hidden-pin count on a collapsed latch.
+    pub latch: Option<T>,
     pub scaled_title: Option<T>,
     pub scaled_pins: Vec<T>,
+    pub scaled_latch: Option<T>,
 }
 
 impl<T> Default for TextCache<T> {
@@ -55,10 +59,13 @@ impl<T> Default for TextCache<T> {
         Self {
             raster_key: None,
             displayed_zoom: 0,
+            title_room: None,
             title: None,
             pins: Vec::new(),
+            latch: None,
             scaled_title: None,
             scaled_pins: Vec::new(),
+            scaled_latch: None,
         }
     }
 }
@@ -72,13 +79,24 @@ impl<T> TextCache<T> {
             self.raster_key = Some(key);
             self.title = None;
             self.pins.clear();
+            self.latch = None;
         }
         if raster_changed || self.displayed_zoom != zoom.to_bits() {
             self.displayed_zoom = zoom.to_bits();
             self.scaled_title = None;
             self.scaled_pins.clear();
+            self.scaled_latch = None;
         }
         raster_zoom
+    }
+
+    /// Status items in the header narrow the title; a new width lays it out again.
+    pub fn fit_title(&mut self, room: f32) {
+        if self.title_room != Some(room.to_bits()) {
+            self.title_room = Some(room.to_bits());
+            self.title = None;
+            self.scaled_title = None;
+        }
     }
 }
 
@@ -186,6 +204,20 @@ mod tests {
         assert_eq!(cache.title, Some("exact title"));
         assert_eq!(cache.pins, ["exact pin"]);
         assert_eq!(cache.scaled_title, Some("exact mesh"));
+    }
+
+    #[test]
+    fn a_new_title_room_relays_only_the_title() {
+        let mut cache = TextCache::default();
+        cache.fit_title(124.0);
+        cache.title = Some("title");
+        cache.scaled_title = Some("display title");
+        cache.pins = vec!["pin"];
+        cache.fit_title(124.0);
+        assert_eq!(cache.title, Some("title"));
+        cache.fit_title(96.0);
+        assert!(cache.title.is_none() && cache.scaled_title.is_none());
+        assert_eq!(cache.pins, ["pin"]);
     }
 
     #[test]

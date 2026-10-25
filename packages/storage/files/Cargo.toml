@@ -15,7 +15,7 @@ tokio = { workspace = true, features = ["sync", "fs", "io-util"] }
 tempfile = "3"
 object_store = { version = "=0.13.2", features = ["gcp", "aws", "azure", "serde", "serde_json", "cloud"] }
 chrono = { workspace = true, optional = true }
-smb2 = { version = "0.11.3", optional = true }
+smb2 = { version = "0.12.1", optional = true }
 blake3 = { workspace = true, features = ["rayon"] }
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }

@@ -150,6 +150,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
             "Automation/LLM/Vision",
         );
         node.set_flowscript_name("automation.llm", "extractFromScreen");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(5);
 

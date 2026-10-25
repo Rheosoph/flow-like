@@ -30,6 +30,7 @@ pub mod fork;
 pub mod graph;
 pub mod groups;
 pub mod invoke;
+pub mod locked;
 pub mod mail;
 pub mod meta;
 pub mod notifications;
@@ -84,6 +85,11 @@ pub fn routes() -> Router<AppState> {
                 .get(internal::change_appearance::get_appearance),
         )
         .route(
+            "/{app_id}/settings/legal",
+            patch(internal::change_legal::change_legal_links)
+                .get(internal::change_legal::get_legal_links),
+        )
+        .route(
             "/{app_id}/settings/forking",
             patch(internal::change_forking::change_forking)
                 .get(internal::change_forking::get_forking),
@@ -93,8 +99,18 @@ pub fn routes() -> Router<AppState> {
             "/{app_id}/notifications/create",
             post(notifications::create_notification),
         )
-        .route("/{app_id}/mail/send", post(mail::send_mail))
-        .route("/{app_id}/mail/reply", post(mail::reply_mail))
+        .route(
+            "/{app_id}/mail/send",
+            post(mail::send_mail).layer(axum::extract::DefaultBodyLimit::max(
+                mail::MAX_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/{app_id}/mail/reply",
+            post(mail::reply_mail).layer(axum::extract::DefaultBodyLimit::max(
+                mail::MAX_REQUEST_BYTES,
+            )),
+        )
         .route(
             "/{app_id}/cache",
             get(cache::read_cache_entry)
@@ -134,6 +150,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/publication", publication::routes())
         .nest("/{app_id}/packages", packages::routes())
         .nest("/{app_id}/data", data::routes())
+        .nest("/{app_id}/locked", locked::routes())
         .nest("/{app_id}/invoke", invoke::routes())
         .nest("/{app_id}/db", db::routes())
         .nest("/{app_id}/graph", graph::routes())

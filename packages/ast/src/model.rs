@@ -42,6 +42,42 @@ pub struct BoardAst {
     pub modules: Vec<ModuleDecl>,
 }
 
+impl BoardAst {
+    /// Open every `@collapse` group in every section; see [`Block::flatten_collapse`].
+    pub fn flatten_collapse(&mut self) {
+        fn sections(
+            functions: &mut [FnDecl],
+            events: &mut [EventBlock],
+            detached: &mut [Block],
+            modules: &mut [ModuleDecl],
+        ) {
+            for function in functions {
+                function.body.flatten_collapse();
+            }
+            for event in events {
+                event.body.flatten_collapse();
+            }
+            for block in detached {
+                block.flatten_collapse();
+            }
+            for module in modules {
+                sections(
+                    &mut module.functions,
+                    &mut module.events,
+                    &mut module.detached,
+                    &mut module.modules,
+                );
+            }
+        }
+        sections(
+            &mut self.functions,
+            &mut self.events,
+            &mut self.detached,
+            &mut self.modules,
+        );
+    }
+}
+
 /// A `module name { … }` block: a namespace grouping functions, events and nested modules.
 ///
 /// Purely structural at the language level — resolution and lowering live in core. A module body
@@ -306,6 +342,9 @@ pub struct EventBlock {
     /// its friendly name. `None` keeps the catalog default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_name: Option<String>,
+    /// Human description of the event or tool, rendered as `@description("…")`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The event's payload outputs, surfaced as a typed parameter list (`name: Type`, or
     /// `name?: Type = literal` for an optional pin with a stored default). These are the entry
     /// node's data output pins (often user-configured) that the body consumes.
@@ -329,8 +368,53 @@ impl Block {
     /// A `detached { … }` block has no header to anchor, so this stands in for one: it names the
     /// board section a scoped apply is allowed to diff.
     pub fn root_anchor(&self) -> Option<&str> {
-        self.stmts.iter().find_map(Stmt::anchor)
+        self.flat_stmts().into_iter().find_map(Stmt::anchor)
     }
+
+    /// The block's statements in order with every `@collapse` group opened. A group is
+    /// presentation only, so its statements belong to this block exactly as if written in it.
+    pub fn flat_stmts(&self) -> Vec<&Stmt> {
+        fn push<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Stmt>) {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Collapse(group) => push(&group.body.stmts, out),
+                    other => out.push(other),
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(self.stmts.len());
+        push(&self.stmts, &mut out);
+        out
+    }
+
+    /// Open every `@collapse` group in place, recursively through nested blocks, for consumers
+    /// that only care about the statements.
+    pub fn flatten_collapse(&mut self) {
+        let stmts = std::mem::take(&mut self.stmts);
+        for mut stmt in stmts {
+            stmt.flatten_nested_collapse();
+            match stmt {
+                Stmt::Collapse(group) => self.stmts.extend(group.body.stmts),
+                other => self.stmts.push(other),
+            }
+        }
+    }
+}
+
+/// `@collapse("Name") { … }` — a visual group: the nodes its statements produce are placed in a
+/// Collapsed layer. It opens no scope and changes no execution order; the statements belong to the
+/// enclosing block exactly as if written there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollapseBlock {
+    /// Group names, outermost first: `@collapse("A/B")` is `["A", "B"]`.
+    pub path: Vec<String>,
+    /// A leading `/` resolves the path from the section root (board root, module or Function
+    /// layer) instead of the enclosing group. `@collapse("/")` is the section root itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub absolute: bool,
+    pub body: Block,
+    /// `//@l:<layer id>` of the innermost group.
+    pub anchor: Option<String>,
 }
 
 /// A single statement inside a block.
@@ -341,6 +425,9 @@ pub enum Stmt {
         name: String,
         call: Call,
         anchor: Option<String>,
+        /// `const name: Type = …`: the type the author declared for the binding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ty: Option<TypeRef>,
     },
     /// `const { a, b: c } = call(...)` — one node whose outputs are bound by pin name.
     Destructure {
@@ -414,6 +501,9 @@ pub enum Stmt {
         name: String,
         value: Expr,
         anchor: Option<String>,
+        /// `const name: Type = expr`: the type the author declared for the binding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ty: Option<TypeRef>,
     },
     /// `return a, b` — function layer outputs, or an event/tool-entry result
     /// (`events_generic_return_result`). `anchor` is that result node's id when the return maps to
@@ -429,12 +519,15 @@ pub enum Stmt {
     /// that lives inside a function scope and closes over its locals (e.g. an agent tool entry).
     /// It is an independent entry point, not part of the enclosing chain.
     Handler(EventBlock),
+    /// `@collapse("Name") { … }` — a visual group around statements of the enclosing block.
+    Collapse(CollapseBlock),
     /// A free-standing comment line.
     Comment(String),
 }
 
 impl Stmt {
-    /// The statement's stable identity anchor (the node id it renders), when it has one.
+    /// The statement's stable identity anchor (the node id it renders), when it has one. A
+    /// `@collapse` group renders a layer, not a node, so it has none.
     pub fn anchor(&self) -> Option<&str> {
         match self {
             Stmt::Let { anchor, .. }
@@ -448,7 +541,31 @@ impl Stmt {
             | Stmt::Return { anchor, .. } => anchor.as_deref(),
             Stmt::Local(var) => var.anchor.as_deref(),
             Stmt::Handler(event) => event.anchor.as_deref(),
-            Stmt::Comment(_) => None,
+            Stmt::Collapse(_) | Stmt::Comment(_) => None,
+        }
+    }
+
+    /// Open the `@collapse` groups inside this statement's nested blocks (arms, loop body,
+    /// handler body, group body).
+    fn flatten_nested_collapse(&mut self) {
+        match self {
+            Stmt::Branch { arms, .. } => {
+                for arm in arms {
+                    arm.body.flatten_collapse();
+                }
+            }
+            Stmt::Loop { body, .. } => body.flatten_collapse(),
+            Stmt::Handler(event) => event.body.flatten_collapse(),
+            Stmt::Collapse(group) => group.body.flatten_collapse(),
+            Stmt::Let { .. }
+            | Stmt::Destructure { .. }
+            | Stmt::Call { .. }
+            | Stmt::Assign { .. }
+            | Stmt::FieldAssign { .. }
+            | Stmt::LocalAlias { .. }
+            | Stmt::Return { .. }
+            | Stmt::Local(_)
+            | Stmt::Comment(_) => {}
         }
     }
 }

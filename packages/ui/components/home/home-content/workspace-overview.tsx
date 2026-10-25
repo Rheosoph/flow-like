@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Activity,
 	ArrowRight,
@@ -26,6 +26,10 @@ import {
 	homeActivityDays,
 	homeActivityPeriod,
 } from "../home-activity-statistics";
+import {
+	homeExecutionActivityQuery,
+	refreshHomeUsageQuery,
+} from "../home-usage-query";
 import { useHomeLibrary } from "./collections";
 import type { HomeContentProps } from "./config";
 import { HomeSourceNote, useHomeScope } from "./shared";
@@ -44,6 +48,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 	const router = useRouter();
 	const auth = useAuth();
 	const scope = useHomeScope();
+	const client = useQueryClient();
 	const library = useHomeLibrary();
 	const profile = useQuery({
 		queryKey: ["home", ...scope, "profile-apps"],
@@ -53,17 +58,24 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 	const setDraft = useGlobalChatStore((state) => state.setDraft);
 	const enabled = auth.isAuthenticated && Boolean(backend.usageState);
 	const days = homeActivityDays(widget.config.days);
+	const executionOptions = homeExecutionActivityQuery(
+		backend.usageState,
+		scope,
+		days,
+		"",
+		editing,
+	);
 	const executions = useQuery({
-		queryKey: ["home", ...scope, "activity", "", days],
-		queryFn: () => {
-			if (!backend.usageState) throw new Error("Usage history is unavailable.");
-			return backend.usageState.getExecutionActivity(days);
-		},
+		...executionOptions,
 		enabled,
-		staleTime: 30_000,
-		refetchInterval: editing ? false : 60_000,
 		retry: false,
 	});
+	const refreshExecutions = () =>
+		refreshHomeUsageQuery(
+			client,
+			executionOptions.queryKey,
+			executions.refetch,
+		);
 	const statistics = workspacePulseHistory(
 		enabled ? executions.data : undefined,
 	);
@@ -110,7 +122,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 				state={state}
 				local={!backend.usageState}
 				names={names}
-				onRetry={() => void executions.refetch()}
+				onRetry={() => void refreshExecutions()}
 			/>
 		);
 	}
@@ -130,7 +142,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 				state={state}
 				local={!backend.usageState}
 				showAttention={showAttention}
-				onRetry={() => void executions.refetch()}
+				onRetry={() => void refreshExecutions()}
 			/>
 		);
 	}
@@ -354,7 +366,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 						{state === "unavailable" && (
 							<button
 								type="button"
-								onClick={() => void executions.refetch()}
+								onClick={() => void refreshExecutions()}
 								className="flex shrink-0 items-center gap-1 rounded text-xs hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							>
 								<RefreshCw className="size-3" />

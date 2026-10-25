@@ -1,4 +1,8 @@
 {{- if .Values.rustfs.enabled }}
+{{- $buckets := list .Values.storage.s3.metaBucket .Values.storage.s3.contentBucket .Values.storage.s3.logBucket }}
+{{- with .Values.lockedStorage.bucket }}{{- $buckets = append $buckets . }}{{- end }}
+{{- $patterns := list }}
+{{- range $buckets }}{{- $patterns = append $patterns (replace "." "\\." .) }}{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,7 +28,7 @@ data:
         client_max_body_size 0;
         if ($arg_action != '') { return 403; }
         location = /health { return 200 'ok'; }
-        location ~ ^/({{ .Values.storage.s3.metaBucket | replace "." "\\." }}|{{ .Values.storage.s3.contentBucket | replace "." "\\." }}|{{ .Values.storage.s3.logBucket | replace "." "\\." }})(/|$) {
+        location ~ ^/({{ join "|" $patterns }})(/|$) {
           proxy_pass http://store;
           proxy_http_version 1.1;
           proxy_set_header Host $http_host;

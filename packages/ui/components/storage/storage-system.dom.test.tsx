@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildUploadPath } from "../../lib/bulk-upload";
 import type { IStorageItem } from "../../lib/schema/storage/storage-item";
 import { storageDisplayName } from "../../lib/storage-tree";
+import type {
+	IListLockedItemsResponse,
+	ILockedItem,
+	ILockedStorageStatus,
+} from "../../state/backend-state/locked-storage-state";
 import { StorageSystem } from "./storage-system";
 
 type DocxProps = ComponentProps<
@@ -35,7 +40,12 @@ const fixture = vi.hoisted(() => ({
 	craftRender: vi.fn(),
 	previewable: new Map<string, boolean | undefined>(),
 	updatePrefix: vi.fn(),
+	lockedStatus: undefined as ILockedStorageStatus | undefined,
+	lockedListing: undefined as IListLockedItemsResponse | undefined,
+	invokeArgs: new Map<string, unknown[]>(),
+	lockedRows: [] as ILockedItem[],
 	backend: {
+		lockedStorageState: {},
 		storageState: {
 			listStorageItems: vi.fn(),
 			listStorageItemsUser: vi.fn(),
@@ -64,13 +74,29 @@ vi.mock("../..", async () => ({
 				fixture.cachedQueries.filter(predicate),
 		}),
 	}),
+	useAppPermissions: () => ({ can: () => true, canStrict: () => true }),
+	useBackendReady: () => true,
 	useInvoke: (
 		fn: (...args: unknown[]) => Promise<unknown>,
 		context: unknown,
 		args: unknown[],
 	) => {
+		fixture.invokeArgs.set(fn.name, args);
+		if (fn.name === "lockedStorageStatus")
+			return { data: fixture.lockedStatus };
+		if (fn.name === "listLockedFolder") return { data: fixture.lockedListing };
+		if (fn.name === "lockedItemDetail") return { data: undefined };
 		fixture.invoke = () => fn.apply(context, args);
 		return { data: fixture.items, isSuccess: true, refetch: fixture.refetch };
+	},
+}));
+
+vi.mock("./locked-storage-dialogs", () => ({ LockedStorageLayer: () => null }));
+
+vi.mock("./locked-file-row", () => ({
+	LockedFileRow: ({ item }: { item: ILockedItem }) => {
+		fixture.lockedRows.push(item);
+		return <div data-locked-row={item.name} />;
 	},
 }));
 
@@ -78,7 +104,7 @@ vi.mock("../ui/monaco-file-editor", () => ({ MonacoFileEditor: () => null }));
 vi.mock("../ui/text-editor", () => ({ TextEditor: () => null }));
 
 vi.mock("../ui", async () => {
-	const { isPdf, isImage, isAudio, isVideo } = await import(
+	const { canPreview, isPdf, isImage, isAudio, isVideo } = await import(
 		"../ui/file-previewer"
 	);
 	const Wrapper = ({ children }: { children?: ReactNode }) => <>{children}</>;
@@ -117,6 +143,7 @@ vi.mock("../ui", async () => {
 		TooltipTrigger: Wrapper,
 		isCode: () => false,
 		isText: () => false,
+		canPreview,
 		isPdf,
 		isImage,
 		isAudio,
@@ -155,12 +182,14 @@ vi.mock("./storage-file-or-folder", () => ({
 		deleteFile,
 		loadFile,
 		renameFile,
+		changePrefix,
 		previewable,
 	}: {
 		file: IStorageItem;
 		deleteFile: (target: string) => Promise<void>;
 		loadFile: (target: string) => Promise<void>;
 		renameFile?: (file: IStorageItem) => void;
+		changePrefix?: (prefix: string) => void;
 		previewable?: boolean;
 	}) => {
 		fixture.deleteFile = deleteFile;
@@ -177,6 +206,13 @@ vi.mock("./storage-file-or-folder", () => ({
 						onClick={() => renameFile(file)}
 					/>
 				)}
+				{file.is_dir && (
+					<button
+						type="button"
+						aria-label={`Open ${storageDisplayName(file.location)}`}
+						onClick={() => changePrefix?.(file.location.split("/").pop() ?? "")}
+					/>
+				)}
 			</div>
 		);
 	},
@@ -191,6 +227,18 @@ const item = (location: string, is_dir = true): IStorageItem => ({
 
 let root: Root;
 let container: HTMLDivElement;
+
+function docxSave() {
+	const save = fixture.docxProps?.onSave;
+	if (!save) throw new Error("WordcraftDocument rendered without onSave");
+	return save;
+}
+
+function craftSave() {
+	const save = fixture.craftProps?.onSave;
+	if (!save) throw new Error("CraftDocument rendered without onSave");
+	return save;
+}
 
 beforeEach(() => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -221,6 +269,10 @@ beforeEach(() => {
 	fixture.docxRender.mockReset();
 	fixture.previewable.clear();
 	fixture.updatePrefix.mockReset();
+	fixture.lockedStatus = undefined;
+	fixture.lockedListing = undefined;
+	fixture.invokeArgs.clear();
+	fixture.lockedRows = [];
 	fixture.backend.storageState.listStorageItems.mockReset();
 	fixture.backend.storageState.listStorageItems.mockResolvedValue([]);
 	fixture.backend.storageState.listStorageItemsUser.mockReset();
@@ -713,7 +765,7 @@ describe("Storage DOCX documents", () => {
 			},
 		);
 		await act(async () => {
-			await fixture.docxProps?.onSave(exported, onProgress);
+			await docxSave()(exported, onProgress);
 		});
 		expect(onProgress).toHaveBeenCalledWith(42);
 		const [appId, directory, savedFiles] =
@@ -752,8 +804,8 @@ describe("Storage DOCX documents", () => {
 			});
 			const exported = new File(["updated"], "document.docx");
 			await act(async () => {
-				await fixture.docxProps?.onSave(exported);
-				await fixture.docxProps?.onSave(exported);
+				await docxSave()(exported);
+				await docxSave()(exported);
 			});
 			expect(
 				fixture.backend.storageState.uploadStorageItems,
@@ -779,7 +831,7 @@ describe("Storage DOCX documents", () => {
 		});
 		expect(fixture.docxProps?.editable).toBe(false);
 		await expect(
-			fixture.docxProps?.onSave(new File(["content"], "report.docx")),
+			docxSave()(new File(["content"], "report.docx")),
 		).rejects.toThrow("permission");
 		expect(
 			fixture.backend.storageState.uploadStorageItems,
@@ -797,7 +849,7 @@ describe("Storage DOCX documents", () => {
 			new Error("Upload failed"),
 		);
 		await expect(
-			fixture.docxProps?.onSave(new File(["content"], "report.docx")),
+			docxSave()(new File(["content"], "report.docx")),
 		).rejects.toThrow("Upload failed");
 		expect(container.querySelector("[data-docx-document]")).not.toBeNull();
 		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -824,7 +876,7 @@ describe("Storage DOCX documents", () => {
 		);
 		const logError = vi.spyOn(console, "error").mockImplementation(() => {});
 		await expect(
-			fixture.docxProps?.onSave(new File(["content"], "report.docx")),
+			docxSave()(new File(["content"], "report.docx")),
 		).rejects.toThrow("Upload failed");
 		expect(logError).toHaveBeenCalledWith(
 			"Failed to refresh storage:",
@@ -1176,10 +1228,7 @@ describe("Storage Craft editors", () => {
 			});
 			const onProgress = vi.fn();
 			await act(async () => {
-				await fixture.craftProps?.onSave(
-					new File(["bytes"], "ignored.bin"),
-					onProgress,
-				);
+				await craftSave()(new File(["bytes"], "ignored.bin"), onProgress);
 			});
 			const [appId, directory, files, reportProgress] =
 				fixture.backend.storageState.uploadStorageItems.mock.calls[0];
@@ -1248,8 +1297,8 @@ describe("Storage Craft editors", () => {
 			expect(fixture.craftProps?.viewer.id).toBe(id);
 			const outputName = fixture.craftProps?.outputFilename;
 			await act(async () => {
-				await fixture.craftProps?.onSave(new File(["bytes"], "untrusted.bin"));
-				await fixture.craftProps?.onSave(new File(["bytes"], "untrusted.bin"));
+				await craftSave()(new File(["bytes"], "untrusted.bin"));
+				await craftSave()(new File(["bytes"], "untrusted.bin"));
 			});
 			const uploads =
 				fixture.backend.storageState.uploadStorageItems.mock.calls;
@@ -1272,7 +1321,7 @@ describe("Storage Craft editors", () => {
 		});
 		expect(fixture.craftProps?.editable).toBe(false);
 		await expect(
-			fixture.craftProps?.onSave(new File(["bytes"], "drawing.vectorcraft")),
+			craftSave()(new File(["bytes"], "drawing.vectorcraft")),
 		).rejects.toThrow("permission");
 		fixture.craftProps?.onDirtyChange?.(true);
 		vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -1280,5 +1329,129 @@ describe("Storage Craft editors", () => {
 			fixture.closeDialog?.();
 		});
 		expect(container.querySelector("[data-craft-document]")).not.toBeNull();
+	});
+});
+
+const LOCKED_STATUS: ILockedStorageStatus = {
+	enabled: true,
+	provider: "s3",
+	enforcement: "object",
+	retention_mode: "compliance",
+	default_retention_days: 3650,
+	min_retention_days: 1,
+	max_retention_days: 36500,
+	max_file_bytes: 5_368_709_120,
+	supports_legal_hold: true,
+	supports_retention_extension: true,
+};
+
+const lockedItem = (name: string, folder: string): ILockedItem => ({
+	id: `item-${name}`,
+	app_id: "app-a",
+	scope: "project",
+	owner_id: null,
+	name,
+	folder,
+	content_type: "application/pdf",
+	latest_version: 2,
+	latest_size: 10,
+	live_versions: 2,
+	live_size: 20,
+	metadata: null,
+	created_by: "user-a",
+	created_at: "2026-10-01T00:00:00Z",
+	updated_at: "2026-10-02T00:00:00Z",
+	latest: null,
+});
+
+describe("Storage locked files", () => {
+	it("stays a plain storage browser while locked storage is disabled", async () => {
+		fixture.items = [item("apps/app-a/upload/docs/a.pdf", false)];
+		await renderStorage("shared", "docs");
+		expect(fixture.invokeArgs.get("lockedStorageStatus")).toEqual(["app-a"]);
+		expect(container.querySelector("[data-locked-row]")).toBeNull();
+		expect(
+			[...container.querySelectorAll("[data-storage-location]")].map((node) =>
+				node.getAttribute("data-storage-location"),
+			),
+		).toEqual(["apps/app-a/upload/docs/a.pdf"]);
+	});
+
+	it("lists the decoded folder and merges locked rows and folders by display name", async () => {
+		const prefix = "Akten/%C3%9Cbersicht";
+		fixture.lockedStatus = LOCKED_STATUS;
+		fixture.items = [
+			item(`apps/app-a/upload/${prefix}/%C3%9Cbersicht%20alt`, true),
+			item(`apps/app-a/upload/${prefix}/notes.txt`, false),
+		];
+		fixture.lockedListing = {
+			items: [lockedItem("Übersicht (2)#1.pdf", "Akten/Übersicht")],
+			folders: ["Übersicht alt", "Verträge"],
+			next_cursor: null,
+		};
+		await renderStorage("user", prefix);
+
+		expect(fixture.invokeArgs.get("listLockedFolder")).toEqual([
+			"app-a",
+			"user",
+			"Akten/Übersicht",
+		]);
+		const folders = [...container.querySelectorAll('[data-folder="true"]')].map(
+			(node) => node.getAttribute("data-storage-location"),
+		);
+		expect(folders).toEqual([
+			`apps/app-a/upload/${prefix}/%C3%9Cbersicht%20alt`,
+			`${prefix}/Vertr%C3%A4ge`,
+		]);
+		expect(
+			[...container.querySelectorAll("[data-locked-row]")].map((node) =>
+				node.getAttribute("data-locked-row"),
+			),
+		).toEqual(["Übersicht (2)#1.pdf"]);
+
+		await act(async () =>
+			container
+				.querySelector<HTMLButtonElement>('button[aria-label="Open Verträge"]')
+				?.click(),
+		);
+		expect(fixture.updatePrefix).toHaveBeenCalledWith(
+			`${prefix}/Vertr%C3%A4ge`,
+		);
+	});
+
+	it("filters locked rows with the search box", async () => {
+		fixture.lockedStatus = LOCKED_STATUS;
+		fixture.items = [item("apps/app-a/upload/a.txt", false)];
+		fixture.lockedListing = {
+			items: [lockedItem("contract.pdf", ""), lockedItem("invoice.pdf", "")],
+			folders: [],
+			next_cursor: null,
+		};
+		await renderStorage("shared", "");
+		expect(fixture.invokeArgs.get("listLockedFolder")).toEqual([
+			"app-a",
+			"project",
+			"",
+		]);
+		const search = container.querySelector<HTMLInputElement>(
+			'input[placeholder="Search files and folders..."]',
+		);
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(search, "INVOICE");
+			search?.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		expect(
+			[...container.querySelectorAll("[data-locked-row]")].map((node) =>
+				node.getAttribute("data-locked-row"),
+			),
+		).toEqual(["invoice.pdf"]);
+		expect(
+			container.querySelector(
+				'[data-storage-location="apps/app-a/upload/a.txt"]',
+			),
+		).toBeNull();
 	});
 });

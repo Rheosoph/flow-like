@@ -21,6 +21,21 @@ fn board_organization_guidance_covers_module_blocks() {
 }
 
 #[test]
+fn board_organization_guidance_covers_visual_groups() {
+    for marker in [
+        "VISUAL GROUPS (@collapse)",
+        "`@collapse(\"Name\") { ... }`",
+        "visual only",
+        "Preserve every existing `@collapse` wrapper",
+    ] {
+        assert!(
+            BOARD_ORGANIZATION_GUIDANCE.contains(marker),
+            "visual-group guidance lost `{marker}`"
+        );
+    }
+}
+
+#[test]
 fn board_prompts_expose_function_cache_syntax_and_runtime_semantics() {
     let prompts = [
         board_system_prompt("{}", "", 0, false, false),

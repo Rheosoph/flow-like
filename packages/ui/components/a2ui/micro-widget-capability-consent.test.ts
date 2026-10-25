@@ -109,6 +109,15 @@ describe("readRequestedCapabilities", () => {
 		expect(readRequestedCapabilities(contract(["wasm"]), false)).toEqual([]);
 		expect(readRequestedCapabilities(null, false)).toEqual([]);
 	});
+
+	test("previews never get file uploads", () => {
+		const uploads = contract({ uploads: true, workers: true });
+		expect(readRequestedCapabilities(uploads, false)).toEqual([
+			"uploads",
+			"workers",
+		]);
+		expect(readRequestedCapabilities(uploads, true)).toEqual(["workers"]);
+	});
 });
 
 describe("consent keys", () => {

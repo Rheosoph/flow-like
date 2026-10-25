@@ -1313,13 +1313,15 @@ pub struct WidgetPolicy {
     pub microphone: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub downloads: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uploads: bool,
     #[serde(default, skip_serializing_if = "WidgetCsp::is_empty")]
     pub csp: WidgetCsp,
 }
 
 impl WidgetPolicy {
     /// Declared policy of a contract with every purpose flattened. Previews
-    /// never get network sources, media or microphone.
+    /// never get network sources, media, microphone or uploads.
     pub fn from_contract(contract: &WidgetContract, preview: bool) -> Self {
         let capabilities = contract.capabilities.clone().unwrap_or_default();
         let enabled = |flag: Option<bool>| flag == Some(true);
@@ -1329,6 +1331,7 @@ impl WidgetPolicy {
             media: !preview && enabled(capabilities.media),
             microphone: !preview && enabled(capabilities.microphone),
             downloads: enabled(capabilities.downloads),
+            uploads: !preview && enabled(capabilities.uploads),
             csp: if preview {
                 WidgetCsp::default()
             } else {
@@ -1343,6 +1346,7 @@ impl WidgetPolicy {
             && !self.media
             && !self.microphone
             && !self.downloads
+            && !self.uploads
             && self.csp.is_empty()
     }
 
@@ -2658,6 +2662,7 @@ mod tests {
             microphone: Some(true),
             wasm: Some(true),
             downloads: Some(true),
+            uploads: Some(true),
         }
     }
 
@@ -3454,7 +3459,7 @@ mod tests {
     }
 
     #[test]
-    fn from_contract_flattens_purposes_and_preview_strips_network_media_and_microphone() {
+    fn from_contract_flattens_purposes_and_preview_strips_network_media_microphone_and_uploads() {
         let contract = contract_with(
             Some(full_capabilities()),
             vec![
@@ -3467,7 +3472,14 @@ mod tests {
             ],
         );
         let live = WidgetPolicy::from_contract(&contract, false);
-        assert!(live.workers && live.wasm && live.media && live.microphone && live.downloads);
+        assert!(
+            live.workers
+                && live.wasm
+                && live.media
+                && live.microphone
+                && live.downloads
+                && live.uploads
+        );
         assert_eq!(
             live.csp.connect_src,
             strings(&["https://a.maptiler.com", "https://b.maptiler.com"])
@@ -3476,7 +3488,7 @@ mod tests {
 
         let preview = WidgetPolicy::from_contract(&contract, true);
         assert!(preview.workers && preview.wasm && preview.downloads);
-        assert!(!preview.media && !preview.microphone);
+        assert!(!preview.media && !preview.microphone && !preview.uploads);
         assert!(preview.csp.is_empty());
 
         let partial = contract_with(
@@ -3490,6 +3502,13 @@ mod tests {
         let policy = WidgetPolicy::from_contract(&partial, false);
         assert!(!policy.workers && policy.wasm && !policy.is_empty());
         assert!(WidgetPolicy::from_contract(&WidgetContract::new("plain"), false).is_empty());
+
+        let uploads_only = WidgetPolicy {
+            uploads: true,
+            ..WidgetPolicy::default()
+        };
+        assert!(!uploads_only.is_empty());
+        assert_eq!(uploads_only.canonical_json(), r#"{"uploads":true}"#);
     }
 
     #[test]
@@ -3547,11 +3566,12 @@ mod tests {
         moved.csp.img_src = std::mem::take(&mut moved.csp.connect_src);
         assert_ne!(base.digest(), moved.digest());
 
-        let toggles: [fn(&mut WidgetPolicy); 5] = [
+        let toggles: [fn(&mut WidgetPolicy); 6] = [
             |p| p.wasm = true,
             |p| p.media = true,
             |p| p.microphone = true,
             |p| p.downloads = true,
+            |p| p.uploads = true,
             |p| p.workers = false,
         ];
         for toggle in toggles {

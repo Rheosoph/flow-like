@@ -27,6 +27,7 @@ impl NodeLogic for BuildSelectorNode {
             "Automation/Selector",
         );
         node.set_flowscript_name("automation.selector", "build");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -146,6 +147,7 @@ impl NodeLogic for CreateSelectorSetNode {
             "Automation/Selector",
         );
         node.set_flowscript_name("automation.selector", "createSet");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -198,6 +200,7 @@ impl NodeLogic for AddToSelectorSetNode {
         );
         node.set_flowscript_name("automation.selector", "addToSet");
         node.set_receiver("selector_set");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -271,6 +274,7 @@ impl NodeLogic for GetPrimarySelectorNode {
         );
         node.set_flowscript_name("automation.selector", "getPrimary");
         node.set_receiver("selector_set");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -348,6 +352,7 @@ impl NodeLogic for SelectorToStringNode {
         );
         node.set_flowscript_name("automation.selector", "toString");
         node.set_receiver("selector");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/selector.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);

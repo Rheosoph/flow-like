@@ -17,6 +17,9 @@ pub use flow_like_catalog_macros::register_node;
 
 mod types;
 
+#[cfg(feature = "mail")]
+pub mod mail;
+
 /// Returns true if the `execute` feature is enabled, allowing node execution.
 /// When disabled, nodes should return an error from `run()` instead of executing.
 #[inline]
@@ -56,7 +59,7 @@ macro_rules! run_with_execute_gate {
     }};
 }
 
-pub use types::attachment::Attachment;
+pub use types::attachment::{Attachment, mime_type_for, read_file_attachments};
 pub use types::bounding_box::BoundingBox;
 pub use types::class_prediction::ClassPrediction;
 pub use types::db_connection::NodeDBConnection;
@@ -65,6 +68,7 @@ pub use types::db_connection::{CachedDB, CachedDBRefreshHook, CachedDBRefresher}
 pub use types::embedding_content::{
     EmbeddingAudio, EmbeddingContent, EmbeddingContentPart, EmbeddingVideo, EmbeddingVideoFrame,
 };
+pub use types::file_probe::{FilePrefix, PROBE_PREFIX_BYTES, looks_like_text, sniff_file_type};
 pub use types::flow_path::{FlowPath, FlowPathRuntime, FlowPathStore, found_or_missing};
 pub use types::graph_overlay::{
     DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT,
@@ -74,9 +78,13 @@ pub use types::graph_overlay::{
     RESERVED_TABLE_PREFIX, RESERVED_TABLE_SUFFIX, SubgraphEdge, SubgraphNode, SubgraphPayload,
     is_reserved_table,
 };
+pub use types::image_header::{
+    ImageHeader, ImageHeaderError, parse_image_header, read_image_header,
+};
 pub use types::inbound_email::{
     InboundEmail, InboundEmailAddress, InboundEmailAttachment, InboundEmailAuthentication,
-    InboundEmailHeader, InboundEmailVerdict, MailMessageRef, MailSession,
+    InboundEmailHeader, InboundEmailVerdict, MAX_MAIL_ATTACHMENT_BYTES, MAX_MAIL_ATTACHMENTS,
+    MailAttachment, MailMessageRef, MailSession,
 };
 pub use types::keypoint::{
     COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, PoseDetection, SkeletonConnection,

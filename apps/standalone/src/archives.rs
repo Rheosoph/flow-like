@@ -218,6 +218,9 @@ const PENDING_PER_STREAM: u64 = 32;
 const PENDING_SEGMENTS: u64 = 512;
 const RETAINED_UPLOADED_SEGMENTS: i64 = 256;
 const PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
+/// A segment that does not fill its budget waits until its oldest record is this old, so a
+/// quiet stream seals a few larger segments instead of one per publish pass.
+const PARTIAL_SEGMENT_AGE_SECONDS: i64 = 300;
 
 /// Waiting for a re-signed roster, a current policy or outbox capacity is
 /// expected; any other sealing failure is a fault that stalls the stream.
@@ -282,27 +285,28 @@ pub(crate) fn status(root: &Path, scope: &str, kind: &ArchiveKind) -> Option<Val
     crate::diagnostics::global().history_status(root, scope, kind_name(kind))
 }
 
-/// Reads whole records after `cursor` until the serialized budget is reached.
-/// The first record is always included so a small budget still progresses.
+/// Reads whole records after `cursor` until the serialized budget is reached, and whether
+/// the budget, not the end of the stream, stopped it. The first record is always included so
+/// a small budget still progresses.
 fn collect_records(
     telemetry: &TelemetryStore,
     placement: Option<&str>,
     kind: &str,
     cursor: u64,
     budget: usize,
-) -> Result<(Vec<Value>, u64)> {
+) -> Result<(Vec<Value>, u64, bool)> {
     let mut records = Vec::new();
     let mut size = 0usize;
     let mut next = cursor;
     loop {
         let page = telemetry.read(placement, kind, next, 100)?;
         let Some(page) = page["records"].as_array().filter(|page| !page.is_empty()) else {
-            return Ok((records, next));
+            return Ok((records, next, false));
         };
         for record in page {
             let bytes = serde_json::to_vec(record)?.len() + 1;
             if !records.is_empty() && size + bytes > budget {
-                return Ok((records, next));
+                return Ok((records, next, true));
             }
             size += bytes;
             next = record["sequence"]
@@ -313,7 +317,21 @@ fn collect_records(
     }
 }
 
-/// Seals the next segment of one stream; false when it is caught up.
+/// Whether the collected records make a segment now: a gap to sign, a full budget, or records
+/// whose oldest has waited long enough. A record stamped ahead of the clock, after it stepped
+/// back, does not hold the segment.
+fn ready_to_seal(records: &[Value], full: bool, dropped: u64, now: i64) -> bool {
+    dropped > 0
+        || full
+        || records.first().is_some_and(|record| {
+            record["timestamp"]
+                .as_i64()
+                .is_none_or(|oldest| !(0..PARTIAL_SEGMENT_AGE_SECONDS).contains(&(now - oldest)))
+        })
+}
+
+/// Seals the next segment of one stream; false when it is caught up or the records it has
+/// are too few and too recent to seal yet.
 fn seal_one(
     telemetry: &TelemetryStore,
     device: &DeviceSession,
@@ -349,8 +367,9 @@ fn seal_one(
         };
         let mut budget = SEGMENT_PLAINTEXT_BYTES;
         loop {
-            let (records, next) = collect_records(telemetry, placement, kind, cursor, budget)?;
-            if records.is_empty() && dropped == 0 {
+            let (records, next, full) =
+                collect_records(telemetry, placement, kind, cursor, budget)?;
+            if !ready_to_seal(&records, full, dropped, now) {
                 return Ok(false);
             }
             let count = records.len();
@@ -660,6 +679,19 @@ mod tests {
         Ok((device, pins, seed, owner))
     }
 
+    /// Records a device-scope value as if it had waited long enough to seal on its own.
+    fn append_settled(telemetry: &TelemetryStore, kind: &str, value: Value) -> Result<u64> {
+        let at = unix_time()? - PARTIAL_SEGMENT_AGE_SECONDS;
+        telemetry.transaction(|| telemetry.append_in_transaction(None, kind, &value, at))
+    }
+
+    fn outbox_len(telemetry: &TelemetryStore) -> u64 {
+        let connection = &telemetry.store.connection;
+        connection
+            .query_row("SELECT COUNT(*) FROM archive_outbox", [], |r| r.get(0))
+            .unwrap()
+    }
+
     /// Why sealing paused, when it paused for an expected reason.
     fn pause(sealed: Result<bool>) -> Option<Option<HistoryPause>> {
         let error = sealed.err()?;
@@ -804,10 +836,10 @@ mod tests {
         let (device, pins, seed) = device_logs_roster(&root)?;
         let telemetry = TelemetryStore::open(&root)?;
         for index in 0..400 {
-            telemetry.append(
-                None,
+            append_settled(
+                &telemetry,
                 "log",
-                &json!({"message":format!("{index}-{}", "x".repeat(300))}),
+                json!({"message":format!("{index}-{}", "x".repeat(300))}),
             )?;
         }
         seal_streams(&root, &telemetry, &device)?;
@@ -867,6 +899,57 @@ mod tests {
         )?;
         let fault = seal_one(&telemetry, &device, "device", "log").unwrap_err();
         assert!(!fault.is::<PublicationPaused>());
+        Ok(())
+    }
+
+    #[test]
+    fn partial_segments_wait_for_their_oldest_record_while_full_ones_and_gaps_seal_at_once()
+    -> Result<()> {
+        let records = [json!({"timestamp":1_000}), json!({"timestamp":0})];
+        let ready = |full, dropped, now| ready_to_seal(&records, full, dropped, now);
+        assert!(!ready(false, 0, 1_000));
+        assert!(!ready(false, 0, 1_000 + PARTIAL_SEGMENT_AGE_SECONDS - 1));
+        assert!(ready(false, 0, 1_000 + PARTIAL_SEGMENT_AGE_SECONDS));
+        assert!(ready(false, 0, 999));
+        assert!(ready(true, 0, 1_000));
+        assert!(ready(false, 1, 1_000));
+        assert!(!ready_to_seal(&[], false, 0, 1_000));
+        assert!(ready_to_seal(&[], false, 1, 1_000));
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?;
+        let (device, _, _) = device_logs_roster(&root)?;
+        let telemetry = TelemetryStore::open(&root)?;
+        let seal = || seal_one(&telemetry, &device, "device", "log");
+        telemetry.append(None, "log", &json!({"message":"quiet"}))?;
+        assert!(!seal()?);
+        assert_eq!(outbox_len(&telemetry), 0);
+        for index in 0..200 {
+            telemetry.append(
+                None,
+                "log",
+                &json!({"message":format!("{index}-{}", "x".repeat(300))}),
+            )?;
+        }
+        while seal()? {}
+        let full = outbox_len(&telemetry);
+        assert!(full >= 1);
+        let (cursor, last): (u64, u64) = telemetry.store.connection.query_row(
+            "SELECT telemetry_cursor,(SELECT MAX(sequence) FROM telemetry_records) FROM archive_rosters",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        assert!(cursor < last, "the fresh remainder waits");
+        telemetry.store.connection.execute(
+            "UPDATE archive_rosters SET dropped=3 WHERE scope='device' AND kind='log'",
+            [],
+        )?;
+        assert!(seal()?);
+        assert!(!seal()?);
+        assert_eq!(outbox_len(&telemetry), full + 1);
+        append_settled(&telemetry, "log", json!({"message":"settled"}))?;
+        assert!(seal()?);
+        assert_eq!(outbox_len(&telemetry), full + 2);
         Ok(())
     }
 
@@ -1110,10 +1193,10 @@ mod tests {
         };
         let compact = sign_archive_roster(&roster, &owner)?;
         apply_policy(&store, device.manifest(), &compact, now)?;
-        TelemetryStore::open(&root)?.append(
-            None,
+        append_settled(
+            &TelemetryStore::open(&root)?,
             "log",
-            &json!({"message":"retained-private-message"}),
+            json!({"message":"retained-private-message"}),
         )?;
         TelemetryStore::open(&root)?.append(None,"message",&json!({"version":1,"kind":"operation","source_id":"structured-operation-fixture","state":"completed"}))?;
         seal_one(&TelemetryStore::open(&root)?, &device, "device", "log")?;
@@ -1164,7 +1247,11 @@ mod tests {
         };
         let policy = sign_management_policy(&policy, &owner)?;
         store.accept_management_policy(&policy, &owner.public_key(), "device", now)?;
-        TelemetryStore::open(&root)?.append(None, "log", &json!({"message":"later"}))?;
+        append_settled(
+            &TelemetryStore::open(&root)?,
+            "log",
+            json!({"message":"later"}),
+        )?;
         let stopped = seal_one(&TelemetryStore::open(&root)?, &device, "device", "log");
         assert_eq!(pause(stopped), Some(Some(HistoryPause::RulesChanged)));
         roster.policy_version = 2;

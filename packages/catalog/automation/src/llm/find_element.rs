@@ -103,6 +103,7 @@ impl NodeLogic for LLMFindElementNode {
             "Automation/LLM/Vision",
         );
         node.set_flowscript_name("automation.llm", "findElement");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/bot-search.svg");
         node.set_version(5);
 

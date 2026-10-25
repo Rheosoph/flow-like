@@ -1,9 +1,9 @@
-export {
-	GraphCanvas,
-	type GraphCanvasProps,
-	type GraphCanvasApi,
-	type GraphLayoutCommand,
+export type {
+	GraphCanvasProps,
+	GraphCanvasApi,
+	GraphLayoutCommand,
 } from "./graph-canvas";
+export { GraphCanvas } from "./lazy-graph-canvas";
 export {
 	GraphContextMenu,
 	type GraphContextMenuProps,

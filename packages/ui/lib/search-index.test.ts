@@ -127,6 +127,24 @@ describe("buildSearchIndex", () => {
 		expect(found("long context")).toEqual(["google-gemini-2-5-pro"]);
 	});
 
+	test("indexes the text of rich-text fields, not their storage JSON", () => {
+		const apps = [
+			{
+				id: "rich",
+				long_description:
+					'plate_json::{"version":1,"children":[{"type":"p","id":"x1","children":[{"text":"Shared workshop"}]}],"discussions":[],"users":{}}',
+			},
+			{ id: "markdown", long_description: "A **plain** markdown text" },
+		];
+		const index = buildSearchIndex(apps, { fields: ["long_description"] });
+		const found = (q: string) => index.search(q).map((app) => app.id);
+
+		expect(found("workshop")).toEqual(["rich"]);
+		expect(found("children")).toEqual([]);
+		expect(found("version")).toEqual([]);
+		expect(found("plain")).toEqual(["markdown"]);
+	});
+
 	test("handles an undefined collection", () => {
 		const empty = buildSearchIndex<Pkg>(undefined, { fields: ["id"] });
 		expect(empty.isEmpty).toBe(true);

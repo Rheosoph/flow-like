@@ -2,6 +2,8 @@
 //! This module contains comprehensive documentation for all A2UI components
 //! that can be used by the AI copilot to generate UIs.
 
+use crate::a2ui::authoring::{component_manifest, component_reference};
+
 pub const COMPONENT_CATALOG: &str = r##"
 # A2UI Component Catalog
 
@@ -49,6 +51,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `dateTimeInput` - Date/time picker (`mode`: date | time | datetime)
 - `fileInput` - File upload (`accept`, `multiple`, `maxSize`, `maxFiles`, `directory` for whole-folder uploads - implies `multiple`)
 - `imageInput` - Image upload with preview (`aspectRatio`, `showPreview`)
+- `cameraView` - Live camera the user starts; captured frames reach the workflow through exact `capture` and `frame` (every `intervalMs`) events (`facingMode`, `mirrored`, `audioEnabled`)
 - `voiceInput` - Microphone recording / dictation - THE component for every record-audio, voice-note, speech or push-to-talk request (full docs in the Voice Input section)
 - `feedback` - Rating input: thumbs up/down (default) or a numeric 0-5 button scale (`mode`: "rating"/"scale" with `positiveRating`/`negativeRating`), optional comment dialog - the only rating component (no star rating exists)
 - `appLink` - Button-styled navigation that opens an app/event (`appId`, `eventId`, `target`)
@@ -128,7 +131,7 @@ is a defect:
 - a formatted document, article, note or anything needing headings/lists/images -> `richText`
 - thumbs, like/dislike, "was this helpful", 0-5 score -> `feedback` (thumbs or numeric scale mode + comment; no star-rating component exists)
 - choose one of few visible options -> `radioGroup`; one of many -> `select`; on/off setting -> `switch`; form consent/multi-pick -> `checkbox`
-- upload images -> `imageInput`; other files -> `fileInput` (no camera-capture component exists - say so rather than faking one)
+- upload images -> `imageInput`; other files -> `fileInput`; take a photo or watch a live camera feed -> `cameraView`
 - date, time, or both -> `dateTimeInput` (`mode`)
 - navigate to another app or trigger its event -> `appLink`; plain URL/route -> `link`
 - user draws/edits boxes ON an image (annotation input) -> `imageLabeler`; SHOW detection results -> `boundingBoxOverlay`; predefined clickable regions -> `imageHotspot`
@@ -162,16 +165,14 @@ assistants. Any request mentioning record, microphone, speech, dictate, or audio
 Example:
 {
   "id": "voice-note",
-  "component": {
-    "type": "voiceInput",
-    "label": { "literalString": "Record a note" },
-    "value": { "path": "$.data.voiceNote" },
-    "mode": { "literalString": "record" },
-    "invoke": { "literalString": "hold" },
-    "variant": { "literalString": "waveform" },
-    "resultMode": { "literalString": "player" },
-    "actions": [{ "name": "workflow_event", "context": { "nodeId": "<transcribe-note-event-id>" } }]
-  }
+  "type": "voiceInput",
+  "label": "Record a note",
+  "value": { "path": "$.data.voiceNote" },
+  "mode": "record",
+  "invoke": "hold",
+  "variant": "waveform",
+  "resultMode": "player",
+  "actions": [{ "name": "workflow_event", "context": { "nodeId": "<transcribe-note-event-id>" } }]
 }
 The bound workflow event fetches the recording itself (Get Element Value); transcription,
 storage, and AI processing happen in the flow.
@@ -225,6 +226,9 @@ the action alone leaves a dead button.
   - `excalidraw`: "load" carries `value` and `scene`, both complete Excalidraw scene objects;
     "save" and "autoSave" add `changeCount`. "dirtyChange" carries `dirty`; "error" carries
     `message` and `operation` ("load", "save" or "autoSave"). Save workflows persist the scene.
+  - `cameraView`: "ready" (session started), "capture" (the user took a frame), "frame" (every
+    `intervalMs` while visible, skipped while the previous run is busy), "overlayClick", "error".
+    Captures carry a temporary image plus `sessionId` and `frameId`.
   - `table`: "rowClick", "cellClick" (both carry the source row and its index in the unsorted
     data), "selectionChange" (needs `selectable`), "sortChange".
   - `nivoChart` / `plotlyChart`: "pointClick".
@@ -1061,11 +1065,31 @@ Base styles are the MOBILE layout; the surface must stay usable at 360px wide, w
 targets at least 40px tall.
 "##;
 
+/// Building blocks another component renders (`table` draws its own rows and cells); models
+/// author the parent component instead.
+pub const UNADVERTISED_COMPONENT_TYPES: &[&str] = &["tableRow", "tableCell"];
+
+const PROP_REFERENCE_HEADER: &str = "## Component Props (generated: `*` required, `(a|b)` allowed values, `=[…]` JSON shape, `[…]` list item fields, `{…}` nested fields)
+Every component also takes `id`, `style`, `children`, `actions`, `eventHandlers` and `hidden`; `widgetInstance` additionally takes `inlineWidgetDef`. Any other prop is rejected.";
+
+/// Exact props of every advertised component, generated from the component manifest the
+/// `emit_ui` validator checks against.
+pub fn component_prop_reference() -> String {
+    let types: Vec<&str> = component_manifest()
+        .components
+        .iter()
+        .map(|spec| spec.component_type.as_str())
+        .filter(|component_type| !UNADVERTISED_COMPONENT_TYPES.contains(component_type))
+        .collect();
+    format!("{PROP_REFERENCE_HEADER}\n{}", component_reference(&types))
+}
+
 /// Get the full component documentation for AI copilot
 pub fn get_full_documentation() -> String {
     format!(
-        "{}\n\n{}\n\n{}\n\n{}\n\n{}",
+        "{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
         COMPONENT_CATALOG,
+        component_prop_reference(),
         CHART_DOCUMENTATION,
         GAME_COMPONENT_DOCUMENTATION,
         ML_VISION_DOCUMENTATION,
@@ -1087,7 +1111,67 @@ pub fn get_documentation_section(section: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::COMPONENT_CATALOG;
+    use super::{
+        COMPONENT_CATALOG, UNADVERTISED_COMPONENT_TYPES, component_prop_reference,
+        get_full_documentation,
+    };
+    use crate::a2ui::authoring::{component_manifest, lower_component};
+    use std::collections::HashSet;
+
+    #[test]
+    fn prop_reference_lists_every_advertised_component() {
+        let reference = component_prop_reference();
+        let listed: HashSet<&str> = reference
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .filter_map(|line| line.split(':').next())
+            .collect();
+        for spec in &component_manifest().components {
+            let component_type = spec.component_type.as_str();
+            assert_eq!(
+                listed.contains(component_type),
+                !UNADVERTISED_COMPONENT_TYPES.contains(&component_type),
+                "prop reference listing of '{component_type}' is wrong"
+            );
+        }
+        assert!(reference.contains("\n- text: content*, variant(body|heading|label|caption|code)"));
+        assert!(
+            !reference.contains("headerImage"),
+            "props the renderer ignores stay out of prompts"
+        );
+        assert!(get_full_documentation().contains(&reference));
+    }
+
+    #[test]
+    fn voice_input_example_is_a_valid_authored_component() {
+        let example = COMPONENT_CATALOG
+            .split("## Voice Input (voiceInput)")
+            .nth(1)
+            .and_then(|section| section.split("Example:\n").nth(1))
+            .and_then(|rest| rest.split("\n}\n").next())
+            .map(|body| format!("{body}\n}}"))
+            .expect("the voice input section carries an example");
+        let example: serde_json::Value =
+            serde_json::from_str(&example).expect("the voice input example is JSON");
+        assert!(
+            !example.to_string().contains("\"literal"),
+            "examples use plain values"
+        );
+        let lowered = lower_component(example).expect("the voice input example lowers");
+        let spec = component_manifest()
+            .component("voiceInput")
+            .expect("voiceInput is a component");
+        for key in lowered["component"]
+            .as_object()
+            .expect("a lowered component is an object")
+            .keys()
+        {
+            assert!(
+                key == "type" || key == "actions" || spec.prop(key).is_some(),
+                "voiceInput example prop '{key}' is not a voiceInput prop"
+            );
+        }
+    }
 
     /// Keep in sync with `executeAction` in packages/ui/components/a2ui/ActionHandler.tsx.
     const BUILTIN_ACTION_NAMES: &[&str] = &[

@@ -263,6 +263,12 @@ fn spawn_compiled_artifact_warmup(
                 return;
             }
         };
+        if let Err(reason) =
+            crate::execution::compiled_artifacts::ensure_server_runnable(&snapshot, &registry)
+        {
+            tracing::debug!(board_id = %board_id, %reason, "Compiled-board warm-up skipped");
+            return;
+        }
         let fingerprint = registry.fingerprint();
         let compiled = match flow_like::flow::compiled::compile::compile_board_with_catalog(
             &snapshot,

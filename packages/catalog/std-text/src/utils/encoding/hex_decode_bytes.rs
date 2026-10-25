@@ -4,7 +4,7 @@ use flow_like::flow::{
     pin::ValueType,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -47,7 +47,7 @@ impl NodeLogic for HexDecodeBytesNode {
                     .map_err(|e| flow_like_types::anyhow!("Invalid hex at position {i}: {e}"))
             })
             .collect::<flow_like_types::Result<Vec<u8>>>()?;
-        context.set_pin_value("output", json!(bytes)).await?;
+        context.set_pin_bytes("output", bytes).await?;
         Ok(())
     }
 }

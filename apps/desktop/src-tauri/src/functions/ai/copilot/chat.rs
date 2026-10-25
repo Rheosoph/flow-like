@@ -13,7 +13,7 @@ use super::client_pool::{
 };
 use super::external_chat::external_code_agent_chat_internal;
 use super::platform_bridge::{DesktopPlatformBridge, FrontendPlatformToolSet};
-use super::runtime::{frontend_tool_channel, register_copilot_run};
+use super::runtime::{claim_run_tool_owner, frontend_tool_channel, register_copilot_run};
 use super::sdk_chat::copilot_sdk_chat_internal;
 use super::stream_events::{
     correlate_stream_frame, request_identity_prompt_for, scoped_parent_request_id,
@@ -309,6 +309,7 @@ async fn run_bits_specialist_chat(
 #[tauri::command]
 pub async fn copilot_chat(
     app_handle: AppHandle,
+    webview: tauri::Webview,
     state: State<'_, TauriFlowLikeState>,
     // Scope selection
     scope: CopilotScope,
@@ -437,6 +438,12 @@ pub async fn copilot_chat(
     } else {
         None
     };
+    let _tool_owner = claim_run_tool_owner(
+        webview.label(),
+        tool_context.as_ref(),
+        request_id.as_deref(),
+    )
+    .await;
     let model_selection = FlowPilotModelSelection::parse(model_id);
     if let FlowPilotChatBackend::Agent(agent_backend) = model_selection.backend {
         return match agent_backend {

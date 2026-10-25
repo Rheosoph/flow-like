@@ -102,6 +102,15 @@ fn primary(app: &str, event: &str, domain: &str) -> String {
     )
 }
 
+/// Retired aliases are inactive, so at most one active alias exists per event.
+fn current_alias<'a>(active: &'a [Address], domain: &str) -> Option<&'a str> {
+    let suffix = format!("@{domain}");
+    active
+        .iter()
+        .find(|a| a.kind == "alias" && a.address.ends_with(&suffix))
+        .map(|a| a.address.as_str())
+}
+
 pub(super) fn is_reserved(local: &str) -> bool {
     RESERVED.iter().any(|name| name.eq_ignore_ascii_case(local))
 }
@@ -154,15 +163,10 @@ async fn view(state: &AppState, app: &str, event_id: &str) -> Result<AddressView
     let addresses = Address::find_by_statement(statement(
         r#"SELECT * FROM "InboundMailAddress" WHERE "appId"=$1 AND "eventId"=$2 AND "active"=TRUE ORDER BY "createdAt""#,
         vec![app.into(),event_id.into()])).all(&state.db).await?;
-    let alias = addresses
-        .iter()
-        .find(|a| {
-            a.kind == "alias"
-                && domain
-                    .as_ref()
-                    .is_some_and(|d| a.address.ends_with(&format!("@{d}")))
-        })
-        .and_then(|a| a.address.split_once('@').map(|(local, _)| local.to_owned()));
+    let alias = domain
+        .as_deref()
+        .and_then(|d| current_alias(&addresses, d))
+        .and_then(|a| a.split_once('@').map(|(local, _)| local.to_owned()));
     let active = super::live_target(state, app, event_id).await?.is_some();
     Ok(AddressView {
         configured: domain.is_some(),
@@ -396,6 +400,32 @@ mod tests {
     }
 
     #[test]
+    fn the_current_alias_is_the_sending_address() {
+        let address = |address: &str, kind: &str| Address {
+            address: address.into(),
+            app_id: "a".into(),
+            event_id: "b".into(),
+            kind: kind.into(),
+        };
+        let primary = primary("a", "b", "mail.example.com");
+        assert_eq!(
+            current_alias(&[address(&primary, "primary")], "mail.example.com"),
+            None
+        );
+        assert_eq!(
+            current_alias(
+                &[
+                    address(&primary, "primary"),
+                    address("orders@other.example.com", "alias"),
+                    address("orders@mail.example.com", "alias"),
+                ],
+                "mail.example.com"
+            ),
+            Some("orders@mail.example.com")
+        );
+    }
+
+    #[test]
     fn primary_addresses_are_stable_and_scoped() {
         assert_eq!(
             primary("a", "b", "mail.example.com"),
@@ -408,11 +438,10 @@ mod tests {
     }
 }
 
-/// Resolve From using the server's registry. A retired alias falls back to the primary address.
+/// Resolve From using the server's registry: the event's current alias, else its primary address.
 pub(crate) async fn sending_address(
     state: &AppState,
     session: &flow_like_catalog_core::MailSession,
-    preferred: Option<&str>,
 ) -> Result<String, ApiError> {
     let domain = domain(state).ok_or_else(|| {
         ApiError::service_unavailable("Inbound email is not configured on this server")
@@ -427,13 +456,8 @@ pub(crate) async fn sending_address(
     ))
     .all(&state.db)
     .await?;
-    if let Some(preferred) = preferred {
-        if let Some(address) = addresses
-            .iter()
-            .find(|a| a.address == preferred && a.address.ends_with(&format!("@{domain}")))
-        {
-            return Ok(address.address.clone());
-        }
+    if let Some(alias) = current_alias(&addresses, &domain) {
+        return Ok(alias.to_owned());
     }
     let expected = primary(&session.app_id, &session.event_id, &domain);
     addresses

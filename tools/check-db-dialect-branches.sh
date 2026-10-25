@@ -15,15 +15,17 @@ PATTERN='is_dsql\(|DbDialect::Dsql([^A-Za-z0-9_]|$)'
 
 # The layer itself, the probes that must speak to a specific catalog, the
 # mains that build a pool whose engine they already know, and the live-cluster
-# suite that checks the predicates against a real DSQL endpoint.
+# suites that check the predicates against a real DSQL endpoint.
 ALLOWED=(
     packages/db/src
     packages/api/src/db
     packages/api/tests/dsql_live.rs
+    packages/api/tests/dsql_smoke.rs
     packages/api/src/routes/admin/resources/database.rs
     packages/api/src/cache/postgres.rs
     apps/backend/aws/shared/api_bootstrap.rs
     apps/backend/aws/file-tracker/src/main.rs
+    apps/backend/local/api/src/main.rs
 )
 
 exclude_args=()
@@ -31,7 +33,22 @@ for prefix in "${ALLOWED[@]}"; do
     exclude_args+=(":(exclude)$prefix" ":(exclude)$prefix/*")
 done
 
-hits="$(git grep --untracked -nE "$PATTERN" -- 'packages/**/*.rs' 'apps/backend/**/*.rs' 'libs/**/*.rs' "${exclude_args[@]}" || true)"
+# An inline `#[cfg(test)] mod tests` block may name an engine to drive a
+# predicate down the branch it tests.
+outside_test_modules() {
+    local hit file line start
+    while IFS= read -r hit; do
+        file="${hit%%:*}"
+        line="${hit#*:}"
+        line="${line%%:*}"
+        start="$(awk 'previous ~ /^#\[cfg\(test\)\]$/ && /^mod tests \{/ { print NR; exit } { previous = $0 }' "$file")"
+        if [[ -z "$start" || "$line" -lt "$start" ]]; then
+            echo "$hit"
+        fi
+    done
+}
+
+hits="$( (git grep --untracked -nE "$PATTERN" -- 'packages/**/*.rs' 'apps/backend/**/*.rs' 'libs/**/*.rs' "${exclude_args[@]}" || true) | outside_test_modules)"
 if [[ -n "$hits" ]]; then
     echo "$hits"
     echo "error: branch on DbDialect predicates, not on the engine (see packages/db/src/dialect.rs)" >&2

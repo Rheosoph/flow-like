@@ -427,4 +427,41 @@ describe("diffBoards", () => {
 				.changes[0].status,
 		).toBe("moved");
 	});
+
+	it("shows rich comments as text and still reports formatting-only edits", () => {
+		const rich = (text: string, bold?: boolean) =>
+			`plate_json::${JSON.stringify({
+				version: 1,
+				children: [
+					{ type: "p", children: [{ text, ...(bold ? { bold } : {}) }] },
+				],
+			})}`;
+		const note: IComment = {
+			id: "c1",
+			content: rich("Retry twice"),
+			comment_type: ICommentType.Text,
+			coordinates: [0, 0, 0],
+			timestamp: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+		};
+		const added = diffBoards(board({}), board({ comments: [note] })).changes[0];
+		expect(added.title).toBe("Retry twice");
+		expect(added.details[0]?.after).toBe("Retry twice");
+
+		const reworded = diffBoards(
+			board({ comments: [note] }),
+			board({ comments: [{ ...clone(note), content: rich("Retry thrice") }] }),
+		).changes[0];
+		expect(reworded.details[0]).toMatchObject({
+			before: "Retry twice",
+			after: "Retry thrice",
+		});
+
+		const bolded = diffBoards(
+			board({ comments: [note] }),
+			board({
+				comments: [{ ...clone(note), content: rich("Retry twice", true) }],
+			}),
+		).changes[0];
+		expect(bolded?.status).toBe("changed");
+	});
 });

@@ -1,9 +1,7 @@
-use flow_like::a2ui::components::TextFieldProps;
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
-    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -39,10 +37,8 @@ impl NodeLogic for SetInputPlaceholder {
             "element_ref",
             "Input",
             "Element ID string or element object from Get Element",
-            VariableType::Struct,
-        )
-        .set_schema::<TextFieldProps>()
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+            VariableType::Generic,
+        );
 
         node.add_input_pin(
             "placeholder",
@@ -52,6 +48,8 @@ impl NodeLogic for SetInputPlaceholder {
         );
 
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
+
+        node.set_version(1);
 
         node
     }

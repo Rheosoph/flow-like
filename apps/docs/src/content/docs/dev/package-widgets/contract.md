@@ -110,7 +110,7 @@ Register its handler with `bridge.onQuery("setCount", ({ value }) => {
 count = value; })`. A mutation needs the live widget to acknowledge the call;
 test unmounted and disconnected cases in the Flow as well as successful calls.
 
-## Geometry and model values
+## Geometry, model, and file values
 
 Use the SDK's `GeoPoint`, `GeoLineString`, `GeoPolygon`, or other geometry
 types to produce native Geometry pins. Coordinates use two-dimensional WGS 84
@@ -122,15 +122,27 @@ Their contract schemas match Flow-Like's model nodes. Arrays keep their
 collection shape; `@uniqueItems true` marks set inputs, and `Record<string, T>`
 represents maps. An explicit nullable union remains JSON-shaped.
 
+For a file the viewer uploaded, use `WidgetFile`, the handle that
+`bridge.uploadFile()` returns. The contract marks it as
+`{"type":"object","x-flow-like-type":"file"}`, also as an array element. Only
+event payloads may carry it: the host replaces each handle with the stored
+file before the event reaches the Flow, and the bundler rejects `WidgetFile`
+in inputs and queries. In the Flow, **Uploaded File to Path** turns the file
+into a FlowPath. Copy it to permanent storage when the app keeps it; temporary
+files expire after about 32 days. Limits and error codes are in the SDK's
+[Host uploads](https://github.com/Rheosoph/flow-like/tree/dev/packages/widget-sdk#host-uploads)
+section.
+
 The bundler inlines schema references. Recursive types cannot be represented;
 keep transport values finite and serializable.
 
 ## Capabilities and contract versions
 
 The `capabilities` object opts into `workers`, `wasm`, `media`, `microphone`,
-and `downloads`. These declarations affect the host sandbox and user consent.
-They do not grant network destinations. Declare those in `csp` purpose groups
-as described in [Network access](/dev/package-widgets/network/).
+`downloads`, and `uploads`. `uploads` lets the widget hand files to the host
+with `bridge.uploadFile()`. These declarations affect the host sandbox and
+user consent. They do not grant network destinations. Declare those in `csp`
+purpose groups as described in [Network access](/dev/package-widgets/network/).
 
 Contracts without `csp` use version 1. Contracts with `csp` use version 2;
 older hosts reject them. The bundler writes the version and generated schemas,

@@ -6,14 +6,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IBit } from "../../../packages/ui/lib/schema/bit/bit";
 import type { ISettingsProfile } from "../../../packages/ui/types";
 
-const harness = vi.hoisted(() => ({
-	profile: {
-		hub_profile: { id: "profile-1", bits: [] as string[], apps: [] },
-	} as ISettingsProfile,
-	apiGet: vi.fn(),
-	apiPost: vi.fn(),
-	toastError: vi.fn(),
-}));
+const harness = vi.hoisted(() => {
+	const createProfile = (): ISettingsProfile => ({
+		hub_profile: {
+			id: "profile-1",
+			name: "Test profile",
+			bits: [],
+			apps: [],
+			created: "2026-01-01T00:00:00Z",
+			updated: "2026-01-01T00:00:00Z",
+		},
+		execution_settings: { gpu_mode: false, max_context_size: 8192 },
+		created: "2026-01-01T00:00:00Z",
+		updated: "2026-01-01T00:00:00Z",
+	});
+	return {
+		createProfile,
+		profile: createProfile(),
+		apiGet: vi.fn(),
+		apiPost: vi.fn(),
+		toastError: vi.fn(),
+	};
+});
 
 vi.mock("@flow-like/flow-like-ui", async () => ({
 	...(await import("../../../packages/ui/state/backend-state")),
@@ -132,7 +146,16 @@ function forecastingBit(): IBit {
 		hash: "forecast-hash",
 		dependency_tree_hash: "",
 		dependencies: [],
-		meta: { en: { name: "Forecast model", description: "Test checkpoint" } },
+		meta: {
+			en: {
+				name: "Forecast model",
+				description: "Test checkpoint",
+				created_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+				updated_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+				preview_media: [],
+				tags: [],
+			},
+		},
 		size: 100,
 		file_name: "model.safetensors",
 		download_link: "https://models.example/model.safetensors",
@@ -141,7 +164,7 @@ function forecastingBit(): IBit {
 			provider: { provider_name: "local:forecast" },
 			assets: [{ bit: "hub.example:config", relative_path: "config.json" }],
 		},
-	} as IBit;
+	};
 }
 
 let root: Root;
@@ -154,9 +177,7 @@ beforeEach(() => {
 	).IS_REACT_ACT_ENVIRONMENT = true;
 	useBackendStore.setState({ backend: null });
 	useDownloadManager.getState().setDownloadBackend(null);
-	harness.profile = {
-		hub_profile: { id: "profile-1", bits: [], apps: [] },
-	} as ISettingsProfile;
+	harness.profile = harness.createProfile();
 	harness.apiGet.mockReset().mockResolvedValue({
 		...forecastingBit(),
 		id: "config",

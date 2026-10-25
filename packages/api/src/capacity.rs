@@ -582,6 +582,48 @@ pub async fn transfer_project(
     Ok(())
 }
 
+/// Locked-bucket bytes are settled by the API at commit and purge, never by the
+/// file tracker, with the same payer lock order and totals the tracker uses.
+pub(crate) async fn adjust_locked_storage(
+    txn: &DatabaseTransaction,
+    app_id: &str,
+    user_id: Option<&str>,
+    delta: i64,
+) -> Result<(), ApiError> {
+    if delta == 0 {
+        return Ok(());
+    }
+    if let Some(payer) = payer_for_app(txn, app_id).await? {
+        txn.execute_raw(Statement::from_sql_and_values(
+            txn.get_database_backend(),
+            r#"INSERT INTO "AccountCapacity" ("payerId") VALUES ($1) ON CONFLICT ("payerId") DO UPDATE SET "updatedAt"=now()"#,
+            [payer.clone().into()],
+        ))
+        .await?;
+        txn.execute_raw(Statement::from_sql_and_values(
+            txn.get_database_backend(),
+            r#"UPDATE "AccountCapacity" SET "storageBytes"=GREATEST(0,"storageBytes"+$2),"updatedAt"=now() WHERE "payerId"=$1 AND EXISTS(SELECT 1 FROM "ProjectCapacity" p WHERE p."appId"=$3 AND p."payerId"=$1)"#,
+            [payer.into(), delta.into(), app_id.into()],
+        ))
+        .await?;
+    }
+    txn.execute_raw(Statement::from_sql_and_values(
+        txn.get_database_backend(),
+        r#"UPDATE "App" SET "totalSize"=GREATEST(0,"totalSize"+$2) WHERE "id"=$1"#,
+        [app_id.into(), delta.into()],
+    ))
+    .await?;
+    if let Some(user_id) = user_id {
+        txn.execute_raw(Statement::from_sql_and_values(
+            txn.get_database_backend(),
+            r#"UPDATE "User" SET "totalSize"=GREATEST(0,"totalSize"+$2) WHERE "id"=$1"#,
+            [user_id.into(), delta.into()],
+        ))
+        .await?;
+    }
+    Ok(())
+}
+
 /// Stops issuing further writes at capacity. Existing cloud credentials and URLs
 /// remain valid until expiry, so this is an eventual storage gate, not a byte reservation.
 pub async fn check_storage_write(

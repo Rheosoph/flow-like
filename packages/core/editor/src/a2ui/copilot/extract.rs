@@ -4,7 +4,14 @@
 //! so that when a model outputs raw JSON instead of calling tools, we can still
 //! recover the component tree.
 
+use serde_json::Value;
+
 use crate::a2ui::SurfaceComponent;
+
+/// Lower model-authored components (flat or nested, plain or BoundValue-wrapped values) to the
+/// canonical `SurfaceComponent` JSON, including the trees of `widgetInstance.inlineWidgetDef`.
+/// Components that cannot be lowered are reported and left out.
+pub use crate::a2ui::authoring::lower_components as lower_authored_components;
 
 /// Everything we can extract from an LLM response that contains A2UI JSON.
 #[derive(Debug, Default)]
@@ -130,44 +137,43 @@ fn extract_from_raw_json(response: &str) -> Option<ExtractedSurface> {
 /// Handles:
 /// - `{"rootComponentId": "…", "canvasSettings": {…}, "components": […]}`
 /// - Direct array of components `[…]`
+///
+/// Components may use the plain authoring form; they are lowered before deserializing.
 fn parse_surface_json(json_str: &str) -> Option<ExtractedSurface> {
-    if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(json_str)
-        && let Some(components_val) = wrapper.get("components")
-    {
-        match serde_json::from_value::<Vec<SurfaceComponent>>(components_val.clone()) {
-            Ok(components) if !components.is_empty() => {
-                let root_component_id = wrapper
+    match serde_json::from_str::<Value>(json_str).ok()? {
+        Value::Object(wrapper) => {
+            let components = surface_components(wrapper.get("components")?.as_array()?.clone())?;
+            Some(ExtractedSurface {
+                components,
+                root_component_id: wrapper
                     .get("rootComponentId")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let canvas_settings = wrapper.get("canvasSettings").cloned();
-                return Some(ExtractedSurface {
-                    components,
-                    root_component_id,
-                    canvas_settings,
-                });
-            }
-            _ => {}
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                canvas_settings: wrapper.get("canvasSettings").cloned(),
+            })
         }
-    }
-
-    // Try as direct array
-    if let Ok(components) = serde_json::from_str::<Vec<SurfaceComponent>>(json_str)
-        && !components.is_empty()
-    {
-        return Some(ExtractedSurface {
-            components,
+        Value::Array(items) => Some(ExtractedSurface {
+            components: surface_components(items)?,
             root_component_id: None,
             canvas_settings: None,
-        });
+        }),
+        _ => None,
     }
+}
 
-    None
+/// Lowered, typed components; `None` unless every component lowers and deserializes.
+fn surface_components(values: Vec<Value>) -> Option<Vec<SurfaceComponent>> {
+    let (lowered, errors) = lower_authored_components(values);
+    if !errors.is_empty() || lowered.is_empty() {
+        return None;
+    }
+    serde_json::from_value(Value::Array(lowered)).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn surface_json() -> &'static str {
         r#"{"rootComponentId":"root","canvasSettings":{"backgroundColor":"bg-background"},"components":[{"id":"root","component":{"type":"text","content":{"literalString":"hi"}}}]}"#
@@ -208,11 +214,78 @@ mod tests {
         // original string and panicked.
         let prefix = "İ".repeat(100);
         let response = format!(
-            "{}```json\n{{\"components\":[{{\"id\":\"a\",\"component\":{{}}}}]}}\n```",
+            "{}```json\n{{\"components\":[{{\"id\":\"a\",\"type\":\"divider\"}}]}}\n```",
             prefix
         );
         let surface = extract_surface_from_response(&response);
         assert_eq!(surface.components.len(), 1);
+    }
+
+    #[test]
+    fn plain_authoring_form_is_lowered_to_canonical_components() {
+        let response = r#"Here is the UI:
+```json
+{"rootComponentId": "root", "components": [
+  {"id": "root", "type": "column", "gap": "8px", "children": ["title"]},
+  {"id": "title", "type": "text", "content": "Hello", "variant": "heading"}
+]}
+```"#;
+        let surface = extract_surface_from_response(response);
+        assert_eq!(surface.components.len(), 2);
+        assert_eq!(surface.root_component_id.as_deref(), Some("root"));
+        assert_eq!(
+            surface.components[0].component["children"],
+            json!({"explicitList": ["title"]})
+        );
+        assert_eq!(
+            surface.components[1].component["content"],
+            json!({"literalString": "Hello"})
+        );
+    }
+
+    #[test]
+    fn a_component_that_cannot_be_lowered_rejects_the_block() {
+        let response = r#"```json
+[{"id": "a", "type": "text", "content": "ok"}, {"id": "b", "content": "no type"}]
+```"#;
+        let surface = extract_surface_from_response(response);
+        assert!(surface.components.is_empty());
+    }
+
+    #[test]
+    fn inline_widget_definitions_are_lowered_recursively() {
+        let (lowered, errors) = lower_authored_components(vec![json!({
+            "id": "card-1",
+            "type": "widgetInstance",
+            "widgetId": "card",
+            "instanceId": "card-1",
+            "inlineWidgetDef": {
+                "rootComponentId": "c",
+                "components": [{"id": "c", "type": "text", "content": "Hi"}]
+            }
+        })]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            lowered[0]["component"]["inlineWidgetDef"]["components"][0]["component"]["content"],
+            json!({"literalString": "Hi"})
+        );
+
+        let (lowered, errors) = lower_authored_components(vec![json!({
+            "id": "card-2",
+            "type": "widgetInstance",
+            "widgetId": "card",
+            "instanceId": "card-2",
+            "inlineWidgetDef": {"components": [{"id": "bad"}]}
+        })]);
+        assert!(lowered.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].id.as_deref(), Some("card-2"));
+        assert!(
+            errors[0]
+                .message
+                .starts_with("inlineWidgetDef.components[0]: "),
+            "{errors:?}"
+        );
     }
 
     #[test]

@@ -18,6 +18,9 @@ describe("historical forecast cutoff", () => {
 			valid: true,
 			available: true,
 			maxOffset: 5,
+			totalCount: 10,
+			contextCount: 5,
+			maxHorizon: 8,
 			cutoff: 4000,
 			start: 5000,
 			end: 7000,
@@ -41,6 +44,9 @@ describe("historical forecast cutoff", () => {
 			valid: true,
 			seriesCount: 2,
 			maxOffset: 1,
+			totalCount: 10,
+			contextCount: 6,
+			maxHorizon: 4,
 			cutoff: 5000,
 		});
 		expect(forecastBacktestRange(history, "sales", "b", 3, 1)).toMatchObject({

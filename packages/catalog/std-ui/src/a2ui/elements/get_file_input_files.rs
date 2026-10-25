@@ -126,10 +126,8 @@ impl NodeLogic for GetFileInputFiles {
             "element_ref",
             "Element",
             "File or voice input element ID or element object from Get Element",
-            VariableType::Struct,
-        )
-        .set_options(PinOptions::new().set_enforce_schema(false).build())
-        .set_schema::<flow_like::a2ui::ElementRef>();
+            VariableType::Generic,
+        );
 
         node.add_output_pin(
             "files",
@@ -165,6 +163,8 @@ impl NodeLogic for GetFileInputFiles {
             "Whether the file input element exists",
             VariableType::Boolean,
         );
+
+        node.set_version(1);
 
         node
     }

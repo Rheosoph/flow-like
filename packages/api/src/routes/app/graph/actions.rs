@@ -240,7 +240,7 @@ async fn ensure_action_board_published(
             if publish_draft {
                 let unchanged =
                     guard
-                        .snapshot_matches_current(pinned, None)
+                        .snapshot_matches_persisted_draft(pinned, None)
                         .await
                         .map_err(|error| {
                             ApiError::internal(format!(
@@ -322,7 +322,7 @@ async fn ensure_action_board_published(
         // newer draft at another immutable patch.
         let guard = board.snapshot();
         if guard
-            .snapshot_matches_current(pinned, None)
+            .snapshot_matches_persisted_draft(pinned, None)
             .await
             .map_err(|error| {
                 ApiError::internal(format!(

@@ -60,6 +60,39 @@
 {{- end }}
 {{- end }}
 
+{{- with .Values.lockedStorage }}
+{{- if .bucket }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$" .bucket) }}
+{{- fail "lockedStorage.bucket must be a lowercase DNS bucket name of 3 to 63 characters without periods, which the object gateway and execution manager reject" }}
+{{- end }}
+{{- $active := default (dict) (index $.Values.storage $.Values.storage.provider) }}
+{{- if has .bucket (list $.Values.storage.s3.metaBucket $.Values.storage.s3.contentBucket $.Values.storage.s3.logBucket $active.metaBucket $active.contentBucket $active.logBucket $.Values.audit.bucket) }}
+{{- fail "lockedStorage.bucket must be separate from the metadata, content, logs and audit buckets" }}
+{{- end }}
+{{- if not (has .enforcement (list "object" "bucket")) }}
+{{- fail "lockedStorage.enforcement must be object or bucket" }}
+{{- end }}
+{{- if not (has .lockMode (list "GOVERNANCE" "COMPLIANCE")) }}
+{{- fail "lockedStorage.lockMode must be GOVERNANCE or COMPLIANCE" }}
+{{- end }}
+{{- range $setting := list "retentionDays" "minRetentionDays" "maxFileBytes" }}
+{{- $value := index $.Values.lockedStorage $setting }}
+{{- if ne (float64 (int64 $value)) (float64 $value) }}
+{{- fail (printf "lockedStorage.%s must be a whole number" $setting) }}
+{{- end }}
+{{- end }}
+{{- if or (lt (int64 .retentionDays) 1) (gt (int64 .retentionDays) 36500) }}
+{{- fail "lockedStorage.retentionDays must be between 1 and 36500" }}
+{{- end }}
+{{- if or (lt (int64 .minRetentionDays) 1) (gt (int64 .minRetentionDays) (int64 .retentionDays)) }}
+{{- fail "lockedStorage.minRetentionDays must be between 1 and lockedStorage.retentionDays" }}
+{{- end }}
+{{- if lt (int64 .maxFileBytes) 1 }}
+{{- fail "lockedStorage.maxFileBytes must be a positive number of bytes" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- if .Values.audit.vaultAddress }}
 {{- if not (regexMatch "^https?://" .Values.audit.vaultAddress) }}
 {{- fail "audit.vaultAddress must be an HTTP(S) URL, for example https://vault:8200" }}
@@ -121,7 +154,7 @@
 {{- end }}
 {{- end }}
 
-{{- $reservedEnv := list "AUDIT_WORKER" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "PORT" "METRICS_PORT" "REDIS_URL" "DATABASE_URL" "EXECUTION_ISOLATION_MODE" "EXECUTION_BACKEND" "ASYNC_EXECUTION_BACKEND" "EXECUTOR_URL" "EXECUTION_MANAGER_TOKEN" "API_BASE_URL" "PUBLIC_API_URL" "FRONTEND_BASE_URL" "EXECUTION_STATE_BACKEND" "REDIS_EXECUTION_QUEUE" "S3_STS_PROVIDER" "STS_ENDPOINT_URL" "S3_PUBLIC_ENDPOINT" "S3_INTERNAL_ENDPOINT" "STORAGE_PROVIDER" "RUNTIME_CREDENTIALS_PROVIDER" "AWS_ENDPOINT" "AWS_REGION" "AWS_USE_PATH_STYLE" "META_BUCKET" "CONTENT_BUCKET" "LOG_BUCKET" "STS_SESSION_TTL_SECONDS" "CORS_ALLOWED_ORIGINS" "EXECUTION_TIMEOUT_SECONDS" "EXECUTION_QUEUE_MAX_WAIT_SECONDS" "EXECUTION_CREDENTIAL_MARGIN_SECONDS" "EXECUTION_STARTUP_GRACE_SECONDS" "EXECUTION_TERMINAL_GRACE_SECONDS" "EXECUTION_CLEANUP_TIMEOUT_SECONDS" }}
+{{- $reservedEnv := list "AUDIT_WORKER" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "PORT" "METRICS_PORT" "REDIS_URL" "DATABASE_URL" "EXECUTION_ISOLATION_MODE" "EXECUTION_BACKEND" "ASYNC_EXECUTION_BACKEND" "EXECUTOR_URL" "EXECUTION_MANAGER_TOKEN" "API_BASE_URL" "PUBLIC_API_URL" "FRONTEND_BASE_URL" "EXECUTION_STATE_BACKEND" "REDIS_EXECUTION_QUEUE" "S3_STS_PROVIDER" "STS_ENDPOINT_URL" "S3_PUBLIC_ENDPOINT" "S3_INTERNAL_ENDPOINT" "STORAGE_PROVIDER" "RUNTIME_CREDENTIALS_PROVIDER" "AWS_ENDPOINT" "AWS_REGION" "AWS_USE_PATH_STYLE" "META_BUCKET" "CONTENT_BUCKET" "LOG_BUCKET" "STS_SESSION_TTL_SECONDS" "CORS_ALLOWED_ORIGINS" "EXECUTION_TIMEOUT_SECONDS" "EXECUTION_QUEUE_MAX_WAIT_SECONDS" "EXECUTION_CREDENTIAL_MARGIN_SECONDS" "EXECUTION_STARTUP_GRACE_SECONDS" "EXECUTION_TERMINAL_GRACE_SECONDS" "EXECUTION_CLEANUP_TIMEOUT_SECONDS" "LOCKED_BUCKET" "LOCKED_BUCKET_ENFORCEMENT" "LOCKED_BUCKET_LOCK_MODE" "LOCKED_BUCKET_RETENTION_DAYS" "LOCKED_BUCKET_MIN_RETENTION_DAYS" "LOCKED_BUCKET_MAX_FILE_BYTES" }}
 {{- range .Values.api.env }}
 {{- if has .name $reservedEnv }}
 {{- fail (printf "api.env cannot override chart-managed %s; configure its values.yaml setting" .name) }}

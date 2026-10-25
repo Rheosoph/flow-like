@@ -32,12 +32,14 @@ export const WIDGET_CAPABILITY_TONE: Readonly<
 	media: "known",
 	microphone: "shared",
 	downloads: "broad",
+	uploads: "known",
 };
 
 /** Capabilities that keep a full row; the rest share "Also asks for". */
 export const WIDGET_FULL_ROW_CAPABILITIES: readonly MicroWidgetCapability[] = [
 	"microphone",
 	"downloads",
+	"uploads",
 ];
 
 /** Declared chips shown on a card before "+N more". */

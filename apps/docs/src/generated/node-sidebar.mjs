@@ -39,6 +39,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/agents/builder/agent-lazy-register-function-tools"
               },
               {
+                "label": "Register Editor MCP Tools",
+                "slug": "nodes/ai/agents/builder/agent-register-editor-mcp-tools"
+              },
+              {
                 "label": "Register Function Tools",
                 "slug": "nodes/ai/agents/builder/agent-register-function-tools"
               },
@@ -1323,6 +1327,40 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Forecasting",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ai/ml/forecasting"
+              },
+              {
+                "label": "Forecast",
+                "slug": "nodes/ai/ml/forecasting/ml-forecast"
+              },
+              {
+                "label": "Forecast Model Info",
+                "slug": "nodes/ai/ml/forecasting/ml-forecast-model-info"
+              },
+              {
+                "label": "Forecast Values",
+                "slug": "nodes/ai/ml/forecasting/ml-forecast-values"
+              },
+              {
+                "label": "Load Forecast Model",
+                "slug": "nodes/ai/ml/forecasting/ml-load-forecast-model"
+              },
+              {
+                "label": "Load Forecasting Bit",
+                "slug": "nodes/ai/ml/forecasting/ml-load-forecasting-bit"
+              },
+              {
+                "label": "Load Hugging Face Forecast Model",
+                "slug": "nodes/ai/ml/forecasting/ml-load-huggingface-forecast-model"
+              }
+            ]
+          },
+          {
             "label": "Fusion",
             "collapsed": true,
             "items": [
@@ -2331,6 +2369,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Summarize Document",
             "slug": "nodes/ai/processing/ai-processing-summarize-document"
+          },
+          {
+            "label": "Summarize File",
+            "slug": "nodes/ai/processing/ai-processing-summarize-file"
           },
           {
             "label": "YAKE Keywords",
@@ -4817,6 +4859,56 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Locked",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/files/locked"
+              },
+              {
+                "label": "Delete Expired Locked File",
+                "slug": "nodes/data/files/locked/locked-purge"
+              },
+              {
+                "label": "Download Locked File",
+                "slug": "nodes/data/files/locked/locked-download-item"
+              },
+              {
+                "label": "Extend Locked File Retention",
+                "slug": "nodes/data/files/locked/locked-extend-retention"
+              },
+              {
+                "label": "Get Locked File",
+                "slug": "nodes/data/files/locked/locked-get-item"
+              },
+              {
+                "label": "List Locked Files",
+                "slug": "nodes/data/files/locked/locked-list-items"
+              },
+              {
+                "label": "Locked Storage Status",
+                "slug": "nodes/data/files/locked/locked-storage-status"
+              },
+              {
+                "label": "Set Locked File Auto Delete",
+                "slug": "nodes/data/files/locked/locked-set-auto-delete"
+              },
+              {
+                "label": "Set Locked File Legal Hold",
+                "slug": "nodes/data/files/locked/locked-set-legal-hold"
+              },
+              {
+                "label": "Upload Locked File",
+                "slug": "nodes/data/files/locked/locked-upload-item"
+              },
+              {
+                "label": "Upload Locked File Version",
+                "slug": "nodes/data/files/locked/locked-upload-version"
+              }
+            ]
+          },
+          {
             "label": "Operations",
             "collapsed": true,
             "items": [
@@ -4839,6 +4931,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Get",
                 "slug": "nodes/data/files/operations/path-get"
+              },
+              {
+                "label": "Get File Metadata",
+                "slug": "nodes/data/files/operations/file-get-metadata"
               },
               {
                 "label": "Get Range",
@@ -7061,6 +7157,20 @@ export const generatedNodeSidebar = [
         ]
       },
       {
+        "label": "HTTP",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/events/http"
+          },
+          {
+            "label": "Stream HTTP Response",
+            "slug": "nodes/events/http/events-http-stream-response"
+          }
+        ]
+      },
+      {
         "label": "Remote",
         "collapsed": true,
         "items": [
@@ -7167,6 +7277,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Read Image (URL)",
             "slug": "nodes/image/content/read-image-url"
+          },
+          {
+            "label": "Read Image Dimensions",
+            "slug": "nodes/image/content/read-image-dimensions"
           },
           {
             "label": "Read QR-/Barcode",
@@ -8919,6 +9033,20 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Excalidraw",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ui/elements/excalidraw"
+              },
+              {
+                "label": "Set Excalidraw Scene",
+                "slug": "nodes/ui/elements/excalidraw/a2ui-set-excalidraw-scene"
+              }
+            ]
+          },
+          {
             "label": "Files",
             "collapsed": true,
             "items": [
@@ -8929,6 +9057,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Get File Input Files",
                 "slug": "nodes/ui/elements/files/a2ui-get-file-input-files"
+              },
+              {
+                "label": "Uploaded File to Path",
+                "slug": "nodes/ui/elements/files/a2ui-uploaded-file-to-path"
               }
             ]
           },

@@ -955,6 +955,154 @@ async fn camelcase_name_collisions_do_not_render_an_ambiguous_document() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Corpus: board shapes only the canvas, a deletion or an event-local `let` produces.
+// ---------------------------------------------------------------------------------------------
+
+/// Apply `source` through the product path, the way the editor's Apply does.
+async fn apply_source(board: &mut Board, source: &str) {
+    let result = apply_flowscript_to_board(
+        board,
+        source,
+        &flowscript_support::CATALOG.nodes,
+        flowscript_support::catalog_state().await,
+        None,
+        true,
+    )
+    .await
+    .expect("corpus source applies");
+    assert!(
+        result.diagnostics.is_empty(),
+        "{:?}\n{source}",
+        result.diagnostics
+    );
+}
+
+fn anchored_text(board: &Board) -> String {
+    board_to_flowscript(
+        board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    )
+}
+
+/// A module layer's own variable (what a `let` in a module event creates), written by two of the
+/// module's events: the text declares it in one, and the other's anchored assignment resolves it
+/// through the module scope.
+async fn board_with_module_variable_in_two_events() -> Board {
+    let mut board = Board::new_detached(Some("module-variable".to_string()), Path::default());
+    apply_source(
+        &mut board,
+        r#"module lea {
+    eventsSimple leaToggle() {
+        let changed: string = ""
+        changed = "a"
+        log::info({ message: changed, toast: false })
+    }
+}
+"#,
+    )
+    .await;
+    let text = anchored_text(&board);
+    let close = text.rfind("\n}").expect("the module block closes");
+    let both = format!(
+        "{}\n    eventsSimple leaReset() {{\n        let changed: string = \"\"\n        changed = \"reset\"\n    }}{}",
+        &text[..close],
+        &text[close..]
+    );
+    apply_source(&mut board, &both).await;
+    board
+}
+
+/// A `variable::set` whose variable was deleted afterwards.
+async fn board_with_set_of_deleted_variable() -> Board {
+    let mut board = Board::new_detached(Some("deleted-variable".to_string()), Path::default());
+    apply_source(
+        &mut board,
+        r#"let note: string = ""
+
+eventsSimple tick() {
+    note = "a"
+    log::info({ message: "tick", toast: false })
+}
+"#,
+    )
+    .await;
+    let variable_id = board
+        .variables
+        .keys()
+        .next()
+        .cloned()
+        .expect("note is declared");
+    apply_board_commands_to_board(
+        &mut board,
+        vec![BoardCommand::RemoveVariable {
+            variable_id,
+            summary: None,
+        }],
+        &flowscript_support::CATALOG.nodes,
+        flowscript_support::catalog_state().await,
+        None,
+    )
+    .await
+    .expect("the variable is removed");
+    board
+}
+
+/// A Function layer whose two outputs share one name.
+async fn board_with_same_named_returns() -> Board {
+    let mut board = Board::new_detached(Some("same-named-returns".to_string()), Path::default());
+    apply_source(
+        &mut board,
+        r#"function pair(first: string, second: string): (samples: string, picks: string) {
+    return first.toUpper(), second.trim()
+}
+"#,
+    )
+    .await;
+    let pin = board
+        .layers
+        .values_mut()
+        .flat_map(|layer| layer.pins.values_mut())
+        .find(|pin| pin.name == "picks")
+        .expect("pair returns picks");
+    pin.name = "samples".to_string();
+    pin.friendly_name = "samples".to_string();
+    board
+}
+
+/// The board's own text must survive shapes the language cannot author directly. Each of these
+/// once rendered a document its own apply refused: an undeclared module variable, a dangling
+/// `varRef` blocking every edit, and a duplicate return name rejecting the whole document.
+#[tokio::test(flavor = "multi_thread")]
+async fn canvas_made_board_shapes_round_trip() {
+    let (catalog, enricher) = flowscript_support::catalog();
+    let cases = [
+        (
+            "shape/module-variable-in-two-events",
+            board_with_module_variable_in_two_events().await,
+        ),
+        (
+            "shape/set-of-deleted-variable",
+            board_with_set_of_deleted_variable().await,
+        ),
+        (
+            "shape/same-named-function-returns",
+            board_with_same_named_returns().await,
+        ),
+    ];
+    let mut findings = Vec::new();
+    let mut exercised = BTreeSet::new();
+    for (case, board) in &cases {
+        exercised.insert(case.to_string());
+        findings.extend(check_board(case, board, &catalog, &enricher, FULL).await);
+    }
+
+    ratchet("board-shape", findings, &exercised);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Guard rails on the harness itself.
 // ---------------------------------------------------------------------------------------------
 

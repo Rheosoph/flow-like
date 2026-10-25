@@ -15,7 +15,7 @@ import {
 	verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Trans, i18n as i18next, useTranslation } from "@flow-like/locales";
+import { Trans, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
 	ArrowDownIcon,
@@ -42,7 +42,6 @@ import {
 import { useBoardFormat } from "../../hooks/use-board-format";
 import {
 	type IPin,
-	type IPinOptions,
 	IValueType,
 	IVariableType,
 	describeCacheLifetime,
@@ -92,25 +91,20 @@ import {
 	TabsTrigger,
 	Textarea,
 } from "../ui";
+import {
+	type PinEdit,
+	buildInitialEdits,
+	isPayloadPin,
+	pinNameForLabel,
+	reindex,
+	serializePinEdits,
+	sortByIndex,
+} from "./pin-editor-model";
 import { PinOptionsDialog } from "./pin-options-dialog";
 import { hasActivePinOptions, hasPinOptionSections } from "./pin-options-model";
 import { typeToColor } from "./utils";
 import { ValueTypeIcon } from "./variables/variables-menu";
 import { VariablesMenuEdit } from "./variables/variables-menu-edit";
-
-export type PinEdit = {
-	id: string;
-	name: string;
-	friendly_name: string;
-	description: string;
-	data_type: IVariableType;
-	options?: IPinOptions | null;
-	schema?: string | null;
-	pin_type: IPinType;
-	index: number;
-	value_type: IValueType;
-	default_value?: number[] | null;
-};
 
 function selectPreviewElement(type: IVariableType) {
 	return (
@@ -123,23 +117,6 @@ function selectPreviewElement(type: IVariableType) {
 		</div>
 	);
 }
-
-const normalizeValueType = (vt: unknown): IValueType => {
-	const s = String(vt ?? "").toLowerCase();
-	if (s === "array") return IValueType.Array;
-	if (s === "hashmap" || s === "map") return IValueType.HashMap;
-	if (s === "hashset" || s === "set") return IValueType.HashSet;
-	return IValueType.Normal;
-};
-
-const toMachineName = (s: string) =>
-	s.trim().toLowerCase().replace(/\s+/g, "_");
-
-const sortByIndex = <T extends { index: number }>(arr: T[]) =>
-	[...arr].sort((a, b) => a.index - b.index);
-
-const isPayloadPin = (pin: PinEdit, isGenericEvent: boolean) =>
-	isGenericEvent && pin.name === "payload";
 
 const canBeOptional = (pin: PinEdit, isGenericEvent: boolean) =>
 	isGenericEvent &&
@@ -175,9 +152,6 @@ const retypedDefault = (
 	};
 };
 
-const reindex = <T extends { index: number }>(arr: T[]) =>
-	arr.map((p, i) => ({ ...p, index: i + 1 }));
-
 const DEFAULT_LAYER_CACHE: ILayerCache = {
 	enabled: false,
 	prefix: "",
@@ -201,65 +175,6 @@ const useGroupedPins = (edits: Record<string, PinEdit>) => {
 		);
 		return { inputs, outputs };
 	}, [edits]);
-};
-
-const buildInitialEdits = (
-	entity: ILayer | INode,
-	boardRef?: RefObject<IBoard | undefined>,
-): Record<string, PinEdit> => {
-	const out: Record<string, PinEdit> = {};
-	const isNodeMode = "friendly_name" in entity;
-	const isGenericEvent =
-		isNodeMode && (entity as INode).name === "events_generic";
-
-	for (const pin of Object.values(entity.pins)) {
-		const p: typeof pin & { valueType?: unknown } = pin;
-		const friendly = p.friendly_name ?? p.name ?? pin.id;
-		let description = p.description ?? "";
-		let schema = p.schema ?? null;
-
-		// Resolve description ref if it's a hash
-		const descRef = boardRef?.current?.refs?.[description];
-		if (descRef) {
-			description = descRef;
-		}
-
-		// Resolve schema ref if it's a hash
-		if (schema && typeof schema === "string") {
-			const schemaRef = boardRef?.current?.refs?.[schema];
-			if (schemaRef) {
-				schema = schemaRef;
-			}
-		}
-
-		// Hash for empty string, empty string will not be taken into the refs.
-		if (description === "16248035215404677707") {
-			description = "";
-		}
-
-		// Override description for payload pin on generic_event nodes
-		if (isGenericEvent && p.name === "payload") {
-			description = i18next.t(
-				"catchAllForAdditionalMetadata",
-				"(Catch all for additional metadata)",
-			);
-		}
-
-		out[pin.id] = {
-			id: pin.id,
-			name: toMachineName(friendly),
-			friendly_name: friendly,
-			description: description,
-			data_type: p.data_type ?? IVariableType.Generic,
-			options: p.options ?? null,
-			schema: schema,
-			pin_type: pin.pin_type,
-			index: pin.index ?? 1,
-			value_type: normalizeValueType(p.value_type ?? p.valueType),
-			default_value: p.default_value ?? null,
-		};
-	}
-	return out;
 };
 
 export interface IPinEditor {
@@ -314,12 +229,15 @@ export function usePinEditor(
 			patchPin(id, (p) => {
 				const next: PinEdit = { ...p, ...patch };
 				if (patch.friendly_name !== undefined) {
-					next.name = toMachineName(patch.friendly_name);
+					next.name = pinNameForLabel(
+						(entity?.pins as Record<string, IPin> | undefined)?.[id],
+						patch.friendly_name,
+					);
 				}
 				return next;
 			});
 		},
-		[patchPin],
+		[patchPin, entity],
 	);
 
 	const reindexGroup = useCallback((group: PinEdit[]) => {
@@ -403,53 +321,15 @@ export function usePinEditor(
 		});
 	}, []);
 
-	const buildPins = useCallback((): Record<string, IPin> => {
-		const original = (entity?.pins ?? {}) as Record<string, IPin>;
-		const nextPins: Record<string, IPin> = {};
-		const zeroIndexed = Object.values(edits).find((p) => p.index <= 0);
-
-		for (const edit of Object.values(edits)) {
-			const prev = original[edit.id];
-
-			nextPins[edit.id] = {
-				...(prev as IPin),
-				id: edit.id,
-				pin_type: edit.pin_type,
-				index: zeroIndexed ? (edit.index ?? 0) + 1 : (edit.index ?? 1),
-				connected_to: prev?.connected_to ?? [],
-				depends_on: prev?.depends_on ?? [],
-				default_value: edit.default_value ?? null,
-				data_type: edit.data_type,
-				// The payload pin shows a localized hint in place of its description; saving
-				// that hint would persist UI text as the pin's contract.
-				description: isPayloadPin(edit, isGenericEvent)
-					? (prev?.description ?? "")
-					: (edit.description ?? ""),
-				friendly_name: edit.friendly_name ?? edit.name,
-				name: toMachineName(edit.friendly_name ?? edit.name),
-				options: edit.options ?? null,
-				schema: edit.schema ?? null,
-				value_type: edit.value_type ?? IValueType.Normal,
-			};
-		}
-
-		const nextInputs = reindex(
-			sortByIndex(
-				Object.values(nextPins).filter((p) => p.pin_type === IPinType.Input),
+	const buildPins = useCallback(
+		(): Record<string, IPin> =>
+			serializePinEdits(
+				(entity?.pins ?? {}) as Record<string, IPin>,
+				edits,
+				isGenericEvent,
 			),
-		);
-		const nextOutputs = reindex(
-			sortByIndex(
-				Object.values(nextPins).filter((p) => p.pin_type === IPinType.Output),
-			),
-		);
-		for (const p of nextInputs)
-			nextPins[p.id] = { ...nextPins[p.id], index: p.index };
-		for (const p of nextOutputs)
-			nextPins[p.id] = { ...nextPins[p.id], index: p.index };
-
-		return nextPins;
-	}, [edits, entity, isGenericEvent]);
+		[edits, entity, isGenericEvent],
+	);
 
 	return {
 		edits,

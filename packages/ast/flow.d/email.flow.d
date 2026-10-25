@@ -1,8 +1,10 @@
 // Email — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -16,11 +18,13 @@ declare namespace email {
      * @param message — Received message reference from an inbound email event
      * @param text (optional) — Plain text reply body
      * @param html (optional) — HTML reply body
+     * @param attachments (optional) — Files to attach: at most 10, together at most 3 MiB
+     * @param senderName (optional) — Name recipients see as the sender, at most 64 characters; empty uses the email event's name
      * @returns requestId — Server identifier for this submission
      * @returns sessionOut — Mail session used for this submission
      * @impure has side effects / drives control flow
      */
-    function replyPlatform(this: MailSession, { session: Struct, message: Struct, text?: string, html?: string }): { requestId: string, sessionOut: Struct };
+    function replyPlatform(this: MailSession, { session: Struct, message: Struct, text?: string, html?: string, attachments?: Struct[], senderName?: string }): { requestId: string, sessionOut: Struct };
 
     /**
      * Send email from an authorized event's address
@@ -32,11 +36,13 @@ declare namespace email {
      * @param subject (optional) — Email subject
      * @param text (optional) — Plain text body
      * @param html (optional) — HTML body
+     * @param attachments (optional) — Files to attach: at most 10, together at most 3 MiB
+     * @param senderName (optional) — Name recipients see as the sender, at most 64 characters; empty uses the email event's name
      * @returns requestId — Server identifier for this submission
      * @returns sessionOut — Mail session used for this submission
      * @impure has side effects / drives control flow
      */
-    function sendPlatform(this: MailSession, { session: Struct, to?: string[], cc?: string[], bcc?: string[], subject?: string, text?: string, html?: string }): { requestId: string, sessionOut: Struct };
+    function sendPlatform(this: MailSession, { session: Struct, to?: string[], cc?: string[], bcc?: string[], subject?: string, text?: string, html?: string, attachments?: Struct[], senderName?: string }): { requestId: string, sessionOut: Struct };
 
     // === Email/Access ===
 

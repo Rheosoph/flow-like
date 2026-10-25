@@ -40,7 +40,7 @@ impl NodeLogic for FromBytesNode {
     }
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        let bytes: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
         let value: Value = flow_like_types::json::from_slice(&bytes)?;
         let normalized_value = normalize_json_value(value);
         context.set_pin_value("value", normalized_value).await?;

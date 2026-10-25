@@ -4,7 +4,7 @@ use crate::{
     cache::Reservation,
     error::ApiError,
     execution::state::{ExecutionRunRecord, RunVariant},
-    mail::{AutoSubmitted, AutomationEmailMessage, DynMailClient},
+    mail::{AutoSubmitted, AutomationEmailMessage, DynMailClient, EmailAttachment},
     mail_ingress::{
         ReplySource, digest, failed_verdict, is_automated,
         limits::{self, Counter, Window},
@@ -21,7 +21,10 @@ use axum::{
     http::{HeaderValue, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
-use flow_like_catalog_core::{MailMessageRef, MailSession};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use flow_like_catalog_core::{
+    MAX_MAIL_ATTACHMENT_BYTES, MAX_MAIL_ATTACHMENTS, MailAttachment, MailMessageRef, MailSession,
+};
 use mail_parser::{Message, MessageParser};
 use sea_orm::{ConnectionTrait, FromQueryResult};
 use serde::{Deserialize, Serialize};
@@ -29,7 +32,23 @@ use utoipa::ToSchema;
 
 const MAX_RECIPIENTS: usize = 20;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+/// A request at the body and attachment limits: JSON escaping can double the body, and
+/// base64 adds a third to the attachments.
+pub(crate) const MAX_REQUEST_BYTES: usize =
+    2 * MAX_BODY_BYTES + (MAX_MAIL_ATTACHMENT_BYTES as usize).div_ceil(3) * 4 + 64 * 1024;
 const MAX_DISPLAY_NAME: usize = 64;
+/// Executable and script types that SES refuses. Every provider rejects them up front, so
+/// a flow learns why instead of seeing a provider failure.
+const BLOCKED_EXTENSIONS: &[&str] = &[
+    "ade", "adp", "app", "asp", "bas", "bat", "cer", "chm", "cmd", "com", "cpl", "crt", "csh",
+    "der", "exe", "fxp", "gadget", "hlp", "hta", "inf", "ins", "isp", "its", "js", "jse", "ksh",
+    "lib", "lnk", "mad", "maf", "mag", "mam", "maq", "mar", "mas", "mat", "mau", "mav", "maw",
+    "mda", "mdb", "mde", "mdt", "mdw", "mdz", "msc", "msh", "msh1", "msh2", "mshxml", "msh1xml",
+    "msh2xml", "msi", "msp", "mst", "ops", "pcd", "pif", "plg", "prf", "prg", "ps1", "ps1xml",
+    "ps2", "ps2xml", "psc1", "psc2", "reg", "scf", "scr", "sct", "shb", "shs", "sys", "tmp", "url",
+    "vb", "vbe", "vbs", "vps", "vsmacros", "vss", "vst", "vsw", "vxd", "ws", "wsc", "wsf", "wsh",
+    "xnk",
+];
 /// Longer than any send route deadline, so a live claim is never taken over.
 const SEND_LEASE_MS: i64 = 600_000;
 const IDEMPOTENCY_WINDOW_MS: i64 = 86_400_000;
@@ -47,6 +66,16 @@ pub struct MailMessageRefSchema {
     pub session: MailSessionSchema,
     pub delivery_id: String,
 }
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct MailAttachmentSchema {
+    /// File name shown to recipients, without a path.
+    pub filename: String,
+    /// MIME type, such as `application/pdf`.
+    pub content_type: String,
+    /// The file's bytes as standard base64.
+    pub content: String,
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +90,13 @@ pub struct SendMailRequest {
     pub subject: String,
     pub text: Option<String>,
     pub html: Option<String>,
+    /// Up to 10 files totaling at most 3 MiB. Executable and script types are refused.
+    #[serde(default)]
+    #[schema(value_type = Vec<MailAttachmentSchema>)]
+    pub attachments: Vec<MailAttachment>,
+    /// Name recipients see as the sender, at most 64 characters. Defaults to the event's name.
+    #[serde(default)]
+    pub sender_name: Option<String>,
     /// Retries with the same ID within 24 hours return the first response instead of
     /// sending again. 1-128 characters of letters, digits, `:`, `.`, `_` and `-`.
     #[serde(default)]
@@ -76,6 +112,13 @@ pub struct ReplyMailRequest {
     pub message: MailMessageRef,
     pub text: Option<String>,
     pub html: Option<String>,
+    /// Up to 10 files totaling at most 3 MiB. Executable and script types are refused.
+    #[serde(default)]
+    #[schema(value_type = Vec<MailAttachmentSchema>)]
+    pub attachments: Vec<MailAttachment>,
+    /// Name recipients see as the sender, at most 64 characters. Defaults to the event's name.
+    #[serde(default)]
+    pub sender_name: Option<String>,
     /// Retries with the same ID within 24 hours return the first response instead of
     /// replying again. 1-128 characters of letters, digits, `:`, `.`, `_` and `-`.
     #[serde(default)]
@@ -175,6 +218,86 @@ fn validate_request_id(request_id: Option<&str>) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn valid_file_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.len() <= 255
+        && !matches!(name, "." | "..")
+        && !name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '\\'))
+}
+
+fn valid_content_type(value: &str) -> bool {
+    let token = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$&-^_.+".contains(&b))
+    };
+    value.len() <= 255
+        && value
+            .split_once('/')
+            .is_some_and(|(kind, subtype)| token(kind) && token(subtype))
+}
+
+fn decode_attachment(attachment: MailAttachment) -> Result<EmailAttachment, ApiError> {
+    let name = attachment.filename.as_str();
+    if !valid_file_name(name) {
+        return Err(ApiError::bad_request(format!(
+            "Attachment name {name:?} must be a file name of 1-255 bytes without a path"
+        )));
+    }
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    if extension
+        .as_deref()
+        .is_some_and(|extension| BLOCKED_EXTENSIONS.contains(&extension))
+    {
+        return Err(ApiError::bad_request(format!(
+            "Attachment {name:?} is an executable or script file, which automated mail does not send"
+        )));
+    }
+    if !valid_content_type(&attachment.content_type) {
+        return Err(ApiError::bad_request(format!(
+            "Attachment {name:?} needs a MIME type such as application/pdf"
+        )));
+    }
+    let content = STANDARD.decode(&attachment.content).map_err(|_| {
+        ApiError::bad_request(format!(
+            "Attachment {name:?} content is not standard base64"
+        ))
+    })?;
+    Ok(EmailAttachment {
+        filename: attachment.filename,
+        content_type: attachment.content_type,
+        content,
+    })
+}
+
+fn decode_attachments(attachments: Vec<MailAttachment>) -> Result<Vec<EmailAttachment>, ApiError> {
+    if attachments.len() > MAX_MAIL_ATTACHMENTS {
+        return Err(ApiError::bad_request(format!(
+            "A message can carry at most {MAX_MAIL_ATTACHMENTS} attachments"
+        )));
+    }
+    let decoded = attachments
+        .into_iter()
+        .map(decode_attachment)
+        .collect::<Result<Vec<_>, _>>()?;
+    let total = decoded
+        .iter()
+        .map(|attachment| attachment.content.len() as u64)
+        .sum::<u64>();
+    if total > MAX_MAIL_ATTACHMENT_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "Attachments may total at most {} MiB",
+            MAX_MAIL_ATTACHMENT_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(decoded)
+}
+
 fn validate(request: &SendMailRequest) -> Result<(), ApiError> {
     if request.to.is_empty()
         || request.to.len() + request.cc.len() + request.bcc.len() > MAX_RECIPIENTS
@@ -237,9 +360,18 @@ fn ensure_external<'a>(
     Ok(())
 }
 
-/// The event name as display name, so recipients see who writes instead of the platform.
-fn display_name(event_name: &str, from: &str) -> String {
-    let cleaned = event_name
+/// The flow's sender name, else the event name, so recipients see who writes instead of the
+/// platform.
+fn display_name(requested: Option<&str>, event_name: &str, from: &str) -> String {
+    requested
+        .into_iter()
+        .chain([event_name])
+        .find_map(clean_display_name)
+        .unwrap_or_else(|| from.split('@').next().unwrap_or(from).to_owned())
+}
+
+fn clean_display_name(raw: &str) -> Option<String> {
+    let cleaned = raw
         .chars()
         .map(|c| {
             if c.is_alphanumeric() || " -_.&+'".contains(c) {
@@ -257,46 +389,69 @@ fn display_name(event_name: &str, from: &str) -> String {
         .take(MAX_DISPLAY_NAME)
         .collect::<String>();
     let name = name.trim();
-    if name.is_empty() {
-        from.split('@').next().unwrap_or(from).to_owned()
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn has_ended(run: &ExecutionRunRecord) -> bool {
+    run.status.is_terminal()
+        || run
+            .expires_at
+            .is_some_and(|expiry| expiry <= chrono::Utc::now().timestamp_millis())
+}
+
+fn is_replay(run: &ExecutionRunRecord) -> bool {
+    matches!(run.run_variant, RunVariant::Shadow | RunVariant::Regression)
+        || run.shadow_of_run_id.is_some()
+        || run.regression_run_id.is_some()
+}
+
+/// Any live primary run of the session's app may send, whichever event started it; shadow
+/// and regression replays never send.
+fn ensure_run_can_send(run: &ExecutionRunRecord, session: &MailSession) -> Result<(), ApiError> {
+    let refusal = if run.app_id != session.app_id {
+        "The run belongs to a different app than the mail session"
+    } else if has_ended(run) {
+        "The run has already ended"
+    } else if is_replay(run) {
+        "Shadow and regression runs cannot send mail"
     } else {
-        name.to_owned()
+        return Ok(());
+    };
+    Err(ApiError::forbidden(refusal))
+}
+
+/// Anonymous sink runs carry `sink:<id>` and no user. User, API-key and connected-app
+/// dispatches retain their effective user and optional technical user in both the run
+/// record and the signed token.
+fn same_identity(executor: &ExecutorUser, run: &ExecutionRunRecord) -> bool {
+    if executor.sub.starts_with("sink:") {
+        executor.app_chain.is_none()
+            && run.user_id.is_none()
+            && run.technical_user_id.is_none()
+            && executor.technical_user_id.is_none()
+    } else {
+        run.user_id.as_deref() == Some(executor.sub.as_str())
+            && executor.technical_user_id == run.technical_user_id
     }
 }
 
-fn run_can_send(run: &ExecutionRunRecord, session: &MailSession) -> bool {
-    run.app_id == session.app_id
-        && run.event_id.as_deref() == Some(session.event_id.as_str())
-        && !run.status.is_terminal()
-        && !matches!(run.run_variant, RunVariant::Shadow | RunVariant::Regression)
-        && run.shadow_of_run_id.is_none()
-        && run.regression_run_id.is_none()
-        && run
-            .expires_at
-            .is_none_or(|expiry| expiry > chrono::Utc::now().timestamp_millis())
-}
-
-fn executor_can_send(
+fn ensure_executor_can_send(
     executor: &ExecutorUser,
     run: &ExecutionRunRecord,
     session: &MailSession,
-    sink_id: &str,
-) -> bool {
-    if executor.app_id != session.app_id || executor.run_id != run.id || !run_can_send(run, session)
-    {
-        return false;
+) -> Result<(), ApiError> {
+    if executor.app_id != session.app_id || executor.run_id != run.id {
+        return Err(ApiError::forbidden(
+            "The executor token does not belong to this run",
+        ));
     }
-    if let Some(subject_sink_id) = executor.sub.strip_prefix("sink:") {
-        return subject_sink_id == sink_id
-            && executor.app_chain.is_none()
-            && run.user_id.is_none()
-            && run.technical_user_id.is_none()
-            && executor.technical_user_id.is_none();
+    ensure_run_can_send(run, session)?;
+    if !same_identity(executor, run) {
+        return Err(ApiError::forbidden(
+            "The executor identity does not match its run",
+        ));
     }
-    // User, API-key and connected-app dispatches retain their effective user and
-    // optional technical user in both the run record and the signed token.
-    run.user_id.as_deref() == Some(executor.sub.as_str())
-        && executor.technical_user_id == run.technical_user_id
+    Ok(())
 }
 
 /// Who is sending: the event supplies the display name, the principal carries the daily cap.
@@ -305,7 +460,20 @@ struct Sender {
     principal: Option<String>,
 }
 
-/// A live run of the session's event; the run's user or the sink owner is the principal.
+/// The name of the session's email event while it can send.
+async fn live_event_name(
+    state: &AppState,
+    app_id: &str,
+    session: &MailSession,
+) -> Result<String, ApiError> {
+    crate::mail_ingress::live_target(state, app_id, &session.event_id)
+        .await?
+        .map(|(_, event)| event.name)
+        .ok_or_else(|| ApiError::forbidden("The mail session's email event is not active"))
+}
+
+/// A live run of the session's app; the run's user is the principal. Anonymous sink runs
+/// have no user, because a sink with a stored token runs as that token's user.
 async fn authorize_executor(
     state: &AppState,
     executor: &ExecutorUser,
@@ -313,28 +481,20 @@ async fn authorize_executor(
     session: &MailSession,
 ) -> Result<Sender, ApiError> {
     if executor.app_id != app_id {
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::forbidden(
+            "The executor token belongs to a different app",
+        ));
     }
     let run = get_state_store(state)
         .await?
         .get_run(&executor.run_id)
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?
-        .filter(|run| run_can_send(run, session))
-        .ok_or(ApiError::FORBIDDEN)?;
-    let (sink, event) = crate::mail_ingress::live_target(state, app_id, &session.event_id)
-        .await?
-        .ok_or(ApiError::FORBIDDEN)?;
-    if !executor_can_send(executor, &run, session, &sink.id) {
-        return Err(ApiError::FORBIDDEN);
-    }
-    let principal = match run.user_id {
-        Some(user_id) => Some(user_id),
-        None => crate::mail_ingress::sink_owner(state, &sink).await?,
-    };
+        .ok_or_else(|| ApiError::forbidden("The executor's run no longer exists"))?;
+    ensure_executor_can_send(executor, &run, session)?;
     Ok(Sender {
-        event_name: event.name,
-        principal,
+        event_name: live_event_name(state, app_id, session).await?,
+        principal: run.user_id,
     })
 }
 
@@ -350,7 +510,9 @@ async fn authorize(
         || session.app_id.len() > 256
         || session.event_id.len() > 256
     {
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::forbidden(
+            "The mail session does not belong to this app",
+        ));
     }
     if let AppUser::Executor(executor) = user {
         return authorize_executor(state, executor, app_id, session).await;
@@ -360,13 +522,12 @@ async fn authorize(
     if !permission.has_permission(RolePermissions::ExecuteEvents)
         || !permission.has_permission(RolePermissions::WriteEvents)
     {
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::forbidden(
+            "Sending mail needs the ExecuteEvents and WriteEvents permissions",
+        ));
     }
-    let (_, event) = crate::mail_ingress::live_target(state, app_id, &session.event_id)
-        .await?
-        .ok_or(ApiError::FORBIDDEN)?;
     Ok(Sender {
-        event_name: event.name,
+        event_name: live_event_name(state, app_id, session).await?,
         principal: Some(
             permission
                 .effective_user_id
@@ -617,14 +778,19 @@ async fn send(
     ensure_enabled(state)?;
     let sender = authorize(state, user, app_id, &request.session).await?;
     validate(&request)?;
+    let attachments = decode_attachments(std::mem::take(&mut request.attachments))?;
     dedupe_recipients(&mut request);
     ensure_external(
         state.mail_automation.domain(),
         request.to.iter().chain(&request.cc).chain(&request.bcc),
     )?;
-    let from = crate::mail_ingress::address::sending_address(state, &request.session, None).await?;
+    let from = crate::mail_ingress::address::sending_address(state, &request.session).await?;
     let message = AutomationEmailMessage {
-        from_name: Some(display_name(&sender.event_name, &from)),
+        from_name: Some(display_name(
+            request.sender_name.as_deref(),
+            &sender.event_name,
+            &from,
+        )),
         from_email: Some(from.clone()),
         to: request.to,
         cc: request.cc,
@@ -636,6 +802,7 @@ async fn send(
         in_reply_to: None,
         references: Vec::new(),
         auto_submitted: Some(AutoSubmitted::Generated),
+        attachments,
     };
     submit(
         state,
@@ -651,10 +818,10 @@ async fn send(
 
 #[utoipa::path(
     post, path = "/apps/{app_id}/mail/send", tag = "app",
-    description = "Send from an active inbound email event. The session identifies the event; the server resolves its From address and shows the event name as sender. Recipients are deduplicated and count against the app's and the sender's daily recipient limits. Direct callers need current ExecuteEvents and WriteEvents permissions; executor callers need a live run of that event.",
+    description = "Send from an active inbound email event. The session identifies the event; the server resolves its From address and shows the event name as sender. Recipients are deduplicated and count against the app's and the sender's daily recipient limits. Direct callers need current ExecuteEvents and WriteEvents permissions; executor callers need a live run of the same app, started by any event.",
     params(("app_id" = String, Path)), request_body = SendMailRequest,
     responses((status=200,description="Mail provider accepted the message, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid message"),(status=403,description="Session not authorized"),
+        (status=400,description="Invalid message or attachments"),(status=403,description="Session not authorized"),
         (status=409,description="A message with this request_id is still being sent"),
         (status=422,description="A recipient is an event address on this server"),
         (status=429,description="App send interval or daily recipient limit reached",headers(("Retry-After" = u64, description = "Seconds until a retry can succeed"))),
@@ -672,10 +839,10 @@ pub async fn send_mail(
 
 #[utoipa::path(
     post, path = "/execution/apps/{app_id}/mail/send", tag = "execution",
-    description = "Send from the inbound email event of this run. Executor only; same contract as the app route. Retry only 429 responses, after Retry-After.",
+    description = "Send from an inbound email event of this run's app; any event's run may send. Executor only; same contract as the app route. Retry only 429 responses, after Retry-After.",
     params(("app_id" = String, Path, description = "Application ID")), request_body = SendMailRequest,
     responses((status=200,description="Mail provider accepted the message, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid message"),(status=403,description="The caller is not a live run of this event"),
+        (status=400,description="Invalid message or attachments"),(status=403,description="The caller is not a live run of this app, or the session's email event is not active"),
         (status=409,description="A message with this request_id is still being sent"),
         (status=422,description="A recipient is an event address on this server"),
         (status=429,description="App send interval or daily recipient limit reached",headers(("Retry-After" = u64, description = "Seconds until a retry can succeed"))),
@@ -821,24 +988,24 @@ async fn reply(
     state: &AppState,
     user: &AppUser,
     app_id: &str,
-    request: ReplyMailRequest,
+    mut request: ReplyMailRequest,
 ) -> Result<Json<SendMailResponse>, MailError> {
     ensure_enabled(state)?;
     let sender = authorize(state, user, app_id, &request.session).await?;
     validate_reply(&request)?;
+    let attachments = decode_attachments(std::mem::take(&mut request.attachments))?;
     let source = crate::mail_ingress::reply_source(state, &request.message).await?;
     let original = parse_original(&source.raw)?;
     refuse_unsafe_reply(&source, &original)?;
     let headers = reply_headers(&original)?;
     ensure_external(state.mail_automation.domain(), [&headers.to])?;
-    let from = crate::mail_ingress::address::sending_address(
-        state,
-        &request.session,
-        Some(&source.recipient),
-    )
-    .await?;
+    let from = crate::mail_ingress::address::sending_address(state, &request.session).await?;
     let message = AutomationEmailMessage {
-        from_name: Some(display_name(&sender.event_name, &from)),
+        from_name: Some(display_name(
+            request.sender_name.as_deref(),
+            &sender.event_name,
+            &from,
+        )),
         from_email: Some(from.clone()),
         to: vec![headers.to],
         cc: Vec::new(),
@@ -850,6 +1017,7 @@ async fn reply(
         in_reply_to: headers.in_reply_to,
         references: headers.references,
         auto_submitted: Some(AutoSubmitted::Replied),
+        attachments,
     };
     submit(
         state,
@@ -868,7 +1036,7 @@ async fn reply(
     description = "Reply to a retained message belonging to the authorized email event. The server loads the original recipient, subject and threading headers and answers exactly one address: the first Reply-To, else From. Replies to automated mail (bounces, auto-replies, mailing lists) or to mail that failed its DMARC, spam or virus check are refused. Callers supply only locator references and the reply body.",
     params(("app_id"=String,Path)), request_body=ReplyMailRequest,
     responses((status=200,description="Mail provider accepted the reply, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid reply"),(status=403,description="Session or message not authorized"),
+        (status=400,description="Invalid reply or attachments"),(status=403,description="Session or message not authorized"),
         (status=404,description="Original message not found for this event"),
         (status=409,description="The original is not available for replies, or a reply with this request_id is still being sent"),
         (status=410,description="Original message expired"),
@@ -888,10 +1056,10 @@ pub async fn reply_mail(
 
 #[utoipa::path(
     post, path = "/execution/apps/{app_id}/mail/reply", tag = "execution",
-    description = "Reply to a retained message of this run's inbound email event. Executor only; same contract as the app route. Retry only 429 responses, after Retry-After.",
+    description = "Reply to a retained message of an inbound email event in this run's app; any event's run may reply. Executor only; same contract as the app route. Retry only 429 responses, after Retry-After.",
     params(("app_id" = String, Path, description = "Application ID")), request_body = ReplyMailRequest,
     responses((status=200,description="Mail provider accepted the reply, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid reply"),(status=403,description="The caller is not a live run of this event"),
+        (status=400,description="Invalid reply or attachments"),(status=403,description="The caller is not a live run of this app, or the session's email event is not active"),
         (status=404,description="Original message not found for this event"),
         (status=409,description="The original is not available for replies, or a reply with this request_id is still being sent"),
         (status=410,description="Original message expired"),
@@ -930,7 +1098,17 @@ mod tests {
             subject: "Order received".into(),
             text: Some("Thank you".into()),
             html: None,
+            attachments: vec![],
+            sender_name: None,
             request_id: None,
+        }
+    }
+
+    fn attachment(filename: &str, content: &[u8]) -> MailAttachment {
+        MailAttachment {
+            filename: filename.into(),
+            content_type: "application/pdf".into(),
+            content: STANDARD.encode(content),
         }
     }
 
@@ -975,57 +1153,42 @@ mod tests {
 
     fn reply_source(envelope_from: &str, raw: &[u8]) -> ReplySource {
         ReplySource {
-            recipient: "event@mail.example.com".into(),
             envelope_from: envelope_from.into(),
             raw: raw.to_vec(),
             authentication: None,
         }
     }
 
-    #[test]
-    fn sink_executor_requires_its_exact_anonymous_sink_identity() {
-        let executor = executor("sink:mail-sink");
-        let run = run();
-        assert!(executor_can_send(&executor, &run, &session(), "mail-sink"));
-        assert!(!executor_can_send(
-            &executor,
-            &run,
-            &session(),
-            "other-sink"
-        ));
+    fn can_send(executor: &ExecutorUser, run: &ExecutionRunRecord, session: &MailSession) -> bool {
+        ensure_executor_can_send(executor, run, session).is_ok()
+    }
 
+    fn refusal(result: Result<(), ApiError>) -> Option<String> {
+        result
+            .err()
+            .and_then(|error| error.public_message().map(str::to_owned))
+    }
+
+    #[test]
+    fn anonymous_sink_runs_of_any_event_need_an_unattributed_identity() {
+        let run = run();
+        for subject in ["sink:mail-sink", "sink:cron-sink"] {
+            assert!(can_send(&executor(subject), &run, &session()), "{subject}");
+        }
+
+        let executor = executor("sink:cron-sink");
         let mut conflicting = executor.clone();
         conflicting.app_chain = Some(vec!["calling-app".into()]);
-        assert!(!executor_can_send(
-            &conflicting,
-            &run,
-            &session(),
-            "mail-sink"
-        ));
+        assert!(!can_send(&conflicting, &run, &session()));
         let mut conflicting = executor.clone();
         conflicting.technical_user_id = Some("key".into());
-        assert!(!executor_can_send(
-            &conflicting,
-            &run,
-            &session(),
-            "mail-sink"
-        ));
+        assert!(!can_send(&conflicting, &run, &session()));
         let mut attributed = run.clone();
-        attributed.user_id = Some("sink:mail-sink".into());
-        assert!(!executor_can_send(
-            &executor,
-            &attributed,
-            &session(),
-            "mail-sink"
-        ));
+        attributed.user_id = Some("sink:cron-sink".into());
+        assert!(!can_send(&executor, &attributed, &session()));
         let mut attributed = run.clone();
         attributed.technical_user_id = Some("key".into());
-        assert!(!executor_can_send(
-            &executor,
-            &attributed,
-            &session(),
-            "mail-sink"
-        ));
+        assert!(!can_send(&executor, &attributed, &session()));
     }
 
     #[test]
@@ -1033,19 +1196,22 @@ mod tests {
         let mut executor = executor("user");
         let mut run = run();
         run.user_id = Some("user".into());
-        assert!(executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(can_send(&executor, &run, &session()));
 
         executor.sub = "other-user".into();
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(!can_send(&executor, &run, &session()));
         executor.sub = "user".into();
         executor.technical_user_id = Some("key".into());
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(!can_send(&executor, &run, &session()));
         executor.technical_user_id = None;
         run.technical_user_id = Some("key".into());
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(!can_send(&executor, &run, &session()));
         run.technical_user_id = None;
         run.user_id = None;
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert_eq!(
+            refusal(ensure_executor_can_send(&executor, &run, &session())).as_deref(),
+            Some("The executor identity does not match its run")
+        );
     }
 
     #[test]
@@ -1055,24 +1221,24 @@ mod tests {
         let mut run = run();
         run.user_id = Some("effective-user".into());
         run.technical_user_id = Some("key".into());
-        assert!(executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(can_send(&executor, &run, &session()));
         executor.app_chain = Some(vec!["calling-app".into()]);
-        assert!(executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(can_send(&executor, &run, &session()));
 
         executor.sub = "other-user".into();
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(!can_send(&executor, &run, &session()));
         executor.sub = "effective-user".into();
         executor.technical_user_id = Some("other-key".into());
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(!can_send(&executor, &run, &session()));
         executor.technical_user_id = None;
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(!can_send(&executor, &run, &session()));
         executor.technical_user_id = Some("key".into());
         run.user_id = None;
-        assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+        assert!(!can_send(&executor, &run, &session()));
     }
 
     #[test]
-    fn every_executor_actor_is_bound_to_its_run_app_and_event() {
+    fn runs_of_any_event_may_send_but_stay_bound_to_their_run_and_app() {
         for (subject, technical_id) in [
             ("sink:mail-sink", None),
             ("user", None),
@@ -1085,41 +1251,31 @@ mod tests {
                 run.user_id = Some(subject.into());
                 run.technical_user_id = technical_id.map(str::to_owned);
             }
-            assert!(executor_can_send(&executor, &run, &session(), "mail-sink"));
-            let mut other_session = session();
-            other_session.event_id = "other-event".into();
-            assert!(!executor_can_send(
-                &executor,
-                &run,
-                &other_session,
-                "mail-sink"
-            ));
-            other_session = session();
-            other_session.app_id = "other-app".into();
-            assert!(!executor_can_send(
-                &executor,
-                &run,
-                &other_session,
-                "mail-sink"
-            ));
+            assert!(can_send(&executor, &run, &session()));
+            let mut mail_event = session();
+            mail_event.event_id = "mail-event".into();
+            assert!(
+                can_send(&executor, &run, &mail_event),
+                "{subject}: a run of another event in the app may use the mail session"
+            );
+            run.event_id = None;
+            assert!(
+                can_send(&executor, &run, &session()),
+                "{subject}: board invokes without an event may send"
+            );
+
+            let mut other_app = session();
+            other_app.app_id = "other-app".into();
+            assert!(!can_send(&executor, &run, &other_app));
             let mut other_executor = executor.clone();
             other_executor.app_id = "other-app".into();
-            assert!(!executor_can_send(
-                &other_executor,
-                &run,
-                &session(),
-                "mail-sink"
-            ));
+            assert!(!can_send(&other_executor, &run, &session()));
             other_executor = executor.clone();
             other_executor.run_id = "other-run".into();
-            assert!(!executor_can_send(
-                &other_executor,
-                &run,
-                &session(),
-                "mail-sink"
-            ));
-            run.event_id = None;
-            assert!(!executor_can_send(&executor, &run, &session(), "mail-sink"));
+            assert_eq!(
+                refusal(ensure_executor_can_send(&other_executor, &run, &session())).as_deref(),
+                Some("The executor token does not belong to this run")
+            );
         }
     }
 
@@ -1149,6 +1305,93 @@ mod tests {
         assert!(validate(&value).is_err());
         assert!(validate_body(None, None).is_err());
         assert!(validate_body(Some(&"x".repeat(MAX_BODY_BYTES + 1)), None).is_err());
+    }
+
+    #[test]
+    fn attachments_decode_to_named_files() {
+        assert!(decode_attachments(vec![]).unwrap().is_empty());
+        let [decoded] = decode_attachments(vec![attachment("Order 42.pdf", b"%PDF")])
+            .unwrap()
+            .try_into()
+            .ok()
+            .unwrap();
+        assert_eq!(decoded.filename, "Order 42.pdf");
+        assert_eq!(decoded.content_type, "application/pdf");
+        assert_eq!(decoded.content, b"%PDF");
+    }
+
+    #[test]
+    fn attachments_are_bounded_and_never_executable() {
+        let too_many = vec![attachment("a.pdf", b"x"); MAX_MAIL_ATTACHMENTS + 1];
+        assert!(decode_attachments(too_many).is_err());
+        let half = vec![0; (MAX_MAIL_ATTACHMENT_BYTES / 2) as usize];
+        let full = vec![attachment("a.pdf", &half), attachment("b.pdf", &half)];
+        assert!(decode_attachments(full.clone()).is_ok());
+        let mut over = full;
+        over.push(attachment("c.pdf", b"x"));
+        assert!(decode_attachments(over).is_err());
+
+        for name in ["setup.exe", "Run.BAT", "macro.vbs", "app.js"] {
+            assert!(
+                decode_attachments(vec![attachment(name, b"x")]).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn attachment_names_types_and_content_are_validated() {
+        for name in [
+            "",
+            " ",
+            "..",
+            "dir/a.pdf",
+            "dir\\a.pdf",
+            "a\r\nBcc: victim@example.com",
+        ] {
+            assert!(
+                decode_attachments(vec![attachment(name, b"x")]).is_err(),
+                "{name:?}"
+            );
+        }
+        assert!(decode_attachments(vec![attachment("Übersicht (2).pdf", b"x")]).is_ok());
+        for content_type in ["pdf", "application/pdf\r\nX-Injected: 1", "/pdf", "a/b/c"] {
+            let mut typed = attachment("a.pdf", b"x");
+            typed.content_type = content_type.into();
+            assert!(decode_attachments(vec![typed]).is_err(), "{content_type:?}");
+        }
+        let mut encoded = attachment("a.pdf", b"x");
+        encoded.content = "not base64!".into();
+        assert!(decode_attachments(vec![encoded]).is_err());
+    }
+
+    #[test]
+    fn attachments_are_optional_and_closed() {
+        let base = serde_json::json!({"session":session(),"to":["a@example.com"],"subject":"Mail","text":"Body"});
+        let request = serde_json::from_value::<SendMailRequest>(base.clone()).unwrap();
+        assert!(request.attachments.is_empty());
+        let mut with = base;
+        with["attachments"] = serde_json::json!([
+            {"filename":"a.pdf","content_type":"application/pdf","content":"eA=="}
+        ]);
+        let request = serde_json::from_value::<SendMailRequest>(with.clone()).unwrap();
+        assert_eq!(request.attachments.len(), 1);
+        with["attachments"][0]["path"] = serde_json::json!("apps/other/storage/secret.pdf");
+        assert!(serde_json::from_value::<SendMailRequest>(with).is_err());
+
+        let reply = serde_json::json!({"session":session(),"message":{"session":session(),"delivery_id":"mail-1"},"text":"Reply","attachments":[{"filename":"a.pdf","content_type":"application/pdf","content":"eA=="}]});
+        let reply = serde_json::from_value::<ReplyMailRequest>(reply).unwrap();
+        assert_eq!(reply.attachments.len(), 1);
+    }
+
+    #[test]
+    fn a_full_message_fits_the_route_body_limit() {
+        let encoded_attachments = (MAX_MAIL_ATTACHMENT_BYTES as usize).div_ceil(3) * 4;
+        assert!(MAX_REQUEST_BYTES > MAX_BODY_BYTES + encoded_attachments);
+        assert!(
+            MAX_REQUEST_BYTES > 2 * 1024 * 1024,
+            "never below axum's default"
+        );
     }
 
     #[test]
@@ -1199,22 +1442,53 @@ mod tests {
     #[test]
     fn senders_are_named_after_their_event_never_the_platform() {
         assert_eq!(
-            display_name("Invoice Intake", "m-1@mail.example.com"),
+            display_name(None, "Invoice Intake", "m-1@mail.example.com"),
             "Invoice Intake"
         );
         assert_eq!(
-            display_name("  <Orders>\r\n\"Desk\" ", "m-1@mail.example.com"),
+            display_name(None, "  <Orders>\r\n\"Desk\" ", "m-1@mail.example.com"),
             "Orders Desk"
         );
         assert_eq!(
-            display_name("Bestellungen & Rückfragen", "m-1@mail.example.com"),
+            display_name(None, "Bestellungen & Rückfragen", "m-1@mail.example.com"),
             "Bestellungen & Rückfragen"
         );
-        assert_eq!(display_name("<>", "orders@mail.example.com"), "orders");
         assert_eq!(
-            display_name(&"x".repeat(100), "m-1@mail.example.com").len(),
+            display_name(None, "<>", "orders@mail.example.com"),
+            "orders"
+        );
+        assert_eq!(
+            display_name(None, &"x".repeat(100), "m-1@mail.example.com").len(),
             MAX_DISPLAY_NAME
         );
+    }
+
+    #[test]
+    fn flows_name_the_sender_and_fall_back_to_the_event() {
+        assert_eq!(
+            display_name(Some(" Momo "), "inboundEmailEvent", "momo@mail.example.com"),
+            "Momo"
+        );
+        assert_eq!(
+            display_name(
+                Some("\"CEO\" <ceo@bank.example>"),
+                "Orders",
+                "orders@mail.example.com"
+            ),
+            "CEO ceo bank.example"
+        );
+        for blank in ["", "  ", "<>"] {
+            assert_eq!(
+                display_name(Some(blank), "Orders", "orders@mail.example.com"),
+                "Orders"
+            );
+        }
+        let request: SendMailRequest = serde_json::from_value(serde_json::json!({
+            "session": session(), "to": ["a@example.com"], "subject": "Mail", "text": "Body",
+            "sender_name": "Momo"
+        }))
+        .unwrap();
+        assert_eq!(request.sender_name.as_deref(), Some("Momo"));
     }
 
     #[test]
@@ -1341,30 +1615,40 @@ mod tests {
     }
 
     #[test]
-    fn live_run_is_bound_to_this_event_and_app() {
+    fn any_live_primary_run_of_the_app_can_send() {
+        let check = |run: &ExecutionRunRecord, session: &MailSession| {
+            refusal(ensure_run_can_send(run, session))
+        };
         let mut run = run();
-        assert!(run_can_send(&run, &session()));
+        assert_eq!(check(&run, &session()), None);
         let mut other = session();
         other.event_id = "another-event".into();
-        assert!(!run_can_send(&run, &other));
+        assert_eq!(check(&run, &other), None);
         other = session();
         other.app_id = "another-app".into();
-        assert!(!run_can_send(&run, &other));
+        assert_eq!(
+            check(&run, &other).as_deref(),
+            Some("The run belongs to a different app than the mail session")
+        );
+        run.status = RunStatus::Pending;
+        assert_eq!(check(&run, &session()), None);
+        let ended = Some("The run has already ended");
         run.status = RunStatus::Completed;
-        assert!(!run_can_send(&run, &session()));
+        assert_eq!(check(&run, &session()).as_deref(), ended);
         run.status = RunStatus::Running;
+        let replay = Some("Shadow and regression runs cannot send mail");
         run.run_variant = RunVariant::Shadow;
-        assert!(!run_can_send(&run, &session()));
+        assert_eq!(check(&run, &session()).as_deref(), replay);
         run.run_variant = RunVariant::Regression;
-        assert!(!run_can_send(&run, &session()));
+        assert_eq!(check(&run, &session()).as_deref(), replay);
         run.run_variant = RunVariant::Primary;
         run.shadow_of_run_id = Some("original-run".into());
-        assert!(!run_can_send(&run, &session()));
+        assert_eq!(check(&run, &session()).as_deref(), replay);
         run.shadow_of_run_id = None;
         run.regression_run_id = Some("regression-run".into());
-        assert!(!run_can_send(&run, &session()));
+        assert_eq!(check(&run, &session()).as_deref(), replay);
         run.regression_run_id = None;
         run.expires_at = Some(0);
-        assert!(!run_can_send(&run, &session()));
+        assert_eq!(check(&run, &session()).as_deref(), ended);
     }
 }

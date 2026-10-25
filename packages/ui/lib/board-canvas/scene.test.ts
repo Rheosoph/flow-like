@@ -143,92 +143,93 @@ describe("production board canvas scene", () => {
 			{ error: "Runtime failed" },
 			{ comment: "Important context" },
 			{ icon: "/icons/catalog.svg" },
-			{ long_running: true },
 			{ only_offline: true },
 			{ start: true },
-			{ event_callback: true },
 			{ wasm: { package_id: "package" } },
 			{ fn_refs: { can_reference_fns: true } },
 		])
 			expect(nodeNeedsDom(node("rich", [], extra))).toBe(true);
-		expect(nodeNeedsDom(node("latch", [pin("out", 1, IPinType.Output)]))).toBe(
-			true,
+		// The canvas paints the latch, the (x) button, checkboxes, enum selects and containers.
+		expect(nodeNeedsDom(node("callback", [], { event_callback: true }))).toBe(
+			false,
 		);
-		expect(
-			nodeNeedsDom(
-				node("editor", [
-					pin("bool", 1, IPinType.Input, { data_type: IVariableType.Boolean }),
-				]),
-			),
-		).toBe(true);
-		expect(
-			nodeNeedsDom(
-				node("container", [
-					pin("list", 1, IPinType.Output, {
-						value_type: IValueType.Array,
-						connected_to: ["in"],
-					}),
-				]),
-			),
-		).toBe(true);
+		const slow = node("slow", [], { long_running: true });
+		expect(nodeNeedsDom(slow)).toBe(false);
+		expect(sceneFromFlow([slow], [], palette).nodes[0].longRunning).toBe(true);
+		expect(sceneFromFlow([baseline], [], palette).nodes[0].longRunning).toBe(
+			undefined,
+		);
+		expect(nodeNeedsDom(node("latch", [pin("out", 1, IPinType.Output)]))).toBe(
+			false,
+		);
+		for (const editor of [
+			pin("plain", 1, IPinType.Input),
+			pin("bool", 1, IPinType.Input, { data_type: IVariableType.Boolean }),
+			pin("choice", 1, IPinType.Input, {
+				options: { valid_values: ["first", "second"] },
+			}),
+			pin("list", 1, IPinType.Output, { value_type: IValueType.Array }),
+		])
+			expect(nodeNeedsDom(node("editor", [editor]))).toBe(false);
+		// Pickers, dynamic families and glyphs outside the canvas font keep the DOM editor.
+		for (const editor of [
+			pin("fn_ref", 1, IPinType.Input),
+			pin("_flow_user_sub", 1, IPinType.Input),
+			pin("grow", 1, IPinType.Input, { dynamic: true }),
+			pin("choice", 1, IPinType.Input, {
+				options: { valid_values: ["一"] },
+				default_value: Array.from(new TextEncoder().encode('"一"')),
+			}),
+		])
+			expect(nodeNeedsDom(node("editor", [editor]))).toBe(true);
 		for (const data of [
 			{ remoteSelections: [{ userId: "peer" }] },
 			{ remoteEditors: [{ userId: "peer" }] },
-			{ remoteExecuting: true },
 			{ isUnavailable: true },
 			{ functionCache: { ttl: 60 } },
 		])
 			expect(
 				nodeNeedsDom({ ...baseline, data: { ...baseline.data, ...data } }),
 			).toBe(true);
+		// A collaborator's run is painted by the canvas, like a local one.
+		expect(
+			nodeNeedsDom({
+				...baseline,
+				data: { ...baseline.data, remoteExecuting: true },
+			}),
+		).toBe(false);
 	});
 
-	test("runtime projection follows quality, run, log, and heatmap stores", () => {
-		const nodes = [
+	test("catalog icons render natively while other icon sources keep the DOM node", () => {
+		const wired = [pin("out", 1, IPinType.Output, { connected_to: ["in"] })];
+		const catalog = node("catalog", wired, { icon: "/flow/icons/box.svg" });
+		expect(nodeNeedsDom(catalog)).toBe(false);
+		expect(sceneFromFlow([catalog], [], palette).nodes[0].icon).toBe(
+			"/flow/icons/box.svg",
+		);
+		for (const icon of [
+			"https://cdn.example.com/box.svg",
+			"/flow/icons/box.png",
+			"data:image/svg+xml,<svg/>",
+		]) {
+			const foreign = node("foreign", wired, { icon });
+			expect(nodeNeedsDom(foreign)).toBe(true);
+			expect(sceneFromFlow([foreign], [], palette).nodes[0].icon).toBe(
+				undefined,
+			);
+		}
+	});
+
+	test("running a board keeps its nodes native; only selection and DOM-only chrome mount editors", () => {
+		const nodes = ["idle", "running", "selected"].map((id) => node(id, []));
+		nodes[2].selected = true;
+		expect([...collectDomNodeIds(nodes)]).toEqual(["selected"]);
+		expect([...collectDomNodeIds(nodes, { forceDomText: true })]).toEqual([
 			"idle",
 			"running",
-			"done",
-			"logged",
-			"summary",
-			"heat",
-			"lint",
-		].map((id) => {
-			const value = node(id, []);
-			value.data.boardId = "board";
-			return value;
-		});
-		const state = {
-			runs: new Map([
-				[
-					"run",
-					{ nodes: new Set(["running"]), already_executed: new Set(["done"]) },
-				],
-			]),
-			currentMetadata: { run_id: "run", nodes: [["logged", 3]] },
-			currentSummaryRunId: "run",
-			currentSummary: { nodes: { summary: [0, 0, 1, 0] } },
-			heatmapEnabled: true,
-			heatmap: { nodes: { heat: { visits: 2 } } },
-			qualityInline: true,
-			qualityMarks: { board: { lint: { severity: "error" } } },
-		};
-		expect([...collectDomNodeIds(nodes, state)]).toEqual([
-			"running",
-			"done",
-			"logged",
-			"summary",
-			"heat",
-			"lint",
+			"selected",
 		]);
-		expect([
-			...collectDomNodeIds(nodes, {
-				...state,
-				currentSummaryRunId: "stale",
-				heatmapEnabled: false,
-				qualityInline: false,
-			}),
-		]).toEqual(["running", "done", "logged"]);
-		const ids = collectDomNodeIds(nodes, state);
+		const ids = collectDomNodeIds(nodes);
 		expect(
 			sceneFromFlow(nodes, [], palette, { domNodeIds: ids })
 				.nodes.filter((node) => node.dom)
@@ -301,9 +302,9 @@ describe("production board canvas scene", () => {
 			palette,
 		);
 		expect(scene.nodes[1].pins.map((pin) => [pin.id, pin.y])).toEqual([
-			["first", 28],
-			["second", 43],
-			["third", 58],
+			["first", 29],
+			["second", 44],
+			["third", 59],
 		]);
 		// The fourth row reserves the production family's add-pin control, without inventing a graph pin.
 		expect(scene.nodes[1].height).toBe(98);
@@ -328,14 +329,14 @@ describe("production board canvas scene", () => {
 		const before = JSON.stringify(graphNode);
 		const compact = sceneFromFlow([graphNode], [], palette).nodes[0];
 		expect(compact.pins.map((pin) => [pin.id, pin.y])).toEqual([
-			["exec", 28],
-			["wired", 43],
-			["out", 28],
+			["exec", 29],
+			["wired", 44],
+			["out", 29],
 		]);
 		const expanded = sceneFromFlow([graphNode], [], palette, {
 			collapsed: new Map([["collapsed", false]]),
 		}).nodes[0];
-		expect(expanded.pins.find((pin) => pin.id === "wired")?.y).toBe(88);
+		expect(expanded.pins.find((pin) => pin.id === "wired")?.y).toBe(89);
 		expect(expanded.pins.some((pin) => pin.id === "loose")).toBe(true);
 		expect(JSON.stringify(graphNode)).toBe(before);
 	});
@@ -361,9 +362,9 @@ describe("production board canvas scene", () => {
 		expect(
 			scene.nodes[0].pins.map((pin) => [pin.id, pin.y, pin.label]),
 		).toEqual([
-			["exec", 28, ""],
-			["arg", 43, "arg"],
-			["result", 43, "result"],
+			["exec", 29, ""],
+			["arg", 44, "arg"],
+			["result", 44, "result"],
 		]);
 		expect(JSON.stringify(call)).toBe(before);
 	});
@@ -435,18 +436,20 @@ describe("production board canvas scene", () => {
 		const scene = sceneFromFlow([from, to], [refEdge], palette, {
 			referenceColor: [1, 2, 3, 255],
 		});
+		// The DOM puts the referenced square in the header's right end and the reference
+		// square on the bottom border, both one border width inside the card.
 		expect(scene.nodes[0].pins[0]).toMatchObject({
 			id: "ref_out_from",
 			direction: "output",
 			x: 75,
-			y: scene.nodes[0].height,
+			y: scene.nodes[0].height - 1,
 			kind: "reference",
 		});
 		expect(scene.nodes[1].pins[0]).toMatchObject({
 			id: "ref_in_to",
 			direction: "input",
-			x: 75,
-			y: 0,
+			x: 141,
+			y: 9,
 		});
 		expect(scene.edges[0]).toMatchObject({
 			kind: "reference",
@@ -507,8 +510,8 @@ describe("production board canvas scene", () => {
 		});
 		expect(scene.nodes[0].pins.map((pin) => [pin.x, pin.y, pin.label])).toEqual(
 			[
-				[0, 6, ""],
-				[16, 6, ""],
+				[1, 6, ""],
+				[15, 6, ""],
 			],
 		);
 		expect(scene.nodes[1].pins.map((pin) => pin.id)).toEqual(["visible"]);
@@ -550,10 +553,114 @@ describe("production board canvas scene", () => {
 		});
 		expect(scene.nodes[0]).toMatchObject({ selected: true, dimmed: true });
 		expect(scene.nodes[0].pins[0].color).toEqual([123, 45, 67, 255]);
+		// The two caps share the 134px row. Text loses the label's 4px margin on both sides,
+		// and the unconnected input also gives up its 4px gap and 8px (x) button.
+		expect(scene.nodes[0].pins[0].editor).toEqual({
+			kind: "variable",
+			set: false,
+		});
 		expect(
 			(scene.nodes[0].pins[0].labelMaxWidth ?? Number.NaN) +
 				(scene.nodes[0].pins[1].labelMaxWidth ?? Number.NaN),
-		).toBe(134);
+		).toBe(134 - 4 - 12 - 4);
+	});
+
+	test("inline editors, containers and the latch carry what the DOM row shows", () => {
+		const encode = (value: unknown) =>
+			Array.from(new TextEncoder().encode(JSON.stringify(value)));
+		const rows = node(
+			"rows",
+			[
+				pin("set", 1, IPinType.Input, { default_value: encode("text") }),
+				pin("checked", 2, IPinType.Input, {
+					data_type: IVariableType.Boolean,
+					default_value: encode(true),
+				}),
+				pin("unchecked", 3, IPinType.Input, {
+					data_type: IVariableType.Boolean,
+				}),
+				pin("choice", 4, IPinType.Input, {
+					options: { valid_values: ["first", "second"] },
+					default_value: encode("second"),
+				}),
+				pin("empty", 5, IPinType.Input, {
+					options: { valid_values: ["first"] },
+				}),
+				pin("wired", 6, IPinType.Input, { depends_on: ["source"] }),
+				pin("list", 1, IPinType.Output, { value_type: IValueType.Array }),
+				pin("map", 2, IPinType.Output, { value_type: IValueType.HashMap }),
+				pin("set-out", 3, IPinType.Output, {
+					value_type: IValueType.HashSet,
+					connected_to: ["target"],
+				}),
+			],
+			{ pins_collapsed: true },
+		);
+		const scene = sceneFromFlow([rows], [], palette).nodes[0];
+		const byId = Object.fromEntries(scene.pins.map((pin) => [pin.id, pin]));
+		expect(byId.wired).toMatchObject({ label: "wired", y: 29 });
+		expect(byId.wired.editor).toBeUndefined();
+		expect(byId["set-out"]).toMatchObject({ container: "set", y: 29 });
+		expect(scene.latch).toEqual({ collapsed: true, hidden: 7 });
+		const expanded = sceneFromFlow([rows], [], palette, {
+			collapsed: new Map([["rows", false]]),
+		}).nodes[0];
+		const open = Object.fromEntries(expanded.pins.map((pin) => [pin.id, pin]));
+		expect(expanded.latch).toEqual({ collapsed: false, hidden: 0 });
+		expect(open.set.editor).toEqual({ kind: "variable", set: true });
+		expect(open.checked.editor).toEqual({ kind: "boolean", checked: true });
+		expect(open.unchecked.editor).toEqual({ kind: "boolean", checked: false });
+		expect(open.choice).toMatchObject({
+			label: "second",
+			editor: { kind: "select", placeholder: false },
+		});
+		expect(open.empty).toMatchObject({
+			label: "Select empty",
+			editor: { kind: "select", placeholder: true },
+		});
+		expect(open.list.container).toBe("array");
+		expect(open.map.container).toBe("map");
+		expect(open.list.editor).toBeUndefined();
+	});
+
+	test("header gradients follow the production class precedence", () => {
+		const exec = pin("exec", 1, IPinType.Input, {
+			data_type: IVariableType.Execution,
+		});
+		const header = (
+			extra: Record<string, unknown>,
+			pins = [exec],
+			data: Record<string, unknown> = {},
+		) => {
+			const value = node("header", pins, extra);
+			Object.assign(value.data, data);
+			return sceneFromFlow([value], [], palette, {
+				headerColors: { function: [1, 1, 1, 255], testEvent: [2, 2, 2, 255] },
+			}).nodes[0].header;
+		};
+		expect(header({})).toEqual({ color: palette.card, reversed: false });
+		expect(header({}, [pin("data", 1, IPinType.Input)])).toEqual({
+			color: palette.tertiary,
+			reversed: false,
+		});
+		expect(header({ event_callback: true })).toEqual({
+			color: palette.primary,
+			reversed: true,
+		});
+		// Start nodes hide their inputs; their execution output keeps them non-pure.
+		const started = [
+			pin("next", 1, IPinType.Output, { data_type: IVariableType.Execution }),
+		];
+		expect(header({ start: true, friendly_name: "Run" }, started)).toEqual({
+			color: palette.primary,
+			reversed: false,
+		});
+		expect(
+			header({ start: true, friendly_name: "Test empty cart" }, started),
+		).toEqual({ color: [2, 2, 2, 255], reversed: false });
+		expect(
+			header({ event_callback: true }, [exec], { functionLayerId: "layer" }),
+		).toEqual({ color: [1, 1, 1, 255], reversed: false });
 	});
 
 	test("pin typography and geometry follow rem sizing while headers keep production fitting", () => {
@@ -568,7 +675,8 @@ describe("production board canvas scene", () => {
 		expect(large.pins[0].y - normal.pins[0].y).toBe(7);
 		expect(large.height - normal.height).toBe(7);
 		expect(large.headerHeight).toBe(20);
-		expect(normal.labelFontSize).toBe(6);
+		// A <small> in xyflow's 12px node text, shrunk to its 0.6 floor for long titles.
+		expect(normal.labelFontSize).toBeCloseTo(5.76);
 		expect(large.labelFontSize).toBe(normal.labelFontSize);
 	});
 

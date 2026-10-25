@@ -1,3 +1,4 @@
+import { plainTextFromRichContent } from "../plate-text";
 import {
 	type IBoard,
 	type IComment,
@@ -654,10 +655,29 @@ function typeLabel(variable: IVariable): string {
 		: variable.data_type;
 }
 
+function commentText(comment: IComment): string {
+	return plainTextFromRichContent(comment.content ?? "");
+}
+
 function commentExcerpt(comment: IComment): string {
-	const text = (comment.content ?? "").replace(/\s+/g, " ").trim();
+	const text = commentText(comment).replace(/\s+/g, " ").trim();
 	if (!text) return comment.comment_type;
 	return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+}
+
+/** Changes are detected on the stored content so formatting-only edits still count. */
+function commentContentDetail(
+	a: IComment,
+	b: IComment,
+): IBoardChangeDetail | undefined {
+	if ((a.content ?? "") === (b.content ?? "")) return undefined;
+	return {
+		kind: "value",
+		field: "content",
+		label: "Text",
+		before: commentText(a),
+		after: commentText(b),
+	};
 }
 
 function commentChanges(base: BoardIndex, head: BoardIndex, ctx: DiffContext) {
@@ -693,7 +713,7 @@ function commentChanges(base: BoardIndex, head: BoardIndex, ctx: DiffContext) {
 					kind: "value",
 					field: "content",
 					label: "Text",
-					[side]: entry.comment.content,
+					[side]: commentText(entry.comment),
 				},
 			];
 			ctx.itemStatus.set(id, change.status);
@@ -701,7 +721,7 @@ function commentChanges(base: BoardIndex, head: BoardIndex, ctx: DiffContext) {
 			continue;
 		}
 		const details = compact<IBoardChangeDetail>([
-			propertyDetail("content", "Text", a.content, b.content, "value"),
+			commentContentDetail(a, b),
 			propertyDetail("color", "Color", a.color, b.color),
 		]);
 		recordEdit(

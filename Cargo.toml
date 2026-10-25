@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 # Keep vendored upstream test suites out of workspace test runs.
-exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader", "packages/vendor/telegenic", "packages/vendor/ads", "packages/vendor/dust-dds"]
+exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader", "packages/vendor/telegenic", "packages/vendor/ads", "packages/vendor/dust-dds", "packages/vendor/datafusion-federation"]
 # Bare Cargo commands target the shared editing loop. Product crates remain one
 # short alias away, while CI always passes --workspace explicitly.
 default-members = [
@@ -277,6 +277,7 @@ webp = "0.3.1"
 ahash = "0.8.12"
 rkyv = { version = "0.8.18", features = ["bytecheck"] }
 zstd = "0.13.3"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs", "time"] }
 base64 = "0.22.1"
 aes-gcm = "0.10.3"
 argon2 = "0.5.3"
@@ -313,7 +314,7 @@ thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
 lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
-markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "1bd98da0de6f90143b25452d74b275da21f2d175", default-features = false, features = ["rustls-tls", "static-liblzma"] }
+markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "450c9714e3be639feaf8c5a1a6206f01f7f05eda", default-features = false, features = ["rustls-tls", "static-liblzma"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 percent-encoding = "2.3.2"
@@ -361,6 +362,9 @@ matchgen = { path = "packages/vendor/matchgen" }
 num_threads = { path = "packages/vendor/num_threads" }
 # swift-rs requires SwiftPM's native build engine for iOS targets and artifact paths.
 swift-rs = { path = "packages/vendor/swift-rs" }
+# 0.5.3 reports static filters as pushed into federated scans whose SQL never applies them,
+# silently dropping WHERE clauses; the upstream fix needs DataFusion 54.
+datafusion-federation = { path = "packages/vendor/datafusion-federation" }
 # Pin the complete Lance workspace to the create-only commit fix. Its crates
 # must share a source because their public types cross crate boundaries.
 lance = { git = "https://github.com/Rheosoph/lance.git", rev = "82a122e817e1cd61af9d3bc20aee9600fae066f9" }

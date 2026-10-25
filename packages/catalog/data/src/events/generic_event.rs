@@ -530,7 +530,7 @@ mod tests {
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0; 2048];
-            socket.read(&mut request).await.unwrap();
+            let _ = socket.read(&mut request).await;
             let headers = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -566,7 +566,9 @@ mod tests {
             refs.insert("123".to_string(), pin.schema.take().unwrap());
             pin.schema = Some("123".to_string());
         }
-        let (state, run) = build_run_with_node(Some(json!({"Dateien": value})), node, refs).await;
+        let (state, mut run) =
+            build_run_with_node(Some(json!({"Dateien": value})), node, refs).await;
+        run.set_execution_sub("viewer".to_string()).await;
         run.cache.write().await.insert(
             flow_like_types::dispatch::REQUEST_FILES_STORE_REF.to_string(),
             Arc::new(FlowLikeStore::Memory(Arc::new(

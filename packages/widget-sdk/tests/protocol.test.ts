@@ -46,6 +46,9 @@ describe("isFlwEnvelope", () => {
 			"query:result",
 			"resize",
 			"value:changed",
+			"file:upload",
+			"file:result",
+			"file:cancel",
 		];
 		for (const type of types) {
 			expect(isFlwEnvelope({ ...valid, type })).toBe(true);

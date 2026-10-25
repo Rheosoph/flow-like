@@ -97,6 +97,12 @@ impl CommonConfig {
                 .into_iter()
                 .zip(["flow-like-meta", "flow-like-content", "flow-like-logs"])
                 .map(|(name, default)| env::var(name).unwrap_or_else(|_| default.into()))
+                .chain(
+                    env::var("LOCKED_BUCKET")
+                        .ok()
+                        .map(|bucket| bucket.trim().to_owned())
+                        .filter(|bucket| !bucket.is_empty()),
+                )
                 .collect(),
             object_store_tls_gateway: env::var("EXECUTION_OBJECT_STORE_TLS_GATEWAY").as_deref()
                 == Ok("true"),
@@ -185,10 +191,10 @@ impl CommonConfig {
             .iter()
             .collect::<std::collections::HashSet<_>>()
             .len()
-            != 3
+            != result.buckets.len()
         {
             return Err(Error::invalid(
-                "Metadata, content and logs require distinct buckets",
+                "Metadata, content, logs and LOCKED_BUCKET require distinct buckets",
             ));
         }
         for host in &result.allowed_https_hosts {

@@ -1,10 +1,100 @@
 import { type Edge, type Node, Position } from "@xyflow/react";
+import { DOM_RENDERER_NODE_BUDGET } from "../../lib/board-canvas/dom-visibility";
 import {
+	type Palette,
 	type Scene,
 	type SceneNode,
 	type ScenePin,
 	isNativeCanvasNode,
+	sceneFromFlow,
 } from "../../lib/board-canvas/scene";
+
+const GEOMETRY_ONLY: Palette = {
+	background: [0, 0, 0, 0],
+	card: [0, 0, 0, 0],
+	foreground: [0, 0, 0, 0],
+	muted: [0, 0, 0, 0],
+	border: [0, 0, 0, 0],
+	primary: [0, 0, 0, 0],
+	tertiary: [0, 0, 0, 0],
+};
+// DOM editors measured up to a third taller than their native rows; overestimating only mounts a node early.
+const DOM_HEIGHT_HEADROOM = 1.4;
+
+function hasMeasuredSize(node: Node) {
+	return (
+		node.measured?.width !== undefined && node.measured.height !== undefined
+	);
+}
+
+function sceneHandles(pins: readonly ScenePin[]) {
+	return pins.map((pin) => ({
+		id: pin.id,
+		type: pin.direction === "input" ? ("target" as const) : ("source" as const),
+		position: pinPosition(pin),
+		x: pin.x - 6,
+		y: pin.y - 6,
+		width: 12,
+		height: 12,
+	}));
+}
+
+/**
+ * React Flow mounts every node without handle bounds to measure it, wherever it is,
+ * so opening a large board mounted all of it once and OOM-killed small machines.
+ * Never-measured nodes get the native geometry instead, so only nodes in view mount.
+ * The estimate is half a pixel off any DOM size, so a node's first measurement always
+ * replaces it; the measured size then reaches the board through its dimension change.
+ */
+export function createDomFlowGeometryCache() {
+	const seeded = new WeakMap<Node, Node>();
+	const seed = (
+		node: Node,
+		width: number,
+		height: number,
+		handles: Node["handles"],
+	) => {
+		seeded.set(node, {
+			...node,
+			measured: { width: width + 0.5, height: height + 0.5 },
+			handles,
+		});
+	};
+	const seedNative = (pending: Node[]) => {
+		const byId = new Map(pending.map((node) => [node.id, node]));
+		for (const estimate of sceneFromFlow(pending, [], GEOMETRY_ONLY).nodes) {
+			const node = byId.get(estimate.id);
+			if (node)
+				seed(
+					node,
+					estimate.width,
+					estimate.height * DOM_HEIGHT_HEADROOM,
+					sceneHandles(estimate.pins),
+				);
+		}
+	};
+	const seedFixedSize = (node: Node) => {
+		if (
+			!seeded.has(node) &&
+			typeof node.width === "number" &&
+			typeof node.height === "number"
+		)
+			seed(node, node.width, node.height, []);
+	};
+	const needsSeed = (node: Node) =>
+		!node.hidden && !hasMeasuredSize(node) && !seeded.has(node);
+	const estimated = (node: Node) =>
+		hasMeasuredSize(node) ? node : (seeded.get(node) ?? node);
+	return (nodes: Node[]): Node[] => {
+		if (nodes.length <= DOM_RENDERER_NODE_BUDGET) return nodes;
+		const pending = nodes.filter(needsSeed);
+		if (pending.length) {
+			seedNative(pending);
+			for (const node of pending) seedFixedSize(node);
+		}
+		return nodes.map(estimated);
+	};
+}
 
 /** Native rows are deterministic; selected DOM editor measurements are temporary. */
 export function prepareNativeSceneNodes(
@@ -57,15 +147,7 @@ function projectNode(node: Node, projected: SceneNode, hovered: boolean): Node {
 		width: projected.width,
 		height: projected.height,
 		measured: { width: projected.width, height: projected.height },
-		handles: projected.pins.map((pin) => ({
-			id: pin.id,
-			type: pin.direction === "input" ? "target" : "source",
-			position: pinPosition(pin),
-			x: pin.x - 6,
-			y: pin.y - 6,
-			width: 12,
-			height: 12,
-		})),
+		handles: sceneHandles(projected.pins),
 		style: {
 			...node.style,
 			pointerEvents: "all",

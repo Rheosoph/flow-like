@@ -1,4 +1,3 @@
-import { createWidgetMediaClient, type WidgetMediaState } from "./media";
 import { type MapStore, type ReadableAtom, atom, map } from "nanostores";
 import {
 	CONTRACT_VERSION,
@@ -13,12 +12,13 @@ import type {
 	WidgetInputsShape,
 	WidgetQueriesShape,
 } from "./define";
+import { type WidgetMediaState, createWidgetMediaClient } from "./media";
 import {
 	type FlwEnvelope,
 	type FlwMessageType,
 	type FlwPayloadMap,
-	type InitPayload,
 	type InitCapabilities,
+	type InitPayload,
 	type PropsUpdatePayload,
 	type QueryPayload,
 	type ThemeState,
@@ -32,12 +32,17 @@ import {
 	watchColorScheme,
 } from "./standalone";
 import { applyTheme } from "./theme";
+import {
+	type WidgetFile,
+	type WidgetUploadOptions,
+	createWidgetUploadClient,
+} from "./upload";
 import { validateInputValue, validateSchema } from "./validate";
 
 import {
-	createWidgetMicrophoneClient,
 	type WidgetAudioOptions,
 	type WidgetAudioResult,
+	createWidgetMicrophoneClient,
 } from "./microphone";
 import { dispatchWidgetQuery } from "./query";
 
@@ -69,6 +74,8 @@ export interface WidgetBridge<
 	playMedia(id: string): Promise<void>;
 	pauseMedia(): void;
 	stopMedia(): void;
+	/** Hands a file to the host for upload; needs the `uploads` capability. */
+	uploadFile(file: Blob, options?: WidgetUploadOptions): Promise<WidgetFile>;
 	emit<Name extends keyof E & string>(
 		name: Name,
 		...args: EmitPayloadArgs<E, Name>
@@ -190,6 +197,7 @@ export function mountFlowWidget<
 
 	const microphone = createWidgetMicrophoneClient(post, $capabilities.get);
 	const media = createWidgetMediaClient(post, $capabilities.get);
+	const uploads = createWidgetUploadClient(post, $capabilities.get);
 
 	const setAndApplyTheme = (theme: ThemeState) => {
 		$theme.set(theme);
@@ -225,6 +233,7 @@ export function mountFlowWidget<
 		cleanupStandalone();
 		microphone.reset();
 		media.reset();
+		uploads.reset();
 		$capabilities.set(payload.capabilities ?? {});
 		nonce = envelope.nonce;
 		instanceId = payload.instanceId || envelope.instanceId;
@@ -272,6 +281,7 @@ export function mountFlowWidget<
 		if (instanceId && envelope.instanceId !== instanceId) return;
 		microphone.handle(envelope);
 		media.handle(envelope);
+		uploads.handle(envelope);
 		switch (envelope.type) {
 			case "capabilities:update":
 				$capabilities.set(envelope.payload as InitCapabilities);
@@ -351,6 +361,7 @@ export function mountFlowWidget<
 		disposed = true;
 		microphone.dispose();
 		media.dispose();
+		uploads.dispose();
 		window.removeEventListener("message", onMessage);
 		if (standaloneTimer !== null) {
 			clearTimeout(standaloneTimer);
@@ -377,6 +388,7 @@ export function mountFlowWidget<
 		playMedia: media.playMedia,
 		pauseMedia: media.pauseMedia,
 		stopMedia: media.stopMedia,
+		uploadFile: uploads.uploadFile,
 		emit,
 		onQuery,
 		setValues,

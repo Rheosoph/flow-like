@@ -318,6 +318,8 @@ fn build() -> FkGraph {
             LessonAppRef,
             LlmModel,
             LlmUsageTracking,
+            LockedItem,
+            LockedItemVersion,
             Membership,
             Meta,
             MutationLock,

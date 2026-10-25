@@ -384,16 +384,20 @@ mod tests {
     use flow_like::{
         flow::{
             board::ExecutionStage,
-            execution::{LogLevel, Run, internal_node::InternalNode, internal_pin::InternalPin},
+            execution::{
+                LogLevel, Run, context::ExecutionContextCache, internal_node::InternalNode,
+                internal_pin::InternalPin,
+            },
             node::{Node, NodeLogic},
             variable::Variable,
         },
         profile::Profile,
-        state::{FlowLikeConfig, FlowLikeState},
+        state::{FlowLikeConfig, FlowLikeState, FlowLikeStores},
         utils::http::HTTPClient,
     };
     use flow_like_storage::files::store::local_store::LocalObjectStore;
     use flow_like_types::{
+        dispatch::REQUEST_FILES_STORE_REF,
         sync::{Mutex, RwLock},
         tokio::io::{AsyncReadExt, AsyncWriteExt},
     };
@@ -638,6 +642,138 @@ mod tests {
                 .await
                 .expect("read local upload through FlowPath"),
             expected
+        );
+    }
+
+    async fn request_files_context(root: &TestDirectory) -> ExecutionContext {
+        let mut context = test_context().await;
+        context.execution_cache = Some(ExecutionContextCache {
+            stores: FlowLikeStores::default(),
+            app_id: "app".into(),
+            model_usage_app_id: None,
+            board_dir: Path::from("apps/app"),
+            board_id: "board".into(),
+            node_id: Arc::from("node"),
+            sub: "uploader".into(),
+            shadow: false,
+        });
+        register_local_store(&context, root, REQUEST_FILES_STORE_REF).await;
+        context
+    }
+
+    fn request_file(path: &str, url: Option<String>) -> UploadedFile {
+        UploadedFile {
+            name: Some("file.md".to_string()),
+            url,
+            flow_path: Some(FlowPath::new(
+                path.to_string(),
+                REQUEST_FILES_STORE_REF.to_string(),
+                None,
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn request_files_resolve_inside_the_uploaders_scratch_roots() {
+        let root = TestDirectory::new();
+        let mut context = request_files_context(&root).await;
+        for path in [
+            "tmp/user/uploader/apps/app/2026/10/20/file.md",
+            "tmp/global/apps/app/events/event/requests/r1/0001-file.md",
+        ] {
+            let file = request_file(path, None);
+            file.flow_path
+                .as_ref()
+                .unwrap()
+                .put(&mut context, b"own upload".to_vec(), true)
+                .await
+                .expect("write own scratch upload");
+            let result = materialize_uploaded_files(&mut context, "file-input", &mut [file])
+                .await
+                .expect("own scratch upload resolves");
+            assert_eq!(result[0].path, path);
+        }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn forged_request_file_paths_cannot_read_app_storage() {
+        let root = TestDirectory::new();
+        let mut context = request_files_context(&root).await;
+        let secret = root.0.join("apps/app/storage/secret.md");
+        std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        std::fs::write(&secret, b"app secret").unwrap();
+
+        for path in [
+            "apps/app/storage/secret.md",
+            "tmp/user/someone-else/apps/app/file.md",
+            "tmp/user/uploader/apps/other-app/file.md",
+            "tmp/user/uploader/apps/app-suffix/file.md",
+        ] {
+            let error = materialize_uploaded_files(
+                &mut context,
+                "file-input",
+                &mut [request_file(path, None)],
+            )
+            .await
+            .expect_err("forged request file path must be refused");
+            assert!(
+                error
+                    .to_string()
+                    .contains("outside this run's request files"),
+                "{path}: {error}"
+            );
+        }
+
+        let climbing = request_file(
+            "tmp/user/uploader/apps/app/../../../../apps/app/storage/secret.md",
+            None,
+        );
+        let contained = materialize_uploaded_files(&mut context, "file-input", &mut [climbing])
+            .await
+            .expect("dot segments are literal names inside the scratch root");
+        assert!(contained[0].path.starts_with("tmp/user/uploader/apps/app/"));
+        contained[0]
+            .get(&mut context, true)
+            .await
+            .expect_err("a literal dot-segment path must not reach the app secret");
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn forged_request_file_paths_cannot_plant_objects_from_a_url() {
+        let root = TestDirectory::new();
+        let mut context = request_files_context(&root).await;
+        let url = serve_once(b"planted".to_vec()).await;
+
+        materialize_uploaded_files(
+            &mut context,
+            "file-input",
+            &mut [request_file("apps/app/storage/planted.md", Some(url))],
+        )
+        .await
+        .expect_err("forged request file path must not be written");
+        assert!(!root.0.join("apps/app/storage/planted.md").exists());
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn the_request_files_store_cannot_be_named_as_a_cache_layer() {
+        let root = TestDirectory::new();
+        let mut context = request_files_context(&root).await;
+        register_local_store(&context, &root, "workflow-store").await;
+        let flow_path = FlowPath::new(
+            "apps/app/storage/copied.md".to_string(),
+            "workflow-store".to_string(),
+            Some(REQUEST_FILES_STORE_REF.to_string()),
+        );
+
+        let error = flow_path
+            .to_cache_layer(&mut context)
+            .await
+            .expect_err("request files store must not serve as a cache layer outside scratch");
+        assert!(
+            error
+                .to_string()
+                .contains("outside this run's request files")
         );
     }
 }

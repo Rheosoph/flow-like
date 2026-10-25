@@ -274,6 +274,22 @@ pub enum BoardCommand {
         #[serde(default)]
         summary: Option<String>,
     },
+    /// Set an entry node's description. An empty string clears the description.
+    SetNodeDescription {
+        node_id: String,
+        description: String,
+        #[serde(default)]
+        summary: Option<String>,
+    },
+    /// Store the FlowScript names the text gave a node's values (`Node.code_names`), merged into
+    /// the names it already has. Keys are output pin names; `""` is the node's own binding.
+    /// Presentation only: execution never reads them.
+    SetNodeCodeNames {
+        node_id: String,
+        code_names: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        summary: Option<String>,
+    },
     /// Set a node's function references (e.g. an agent's registered tool functions). `fn_refs`
     /// carries the referenced targets as ref tokens (`$N` ref-ids, board node/layer anchors, or
     /// names) which the applier resolves to concrete node ids.
@@ -427,6 +443,15 @@ pub enum BoardCommand {
     },
     /// Rename an existing layer without touching its contents or position. FlowScript emits this
     /// when an anchored module or Function declaration is written with a new name.
+    /// Rewrite a Function layer's data boundary to `pins`: parameters as `Input`, then returns as
+    /// `Output`, each in written order. Execution pins stay. A data pin whose name and direction
+    /// survive keeps its id and wiring; every call node mirrors the new pins when it updates.
+    UpdateFunctionSignature {
+        layer_id: String,
+        pins: Vec<PlaceholderPinDef>,
+        #[serde(default)]
+        summary: Option<String>,
+    },
     RenameLayer {
         layer_id: String,
         name: String,

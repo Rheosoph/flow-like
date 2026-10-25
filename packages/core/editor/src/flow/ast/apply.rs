@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::{
     flow::{
-        ast::{FlowScriptFile, ReconcileOptions},
+        ast::{FlowScriptChanges, FlowScriptDiagnostic, FlowScriptFile, ReconcileOptions},
         board::{
             Board, Comment, CommentType, Layer, LayerType,
             commands::{
@@ -36,7 +36,7 @@ use crate::{
             BoardCommand, NodeMetadata, NodePosition, PlaceholderPinDef, node_to_metadata,
             pin_to_metadata,
         },
-        node::{FnRefs, Node, NodeLogic},
+        node::{FnRefs, Node, NodeLogic, dynamic_pin_source_literal},
         pin::{Pin, PinOptions, PinType, ValueType, resolve_schema},
         variable::{Variable, VariableType, default_value_for_type},
     },
@@ -62,34 +62,178 @@ pub struct ApplyFlowScriptResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<String>,
     pub diagnostics: Vec<String>,
+    /// Positioned validation errors for the submitted FlowScript source.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub structured_diagnostics: Vec<FlowScriptDiagnostic>,
+    /// What the apply changed on the board: nodes, connections (including edges a new connection
+    /// replaced), literal values, stored names, variables and layers. Empty when nothing applied.
+    #[serde(skip_serializing_if = "FlowScriptChanges::is_empty")]
+    pub changes: FlowScriptChanges,
 }
 
 pub fn destructive_flowscript_command_summaries(commands: &[BoardCommand]) -> Vec<String> {
-    commands
+    commands.iter().filter_map(destructive_summary).collect()
+}
+
+/// [`destructive_flowscript_command_summaries`] for a batch about to run on `board`. Regrouping is
+/// presentation, so a move that keeps every item in its executable scope (into, out of or between
+/// Collapsed groups) and the ungrouping of a group the batch empties are not held back.
+pub fn destructive_flowscript_command_summaries_on(
+    board: &Board,
+    commands: &[BoardCommand],
+) -> Vec<String> {
+    let created_groups: HashSet<&str> = commands
         .iter()
         .filter_map(|command| match command {
-            BoardCommand::RemoveNode { node_id, .. } => Some(format!("node `{node_id}`")),
-            BoardCommand::RemoveVariable { variable_id, .. } => {
-                Some(format!("variable `{variable_id}`"))
-            }
-            BoardCommand::RemoveLayer { layer_id, .. } => Some(format!("layer `{layer_id}`")),
-            BoardCommand::RemoveComment { comment_id, .. } => {
-                Some(format!("comment `{comment_id}`"))
-            }
-            // A move out of every module to the board root is what a document whose `module { }`
-            // wrapper was dropped reconciles to; it dissolves a namespace exactly as silently as
-            // a missing `//@n` anchor deletes a node, so it is held behind the same gate.
-            BoardCommand::MoveToLayer {
-                ids,
-                target_layer: None,
+            BoardCommand::CreateLayer {
+                ref_id: Some(ref_id),
+                layer_type,
                 ..
-            } if !ids.is_empty() => Some(format!(
-                "move of {} board item(s) out of their module to the board root",
-                ids.len()
-            )),
+            } if is_group_layer(&layer_type_from_str(layer_type)) => Some(ref_id.as_str()),
             _ => None,
         })
+        .collect();
+    let regrouped: HashSet<&str> = commands
+        .iter()
+        .filter_map(|command| match command {
+            BoardCommand::MoveToLayer {
+                ids, target_layer, ..
+            } if moves_only_regroup(board, &created_groups, ids, target_layer.as_deref()) => {
+                Some(ids.iter().map(String::as_str))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let removed: HashSet<&str> = commands
+        .iter()
+        .filter_map(|command| match command {
+            BoardCommand::RemoveNode { node_id, .. } => Some(node_id.as_str()),
+            BoardCommand::RemoveLayer { layer_id, .. } => Some(layer_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    commands
+        .iter()
+        .filter(|command| match command {
+            BoardCommand::MoveToLayer {
+                ids, target_layer, ..
+            } => !moves_only_regroup(board, &created_groups, ids, target_layer.as_deref()),
+            BoardCommand::RemoveLayer { layer_id, .. } => {
+                !batch_empties_group(board, layer_id, &regrouped, &removed)
+            }
+            _ => true,
+        })
+        .filter_map(destructive_summary)
         .collect()
+}
+
+fn destructive_summary(command: &BoardCommand) -> Option<String> {
+    match command {
+        BoardCommand::RemoveNode { node_id, .. } => Some(format!("node `{node_id}`")),
+        BoardCommand::RemoveVariable { variable_id, .. } => {
+            Some(format!("variable `{variable_id}`"))
+        }
+        BoardCommand::RemoveLayer { layer_id, .. } => Some(format!("layer `{layer_id}`")),
+        BoardCommand::RemoveComment { comment_id, .. } => Some(format!("comment `{comment_id}`")),
+        // A move out of every module to the board root is what a document whose `module { }`
+        // wrapper was dropped reconciles to; it dissolves a namespace exactly as silently as a
+        // missing `//@n` anchor deletes a node, so it is held behind the same gate.
+        BoardCommand::MoveToLayer {
+            ids,
+            target_layer: None,
+            ..
+        } if !ids.is_empty() => Some(format!(
+            "move of {} board item(s) out of their module or group to the board root",
+            ids.len()
+        )),
+        _ => None,
+    }
+}
+
+/// Collapsed and Macro layers are groups: presentation over the graph, transparent to execution.
+fn is_group_layer(kind: &LayerType) -> bool {
+    matches!(kind, LayerType::Collapsed | LayerType::Macro)
+}
+
+/// The executable scope `layer` belongs to: the first Function or module layer at or above it,
+/// `None` for the board root. A damaged chain resolves to the layer where it breaks.
+fn executable_scope(layer: Option<&str>, layers: &[&HashMap<String, Layer>]) -> Option<String> {
+    let mut current = layer.filter(|id| !id.is_empty()).map(str::to_string);
+    let mut seen = HashSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            return Some(id);
+        }
+        match layers.iter().find_map(|map| map.get(&id)) {
+            Some(entry) if is_group_layer(&entry.r#type) => {
+                current = entry.parent_id.clone().filter(|parent| !parent.is_empty());
+            }
+            _ => return Some(id),
+        }
+    }
+    None
+}
+
+/// Whether moving `ids` to `target` on `board` only regroups them: into a group the batch
+/// creates, or without changing any item's executable scope.
+fn moves_only_regroup(
+    board: &Board,
+    created_groups: &HashSet<&str>,
+    ids: &[String],
+    target: Option<&str>,
+) -> bool {
+    if target.is_some_and(|id| created_groups.contains(id)) {
+        return true;
+    }
+    let layers = [&board.layers];
+    let target_scope = executable_scope(target, &layers);
+    !ids.is_empty()
+        && ids.iter().all(|id| {
+            let scope = if let Some(node) = board.nodes.get(id) {
+                executable_scope(node.layer.as_deref(), &layers)
+            } else if let Some(comment) = board.comments.get(id) {
+                executable_scope(comment.layer.as_deref(), &layers)
+            } else if let Some(layer) = board.layers.get(id).filter(|l| is_group_layer(&l.r#type)) {
+                executable_scope(layer.parent_id.as_deref(), &layers)
+            } else {
+                return false;
+            };
+            scope == target_scope
+        })
+}
+
+/// Whether removing `layer_id` only ungroups a group this batch empties: every node in it is
+/// regrouped elsewhere or removed, and no comment or other layer stays inside it.
+fn batch_empties_group(
+    board: &Board,
+    layer_id: &str,
+    regrouped: &HashSet<&str>,
+    removed: &HashSet<&str>,
+) -> bool {
+    if !board
+        .layers
+        .get(layer_id)
+        .is_some_and(|layer| is_group_layer(&layer.r#type))
+    {
+        return false;
+    }
+    let leaves = |id: &str| regrouped.contains(id) || removed.contains(id);
+    let mut members = board
+        .nodes
+        .values()
+        .filter(|node| node.layer.as_deref() == Some(layer_id))
+        .peekable();
+    members.peek().is_some()
+        && members.all(|node| leaves(&node.id))
+        && board
+            .comments
+            .values()
+            .all(|comment| comment.layer.as_deref() != Some(layer_id) || leaves(&comment.id))
+        && board
+            .layers
+            .values()
+            .all(|child| child.parent_id.as_deref() != Some(layer_id) || leaves(&child.id))
 }
 
 /// How the deletion gate's message starts. It is a confirmation prompt, not a failure: the editor
@@ -102,6 +246,25 @@ pub fn is_destructive_block(command_count: usize, diagnostics: &[String]) -> boo
         && diagnostics
             .first()
             .is_some_and(|diagnostic| diagnostic.starts_with(DESTRUCTIVE_BLOCK_PREFIX))
+}
+
+/// How the refusal of a board mutation starts while a FlowPilot edit of the same board is applying,
+/// failed-recovery or awaiting receipt delivery. It is a lock, not a failed edit: the editor retries
+/// once FlowPilot releases the board, and failure capture skips it like the deletion gate.
+pub const FLOWPILOT_BOARD_RESERVED_PREFIX: &str =
+    "FlowPilot has an applying, failed-recovery, or pending-delivery edit for this board.";
+
+pub fn flowpilot_board_reserved_message() -> String {
+    format!(
+        "{FLOWPILOT_BOARD_RESERVED_PREFIX} Retry/dismiss it or finish receipt delivery before making another board mutation."
+    )
+}
+
+/// Whether an apply error is FlowPilot's board lock (see [`FLOWPILOT_BOARD_RESERVED_PREFIX`]).
+pub fn is_flowpilot_board_reservation(error_message: &str) -> bool {
+    error_message
+        .trim_start()
+        .starts_with(FLOWPILOT_BOARD_RESERVED_PREFIX)
 }
 
 pub fn blocked_destructive_flowscript_message(summaries: &[String]) -> String {
@@ -339,16 +502,19 @@ pub async fn apply_flowscript_to_board_file(
     // Applying the remaining setup commands is how empty function layers and disconnected nodes were
     // created, so the server apply boundary is atomic even if a caller bypasses the agent tool gate.
     if !reconcile_is_safe_to_apply(&reconcile.commands, &reconcile.diagnostics) {
+        let structured_diagnostics = reconcile.structured_diagnostics_for_source(flowscript);
         return Ok(ApplyFlowScriptResult {
             commands: Vec::new(),
             board_commands: reconcile.commands,
             corrections,
             diagnostics: reconcile.diagnostics,
+            structured_diagnostics,
+            changes: FlowScriptChanges::default(),
         });
     }
 
     if !allow_deletions {
-        let destructive = destructive_flowscript_command_summaries(&reconcile.commands);
+        let destructive = destructive_flowscript_command_summaries_on(board, &reconcile.commands);
         if !destructive.is_empty() {
             let mut diagnostics = std::mem::take(&mut reconcile.diagnostics);
             diagnostics.insert(0, blocked_destructive_flowscript_message(&destructive));
@@ -357,10 +523,16 @@ pub async fn apply_flowscript_to_board_file(
                 board_commands: reconcile.commands,
                 corrections,
                 diagnostics,
+                structured_diagnostics: Vec::new(),
+                changes: FlowScriptChanges::default(),
             });
         }
     }
 
+    // The text writes every group explicitly, so a node it places outside all groups belongs to
+    // the section root, not to whichever group the editor happens to have open.
+    let current_layer =
+        current_layer.and_then(|layer| executable_scope(Some(layer.as_str()), &[&board.layers]));
     let mut applied = apply_board_commands_to_board(
         board,
         reconcile.commands,
@@ -586,7 +758,7 @@ pub async fn apply_board_commands_to_board(
     // Connections can replace existing edges before a later dynamic pin fails validation.
     // Publish the staged board only after every phase succeeds, including derived pin contracts.
     let mut staged_board = board.clone();
-    let result = apply_board_commands_to_staged_board(
+    let mut result = apply_board_commands_to_staged_board(
         &mut staged_board,
         board_commands,
         catalog_nodes,
@@ -595,6 +767,7 @@ pub async fn apply_board_commands_to_board(
     )
     .await?;
     if result.diagnostics.is_empty() {
+        result.changes = FlowScriptChanges::between(board, &staged_board);
         *board = staged_board;
     }
     Ok(result)
@@ -648,6 +821,8 @@ async fn apply_board_commands_to_staged_board(
                 board_commands,
                 corrections: Vec::new(),
                 diagnostics: vec!["FlowScript apply failed and was rolled back".to_string()],
+                structured_diagnostics: Vec::new(),
+                changes: FlowScriptChanges::default(),
             });
         }
     };
@@ -679,11 +854,17 @@ async fn apply_board_commands_to_staged_board(
         rollback_applied(board, &applied_commands, state.clone(), error).await?;
     }
 
+    if let Err(error) = planner.validate_format_placeholders(board, &board_commands) {
+        rollback_applied(board, &applied_commands, state.clone(), error).await?;
+    }
+
     Ok(ApplyFlowScriptResult {
         commands: applied_commands,
         board_commands,
         corrections: Vec::new(),
         diagnostics: Vec::new(),
+        structured_diagnostics: Vec::new(),
+        changes: FlowScriptChanges::default(),
     })
 }
 
@@ -920,6 +1101,66 @@ impl FlowScriptApplyPlanner {
             pending.remove(&index);
         }
         Ok(ready)
+    }
+
+    /// Dynamic placeholders must still have values after node updates and cleanup have settled.
+    /// Limit this check to authored nodes so unrelated incomplete canvas nodes remain editable.
+    fn validate_format_placeholders(
+        &self,
+        board: &Board,
+        commands: &[BoardCommand],
+    ) -> flow_like_types::Result<()> {
+        let touched: BTreeSet<String> = commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    ref_id: Some(node_ref),
+                    ..
+                }
+                | BoardCommand::UpdateNodePin {
+                    node_id: node_ref, ..
+                }
+                | BoardCommand::ConnectPins {
+                    to_node: node_ref, ..
+                }
+                | BoardCommand::DisconnectPins {
+                    to_node: node_ref, ..
+                } => self.resolve_node_id(board, node_ref).ok(),
+                _ => None,
+            })
+            .collect();
+        for node_id in touched {
+            // The planner's staged nodes predate the final connections and derived pin state.
+            let Some(node) = board.nodes.get(&node_id).or_else(|| {
+                board
+                    .layers
+                    .values()
+                    .find_map(|layer| layer.nodes.get(&node_id))
+            }) else {
+                continue;
+            };
+            if node.name != super::template::STRING_FORMAT_NODE_TYPE {
+                continue;
+            }
+            let Some(format) = dynamic_pin_source_literal(node, super::template::FORMAT_STRING_PIN)
+            else {
+                continue;
+            };
+            for placeholder in super::reconcile::format_string_placeholders(&format) {
+                let has_value = node.pins.values().any(|pin| {
+                    pin.pin_type == PinType::Input
+                        && pin.name == placeholder
+                        && (pin.default_value.is_some() || !pin.depends_on.is_empty())
+                });
+                if !has_value {
+                    return Err(flow_like_types::anyhow!(
+                        "string::format placeholder `{{{placeholder}}}` on `{}` has no value or connection after applying FlowScript. Supply a value for `{placeholder}`. No part of this revision was applied.",
+                        node.friendly_name
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_widget_bindings(
@@ -1215,6 +1456,28 @@ impl FlowScriptApplyPlanner {
                     self.staged_layers.insert(layer_id, layer);
                     generic_commands.push(GenericCommand::UpsertLayer(command));
                 }
+                BoardCommand::UpdateFunctionSignature { layer_id, pins, .. } => {
+                    let layer_id = self.resolve_node_id(board, layer_id)?;
+                    let Some(existing_layer) = self
+                        .staged_layers
+                        .get(&layer_id)
+                        .or_else(|| board.layers.get(&layer_id))
+                    else {
+                        return Err(flow_like_types::anyhow!("Layer `{layer_id}` not found"));
+                    };
+                    if !matches!(existing_layer.r#type, LayerType::Function) {
+                        return Err(flow_like_types::anyhow!(
+                            "Layer `{layer_id}` is a {:?} layer; only a Function has a signature",
+                            existing_layer.r#type
+                        ));
+                    }
+                    let mut layer = existing_layer.clone();
+                    layer.pins = migrated_boundary_pins(&layer.pins, pins)?;
+                    let mut command = UpsertLayerCommand::new(layer.clone());
+                    command.current_layer = layer.parent_id.clone();
+                    self.staged_layers.insert(layer_id, layer);
+                    generic_commands.push(GenericCommand::UpsertLayer(command));
+                }
                 BoardCommand::RenameLayer { layer_id, name, .. } => {
                     let layer_id = self.resolve_node_id(board, layer_id)?;
                     let Some(existing_layer) = self
@@ -1238,8 +1501,17 @@ impl FlowScriptApplyPlanner {
                 BoardCommand::MoveToLayer {
                     ids, target_layer, ..
                 } => {
-                    let resolved_ids = self.resolve_node_ids(board, ids)?;
                     let target = self.resolve_optional_layer(board, target_layer.as_deref())?;
+                    // Runs with the connections instead: cleanup at the end of this phase would
+                    // bridge the edges that still cross the new function boundary.
+                    if self.is_function_layer(board, target.as_deref()) {
+                        continue;
+                    }
+                    let resolved_ids = self.resolve_node_ids(board, ids)?;
+                    // Regrouping runs after every connection of the remaining phase.
+                    if self.is_regroup(board, &resolved_ids, target.as_deref()) {
+                        continue;
+                    }
                     if let Some(target_id) = target.as_deref() {
                         let target_is_module = self
                             .staged_layers
@@ -1424,6 +1696,30 @@ impl FlowScriptApplyPlanner {
                     self.staged_nodes.insert(node_id.clone(), node.clone());
                     generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
                 }
+                BoardCommand::SetNodeDescription {
+                    node_id,
+                    description,
+                    ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let mut node = self.resolve_node(board, &node_id)?.clone();
+                    node.description = description.clone();
+                    self.staged_nodes.insert(node_id.clone(), node.clone());
+                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                }
+                BoardCommand::SetNodeCodeNames {
+                    node_id,
+                    code_names,
+                    ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let mut node = self.resolve_node(board, &node_id)?.clone();
+                    node.code_names
+                        .get_or_insert_default()
+                        .extend(code_names.clone());
+                    self.staged_nodes.insert(node_id.clone(), node.clone());
+                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                }
                 BoardCommand::UpdateNodePinOptions {
                     node_id,
                     pin_name,
@@ -1531,9 +1827,12 @@ impl FlowScriptApplyPlanner {
         }
         let mut fn_refs_initialized = HashSet::new();
         let mut generic_commands = Vec::new();
-        // Every Connect/Disconnect must execute after all whole-node UpdateNode commands and all
-        // moves/removals. Connections are the final persisted graph mutations in this batch.
+        // Rewires follow whole-node updates and moves/removals. Removing nodes first captures
+        // their original neighbors for undo before a replacement connection changes those edges.
         let mut connection_commands = Vec::new();
+        // Regrouping into and out of Collapsed groups is presentation over the finished graph:
+        // it runs last, so its bridge relays are re-derived from the final wires.
+        let mut regroup_commands = Vec::new();
 
         for command in commands {
             match command {
@@ -1544,9 +1843,38 @@ impl FlowScriptApplyPlanner {
                 | BoardCommand::UpdateNodePin { .. }
                 | BoardCommand::UpdateNodePinOptions { .. }
                 | BoardCommand::RenameNode { .. }
+                | BoardCommand::SetNodeDescription { .. }
+                | BoardCommand::SetNodeCodeNames { .. }
+                | BoardCommand::UpdateFunctionSignature { .. }
                 | BoardCommand::RenameLayer { .. }
-                | BoardCommand::MoveToLayer { .. }
                 | BoardCommand::UpdateLayerCache { .. } => {}
+                BoardCommand::MoveToLayer {
+                    ids, target_layer, ..
+                } => {
+                    let target = self.resolve_optional_layer(board, target_layer.as_deref())?;
+                    let resolved_ids = self.resolve_node_ids(board, ids)?;
+                    if self.is_regroup(board, &resolved_ids, target.as_deref()) {
+                        regroup_commands.push(GenericCommand::MoveToLayer(
+                            MoveToLayerCommand::new(resolved_ids, target),
+                        ));
+                        continue;
+                    }
+                    if !self.is_function_layer(board, target.as_deref()) {
+                        continue;
+                    }
+                    if let Some(layer_id) = resolved_ids
+                        .iter()
+                        .find(|id| board.layers.contains_key(id.as_str()))
+                    {
+                        return Err(flow_like_types::anyhow!(
+                            "MoveToLayer cannot nest layer `{layer_id}` inside a Function layer; only nodes and comments move into a function"
+                        ));
+                    }
+                    generic_commands.push(GenericCommand::MoveToLayer(MoveToLayerCommand::new(
+                        resolved_ids,
+                        target,
+                    )));
+                }
                 BoardCommand::RemoveNode { node_id, .. } => {
                     let node_id = self.resolve_node_id(board, node_id)?;
                     let node = self.resolve_node(board, &node_id)?.clone();
@@ -1585,9 +1913,9 @@ impl FlowScriptApplyPlanner {
                     let from_node_id = self.resolve_node_id(board, from_node)?;
                     let to_node_id = self.resolve_node_id(board, to_node)?;
                     let from_pin_id =
-                        self.resolve_pin_id(board, &from_node_id, from_pin, Some(PinType::Output))?;
+                        self.resolve_disconnect_source_pin_id(board, &from_node_id, from_pin)?;
                     let to_pin_id =
-                        self.resolve_pin_id(board, &to_node_id, to_pin, Some(PinType::Input))?;
+                        self.resolve_disconnect_target_pin_id(board, &to_node_id, to_pin)?;
                     connection_commands.push(GenericCommand::DisconnectPin(
                         DisconnectPinsCommand::new(
                             from_node_id,
@@ -1700,11 +2028,17 @@ impl FlowScriptApplyPlanner {
                     let Some(layer) = board.layers.get(&layer_id) else {
                         return Err(flow_like_types::anyhow!("Layer `{layer_id}` not found"));
                     };
-                    generic_commands.push(GenericCommand::RemoveLayer(RemoveLayerCommand::new(
+                    let command = GenericCommand::RemoveLayer(RemoveLayerCommand::new(
                         layer.clone(),
                         Vec::new(),
                         true,
-                    )));
+                    ));
+                    // Ungrouping a group runs after the moves that emptied it.
+                    if is_group_layer(&layer.r#type) {
+                        regroup_commands.push(command);
+                    } else {
+                        generic_commands.push(command);
+                    }
                 }
                 BoardCommand::SetNodeFunctionRefs {
                     node_id, fn_refs, ..
@@ -1791,14 +2125,36 @@ impl FlowScriptApplyPlanner {
             }
         }
 
+        // Disconnects touching a deleted endpoint must run while that endpoint still exists.
+        // Keep all other edge edits in their authored order after removals.
+        let removed_ids: HashSet<&str> = generic_commands
+            .iter()
+            .filter_map(|command| match command {
+                GenericCommand::RemoveNode(command) => Some(command.node.id.as_str()),
+                GenericCommand::RemoveLayer(command) => Some(command.layer.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let (deletion_disconnects, connection_commands): (Vec<_>, Vec<_>) =
+            connection_commands.into_iter().partition(|command| {
+                matches!(
+                    command,
+                    GenericCommand::DisconnectPin(command)
+                        if removed_ids.contains(command.from_node.as_str())
+                            || removed_ids.contains(command.to_node.as_str())
+                )
+            });
+
         let mut composed_commands = node_update_order
             .into_iter()
             .filter_map(|node_id| node_updates.remove(&node_id))
             .map(|node| GenericCommand::UpdateNode(UpdateNodeCommand::new(node)))
             .collect::<Vec<_>>();
+        composed_commands.extend(deletion_disconnects);
         composed_commands.append(&mut generic_commands);
         let mut generic_commands = composed_commands;
         generic_commands.extend(connection_commands);
+        generic_commands.extend(regroup_commands);
 
         Ok(generic_commands)
     }
@@ -2052,6 +2408,78 @@ impl FlowScriptApplyPlanner {
         Err(flow_like_types::anyhow!("Entity `{entity_id}` not found"))
     }
 
+    /// A disconnect may name its source by the exact id of a layer boundary pin. The id alone is
+    /// unambiguous, and the inverted direction filter that disambiguates boundary pin NAMES would
+    /// reject a collapsed frame's outward bridge, which is an `Output` pin feeding the outside.
+    fn resolve_disconnect_source_pin_id(
+        &self,
+        board: &Board,
+        entity_id: &str,
+        pin_ref: &str,
+    ) -> flow_like_types::Result<String> {
+        let layer = board
+            .layers
+            .get(entity_id)
+            .or_else(|| self.staged_layers.get(entity_id));
+        if layer.is_some_and(|layer| layer.pins.contains_key(pin_ref)) {
+            return Ok(pin_ref.to_string());
+        }
+        self.resolve_pin_id(board, entity_id, pin_ref, Some(PinType::Output))
+    }
+
+    /// The target-side twin: a collapsed frame's inward bridge is an `Input` pin fed from outside,
+    /// which the inverted boundary direction filter would reject.
+    fn resolve_disconnect_target_pin_id(
+        &self,
+        board: &Board,
+        entity_id: &str,
+        pin_ref: &str,
+    ) -> flow_like_types::Result<String> {
+        let layer = board
+            .layers
+            .get(entity_id)
+            .or_else(|| self.staged_layers.get(entity_id));
+        if layer.is_some_and(|layer| layer.pins.contains_key(pin_ref)) {
+            return Ok(pin_ref.to_string());
+        }
+        self.resolve_pin_id(board, entity_id, pin_ref, Some(PinType::Input))
+    }
+
+    fn is_function_layer(&self, board: &Board, layer_id: Option<&str>) -> bool {
+        layer_id
+            .and_then(|id| self.staged_layers.get(id).or_else(|| board.layers.get(id)))
+            .is_some_and(|layer| matches!(layer.r#type, LayerType::Function))
+    }
+
+    /// A move that only regroups: into a Collapsed group, or between groups of one executable
+    /// scope (out of a group to its Function, module or the board root). Regrouping runs after
+    /// every connection, so the bridge relays it re-derives match the final wires.
+    fn is_regroup(&self, board: &Board, ids: &[String], target: Option<&str>) -> bool {
+        let layers = [&self.staged_layers, &board.layers];
+        let layer = |id: &str| layers.iter().find_map(|map| map.get(id));
+        if target
+            .and_then(layer)
+            .is_some_and(|layer| is_group_layer(&layer.r#type))
+        {
+            return true;
+        }
+        let target_scope = executable_scope(target, &layers);
+        !ids.is_empty()
+            && ids.iter().all(|id| {
+                let scope =
+                    if let Some(node) = self.staged_nodes.get(id).or_else(|| board.nodes.get(id)) {
+                        executable_scope(node.layer.as_deref(), &layers)
+                    } else if let Some(comment) = board.comments.get(id) {
+                        executable_scope(comment.layer.as_deref(), &layers)
+                    } else if let Some(group) = layer(id).filter(|l| is_group_layer(&l.r#type)) {
+                        executable_scope(group.parent_id.as_deref(), &layers)
+                    } else {
+                        return false;
+                    };
+                scope == target_scope
+            })
+    }
+
     fn resolve_optional_layer(
         &self,
         board: &Board,
@@ -2130,10 +2558,15 @@ impl FlowScriptApplyPlanner {
                     "Applied Function `{name}` resolved to missing layer `{layer_id}`"
                 )
             })?;
+            // Body nodes may sit in `@collapse` groups inside the function, and the boundary then
+            // wires through those groups' bridges.
+            let in_function = |layer: Option<&str>| {
+                executable_scope(layer, &[&board.layers]).as_deref() == Some(layer_id.as_str())
+            };
             let body_nodes = board
                 .nodes
                 .values()
-                .filter(|node| node.layer.as_deref() == Some(layer_id.as_str()))
+                .filter(|node| in_function(node.layer.as_deref()))
                 .collect::<Vec<_>>();
             if body_nodes.is_empty() {
                 return Err(flow_like_types::anyhow!(
@@ -2157,9 +2590,17 @@ impl FlowScriptApplyPlanner {
                     "Applied Function `{name}` has an incomplete execution boundary"
                 ));
             };
+            let group_bridges = board
+                .layers
+                .values()
+                .filter(|group| {
+                    is_group_layer(&group.r#type) && in_function(Some(group.id.as_str()))
+                })
+                .flat_map(|group| group.pins.keys().map(String::as_str));
             let body_pin_ids = body_nodes
                 .iter()
                 .flat_map(|node| node.pins.values().map(|pin| pin.id.as_str()))
+                .chain(group_bridges)
                 .collect::<HashSet<_>>();
             if !exec_in
                 .connected_to
@@ -2385,6 +2826,64 @@ fn set_pin_optional(
     let mut options = pin.options.clone().unwrap_or_default();
     options.set_optional(true);
     pin.set_options(options);
+}
+
+/// A Function layer's pins once its data boundary becomes `boundary` (parameters as `Input`, then
+/// returns as `Output`). Execution pins stay. A data pin whose name and direction survive keeps
+/// its id, and with it its wiring, and takes the new type; every other pin is new.
+pub(super) fn migrated_boundary_pins(
+    current: &HashMap<String, Pin>,
+    boundary: &[PlaceholderPinDef],
+) -> flow_like_types::Result<HashMap<String, Pin>> {
+    let mut pins: HashMap<String, Pin> = current
+        .values()
+        .filter(|pin| pin.data_type == VariableType::Execution)
+        .map(|pin| (pin.id.clone(), pin.clone()))
+        .collect();
+    let first_index = pins.len();
+    for (offset, def) in boundary.iter().enumerate() {
+        let pin_type = pin_type_from_str(&def.pin_type);
+        let data_type = variable_type_from_str(&def.data_type)?;
+        let value_type = def
+            .value_type
+            .as_deref()
+            .map(value_type_from_str)
+            .unwrap_or(ValueType::Normal);
+        let index = (first_index + offset) as u16;
+        let kept = current.values().find(|pin| {
+            pin.pin_type == pin_type
+                && pin.data_type != VariableType::Execution
+                && pin.name == def.name
+                && !pins.contains_key(&pin.id)
+        });
+        let Some(kept) = kept else {
+            insert_placeholder_pin(
+                &mut pins,
+                &def.name,
+                &def.friendly_name,
+                def.description.as_deref().unwrap_or(""),
+                pin_type,
+                data_type,
+                value_type,
+                def.schema.clone(),
+                def.enforce_schema,
+                index,
+            );
+            continue;
+        };
+        let mut pin = kept.clone();
+        pin.data_type = data_type;
+        pin.value_type = value_type;
+        pin.schema = def.schema.clone();
+        pin.index = index;
+        if def.enforce_schema {
+            pin.options.get_or_insert_default().enforce_schema = Some(true);
+        } else if let Some(options) = pin.options.as_mut() {
+            options.enforce_schema = None;
+        }
+        pins.insert(pin.id.clone(), pin);
+    }
+    Ok(pins)
 }
 
 fn layer_pins(defs: Option<&[PlaceholderPinDef]>) -> flow_like_types::Result<HashMap<String, Pin>> {
@@ -2701,6 +3200,10 @@ fn pin_type_from_str(value: &str) -> PinType {
 }
 
 #[cfg(test)]
+#[path = "apply/deletion_tests.rs"]
+mod deletion_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::flow::board::{ExecutionMode, ExecutionStage, LayerCache, LayerCacheScope};
@@ -2750,12 +3253,116 @@ mod tests {
         node
     }
 
+    #[test]
+    fn format_placeholder_validation_uses_final_values_and_only_authored_nodes() {
+        let mut board = empty_board();
+        let mut format = dynamic_format_catalog_node();
+        format.name = "string_format".into();
+        format.id = "format".into();
+        format
+            .get_pin_mut_by_name("format_string")
+            .unwrap()
+            .set_default_value(Some(json!("{greeting} x")));
+        board.nodes.insert(format.id.clone(), format);
+        let commands = vec![BoardCommand::UpdateNodePin {
+            node_id: "format".into(),
+            pin_id: "format_string".into(),
+            value: json!("{greeting} x"),
+            summary: None,
+        }];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        planner
+            .staged_nodes
+            .insert("format".into(), board.nodes["format"].clone());
+
+        assert!(planner.validate_format_placeholders(&board, &[]).is_ok());
+        assert!(
+            planner
+                .validate_format_placeholders(&board, &commands)
+                .unwrap_err()
+                .to_string()
+                .contains("{greeting}")
+        );
+        board.nodes.get_mut("format").unwrap().add_input_pin(
+            "greeting",
+            "Greeting",
+            "",
+            VariableType::Generic,
+        );
+        assert!(
+            planner
+                .validate_format_placeholders(&board, &commands)
+                .is_err()
+        );
+        let mut unrelated = Node::new("log_info", "Log", "", "test");
+        unrelated.id = "log".into();
+        board.nodes.insert(unrelated.id.clone(), unrelated);
+        assert!(
+            planner
+                .validate_format_placeholders(
+                    &board,
+                    &[BoardCommand::UpdateNodePin {
+                        node_id: "log".into(),
+                        pin_id: "message".into(),
+                        value: json!("unrelated edit"),
+                        summary: None,
+                    }]
+                )
+                .is_ok()
+        );
+        for value in [json!("hi"), json!(null)] {
+            board
+                .nodes
+                .get_mut("format")
+                .unwrap()
+                .get_pin_mut_by_name("greeting")
+                .unwrap()
+                .set_default_value(Some(value));
+            assert!(
+                planner
+                    .validate_format_placeholders(&board, &commands)
+                    .is_ok()
+            );
+        }
+        let format = board.nodes.get_mut("format").unwrap();
+        format
+            .get_pin_mut_by_name("greeting")
+            .unwrap()
+            .default_value = None;
+        format
+            .get_pin_mut_by_name("format_string")
+            .unwrap()
+            .set_default_value(Some(json!("hello")));
+        assert!(
+            planner
+                .validate_format_placeholders(&board, &commands)
+                .is_ok()
+        );
+    }
+
     fn generic_event_catalog_node() -> Node {
         let mut node = Node::new("events_generic", "Generic Event", "", "events");
         node.set_can_be_referenced_by_fns(true);
         node.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
         node.add_output_pin("payload", "Payload", "", VariableType::Struct);
         node
+    }
+
+    fn browser_handler_catalog() -> Vec<Node> {
+        let mut generic = generic_event_catalog_node();
+        generic.set_start(true);
+        let mut catalog = vec![generic, log_catalog_node()];
+        for (name, friendly_name, parameter) in [
+            ("browser_open", "Browser Open", "url"),
+            ("browser_click", "Browser Click", "ref"),
+        ] {
+            let mut node = Node::new(name, friendly_name, "", "browser");
+            node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+            node.add_input_pin(parameter, parameter, "", VariableType::String);
+            node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+            catalog.push(node);
+        }
+        catalog
     }
 
     fn function_ref_consumer_catalog_node() -> Node {
@@ -2770,6 +3377,739 @@ mod tests {
             .as_deref()
             .expect("pin has a default value");
         flow_like_types::json::from_slice(bytes).expect("default value decodes")
+    }
+
+    fn wired_payload_catalog() -> Vec<Node> {
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let mut source = Node::new("make_value", "Make Value", "", "test");
+        source.add_output_pin("value", "Value", "", VariableType::String);
+        let mut sink = Node::new("payload_sink", "Payload Sink", "", "test");
+        sink.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        sink.add_input_pin("payload", "Payload", "", VariableType::String);
+        sink.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        vec![event, source, sink]
+    }
+
+    /// `event → sink` with `sink.payload` fed by a pure `make_value`. With `collapsed_source`
+    /// the producer sits inside a collapsed frame, so the sink reads an outward bridge pin.
+    fn board_with_wired_payload(catalog: &[Node], collapsed_source: bool) -> Board {
+        use crate::flow::board::commands::pins::connect_pins::connect_pins;
+        let mut board = empty_board();
+        let mut place = |index: usize, id: &str| {
+            let mut node = catalog[index].clone();
+            node.id = id.to_string();
+            board.nodes.insert(node.id.clone(), node);
+        };
+        place(0, "event");
+        place(1, "source");
+        place(2, "sink");
+        board.nodes.get_mut("event").unwrap().set_start(true);
+        let pin_id = |board: &Board, node: &str, name: &str| {
+            board.nodes[node].get_pin_by_name(name).unwrap().id.clone()
+        };
+        let (event_out, sink_in) = (
+            pin_id(&board, "event", "exec_out"),
+            pin_id(&board, "sink", "exec_in"),
+        );
+        connect_pins(&mut board, "event", &event_out, "sink", &sink_in).unwrap();
+        let (value, payload) = (
+            pin_id(&board, "source", "value"),
+            pin_id(&board, "sink", "payload"),
+        );
+        connect_pins(&mut board, "source", &value, "sink", &payload).unwrap();
+        if collapsed_source {
+            let frame = Layer::new(
+                "frame".to_string(),
+                "Frame".to_string(),
+                LayerType::Collapsed,
+            );
+            board.layers.insert(frame.id.clone(), frame);
+            board.nodes.get_mut("source").unwrap().layer = Some("frame".to_string());
+            board.cleanup();
+            let payload = board.nodes["sink"].get_pin_by_name("payload").unwrap();
+            assert!(
+                payload
+                    .depends_on
+                    .iter()
+                    .all(|source| board.layers["frame"].pins.contains_key(source)),
+                "the fixture must read the producer through the frame's bridge"
+            );
+        }
+        board
+    }
+
+    #[tokio::test]
+    async fn literal_replacing_a_wired_input_cuts_the_wire_on_apply() {
+        let catalog = wired_payload_catalog();
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        for collapsed_source in [false, true] {
+            let mut board = board_with_wired_payload(&catalog, collapsed_source);
+            let text = super::super::board_to_flowscript(&board, &anchored);
+            assert!(text.contains("payloadSink(makeValue())"), "{text}");
+            let state = Arc::new(crate::state::FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+
+            let edited = text.replace("payloadSink(makeValue())", "payloadSink(\"literal\")");
+            let result =
+                apply_flowscript_to_board(&mut board, &edited, &catalog, state.clone(), None, true)
+                    .await
+                    .expect("apply");
+            assert!(
+                result.diagnostics.is_empty(),
+                "collapsed_source={collapsed_source}: {:?}",
+                result.diagnostics
+            );
+
+            let payload = board.nodes["sink"].get_pin_by_name("payload").unwrap();
+            assert!(
+                payload.depends_on.is_empty(),
+                "collapsed_source={collapsed_source}: the literal must replace the wire"
+            );
+            assert_eq!(decode_default(payload), json!("literal"));
+            let rendered = super::super::board_to_flowscript(&board, &anchored);
+            assert!(rendered.contains("payloadSink(\"literal\")"), "{rendered}");
+
+            let again =
+                apply_flowscript_to_board(&mut board, &rendered, &catalog, state, None, true)
+                    .await
+                    .expect("re-apply");
+            assert!(again.diagnostics.is_empty(), "{:?}", again.diagnostics);
+            assert!(
+                again.board_commands.is_empty(),
+                "collapsed_source={collapsed_source}: {:?}",
+                again.board_commands
+            );
+        }
+    }
+
+    fn exec_rewire_catalog() -> Vec<Node> {
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let mut branch = Node::new("control_branch", "Branch", "", "control");
+        branch.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        branch
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .default_value = Some(b"true".to_vec());
+        branch.add_output_pin("true", "True", "", VariableType::Execution);
+        branch.add_output_pin("false", "False", "", VariableType::Execution);
+        let mut catalog = vec![event, branch];
+        for (name, friendly_name) in [("first_step", "First Step"), ("second_step", "Second Step")]
+        {
+            let mut node = Node::new(name, friendly_name, "", "test");
+            node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+            node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+            catalog.push(node);
+        }
+        catalog
+    }
+
+    fn board_with_exec_rewire_nodes(catalog: &[Node], branched: bool) -> Board {
+        use crate::flow::board::commands::pins::connect_pins::connect_pins;
+
+        let mut board = empty_board();
+        for (index, id) in [(0, "event"), (1, "branch"), (2, "first"), (3, "second")] {
+            if id == "branch" && !branched {
+                continue;
+            }
+            let mut node = catalog[index].clone();
+            node.id = id.to_string();
+            board.nodes.insert(node.id.clone(), node);
+        }
+        board.nodes.get_mut("event").unwrap().set_start(true);
+        let edges = if branched {
+            vec![
+                ("event", "exec_out", "branch", "exec_in"),
+                ("branch", "true", "first", "exec_in"),
+                ("branch", "false", "second", "exec_in"),
+            ]
+        } else {
+            vec![
+                ("event", "exec_out", "first", "exec_in"),
+                ("first", "exec_out", "second", "exec_in"),
+            ]
+        };
+        for (from_node, from_pin, to_node, to_pin) in edges {
+            let output = board.nodes[from_node]
+                .get_pin_by_name(from_pin)
+                .unwrap()
+                .id
+                .clone();
+            let input = board.nodes[to_node]
+                .get_pin_by_name(to_pin)
+                .unwrap()
+                .id
+                .clone();
+            connect_pins(&mut board, from_node, &output, to_node, &input).unwrap();
+        }
+        board
+    }
+
+    fn swap_anchored_statements(text: &str, first: &str, second: &str) -> String {
+        let mut lines: Vec<_> = text.lines().collect();
+        let anchored_line = |id: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(&format!("//@n:{id}")))
+                .unwrap_or_else(|| panic!("missing node anchor {id}:\n{text}"))
+        };
+        let first = anchored_line(first);
+        let second = anchored_line(second);
+        lines.swap(first, second);
+        lines.join("\n")
+    }
+
+    fn assert_exec_edges(board: &Board, edges: &[(&str, &str, &str, &str)]) {
+        let mut outgoing: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let mut incoming: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for &(from_node, from_pin, to_node, to_pin) in edges {
+            let output = &board.nodes[from_node].get_pin_by_name(from_pin).unwrap().id;
+            let input = &board.nodes[to_node].get_pin_by_name(to_pin).unwrap().id;
+            outgoing
+                .entry(output.clone())
+                .or_default()
+                .insert(input.clone());
+            incoming
+                .entry(input.clone())
+                .or_default()
+                .insert(output.clone());
+        }
+        for node in board.nodes.values() {
+            for pin in node
+                .pins
+                .values()
+                .filter(|pin| pin.data_type == VariableType::Execution)
+            {
+                match pin.pin_type {
+                    PinType::Output => assert_eq!(
+                        pin.connected_to,
+                        outgoing.remove(&pin.id).unwrap_or_default(),
+                        "unexpected execution targets for {}.{}",
+                        node.id,
+                        pin.name
+                    ),
+                    PinType::Input => assert_eq!(
+                        pin.depends_on,
+                        incoming.remove(&pin.id).unwrap_or_default(),
+                        "unexpected execution sources for {}.{}",
+                        node.id,
+                        pin.name
+                    ),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn large_deletion_apply_previews_without_mutation_and_repeats_as_noop() {
+        let catalog = exec_rewire_catalog();
+        let mut board = empty_board();
+        for event_index in 0..100 {
+            let mut event = AddNodeCommand::new(catalog[0].clone()).node;
+            event.id = format!("event-{event_index:03}");
+            event.friendly_name = format!("Event {event_index}");
+            event.set_start(true);
+            let mut previous = event.id.clone();
+            board.nodes.insert(event.id.clone(), event);
+            for step in 0..12 {
+                let mut node = AddNodeCommand::new(catalog[2].clone()).node;
+                node.id = format!("remove-{event_index:03}-{step:02}");
+                let source = board
+                    .nodes
+                    .get_mut(&previous)
+                    .unwrap()
+                    .get_pin_mut_by_name("exec_out")
+                    .unwrap();
+                let target = node.get_pin_mut_by_name("exec_in").unwrap();
+                source.connected_to.insert(target.id.clone());
+                target.depends_on.insert(source.id.clone());
+                previous = node.id.clone();
+                board.nodes.insert(node.id.clone(), node);
+            }
+        }
+        let rendered = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(rendered.matches("//@n:remove-").count(), 1_200);
+        let edited = rendered
+            .lines()
+            .filter(|line| !line.contains("//@n:remove-"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let original = serde_json::to_value(&board).unwrap();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut previous_removals = None;
+        for _ in 0..2 {
+            let preview = apply_flowscript_to_board(
+                &mut board,
+                &edited,
+                &catalog,
+                state.clone(),
+                None,
+                false,
+            )
+            .await
+            .expect("large deletion preview");
+            assert!(preview.commands.is_empty());
+            assert!(
+                is_destructive_block(preview.commands.len(), &preview.diagnostics),
+                "{:?}",
+                preview.diagnostics
+            );
+            let removals = destructive_flowscript_command_summaries(&preview.board_commands);
+            assert_eq!(removals.len(), 1_200);
+            if let Some(previous) = &previous_removals {
+                assert_eq!(&removals, previous);
+            }
+            previous_removals = Some(removals);
+            assert_eq!(serde_json::to_value(&board).unwrap(), original);
+        }
+
+        let applied =
+            apply_flowscript_to_board(&mut board, &edited, &catalog, state.clone(), None, true)
+                .await
+                .expect("confirmed large deletion apply");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+        assert_eq!(
+            applied
+                .commands
+                .iter()
+                .filter(|command| matches!(command, GenericCommand::RemoveNode(_)))
+                .count(),
+            1_200
+        );
+        assert_eq!(board.nodes.len(), 100);
+        assert!(board.nodes.keys().all(|id| id.starts_with("event-")));
+        assert_exec_edges(&board, &[]);
+
+        let confirmed = serde_json::to_value(&board).unwrap();
+        let repeated = apply_flowscript_to_board(&mut board, &edited, &catalog, state, None, false)
+            .await
+            .expect("repeat confirmed source");
+        assert!(
+            repeated.diagnostics.is_empty(),
+            "{:?}",
+            repeated.diagnostics
+        );
+        assert!(repeated.commands.is_empty());
+        assert!(
+            repeated.board_commands.is_empty(),
+            "{:?}",
+            repeated.board_commands
+        );
+        assert_eq!(serde_json::to_value(&board).unwrap(), confirmed);
+    }
+
+    #[tokio::test]
+    async fn swapping_existing_branch_arms_rewires_exec_on_apply() {
+        let catalog = exec_rewire_catalog();
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        for change_condition in [false, true] {
+            let mut board = board_with_exec_rewire_nodes(&catalog, true);
+            let text = super::super::board_to_flowscript(&board, &anchored);
+            assert!(text.contains("if (true)"), "{text}");
+            let edited = swap_anchored_statements(&text, "first", "second");
+            let edited = if change_condition {
+                edited.replace("if (true)", "if (false)")
+            } else {
+                edited
+            };
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+
+            let unchanged =
+                apply_flowscript_to_board(&mut board, &text, &catalog, state.clone(), None, true)
+                    .await
+                    .expect("apply original branch arms");
+            assert!(
+                unchanged.diagnostics.is_empty(),
+                "{:?}",
+                unchanged.diagnostics
+            );
+            assert!(
+                unchanged.board_commands.is_empty(),
+                "{:?}",
+                unchanged.board_commands
+            );
+
+            let result =
+                apply_flowscript_to_board(&mut board, &edited, &catalog, state.clone(), None, true)
+                    .await
+                    .expect("apply swapped branch arms");
+            assert!(
+                result.diagnostics.is_empty(),
+                "{:?}\n{edited}",
+                result.diagnostics
+            );
+            assert_eq!(board.nodes.len(), 4);
+            assert_exec_edges(
+                &board,
+                &[
+                    ("event", "exec_out", "branch", "exec_in"),
+                    ("branch", "true", "second", "exec_in"),
+                    ("branch", "false", "first", "exec_in"),
+                ],
+            );
+            assert_eq!(
+                decode_default(board.nodes["branch"].get_pin_by_name("condition").unwrap()),
+                json!(!change_condition)
+            );
+
+            let rendered = super::super::board_to_flowscript(&board, &anchored);
+            let again = apply_flowscript_to_board(
+                &mut board,
+                &rendered,
+                &catalog,
+                state.clone(),
+                None,
+                true,
+            )
+            .await
+            .expect("re-apply swapped branch arms");
+            assert!(again.diagnostics.is_empty(), "{:?}", again.diagnostics);
+            assert!(
+                again.board_commands.is_empty(),
+                "{:?}",
+                again.board_commands
+            );
+
+            let restored =
+                apply_flowscript_to_board(&mut board, &text, &catalog, state, None, true)
+                    .await
+                    .expect("restore original branch arms");
+            assert!(
+                restored.diagnostics.is_empty(),
+                "{:?}",
+                restored.diagnostics
+            );
+            assert_exec_edges(
+                &board,
+                &[
+                    ("event", "exec_out", "branch", "exec_in"),
+                    ("branch", "true", "first", "exec_in"),
+                    ("branch", "false", "second", "exec_in"),
+                ],
+            );
+            assert_eq!(
+                decode_default(board.nodes["branch"].get_pin_by_name("condition").unwrap()),
+                json!(true)
+            );
+            assert_eq!(super::super::board_to_flowscript(&board, &anchored), text);
+        }
+    }
+
+    #[tokio::test]
+    async fn negating_an_existing_single_arm_branch_rewires_and_restores_execution() {
+        let catalog = exec_rewire_catalog();
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        for condition in [false, true] {
+            let mut board = board_with_exec_rewire_nodes(&catalog, true);
+            board.nodes.remove("second");
+            let branch = board.nodes.get_mut("branch").unwrap();
+            branch
+                .get_pin_mut_by_name("false")
+                .unwrap()
+                .connected_to
+                .clear();
+            branch
+                .get_pin_mut_by_name("condition")
+                .unwrap()
+                .default_value = Some(flow_like_types::json::to_vec(&condition).unwrap());
+            let text = super::super::board_to_flowscript(&board, &anchored);
+            let guard = format!("if ({condition})");
+            assert!(text.contains(&guard), "{text}");
+            let negated = text.replace(&guard, &format!("if (!({condition}))"));
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+
+            for (source, output, no_change) in [
+                (&text, "true", true),
+                (&negated, "false", false),
+                (&negated, "false", true),
+                (&text, "true", false),
+                (&text, "true", true),
+            ] {
+                let result = apply_flowscript_to_board(
+                    &mut board,
+                    source,
+                    &catalog,
+                    state.clone(),
+                    None,
+                    true,
+                )
+                .await
+                .expect("apply single-arm branch edit");
+                assert!(
+                    result.diagnostics.is_empty(),
+                    "{:?}\n{source}",
+                    result.diagnostics
+                );
+                if no_change {
+                    assert!(
+                        result.board_commands.is_empty(),
+                        "{:?}",
+                        result.board_commands
+                    );
+                }
+                assert_eq!(board.nodes.len(), 3);
+                assert_exec_edges(
+                    &board,
+                    &[
+                        ("event", "exec_out", "branch", "exec_in"),
+                        ("branch", output, "first", "exec_in"),
+                    ],
+                );
+                assert_eq!(
+                    decode_default(board.nodes["branch"].get_pin_by_name("condition").unwrap()),
+                    json!(condition),
+                    "single-arm negation changes the selected output, preserving the condition"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_or_omitted_branch_arm_disconnects_its_moved_statement_and_restores() {
+        let catalog = exec_rewire_catalog();
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        for omitted_else in [false, true] {
+            let mut board = board_with_exec_rewire_nodes(&catalog, true);
+            let mut other = AddNodeCommand::new(catalog[0].clone()).node;
+            other.id = "other".to_string();
+            other.set_start(true);
+            board.nodes.insert(other.id.clone(), other);
+            let text = super::super::board_to_flowscript(&board, &anchored);
+            let event_header = text
+                .lines()
+                .find(|line| line.contains("//@n:event"))
+                .unwrap();
+            let other_header = text
+                .lines()
+                .find(|line| line.contains("//@n:other"))
+                .unwrap();
+            let else_arm = if omitted_else { "" } else { " else {\n    }" };
+            let edited = format!(
+                "{event_header}\n    if (true) {{   //@n:branch\n        firstStep()   //@n:first\n    }}{else_arm}\n}}\n{other_header}\n    secondStep()   //@n:second\n}}\n"
+            );
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            for (source, moved, no_change) in [
+                (&text, false, true),
+                (&edited, true, false),
+                (&edited, true, true),
+                (&text, false, false),
+                (&text, false, true),
+            ] {
+                let result = apply_flowscript_to_board(
+                    &mut board,
+                    source,
+                    &catalog,
+                    state.clone(),
+                    None,
+                    true,
+                )
+                .await
+                .expect("apply empty branch arm");
+                assert!(
+                    result.diagnostics.is_empty(),
+                    "{:?}\n{source}",
+                    result.diagnostics
+                );
+                if no_change {
+                    assert!(
+                        result.board_commands.is_empty(),
+                        "{:?}",
+                        result.board_commands
+                    );
+                }
+                assert_eq!(board.nodes.len(), 5);
+                let second_source = if moved {
+                    ("other", "exec_out", "second", "exec_in")
+                } else {
+                    ("branch", "false", "second", "exec_in")
+                };
+                assert_exec_edges(
+                    &board,
+                    &[
+                        ("event", "exec_out", "branch", "exec_in"),
+                        ("branch", "true", "first", "exec_in"),
+                        second_source,
+                    ],
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn swapping_existing_branch_arms_preserves_the_shared_successor_on_apply() {
+        use crate::flow::board::commands::pins::connect_pins::connect_pins;
+
+        let mut catalog = exec_rewire_catalog();
+        let mut after = Node::new("after_step", "After Step", "", "test");
+        after.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        after.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        catalog.push(after.clone());
+        after.id = "after".to_string();
+        let input = after.get_pin_by_name("exec_in").unwrap().id.clone();
+        let mut board = board_with_exec_rewire_nodes(&catalog, true);
+        board.nodes.insert(after.id.clone(), after);
+        for source in ["first", "second"] {
+            let output = board.nodes[source]
+                .get_pin_by_name("exec_out")
+                .unwrap()
+                .id
+                .clone();
+            connect_pins(&mut board, source, &output, "after", &input).unwrap();
+        }
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        let text = super::super::board_to_flowscript(&board, &anchored);
+        let edited = swap_anchored_statements(&text, "first", "second");
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+
+        for (source, true_target, false_target, no_change) in [
+            (&text, "first", "second", true),
+            (&edited, "second", "first", false),
+            (&edited, "second", "first", true),
+            (&text, "first", "second", false),
+            (&text, "first", "second", true),
+        ] {
+            let result =
+                apply_flowscript_to_board(&mut board, source, &catalog, state.clone(), None, true)
+                    .await
+                    .expect("apply branch arms with a shared successor");
+            assert!(
+                result.diagnostics.is_empty(),
+                "{:?}\n{source}",
+                result.diagnostics
+            );
+            if no_change {
+                assert!(
+                    result.board_commands.is_empty(),
+                    "{:?}",
+                    result.board_commands
+                );
+            }
+            assert_eq!(board.nodes.len(), 5);
+            assert_exec_edges(
+                &board,
+                &[
+                    ("event", "exec_out", "branch", "exec_in"),
+                    ("branch", "true", true_target, "exec_in"),
+                    ("branch", "false", false_target, "exec_in"),
+                    ("first", "exec_out", "after", "exec_in"),
+                    ("second", "exec_out", "after", "exec_in"),
+                ],
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reordering_existing_linear_nodes_removes_terminal_exec_edge_on_apply() {
+        use crate::flow::board::commands::pins::connect_pins::connect_pins;
+
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        for rerouted in [false, true] {
+            let mut catalog = exec_rewire_catalog();
+            let mut board = board_with_exec_rewire_nodes(&catalog, false);
+            if rerouted {
+                let mut route = Node::new("reroute", "Reroute", "", "control");
+                route.id = "route".to_string();
+                let route_in = route
+                    .add_input_pin("route_in", "In", "", VariableType::Execution)
+                    .id
+                    .clone();
+                let route_out = route
+                    .add_output_pin("route_out", "Out", "", VariableType::Execution)
+                    .id
+                    .clone();
+                catalog.push(route.clone());
+                board.nodes.insert(route.id.clone(), route);
+                let first_out = board.nodes["first"]
+                    .get_pin_by_name("exec_out")
+                    .unwrap()
+                    .id
+                    .clone();
+                let second_in = board.nodes["second"]
+                    .get_pin_by_name("exec_in")
+                    .unwrap()
+                    .id
+                    .clone();
+                connect_pins(&mut board, "first", &first_out, "route", &route_in).unwrap();
+                connect_pins(&mut board, "route", &route_out, "second", &second_in).unwrap();
+            }
+            let text = super::super::board_to_flowscript(&board, &anchored);
+            let edited = swap_anchored_statements(&text, "first", "second");
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+
+            let result =
+                apply_flowscript_to_board(&mut board, &edited, &catalog, state.clone(), None, true)
+                    .await
+                    .expect("apply reordered existing nodes");
+            assert!(
+                result.diagnostics.is_empty(),
+                "{:?}\n{edited}",
+                result.diagnostics
+            );
+            assert_eq!(board.nodes.len(), 3);
+            assert_exec_edges(
+                &board,
+                &[
+                    ("event", "exec_out", "second", "exec_in"),
+                    ("second", "exec_out", "first", "exec_in"),
+                ],
+            );
+
+            let rendered = super::super::board_to_flowscript(&board, &anchored);
+            let again =
+                apply_flowscript_to_board(&mut board, &rendered, &catalog, state, None, true)
+                    .await
+                    .expect("re-apply reordered existing nodes");
+            assert!(again.diagnostics.is_empty(), "{:?}", again.diagnostics);
+            assert!(
+                again.board_commands.is_empty(),
+                "{:?}",
+                again.board_commands
+            );
+        }
     }
 
     struct TestVariableGetLogic;
@@ -2963,6 +4303,158 @@ mod tests {
             &["even an unfamiliar diagnostic is atomic".to_string()]
         ));
         assert!(!reconcile_is_safe_to_apply(&[], &[]));
+    }
+
+    #[tokio::test]
+    async fn rejected_apply_returns_diagnostics_for_the_submitted_source() {
+        let mut board = empty_board();
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        let catalog = vec![log];
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let source = "// Keep these leading lines.\n\nfunction report() {\n    log({ email: \"invalid\" })\n}\n";
+
+        let result = apply_flowscript_to_board(&mut board, source, &catalog, state, None, true)
+            .await
+            .unwrap();
+
+        assert!(result.commands.is_empty());
+        assert!(board.nodes.is_empty());
+        assert!(board.layers.is_empty());
+        let pin_error = result
+            .structured_diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == super::super::FlowScriptDiagnosticCode::FsUnknownInputPin
+            })
+            .expect("pin validation retains its structured diagnostic");
+        assert_eq!(pin_error.source_span.as_ref().unwrap().start.line, 4);
+        assert!(result.diagnostics.contains(&pin_error.message));
+        let serialized = serde_json::to_value(&result).unwrap();
+        assert!(!serialized["diagnostics"].as_array().unwrap().is_empty());
+        assert!(serialized["structured_diagnostics"].is_array());
+    }
+
+    #[tokio::test]
+    async fn colliding_handler_names_reject_apply_without_parameter_cascades_or_mutation() {
+        let mut board = empty_board();
+        let original = serde_json::to_value(&board).unwrap();
+        let catalog = browser_handler_catalog();
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let source = r#"const untouched: string = "keep this unapplied"
+
+browserOpen(url: string) {
+    logInfo({ message: url })
+}
+
+browserClick(ref: string) {
+    logInfo({ message: ref })
+}
+"#;
+
+        let result = apply_flowscript_to_board(&mut board, source, &catalog, state, None, true)
+            .await
+            .expect("handler collisions return validation diagnostics");
+
+        assert!(result.commands.is_empty());
+        assert!(result.changes.is_empty());
+        assert_eq!(serde_json::to_value(&board).unwrap(), original);
+        assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+        for (handler, node_type) in [
+            ("browserOpen", "browser_open"),
+            ("browserClick", "browser_click"),
+        ] {
+            let diagnostic = result
+                .diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic.contains(&format!(
+                        "handler name `{handler}` collides with built-in node `{node_type}`"
+                    ))
+                })
+                .unwrap_or_else(|| {
+                    panic!("missing collision for {handler}: {:?}", result.diagnostics)
+                });
+            assert!(
+                diagnostic.contains(&format!("eventsGeneric {handler}")),
+                "{diagnostic}"
+            );
+        }
+        assert!(result.diagnostics.iter().all(|diagnostic| {
+            !diagnostic.contains("skipped connection")
+                && !diagnostic.contains("is not defined in this section")
+        }));
+    }
+
+    #[tokio::test]
+    async fn explicit_generic_handler_alias_applies_with_colliding_builtin_and_parameter_wiring() {
+        let mut board = empty_board();
+        let catalog = browser_handler_catalog();
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let source = r#"eventsGeneric browserOpen(url: string) {
+    browserOpen({ url: url })
+}
+"#;
+
+        let result = apply_flowscript_to_board(&mut board, source, &catalog, state, None, false)
+            .await
+            .expect("an explicit event selector disambiguates the handler alias");
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.commands.is_empty());
+        assert_eq!(board.nodes.len(), 2);
+        let entry = board
+            .nodes
+            .values()
+            .find(|node| node.name == "events_generic")
+            .expect("the handler uses the explicit Generic Event type");
+        assert_eq!(entry.friendly_name, "browserOpen");
+        let action = board
+            .nodes
+            .values()
+            .find(|node| node.name == "browser_open")
+            .expect("the handler body can still call the built-in node");
+        for (output_name, input_name) in [("exec_out", "exec_in"), ("url", "url")] {
+            let output = entry.get_pin_by_name(output_name).unwrap();
+            let input = action.get_pin_by_name(input_name).unwrap();
+            assert!(output.connected_to.contains(&input.id));
+            assert!(input.depends_on.contains(&output.id));
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_rejection_returns_positioned_diagnostics() {
+        let mut board = empty_board();
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let source = "\n\nfunction broken( {\n";
+        let parse_error = super::super::parse(source).unwrap_err();
+
+        let result = apply_flowscript_to_board(&mut board, source, &[], state, None, true)
+            .await
+            .unwrap();
+
+        assert!(result.commands.is_empty());
+        assert_eq!(result.structured_diagnostics.len(), 1);
+        let diagnostic = &result.structured_diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            super::super::FlowScriptDiagnosticCode::FsParseError
+        );
+        let position = &diagnostic.source_span.as_ref().unwrap().start;
+        assert_eq!(position.line, parse_error.line);
+        assert_eq!(position.column, parse_error.col);
     }
 
     #[tokio::test]
@@ -4716,6 +6208,82 @@ eventsChat() {
         assert!(!pin.is_optional());
         assert!(pin.default_value.is_none());
         assert!(pin.options.is_none());
+    }
+
+    #[tokio::test]
+    async fn event_description_applies_to_new_refs_and_composes_with_other_node_edits() {
+        let mut board = empty_board();
+        let mut event = generic_event_catalog_node();
+        event.set_start(true);
+        let catalog = vec![event];
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let result = apply_board_commands_to_board(
+            &mut board,
+            vec![
+                add_generic_event(vec![generic_event_output_def(
+                    "ticketId", "String", None, false, None,
+                )]),
+                BoardCommand::SetNodeDescription {
+                    node_id: "$0".into(),
+                    description: "Look up a ticket".into(),
+                    summary: None,
+                },
+                BoardCommand::RenameNode {
+                    node_id: "$0".into(),
+                    friendly_name: "lookupTicket".into(),
+                    summary: None,
+                },
+                pin_options("$0", "ticketId", true, Some(json!("T-1"))),
+            ],
+            &catalog,
+            state.clone(),
+            None,
+        )
+        .await
+        .expect("new entry description applies");
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let node = board.nodes.values().next().expect("created event");
+        let id = node.id.clone();
+        assert_eq!(node.friendly_name, "lookupTicket");
+        assert_eq!(
+            crate::flow::pin::resolve_schema(&node.description, &board.refs).unwrap(),
+            "Look up a ticket"
+        );
+        let pin = node.get_pin_by_name("ticketId").unwrap();
+        assert!(pin.is_optional());
+        assert_eq!(decode_default(pin), json!("T-1"));
+
+        for description in ["Look up the latest ticket", ""] {
+            let result = apply_board_commands_to_board(
+                &mut board,
+                vec![BoardCommand::SetNodeDescription {
+                    node_id: id.clone(),
+                    description: description.into(),
+                    summary: None,
+                }],
+                &catalog,
+                state.clone(),
+                None,
+            )
+            .await
+            .expect("existing entry description applies");
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            assert_eq!(result.changes.descriptions_changed.len(), 1);
+            assert_eq!(result.changes.descriptions_changed[0].after, description);
+            let node = &board.nodes[&id];
+            assert_eq!(
+                crate::flow::pin::resolve_schema(&node.description, &board.refs).unwrap(),
+                description
+            );
+            assert_eq!(node.friendly_name, "lookupTicket");
+            assert_eq!(
+                decode_default(node.get_pin_by_name("ticketId").unwrap()),
+                json!("T-1")
+            );
+        }
     }
 
     #[test]

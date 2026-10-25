@@ -21,7 +21,7 @@ import {
 	CollapsibleTrigger,
 } from "../../ui/collapsible";
 import type { IBuildLaneDetail, IPlanStep, PlanStepStatus } from "./chat-db";
-import { ReasoningViewer } from "./reasoning-viewer";
+import { ReasoningBody } from "./reasoning-viewer";
 import {
 	ActivitySources,
 	ToolActivityRow,
@@ -189,8 +189,127 @@ function ActivitySummaryLabel({
 	return <span className="min-w-0 flex-1 truncate">{parts.join(" · ")}</span>;
 }
 
+/** A group of one is named after its step: "1 step" and a "0/1" counter add nothing to its title. */
+function SoloSummaryLabel({
+	step,
+	running,
+	durationLabel,
+}: {
+	step: IPlanStep;
+	running: boolean;
+	durationLabel: string | null;
+}) {
+	const title = stepActivityTitle(step);
+	if (running) {
+		return (
+			<span className="min-w-0 flex-1 truncate text-foreground">{title}</span>
+		);
+	}
+	return (
+		<span className="min-w-0 flex-1 truncate">
+			{durationLabel ? `${title} · ${durationLabel}` : title}
+		</span>
+	);
+}
+
+function GroupSummaryLabel({
+	steps,
+	running,
+	activeStep,
+}: {
+	steps: IPlanStep[];
+	running: boolean;
+	activeStep?: IPlanStep;
+}) {
+	const summary = summariseSteps(steps);
+	if (steps.length === 1) {
+		return (
+			<SoloSummaryLabel
+				step={steps[0]}
+				running={running}
+				durationLabel={summary.durationLabel}
+			/>
+		);
+	}
+	return (
+		<ActivitySummaryLabel
+			summary={summary}
+			running={running}
+			activeTitle={activeStep && stepActivityTitle(activeStep)}
+		/>
+	);
+}
+
 const ACTIVITY_TRIGGER_CLASS =
 	"group flex w-full items-center gap-2.5 border-y py-2 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0";
+
+/**
+ * A lone step without structured detail IS the group: its title becomes the header and its text
+ * the body. Rendering it as a row under a header repeats the title and the spinner — a single
+ * "Thinking" step otherwise showed up three times over.
+ */
+function soloPlainStep(steps: IPlanStep[]): IPlanStep | undefined {
+	const [only] = steps;
+	return steps.length === 1 && !only.detail ? only : undefined;
+}
+
+function hasStepBody(step: IPlanStep): boolean {
+	return Boolean(step.description?.trim() || step.reasoning?.trim());
+}
+
+function SoloStepBody({ step }: { step: IPlanStep }) {
+	return (
+		<div className="pt-1 pb-1">
+			{step.description && (
+				<p className="px-2 text-xs text-muted-foreground">{step.description}</p>
+			)}
+			{step.reasoning && <ReasoningBody reasoning={step.reasoning} compact />}
+		</div>
+	);
+}
+
+function StepGroupTrigger({
+	steps,
+	running,
+	open,
+	activeStep,
+	expandable = true,
+}: {
+	steps: IPlanStep[];
+	running: boolean;
+	open: boolean;
+	activeStep?: IPlanStep;
+	expandable?: boolean;
+}) {
+	return (
+		<CollapsibleTrigger
+			className={ACTIVITY_TRIGGER_CLASS}
+			style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
+		>
+			{running ? (
+				<Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+			) : (
+				<StatusDots steps={steps} />
+			)}
+			<span className="flex min-w-0 flex-1 flex-col gap-1.5">
+				<GroupSummaryLabel
+					steps={steps}
+					running={running}
+					activeStep={activeStep}
+				/>
+				<ActivitySources steps={steps} />
+			</span>
+			{expandable && (
+				<ChevronDown
+					className={cn(
+						"size-3.5 shrink-0 transition-transform",
+						open ? "rotate-180" : "",
+					)}
+				/>
+			)}
+		</CollapsibleTrigger>
+	);
+}
 
 /**
  * One concurrent branch of a build, rendered as a block rather than a row.
@@ -399,11 +518,7 @@ function StepRow({
 			</button>
 			{isExpanded && hasReasoning && (
 				<div className="pl-7 pr-2 pb-1.5">
-					<ReasoningViewer
-						reasoning={step.reasoning ?? ""}
-						defaultExpanded={true}
-						compact={true}
-					/>
+					<ReasoningBody reasoning={step.reasoning ?? ""} compact />
 				</div>
 			)}
 		</div>
@@ -472,13 +587,13 @@ export function InlineStepGroup({
 		});
 	};
 
-	const summary = summariseSteps(steps);
 	const running =
 		Boolean(loading) ||
 		steps.some((s) => s.status === "progress" || s.status === "planned");
 	const activeStep = currentStepId
 		? steps.find((s) => s.id === currentStepId)
 		: undefined;
+	const solo = soloPlainStep(steps);
 
 	return (
 		<Collapsible
@@ -488,42 +603,29 @@ export function InlineStepGroup({
 			data-fl-plan-group
 			style={{ maxWidth: "var(--fl-chat-measure, 38rem)" }}
 		>
-			<CollapsibleTrigger
-				className={ACTIVITY_TRIGGER_CLASS}
-				style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
-			>
-				{running ? (
-					<Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
-				) : (
-					<StatusDots steps={steps} />
-				)}
-				<span className="flex min-w-0 flex-1 flex-col gap-1.5">
-					<ActivitySummaryLabel
-						summary={summary}
-						running={running}
-						activeTitle={activeStep && stepActivityTitle(activeStep)}
-					/>
-					<ActivitySources steps={steps} />
-				</span>
-				<ChevronDown
-					className={cn(
-						"size-3.5 shrink-0 transition-transform",
-						open ? "rotate-180" : "",
-					)}
-				/>
-			</CollapsibleTrigger>
+			<StepGroupTrigger
+				steps={steps}
+				running={running}
+				open={open}
+				activeStep={activeStep}
+				expandable={!solo || hasStepBody(solo)}
+			/>
 			<CollapsibleContent>
-				<div className="space-y-0.5 pt-2 pb-1">
-					{steps.map((step) => (
-						<StepRow
-							key={step.id}
-							step={step}
-							isActive={currentStepId === step.id}
-							isExpanded={expandedSteps.has(step.id)}
-							onToggle={toggleStep}
-						/>
-					))}
-				</div>
+				{solo ? (
+					<SoloStepBody step={solo} />
+				) : (
+					<div className="space-y-0.5 pt-2 pb-1">
+						{steps.map((step) => (
+							<StepRow
+								key={step.id}
+								step={step}
+								isActive={currentStepId === step.id}
+								isExpanded={expandedSteps.has(step.id)}
+								onToggle={toggleStep}
+							/>
+						))}
+					</div>
+				)}
 			</CollapsibleContent>
 		</Collapsible>
 	);
@@ -621,8 +723,7 @@ export function PlanSteps({
 	const activeStep = currentStepId
 		? steps.find((s) => s.id === currentStepId)
 		: undefined;
-
-	const summary = summariseSteps(steps);
+	const solo = soloPlainStep(steps);
 
 	return (
 		<Collapsible
@@ -632,57 +733,52 @@ export function PlanSteps({
 			data-fl-plan-group
 			style={{ maxWidth: "var(--fl-chat-measure, 38rem)" }}
 		>
-			<CollapsibleTrigger
-				className={ACTIVITY_TRIGGER_CLASS}
-				style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
-			>
-				{running ? (
-					<Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
-				) : (
-					<StatusDots steps={steps} />
-				)}
-				<span className="flex min-w-0 flex-1 flex-col gap-1.5">
-					<ActivitySummaryLabel
-						summary={summary}
-						running={running}
-						activeTitle={activeStep && stepActivityTitle(activeStep)}
-					/>
-					<ActivitySources steps={steps} />
-				</span>
-				<ChevronDown
-					className={cn(
-						"size-3.5 shrink-0 transition-transform",
-						open ? "rotate-180" : "",
-					)}
-				/>
-			</CollapsibleTrigger>
+			<StepGroupTrigger
+				steps={steps}
+				running={running}
+				open={open}
+				activeStep={activeStep}
+				expandable={!solo || hasStepBody(solo)}
+			/>
 			<CollapsibleContent>
-				<div className="space-y-0.5 pt-2 pb-1">
-					{olderSteps.length > 0 && (
-						<button
-							type="button"
-							onClick={() => setShowOlderSteps((show) => !show)}
-							className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-left text-xs text-muted-foreground hover:bg-muted/40 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-						>
-							<History className="size-3.5 shrink-0" />
-							<span className="flex-1">
-								{showOlderSteps ? t("hide", "Hide") : t("show", "Show")}{" "}
-								{t("countEarlierSteps", {
-									defaultValue_one: "{{count}} earlier step",
-									defaultValue_other: "{{count}} earlier steps",
-									count: olderSteps.length,
-								})}
-							</span>
-							<ChevronDown
-								className={cn(
-									"size-3.5 transition-transform",
-									showOlderSteps ? "rotate-180" : "",
-								)}
-							/>
-						</button>
-					)}
-					{showOlderSteps &&
-						olderSteps.map((step) => (
+				{solo ? (
+					<SoloStepBody step={solo} />
+				) : (
+					<div className="space-y-0.5 pt-2 pb-1">
+						{olderSteps.length > 0 && (
+							<button
+								type="button"
+								onClick={() => setShowOlderSteps((show) => !show)}
+								className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-left text-xs text-muted-foreground hover:bg-muted/40 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+							>
+								<History className="size-3.5 shrink-0" />
+								<span className="flex-1">
+									{showOlderSteps ? t("hide", "Hide") : t("show", "Show")}{" "}
+									{t("countEarlierSteps", {
+										defaultValue_one: "{{count}} earlier step",
+										defaultValue_other: "{{count}} earlier steps",
+										count: olderSteps.length,
+									})}
+								</span>
+								<ChevronDown
+									className={cn(
+										"size-3.5 transition-transform",
+										showOlderSteps ? "rotate-180" : "",
+									)}
+								/>
+							</button>
+						)}
+						{showOlderSteps &&
+							olderSteps.map((step) => (
+								<StepRow
+									key={step.id}
+									step={step}
+									isActive={currentStepId === step.id}
+									isExpanded={expandedSteps.has(step.id)}
+									onToggle={toggleStep}
+								/>
+							))}
+						{visibleSteps.map((step) => (
 							<StepRow
 								key={step.id}
 								step={step}
@@ -691,16 +787,8 @@ export function PlanSteps({
 								onToggle={toggleStep}
 							/>
 						))}
-					{visibleSteps.map((step) => (
-						<StepRow
-							key={step.id}
-							step={step}
-							isActive={currentStepId === step.id}
-							isExpanded={expandedSteps.has(step.id)}
-							onToggle={toggleStep}
-						/>
-					))}
-				</div>
+					</div>
+				)}
 			</CollapsibleContent>
 		</Collapsible>
 	);

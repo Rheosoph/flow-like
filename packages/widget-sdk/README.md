@@ -218,15 +218,16 @@ usage.
 pins `ajv` too old to use here). Supported keywords: `type` (incl. `integer`
 and type arrays), `enum`, `const`, `properties` / `required` /
 `additionalProperties`, `items`, numeric bounds, string and array length,
-`pattern`, `anyOf` / `oneOf` / `allOf`, and the Flow-Like geometry and LLM
-markers.
+`pattern`, `anyOf` / `oneOf` / `allOf`, and the Flow-Like geometry, LLM and
+file markers.
 Schemas must be pre-inlined by the bundler. `$ref` cannot be resolved at
 runtime and is treated as valid.
 
 ## Host media and microphone
 
 Widgets can declare `capabilities` in `defineWidget`: `workers`, `wasm`,
-`media`, `microphone`, and `downloads`. Each is opt-in. Workers, media, and
+`media`, `microphone`, `downloads`, and `uploads` (see
+[Host uploads](#host-uploads)). Each is opt-in. Workers, media, and
 WebAssembly access stay restricted to bundled assets and local Blob URLs. The
 iframe retains its opaque origin. Downloads add only `allow-downloads` to its
 sandbox policy.
@@ -256,3 +257,105 @@ credential query fields. Broadcaster DNS and redirects must also be vetted by
 the source workflow. Native HTML audio uses anonymous CORS; MP3/AAC broadcasts
 are supported when the broadcaster permits it. Widget teardown and grant
 revocation stop playback.
+
+## Host uploads
+
+With the `uploads` capability, a widget hands a file the viewer picked to the
+host instead of sending its bytes through an event. `bridge.uploadFile(file)`
+stores the file in the viewer's temporary Flow-Like storage for this app and
+resolves to a `WidgetFile` handle:
+
+```ts
+interface WidgetFile {
+	$flwFile: string; // opaque handle
+	name: string;
+	size: number;
+	mimeType: string;
+}
+```
+
+Put the handle into a declared event payload. The bundler writes `WidgetFile`
+into the contract as `{"type":"object","x-flow-like-type":"file"}`, also as an
+array element, and the bridge checks the handle form on `emit`. Before the
+event reaches the workflow, the host swaps each handle for the stored file
+`{ name, size, type, url, flowPath }`; an event with an unknown handle is
+dropped. The widget never sees the URL or storage path. Only event payloads may
+carry `WidgetFile`; the bundler rejects it in inputs and queries.
+
+In the workflow, pass the file to **Uploaded File to Path** to get a FlowPath.
+Temporary files expire after about 32 days, so copy the file to permanent
+storage when the app needs to keep it.
+
+```ts
+// widget.config.ts
+import { defineWidget, type WidgetFile } from "@flow-like/widget-sdk";
+
+interface Events {
+	attached: { files: WidgetFile[] };
+}
+
+export default defineWidget<{}, Events, {}>({
+	id: "attachments",
+	name: "Attachments",
+	description: "Hands picked files to the workflow",
+	capabilities: { uploads: true },
+});
+```
+
+```tsx
+import { WidgetUploadError, type WidgetFile } from "@flow-like/widget-sdk";
+import { useStore } from "@flow-like/widget-sdk/react";
+import { type ChangeEvent, useState } from "react";
+import { bridge } from "./main";
+
+export function AttachFiles() {
+	const canUpload = useStore(bridge.$capabilities).uploads === true;
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	async function attach(event: ChangeEvent<HTMLInputElement>) {
+		const picked = [...(event.target.files ?? [])];
+		event.target.value = "";
+		setBusy(true);
+		setError(null);
+		try {
+			const files: WidgetFile[] = [];
+			for (const file of picked) files.push(await bridge.uploadFile(file));
+			if (files.length > 0) bridge.emit("attached", { files });
+		} catch (e) {
+			setError(e instanceof WidgetUploadError ? e.message : "Upload failed");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	if (!canUpload) return null;
+	return (
+		<label>
+			<input type="file" multiple disabled={busy} onChange={attach} />
+			{error && <p role="alert">{error}</p>}
+		</label>
+	);
+}
+```
+
+Uploads are for signed-in viewers only. A file may be at most 25 MB
+(`MAX_WIDGET_UPLOAD_BYTES`), and at most 4 uploads run at once per widget
+(`MAX_WIDGET_UPLOADS_IN_FLIGHT`). `options.name` replaces the file name, and
+`options.signal` cancels the upload with an `AbortError`. Other failures reject
+with a `WidgetUploadError` whose `code` is one of:
+
+| Code | Meaning |
+| --- | --- |
+| `not-granted` | No `uploads` grant: undeclared, declined, preview or standalone mode |
+| `too-large` | The file exceeds 25 MB |
+| `busy` | Too many uploads in flight or in the last minute |
+| `sign-in-required` | The viewer is not signed in |
+| `unavailable` | The host cannot store files here |
+| `failed` | The upload failed |
+| `timeout` | No result within 10 minutes |
+| `disposed` | The widget was torn down |
+
+Never send file bytes, base64 or data URLs through events. Hosted runs cap a
+request at 2 MiB, and the host repeats the payload in the action context, so
+even files well below 1 MB can fail.

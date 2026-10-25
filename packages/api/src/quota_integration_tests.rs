@@ -9,6 +9,7 @@ use sea_orm::{
     TransactionTrait,
 };
 use serde_json::json;
+use std::sync::Arc;
 
 async fn execute(db: &DatabaseConnection, sql: &str) {
     db.execute_raw(Statement::from_string(DatabaseBackend::Postgres, sql))
@@ -1345,4 +1346,214 @@ async fn overview_first_use_and_renewal_create_one_period_under_concurrency() {
             [payer.into(),chrono::Utc::now().timestamp_millis().into()])).await.unwrap().unwrap();
         assert_eq!(row.try_get::<i64>("", "total").unwrap(), 1);
     }
+}
+
+async fn admission_fixture() -> DatabaseConnection {
+    use crate::entity::{execution_run, execution_run_caller_app};
+    use sea_orm::{Schema, sea_query::Table};
+    let db = fixture().await;
+    for statement in [
+        r#"CREATE TYPE "UserStatus" AS ENUM ('ACTIVE','INACTIVE')"#,
+        r#"CREATE TYPE "UserTier" AS ENUM ('FREE','ENTERPRISE')"#,
+        r#"CREATE TABLE "User" (id TEXT PRIMARY KEY,status "UserStatus" NOT NULL,tier "UserTier" NOT NULL,"billingPeriodAnchor" TIMESTAMPTZ)"#,
+        r#"CREATE TABLE "ProjectCapacity" ("appId" TEXT PRIMARY KEY,"payerId" TEXT NOT NULL)"#,
+        r#"CREATE TABLE "App" (id TEXT PRIMARY KEY,"ownerRoleId" TEXT)"#,
+        r#"CREATE TABLE "Membership" ("userId" TEXT,"appId" TEXT,"roleId" TEXT)"#,
+        r#"INSERT INTO "User" (id,status,tier) VALUES ('payer','ACTIVE','FREE'),('inactive','INACTIVE','FREE')"#,
+        r#"INSERT INTO "ProjectCapacity" VALUES ('app-1','payer'),('app-inactive','inactive')"#,
+    ] {
+        execute(&db, statement).await;
+    }
+    // The run entities are pinned to `public`; their rows use unique ids per test run.
+    let schema = Schema::new(DatabaseBackend::Postgres);
+    for source in [
+        schema.create_table_from_entity(execution_run::Entity),
+        schema.create_table_from_entity(execution_run_caller_app::Entity),
+    ] {
+        let mut table = Table::create();
+        table
+            .table(source.get_table_name().unwrap().clone())
+            .if_not_exists();
+        for column in source.get_columns() {
+            table.col(column.clone());
+        }
+        db.execute(&table).await.unwrap();
+    }
+    db
+}
+
+fn admission_request(run_id: &str, app_id: &str) -> crate::execution::DispatchRequest {
+    serde_json::from_value(json!({
+        "run_id": run_id, "app_id": app_id, "board_id": "board-1", "node_id": "node-1",
+        "user_id": "actor", "credentials_json": "{}", "jwt": "", "callback_url": "https://api.test",
+    }))
+    .unwrap()
+}
+
+fn run_record(run_id: &str, app_id: &str) -> crate::quota::RunRecord {
+    use crate::entity::{
+        execution_run,
+        sea_orm_active_enums::{RunMode, RunStatus, RunVariant},
+    };
+    use sea_orm::ActiveValue::Set;
+    let now = chrono::Utc::now().fixed_offset();
+    let chain = vec!["caller-app".to_string()];
+    crate::quota::RunRecord {
+        caller_apps: crate::entity::caller_apps::caller_app_rows(run_id, &chain),
+        run: execution_run::ActiveModel {
+            id: Set(run_id.into()),
+            board_id: Set("board-1".into()),
+            version: Set(None),
+            event_id: Set(Some("event-1".into())),
+            node_id: Set(Some("node-1".into())),
+            status: Set(RunStatus::Pending),
+            mode: Set(RunMode::Http),
+            run_variant: Set(RunVariant::Primary),
+            variant_name: Set(None),
+            shadow_of_run_id: Set(None),
+            regression_run_id: Set(None),
+            log_level: Set(0),
+            input_payload_len: Set(0),
+            input_payload_key: Set(None),
+            output_payload_len: Set(0),
+            error_message: Set(None),
+            progress: Set(0),
+            current_step: Set(None),
+            started_at: Set(None),
+            completed_at: Set(None),
+            expires_at: Set(None),
+            user_id: Set(Some("actor".into())),
+            technical_user_id: Set(None),
+            caller_app_chain: Set(Some(chain.into())),
+            trace_id: Set(None),
+            parent_run_id: Set(None),
+            correlation_keys: Set(None),
+            app_id: Set(app_id.into()),
+            created_at: Set(now),
+            updated_at: Set(now),
+            event_version: Set(None),
+            nodes: Set(None),
+            logs_count: Set(None),
+        },
+    }
+}
+
+fn api_attempt(request_id: &str) -> Arc<crate::compute_attempts::AttemptContext> {
+    use crate::compute_attempts::{AttemptContext, AttemptReport, RATE_VERSION};
+    Arc::new(AttemptContext::new(
+        AttemptReport {
+            function_name: "flow-api".into(),
+            request_id: request_id.into(),
+            operation_id: None,
+            payer_id: None,
+            role: "api".into(),
+            cost_class: "overhead".into(),
+            memory_mb: 1024,
+            architecture: "arm64".into(),
+            region: "eu-west-1".into(),
+            measured_duration_ms: None,
+            billed_duration_ms: None,
+            cost_micro_usd: None,
+            evidence: "measured_estimate".into(),
+            rate_version: RATE_VERSION.into(),
+            status: "started".into(),
+            started_at: chrono::Utc::now(),
+            revision: "started".into(),
+        },
+        DbDialect::Postgres,
+    ))
+}
+
+async fn count(db: &DatabaseConnection, sql: &str, id: &str) -> i64 {
+    db.query_one_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        sql,
+        [id.into()],
+    ))
+    .await
+    .unwrap()
+    .unwrap()
+    .try_get("", "n")
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn cloud_admission_commits_run_and_attempt_in_one_transaction() {
+    use crate::compute_attempts::CURRENT_ATTEMPT;
+    let db = admission_fixture().await;
+    let tiers = overview_tiers();
+    let admit = |run_id: String, app_id: &'static str, attempt| {
+        let db = db.clone();
+        let tiers = tiers.clone();
+        CURRENT_ATTEMPT.scope(attempt, async move {
+            crate::quota::reserve_cloud_with_db(
+                &db,
+                DbDialect::Postgres,
+                &tiers,
+                &admission_request(&run_id, app_id),
+                "realtime",
+                Some(run_record(&run_id, app_id)),
+            )
+            .await
+        })
+    };
+    let runs = r#"SELECT COUNT(*) AS n FROM public."ExecutionRun" WHERE id=$1"#;
+    let lineage = r#"SELECT COUNT(*) AS n FROM public."ExecutionRunCallerApp" WHERE "runId"=$1"#;
+    let operations = r#"SELECT COUNT(*) AS n FROM "QuotaOperation" WHERE id=$1"#;
+    let attempts = r#"SELECT COUNT(*) AS n FROM "ComputeAttempt" WHERE "operationId"=$1 AND "payerId"='payer' AND role='workflow_api'"#;
+
+    let admitted = format!("admitted-{}", flow_like_types::create_id());
+    let context = api_attempt(&admitted);
+    let admission = admit(admitted.clone(), "app-1", context.clone())
+        .await
+        .unwrap();
+    assert_eq!(admission.runtime_ms, 10_000);
+    for sql in [runs, lineage, operations, attempts] {
+        assert_eq!(count(&db, sql, &admitted).await, 1, "{sql}");
+    }
+    let confirmed = context.admitted.lock().await.clone().unwrap();
+    assert_eq!(confirmed.operation_id.as_deref(), Some(admitted.as_str()));
+    assert_eq!(confirmed.payer_id.as_deref(), Some("payer"));
+
+    // An unknown commit outcome re-runs the admission: it must find the committed
+    // reservation instead of inserting the run a second time.
+    let again = admit(admitted.clone(), "app-1", api_attempt("repeat"))
+        .await
+        .unwrap();
+    assert_eq!(again.created_at, admission.created_at);
+    assert_eq!(count(&db, runs, &admitted).await, 1);
+
+    let rejected = format!("rejected-{}", flow_like_types::create_id());
+    let context = api_attempt(&rejected);
+    let error = admit(rejected.clone(), "app-inactive", context.clone())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.status(), axum::http::StatusCode::FORBIDDEN);
+    for sql in [runs, lineage, operations] {
+        assert_eq!(count(&db, sql, &rejected).await, 0, "{sql}");
+    }
+    assert!(context.admitted.lock().await.is_none());
+    assert_eq!(
+        count(
+            &db,
+            r#"SELECT COUNT(*) AS n FROM "ComputeAttempt" WHERE "requestId"=$1"#,
+            &rejected
+        )
+        .await,
+        0
+    );
+
+    execute(
+        &db,
+        &format!(r#"UPDATE "QuotaOperation" SET status='running' WHERE id='{admitted}'"#),
+    )
+    .await;
+    let started = admit(admitted.clone(), "app-1", api_attempt("late"))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(started.status(), axum::http::StatusCode::CONFLICT);
+    db.close().await.unwrap();
 }

@@ -14,6 +14,7 @@ use flow_like_storage::{
 };
 use flow_like_types::{
     Bytes, Cacheable, JsonSchema, anyhow,
+    dispatch::REQUEST_FILES_STORE_REF,
     json::{Deserialize, Serialize},
 };
 use std::{path::PathBuf, sync::Arc};
@@ -71,8 +72,17 @@ impl FlowPath {
     pub async fn get(
         &self,
         context: &mut ExecutionContext,
-        mut bypass_cache: bool,
+        bypass_cache: bool,
     ) -> flow_like_types::Result<Vec<u8>> {
+        Ok(self.get_bytes(context, bypass_cache).await?.to_vec())
+    }
+
+    /// The object's contents as the store returned them, without copying.
+    pub async fn get_bytes(
+        &self,
+        context: &mut ExecutionContext,
+        mut bypass_cache: bool,
+    ) -> flow_like_types::Result<Bytes> {
         let store: FlowLikeStore = self.to_store(context).await?;
         if let FlowLikeStore::Memory(_) = store {
             bypass_cache = true;
@@ -83,8 +93,7 @@ impl FlowPath {
             let file = file.ok_or_else(|| {
                 flow_like_types::anyhow!("File not found in store: {}", self.path)
             })?;
-            let bytes = file.bytes().await?;
-            return Ok(bytes.to_vec());
+            return Ok(file.bytes().await?);
         }
 
         let (get_results, dirty) = self.get_cached_file(context).await?;
@@ -114,7 +123,6 @@ impl FlowPath {
             }
         }
 
-        let bytes = bytes.to_vec();
         Ok(bytes)
     }
 
@@ -122,10 +130,19 @@ impl FlowPath {
         &self,
         context: &mut ExecutionContext,
         bytes: Vec<u8>,
+        bypass_cache: bool,
+    ) -> flow_like_types::Result<()> {
+        self.put_bytes(context, bytes, bypass_cache).await
+    }
+
+    /// Writes `bytes` without copying them; a `Bytes` shared with a pin stays shared.
+    pub async fn put_bytes(
+        &self,
+        context: &mut ExecutionContext,
+        bytes: impl Into<Bytes>,
         mut bypass_cache: bool,
     ) -> flow_like_types::Result<()> {
-        let bytes = Bytes::from(bytes);
-        let payload = PutPayload::from_bytes(bytes);
+        let payload = PutPayload::from_bytes(bytes.into());
         let store = self.to_store(context).await?;
 
         if let FlowLikeStore::Memory(_) = store {
@@ -151,10 +168,43 @@ impl FlowPath {
         Ok(())
     }
 
+    /// Request-file FlowPaths arrive in client payloads, while the request-files
+    /// store spans everything the run's credential reaches (the whole content
+    /// bucket on AWS and GCP). Only the run's own scratch roots may be named
+    /// through it, so a forged path can't read or create app storage objects.
+    fn ensure_request_file_scope(
+        &self,
+        context: &ExecutionContext,
+        store_ref: &str,
+    ) -> flow_like_types::Result<()> {
+        if store_ref != REQUEST_FILES_STORE_REF {
+            return Ok(());
+        }
+        let cache = context.execution_cache.as_ref().ok_or_else(|| {
+            anyhow!(
+                "FlowPath '{}' names the request-files store, but the run has no execution cache to scope it",
+                self.path
+            )
+        })?;
+        let user_root = cache.get_cache(false, true)?;
+        let global_root = cache.get_cache(false, false)?;
+        let path = self.object_path();
+        if path.prefix_matches(&user_root) || path.prefix_matches(&global_root) {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "FlowPath '{}' lies outside this run's request files ('{}' or '{}'); request-file FlowPaths come from the client and may only name the uploader's own scratch area",
+            self.path,
+            user_root,
+            global_root
+        ))
+    }
+
     pub async fn to_store(
         &self,
         context: &mut ExecutionContext,
     ) -> flow_like_types::Result<FlowLikeStore> {
+        self.ensure_request_file_scope(context, &self.store_ref)?;
         let store = context.get_cache(&self.store_ref).await.ok_or_else(|| {
             anyhow!(
                 "Failed to resolve FlowPath store '{}' in the current run. store_ref is a per-run cache key, so a FlowPath produced by another app or run cannot be resolved here — pass a signed URL across the boundary instead of the FlowPath.",
@@ -179,6 +229,7 @@ impl FlowPath {
         }
 
         let store_ref = cache_store_ref.unwrap();
+        self.ensure_request_file_scope(context, &store_ref)?;
         let store = context.get_cache(&store_ref).await.ok_or_else(|| {
             anyhow!(
                 "Failed to resolve FlowPath cache store '{}' in the current run. cache_store_ref is a per-run cache key; a FlowPath from another app or run is not transferable — use a signed URL across the boundary.",

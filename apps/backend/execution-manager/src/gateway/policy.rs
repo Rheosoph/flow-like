@@ -226,28 +226,38 @@ impl Policy {
             }
             let base = format!("/api/v1/channels/{}", self.data.run_id);
             let message = path.strip_prefix(&format!("{base}/messages/"));
+            let app_route =
+                path.strip_prefix(&format!("/api/v1/execution/apps/{}/", self.data.app_id));
             let allowed = (method == Method::POST
                 && matches!(
                     path.as_str(),
                     "/api/v1/execution/progress" | "/api/v1/execution/events"
                 ))
                 || (method == Method::GET
-                    && path
-                        .strip_prefix(&format!("/api/v1/execution/apps/{}/", self.data.app_id))
-                        .is_some_and(|route| matches!(route, "widgets" | "package-widgets")))
+                    && app_route.is_some_and(|route| {
+                        matches!(route, "widgets" | "package-widgets" | "locked/status")
+                    }))
                 || (method == Method::POST
-                    && path
-                        .strip_prefix(&format!("/api/v1/execution/apps/{}/", self.data.app_id))
-                        .is_some_and(|route| {
-                            matches!(
-                                route,
-                                "teams/send"
-                                    | "teams/messages"
-                                    | "teams/members"
-                                    | "mail/send"
-                                    | "mail/reply"
-                            )
-                        }))
+                    && app_route.is_some_and(|route| {
+                        matches!(
+                            route,
+                            "teams/send"
+                                | "teams/messages"
+                                | "teams/members"
+                                | "mail/send"
+                                | "mail/reply"
+                                | "locked/list"
+                                | "locked/get"
+                                | "locked/upload"
+                                | "locked/commit"
+                                | "locked/abort"
+                                | "locked/download"
+                                | "locked/retention"
+                                | "locked/legal-hold"
+                                | "locked/auto-delete"
+                                | "locked/purge"
+                        )
+                    }))
                 || (method == Method::DELETE && path == base)
                 || (method == Method::POST
                     && (path == format!("{base}/messages")
@@ -279,6 +289,8 @@ impl Policy {
                 "requestpayment",
                 "accelerate",
                 "object-lock",
+                "retention",
+                "legal-hold",
                 "analytics",
                 "inventory",
                 "metrics",
@@ -570,6 +582,150 @@ mod tests {
             (Method::POST, "/api/v1/apps/app-1/mail/send", true, false),
             (
                 Method::GET,
+                "/api/v1/execution/apps/app-1/locked/status",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/list",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/get",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/upload",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/commit",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/abort",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/download",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/retention",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/legal-hold",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/auto-delete",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/purge",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/status",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/locked/upload",
+                true,
+                false,
+            ),
+            (
+                Method::DELETE,
+                "/api/v1/execution/apps/app-1/locked/purge",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-2/locked/status",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-2/locked/upload",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/locked/status",
+                false,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/commit",
+                false,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/upload/extra",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/locked/status/extra",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/delete",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/locked/",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/apps/app-1/locked/upload",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
                 "/api/v1/channels/run-1/messages/request-1",
                 true,
                 true,
@@ -634,18 +790,36 @@ mod tests {
                 "{path}"
             );
         }
-        for target in [
-            "http://callback:8080/api/v1/execution/apps/app-1/teams/send",
-            "http://callback:8080/api/v1/execution/apps/app-1/teams/messages",
-            "http://callback:8080/api/v1/execution/apps/app-1/teams/members",
-            "http://callback:8080/api/v1/execution/apps/app-1/mail/send",
-            "http://callback:8080/api/v1/execution/apps/app-1/mail/reply",
+        for (method, route) in [
+            (Method::POST, "teams/send"),
+            (Method::POST, "teams/messages"),
+            (Method::POST, "teams/members"),
+            (Method::POST, "mail/send"),
+            (Method::POST, "mail/reply"),
+            (Method::GET, "locked/status"),
+            (Method::POST, "locked/list"),
+            (Method::POST, "locked/get"),
+            (Method::POST, "locked/upload"),
+            (Method::POST, "locked/commit"),
+            (Method::POST, "locked/abort"),
+            (Method::POST, "locked/download"),
+            (Method::POST, "locked/retention"),
+            (Method::POST, "locked/legal-hold"),
+            (Method::POST, "locked/auto-delete"),
+            (Method::POST, "locked/purge"),
         ] {
-            let mut headers = auth(target, true);
+            let target = format!("http://callback:8080/api/v1/execution/apps/app-1/{route}");
+            let mut headers = auth(&target, true);
+            assert!(
+                policy
+                    .authorize(&method, &target.parse().unwrap(), &headers)
+                    .is_ok(),
+                "{target}"
+            );
             headers.insert("authorization", "Bearer another-run-jwt".parse().unwrap());
             assert!(
                 policy
-                    .authorize(&Method::POST, &target.parse().unwrap(), &headers)
+                    .authorize(&method, &target.parse().unwrap(), &headers)
                     .is_err(),
                 "{target}"
             );
@@ -679,6 +853,54 @@ mod tests {
                 allowed,
                 "{path}"
             );
+        }
+    }
+
+    #[test]
+    fn locked_bucket_accepts_signed_object_requests_only_when_configured() {
+        let put = "http://objects:9000/flow-like-locked/apps/app-1/project/item-1/version-1?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=content-type%3Bhost%3Bx-amz-checksum-sha256%3Bx-amz-object-lock-mode%3Bx-amz-object-lock-retain-until-date&X-Amz-Signature=sig";
+        let get = "http://objects:9000/flow-like-locked/apps/app-1/project/item-1/version-1?versionId=v1&X-Amz-Signature=sig";
+        let lock_headers = |target: &str| {
+            let mut headers = auth(target, false);
+            for (name, value) in [
+                ("content-type", "application/pdf"),
+                ("x-amz-object-lock-mode", "COMPLIANCE"),
+                (
+                    "x-amz-object-lock-retain-until-date",
+                    "2036-10-21T00:00:00Z",
+                ),
+                (
+                    "x-amz-checksum-sha256",
+                    "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+                ),
+            ] {
+                headers.insert(name, value.parse().unwrap());
+            }
+            headers
+        };
+        let allows = |policy: &Policy, method: Method, target: &str, headers: HeaderMap| {
+            policy
+                .authorize(&method, &target.parse().unwrap(), &headers)
+                .is_ok()
+        };
+        let unconfigured = Policy::new(data()).unwrap();
+        assert!(!allows(&unconfigured, Method::PUT, put, lock_headers(put)));
+        assert!(!allows(&unconfigured, Method::GET, get, auth(get, false)));
+        let mut input = data();
+        input.buckets.push("flow-like-locked".into());
+        let policy = Policy::new(input).unwrap();
+        assert!(allows(&policy, Method::PUT, put, lock_headers(put)));
+        assert!(allows(&policy, Method::GET, get, auth(get, false)));
+        for path in [
+            "/flow-like-locked/key?object-lock",
+            "/flow-like-locked?object-lock=",
+            "/flow-like-locked/key?retention&versionId=v1",
+            "/flow-like-locked/key?legal-hold&versionId=v1",
+            "/flow-like-locked/",
+        ] {
+            let target = format!("http://objects:9000{path}");
+            let headers = auth(&target, false);
+            assert!(!allows(&policy, Method::PUT, &target, headers), "{path}");
         }
     }
 

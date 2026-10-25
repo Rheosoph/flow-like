@@ -1139,7 +1139,6 @@ async fn housekeeping(state: &AppState, claims: &SinkTriggerClaims) {
 
 /// The original message behind a reply, with its transport verdicts.
 pub(crate) struct ReplySource {
-    pub(crate) recipient: String,
     pub(crate) envelope_from: String,
     pub(crate) raw: Vec<u8>,
     pub(crate) authentication: Option<InboundEmailAuthentication>,
@@ -1177,7 +1176,6 @@ pub(crate) async fn reply_source(
         return Err(ApiError::gone("The original email has expired"));
     }
     Ok(ReplySource {
-        recipient: envelope.recipient,
         envelope_from: envelope.envelope_from,
         raw: raw?,
         authentication: envelope.authentication,

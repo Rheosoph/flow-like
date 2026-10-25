@@ -2,12 +2,13 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildForecastPlot,
 	finiteValue,
-	numericInputValue,
+	forecastBoundarySegment,
 	forecastCovariateSupport,
 	forecastOutputLabel,
 	forecastingColumns,
 	formatForecastNumber,
 	formatForecastTime,
+	numericInputValue,
 	sampleForecastPlot,
 	sampleTimeline,
 	tableForecastSql,
@@ -185,6 +186,79 @@ describe("checkpoint covariate support", () => {
 });
 
 describe("forecast chart", () => {
+	it("joins history to the next prediction without inventing a forecast at the cutoff", () => {
+		const points = buildForecastPlot(
+			[{ timestamp: 1000, value: 10 }],
+			[{ timestamp: 2000, point: 12, quantiles: [11, 14] }],
+			1000,
+			[0.1, 0.9],
+		);
+		const original = structuredClone(points);
+		expect(forecastBoundarySegment(points, 1000)).toEqual([
+			{ x: 1000, y: 10 },
+			{ x: 2000, y: 12 },
+		]);
+		expect(points).toEqual(original);
+		expect(points[0]).toMatchObject({ forecast: null, interval: null });
+		expect(points[1]).toMatchObject({ forecast: 12, interval: [11, 14] });
+	});
+	it("leaves missing observations, missing predictions and longer time gaps unconnected", () => {
+		const build = (lastValue: number | null, firstPrediction = 3000) =>
+			buildForecastPlot(
+				[
+					{ timestamp: 1000, value: 8 },
+					{ timestamp: 2000, value: lastValue },
+				],
+				[{ timestamp: firstPrediction, point: 12, quantiles: [] }],
+				2000,
+				[],
+			);
+		expect(forecastBoundarySegment(build(null), 2000)).toBeUndefined();
+		expect(forecastBoundarySegment(build(10, 4000), 2000)).toBeUndefined();
+		expect(forecastBoundarySegment(build(10), 1500)).toBeUndefined();
+		expect(forecastBoundarySegment(build(10))).toBeUndefined();
+		expect(forecastBoundarySegment([], 2000)).toBeUndefined();
+		const missingForecast = build(10);
+		missingForecast[2].forecast = null;
+		missingForecast.push({
+			timestamp: 4000,
+			history: null,
+			actual: null,
+			forecast: 12,
+			interval: null,
+		});
+		expect(forecastBoundarySegment(missingForecast, 2000)).toBeUndefined();
+	});
+	it("preserves boundary gaps and cadence when reducing long charts", () => {
+		const history = Array.from({ length: 4000 }, (_, timestamp) => ({
+			timestamp,
+			value: timestamp % 10,
+		}));
+		const predictions = Array.from({ length: 2000 }, (_, index) => ({
+			timestamp: 4000 + index,
+			point: 5,
+			quantiles: [],
+		}));
+		const points = buildForecastPlot(history, predictions, 3999, []);
+		expect(forecastBoundarySegment(sampleForecastPlot(points), 3999)).toEqual([
+			{ x: 3999, y: 9 },
+			{ x: 4000, y: 5 },
+		]);
+		points[4000].forecast = null;
+		expect(
+			forecastBoundarySegment(sampleForecastPlot(points), 3999),
+		).toBeUndefined();
+		points[3999].history = null;
+		points[4000].forecast = 5;
+		expect(
+			forecastBoundarySegment(sampleForecastPlot(points), 3999),
+		).toBeUndefined();
+		points[3999].history = 9;
+		points.splice(4000, 10);
+		expect(
+			forecastBoundarySegment(sampleForecastPlot(points), 3999),
+		).toBeUndefined();
+	});
 	it("preserves point-only forecasts without inventing quantile bounds", () => {
 		const plot = buildForecastPlot(
 			[{ timestamp: 1, value: 10 }],

@@ -1,6 +1,12 @@
 {
 	"identifier": "com.flow-like.app",
 	"bundle": {
+		"macOS": {
+			"frameworks": [
+				"binaries/apple-native/FlowLikeNative.framework",
+				"binaries/odbc/x86_64-apple-darwin/libodbc.2.dylib"
+			]
+		},
 		"externalBin": [
 			"binaries/mac/intel/libllama-server-impl.dylib",
 			"binaries/mac/intel/libllama-common.dylib",

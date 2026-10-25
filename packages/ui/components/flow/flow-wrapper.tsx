@@ -87,7 +87,7 @@ export function FlowWrapper({
 			);
 			setDetail(undefined);
 		},
-		[detail, boardId],
+		[detail],
 	);
 
 	return (
@@ -165,6 +165,7 @@ export function FlowWrapper({
 				renderOverlay={renderOverlay}
 				sub={sub}
 				externalAssistant={externalAssistant}
+				pendingDrop={detail}
 			/>
 			<BoardBridgeResponder
 				snapshot={snapshotFn}
@@ -176,7 +177,7 @@ export function FlowWrapper({
 					if (!open) setDetail(undefined);
 				}}
 			>
-				<DialogContent>
+				<DialogContent aria-describedby={undefined}>
 					<DialogHeader>
 						<DialogTitle>
 							{t("reference", "Reference:")} {detail?.variable.name}

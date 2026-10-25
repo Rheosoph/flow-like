@@ -4,8 +4,14 @@ import type {
 	IExecutionUsageRecord,
 	ILlmUsageRecord,
 	IPaginatedResponse,
+	IRecentExecutionsResponse,
 	IUsageSummary,
 } from "../../lib/schema/usage/tracking";
+
+export interface IUsageRequestOptions {
+	/** Read current usage when the caller explicitly requests a refresh. */
+	fresh?: boolean;
+}
 
 export interface IUsageState {
 	getLlmHistory(
@@ -24,7 +30,15 @@ export interface IUsageState {
 		page?: number,
 		pageSize?: number,
 		appId?: string,
+		options?: IUsageRequestOptions,
 	): Promise<IPaginatedResponse<IExecutionUsageRecord>>;
+
+	/** Newest execution records without counting the full history. */
+	getRecentExecutions(
+		limit?: number,
+		appId?: string,
+		options?: IUsageRequestOptions,
+	): Promise<IRecentExecutionsResponse>;
 
 	/**
 	 * Counts for a whole period rather than a page of it. Prefer this over
@@ -35,7 +49,8 @@ export interface IUsageState {
 	getExecutionActivity(
 		days?: number,
 		appId?: string,
+		options?: IUsageRequestOptions,
 	): Promise<IExecutionActivity>;
 
-	getUsageSummary(): Promise<IUsageSummary>;
+	getUsageSummary(options?: IUsageRequestOptions): Promise<IUsageSummary>;
 }

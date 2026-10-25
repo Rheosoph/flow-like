@@ -122,6 +122,33 @@ function inlineWidgetComponents(
 	return inlineDefinition?.components ?? [];
 }
 
+/**
+ * Each rendered component's data under the key its own `change` events store values at:
+ * top-level components by surface, inline widget children by their instance. The legacy
+ * `surfaceId/childId` alias of a widget child is a read fallback and never a target.
+ */
+export function elementValueTargets(
+	components: Record<string, SurfaceComponent> | undefined,
+	surfaceId: string,
+): Array<[string, JsonRecord]> {
+	const targets: Array<[string, JsonRecord]> = [];
+	if (!components || !surfaceId) return targets;
+
+	for (const [componentId, component] of Object.entries(components)) {
+		const data = component?.component as unknown;
+		if (!isRecord(data)) continue;
+		targets.push([`${surfaceId}/${componentId}`, data]);
+
+		if (data.type !== "widgetInstance") continue;
+		if (typeof data.instanceId !== "string" || !data.instanceId) continue;
+		for (const child of inlineWidgetComponents(data)) {
+			if (!child?.id || !isRecord(child.component)) continue;
+			targets.push([`${data.instanceId}/${child.id}`, child.component]);
+		}
+	}
+	return targets;
+}
+
 export function widgetComponentsForScope(
 	components: Record<string, SurfaceComponent> | undefined,
 	widgetScope: WidgetElementScope,

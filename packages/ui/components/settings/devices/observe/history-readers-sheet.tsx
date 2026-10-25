@@ -548,7 +548,7 @@ export function HistoryReadersSheet({
 						? {
 								what: t(
 									"devices:observe.history.sheet.setupWhat",
-									"{{device}} seals these {{kind}} every 30 s, encrypted for the readers, and stores them on the hub.",
+									"{{device}} seals these {{kind}} within 5 minutes, encrypted for the readers, and stores them on the hub.",
 									{ device: target.name, kind: kindText },
 								),
 								who: t(
@@ -557,7 +557,7 @@ export function HistoryReadersSheet({
 								),
 								when: t(
 									"devices:observe.history.sheet.setupWhen",
-									"From the next sealed chunk, within 30 s.",
+									"From the next sealed chunk, within 5 minutes.",
 								),
 								undo: {
 									reversible: true,
@@ -578,7 +578,7 @@ export function HistoryReadersSheet({
 								),
 								when: t(
 									"devices:observe.history.sheet.changeWhen",
-									"Applies to future records only, from the next sealed chunk (every 30 s).",
+									"Applies to future records only, from the next sealed chunk (within 5 minutes).",
 								),
 								undo: {
 									reversible: true,

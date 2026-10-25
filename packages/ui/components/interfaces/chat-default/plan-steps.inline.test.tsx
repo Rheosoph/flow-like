@@ -91,6 +91,44 @@ describe("InlineStepGroup", () => {
 	});
 });
 
+describe("InlineStepGroup with a single plain step", () => {
+	test("the step is the header, without a 0/1 counter or a second row", async () => {
+		const { InlineStepGroup } = await import("./plan-steps");
+		const { container } = await mount(
+			<InlineStepGroup
+				steps={[step({ id: "a", title: "Thinking", status: "progress" })]}
+				currentStepId="a"
+				loading
+			/>,
+		);
+
+		expect(container.textContent).toBe("Thinking");
+		expect(
+			container.querySelectorAll('[aria-label="In progress"]'),
+		).toHaveLength(0);
+	});
+
+	test("a settled one folds to its own title rather than 1 step", async () => {
+		const { InlineStepGroup } = await import("./plan-steps");
+		const { container } = await mount(
+			<InlineStepGroup
+				steps={[
+					step({
+						id: "a",
+						title: "Thinking",
+						reasoning: "Weighing the options.",
+					}),
+				]}
+			/>,
+		);
+
+		const trigger = container.querySelector("button");
+		expect(trigger?.getAttribute("data-state")).toBe("closed");
+		expect(trigger?.textContent).toContain("Thinking");
+		expect(trigger?.textContent).not.toContain("1 step");
+	});
+});
+
 describe("InlineStepGroup during a live turn", () => {
 	test("keeps each website visible once when completed steps collapse", async () => {
 		const { InlineStepGroup } = await import("./plan-steps");

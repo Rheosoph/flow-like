@@ -1,7 +1,8 @@
 use axum::http::{
     HeaderName, HeaderValue, Method,
     header::{
-        ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, RANGE, WWW_AUTHENTICATE,
+        ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, RANGE,
+        WWW_AUTHENTICATE,
     },
 };
 use flow_like_secrets::{
@@ -42,6 +43,7 @@ const AZURE_PROVIDER_SETTINGS: &[&str] = &[
     "META_BUCKET_PROVIDER",
     "CONTENT_BUCKET_PROVIDER",
     "LOGS_BUCKET_PROVIDER",
+    "LOCKED_BUCKET_PROVIDER",
 ];
 
 #[derive(Clone, Debug)]
@@ -53,6 +55,8 @@ pub struct Config {
     pub meta_container: String,
     pub cdn_container: String,
     pub log_container: String,
+    pub locked_container: Option<String>,
+    pub locked_storage_account_name: Option<String>,
     pub key_vault_url: String,
     pub secret_prefix: String,
     pub managed_identity_client_id: Option<String>,
@@ -74,12 +78,27 @@ impl Config {
         }
 
         let storage_account_name = required_env("AZURE_STORAGE_ACCOUNT_NAME")?;
-        validate_storage_account_name(&storage_account_name)?;
+        validate_storage_account_name("AZURE_STORAGE_ACCOUNT_NAME", &storage_account_name)?;
 
         let content_container = required_container("AZURE_CONTENT_CONTAINER")?;
         let meta_container = required_container("AZURE_META_CONTAINER")?;
         let cdn_container = required_container("AZURE_CDN_CONTAINER")?;
         let log_container = required_container("AZURE_LOG_CONTAINER")?;
+
+        let locked_container = optional_nonempty_env("AZURE_LOCKED_CONTAINER")?;
+        let locked_storage_account_name =
+            optional_nonempty_env("AZURE_LOCKED_STORAGE_ACCOUNT_NAME")?;
+        validate_locked_storage(
+            locked_container.as_deref(),
+            locked_storage_account_name.as_deref(),
+            &storage_account_name,
+            [
+                &content_container,
+                &meta_container,
+                &cdn_container,
+                &log_container,
+            ],
+        )?;
 
         let key_vault_url = required_env("AZURE_KEY_VAULT_URL")?;
         validate_key_vault_url(&key_vault_url)?;
@@ -107,6 +126,8 @@ impl Config {
             meta_container,
             cdn_container,
             log_container,
+            locked_container,
+            locked_storage_account_name,
             key_vault_url,
             secret_prefix,
             managed_identity_client_id,
@@ -148,6 +169,7 @@ impl Config {
             ])
             .allow_headers([
                 AUTHORIZATION,
+                CACHE_CONTROL,
                 CONTENT_TYPE,
                 ACCEPT,
                 RANGE,
@@ -249,15 +271,49 @@ fn optional_nonempty_env(variable: &'static str) -> Result<Option<String>, Confi
     Ok(Some(value.to_string()))
 }
 
-fn validate_storage_account_name(value: &str) -> Result<(), ConfigError> {
+fn validate_storage_account_name(variable: &'static str, value: &str) -> Result<(), ConfigError> {
     if !(3..=24).contains(&value.len())
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
     {
         return Err(ConfigError::invalid(
-            "AZURE_STORAGE_ACCOUNT_NAME",
+            variable,
             "must contain 3-24 lowercase ASCII letters or digits",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Locked storage is optional. Version-level immutability locks every blob in
+/// its container, so in the shared account the container must not be one the
+/// app writes and deletes through.
+fn validate_locked_storage(
+    container: Option<&str>,
+    account: Option<&str>,
+    storage_account_name: &str,
+    app_containers: [&str; 4],
+) -> Result<(), ConfigError> {
+    if let Some(account) = account {
+        validate_storage_account_name("AZURE_LOCKED_STORAGE_ACCOUNT_NAME", account)?;
+    }
+    let Some(container) = container else {
+        if account.is_some() {
+            return Err(ConfigError::invalid(
+                "AZURE_LOCKED_STORAGE_ACCOUNT_NAME",
+                "requires AZURE_LOCKED_CONTAINER",
+            ));
+        }
+        return Ok(());
+    };
+    validate_container_name("AZURE_LOCKED_CONTAINER", container)?;
+    if account.is_none_or(|account| account == storage_account_name)
+        && app_containers.contains(&container)
+    {
+        return Err(ConfigError::invalid(
+            "AZURE_LOCKED_CONTAINER",
+            "must be a dedicated container, separate from the content, meta, CDN and log containers",
         ));
     }
 
@@ -572,13 +628,47 @@ mod tests {
 
     #[test]
     fn accepts_valid_azure_names() {
-        assert!(validate_storage_account_name("flowlikedev01").is_ok());
+        assert!(validate_storage_account_name("TEST", "flowlikedev01").is_ok());
         assert!(validate_container_name("TEST", "flow-like-content").is_ok());
     }
 
     #[test]
+    fn locked_storage_is_optional_and_never_shares_an_app_container() {
+        let apps = ["content", "meta", "cdn", "logs"];
+        assert!(validate_locked_storage(None, None, "flowlikedev01", apps).is_ok());
+        assert!(validate_locked_storage(Some("locked"), None, "flowlikedev01", apps).is_ok());
+        assert!(
+            validate_locked_storage(
+                Some("content"),
+                Some("flowlikelocked"),
+                "flowlikedev01",
+                apps
+            )
+            .is_ok()
+        );
+        assert!(validate_locked_storage(Some("content"), None, "flowlikedev01", apps).is_err());
+        assert!(
+            validate_locked_storage(Some("logs"), Some("flowlikedev01"), "flowlikedev01", apps)
+                .is_err()
+        );
+        assert!(
+            validate_locked_storage(None, Some("flowlikelocked"), "flowlikedev01", apps).is_err()
+        );
+        assert!(validate_locked_storage(Some("Locked"), None, "flowlikedev01", apps).is_err());
+        assert!(
+            validate_locked_storage(
+                Some("locked"),
+                Some("Locked_Account"),
+                "flowlikedev01",
+                apps
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn rejects_invalid_azure_names() {
-        assert!(validate_storage_account_name("FlowLike_Dev").is_err());
+        assert!(validate_storage_account_name("TEST", "FlowLike_Dev").is_err());
         assert!(validate_container_name("TEST", "flow--like").is_err());
         assert!(validate_container_name("TEST", "-flow-like").is_err());
     }

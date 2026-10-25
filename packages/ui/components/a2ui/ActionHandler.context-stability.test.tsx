@@ -30,7 +30,7 @@ const text = (id: string, value: string): SurfaceComponent => ({
 });
 
 describe("ActionProvider context stability", () => {
-	test("a surface update leaves consumers alone while getComponents stays fresh", async () => {
+	test("surface and pending action updates leave unrelated consumers alone", async () => {
 		const window = new Window({ url: "https://local/use" });
 		const globals = {
 			window,
@@ -50,7 +50,14 @@ describe("ActionProvider context stability", () => {
 		});
 
 		const [
-			{ ActionProvider, useAgentActionAccess, useExecuteAction, useOnAction },
+			{
+				ActionProvider,
+				useAgentActionAccess,
+				useExecuteAction,
+				useOnAction,
+				useIsComponentTriggering,
+				useMarkComponentTriggering,
+			},
 			{ useBackendStore },
 			{ appGlobalState, pageLocalState },
 			uiState,
@@ -89,6 +96,7 @@ describe("ActionProvider context stability", () => {
 			onAction?: unknown;
 			executeAction?: unknown;
 			getComponents?: () => Record<string, SurfaceComponent> | undefined;
+			markTriggering?: (componentId: string, on: boolean) => void;
 		} = {};
 		// Memoized like the real component nodes: only a context change can
 		// re-render it.
@@ -97,6 +105,15 @@ describe("ActionProvider context stability", () => {
 			seen.onAction = useOnAction();
 			seen.executeAction = useExecuteAction().executeAction;
 			seen.getComponents = useAgentActionAccess().getComponents;
+			seen.markTriggering = useMarkComponentTriggering();
+			return null;
+		});
+		const pendingRenders = { first: 0, second: 0 };
+		const pendingStates = { first: false, second: false };
+		const Pending = memo(function Pending({ id }: { id: "first" | "second" }) {
+			pendingRenders[id] += 1;
+			const pending = useIsComponentTriggering(id);
+			pendingStates[id] = pending;
 			return null;
 		});
 
@@ -120,6 +137,8 @@ describe("ActionProvider context stability", () => {
 								components={components}
 							>
 								<Consumer />
+								<Pending id="first" />
+								<Pending id="second" />
 							</ActionProvider>
 						</PathnameContext.Provider>
 					</AppRouterContext.Provider>,
@@ -142,5 +161,25 @@ describe("ActionProvider context stability", () => {
 		expect(seen.onAction).toBe(firstOnAction);
 		expect(seen.executeAction).toBe(firstExecute);
 		expect(seen.getComponents?.()).toBe(v2);
+
+		const settledPendingRenders = { ...pendingRenders };
+		await act(() => seen.markTriggering?.("first", true));
+		expect(pendingStates.first).toBe(true);
+		expect(pendingStates.second).toBe(false);
+		expect(pendingRenders.first).toBe(settledPendingRenders.first + 1);
+		expect(pendingRenders.second).toBe(settledPendingRenders.second);
+		expect(consumerRenders).toBe(settledRenders);
+		expect(seen.executeAction).toBe(firstExecute);
+
+		// A second run must keep the first component busy until both runs finish.
+		await act(() => seen.markTriggering?.("first", true));
+		await act(() => seen.markTriggering?.("first", false));
+		expect(pendingStates.first).toBe(true);
+		expect(pendingRenders.first).toBe(settledPendingRenders.first + 1);
+		await act(() => seen.markTriggering?.("first", false));
+		expect(pendingStates.first).toBe(false);
+		expect(pendingRenders.first).toBe(settledPendingRenders.first + 2);
+		expect(pendingRenders.second).toBe(settledPendingRenders.second);
+		expect(consumerRenders).toBe(settledRenders);
 	});
 });

@@ -548,6 +548,15 @@
     "class": null,
     "category": "UI/Elements"
   },
+  "a2ui_set_excalidraw_scene": {
+    "qualified": "ui::setExcalidrawScene",
+    "namespace": "ui",
+    "alias": "setExcalidrawScene",
+    "flat": "a2uiSetExcalidrawScene",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Elements/Excalidraw"
+  },
   "a2ui_set_global_state": {
     "qualified": "ui::setGlobalState",
     "namespace": "ui",
@@ -827,6 +836,15 @@
     "class": null,
     "category": "UI/Elements/Checkbox"
   },
+  "a2ui_uploaded_file_to_path": {
+    "qualified": "ui::uploadedFileToPath",
+    "namespace": "ui",
+    "alias": "uploadedFileToPath",
+    "flat": "a2uiUploadedFileToPath",
+    "receiver": null,
+    "class": null,
+    "category": "UI/Elements/Files"
+  },
   "a2ui_upsert_element": {
     "qualified": "ui::upsertElement",
     "namespace": "ui",
@@ -917,6 +935,15 @@
     "class": "Agent",
     "category": "AI/Agents/Builder"
   },
+  "agent_enable_interactive_ui": {
+    "qualified": "agent::enableInteractiveUi",
+    "namespace": "agent",
+    "alias": "enableInteractiveUi",
+    "flat": "agentEnableInteractiveUi",
+    "receiver": "agent_in",
+    "class": "Agent",
+    "category": "AI/Agents/Builder"
+  },
   "agent_from_model": {
     "qualified": "agent::fromModel",
     "namespace": "agent",
@@ -940,6 +967,15 @@
     "namespace": "agent",
     "alias": "lazyRegisterFunctionTools",
     "flat": "agentLazyRegisterFunctionTools",
+    "receiver": "agent_in",
+    "class": "Agent",
+    "category": "AI/Agents/Builder"
+  },
+  "agent_register_editor_mcp_tools": {
+    "qualified": "agent::registerEditorMcpTools",
+    "namespace": "agent",
+    "alias": "registerEditorMcpTools",
+    "flat": "agentRegisterEditorMcpTools",
     "receiver": "agent_in",
     "class": "Agent",
     "category": "AI/Agents/Builder"
@@ -1447,6 +1483,15 @@
     "receiver": null,
     "class": null,
     "category": "AI/Generative/History"
+  },
+  "ai_generative_interactive_ui_instructions": {
+    "qualified": "ai::interactiveUiInstructions",
+    "namespace": "ai",
+    "alias": "interactiveUiInstructions",
+    "flat": "aiGenerativeInteractiveUiInstructions",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative"
   },
   "ai_generative_invoke": {
     "qualified": "ai::invoke",
@@ -2020,6 +2065,15 @@
     "namespace": "ai.processing",
     "alias": "summarizeDocument",
     "flat": "aiProcessingSummarizeDocument",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Processing"
+  },
+  "ai_processing_summarize_file": {
+    "qualified": "ai::processing::summarizeFile",
+    "namespace": "ai.processing",
+    "alias": "summarizeFile",
+    "flat": "aiProcessingSummarizeFile",
     "receiver": null,
     "class": null,
     "category": "AI/Processing"
@@ -8234,6 +8288,15 @@
     "class": "DataFusionSession",
     "category": "Data/DataFusion/Databases"
   },
+  "df_register_odbc": {
+    "qualified": "df::registerOdbc",
+    "namespace": "df",
+    "alias": "registerOdbc",
+    "flat": "dfRegisterOdbc",
+    "receiver": "session",
+    "class": "DataFusionSession",
+    "category": "Data/DataFusion/Databases"
+  },
   "df_register_oracle": {
     "qualified": "df::registerOracle",
     "namespace": "df",
@@ -9538,6 +9601,15 @@
     "receiver": null,
     "class": null,
     "category": "AI/ML/ONNX"
+  },
+  "file_get_metadata": {
+    "qualified": "files::getMetadata",
+    "namespace": "files",
+    "alias": "getMetadata",
+    "flat": "fileGetMetadata",
+    "receiver": "path",
+    "class": "FlowPath",
+    "category": "Data/Files/Operations"
   },
   "filename": {
     "qualified": "path::filename",
@@ -14138,6 +14210,96 @@
     "class": null,
     "category": "AI/ML/ONNX"
   },
+  "locked_download_item": {
+    "qualified": "lockedFiles::download",
+    "namespace": "lockedFiles",
+    "alias": "download",
+    "flat": "lockedDownloadItem",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_extend_retention": {
+    "qualified": "lockedFiles::extendRetention",
+    "namespace": "lockedFiles",
+    "alias": "extendRetention",
+    "flat": "lockedExtendRetention",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_get_item": {
+    "qualified": "lockedFiles::get",
+    "namespace": "lockedFiles",
+    "alias": "get",
+    "flat": "lockedGetItem",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_list_items": {
+    "qualified": "lockedFiles::list",
+    "namespace": "lockedFiles",
+    "alias": "list",
+    "flat": "lockedListItems",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_purge": {
+    "qualified": "lockedFiles::purge",
+    "namespace": "lockedFiles",
+    "alias": "purge",
+    "flat": "lockedPurge",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_set_auto_delete": {
+    "qualified": "lockedFiles::setAutoDelete",
+    "namespace": "lockedFiles",
+    "alias": "setAutoDelete",
+    "flat": "lockedSetAutoDelete",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_set_legal_hold": {
+    "qualified": "lockedFiles::setLegalHold",
+    "namespace": "lockedFiles",
+    "alias": "setLegalHold",
+    "flat": "lockedSetLegalHold",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_storage_status": {
+    "qualified": "lockedFiles::status",
+    "namespace": "lockedFiles",
+    "alias": "status",
+    "flat": "lockedStorageStatus",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_upload_item": {
+    "qualified": "lockedFiles::upload",
+    "namespace": "lockedFiles",
+    "alias": "upload",
+    "flat": "lockedUploadItem",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
+  "locked_upload_version": {
+    "qualified": "lockedFiles::uploadVersion",
+    "namespace": "lockedFiles",
+    "alias": "uploadVersion",
+    "flat": "lockedUploadVersion",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Files/Locked"
+  },
   "log_error": {
     "qualified": "log::error",
     "namespace": "log",
@@ -16926,6 +17088,15 @@
     "flat": "readImage",
     "receiver": null,
     "class": null,
+    "category": "Image/Content"
+  },
+  "read_image_dimensions": {
+    "qualified": "image::readDimensions",
+    "namespace": "image",
+    "alias": "readDimensions",
+    "flat": "readImageDimensions",
+    "receiver": "path",
+    "class": "FlowPath",
     "category": "Image/Content"
   },
   "read_image_url": {

@@ -23,7 +23,9 @@
 //! no apply is recorded twice.
 
 use axum::{Extension, Json, Router, extract::State, routing::post};
-use flow_like::flow::ast::{is_destructive_block, redact_flowscript};
+use flow_like::flow::ast::{
+    is_destructive_block, is_flowpilot_board_reservation, redact_flowscript,
+};
 use sea_orm::{EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -149,18 +151,26 @@ fn cause_of(error_message: Option<&str>, diagnostics: &[String]) -> String {
     }
 }
 
+/// Refusals that are the editor working as designed rather than an edit going wrong. The deletion
+/// gate asks for confirmation before it removes work, and the user answers it and re-applies;
+/// FlowPilot's board lock holds ordinary edits while its own edit of the board is in flight.
+/// Recorded as failures, every confirmed delete showed up as a "blocked" row and every edit made
+/// during a FlowPilot review as an "error". Checked here rather than in the clients so shipped
+/// desktop builds stop too.
+fn is_expected_refusal(failure: &FlowScriptApplyFailure) -> bool {
+    match failure.error_message.as_deref() {
+        Some(error) => is_flowpilot_board_reservation(error),
+        None => is_destructive_block(failure.command_count, &failure.diagnostics),
+    }
+}
+
 /// Persist one captured apply. Best-effort and fire-and-forget: telemetry must never cost a user
 /// their edit, so a failed insert is logged and dropped rather than surfaced.
 pub fn record_flowscript_apply_failure(state: &AppState, failure: FlowScriptApplyFailure) {
     if !state.platform_config.features.telemetry {
         return;
     }
-    // The deletion gate is the editor asking for confirmation before it removes work; the user
-    // answers it and re-applies. Recorded as a failure, every confirmed delete showed up as a
-    // "blocked" row. Checked here rather than in the clients so shipped desktop builds stop too.
-    if failure.error_message.is_none()
-        && is_destructive_block(failure.command_count, &failure.diagnostics)
-    {
+    if is_expected_refusal(&failure) {
         return;
     }
 
@@ -358,6 +368,29 @@ mod tests {
     fn diagnostics_without_commands_are_blocked_and_with_commands_are_partial() {
         assert_eq!(outcome_for(0, 1), Some(OUTCOME_BLOCKED));
         assert_eq!(outcome_for(4, 2), Some(OUTCOME_PARTIAL));
+    }
+
+    #[test]
+    fn the_flowpilot_board_lock_is_recognised_as_not_a_failure() {
+        let locked = FlowScriptApplyFailure {
+            error_message: Some(flow_like::flow::ast::flowpilot_board_reserved_message()),
+            ..FlowScriptApplyFailure::empty()
+        };
+        assert!(is_expected_refusal(&locked));
+        let gate = FlowScriptApplyFailure {
+            diagnostics: vec![
+                flow_like::flow::ast::blocked_destructive_flowscript_message(&[
+                    "node `a`".to_string()
+                ]),
+            ],
+            ..FlowScriptApplyFailure::empty()
+        };
+        assert!(is_expected_refusal(&gate));
+        let parse_error = FlowScriptApplyFailure {
+            error_message: Some("expected `RParen`, found `Comma` at 3:14".to_string()),
+            ..FlowScriptApplyFailure::empty()
+        };
+        assert!(!is_expected_refusal(&parse_error));
     }
 
     #[test]

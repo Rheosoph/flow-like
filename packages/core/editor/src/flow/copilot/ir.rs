@@ -1464,6 +1464,7 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
                 ast.events.push(EventBlock {
                     name: name.clone(),
                     event_name: None,
+                    description: None,
                     // Reconciliation treats a typed Event node_type as an authoritative catalog
                     // identity. Canonicalize an accepted camel/display spelling here just as node
                     // calls already do, so compile-time resolution and materialization cannot
@@ -1816,6 +1817,7 @@ fn compile_steps_with_offset(
                     name: id.clone(),
                     call,
                     anchor: anchor.clone(),
+                    ty: None,
                 });
             }
             FlowIrStep::CallFunction {
@@ -1841,6 +1843,7 @@ fn compile_steps_with_offset(
                     name: id.clone(),
                     call,
                     anchor: anchor.clone(),
+                    ty: None,
                 });
             }
             FlowIrStep::If {

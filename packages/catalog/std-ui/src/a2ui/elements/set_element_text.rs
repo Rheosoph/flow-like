@@ -1,9 +1,7 @@
 use super::element_utils::extract_element_id;
-use flow_like::a2ui::components::TextProps;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
-    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -39,16 +37,15 @@ impl NodeLogic for SetElementText {
             "element_ref",
             "Element",
             "Reference to the text element (ID string or element object from Get Element)",
-            VariableType::Struct,
-        )
-        .set_schema::<TextProps>()
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+            VariableType::Generic,
+        );
 
         node.add_input_pin("text", "Text", "The new text content", VariableType::String);
 
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 
         node.set_long_running(true);
+        node.set_version(1);
 
         node
     }

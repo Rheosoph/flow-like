@@ -249,6 +249,7 @@ fn actual_executed_receipt_is_bounded_before_remote_persistence() {
         diagnostics: Vec::new(),
         final_board_node_count: Some(0),
         persisted_board_fingerprint: Some("flowpilot-board-v1:test".to_string()),
+        changes: Default::default(),
     };
 
     let error = validate_board_edit_delivery_bounds(&result, true)
@@ -284,6 +285,7 @@ fn aggregate_executed_receipt_must_fit_one_atomic_remote_request() {
         diagnostics: Vec::new(),
         final_board_node_count: Some(0),
         persisted_board_fingerprint: Some("flowpilot-board-v1:test".to_string()),
+        changes: Default::default(),
     };
 
     let error = validate_board_edit_delivery_bounds(&result, true)
@@ -306,6 +308,7 @@ fn durable_receipt_drops_redundant_compiler_commands() {
         diagnostics: Vec::new(),
         final_board_node_count: Some(0),
         persisted_board_fingerprint: Some("flowpilot-board-v1:test".to_string()),
+        changes: Default::default(),
     };
 
     let compact = compact_durable_apply_receipt(&result);
@@ -978,6 +981,7 @@ fn atomic_typed_apply_receipt_replays_exact_success_after_lost_response() {
         diagnostics: Vec::new(),
         final_board_node_count: Some(3),
         persisted_board_fingerprint: Some("flowpilot-board-v1:original".to_string()),
+        changes: Default::default(),
     };
 
     retain_flow_ir_applied_receipt("receipt-app", &token, &result);

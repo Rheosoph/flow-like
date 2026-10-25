@@ -6,7 +6,8 @@ use crate::{
     error::ApiError,
 };
 use chrono::{DateTime, Utc};
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
+use flow_like_types::tokio::sync::{Mutex, OwnedMutexGuard};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -17,7 +18,58 @@ pub const RATE_VERSION: &str = "aws-lambda-reference-2026-09";
 pub struct AttemptContext {
     pub report: AttemptReport,
     pub dialect: DbDialect,
-    pub admitted: flow_like_types::tokio::sync::Mutex<Option<AttemptReport>>,
+    pub admitted: Arc<Mutex<Option<AttemptReport>>>,
+}
+
+impl AttemptContext {
+    pub fn new(report: AttemptReport, dialect: DbDialect) -> Self {
+        Self {
+            report,
+            dialect,
+            admitted: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+/// The current request's attempt, held until its association commits. A
+/// request associates its attempt with one operation only.
+pub(crate) struct AttemptClaim {
+    template: AttemptReport,
+    dialect: DbDialect,
+    admitted: OwnedMutexGuard<Option<AttemptReport>>,
+}
+
+impl AttemptClaim {
+    pub(crate) async fn current() -> Option<Self> {
+        let context = CURRENT_ATTEMPT.try_with(Clone::clone).ok()?;
+        let admitted = context.admitted.clone().lock_owned().await;
+        admitted.is_none().then(|| Self {
+            template: context.report.clone(),
+            dialect: context.dialect,
+            admitted,
+        })
+    }
+
+    pub(crate) fn report(
+        &self,
+        operation_id: &str,
+        payer_id: &str,
+        role: &str,
+        cost_class: &str,
+    ) -> AttemptReport {
+        AttemptReport {
+            operation_id: Some(operation_id.into()),
+            payer_id: Some(payer_id.into()),
+            role: role.into(),
+            cost_class: cost_class.into(),
+            ..self.template.clone()
+        }
+    }
+
+    /// Call after the transaction that wrote `report` committed.
+    pub(crate) fn confirm(mut self, report: AttemptReport) {
+        *self.admitted = Some(report);
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,13 +121,16 @@ pub fn estimate_cost_micro_usd(
         .map_err(|_| ApiError::bad_request("Compute cost overflow"))
 }
 
-/// Only trusted server callbacks and maintenance reconciliation call this routine.
-/// No inferred amount is inserted into the public quota counters.
-pub async fn record(
-    db: &DatabaseConnection,
-    dialect: DbDialect,
+#[derive(Clone)]
+struct PreparedAttempt {
+    id: String,
+    rank: i32,
+    cost: Option<i64>,
+    payload: String,
     report: AttemptReport,
-) -> Result<String, ApiError> {
+}
+
+fn prepare(report: AttemptReport) -> Result<PreparedAttempt, ApiError> {
     let rank = match report.evidence.as_str() {
         "measured_estimate" => 0,
         "aws_report_estimate" => 1,
@@ -127,8 +182,6 @@ pub async fn record(
             "Invoice evidence requires allocated cost",
         ));
     }
-    let id = attempt_id(&report.function_name, &report.request_id);
-    let result_id = id.clone();
     let cost = if rank == 2 {
         report.cost_micro_usd
     } else {
@@ -140,21 +193,72 @@ pub async fn record(
             })
             .transpose()?
     };
-    let payload = serde_json::to_string(&report)?;
-    retry_transaction(db,dialect,None,&RetryPolicy::idempotent(),move|txn|{let id=id.clone();let report=report.clone();let payload=payload.clone();Box::pin(async move{
-        coordinate(txn,"compute-attempt",&[&id]).await?;
-        let revision_id=format!("{id}:{}",report.revision);
-        // New evidence needs no read-before-insert. The revision and attempt commit
-        // together; a duplicate checks its immutable payload before returning.
-        let inserted=txn.execute_raw(sql("INSERT INTO \"ComputeAttemptRevision\" (id,\"attemptId\",evidence,payload) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",vec![revision_id.clone().into(),id.clone().into(),report.evidence.clone().into(),payload.clone().into()])).await?;
-        if inserted.rows_affected()==0{
-            let old=txn.query_one_raw(sql("SELECT payload FROM \"ComputeAttemptRevision\" WHERE id=$1",vec![revision_id.into()])).await?.ok_or_else(||ApiError::conflict("Compute revision disappeared before verification"))?;
-            if old.try_get::<String>("","payload")?!=payload{return Err(ApiError::conflict("Compute revision already has different evidence"));}return Ok(());
+    Ok(PreparedAttempt {
+        id: attempt_id(&report.function_name, &report.request_id),
+        rank,
+        cost,
+        payload: serde_json::to_string(&report)?,
+        report,
+    })
+}
+
+async fn write(txn: &DatabaseTransaction, attempt: PreparedAttempt) -> Result<(), ApiError> {
+    let PreparedAttempt {
+        id,
+        rank,
+        cost,
+        payload,
+        report,
+    } = attempt;
+    coordinate(txn, "compute-attempt", &[&id]).await?;
+    let revision_id = format!("{id}:{}", report.revision);
+    // New evidence needs no read-before-insert. The revision and attempt commit
+    // together; a duplicate checks its immutable payload before returning.
+    let inserted=txn.execute_raw(sql("INSERT INTO \"ComputeAttemptRevision\" (id,\"attemptId\",evidence,payload) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",vec![revision_id.clone().into(),id.clone().into(),report.evidence.clone().into(),payload.clone().into()])).await?;
+    if inserted.rows_affected() == 0 {
+        let old = txn
+            .query_one_raw(sql(
+                "SELECT payload FROM \"ComputeAttemptRevision\" WHERE id=$1",
+                vec![revision_id.into()],
+            ))
+            .await?
+            .ok_or_else(|| {
+                ApiError::conflict("Compute revision disappeared before verification")
+            })?;
+        if old.try_get::<String>("", "payload")? != payload {
+            return Err(ApiError::conflict(
+                "Compute revision already has different evidence",
+            ));
         }
-        txn.execute_raw(sql("INSERT INTO \"ComputeAttempt\" (id,\"functionName\",\"requestId\",\"operationId\",\"payerId\",role,\"costClass\",\"memoryMb\",architecture,region,\"measuredDurationMs\",\"billedDurationMs\",\"costMicroUsd\",\"evidenceRank\",evidence,\"rateVersion\",status,\"startedAt\",\"updatedAt\") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now()) ON CONFLICT (id) DO UPDATE SET \"operationId\"=COALESCE(\"ComputeAttempt\".\"operationId\",EXCLUDED.\"operationId\"),\"payerId\"=COALESCE(\"ComputeAttempt\".\"payerId\",EXCLUDED.\"payerId\"),\"measuredDurationMs\"=COALESCE(EXCLUDED.\"measuredDurationMs\",\"ComputeAttempt\".\"measuredDurationMs\"),\"billedDurationMs\"=COALESCE(EXCLUDED.\"billedDurationMs\",\"ComputeAttempt\".\"billedDurationMs\"),\"costMicroUsd\"=EXCLUDED.\"costMicroUsd\",\"evidenceRank\"=EXCLUDED.\"evidenceRank\",evidence=EXCLUDED.evidence,\"rateVersion\"=EXCLUDED.\"rateVersion\",status=EXCLUDED.status,\"updatedAt\"=now() WHERE \"ComputeAttempt\".\"evidenceRank\"<=EXCLUDED.\"evidenceRank\"",vec![id.clone().into(),report.function_name.into(),report.request_id.into(),report.operation_id.into(),report.payer_id.into(),report.role.into(),report.cost_class.into(),report.memory_mb.into(),report.architecture.into(),report.region.into(),report.measured_duration_ms.into(),report.billed_duration_ms.into(),cost.into(),rank.into(),report.evidence.clone().into(),report.rate_version.into(),report.status.into(),report.started_at.fixed_offset().into()])).await?;
-        Ok(())
-    })}).await?;
-    Ok(result_id)
+        return Ok(());
+    }
+    txn.execute_raw(sql("INSERT INTO \"ComputeAttempt\" (id,\"functionName\",\"requestId\",\"operationId\",\"payerId\",role,\"costClass\",\"memoryMb\",architecture,region,\"measuredDurationMs\",\"billedDurationMs\",\"costMicroUsd\",\"evidenceRank\",evidence,\"rateVersion\",status,\"startedAt\",\"updatedAt\") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now()) ON CONFLICT (id) DO UPDATE SET \"operationId\"=COALESCE(\"ComputeAttempt\".\"operationId\",EXCLUDED.\"operationId\"),\"payerId\"=COALESCE(\"ComputeAttempt\".\"payerId\",EXCLUDED.\"payerId\"),\"measuredDurationMs\"=COALESCE(EXCLUDED.\"measuredDurationMs\",\"ComputeAttempt\".\"measuredDurationMs\"),\"billedDurationMs\"=COALESCE(EXCLUDED.\"billedDurationMs\",\"ComputeAttempt\".\"billedDurationMs\"),\"costMicroUsd\"=EXCLUDED.\"costMicroUsd\",\"evidenceRank\"=EXCLUDED.\"evidenceRank\",evidence=EXCLUDED.evidence,\"rateVersion\"=EXCLUDED.\"rateVersion\",status=EXCLUDED.status,\"updatedAt\"=now() WHERE \"ComputeAttempt\".\"evidenceRank\"<=EXCLUDED.\"evidenceRank\"",vec![id.into(),report.function_name.into(),report.request_id.into(),report.operation_id.into(),report.payer_id.into(),report.role.into(),report.cost_class.into(),report.memory_mb.into(),report.architecture.into(),report.region.into(),report.measured_duration_ms.into(),report.billed_duration_ms.into(),cost.into(),rank.into(),report.evidence.into(),report.rate_version.into(),report.status.into(),report.started_at.fixed_offset().into()])).await?;
+    Ok(())
+}
+
+/// Only trusted server callbacks and maintenance reconciliation call this routine.
+/// No inferred amount is inserted into the public quota counters.
+pub async fn record(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    report: AttemptReport,
+) -> Result<String, ApiError> {
+    let attempt = prepare(report)?;
+    let id = attempt.id.clone();
+    retry_transaction(db, dialect, None, &RetryPolicy::idempotent(), move |txn| {
+        Box::pin(write(txn, attempt.clone()))
+    })
+    .await?;
+    Ok(id)
+}
+
+/// Writes `report` inside the caller's transaction, so it commits or rolls back
+/// with the operation it belongs to.
+pub(crate) async fn record_in(
+    txn: &DatabaseTransaction,
+    report: AttemptReport,
+) -> Result<(), ApiError> {
+    write(txn, prepare(report)?).await
 }
 
 /// Routes call this after resolving the operation and payer on the server.
@@ -165,20 +269,12 @@ pub async fn associate_current(
     role: &str,
     cost_class: &str,
 ) -> Result<(), ApiError> {
-    let Ok(context) = CURRENT_ATTEMPT.try_with(Clone::clone) else {
+    let Some(claim) = AttemptClaim::current().await else {
         return Ok(());
     };
-    let mut admitted = context.admitted.lock().await;
-    if admitted.is_some() {
-        return Ok(());
-    }
-    let mut report = context.report.clone();
-    report.operation_id = Some(operation_id.into());
-    report.payer_id = Some(payer_id.into());
-    report.role = role.into();
-    report.cost_class = cost_class.into();
-    record(db, context.dialect, report.clone()).await?;
-    *admitted = Some(report);
+    let report = claim.report(operation_id, payer_id, role, cost_class);
+    record(db, claim.dialect, report.clone()).await?;
+    claim.confirm(report);
     Ok(())
 }
 

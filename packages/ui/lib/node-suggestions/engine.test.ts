@@ -370,6 +370,72 @@ describe("daily cycle", () => {
 		]);
 		expect(next.sent.at(-1)).toMatchObject({ warmStart: true });
 	});
+
+	test("a tab that waited for another tab's cycle loads its models instead of syncing and training", async () => {
+		const store = createMemorySuggestionStore();
+		const { backend, fetched } = backendFor({ b1: 10, b2: 20 });
+		let tail: Promise<unknown> = Promise.resolve();
+		const exclusive = (task: () => Promise<void>) => {
+			const run = tail.then(task);
+			tail = run.catch(() => {});
+			return run;
+		};
+		const tab = () => {
+			const worker = autoPort();
+			const engine = createNodeSuggestionEngine({
+				sub: SUB,
+				port: worker.port,
+				store: Promise.resolve(store),
+				schedule: (task) => task(),
+				exclusive,
+				learn: true,
+				now: () => new Date(2026, 8, 23, 12),
+			});
+			return { engine, worker };
+		};
+		const first = tab();
+		const second = tab();
+		first.engine.configure(backend, CATALOG);
+		second.engine.configure(backend, CATALOG);
+		await Promise.all([first.engine.idle(), second.engine.idle()]);
+
+		expect(fetched.sort()).toEqual(["b1", "b2"]);
+		expect(first.worker.sent.map((request) => request.type)).toEqual([
+			"extract",
+			"extract",
+			"trainNgram",
+			"trainNeural",
+		]);
+		expect(second.worker.sent.map((request) => request.type)).toEqual(["load"]);
+		expect(second.worker.sent[0]).toMatchObject({
+			ngram: "trainNgram:2",
+			neural: "trainNeural:2",
+		});
+		expect(second.engine.status).toMatchObject({
+			phase: "ready",
+			ngram: true,
+			neural: true,
+		});
+	});
+
+	test("a device that does not learn neither syncs nor trains", async () => {
+		const { backend, fetched } = backendFor({ b1: 10 });
+		const worker = autoPort();
+		const engine = createNodeSuggestionEngine({
+			sub: SUB,
+			port: worker.port,
+			store: Promise.resolve(createMemorySuggestionStore()),
+			schedule: (task) => task(),
+			learn: false,
+			now: () => new Date(2026, 8, 23, 12),
+		});
+		engine.configure(backend, CATALOG);
+		await engine.idle();
+
+		expect(fetched).toEqual([]);
+		expect(worker.sent).toEqual([]);
+		expect(engine.status.phase).toBe("idle");
+	});
 });
 
 describe("fingerprints", () => {

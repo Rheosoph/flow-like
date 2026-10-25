@@ -19,9 +19,9 @@ tower.workspace = true
 flow-like = { workspace = true, features = ["app-runtime", "openapi", "remote-ml"] }
 flow-like-types.workspace = true
 flow-like-storage = { workspace = true, features = ["graph"] }
-flow-like-catalog-core.workspace = true
+flow-like-catalog-core = { workspace = true, features = ["mail"] }
 flow-like-catalog-ml = { workspace = true, default-features = false, features = ["studio"] }
-flow-like-catalog = { workspace = true, default-features = false, features = ["draft-testing"] }
+flow-like-catalog = { workspace = true, default-features = false, features = ["draft-testing", "local-only-metadata"] }
 uuid.workspace = true
 flow-like-sinks.workspace = true
 flow-like-secrets.workspace = true
@@ -31,7 +31,7 @@ tempfile = "3"
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 base64.workspace = true
 mail-parser = "0.11"
-zip = { version = "8.5.1", default-features = false }
+zip = { workspace = true }
 jsonschema.workspace = true
 jsonwebtoken.workspace = true
 hyper.workspace = true
@@ -131,7 +131,7 @@ default = ["aws", "cognito", "ses", "smtp", "sendgrid"]
 secrets-aws = ["flow-like-secrets/aws"]
 secrets-gcp = ["flow-like-secrets/gcp"]
 secrets-azure = ["flow-like-secrets/azure"]
-aws = ["aws-config", "aws-credential-types", "aws-sigv4", "aws-sdk-sts", "aws-sdk-sns", "aws-sdk-cloudwatch", "flow-like-sinks/aws"]
+aws = ["aws-config", "aws-credential-types", "aws-sigv4", "aws-sdk-s3", "aws-sdk-sts", "aws-sdk-sns", "aws-sdk-cloudwatch", "flow-like-sinks/aws"]
 azure = [
     "urlencoding",
     "dep:azure_core",

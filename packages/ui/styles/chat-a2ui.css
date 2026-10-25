@@ -1,0 +1,93 @@
+/* An `a2ui` fence in a chat reply renders with a2ui's own (layered Tailwind) styles. */
+[data-fl-a2ui-fence] {
+	font-family: var(--font-sans);
+	font-size: 0.9375rem;
+	line-height: 1.55;
+	letter-spacing: normal;
+	white-space: normal;
+}
+
+/* The chat prose rules are unlayered and would beat every utility class inside the
+   surface; `revert-layer` hands these properties back to the layered cascade. The
+   doubled attribute outranks the most specific prose selector. */
+[data-fl-renderer]
+	[data-fl-a2ui-surface][data-fl-a2ui-surface]
+	:is(
+		h1,
+		h2,
+		h3,
+		h4,
+		h5,
+		h6,
+		p,
+		a,
+		strong,
+		blockquote,
+		ul,
+		ol,
+		li,
+		hr,
+		code,
+		pre,
+		kbd,
+		samp,
+		figure,
+		button,
+		input,
+		.slate-p,
+		.slate-hr,
+		.slate-table,
+		.codeblock,
+		[data-slate-void],
+		[data-slot="table-scroll"]
+	) {
+	margin: revert-layer;
+	padding: revert-layer;
+	max-width: revert-layer;
+	border: revert-layer;
+	border-radius: revert-layer;
+	background: revert-layer;
+	color: revert-layer;
+	font-family: revert-layer;
+	font-size: revert-layer;
+	font-weight: revert-layer;
+	font-style: revert-layer;
+	line-height: revert-layer;
+	letter-spacing: revert-layer;
+	text-wrap: revert-layer;
+	white-space: revert-layer;
+	overflow-wrap: revert-layer;
+	overflow-x: revert-layer;
+	tab-size: revert-layer;
+	height: revert-layer;
+	text-decoration-thickness: revert-layer;
+	text-underline-offset: revert-layer;
+	text-decoration-color: revert-layer;
+	outline: revert-layer;
+	outline-offset: revert-layer;
+	scrollbar-width: revert-layer;
+	scrollbar-color: revert-layer;
+}
+
+[data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {
+	opacity: 0;
+	transition: opacity 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+[data-fl-a2ui-fence]:hover [data-slot="a2ui-fence-actions"],
+[data-fl-a2ui-fence]:focus-within [data-slot="a2ui-fence-actions"],
+[data-fl-a2ui-fence][data-source-open] [data-slot="a2ui-fence-actions"] {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	[data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-fl-a2ui-fence] [data-slot="a2ui-fence-actions"] {
+		transition: none;
+	}
+}

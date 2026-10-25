@@ -73,6 +73,12 @@ export function contractTagForHtml(
  * as build inputs (one entry per widget id), routes entry/chunk/asset output
  * into `shared/` so `pack` can collect deduplicated chunks, and injects the
  * extracted `__FLW_CONTRACT__` script during dev/build.
+ *
+ * `base` is forced relative: the bundle is served below a per-package prefix
+ * (`flow-widget://localhost/{package}/{hash}/`, `widget-assets/{package}/{version}/`),
+ * so a root-absolute base sends lazy-chunk CSS preloads, CSS `url()`s and
+ * imported asset URLs to the host root, where they 404 and fall outside the
+ * widget CSP.
  */
 export function flowLikeWidgets(): Plugin {
 	let root = process.cwd();
@@ -83,6 +89,7 @@ export function flowLikeWidgets(): Plugin {
 			const entries = discoverWidgetEntries(root);
 			if (entries.length === 0) return {};
 			return {
+				base: "./",
 				build: {
 					rollupOptions: {
 						input: Object.fromEntries(

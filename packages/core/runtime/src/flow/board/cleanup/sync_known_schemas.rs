@@ -51,7 +51,7 @@ impl SyncKnownSchemasCleanup {
             return;
         };
 
-        if is_outdated_bit_schema(schema_value) {
+        if is_outdated_bit_schema(schema_value, current_bit_schema) {
             *schema = Some(current_bit_schema.clone());
         }
     }
@@ -88,7 +88,10 @@ fn looks_like_json(value: &str) -> bool {
     )
 }
 
-fn is_outdated_bit_schema(schema: &str) -> bool {
+/// Whether `schema` is a copy of `Bit` taken before `BitTypes` gained a variant the current
+/// schema declares. Variables and Function parameters keep the copy they were typed with, and a
+/// stale one refuses every current `Bit` assigned to it.
+fn is_outdated_bit_schema(schema: &str, current_bit_schema: &str) -> bool {
     let Ok(schema) = serde_json::from_str::<Value>(schema) else {
         return false;
     };
@@ -97,10 +100,14 @@ fn is_outdated_bit_schema(schema: &str) -> bool {
         return false;
     }
 
-    matches!(
-        bit_types_enum_contains_required_variants(&schema),
-        Some(false)
-    )
+    let Some(stored) = bit_types_variants(&schema) else {
+        return false;
+    };
+    let Ok(current) = serde_json::from_str::<Value>(current_bit_schema) else {
+        return false;
+    };
+    bit_types_variants(&current)
+        .is_some_and(|current| current.iter().any(|variant| !stored.contains(variant)))
 }
 
 fn has_bit_schema_shape(schema: &Value) -> bool {
@@ -119,27 +126,24 @@ fn has_bit_schema_shape(schema: &Value) -> bool {
         && properties.contains_key("dependency_tree_hash")
 }
 
-fn bit_types_enum_contains_required_variants(schema: &Value) -> Option<bool> {
+/// The `BitTypes` variants a Bit schema declares: the enum listing `Llm`, `Vlm`, `Embedding` and
+/// `Other`.
+fn bit_types_variants(schema: &Value) -> Option<Vec<&str>> {
     match schema {
         Value::Object(object) => {
             if let Some(Value::Array(values)) = object.get("enum") {
-                let enum_values: Vec<&str> = values.iter().filter_map(Value::as_str).collect();
-                if enum_values.contains(&"Llm")
-                    && enum_values.contains(&"Vlm")
-                    && enum_values.contains(&"Embedding")
-                    && enum_values.contains(&"Other")
+                let variants: Vec<&str> = values.iter().filter_map(Value::as_str).collect();
+                if ["Llm", "Vlm", "Embedding", "Other"]
+                    .iter()
+                    .all(|variant| variants.contains(variant))
                 {
-                    return Some(enum_values.contains(&"Tts") && enum_values.contains(&"Stt"));
+                    return Some(variants);
                 }
             }
 
-            object
-                .values()
-                .find_map(bit_types_enum_contains_required_variants)
+            object.values().find_map(bit_types_variants)
         }
-        Value::Array(values) => values
-            .iter()
-            .find_map(bit_types_enum_contains_required_variants),
+        Value::Array(values) => values.iter().find_map(bit_types_variants),
         _ => None,
     }
 }
@@ -222,6 +226,41 @@ mod tests {
         let migrated = variable.schema.expect("schema should remain set");
         assert_eq!(Some(migrated.as_str()), cleanup.bit_schema.as_deref());
         assert!(migrated.contains("\"Stt\""));
+    }
+
+    /// `BitTypes` gained `SystemOne` and `Forecasting` after `Tts`/`Stt`; a copy taken in between
+    /// must be refreshed too, on a variable and on a Function parameter alike.
+    #[test]
+    fn migrates_bit_schemas_missing_any_current_variant() {
+        let mut cleanup = SyncKnownSchemasCleanup {
+            refs: HashMap::new(),
+            bit_schema: SyncKnownSchemasCleanup::current_bit_schema(),
+        };
+        let current = cleanup
+            .bit_schema
+            .clone()
+            .expect("Bit schema should serialize");
+        let mut stale = serde_json::from_str::<Value>(&current).expect("Bit schema should parse");
+        remove_bit_type_enum_values(&mut stale, &["SystemOne", "Forecasting"]);
+        let stale = canonical_json_string(&stale).expect("stale Bit schema should serialize");
+
+        let mut variable = Variable::new("model", VariableType::Struct, ValueType::Normal);
+        variable.schema = Some(stale.clone());
+        cleanup.main_variable_iteration(&mut variable, &HashMap::new());
+        assert_eq!(variable.schema.as_deref(), Some(current.as_str()));
+
+        let mut function = crate::flow::node::Node::new("function", "Function", "", "");
+        let mut parameter = function
+            .add_input_pin("model", "Model", "", VariableType::Struct)
+            .clone();
+        parameter.schema = Some(stale);
+        cleanup.main_pin_iteration(&mut parameter, &HashMap::new());
+        assert_eq!(parameter.schema.as_deref(), Some(current.as_str()));
+
+        let mut up_to_date = Variable::new("model", VariableType::Struct, ValueType::Normal);
+        up_to_date.schema = Some(current.clone());
+        cleanup.main_variable_iteration(&mut up_to_date, &HashMap::new());
+        assert_eq!(up_to_date.schema.as_deref(), Some(current.as_str()));
     }
 
     #[test]

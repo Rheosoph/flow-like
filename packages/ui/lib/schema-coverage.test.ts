@@ -249,4 +249,23 @@ describe("schemaCovers", () => {
 			),
 		).toBe(false);
 	});
+
+	test("a nullable enum covers the enum with null its interface spells", () => {
+		const thinking = {
+			type: "object",
+			properties: {
+				thinking: { anyOf: [{ $ref: "#/$defs/Thinking" }, { type: "null" }] },
+			},
+			$defs: { Thinking: { type: "string", enum: ["off", "low"] } },
+		};
+		const projection = {
+			type: "object",
+			properties: { thinking: { enum: ["off", "low", null] } },
+		};
+		expect(covers(thinking, projection)).toBe(true);
+		expect(covers({ type: "null" }, { enum: ["off"] })).toBe(false);
+		expect(covers({ type: "boolean" }, { enum: [true, false] })).toBe(true);
+		expect(covers({ type: "boolean" }, { enum: [true] })).toBe(false);
+		expect(covers(string, { enum: ["off", null] })).toBe(false);
+	});
 });

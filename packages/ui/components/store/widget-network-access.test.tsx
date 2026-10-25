@@ -405,4 +405,27 @@ describe("WidgetCapabilitiesCard", () => {
 		expect(markup).toContain("Unknown");
 		expect(markup).not.toContain("Classified with catalog");
 	});
+
+	test("file uploads are flagged like other ways of moving data off the device", () => {
+		const markup = renderToStaticMarkup(
+			<WidgetCapabilitiesCard
+				widgets={[
+					widget(
+						{
+							contractVersion: 1,
+							id: "composer",
+							capabilities: { workers: true, uploads: true },
+						} as WidgetContract,
+						"Composer",
+					),
+				]}
+			/>,
+		);
+		const uploads = tag(markup, 'data-widget-capability="uploads"');
+		expect(uploads).toContain("text-primary");
+		expect(tag(markup, 'data-widget-capability="workers"')).not.toContain(
+			"text-primary",
+		);
+		expect(markup).toContain("File uploads");
+	});
 });

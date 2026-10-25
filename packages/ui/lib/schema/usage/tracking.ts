@@ -38,6 +38,10 @@ export interface IExecutionUsageRecord {
 	created_at: string;
 }
 
+export interface IRecentExecutionsResponse {
+	items: IExecutionUsageRecord[];
+}
+
 export interface IPaginatedResponse<T> {
 	items: T[];
 	total: number;

@@ -1,9 +1,9 @@
 """Opt-in destructive authorization checks in unique temporary test prefixes.
 
 Run against a disposable or backed-up store after bootstrap. Uses only the API
-and restricted issuer identities, plus the root identity for the audit bucket
-retention check, because only a principal allowed to delete versions proves the
-lock. Every created object is removed in finally.
+and restricted issuer identities, plus the root identity for the audit and locked
+bucket retention checks, because only a principal allowed to delete versions
+proves the lock. Every created object is removed in finally.
 This checks a single node's prefix boundaries; it does not qualify expiry,
 failover, backups, multipart-copy, or the complete Flow-Like application.
 """
@@ -21,13 +21,13 @@ from botocore.exceptions import ClientError
 from bootstrap import Admin, s3_client, secret, setting
 
 
-def denied(call, description):
+def denied(call, description, statuses=(403,)):
     try:
         call()
     except ClientError as error:
-        if error.response["ResponseMetadata"]["HTTPStatusCode"] == 403:
+        if error.response["ResponseMetadata"]["HTTPStatusCode"] in statuses:
             return
-        raise AssertionError(f"{description}: expected authorization denial") from None
+        raise AssertionError(f"{description}: expected authorization denial, got HTTP {error.response['ResponseMetadata']['HTTPStatusCode']}") from None
     except urllib.error.HTTPError as error:
         if error.code == 403:
             return
@@ -57,6 +57,41 @@ def check_audit_retention(endpoint, region, bucket, root):
             client.delete_object(Bucket=bucket, Key=key, VersionId=version, BypassGovernanceRetention=True)
         except ClientError:
             print(f"Audit retention probe {key} stays until its one-day retention ends.", file=sys.stderr)
+
+
+def check_locked_bucket(endpoint, public_endpoint, region, bucket, api, issuer, root):
+    """Only the API reaches the locked bucket, and even the API cannot remove a retained version."""
+    client = s3_client(endpoint, region, *api)
+    issuer_client = s3_client(endpoint, region, *issuer)
+    key = "conformance/" + uuid.uuid4().hex
+    until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+    denied(lambda: issuer_client.put_object(Bucket=bucket, Key=key, Body=b"escape"), "issuer locked PUT")
+    # An explicit GOVERNANCE lock overrides a bucket-mode default, so root can remove the probe.
+    version = client.put_object(Bucket=bucket, Key=key, Body=b"locked", ChecksumAlgorithm="SHA256",
+                                ObjectLockMode="GOVERNANCE", ObjectLockRetainUntilDate=until)["VersionId"]
+    try:
+        client.put_object_retention(Bucket=bucket, Key=key, VersionId=version, Retention={
+            "Mode": "GOVERNANCE", "RetainUntilDate": until + datetime.timedelta(hours=1)})
+        denied(lambda: issuer_client.get_object(Bucket=bucket, Key=key, VersionId=version), "issuer locked GET")
+        for bypass in ({}, {"BypassGovernanceRetention": True}):
+            try:
+                client.delete_object(Bucket=bucket, Key=key, VersionId=version, **bypass)
+            except ClientError as error:
+                if error.response["ResponseMetadata"]["HTTPStatusCode"] not in (400, 403):
+                    raise
+            try:
+                client.head_object(Bucket=bucket, Key=key, VersionId=version)
+            except ClientError:
+                raise AssertionError(f"locked bucket: the API deleted a retained version (bypass={bool(bypass)})") from None
+        url = s3_client(public_endpoint, region, *api).generate_presigned_url(
+            "get_object", Params={"Bucket": bucket, "Key": key, "VersionId": version}, ExpiresIn=60)
+        with urllib.request.urlopen(url, timeout=30) as response:
+            assert response.read() == b"locked", "locked bucket: presigned GET through the gateway returned other bytes"
+    finally:
+        try:
+            s3_client(endpoint, region, *root).delete_object(Bucket=bucket, Key=key, VersionId=version, BypassGovernanceRetention=True)
+        except ClientError:
+            print(f"Locked retention probe {key} stays until its retention ends.", file=sys.stderr)
 
 
 def main():
@@ -102,7 +137,8 @@ def main():
         denied(lambda: scoped.list_objects_v2(Bucket=bucket), "empty-prefix LIST")
         denied(lambda: scoped.list_objects_v2(Bucket=bucket, Prefix=sibling), "sibling LIST")
         denied(lambda: scoped.get_object(Bucket=bucket, Key=allowed + "denied"), "explicit deny")
-        for name in (setting("META_BUCKET"), setting("LOG_BUCKET")):
+        locked_bucket = setting("LOCKED_BUCKET")
+        for name in [setting("META_BUCKET"), setting("LOG_BUCKET")] + ([locked_bucket] if locked_bucket else []):
             denied(lambda name=name: scoped.put_object(Bucket=name, Key=allowed + "output", Body=b"escape"), "other bucket PUT")
         denied(lambda: scoped.copy_object(Bucket=bucket, Key=keys[3], CopySource={"Bucket": bucket, "Key": keys[1]}), "cross-prefix COPY source")
         scoped.copy_object(Bucket=bucket, Key=keys[3], CopySource={"Bucket": bucket, "Key": keys[0]})
@@ -114,7 +150,8 @@ def main():
             scoped.abort_multipart_upload(Bucket=bucket, Key=keys[2], UploadId=upload)
         for bad_token in (None, "invalid-token"):
             invalid = s3_client(endpoint, region, key, password, bad_token)
-            denied(lambda: invalid.get_object(Bucket=bucket, Key=keys[0]), "invalid/missing session token")
+            # RustFS 1.0.0-rc.5 rejects a missing or forged session token with 500 InternalError.
+            denied(lambda: invalid.get_object(Bucket=bucket, Key=keys[0]), "invalid/missing session token", (403, 500))
         # Test denial directly on RustFS as well as through the network gateway.
         child_sts = boto3.client("sts", endpoint_url=endpoint, region_name=region,
                                  aws_access_key_id=key, aws_secret_access_key=password, aws_session_token=token)
@@ -124,7 +161,7 @@ def main():
         denied(lambda: api_sts.assume_role(**role_args), "API user STS issuance")
         denied(lambda: Admin(endpoint, region, key, password, token).request("GET", "/list-users"), "session admin access")
         denied(lambda: Admin(endpoint, region, issuer_key, issuer_secret).request("GET", "/list-users"), "issuer admin access")
-        denied(lambda: internal.list_buckets(), "session list all buckets")
+        denied(internal.list_buckets, "session list all buckets")
         url = scoped.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": keys[0]}, ExpiresIn=60)
         with urllib.request.urlopen(url, timeout=30) as response:
             assert response.read() == b"qualification"
@@ -134,7 +171,10 @@ def main():
         audit_bucket = setting("AUDIT_BUCKET")
         if audit_bucket:
             check_audit_retention(endpoint, region, audit_bucket, (secret("RUSTFS_ROOT_USER"), secret("RUSTFS_ROOT_PASSWORD")))
-        print("Single-node STS prefix, copy-source, token, admin, presigned URL and audit retention checks passed.")
+        if locked_bucket:
+            check_locked_bucket(endpoint, public_endpoint, region, locked_bucket, (api_key, api_secret),
+                                (issuer_key, issuer_secret), (secret("RUSTFS_ROOT_USER"), secret("RUSTFS_ROOT_PASSWORD")))
+        print("Single-node STS prefix, copy-source, token, admin, presigned URL, audit and locked retention checks passed.")
     finally:
         # Also clean unexpected writes if a denial regression was found.
         for cleanup_bucket in (bucket, setting("META_BUCKET"), setting("LOG_BUCKET")):

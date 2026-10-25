@@ -58,6 +58,7 @@ export * from "./storage-url";
 export * from "./storage-tree";
 export * from "./bulk-upload";
 export * from "./signed-upload";
+export * from "./locked-storage";
 export * from "./storage-batching";
 export * from "./temporary-upload-batch";
 export * from "./temporary-upload-cache";

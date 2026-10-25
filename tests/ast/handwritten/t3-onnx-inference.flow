@@ -63,7 +63,7 @@ function openSession(spec: ModelSpec): (session: Struct, provider: string) {
 }
 
 function preprocess(source: Struct, spec: ModelSpec): (frame: Struct, width: int, height: int) {
-    const raw = image::read({ path: source, applyExif: true })
+    const raw = image::read({ path: source, applyExifOrientation: true })
     const rgb = raw.convertColor("RGB", false)
     const { imageOut: scaled, widthOut, heightOut } = rgb.resize(false, "to_fill", "CatmullRom", spec.input_size, spec.input_size)
     const frame = scaled.contrast(1.04, false)

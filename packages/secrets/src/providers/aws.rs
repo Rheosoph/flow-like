@@ -4,6 +4,9 @@ use crate::providers::SecretProvider;
 use crate::{SecretProviderKind, SecretRef, SecretValue};
 use async_trait::async_trait;
 use aws_config::{BehaviorVersion, Region};
+use std::collections::HashSet;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 type GetParameterSdkError =
     aws_sdk_ssm::error::SdkError<aws_sdk_ssm::operation::get_parameter::GetParameterError>;
@@ -17,15 +20,56 @@ type GetSecretValueSdkError = aws_sdk_secretsmanager::error::SdkError<
 pub struct AwsParameterStoreProvider {
     config: AwsParameterStoreProviderConfig,
     client: aws_sdk_ssm::Client,
+    listing: Mutex<Option<Listing>>,
+    absence_ttl: Duration,
+}
+
+/// Every parameter name one complete `GetParametersByPath` pass returned.
+struct Listing {
+    path: String,
+    names: HashSet<String>,
+    listed_at: Instant,
+}
+
+impl Listing {
+    /// A name under the listed path that the pass did not return did not exist then.
+    fn proves_absent(&self, name: &str, ttl: Duration) -> bool {
+        self.listed_at.elapsed() < ttl && name.starts_with(&self.path) && !self.names.contains(name)
+    }
 }
 
 impl AwsParameterStoreProvider {
-    pub async fn new(config: AwsParameterStoreProviderConfig) -> Result<Self> {
+    /// `absence_ttl` bounds how long a complete prefetch answers a lookup for a parameter it
+    /// did not return, without a `GetParameter` request.
+    pub async fn new(
+        config: AwsParameterStoreProviderConfig,
+        absence_ttl: Duration,
+    ) -> Result<Self> {
         let sdk_config = load_sdk_config(config.region.clone()).await;
         Ok(Self {
             config,
             client: aws_sdk_ssm::Client::new(&sdk_config),
+            listing: Mutex::new(None),
+            absence_ttl,
         })
+    }
+
+    fn listed_absent(&self, name: &str) -> bool {
+        self.listing.lock().is_ok_and(|listing| {
+            listing
+                .as_ref()
+                .is_some_and(|listing| listing.proves_absent(name, self.absence_ttl))
+        })
+    }
+
+    fn remember_listing(&self, path: String, names: HashSet<String>) {
+        if let Ok(mut listing) = self.listing.lock() {
+            *listing = Some(Listing {
+                path,
+                names,
+                listed_at: Instant::now(),
+            });
+        }
     }
 
     fn parameter_name(&self, reference: &SecretRef) -> String {
@@ -44,10 +88,14 @@ impl SecretProvider for AwsParameterStoreProvider {
     }
 
     async fn get(&self, reference: &SecretRef) -> Result<SecretValue> {
+        let name = self.parameter_name(reference);
+        if reference.version.is_none() && self.listed_absent(&name) {
+            return Err(SecretError::SecretNotFound(self.kind()));
+        }
         let output = self
             .client
             .get_parameter()
-            .name(self.parameter_name(reference))
+            .name(name)
             .set_with_decryption(Some(self.config.with_decryption))
             .send()
             .await
@@ -67,6 +115,7 @@ impl SecretProvider for AwsParameterStoreProvider {
         };
         let path = format!("/{}/", prefix.trim_matches('/'));
         let mut results = Vec::new();
+        let mut names = HashSet::new();
         let mut next_token: Option<String> = None;
 
         loop {
@@ -90,6 +139,7 @@ impl SecretProvider for AwsParameterStoreProvider {
             if let Some(parameters) = output.parameters {
                 for param in parameters {
                     let Some(name) = param.name else { continue };
+                    names.insert(name.clone());
                     let Some(value) = param.value else { continue };
                     // Strip the prefix path to get the bare key
                     let bare_key = name.strip_prefix(&path).unwrap_or(&name).to_string();
@@ -108,6 +158,7 @@ impl SecretProvider for AwsParameterStoreProvider {
             count = results.len(),
             "SSM GetParametersByPath prefetch complete"
         );
+        self.remember_listing(path, names);
         Ok(results)
     }
 }
@@ -308,5 +359,40 @@ mod tests {
         );
 
         assert_eq!(message, "GetParameter failed: dispatch failure");
+    }
+
+    fn listing(listed_at: Instant) -> Listing {
+        Listing {
+            path: "/flow-like/dev/".to_string(),
+            names: HashSet::from(["/flow-like/dev/SINK_SECRET".to_string()]),
+            listed_at,
+        }
+    }
+
+    #[test]
+    fn fresh_listing_proves_only_unlisted_names_under_its_path_absent() {
+        let listing = listing(Instant::now());
+        let ttl = Duration::from_secs(30);
+
+        assert!(listing.proves_absent("/flow-like/dev/AUDIT_ENTRY_KEY", ttl));
+        assert!(!listing.proves_absent("/flow-like/dev/SINK_SECRET", ttl));
+        assert!(!listing.proves_absent("/flow-like/other/AUDIT_ENTRY_KEY", ttl));
+        assert!(!listing.proves_absent("flow-like/dev/AUDIT_ENTRY_KEY", ttl));
+    }
+
+    #[test]
+    fn stale_listing_proves_nothing() {
+        let Some(listed_at) = Instant::now().checked_sub(Duration::from_secs(31)) else {
+            return;
+        };
+
+        assert!(
+            !listing(listed_at)
+                .proves_absent("/flow-like/dev/AUDIT_ENTRY_KEY", Duration::from_secs(30))
+        );
+        assert!(
+            !listing(Instant::now())
+                .proves_absent("/flow-like/dev/AUDIT_ENTRY_KEY", Duration::ZERO)
+        );
     }
 }

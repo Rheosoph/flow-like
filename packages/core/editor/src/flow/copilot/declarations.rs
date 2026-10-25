@@ -654,6 +654,49 @@ pub(crate) fn canonical_node_type(spelling: &str) -> String {
         .unwrap_or_else(|| key.replace("::", "_"))
 }
 
+/// The node types each `ns::alias` spelling names, keyed by its lower-cased segments: the
+/// declared spelling and the category-derived one reconcile also accepts.
+static NAMESPACE_MEMBER_OWNERS: LazyLock<HashMap<String, BTreeSet<String>>> = LazyLock::new(|| {
+    let mut owners: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for entry in DECLARATION_INDEX.iter() {
+        let derived_namespace = flow_like_ast::derive_namespace(&entry.category);
+        let derived_alias = flow_like_ast::derive_alias(&entry.node_type, &entry.category);
+        for (namespace, alias) in [
+            (entry.namespace.as_str(), entry.alias.as_str()),
+            (derived_namespace.as_str(), derived_alias.as_str()),
+        ] {
+            if namespace.is_empty() {
+                continue;
+            }
+            owners
+                .entry(namespace_member_key(namespace, alias))
+                .or_default()
+                .insert(entry.node_type.clone());
+        }
+    }
+    owners
+});
+
+fn namespace_member_key(namespace: &str, alias: &str) -> String {
+    let dotted = namespace.replace("::", ".");
+    flow_like_ast::naming::namespace_segments(&dotted)
+        .map(str::to_lowercase)
+        .chain(std::iter::once(alias.to_lowercase()))
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// Whether `use namespace::*` lets a bare `alias` reach a catalog node other than `node_type`.
+pub(crate) fn opened_alias_reaches_other(
+    namespace: &[String],
+    alias: &str,
+    node_type: &str,
+) -> bool {
+    NAMESPACE_MEMBER_OWNERS
+        .get(&namespace_member_key(&namespace.join("."), alias))
+        .is_some_and(|owners| owners.iter().any(|owner| owner != node_type))
+}
+
 /// Split a query into symbol-shaped tokens, keeping `::` so a qualified `ns::alias` survives as
 /// one token.
 fn symbol_tokens(query: &str) -> impl Iterator<Item = &str> {
@@ -1750,6 +1793,32 @@ declare function utilsHashMd5({ input: string }): string;
             stem: "fixture",
             content: V2_FIXTURE,
         })
+    }
+
+    #[test]
+    fn an_opened_namespace_reaches_other_nodes_through_a_shared_alias() {
+        let int = vec!["int".to_string()];
+        assert!(opened_alias_reaches_other(
+            &int,
+            "subtract",
+            "float_vector_subtraction"
+        ));
+        assert!(!opened_alias_reaches_other(
+            &int,
+            "subtract",
+            "int_subtract"
+        ));
+        let vector = vec!["math".to_string(), "vector".to_string()];
+        assert!(opened_alias_reaches_other(
+            &vector,
+            "Subtract",
+            "int_subtract"
+        ));
+        assert!(!opened_alias_reaches_other(
+            &["log".to_string()],
+            "info",
+            "log_info"
+        ));
     }
 
     #[test]

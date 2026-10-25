@@ -121,18 +121,15 @@ impl NodeLogic for MqttPublishNode {
 
         let session: MqttSession = context.evaluate_pin("session").await?;
         let topic: String = context.evaluate_pin("topic").await?;
-        let payload_bytes: Option<Vec<u8>> =
-            if context.get_pin_by_name("payload_bytes").await.is_ok() {
-                context.evaluate_pin("payload_bytes").await?
-            } else {
-                None
-            };
-        let payload = match payload_bytes {
-            Some(bytes) => bytes,
-            None => context
+        let has_payload_bytes = context.get_pin_by_name("payload_bytes").await.is_ok()
+            && !context.evaluate_pin_raw("payload_bytes").await?.is_null();
+        let payload = if has_payload_bytes {
+            context.evaluate_pin_bytes("payload_bytes").await?.to_vec()
+        } else {
+            context
                 .evaluate_pin::<String>("payload")
                 .await?
-                .into_bytes(),
+                .into_bytes()
         };
         let qos_str: String = context.evaluate_pin("qos").await?;
         let retain: bool = context.evaluate_pin("retain").await?;

@@ -569,7 +569,7 @@ function reassignCarrier(actionContext: Struct, banner: Struct): (placed: bool) 
                 ui::setPageState({ key: "dispatch.selected_score", value: score })
                 const { element: laneTable } = ui::getElement({ elementRef: "lane-table" })
                 const laneRows = map::values({ mapIn: carrierByShipment })
-                ui::updateTable({ elementRef: laneTable, operation: "Set Data", data: { rows: laneRows } })
+                ui::updateTable({ elementRef: laneTable, operation: "Set Data", data: laneRows })
             }
             execError: {
                 ui::setElementText({ elementRef: banner, text: `no route between the ${shipmentId} stops` })

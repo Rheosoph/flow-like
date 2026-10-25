@@ -25,6 +25,7 @@ import {
 	type ContractInput,
 	type ContractQuery,
 	type JsonValue,
+	WIDGET_CAPABILITY_KEYS,
 	type WidgetContract,
 	normalizeCspPurposes,
 	validateContract,
@@ -104,7 +105,7 @@ export function extractContract(widgetConfigPath: string): ExtractResult {
 		...(tsconfig && { tsconfig }),
 		skipTypeCheck: true,
 		jsDoc: "extended",
-		extraTags: ["geometry", "llm", "mutation"],
+		extraTags: ["geometry", "llm", "upload", "mutation"],
 		topRef: false,
 		expose: "all",
 		additionalProperties: true,
@@ -542,16 +543,26 @@ function geometrySchema(
 		"x-flow-like-type": "geometry",
 	};
 	if (kind !== "Any") result["x-geometry"] = kind;
-	for (const key of [
-		"title",
-		"description",
-		"default",
-		"examples",
-		"deprecated",
-	]) {
-		if (shape[key] !== undefined) result[key] = shape[key];
+	return withAnnotations(result, shape);
+}
+
+const VALUE_ANNOTATIONS = [
+	"title",
+	"description",
+	"default",
+	"examples",
+	"deprecated",
+];
+
+function withAnnotations(
+	marker: JsonObject,
+	source: JsonObject,
+	keys: readonly string[] = VALUE_ANNOTATIONS,
+): JsonObject {
+	for (const key of keys) {
+		if (source[key] !== undefined) marker[key] = source[key];
 	}
-	return result;
+	return marker;
 }
 
 /**
@@ -572,21 +583,36 @@ function llmSchema(schema: JsonObject, context: string): JsonObject {
 			`@llm ${kind} for ${context} must annotate an object type; annotate the element type for arrays and maps`,
 		);
 	}
-	const result: JsonObject = {
-		type: "object",
-		"x-flow-like-type": "llm",
-		"x-llm": kind,
-	};
-	for (const key of [
-		"title",
-		"description",
-		"default",
-		"examples",
-		"deprecated",
-	]) {
-		if (schema[key] !== undefined) result[key] = schema[key];
+	return withAnnotations(
+		{ type: "object", "x-flow-like-type": "llm", "x-llm": kind },
+		schema,
+	);
+}
+
+const UPLOAD_MARKER = "file";
+
+/**
+ * `@upload` marks the SDK's `WidgetFile` handle. The contract keeps only the
+ * marker: the SDK validates the handle form, and the host swaps each handle
+ * for the stored file before an event reaches the workflow. Handles carry no
+ * defaults, since the host mints them per widget session.
+ */
+function uploadSchema(schema: JsonObject, context: string): JsonObject {
+	if (schema.upload !== true) {
+		throw new Error(
+			`Invalid @upload '${String(schema.upload)}' for ${context}; the tag takes no value`,
+		);
 	}
-	return result;
+	if (schema.type !== undefined && schema.type !== "object") {
+		throw new Error(
+			`@upload for ${context} must annotate an object type; annotate the element type for arrays and maps`,
+		);
+	}
+	return withAnnotations(
+		{ type: "object", "x-flow-like-type": UPLOAD_MARKER },
+		schema,
+		["title", "description", "deprecated"],
+	);
 }
 
 function resolveDefinition(
@@ -640,6 +666,9 @@ function inlineRefs(
 	}
 	if (value.llm !== undefined) {
 		return llmSchema(value, context);
+	}
+	if (value.upload !== undefined) {
+		return uploadSchema(value, context);
 	}
 
 	const { $ref, $schema, definitions: _nested, ...rest } = value;
@@ -714,12 +743,19 @@ function extractInputs(
 			[],
 			`input '${member.name}' of widget '${widgetId}'`,
 		);
+		rejectUploadSchema(
+			inlined,
+			`Input '${member.name}' of widget '${widgetId}'`,
+		);
 		const optional = member.optional || !required.has(member.name);
 		const input = mapInputSchema(
 			isJsonObject(inlined) ? inlined : {},
 			optional,
 		);
-		if (input.default !== undefined && containsGeometrySchema(input.schema)) {
+		if (
+			input.default !== undefined &&
+			containsMarker(input.schema, "geometry")
+		) {
 			const result = validateInputValue(input, input.default);
 			if (!result.valid) {
 				throw new Error(
@@ -737,15 +773,25 @@ function extractInputs(
 	return inputs;
 }
 
-function containsGeometrySchema(value: JsonValue | undefined): boolean {
-	if (Array.isArray(value)) return value.some(containsGeometrySchema);
+function containsMarker(value: JsonValue | undefined, type: string): boolean {
+	if (Array.isArray(value))
+		return value.some((entry) => containsMarker(entry, type));
 	if (!isJsonObject(value)) return false;
-	if (value["x-flow-like-type"] === "geometry") return true;
+	if (value["x-flow-like-type"] === type) return true;
 	return Object.entries(value).some(
 		([key, entry]) =>
 			!["default", "examples", "enum", "const"].includes(key) &&
-			containsGeometrySchema(entry),
+			containsMarker(entry, type),
 	);
+}
+
+/** File handles reach the workflow only through events, where the host swaps them for the stored file. */
+function rejectUploadSchema(schema: JsonValue | null, subject: string): void {
+	if (schema !== null && containsMarker(schema, UPLOAD_MARKER)) {
+		throw new Error(
+			`${subject} cannot carry a WidgetFile; uploaded files belong in event payloads, where the host swaps each handle for the stored file`,
+		);
+	}
 }
 
 function mapInputSchema(schema: JsonObject, optional: boolean): ContractInput {
@@ -881,6 +927,8 @@ function extractQueries(
 				`No result schema was generated for query '${member.name}'`,
 			);
 		}
+		rejectUploadSchema(argsSchema, `Query '${member.name}' args`);
+		rejectUploadSchema(resultSchema, `Query '${member.name}' result`);
 
 		queries[member.name] = {
 			argsSchema:
@@ -1018,6 +1066,10 @@ function evaluateExpression(expr: ts.Expression, path: string): JsonValue {
 	);
 }
 
+function isCapabilityKey(key: string): key is keyof WidgetCapabilities {
+	return (WIDGET_CAPABILITY_KEYS as readonly string[]).includes(key);
+}
+
 function readWidgetConfig(
 	cfg: JsonObject,
 	path: string,
@@ -1066,15 +1118,10 @@ function readWidgetConfig(
 			throw new Error(`Widget capabilities in ${path} must be an object`);
 		capabilities = {};
 		for (const [key, value] of Object.entries(cfg.capabilities)) {
-			if (
-				!["workers", "media", "microphone", "downloads", "wasm"].includes(
-					key,
-				) ||
-				typeof value !== "boolean"
-			) {
+			if (!isCapabilityKey(key) || typeof value !== "boolean") {
 				throw new Error(`Invalid widget capability '${key}' in ${path}`);
 			}
-			capabilities[key as keyof WidgetCapabilities] = value;
+			capabilities[key] = value;
 		}
 	}
 

@@ -4,11 +4,90 @@ use flow_like::a2ui::components::TableProps;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, remove_pin},
-    pin::PinOptions,
+    node::{Node, NodeLogic},
+    pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
+
+/// Pins only some operations show.
+const OPERATION_PINS: [&str; 6] = ["data", "columns", "row", "row_index", "cell", "row_count"];
+
+/// The operation pins an operation shows: (name, direction, container).
+fn operation_pins(operation: &str) -> &'static [(&'static str, PinType, ValueType)] {
+    match operation {
+        "Set Data" => &[("data", PinType::Input, ValueType::Array)],
+        "Set Columns" => &[("columns", PinType::Input, ValueType::Array)],
+        "Add Row" => &[("row", PinType::Input, ValueType::Normal)],
+        "Remove Row" => &[("row_index", PinType::Input, ValueType::Normal)],
+        "Update Cell" => &[("cell", PinType::Input, ValueType::Normal)],
+        "Get Data" => &[
+            ("data", PinType::Output, ValueType::Array),
+            ("row_count", PinType::Output, ValueType::Normal),
+        ],
+        _ => &[],
+    }
+}
+
+/// Set Data's `data`: the rows to show, one object per row, as a query returns them.
+fn add_set_data_pin(node: &mut Node) {
+    node.add_input_pin("data", "Data", "Array of row objects", VariableType::Struct)
+        .set_value_type(ValueType::Array)
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_open_schema();
+}
+
+/// Add the operation pin `name` in the direction [`operation_pins`] gives it.
+fn add_operation_pin(node: &mut Node, name: &str, pin_type: &PinType) {
+    match (name, pin_type) {
+        ("data", PinType::Input) => add_set_data_pin(node),
+        ("data", PinType::Output) => {
+            node.add_output_pin("data", "Data", "Current table data", VariableType::Struct)
+                .set_value_type(ValueType::Array)
+                .set_options(PinOptions::new().set_enforce_schema(false).build());
+        }
+        ("columns", _) => {
+            node.add_input_pin(
+                "columns",
+                "Columns",
+                "Column definitions",
+                VariableType::Struct,
+            )
+            .set_value_type(ValueType::Array)
+            .set_schema::<TableColumn>();
+        }
+        ("row", _) => {
+            node.add_input_pin("row", "Row", "Row data object", VariableType::Struct)
+                .set_options(PinOptions::new().set_enforce_schema(false).build());
+        }
+        ("row_index", _) => {
+            node.add_input_pin(
+                "row_index",
+                "Row Index",
+                "Index of row to remove (0-based)",
+                VariableType::Integer,
+            );
+        }
+        ("cell", _) => {
+            node.add_input_pin(
+                "cell",
+                "Cell",
+                "Cell update parameters",
+                VariableType::Struct,
+            )
+            .set_schema::<TableCellUpdate>();
+        }
+        ("row_count", _) => {
+            node.add_output_pin(
+                "row_count",
+                "Row Count",
+                "Number of rows",
+                VariableType::Integer,
+            );
+        }
+        _ => {}
+    }
+}
 
 /// Unified Table update node.
 ///
@@ -75,14 +154,12 @@ impl NodeLogic for UpdateTable {
         )
         .set_default_value(Some(json!("Set Data")));
 
-        // Default: Set Data pins
-        node.add_input_pin("data", "Data", "Array of row objects", VariableType::Struct)
-            .set_options(PinOptions::new().set_enforce_schema(false).build())
-            .set_open_schema();
+        add_set_data_pin(&mut node);
 
         node.add_output_pin("exec_out", "▶", "", VariableType::Execution);
 
         node.set_long_running(true);
+        node.set_version(1);
 
         node
     }
@@ -166,62 +243,19 @@ impl NodeLogic for UpdateTable {
             .and_then(|bytes| flow_like_types::json::from_slice::<String>(&bytes).ok())
             .unwrap_or_else(|| "Set Data".to_string());
 
-        // Remove all dynamic pins
-        let pins_to_check = ["data", "columns", "row", "row_index", "cell", "row_count"];
-        for pin_name in pins_to_check {
-            if let Some(pin) = node.get_pin_by_name(pin_name).cloned() {
-                remove_pin(node, Some(pin));
+        // A pin the operation still shows is kept, not re-minted: a fresh pin id drops its wires
+        // and keeps the board update loop dirty.
+        let shown = operation_pins(&operation);
+        node.pins.retain(|_, pin| {
+            !OPERATION_PINS.contains(&pin.name.as_str())
+                || shown.iter().any(|(name, pin_type, value_type)| {
+                    pin.name == *name && pin.pin_type == *pin_type && pin.value_type == *value_type
+                })
+        });
+        for (name, pin_type, _) in shown {
+            if !node.pins.values().any(|pin| pin.name == *name) {
+                add_operation_pin(node, name, pin_type);
             }
-        }
-
-        match operation.as_str() {
-            "Set Data" => {
-                node.add_input_pin("data", "Data", "Array of row objects", VariableType::Struct)
-                    .set_value_type(flow_like::flow::pin::ValueType::Array)
-                    .set_options(PinOptions::new().set_enforce_schema(false).build());
-            }
-            "Set Columns" => {
-                node.add_input_pin(
-                    "columns",
-                    "Columns",
-                    "Column definitions",
-                    VariableType::Struct,
-                )
-                .set_value_type(flow_like::flow::pin::ValueType::Array)
-                .set_schema::<TableColumn>();
-            }
-            "Add Row" => {
-                node.add_input_pin("row", "Row", "Row data object", VariableType::Struct)
-                    .set_options(PinOptions::new().set_enforce_schema(false).build());
-            }
-            "Remove Row" => {
-                node.add_input_pin(
-                    "row_index",
-                    "Row Index",
-                    "Index of row to remove (0-based)",
-                    VariableType::Integer,
-                );
-            }
-            "Update Cell" => {
-                node.add_input_pin(
-                    "cell",
-                    "Cell",
-                    "Cell update parameters",
-                    VariableType::Struct,
-                )
-                .set_schema::<TableCellUpdate>();
-            }
-            "Get Data" => {
-                node.add_output_pin("data", "Data", "Current table data", VariableType::Struct)
-                    .set_options(PinOptions::new().set_enforce_schema(false).build());
-                node.add_output_pin(
-                    "row_count",
-                    "Row Count",
-                    "Number of rows",
-                    VariableType::Integer,
-                );
-            }
-            _ => {}
         }
     }
 }

@@ -84,6 +84,13 @@ function routeTimeoutMs(parts: readonly string[], method: string): number {
 		if (section === "graph" && action === "actions" && parts[6] === "invoke") {
 			return DISPATCH_REQUEST_TIMEOUT_MS;
 		}
+		// Commit may hash the stored object through the API; purge deletes versions one by one.
+		if (
+			section === "locked" &&
+			(parts[3] === "commit" || parts[3] === "purge")
+		) {
+			return DATA_REQUEST_TIMEOUT_MS;
+		}
 		if (section !== undefined && DATA_APP_SECTIONS.has(section)) {
 			return DATA_REQUEST_TIMEOUT_MS;
 		}

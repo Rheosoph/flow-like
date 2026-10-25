@@ -56,6 +56,7 @@ import {
 
 import { getWebOidcSettings } from "../lib/oidc-settings";
 import { saveReturnUrl } from "../lib/return-url";
+import { HostedLegalMenu } from "./hosted-legal-menu";
 import { useSessionRecovery } from "./use-session-recovery";
 
 function Status({
@@ -424,8 +425,14 @@ function HostedRuntime({
 											<nav className="flex flex-1 items-center gap-2">
 												{navigation}
 											</nav>
-											<div className="flex items-center gap-1">{toolbar}</div>
+											<div className="flex items-center gap-1">
+												{toolbar}
+												<HostedLegalMenu legal={data.legal} floating={false} />
+											</div>
 										</header>
+									)}
+									{data.kind === "u" && (
+										<HostedLegalMenu legal={data.legal} floating />
 									)}
 									<Container ref={sidebarRef}>
 										{data.kind === "c" ? (

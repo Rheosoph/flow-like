@@ -465,11 +465,12 @@ model App {
   ownedGroups      AppGroup[]       @relation("ownedGroups")
   groupMemberships AppGroupMember[] @relation("appGroupMemberships")
 
-  llmUsage       LLMUsageTracking[]
-  usageLimits    AppUsageLimit[]
-  executionUsage ExecutionUsageTracking[]
-  executionRuns  ExecutionRun[]
-  executionMode  String                   @default("ANY")
+  llmUsage            LLMUsageTracking[]
+  usageLimits         AppUsageLimit[]
+  executionUsage      ExecutionUsageTracking[]
+  executionUsageDaily ExecutionUsageDaily[]
+  executionRuns       ExecutionRun[]
+  executionMode       String                   @default("ANY")
 
   syncs       BoardSync[]
   boardScores AppBoardScore[]
@@ -579,10 +580,11 @@ model TechnicalUser {
   creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
   creatorMembershipId String?
 
-  llmUsage       LLMUsageTracking[]
-  embeddingUsage EmbeddingUsageTracking[]
-  executionUsage ExecutionUsageTracking[]
-  executionRuns  ExecutionRun[]
+  llmUsage            LLMUsageTracking[]
+  embeddingUsage      EmbeddingUsageTracking[]
+  executionUsage      ExecutionUsageTracking[]
+  executionUsageDaily ExecutionUsageDaily[]
+  executionRuns       ExecutionRun[]
 
   validUntil DateTime? @db.Timestamptz(3)
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
@@ -1667,10 +1669,18 @@ model DeviceArchive {
 
   @@id([deviceId, archiveId])
   @@unique([deviceId, scope, kind, sequence])
-  @@index([ownerId, expiresAt])
-  // DSQL stores sizeBytes with INCLUDE; Prisma uses a third key for db push.
-  @@index([ownerId, expiresAt, sizeBytes])
+  // Serves owner sums, per-device usage and expired-row batches without row reads.
+  // DSQL stores sizeBytes and createdAt with INCLUDE; Prisma lists them as keys for db push.
+  @@index([ownerId, expiresAt, deviceId, archiveId, sizeBytes, createdAt], map: "DeviceArchive_ownerUsage_idx")
   @@index([expiresAt])
+}
+
+/// Bytes of an owner's stored archives, expired or not. Every insert and delete of
+/// DeviceArchive rows changes it in the same transaction, under the owner's User row
+/// fence. A missing row is initialized from the owner's archives on first use.
+model DeviceArchiveUsage {
+  ownerId   String @id
+  usedBytes BigInt
 }
 
 model DeviceArchiveHead {
@@ -2764,6 +2774,85 @@ model WeeklyChallenge {
   @@unique([weekIso])
   @@index([expiresAt])
   @@index([challengeId])
+}
+
+// ---- locked-storage.prisma
+/// A write-once file in the locked bucket (Revisionssicherheit). The row is the
+/// index of the file; every byte lives in an immutable `LockedItemVersion` object.
+/// No foreign keys: records outlive app and user deletion for as long as their
+/// objects are retained.
+model LockedItem {
+  id            String   @id
+  appId         String
+  /// PROJECT | USER
+  scope         String   @default("PROJECT")
+  /// Owner of a USER item; null for PROJECT items.
+  ownerId       String?
+  /// Lowercased scope, owner, folder and name. Unique per app.
+  pathKey       String
+  name          String
+  folder        String   @default("")
+  contentType   String?
+  /// Highest committed version number; 0 until the first upload is committed.
+  latestVersion Int      @default(0)
+  /// Size of the newest version that is still stored.
+  latestSize    BigInt   @default(0)
+  /// Committed versions that are still stored (not purged).
+  liveVersions  Int      @default(0)
+  /// Bytes of all stored versions, charged to the app's storage payer.
+  liveSize      BigInt   @default(0)
+  metadata      Json?
+  createdBy     String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([appId, pathKey])
+  @@index([appId, scope, folder])
+  @@index([appId, ownerId])
+}
+
+/// One immutable object of a locked item. `version` is assigned when the upload
+/// is committed, so abandoned uploads never leave gaps in the numbering.
+model LockedItemVersion {
+  id                   String    @id
+  itemId               String
+  appId                String
+  version              Int?
+  /// PENDING | LOCKED | PURGED
+  status               String    @default("PENDING")
+  objectKey            String
+  /// S3 VersionId, GCS generation or Azure versionid of the stored object.
+  providerVersionId    String?
+  fileName             String
+  contentType          String
+  size                 BigInt
+  /// Hex SHA-256 the uploader declared; `checksumVerified` once the store confirmed it.
+  sha256               String
+  checksumVerified     Boolean   @default(false)
+  /// GOVERNANCE | COMPLIANCE
+  retentionMode        String
+  retainUntil          DateTime  @db.Timestamptz(3)
+  /// OBJECT (lock set on the object) | BUCKET (bucket-level retention policy)
+  enforcement          String
+  legalHold            Boolean   @default(false)
+  /// The maintenance sweep purges the version once retention ends and no legal hold
+  /// remains. Null (rows from before the column) keeps it like false.
+  deleteAfterRetention Boolean?
+  comment              String?
+  metadata             Json?
+  uploadedBy           String
+  uploadExpiresAt      DateTime  @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(3)
+  lockedAt             DateTime? @db.Timestamptz(3)
+  /// Set when the object was deleted after its retention ended; the row stays as evidence.
+  purgedAt             DateTime? @db.Timestamptz(3)
+  purgedBy             String?
+
+  @@unique([itemId, version])
+  @@index([itemId, status])
+  @@index([status, uploadExpiresAt])
+  @@index([appId, status, retainUntil])
+  @@index([status, deleteAfterRetention, retainUntil])
 }
 
 // ---- locking.prisma
@@ -4154,6 +4243,7 @@ model User {
   llmUsage                    LLMUsageTracking[]
   embeddingUsage              EmbeddingUsageTracking[]
   executionUsage              ExecutionUsageTracking[]
+  executionUsageDaily         ExecutionUsageDaily[]
   executionRuns               ExecutionRun[]
   feedback                    Feedback[]
   flowScriptApplyFailures     FlowScriptApplyFailure[]
@@ -4383,11 +4473,55 @@ model ExecutionUsageTracking {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  @@index([createdAt])
+  // Day roll-ups read only this index; DSQL includes the final five columns as payload.
+  @@index([createdAt, userId, technicalUserId, appId, status, microseconds], map: "ExecutionUsageTracking_createdAt_rollup_idx")
   @@index([appId, createdAt])
+  // DSQL includes the final three columns as payload; Prisma uses trailing keys.
+  @@index([userId, createdAt, id, appId, status, microseconds], map: "ExecutionUsageTracking_userId_createdAt_id_idx")
+  @@index([userId, status, createdAt, id])
+  // Keep exact account counts on a narrower index than the activity projection.
   @@index([userId, createdAt])
   @@index([technicalUserId, createdAt])
   @@index([version])
+}
+
+/// Executions per UTC day, account, technical user, app and severity. A day is
+/// rolled up from ExecutionUsageTracking once it has closed (see
+/// `execution_usage_rollup.rs`); `id` hashes the key, so the roll-up and a late
+/// report write the same row. The day leads the key, so a roll-up reads a day
+/// and retention deletes one as a single key range.
+model ExecutionUsageDaily {
+  day DateTime @db.Date
+  id  String
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId String?
+
+  technicalUserId String?
+  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+
+  app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String?
+
+  status       String
+  executions   BigInt
+  microseconds BigInt
+
+  @@id([day, id])
+  // DSQL includes the final four columns as payload; Prisma uses trailing keys.
+  @@index([userId, day, appId, status, executions, microseconds], map: "ExecutionUsageDaily_userId_day_idx")
+  @@index([appId])
+  @@index([technicalUserId])
+}
+
+/// A UTC day of ExecutionUsageDaily: rolled up once `rolledUpAt` is set. While
+/// a roll-up runs, `claim` names it and every write it makes checks the claim,
+/// so a second runner can take over a stalled day but never write beside it.
+model ExecutionUsageDay {
+  day        DateTime  @id @db.Date
+  rolledUpAt DateTime? @db.Timestamptz(3)
+  claim      String?
+  claimedAt  DateTime? @db.Timestamptz(3)
 }
 
 model UsageInvocation {

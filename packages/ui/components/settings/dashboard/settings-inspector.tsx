@@ -31,8 +31,10 @@ import {
 	APP_TYPE_ORDER,
 	appTypeMeta,
 } from "../../../lib/app-type";
+import { plainTextFromRichContent } from "../../../lib/plate-text";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
+import { EuroAmountInput } from "../../payments/euro-amount-input";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
@@ -55,7 +57,6 @@ import { TextEditor } from "../../ui/text-editor";
 import { Textarea } from "../../ui/textarea";
 import { PermissionNotice } from "../permission";
 import { AppDangerZone } from "./app-danger-zone";
-import { EuroAmountInput } from "../../payments/euro-amount-input";
 import type { ProjectDraft } from "./use-project-draft";
 import type {
 	DashboardPermissions,
@@ -209,6 +210,13 @@ export function SettingsInspector({
 	const canEditApp = permissions.canWriteApp;
 
 	const { draftApp, draftMetadata, setDraftApp, setDraftMetadata } = draft;
+	const longDescriptionPreview = useMemo(
+		() =>
+			plainTextFromRichContent(draftMetadata?.long_description ?? "")
+				.trim()
+				.substring(0, 240),
+		[draftMetadata?.long_description],
+	);
 	const [priceValid, setPriceValid] = useState(true);
 	const panels = useMemo(
 		() =>
@@ -488,9 +496,9 @@ export function SettingsInspector({
 											</Button>
 										</div>
 										<div className="min-h-15 rounded-md border p-3 text-sm text-muted-foreground">
-											{draftMetadata.long_description ? (
+											{longDescriptionPreview ? (
 												<span className="line-clamp-3">
-													{draftMetadata.long_description.substring(0, 240)}
+													{longDescriptionPreview}
 												</span>
 											) : (
 												<span className="italic">
@@ -820,7 +828,7 @@ export function SettingsInspector({
 										<Label>{t("changelog", "Changelog")}</Label>
 										<Textarea
 											rows={4}
-											placeholder={`What is new in this version…`}
+											placeholder="What is new in this version…"
 											value={draftApp.changelog ?? ""}
 											disabled={!canEditApp}
 											onChange={(event) =>

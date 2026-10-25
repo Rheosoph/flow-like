@@ -11,7 +11,7 @@ pub fn read_zip(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
     let mut files = HashMap::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let name = file.name().to_string();
+        let name = file.name()?.into_owned();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         files.insert(name, bytes);

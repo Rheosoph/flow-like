@@ -80,6 +80,8 @@ store's responsibility.
 The isolated manager requires distinct metadata, content and log buckets. Configure
 their names with `storage.s3.metaBucket`, `contentBucket` and `logBucket`.
 Defaults are `flow-like-meta`, `flow-like-content` and `flow-like-logs`.
+The optional write-once bucket in `lockedStorage.bucket` is described in
+[Locked storage](/self-hosting/locked-storage/#kubernetes).
 
 The Secret named by `storage.s3.existingSecret` contains:
 

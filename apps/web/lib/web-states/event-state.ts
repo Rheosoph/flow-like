@@ -1,5 +1,4 @@
 import {
-	type IBoard,
 	type IEvent,
 	type IEventState,
 	type IEventVariant,
@@ -12,7 +11,6 @@ import {
 	type IVersionType,
 	type PageTrigger,
 	type ProgressToastData,
-	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
 	classifyPageContractError,
 	finishAllProgressToasts,
@@ -365,22 +363,17 @@ export class WebEventState implements IEventState {
 		event: IEvent,
 	): Promise<IOAuthCheckResult> {
 		try {
-			// Get the board for this event
-			const boardParams = event.board_version
-				? `?version=${event.board_version.join("_")}`
-				: "";
-			const board = await apiGet<IBoard>(
-				`apps/${appId}/board/${event.board_id}${boardParams}`,
-				this.backend.auth,
-			);
-
+			const requirements = await this.eventOAuthRequirements(appId, event);
 			const hub = await getHubConfig(this.backend.profile);
 			const oauthService = getOAuthService(
 				getOAuthApiBaseUrl(this.backend.profile?.hub),
 			);
-			const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
-				refreshToken: oauthService.refreshToken.bind(oauthService),
-			});
+			const oauthResult = await checkOAuthTokensFromPrerun(
+				requirements,
+				oauthTokenStore,
+				hub,
+				{ refreshToken: oauthService.refreshToken.bind(oauthService) },
+			);
 
 			console.log("[checkEventOAuth] oauthResult:", {
 				requiredProviders: oauthResult.requiredProviders?.map((p) => p.id),
@@ -559,9 +552,6 @@ export class WebEventState implements IEventState {
 		beforeDispatch?: () => void,
 		preparedPrerun?: IPrerunEventResponse,
 	): Promise<ILogMetadata | undefined> {
-		const hub = await timeRunStep("hub_config", () =>
-			getHubConfig(this.backend.profile),
-		);
 		const oauthService = getOAuthService(
 			getOAuthApiBaseUrl(this.backend.profile?.hub),
 		);
@@ -602,32 +592,31 @@ export class WebEventState implements IEventState {
 			);
 		}
 
-		const oauthResult = pagePrerun
-			? await timeRunStep("oauth_tokens", () =>
-					checkOAuthTokensFromPrerun(
-						pagePrerun.oauth_requirements,
-						oauthTokenStore,
-						hub,
-						oauthOptions,
-					),
-				)
+		const requirements = pagePrerun
+			? pagePrerun.oauth_requirements
 			: await (async () => {
 					const event = await timeRunStep("get_event", () =>
 						this.getEvent(appId, eventId),
 					);
-					const boardParams = event.board_version
-						? `?version=${event.board_version.join("_")}`
-						: "";
-					const board = await timeRunStep("get_board", () =>
-						apiGet<IBoard>(
-							`apps/${appId}/board/${event.board_id}${boardParams}`,
-							this.backend.auth,
-						),
-					);
-					return timeRunStep("oauth_tokens", () =>
-						checkOAuthTokens(board, oauthTokenStore, hub, oauthOptions),
+					return timeRunStep("prerun", () =>
+						this.eventOAuthRequirements(appId, event),
 					);
 				})();
+		// Provider configuration is needed only by OAuth nodes. Other actions can
+		// dispatch without waiting for a cold or unavailable Hub configuration.
+		const hub = requirements?.length
+			? await timeRunStep("hub_config", () =>
+					getHubConfig(this.backend.profile),
+				)
+			: undefined;
+		const oauthResult = await timeRunStep("oauth_tokens", () =>
+			checkOAuthTokensFromPrerun(
+				requirements,
+				oauthTokenStore,
+				hub,
+				oauthOptions,
+			),
+		);
 
 		console.log("[OAuth] Event check result:", {
 			requiredProviders: oauthResult.requiredProviders.map((p) => p.id),
@@ -1354,5 +1343,18 @@ export class WebEventState implements IEventState {
 			`apps/${appId}/events/${eventId}/prerun${params}`,
 			this.backend.auth,
 		);
+	}
+
+	/**
+	 * Members of a published app may run an event without reading its board,
+	 * so OAuth requirements come from prerun (ExecuteEvents), pinned to the
+	 * event's board version — prerun otherwise answers for the latest board.
+	 */
+	private async eventOAuthRequirements(appId: string, event: IEvent) {
+		const version = event.board_version
+			? (event.board_version as [number, number, number])
+			: undefined;
+		const prerun = await this.prerunEvent(appId, event.id, version);
+		return prerun.oauth_requirements;
 	}
 }

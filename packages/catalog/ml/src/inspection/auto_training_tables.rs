@@ -1377,7 +1377,7 @@ mod table_io {
             let _lock = self.lock.lock().await;
             let (source, generation) = self
                 .source
-                .load_with_generation(&mut context.clone())
+                .load_unflushed_with_generation(&mut context.clone())
                 .await?;
             if self.source_generation.load(Ordering::Acquire) == generation {
                 return Ok(());
@@ -1413,7 +1413,7 @@ mod table_io {
         source: NodeDBConnection,
         store: LanceDBVectorStore,
     ) -> Result<NodeDBConnection> {
-        let (_, generation) = source.load_with_generation(context).await?;
+        let (_, generation) = source.load_unflushed_with_generation(context).await?;
         let cache_key = format!("inspection::table::{}", uuid::Uuid::new_v4());
         let cached = CachedDB {
             db: Arc::new(RwLock::new(BufferedVectorStore::new(store, 0))),

@@ -19,7 +19,7 @@ use crate::{
     },
 };
 use commands::GenericCommand;
-use commands::nodes::update_node::UpdateNodeCommand;
+use commands::nodes::{remove_node::NodeRemovalIndex, update_node::UpdateNodeCommand};
 use dirty::{DirtyIndex, Touched};
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::object_store::{self, ObjectStore, PutResult, UpdateVersion, path::Path};
@@ -1389,6 +1389,7 @@ impl Board {
         self.ensure_supported_format()?;
         let format_snapshot = self.format_rollback_snapshot();
         let mut commands = commands;
+        let mut removal_index = None;
         for index in 0..commands.len() {
             if let Err(error) = commands[index].validate(self, state.clone()).await {
                 let recovery_errors = self
@@ -1404,7 +1405,20 @@ impl Board {
                 });
             }
 
-            if let Err(error) = commands[index].execute(self, state.clone()).await {
+            if !matches!(&commands[index], GenericCommand::RemoveNode(_)) {
+                removal_index = None;
+            } else if removal_index.is_none()
+                && matches!(commands.get(index + 1), Some(GenericCommand::RemoveNode(_)))
+            {
+                removal_index = Some(NodeRemovalIndex::new(self));
+            }
+            let executed = match (&mut commands[index], &removal_index) {
+                (GenericCommand::RemoveNode(command), Some(removals)) => {
+                    command.execute_indexed(self, Some(removals))
+                }
+                (command, _) => command.execute(self, state.clone()).await,
+            };
+            if let Err(error) = executed {
                 let mut recovery_errors = Vec::new();
                 if let Err(rollback_error) = commands[index].undo(self, state.clone()).await {
                     recovery_errors.push(format!(
@@ -1996,38 +2010,25 @@ impl Board {
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<PreparedBoardSnapshot> {
         let store = self.get_store(store).await?;
-        let mut reloaded: Option<Self> = None;
         let mut attempt = 0;
         loop {
-            let (result, before, after) = {
-                let publisher = reloaded.as_ref().unwrap_or(self);
-                let before = publisher
-                    .persisted_draft_revision(Some(store.clone()))
-                    .await?;
-                let result = publisher
-                    .prepare_snapshot_at_fresh_patch_version(Some(store.clone()))
-                    .await;
-                let after = match result {
-                    Ok(_) => None,
-                    Err(_) => {
-                        publisher
-                            .persisted_draft_revision(Some(store.clone()))
-                            .await?
-                    }
-                };
-                (result, before, after)
-            };
-            let error = match result {
+            let before = self.persisted_draft_revision(Some(store.clone())).await?;
+            let error = match self
+                .publication_draft(store.clone())
+                .await?
+                .prepare_snapshot_at_fresh_patch_version(Some(store.clone()))
+                .await
+            {
                 Ok(prepared) => return Ok(prepared),
                 Err(error) => error,
             };
-            if attempt >= MAX_PUBLISH_RACE_RETRIES
-                || !is_board_draft_race(&error)
-                || !draft_was_replaced(&before, &after)
-            {
+            if attempt >= MAX_PUBLISH_RACE_RETRIES || !is_board_draft_race(&error) {
                 return Err(error);
             }
-            reloaded = Some(self.reloaded_persisted_draft(Some(store.clone())).await?);
+            let after = self.persisted_draft_revision(Some(store.clone())).await?;
+            if !draft_was_replaced(&before, &after) {
+                return Err(error);
+            }
             attempt += 1;
         }
     }
@@ -2043,7 +2044,12 @@ impl Board {
     ) -> flow_like_types::Result<Option<PreparedBoardSnapshot>> {
         let store = self.get_store(store).await?;
         let before = self.persisted_draft_revision(Some(store.clone())).await?;
-        let error = match self.snapshot_at_version(version, Some(store.clone())).await {
+        let error = match self
+            .publication_draft(store.clone())
+            .await?
+            .snapshot_at_version(version, Some(store.clone()))
+            .await
+        {
             Ok(()) => return Ok(None),
             Err(error) => error,
         };
@@ -2054,14 +2060,36 @@ impl Board {
         if !draft_was_replaced(&before, &after) {
             return Err(error);
         }
-        self.reloaded_persisted_draft(Some(store.clone()))
-            .await?
-            .prepare_snapshot_recovering_from_races(Some(store))
+        self.prepare_snapshot_recovering_from_races(Some(store))
             .await
             .map(Some)
     }
 
-    /// Validate an already-created snapshot as the current draft's prepared
+    /// The board a publication snapshots: the stored draft as
+    /// [`Self::reloaded_persisted_draft`] reads it, or this board when it was
+    /// never saved. Publishing the in-memory board instead would snapshot node
+    /// metadata that loading derived but never saved, which the final
+    /// [`Self::snapshot_matches_persisted_draft`] check then reports as a
+    /// [`BoardDraftChanged`] no writer caused.
+    async fn publication_draft(
+        &self,
+        store: Arc<dyn ObjectStore>,
+    ) -> flow_like_types::Result<Self> {
+        match self.reloaded_persisted_draft(Some(store)).await {
+            Ok(draft) => Ok(draft),
+            Err(error)
+                if matches!(
+                    error.downcast_ref::<object_store::Error>(),
+                    Some(object_store::Error::NotFound { .. })
+                ) =>
+            {
+                Ok(self.clone())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Validate an already-created snapshot as the stored draft's prepared
     /// publication. This is used to finish a commit whose floating-board save
     /// previously failed after the referring ontology was persisted.
     pub async fn prepared_snapshot_at_version(
@@ -2074,7 +2102,10 @@ impl Board {
                 "the requested board version is reserved for ETag-bound Latest dispatch"
             ));
         }
-        if !self.snapshot_matches_current(version, store).await? {
+        if !self
+            .snapshot_matches_persisted_draft(version, store)
+            .await?
+        {
             return Err(Self::immutable_snapshot_conflict(version));
         }
         Ok(PreparedBoardSnapshot {
@@ -2160,24 +2191,25 @@ impl Board {
             return Ok(false);
         }
         let store = self.get_store(store).await?;
-        // Protect unsaved in-process edits first.
-        if !self
-            .snapshot_matches_current(prepared.version, Some(store.clone()))
-            .await?
-        {
-            return Ok(false);
-        }
 
-        // Then compare and conditionally update the authoritative floating
-        // object. `open_board` may return a process-local cached board, so an
-        // unconditional save here could otherwise overwrite another process's
-        // edit made after the immutable snapshot was prepared.
+        // Compare and conditionally update the authoritative floating object,
+        // not this board: loading derives node metadata it never saves, so a
+        // freshly opened board would never match its own snapshot. `open_board`
+        // may also return a process-local cached board, so an unconditional
+        // save here could overwrite another process's edit made after the
+        // immutable snapshot was prepared.
         let floating_path = self.board_dir.clone().join(format!("{}.board", self.id));
         let (floating_proto, floating_meta): (proto::Board, _) =
             match from_compressed_with_meta(store.clone(), floating_path.clone()).await {
                 Ok(loaded) => loaded,
                 Err(load_error) => match store.head(&floating_path).await {
                     Err(object_store::Error::NotFound { .. }) => {
+                        if !self
+                            .snapshot_matches_current(prepared.version, Some(store.clone()))
+                            .await?
+                        {
+                            return Ok(false);
+                        }
                         let mut floating = self.clone();
                         floating.version = prepared.version;
                         floating.mark_changed();
@@ -2272,14 +2304,32 @@ impl Board {
     /// immutable snapshot was published under (the pre-bump version). Callers
     /// that derive per-version artifacts (e.g. compiled-board warm-up) need
     /// the snapshot's version, not the bumped draft version.
+    ///
+    /// Publishes and saves the stored draft, not this board; this board only
+    /// takes the new version and keeps its runtime logic and unsaved edits.
     pub async fn create_version_returning_published(
         &mut self,
         version_type: VersionType,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<((u32, u32, u32), (u32, u32, u32))> {
+        let store = self.get_store(store).await?;
+        let mut draft = self.publication_draft(store.clone()).await?;
+        let versions = draft.publish_as_next_version(version_type, store).await?;
+        // Retain the caller's runtime logic and any unsaved edits.
+        self.version = versions.0;
+        self.format_version = self.required_format_version();
+        self.updated_at = draft.updated_at;
+        self.hash();
+        Ok(versions)
+    }
+
+    async fn publish_as_next_version(
+        &mut self,
+        version_type: VersionType,
+        store: Arc<dyn ObjectStore>,
+    ) -> flow_like_types::Result<((u32, u32, u32), (u32, u32, u32))> {
         self.ensure_supported_format()?;
         self.validate_geometry_contracts()?;
-        let store = self.get_store(store).await?;
         let existing = self.get_versions(Some(store.clone())).await?;
         let mut published = self.version;
         if existing.contains(&published) {
@@ -2411,28 +2461,9 @@ impl Board {
         if let Some(version) = self.published_version_of_draft(Some(store.clone())).await? {
             return Ok((version, false));
         }
-        // Loading derives node metadata without saving it. Publish from the same stored
-        // draft that the snapshot's final check reads, so hydration cannot look like an edit.
-        let mut draft = match self.reloaded_persisted_draft(Some(store.clone())).await {
-            Ok(draft) => draft,
-            Err(error)
-                if matches!(
-                    error.downcast_ref::<object_store::Error>(),
-                    Some(object_store::Error::NotFound { .. })
-                ) =>
-            {
-                self.clone()
-            }
-            Err(error) => return Err(error),
-        };
-        let (version, published) = draft
+        let (_, published) = self
             .create_version_returning_published(VersionType::Patch, Some(store))
             .await?;
-        // Retain the caller's runtime logic and any unsaved edits.
-        self.version = version;
-        self.format_version = self.required_format_version();
-        self.updated_at = draft.updated_at;
-        self.hash();
         Ok((published, true))
     }
 
@@ -3759,6 +3790,34 @@ mod tests {
         async fn on_update(&self, node: &mut crate::flow::node::Node, _: &super::Board) {
             node.friendly_name = self.label.to_string();
         }
+    }
+
+    /// A saved board whose node the registry relabels on load, so a loaded copy differs from the
+    /// stored draft by derived metadata alone. Returns the stored board and that node's id.
+    async fn board_relabelled_on_load(
+        state: Arc<crate::state::FlowLikeState>,
+        base_dir: Path,
+    ) -> (super::Board, String) {
+        use crate::flow::node::NodeLogic;
+
+        let mut board = super::Board::new(None, base_dir, state.clone());
+        let node = RefreshDefinitionLogic {
+            label: "Stored label",
+        }
+        .get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board.cleanup();
+        board.mark_changed();
+        board.save(None).await.unwrap();
+        state
+            .node_registry()
+            .write()
+            .await
+            .push_node(Arc::new(RefreshDefinitionLogic {
+                label: "Hydrated label",
+            }));
+        (board, node_id)
     }
 
     #[tokio::test]
@@ -5752,27 +5811,9 @@ mod tests {
 
     #[tokio::test]
     async fn publish_if_changed_publishes_the_stored_draft_after_node_hydration() {
-        use crate::flow::node::NodeLogic;
-
         let state = flow_state().await;
         let base_dir = Path::from("boards");
-        let mut board = super::Board::new(None, base_dir.clone(), state.clone());
-        let node = RefreshDefinitionLogic {
-            label: "Stored label",
-        }
-        .get_node();
-        let node_id = node.id.clone();
-        board.nodes.insert(node_id.clone(), node);
-        board.cleanup();
-        board.mark_changed();
-        board.save(None).await.unwrap();
-        state
-            .node_registry()
-            .write()
-            .await
-            .push_node(Arc::new(RefreshDefinitionLogic {
-                label: "Hydrated label",
-            }));
+        let (board, node_id) = board_relabelled_on_load(state.clone(), base_dir.clone()).await;
 
         let mut loaded = super::Board::load(base_dir, &board.id, state, None)
             .await
@@ -5809,6 +5850,113 @@ mod tests {
             (published, false)
         );
         assert_eq!(loaded.get_versions(None).await.unwrap(), vec![published]);
+    }
+
+    #[tokio::test]
+    async fn create_version_publishes_the_stored_draft_after_node_hydration() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let (board, node_id) = board_relabelled_on_load(state.clone(), base_dir.clone()).await;
+
+        let mut loaded = super::Board::load(base_dir, &board.id, state, None)
+            .await
+            .unwrap();
+        assert_ne!(loaded.content_hash(), board.content_hash());
+        let logic = loaded.logic_nodes["refresh_definition_test"].clone();
+
+        let (next, published) = loaded
+            .create_version_returning_published(super::VersionType::Minor, None)
+            .await
+            .unwrap();
+        assert_eq!(published, board.version);
+        assert_eq!(next, (published.0, published.1 + 1, 0));
+        assert_eq!(loaded.version, next);
+        assert_eq!(loaded.nodes[&node_id].friendly_name, "Hydrated label");
+        assert!(Arc::ptr_eq(
+            &logic,
+            &loaded.logic_nodes["refresh_definition_test"]
+        ));
+        assert!(
+            board
+                .snapshot_matches_current(published, None)
+                .await
+                .unwrap()
+        );
+        let stored = loaded.reloaded_persisted_draft(None).await.unwrap();
+        assert_eq!(stored.nodes[&node_id].friendly_name, "Stored label");
+        assert_eq!(stored.version, next);
+
+        let (after_second, second) = loaded
+            .create_version_returning_published(super::VersionType::Patch, None)
+            .await
+            .unwrap();
+        assert_eq!(second, next);
+        assert_eq!(after_second, (next.0, next.1, next.2 + 1));
+        assert_eq!(
+            loaded.get_versions(None).await.unwrap(),
+            vec![second, published],
+            "each publication of a hydrated board occupies exactly one slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn action_publication_of_a_hydrated_board_prepares_and_commits_the_stored_draft() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let (board, node_id) = board_relabelled_on_load(state.clone(), base_dir.clone()).await;
+        board
+            .snapshot_at_version(board.version, None)
+            .await
+            .unwrap();
+
+        let loaded = super::Board::load(base_dir.clone(), &board.id, state.clone(), None)
+            .await
+            .unwrap();
+        assert!(
+            loaded
+                .snapshot_matches_persisted_draft(board.version, None)
+                .await
+                .unwrap(),
+            "an unedited board is still its pinned version once loaded"
+        );
+
+        let pinned = (board.version.0, board.version.1, board.version.2 + 1);
+        assert_eq!(
+            loaded
+                .snapshot_at_version_recovering_from_races(pinned, None)
+                .await
+                .unwrap(),
+            None
+        );
+        let resumed = loaded
+            .prepared_snapshot_at_version(pinned, None)
+            .await
+            .unwrap();
+        let prepared = loaded
+            .prepare_snapshot_recovering_from_races(None)
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.version(),
+            pinned,
+            "an unedited board resumes its pinned slot instead of taking another"
+        );
+        assert!(board.snapshot_matches_current(pinned, None).await.unwrap());
+
+        let mut committer = super::Board::load(base_dir.clone(), &board.id, state.clone(), None)
+            .await
+            .unwrap();
+        assert!(
+            committer
+                .commit_prepared_snapshot(&resumed, None)
+                .await
+                .unwrap()
+        );
+        assert_eq!(committer.version, pinned);
+        assert_eq!(committer.nodes[&node_id].friendly_name, "Hydrated label");
+        let stored = committer.reloaded_persisted_draft(None).await.unwrap();
+        assert_eq!(stored.version, pinned);
+        assert_eq!(stored.nodes[&node_id].friendly_name, "Stored label");
     }
 
     #[tokio::test]
@@ -6357,6 +6505,71 @@ mod tests {
             board.comments.contains_key("comment-1"),
             "commands undone before the failure must be re-applied so the board is not left partially rolled back"
         );
+    }
+
+    /// A connect whose endpoint an earlier command removed changed nothing, so undoing it failed a
+    /// second time on the same missing node and the batch reported a spurious rollback error.
+    #[tokio::test]
+    async fn an_edge_to_a_missing_node_fails_without_a_rollback_error() {
+        use crate::flow::{
+            board::commands::{
+                GenericCommand, nodes::remove_node::RemoveNodeCommand,
+                pins::connect_pins::ConnectPinsCommand,
+                pins::disconnect_pins::DisconnectPinsCommand,
+            },
+            node::Node,
+            variable::VariableType,
+        };
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let mut from_node = Node::new("test_from", "From", "", "test");
+        let from_pin = from_node
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let mut to_node = Node::new("test_to", "To", "", "test");
+        let to_pin = to_node
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let (from_id, to_id) = (from_node.id.clone(), to_node.id.clone());
+        board.nodes.insert(from_id.clone(), from_node.clone());
+        board.nodes.insert(to_id.clone(), to_node);
+
+        for edge in [
+            GenericCommand::ConnectPin(ConnectPinsCommand::new(
+                from_id.clone(),
+                to_id.clone(),
+                from_pin.clone(),
+                to_pin.clone(),
+            )),
+            GenericCommand::DisconnectPin(DisconnectPinsCommand::new(
+                from_id.clone(),
+                to_id.clone(),
+                from_pin.clone(),
+                to_pin.clone(),
+            )),
+        ] {
+            let error = board
+                .execute_commands(
+                    vec![
+                        GenericCommand::RemoveNode(RemoveNodeCommand::new(from_node.clone())),
+                        edge,
+                    ],
+                    state.clone(),
+                )
+                .await
+                .err()
+                .expect("an edge to a removed node fails")
+                .to_string();
+            assert!(error.contains(&from_id), "{error}");
+            assert!(!error.contains("rollback"), "{error}");
+            assert!(
+                board.nodes.contains_key(&from_id),
+                "the removal before the failed edge is rolled back"
+            );
+        }
     }
 
     #[test]

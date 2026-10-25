@@ -604,6 +604,7 @@ async fn covered_on_update_nodes_are_hash_stable_after_second_run() {
     // Start with fixed regressions and grow this list as dynamic nodes are audited.
     const COVERED_NODES: &[&str] = &[
         "a2ui_update_overlay",
+        "a2ui_update_table",
         "ai_processing_extract_document_ai",
         "ai_processing_extract_documents_ai",
         "llm_extractor_struct_schema",
@@ -614,6 +615,17 @@ async fn covered_on_update_nodes_are_hash_stable_after_second_run() {
     const DEFAULT_SETTINGS: (&str, &[Option<&str>]) = ("", &[None]);
     const OVERLAY_SETTINGS: (&str, &[Option<&str>]) =
         ("operation", &[Some("Set All"), Some("Add"), Some("Clear")]);
+    const TABLE_SETTINGS: (&str, &[Option<&str>]) = (
+        "operation",
+        &[
+            Some("Set Data"),
+            Some("Set Columns"),
+            Some("Add Row"),
+            Some("Remove Row"),
+            Some("Update Cell"),
+            Some("Get Data"),
+        ],
+    );
     const PROMPT_PRESET_SETTINGS: (&str, &[Option<&str>]) = (
         "prompt_preset",
         &[
@@ -642,6 +654,7 @@ async fn covered_on_update_nodes_are_hash_stable_after_second_run() {
     for (name, logic) in logic_nodes {
         let (settings_pin, settings) = match name.as_str() {
             "a2ui_update_overlay" => OVERLAY_SETTINGS,
+            "a2ui_update_table" => TABLE_SETTINGS,
             "ai_processing_extract_document_ai" | "ai_processing_extract_documents_ai" => {
                 PROMPT_PRESET_SETTINGS
             }

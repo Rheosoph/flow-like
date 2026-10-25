@@ -1,5 +1,6 @@
 use flow_like::{models::llm::ExecutionSettings, profile::Profile as FlowLikeProfile};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct UserProfile {
@@ -49,11 +50,138 @@ impl UserProfile {
         self.hub_profile.updated = updated.clone();
         self.updated = updated;
     }
+
+    pub fn prune_missing_bits(
+        &mut self,
+        snapshot: &FlowLikeProfile,
+        missing: &[String],
+        custom_bit_ids: &HashSet<String>,
+    ) -> Vec<String> {
+        let profile = &mut self.hub_profile;
+        if profile.updated != snapshot.updated
+            || profile.id != snapshot.id
+            || profile.hub != snapshot.hub
+            || profile.hubs != snapshot.hubs
+            || profile.secure != snapshot.secure
+            || profile.bits != snapshot.bits
+        {
+            return Vec::new();
+        }
+
+        let missing: HashSet<&str> = missing.iter().map(String::as_str).collect();
+        let mut removed = Vec::new();
+        profile.bits.retain(|reference| {
+            let bit_id = reference
+                .rsplit_once(':')
+                .map_or(reference.as_str(), |(_, id)| id);
+            let is_custom = custom_bit_ids.contains(bit_id)
+                || profile
+                    .custom_bits
+                    .iter()
+                    .any(|custom| custom.0.id == bit_id);
+            if missing.contains(reference.as_str()) && !is_custom {
+                removed.push(reference.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if !removed.is_empty() {
+            removed.sort();
+            removed.dedup();
+            self.advance_revision(None);
+        }
+        removed
+    }
 }
 
 #[cfg(test)]
 mod profile_sync_tests {
     use super::*;
+
+    fn profile_with_bits() -> UserProfile {
+        UserProfile::new(FlowLikeProfile {
+            hub: "https://hub.test".into(),
+            bits: vec!["https://hub.test:missing".into(), "missing".into()],
+            updated: "2099-09-05T10:00:00Z".into(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn pruning_removes_only_confirmed_references_and_advances_the_revision() {
+        let mut profile = profile_with_bits();
+        let snapshot = profile.hub_profile.clone();
+        let missing = vec!["https://hub.test:missing".into()];
+
+        assert_eq!(
+            profile.prune_missing_bits(&snapshot, &missing, &HashSet::new()),
+            missing
+        );
+        assert_eq!(profile.hub_profile.bits, vec!["missing"]);
+        assert_eq!(profile.updated, profile.hub_profile.updated);
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&profile.updated).unwrap()
+                > chrono::DateTime::parse_from_rfc3339(&snapshot.updated).unwrap()
+        );
+
+        let after = profile.clone();
+        assert!(
+            profile
+                .prune_missing_bits(&after.hub_profile, &missing, &HashSet::new())
+                .is_empty()
+        );
+        assert_eq!(profile, after);
+    }
+
+    #[test]
+    fn pruning_preserves_edits_made_while_validation_is_in_flight() {
+        for change in 0..4 {
+            let mut profile = profile_with_bits();
+            let snapshot = profile.hub_profile.clone();
+            match change {
+                0 => profile.advance_revision(None),
+                1 => profile.hub_profile.hub = "https://new-hub.test".into(),
+                2 => profile
+                    .hub_profile
+                    .hubs
+                    .push("https://fallback.test".into()),
+                _ => profile.hub_profile.bits.push("new-bit".into()),
+            }
+            let after_edit = profile.clone();
+
+            assert!(
+                profile
+                    .prune_missing_bits(&snapshot, &snapshot.bits, &HashSet::new())
+                    .is_empty()
+            );
+            assert_eq!(profile, after_edit);
+        }
+    }
+
+    #[test]
+    fn pruning_preserves_custom_bits_added_while_validation_is_in_flight() {
+        for inline in [false, true] {
+            let mut profile = profile_with_bits();
+            let snapshot = profile.hub_profile.clone();
+            let mut custom_bit_ids = HashSet::new();
+            if inline {
+                let mut custom = flow_like::profile::ProfileCustomBit::default();
+                custom.0.id = "missing".into();
+                profile.hub_profile.custom_bits.push(custom);
+            } else {
+                custom_bit_ids.insert("missing".into());
+            }
+            let after_edit = profile.clone();
+
+            assert!(
+                profile
+                    .prune_missing_bits(&snapshot, &snapshot.bits, &custom_bit_ids)
+                    .is_empty()
+            );
+            assert_eq!(profile, after_edit);
+        }
+    }
 
     #[test]
     fn local_changes_advance_past_an_acknowledgement_ahead_of_the_device_clock() {

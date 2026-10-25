@@ -1,5 +1,5 @@
 import { loader } from "@monaco-editor/react";
-import { ThemeProvider } from "next-themes";
+import { ThemeProvider, useTheme } from "next-themes";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ForecastWorkspace } from "../../packages/ui/components/settings/data-studio/forecasting/forecast-workspace";
@@ -26,6 +26,7 @@ const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
 
 function Fixture() {
 	const base = useBackend();
+	const { resolvedTheme, setTheme } = useTheme();
 	const [userScoped, setUserScoped] = useState(false);
 	const [savedForecastId, setSavedForecastId] = useState<string>();
 	const [backend] = useState<IBackendState>(() => ({
@@ -77,13 +78,24 @@ function Fixture() {
 						Production UI components
 					</div>
 					<main className="mx-auto max-w-[1440px] p-3 sm:p-6">
-						<header className="mb-5 border-b px-1 pb-4">
-							<p className="text-xs text-muted-foreground">
-								Sensor operations / Data Studio
-							</p>
-							<h1 className="mt-2 text-2xl font-semibold">
-								Machine temperature predictions
-							</h1>
+						<header className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b px-1 pb-4">
+							<div>
+								<p className="text-xs text-muted-foreground">
+									Sensor operations / Data Studio
+								</p>
+								<h1 className="mt-2 text-2xl font-semibold">
+									Machine temperature predictions
+								</h1>
+							</div>
+							<button
+								type="button"
+								className="rounded-md border bg-card px-3 py-2 text-xs"
+								onClick={() =>
+									setTheme(resolvedTheme === "dark" ? "light" : "dark")
+								}
+							>
+								Toggle color theme
+							</button>
 						</header>
 						<div className="overflow-hidden rounded-xl border">
 							<ForecastWorkspace
@@ -110,7 +122,7 @@ function Fixture() {
 const root = document.getElementById("root");
 if (!root) throw new Error("Fixture root is missing");
 createRoot(root).render(
-	<ThemeProvider attribute="class" defaultTheme="dark" forcedTheme="dark">
+	<ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
 		<Fixture />
 	</ThemeProvider>,
 );

@@ -46,6 +46,7 @@ export interface WidgetCapabilities {
 	microphone?: boolean;
 	wasm?: boolean;
 	downloads?: boolean;
+	uploads?: boolean;
 }
 
 /** CSP fetch directives a widget may extend, in canonical order. */

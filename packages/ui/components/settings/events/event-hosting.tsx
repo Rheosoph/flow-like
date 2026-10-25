@@ -33,6 +33,7 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { Switch } from "../../ui/switch";
+import { HostedLegalLinks } from "./hosted-legal-links";
 
 /**
  * A hosted app is one link, `/a/{appId}`; each routed chat, form or page is
@@ -304,6 +305,9 @@ export function EventHosting({
 						)}
 					</p>
 				</div>
+			)}
+			{hosting.enabled && (
+				<HostedLegalLinks appId={appId} canWrite={canWrite} />
 			)}
 		</div>
 	);

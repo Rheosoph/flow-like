@@ -35,6 +35,7 @@ pub struct TemplatePin {
     /// Parsed once at template build; runs share the parsed tree.
     pub default_value: Option<Arc<Value>>,
     pub layer_pin: bool,
+    pub sensitive: bool,
     pub index: u16,
     /// Arena index of the owning node — `NONE_IDX` for layer relay pins.
     pub owner_node: u32,
@@ -162,6 +163,11 @@ impl CompiledRunTemplate {
                 schema: schema.map(Arc::from),
                 default_value,
                 layer_pin: cp.owner_node == NONE_IDX && cp.owner_layer != NONE_IDX,
+                sensitive: cp
+                    .options
+                    .as_ref()
+                    .and_then(|options| options.sensitive)
+                    .unwrap_or(false),
                 index: cp.index,
                 owner_node: cp.owner_node,
                 depends_on: cp.depends_on.clone().into_boxed_slice(),

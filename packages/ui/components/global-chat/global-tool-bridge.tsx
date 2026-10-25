@@ -54,7 +54,12 @@ import {
 	createFlowScriptGenerationTrace,
 	updateFlowScriptGenerationRunReceipt,
 } from "../../lib/flowpilot/flowscript-generation-receipt";
+import { listenInCurrentWindow } from "../../lib/flowpilot/window-scoped-listen";
 import { WorkspaceSearchSession } from "../../lib/flowpilot/workspace-search";
+import {
+	type IFlowScriptChanges,
+	summarizeFlowScriptChanges,
+} from "../../lib/flowscript/changes";
 import {
 	attachmentDisplayName,
 	forwardedFilesManifest,
@@ -138,6 +143,7 @@ import {
 	safeFlowScriptPlanReasoning,
 } from "../flowpilot/board-edit-guard";
 import { composeDelegatedRawUserPrompt } from "../flowpilot/copilot-request-context";
+import { readUiDraftFrame } from "../flowpilot/copilot-stream-parser";
 import {
 	type FlowScriptWorkspaceCandidate,
 	flowScriptWorkspaceDiagnostics,
@@ -154,6 +160,7 @@ import {
 	flowPilotModelIdForProvider,
 	normalizeAIProvider,
 } from "../flowpilot/types";
+import { createThrottledUiDraft } from "../flowpilot/ui-draft-extractor";
 import { compactLogEvents } from "../flowpilot/utils";
 import {
 	validateCanvasSettings,
@@ -629,6 +636,16 @@ export interface RunScope {
 			appId?: string;
 		} | null,
 	): void;
+	/** Live preview of tool call `requestId` while it generates; `null` ends it. */
+	setPendingComponentsDraft(
+		requestId: string,
+		draft: {
+			components: SurfaceComponent[];
+			canvasSettings?: CanvasSettings;
+			surfaceId?: string;
+			appId?: string;
+		} | null,
+	): void;
 	/** The provider/model/effort pinned by this run, for nested specialists. */
 	turnSelection(): GlobalChatAgentSelection;
 }
@@ -687,6 +704,13 @@ function createRunScope(runId: string | undefined): RunScope {
 			store().setFlowscriptWorkspace(runId ?? null, workspace),
 		setPendingComponents: (pending) =>
 			store().setPendingComponents(runId ?? null, pending),
+		// Only a live run may show a draft, but ending one must work after the run is gone.
+		setPendingComponentsDraft: (requestId, draft) => {
+			if (!runId) return;
+			if (draft)
+				guard((id) => store().setPendingComponentsDraft(id, requestId, draft));
+			else store().setPendingComponentsDraft(runId, requestId, null);
+		},
 		turnSelection: () => getGlobalChatTurnSelection(runId),
 	};
 }
@@ -3198,11 +3222,14 @@ export function GlobalToolBridge() {
 							status: "error",
 							message: `App '${appId}' has no chat event.`,
 						};
-					addInlineAppChat({
-						appId,
-						eventId: chatEvent.id,
-						name: chatEvent.name || appId,
-					});
+					addInlineAppChat(
+						{
+							appId,
+							eventId: chatEvent.id,
+							name: chatEvent.name || appId,
+						},
+						scope.runId,
+					);
 					showConversation();
 					scope.referenceApp(appId);
 					return {
@@ -3283,11 +3310,14 @@ export function GlobalToolBridge() {
 						};
 					}
 					const pageEvent = resolution.event;
-					useGlobalChatStore.getState().addInlineAppPage({
-						appId,
-						eventId: pageEvent.id,
-						name: pageEvent.name || appId,
-					});
+					useGlobalChatStore.getState().addInlineAppPage(
+						{
+							appId,
+							eventId: pageEvent.id,
+							name: pageEvent.name || appId,
+						},
+						scope.runId,
+					);
 					// An explicit open presents an existing card too. The runtime keeps its current
 					// route and state, so this does not reload the page or rerun its on-load workflow.
 					presentInlineAppPage(appId, pageEvent.id);
@@ -3493,11 +3523,14 @@ export function GlobalToolBridge() {
 					if (!findLivePage(appId, { eventId: resolvedEventId })) {
 						// No live instance. Embed it inline through the same card open_app_page uses
 						// before driving it.
-						useGlobalChatStore.getState().addInlineAppPage({
-							appId,
-							eventId: pageEvent.id,
-							name: pageEvent.name || appId,
-						});
+						useGlobalChatStore.getState().addInlineAppPage(
+							{
+								appId,
+								eventId: pageEvent.id,
+								name: pageEvent.name || appId,
+							},
+							scope.runId,
+						);
 						showConversation();
 					}
 					assertRequestActive(request, "app page interaction");
@@ -5337,6 +5370,7 @@ export function GlobalToolBridge() {
 						let persistedReadbackFailed = false;
 						let persistedReadbackVerified = false;
 						let appliedSourceCorrections = 0;
+						let appliedChanges: IFlowScriptChanges | undefined;
 						let canonicalSourceCorrected = false;
 						// Attached run/log context (e.g. the user inspecting a failed run) lets the board
 						// copilot pull the run's logs via its query tools.
@@ -5847,6 +5881,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										appliedCommands = applyResult?.commands?.length ?? 0;
 										appliedSourceCorrections =
 											applyResult?.corrections?.length ?? 0;
+										appliedChanges = applyResult?.changes;
 										diagnostics = applyResult?.diagnostics ?? [];
 									} else {
 										assertRequestActive(request, "detached FlowScript apply");
@@ -5863,6 +5898,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										appliedCommands = applyResult.commands?.length ?? 0;
 										appliedSourceCorrections =
 											applyResult.corrections?.length ?? 0;
+										appliedChanges = applyResult.changes;
 										diagnostics = applyResult.diagnostics ?? [];
 									}
 									blockedDeletion =
@@ -6322,9 +6358,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 						});
 						publishWorkflowLane(resultStatus === "error" ? "failed" : "done");
 						publishSubSteps();
+						const changesSummary = summarizeFlowScriptChanges(appliedChanges);
 						const result = {
 							status: resultStatus,
 							...boardResultEnvelope,
+							...(changesSummary ? { changes: changesSummary } : {}),
 							...scopePlanResult,
 							...manualStepsResult,
 							...(timeBudget && timeBudget.grantedExtensions > 0
@@ -6764,6 +6802,24 @@ Completion contract: build complete helper logic first and add the Event entry l
 						if (result.warnings.length > 0) warnings.push(...result.warnings);
 						return result.components;
 					};
+					// Live preview while the specialist writes: `ui_draft` frames (streamed emit_ui
+					// arguments) and the JSON block of a text reply (Bits). Display-only; the outcome
+					// below still works from the final components.
+					const uiDraft = createThrottledUiDraft((snapshot) => {
+						const { components: draftComponents } = validateComponents(
+							snapshot.components as SurfaceComponent[],
+						);
+						if (draftComponents.length === 0) return;
+						scope.setPendingComponentsDraft(request.requestId, {
+							components: draftComponents,
+							canvasSettings:
+								validateCanvasSettings(snapshot.canvasSettings) ??
+								currentCanvasSettings ??
+								undefined,
+							surfaceId: editSurface?.surfaceId,
+							appId,
+						});
+					});
 					const consumeSubRunEvents = (
 						events: ReturnType<typeof pushSubRunChunk>,
 					) => {
@@ -6771,6 +6827,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 						for (const event of events) {
 							if (event.type === "components") {
 								streamedComponents.push(...collectComponents(event.data));
+								continue;
+							}
+							if (event.type === "ui_draft") {
+								const frame = readUiDraftFrame(event.data);
+								if (frame) uiDraft.pushFrame(frame);
 								continue;
 							}
 							if (event.type === "canvas_settings") {
@@ -6784,7 +6845,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 								if (stat) scope.addSubUsageStats([stat]);
 								continue;
 							}
-							if (event.type === "text") continue;
+							if (event.type === "text") {
+								if (event.text) uiDraft.pushText(event.text);
+								continue;
+							}
 							applyStreamEvent(subAcc, event);
 							stepsChanged = true;
 						}
@@ -6917,6 +6981,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 						failProgressSteps();
 						throw error;
+					} finally {
+						uiDraft.cancel();
+						scope.setPendingComponentsDraft(request.requestId, null);
 					}
 
 					const finalComponents = collectComponents(response.components);
@@ -7605,11 +7672,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 							.getAppMeta(appId)
 							.then((meta) => meta?.name)
 							.catch(() => undefined);
-						useGlobalChatStore.getState().addInlineAppSurface({
-							appId,
-							name: appName || chatEvent.name || appId,
-							surfaces: Array.from(pushedSurfaces.values()),
-						});
+						useGlobalChatStore.getState().addInlineAppSurface(
+							{
+								appId,
+								name: appName || chatEvent.name || appId,
+								surfaces: Array.from(pushedSurfaces.values()),
+							},
+							scope.runId,
+						);
 					}
 
 					const text =
@@ -8124,10 +8194,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 		void (async () => {
 			try {
-				const { listen } = await import("@tauri-apps/api/event");
 				const [stopRequests, stopCancellation, stopLifecycle] =
 					await Promise.all([
-						listen<FrontendToolRequest>(
+						listenInCurrentWindow<FrontendToolRequest>(
 							GLOBAL_FRONTEND_TOOL_EVENT,
 							async (event) => {
 								const request = event.payload;
@@ -8225,7 +8294,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								}
 							},
 						),
-						listen<{
+						listenInCurrentWindow<{
 							requestId?: string;
 							reason?: string;
 							toolName?: string;
@@ -8278,7 +8347,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									);
 							}
 						}),
-						listen<Record<string, unknown>>(
+						listenInCurrentWindow<Record<string, unknown>>(
 							GLOBAL_FRONTEND_TOOL_LIFECYCLE_EVENT,
 							(event) => {
 								const payload = event.payload ?? {};

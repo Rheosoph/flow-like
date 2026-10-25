@@ -27,6 +27,7 @@ impl NodeLogic for ComputeFingerprintHashNode {
         );
         node.set_flowscript_name("automation.fingerprint", "computeHash");
         node.set_receiver("fingerprint");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
@@ -103,6 +104,7 @@ impl NodeLogic for ExtractFingerprintDataNode {
         );
         node.set_flowscript_name("automation.fingerprint", "extractData");
         node.set_receiver("fingerprint");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/fingerprint.svg");
 
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);

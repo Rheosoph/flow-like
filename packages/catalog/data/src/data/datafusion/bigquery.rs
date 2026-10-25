@@ -553,8 +553,7 @@ async fn run_bigquery_registration(
     );
 
     cached_session
-        .ctx
-        .register_table(TableReference::bare(table_name.to_string()), mem_table)
+        .replace_table(TableReference::bare(table_name.to_string()), mem_table)
         .map_err(|e| flow_like_types::anyhow!("Failed to register BigQuery table: {}", e))?;
 
     let stats = BigQueryJobStats {

@@ -42,7 +42,24 @@ export type StandaloneBoardHostProps = ReactFlowProps & {
 type RegisterTransform = (
 	element: HTMLElement | SVGSVGElement,
 	position?: { x: number; y: number },
+	promote?: boolean,
 ) => () => void;
+
+/** Native canvas planes that the rich content interleaves with. */
+export const NATIVE_EDGE_PLANE_Z = 18;
+export const NATIVE_NODE_PLANE_Z = 20;
+const CAMERA_SETTLE_MS = 150;
+
+/**
+ * WebKit rasterizes a composited layer at its untransformed size and never re-rasters it
+ * for a CSS scale, so a zoomed editor on its own layer blurs. Anything painted above the
+ * WebGL edge plane is composited for overlap, so editors between the planes share one
+ * untransformed stratum that paints them at device resolution. They get layers of their
+ * own only while the camera moves.
+ */
+const inEditorStratum = (node: Node) =>
+	(node.zIndex ?? 0) > NATIVE_EDGE_PLANE_Z &&
+	(node.zIndex ?? 0) <= NATIVE_NODE_PLANE_Z;
 
 const cameraTransform = ([x, y, zoom]: readonly number[]) =>
 	`translate(${x}px, ${y}px) scale(${zoom})`;
@@ -81,10 +98,15 @@ const RichNode = memo(function RichNode({
 	const internal = useInternalNode(node.id);
 	const ref = useRef<HTMLDivElement | null>(null);
 	const position = internal?.internals.positionAbsolute ?? node.position;
+	const promote = inEditorStratum(node);
 	useLayoutEffect(() => {
 		if (ref.current)
-			return registerTransform(ref.current, { x: position.x, y: position.y });
-	}, [registerTransform, position.x, position.y]);
+			return registerTransform(
+				ref.current,
+				{ x: position.x, y: position.y },
+				promote,
+			);
+	}, [registerTransform, position.x, position.y, promote]);
 	const width = internal?.measured.width ?? node.measured?.width ?? node.width;
 	const height =
 		internal?.measured.height ?? node.measured?.height ?? node.height;
@@ -141,10 +163,6 @@ const RichNode = memo(function RichNode({
 				left: 0,
 				top: 0,
 				transformOrigin: "0 0",
-				willChange:
-					node.type === "node" || node.type === "flowNode"
-						? "transform"
-						: undefined,
 				zIndex,
 				pointerEvents: "all",
 				...(node.width !== undefined ? { width: node.width } : {}),
@@ -504,6 +522,18 @@ const RichContent = memo(function RichContent({
 	mountedIds.current = visible;
 	const nodeIds = new Set(visible.nodes);
 	const edgeIds = new Set(visible.edges);
+	const visibleNodes = nodes.filter((node) => nodeIds.has(node.id));
+	const richNode = (node: Node) => (
+		<RichNode
+			key={node.id}
+			node={node}
+			component={props.nodeTypes?.[node.type ?? "default"] ?? DefaultNode}
+			observe={observe}
+			measure={measure}
+			registerTransform={registerTransform}
+			props={props}
+		/>
+	);
 	return (
 		<>
 			{edges
@@ -518,19 +548,19 @@ const RichContent = memo(function RichContent({
 						registerTransform={registerTransform}
 					/>
 				))}
-			{nodes
-				.filter((node) => nodeIds.has(node.id))
-				.map((node) => (
-					<RichNode
-						key={node.id}
-						node={node}
-						component={props.nodeTypes?.[node.type ?? "default"] ?? DefaultNode}
-						observe={observe}
-						measure={measure}
-						registerTransform={registerTransform}
-						props={props}
-					/>
-				))}
+			{visibleNodes.filter((node) => !inEditorStratum(node)).map(richNode)}
+			<div
+				data-board-editor-stratum
+				style={{
+					position: "absolute",
+					inset: 0,
+					pointerEvents: "none",
+					zIndex: NATIVE_EDGE_PLANE_Z + 1,
+				}}
+			>
+				{visibleNodes.filter(inEditorStratum).map(richNode)}
+				<SelectedGroup registerTransform={registerTransform} />
+			</div>
 		</>
 	);
 });
@@ -610,12 +640,13 @@ export const StandaloneBoardHost = forwardRef<
 	const transformTargets = useRef(
 		new Map<
 			HTMLElement | SVGSVGElement,
-			{ x: number; y: number } | undefined
+			{ position?: { x: number; y: number }; promote: boolean }
 		>(),
 	);
+	const cameraMoving = useRef(false);
 	const registerTransform = useCallback<RegisterTransform>(
-		(element, position) => {
-			transformTargets.current.set(element, position);
+		(element, position, promote = false) => {
+			transformTargets.current.set(element, { position, promote });
 			const camera = cameraTransform(
 				latest.current.exporting
 					? [0, 0, 1]
@@ -624,6 +655,8 @@ export const StandaloneBoardHost = forwardRef<
 			element.style.transform = position
 				? `${camera} translate(${position.x}px, ${position.y}px)`
 				: camera;
+			element.style.willChange =
+				promote && cameraMoving.current ? "transform" : "";
 			return () => {
 				transformTargets.current.delete(element);
 			};
@@ -749,22 +782,39 @@ export const StandaloneBoardHost = forwardRef<
 		};
 	}, [runtime, queueMeasure]);
 	useLayoutEffect(() => {
+		let settle: ReturnType<typeof setTimeout> | undefined;
+		const setMoving = (moving: boolean) => {
+			cameraMoving.current = moving;
+			for (const [element, target] of transformTargets.current)
+				if (target.promote)
+					element.style.willChange = moving ? "transform" : "";
+		};
 		const sync = () => {
 			const camera = cameraTransform(
 				props.exporting ? [0, 0, 1] : runtime.store.getState().transform,
 			);
 			// Inherited CSS variables invalidate every rich editor's descendants on
 			// camera changes. Direct transforms keep their computed styles intact.
-			for (const [element, position] of transformTargets.current)
+			for (const [element, { position }] of transformTargets.current)
 				element.style.transform = position
 					? `${camera} translate(${position.x}px, ${position.y}px)`
 					: camera;
 			if (worldPortal.current) worldPortal.current.style.transform = camera;
 		};
 		sync();
-		return runtime.store.subscribe((state, previous) => {
-			if (state.transform !== previous.transform) sync();
+		const unsubscribe = runtime.store.subscribe((state, previous) => {
+			if (state.transform === previous.transform) return;
+			sync();
+			if (props.exporting) return;
+			if (!cameraMoving.current) setMoving(true);
+			clearTimeout(settle);
+			settle = setTimeout(() => setMoving(false), CAMERA_SETTLE_MS);
 		});
+		return () => {
+			unsubscribe();
+			clearTimeout(settle);
+			setMoving(false);
+		};
 	}, [runtime, props.exporting]);
 	useEffect(() => {
 		const element = root.current;
@@ -894,7 +944,6 @@ export const StandaloneBoardHost = forwardRef<
 					prefix={prefix}
 					registerTransform={registerTransform}
 				/>
-				<SelectedGroup registerTransform={registerTransform} />
 				<div
 					ref={worldPortal}
 					className="board-world-overlays"

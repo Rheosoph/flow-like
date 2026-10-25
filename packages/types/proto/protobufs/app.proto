@@ -71,6 +71,11 @@ message FrontendConfiguration {
   // App-wide stylesheet, injected above every page surface and scoped to the
   // app root. Page-level CSS stays later in document order and wins ties.
   optional string custom_css = 2;
+
+  // The app publisher's legal notice and privacy policy, linked from hosted
+  // pages.
+  optional string legal_notice_url = 3;
+  optional string privacy_policy_url = 4;
 }
 
 message App {

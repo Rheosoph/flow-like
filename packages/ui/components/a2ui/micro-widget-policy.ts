@@ -8,6 +8,7 @@
 export const MICRO_WIDGET_CAPABILITIES = [
 	"microphone",
 	"downloads",
+	"uploads",
 	"media",
 	"workers",
 	"wasm",
@@ -42,6 +43,7 @@ export interface WidgetPolicy {
 	media?: boolean;
 	microphone?: boolean;
 	downloads?: boolean;
+	uploads?: boolean;
 	csp?: WidgetCsp;
 }
 

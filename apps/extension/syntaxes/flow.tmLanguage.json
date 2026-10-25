@@ -36,7 +36,7 @@
 			"patterns": [
 				{
 					"name": "meta.decorator.flow",
-					"match": "(@)(secret|readonly|runtime|category|description|schema|cache|parallel)\\b",
+					"match": "(@)(secret|readonly|runtime|category|description|schema|cache|parallel|collapse)\\b",
 					"captures": {
 						"1": { "name": "punctuation.decorator.flow" },
 						"2": { "name": "entity.name.function.decorator.flow" }

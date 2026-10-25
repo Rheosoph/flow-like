@@ -6,6 +6,7 @@ export * from "./bit-state";
 export * from "./board-state";
 export * from "./event-state";
 export * from "./helper-state";
+export * from "./locked-storage-state";
 export * from "./role-state";
 export * from "./route-state";
 export * from "./storage-state";

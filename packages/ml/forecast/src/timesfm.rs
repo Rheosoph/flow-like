@@ -258,7 +258,7 @@ impl Layer {
             .map(|x| {
                 // Stable softplus matches PyTorch's thresholded expression.
                 let softplus = if x > 20.0 { x } else { x.exp().ln_1p() };
-                softplus * (1.442_695_041 / (c.head_dim as f64).sqrt()) as f32
+                softplus * (std::f64::consts::LOG2_E / (c.head_dim as f64).sqrt()) as f32
             })
             .collect();
         Ok(Self {

@@ -3,9 +3,10 @@ pub use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like_catalog_core::FlowPath;
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::object_store::PutPayload;
-use flow_like_types::{Value, reqwest};
+use flow_like_types::{Value, json::Map, reqwest};
 use futures::StreamExt;
 use schemars::JsonSchema;
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::{future::Future, pin::Pin, sync::Arc};
 
@@ -116,12 +117,145 @@ pub enum Method {
     PATCH,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
-#[serde(untagged)]
+/// Serialized externally tagged: `{"Json": value}`, `{"Bytes": [..]}`, `{"String": ".."}`.
+/// Any other shape is a body written before the tag existed and still reads as `Json`.
+#[derive(Serialize, Clone, Debug, JsonSchema)]
 pub enum HttpBody {
     Json(Value),
     Bytes(Vec<u8>),
     String(String),
+}
+
+#[derive(Clone, Copy)]
+enum HttpBodyTag {
+    Json,
+    Bytes,
+    String,
+}
+
+impl HttpBodyTag {
+    fn parse(key: &str) -> Option<Self> {
+        match key {
+            "Json" => Some(Self::Json),
+            "Bytes" => Some(Self::Bytes),
+            "String" => Some(Self::String),
+            _ => None,
+        }
+    }
+
+    fn body_from_value<E: de::Error>(self, payload: Value) -> Result<HttpBody, E> {
+        match self {
+            Self::Json => Ok(HttpBody::Json(payload)),
+            Self::Bytes => flow_like_types::json::from_value(payload)
+                .map(HttpBody::Bytes)
+                .map_err(|error| E::custom(format!("HTTP body tag \"Bytes\": {error}"))),
+            Self::String => flow_like_types::json::from_value(payload)
+                .map(HttpBody::String)
+                .map_err(|error| E::custom(format!("HTTP body tag \"String\": {error}"))),
+        }
+    }
+}
+
+fn body_from_entries<E: de::Error>(mut entries: Map<String, Value>) -> Result<HttpBody, E> {
+    if entries.len() == 1
+        && let Some((key, payload)) = entries.iter_mut().next()
+        && let Some(tag) = HttpBodyTag::parse(key)
+    {
+        return tag.body_from_value(payload.take());
+    }
+    Ok(HttpBody::Json(Value::Object(entries)))
+}
+
+impl<'de> Deserialize<'de> for HttpBody {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(HttpBodyVisitor)
+    }
+}
+
+struct HttpBodyVisitor;
+
+impl<'de> Visitor<'de> for HttpBodyVisitor {
+    type Value = HttpBody;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str(
+            "an HTTP body: {\"Json\": value}, {\"Bytes\": [bytes]}, {\"String\": text} or a bare JSON value",
+        )
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::from(value)))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::from(value)))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::from(value)))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::from(value)))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::String(value)))
+    }
+
+    fn visit_unit<E>(self) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::Null))
+    }
+
+    fn visit_none<E>(self) -> Result<HttpBody, E> {
+        Ok(HttpBody::Json(Value::Null))
+    }
+
+    fn visit_some<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<HttpBody, D::Error> {
+        HttpBody::deserialize(deserializer)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<HttpBody, A::Error> {
+        Value::deserialize(de::value::SeqAccessDeserializer::new(seq)).map(HttpBody::Json)
+    }
+
+    /// A single-entry map reads its tagged payload straight into the variant's type, so a
+    /// byte handle under `Bytes` resolves without expanding into one `Value` per byte.
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<HttpBody, A::Error> {
+        let mut entries = Map::new();
+        if map.size_hint() == Some(1)
+            && let Some(key) = map.next_key::<String>()?
+        {
+            let body = match HttpBodyTag::parse(&key) {
+                Some(HttpBodyTag::Json) => Some(HttpBody::Json(map.next_value()?)),
+                Some(HttpBodyTag::Bytes) => Some(HttpBody::Bytes(map.next_value::<Vec<u8>>()?)),
+                Some(HttpBodyTag::String) => Some(HttpBody::String(map.next_value()?)),
+                None => {
+                    entries.insert(key, map.next_value()?);
+                    None
+                }
+            };
+            if let Some(body) = body {
+                return match map.next_key::<String>()? {
+                    None => Ok(body),
+                    Some(extra) => Err(de::Error::custom(format!(
+                        "HTTP body tag must be the only key, found \"{extra}\" next to it"
+                    ))),
+                };
+            }
+        }
+        while let Some((key, value)) = map.next_entry::<String, Value>()? {
+            entries.insert(key, value);
+        }
+        body_from_entries(entries)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -156,6 +290,30 @@ impl HttpRequest {
 
     pub fn set_body(&mut self, body: HttpBody) {
         self.body = Some(body);
+    }
+
+    /// The request as a pin value, with a `Bytes` body held in the run's byte store
+    /// instead of one JSON number per byte.
+    pub async fn into_pin_value(mut self, context: &ExecutionContext) -> Value {
+        match self.body.take() {
+            Some(HttpBody::Bytes(bytes)) => self.into_pin_value_with_bytes(context, bytes).await,
+            body => {
+                self.body = body;
+                flow_like_types::json::json!(self)
+            }
+        }
+    }
+
+    /// Like `into_pin_value` with `bytes` as the body; a shared buffer is not copied.
+    pub async fn into_pin_value_with_bytes(
+        mut self,
+        context: &ExecutionContext,
+        bytes: impl Into<flow_like_types::Bytes>,
+    ) -> Value {
+        self.body = None;
+        let mut value = flow_like_types::json::json!(self);
+        value["body"] = flow_like_types::json::json!({ "Bytes": context.bytes_value(bytes).await });
+        value
     }
 
     /// Every outbound flow request goes through here, and the client type
@@ -355,6 +513,17 @@ impl HttpResponse {
     pub fn to_bytes(&self) -> Vec<u8> {
         self.body.as_ref().unwrap_or(&vec![]).clone()
     }
+
+    /// The response as a pin value, with its body held in the run's byte store
+    /// instead of one JSON number per byte.
+    pub async fn into_pin_value(mut self, context: &ExecutionContext) -> Value {
+        let body = self.body.take();
+        let mut value = flow_like_types::json::json!(self);
+        if let Some(body) = body {
+            value["body"] = context.bytes_value(body).await;
+        }
+        value
+    }
 }
 
 #[cfg(test)]
@@ -512,5 +681,238 @@ mod security_tests {
             .await
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::*;
+    use flow_like::flow::execution::byte_store::{ByteStore, handle_hash};
+    use flow_like_types::json::{from_str, from_value, json};
+    use flow_like_types::tokio;
+
+    fn sample(len: usize) -> Vec<u8> {
+        (0..len).map(|index| (index % 251) as u8).collect()
+    }
+
+    async fn sent(request: &HttpRequest) -> (Option<String>, Vec<u8>) {
+        let client = GuardedHttpClient::configured(
+            flow_like::flow::execution::ExecutionEnvironment::Desktop,
+            |builder| builder.no_proxy(),
+        )
+        .unwrap();
+        let request = request.to_request(&client).await.unwrap().build().unwrap();
+        let content_type = request
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .map(|value| value.to_str().unwrap().to_string());
+        let body = request
+            .body()
+            .and_then(reqwest::Body::as_bytes)
+            .unwrap_or_default()
+            .to_vec();
+        (content_type, body)
+    }
+
+    #[test]
+    fn bodies_serialize_tagged_and_read_back() {
+        for (body, expected) in [
+            (
+                HttpBody::Json(json!({"a": [1, 2]})),
+                json!({"Json": {"a": [1, 2]}}),
+            ),
+            (HttpBody::Bytes(vec![1, 2, 3]), json!({"Bytes": [1, 2, 3]})),
+            (HttpBody::String("hi".to_string()), json!({"String": "hi"})),
+        ] {
+            assert_eq!(json!(body), expected);
+            let from_tree: HttpBody = from_value(expected.clone()).unwrap();
+            assert_eq!(json!(from_tree), expected);
+            let from_text: HttpBody = from_str(&expected.to_string()).unwrap();
+            assert_eq!(json!(from_text), expected);
+        }
+    }
+
+    #[test]
+    fn untagged_bodies_still_read_as_json() {
+        for legacy in [
+            json!({"name": "flow", "count": 2}),
+            json!({"Bytes": [1], "String": "both"}),
+            json!({"query": "x"}),
+            json!({}),
+            json!([1, 2, 3]),
+            json!("text"),
+            json!(42),
+            json!(-1.5),
+            json!(true),
+        ] {
+            let expected = json!({ "Json": legacy });
+            let from_tree: HttpBody = from_value(legacy.clone()).unwrap();
+            assert_eq!(json!(from_tree), expected);
+            let from_text: HttpBody = from_str(&legacy.to_string()).unwrap();
+            assert_eq!(json!(from_text), expected);
+        }
+    }
+
+    #[test]
+    fn a_tag_with_the_wrong_payload_is_rejected() {
+        assert!(from_value::<HttpBody>(json!({"Bytes": "abc"})).is_err());
+        assert!(from_str::<HttpBody>(r#"{"String": 5}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_tagged_byte_handle_resolves_through_the_byte_store() {
+        let store = ByteStore::with_memory_limit(usize::MAX);
+        let bytes = sample(64 * 1024);
+        let handle = store
+            .put(flow_like_types::Bytes::from(bytes.clone()))
+            .await
+            .unwrap();
+        assert!(handle_hash(&handle).is_some());
+
+        let body: HttpBody = store
+            .deserialize(json!({ "Bytes": handle.clone() }))
+            .await
+            .unwrap();
+        assert!(matches!(body, HttpBody::Bytes(read) if read == bytes));
+
+        let request: HttpRequest = store
+            .deserialize(json!({
+                "url": "http://127.0.0.1/",
+                "method": "POST",
+                "headers": null,
+                "body": { "Bytes": handle },
+            }))
+            .await
+            .unwrap();
+        assert!(matches!(request.body, Some(HttpBody::Bytes(read)) if read == bytes));
+    }
+
+    #[tokio::test]
+    async fn round_tripped_bodies_take_their_own_send_branch() {
+        let mut request = HttpRequest::new("http://127.0.0.1/".to_string(), Method::POST);
+        for (body, content_type, sent_body) in [
+            (
+                HttpBody::Json(json!({"a": 1})),
+                Some("application/json".to_string()),
+                br#"{"a":1}"#.to_vec(),
+            ),
+            (HttpBody::Bytes(vec![1, 2, 3]), None, vec![1, 2, 3]),
+            (
+                HttpBody::String("plain".to_string()),
+                None,
+                b"plain".to_vec(),
+            ),
+        ] {
+            request.body = Some(body);
+            let round_tripped: HttpRequest = from_value(json!(request)).unwrap();
+            assert_eq!(sent(&round_tripped).await, (content_type, sent_body));
+        }
+    }
+
+    #[cfg(feature = "execute")]
+    mod node {
+        use super::*;
+        use crate::web::api::request::set_bytes_body::SetBytesBodyNode;
+        use ahash::AHashMap;
+        use flow_like::{
+            flow::{
+                board::ExecutionStage,
+                execution::{
+                    LogLevel, internal_node::InternalNode, internal_pin::InternalPin,
+                    resources::RunResources,
+                },
+                node::NodeLogic,
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use flow_like_types::sync::{Mutex, RwLock};
+        use std::sync::Weak;
+
+        async fn context_for(logic: Arc<dyn NodeLogic>) -> ExecutionContext {
+            let node = logic.get_node();
+            let mut pins = AHashMap::new();
+            let mut by_name: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
+            for pin in node.pins.values() {
+                let internal = Arc::new(InternalPin::new(pin, false));
+                by_name
+                    .entry(pin.name.clone())
+                    .or_default()
+                    .push(internal.clone());
+                pins.insert(pin.id.clone(), internal);
+            }
+            let internal = Arc::new(InternalNode::new(node, pins, logic, by_name));
+            for pin in internal.pins.iter() {
+                pin.init_node(Arc::downgrade(&internal));
+                pin.init_connected_to(Vec::new());
+                pin.init_depends_on(Vec::new());
+            }
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            let mut context = ExecutionContext::new(
+                Arc::new(Default::default()),
+                &Weak::new(),
+                &state,
+                &internal,
+                &Arc::new(Mutex::new(Default::default())),
+                &Arc::new(RwLock::new(Default::default())),
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(Profile::default()),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                None,
+                Arc::new(Default::default()),
+                None,
+            )
+            .await;
+            context.resources = Arc::new(RunResources::default());
+            context
+        }
+
+        #[tokio::test]
+        async fn set_bytes_body_reaches_the_bytes_send_branch() {
+            let mut context = context_for(Arc::new(SetBytesBodyNode::new())).await;
+            let bytes = sample(64 * 1024);
+            let handle = context.bytes_value(bytes.clone()).await;
+            assert!(
+                handle_hash(&handle).is_some(),
+                "64 KiB belong in the byte store"
+            );
+            context
+                .get_pin_by_name("request")
+                .await
+                .unwrap()
+                .set_value(json!(HttpRequest::new(
+                    "http://127.0.0.1/".to_string(),
+                    Method::POST
+                )))
+                .await;
+            context
+                .get_pin_by_name("body")
+                .await
+                .unwrap()
+                .set_value(handle)
+                .await;
+
+            SetBytesBodyNode::new().run(&mut context).await.unwrap();
+
+            let output = context.get_pin_by_name("request_out").await.unwrap();
+            let raw = output.get_raw_value().await.unwrap();
+            assert!(
+                handle_hash(&raw["body"]["Bytes"]).is_some(),
+                "the body stays a byte handle under its tag: {raw}"
+            );
+            let request: HttpRequest = context.evaluate_pin_ref(output).await.unwrap();
+            assert!(matches!(&request.body, Some(HttpBody::Bytes(read)) if *read == bytes));
+            assert_eq!(sent(&request).await, (None, bytes));
+
+            let passed_on = request.into_pin_value(&context).await;
+            assert!(handle_hash(&passed_on["body"]["Bytes"]).is_some());
+        }
     }
 }

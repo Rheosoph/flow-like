@@ -8,9 +8,9 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
-	useState,
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ import { useClientRouter } from "../../lib/client-navigation";
 import { isScriptNavigationUrl } from "../../lib/navigation-url";
 import { getCurrentPageContext } from "../../lib/page-context";
 import { classifyPageContractError } from "../../lib/page-contract-drift";
+import { startRunTrace, timeRunStep } from "../../lib/run-timing";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import { IExecutionMode } from "../../lib/schema/flow/board";
 import {
@@ -46,9 +47,18 @@ import {
 	type RunElementDemand,
 	collectRunElements,
 } from "./collect-run-elements";
+import {
+	type ComponentActionState,
+	createComponentActionState,
+} from "./component-action-state";
 import type { ElementSource } from "./element-materializer";
 import { handleElementsRequestMessage } from "./elements-request-handler";
 import { resolveEventActions } from "./event-handlers";
+import {
+	type FlowValueBaseline,
+	collectFlowValueWrites,
+	hiddenRestoredInputs,
+} from "./flow-value-sync";
 import {
 	EMPTY_FRONTEND_STATE_RECORD,
 	getFrontendStateStore,
@@ -95,6 +105,28 @@ export {
 
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
+
+const UI_OUTPUT_MESSAGE_TYPES = new Set<A2UIServerMessage["type"]>([
+	"beginRendering",
+	"surfaceUpdate",
+	"setCanvasSettings",
+	"dataModelUpdate",
+	"deleteSurface",
+	"showScreen",
+	"upsertElement",
+	"navigateTo",
+	"createElement",
+	"removeElement",
+	"pruneDetached",
+	"setGlobalState",
+	"setPageState",
+	"clearPageState",
+	"clearFileInput",
+	"setQueryParam",
+	"openDialog",
+	"closeDialog",
+]);
+
 export interface ExecuteActionOptions {
 	/** Semantic event name supplied by a built-in renderer, never by event data. */
 	componentEventName?: string;
@@ -107,12 +139,6 @@ export interface ExecuteActionOptions {
 	 */
 	origin?: "micro_widget";
 }
-type ExecuteActionFn = (
-	action: Action | undefined,
-	triggeringComponentId?: string,
-	additionalContext?: Record<string, unknown>,
-	options?: ExecuteActionOptions,
-) => Promise<void>;
 
 const UNSAFE_STATE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -232,6 +258,7 @@ interface ActionContextValue {
 	 * every interactive node that consumes it — untouched.
 	 */
 	getComponents: () => Record<string, SurfaceComponent> | undefined;
+	isSurfaceMounted: () => boolean;
 	globalState: Record<string, unknown>;
 	pageState: Record<string, unknown>;
 	setGlobalState: (key: string, value: unknown) => void;
@@ -251,7 +278,7 @@ interface ActionContextValue {
 	resolveTemporaryUploadTarget: (
 		action?: Action,
 	) => Promise<ITemporaryUploadExecutionTarget>;
-	triggeringComponents: ReadonlySet<string>;
+	componentActionState: ComponentActionState;
 	markComponentTriggering: (componentId: string, on: boolean) => void;
 }
 
@@ -318,8 +345,10 @@ export function ActionProvider({
 
 	// What the surface's inputs are currently holding, and what `_elements` carries into a
 	// workflow. Backed by storage so a surface that comes back from cache and the payload its
-	// workflows receive describe the same screen.
+	// workflows receive describe the same screen. A restored input value only counts while
+	// the input shows it; `restoredKeysRef` holds the restored values not edited since.
 	const elementValuesRef = useRef<Record<string, unknown>>(Object.create(null));
+	const restoredKeysRef = useRef(new Set<string>());
 	const { storeElementValue, restoreSurfaceValues } = useElementStorage(appId);
 	const elementValueScopeKey = useMemo(
 		() => JSON.stringify(elementValueScopeIds(components, surfaceId)),
@@ -328,12 +357,37 @@ export function ActionProvider({
 	const componentsRef = useRef(components);
 	componentsRef.current = components;
 	const getComponents = useCallback(() => componentsRef.current, []);
+	// Runs keep their callback after a reload unmounts the originating surface.
+	const surfaceMountedRef = useRef(false);
+	useLayoutEffect(() => {
+		surfaceMountedRef.current = true;
+		return () => {
+			surfaceMountedRef.current = false;
+		};
+	}, []);
+	const isSurfaceMounted = useCallback(() => surfaceMountedRef.current, []);
 
 	const putElementValue = useCallback((elementId: unknown, value: unknown) => {
 		if (!isSafeStateKey(elementId)) return false;
 		elementValuesRef.current[elementId] = value;
+		restoredKeysRef.current.delete(elementId);
 		return true;
 	}, []);
+
+	const dropHiddenRestoredValues = useCallback(() => {
+		const restoredKeys = restoredKeysRef.current;
+		if (restoredKeys.size === 0) return;
+		const values = elementValuesRef.current;
+		for (const elementId of hiddenRestoredInputs(
+			values,
+			restoredKeys,
+			componentsRef.current,
+			surfaceId,
+		)) {
+			delete values[elementId];
+			restoredKeys.delete(elementId);
+		}
+	}, [surfaceId]);
 
 	useEffect(() => {
 		if (!appId || !surfaceId) return;
@@ -345,18 +399,28 @@ export function ActionProvider({
 				if (cancelled) return;
 				// Anything the user has already touched on this mount is newer than what was
 				// stored, so restoration fills gaps rather than overwriting.
-				elementValuesRef.current = Object.assign(
-					Object.create(null),
-					...restoredByScope,
-					elementValuesRef.current,
-				);
+				const current = elementValuesRef.current;
+				const restored = Object.assign(Object.create(null), ...restoredByScope);
+				for (const elementId of Object.keys(restored)) {
+					if (!Object.hasOwn(current, elementId)) {
+						restoredKeysRef.current.add(elementId);
+					}
+				}
+				elementValuesRef.current = Object.assign(restored, current);
+				dropHiddenRestoredValues();
 			})
 			.catch(() => undefined);
 
 		return () => {
 			cancelled = true;
 		};
-	}, [appId, surfaceId, elementValueScopeKey, restoreSurfaceValues]);
+	}, [
+		appId,
+		surfaceId,
+		elementValueScopeKey,
+		restoreSurfaceValues,
+		dropHiddenRestoredValues,
+	]);
 
 	// Getter for element values (used by useExecuteAction)
 	const getElementValues = useCallback(() => {
@@ -374,28 +438,30 @@ export function ActionProvider({
 		[putElementValue, storeElementValue],
 	);
 
-	// Ref-counted set of components that are currently triggering an async action.
-	// Components consume this to render a loading state for the duration of their action.
-	const triggeringCountsRef = useRef<Map<string, number>>(new Map());
-	const [triggeringComponents, setTriggeringComponents] = useState<
-		ReadonlySet<string>
-	>(() => new Set());
+	// A flow's write to an input supersedes the user's edit of it. Synchronous, so an action
+	// fired right after the write already sends the new value, and through the same setter so
+	// a pending debounced store of the old edit is replaced rather than landing afterwards.
+	const flowValueBaselineRef = useRef<FlowValueBaseline | null>(null);
+	useLayoutEffect(() => {
+		const { baseline, writes } = collectFlowValueWrites(
+			flowValueBaselineRef.current,
+			JSON.stringify([appId, surfaceId]),
+			components,
+			surfaceId,
+		);
+		flowValueBaselineRef.current = baseline;
+		for (const [elementId, value] of writes) setElementValue(elementId, value);
+		dropHiddenRestoredValues();
+	}, [appId, components, surfaceId, setElementValue, dropHiddenRestoredValues]);
 
-	const markComponentTriggering = useCallback(
-		(componentId: string, on: boolean) => {
-			if (!componentId) return;
-			const counts = triggeringCountsRef.current;
-			const current = counts.get(componentId) ?? 0;
-			const next = on ? current + 1 : Math.max(0, current - 1);
-			if (next === 0) {
-				counts.delete(componentId);
-			} else {
-				counts.set(componentId, next);
-			}
-			setTriggeringComponents(new Set(counts.keys()));
-		},
-		[],
-	);
+	// Pending actions notify only their component; updating ActionContext here
+	// would re-render every interactive component when any action starts or ends.
+	const componentActionStateRef = useRef<ComponentActionState | null>(null);
+	if (!componentActionStateRef.current) {
+		componentActionStateRef.current = createComponentActionState();
+	}
+	const componentActionState = componentActionStateRef.current;
+	const markComponentTriggering = componentActionState.mark;
 
 	const resolveTemporaryUploadTarget = useCallback(
 		async (action?: Action): Promise<ITemporaryUploadExecutionTarget> => {
@@ -533,6 +599,7 @@ export function ActionProvider({
 			isGovernedPage: governedPage,
 			elementDemand,
 			getComponents,
+			isSurfaceMounted,
 			globalState,
 			pageState,
 			setGlobalState,
@@ -545,7 +612,7 @@ export function ActionProvider({
 			getElementValues,
 			setElementValue,
 			resolveTemporaryUploadTarget,
-			triggeringComponents,
+			componentActionState,
 			markComponentTriggering,
 		}),
 		[
@@ -559,6 +626,7 @@ export function ActionProvider({
 			governedPage,
 			elementDemand,
 			getComponents,
+			isSurfaceMounted,
 			globalState,
 			pageState,
 			setGlobalState,
@@ -571,7 +639,7 @@ export function ActionProvider({
 			getElementValues,
 			setElementValue,
 			resolveTemporaryUploadTarget,
-			triggeringComponents,
+			componentActionState,
 			markComponentTriggering,
 		],
 	);
@@ -697,9 +765,17 @@ export function useEventRelevantValues(widgetScope?: WidgetElementScope) {
 export function useIsComponentTriggering(
 	componentId: string | undefined,
 ): boolean {
-	const context = useContext(ActionContext);
-	if (!componentId) return false;
-	return context?.triggeringComponents?.has(componentId) ?? false;
+	const state = useContext(ActionContext)?.componentActionState;
+	const subscribe = useCallback(
+		(listener: () => void) =>
+			state && componentId ? state.subscribe(componentId, listener) : () => {},
+		[state, componentId],
+	);
+	const getSnapshot = useCallback(
+		() => (componentId ? (state?.get(componentId) ?? false) : false),
+		[state, componentId],
+	);
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 /**
@@ -863,7 +939,6 @@ export function useExecuteAction() {
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const widgetInstance = useWidgetInstance();
-	const executeActionRef = useRef<ExecuteActionFn | null>(null);
 	const {
 		onAction,
 		onA2UIMessage,
@@ -875,6 +950,7 @@ export function useExecuteAction() {
 		isGovernedPage: governedPage,
 		elementDemand,
 		getComponents,
+		isSurfaceMounted,
 		globalState,
 		pageState,
 		isPreviewMode,
@@ -887,7 +963,7 @@ export function useExecuteAction() {
 
 	const elementSourceRef = useRef<() => ElementSource | null>(() => null);
 	elementSourceRef.current = () =>
-		surfaceId === undefined
+		!isSurfaceMounted?.() || surfaceId === undefined
 			? null
 			: {
 					surfaceId,
@@ -903,7 +979,10 @@ export function useExecuteAction() {
 	const elementSource = useCallback(() => elementSourceRef.current(), []);
 
 	const handleA2UIEvents = useCallback(
-		(events: IIntercomEvent[]) => {
+		(
+			events: IIntercomEvent[],
+			onUpdate?: (stage: "received" | "applied") => void,
+		) => {
 			console.log("[A2UI] Received events from backend", {
 				count: events.length,
 			});
@@ -941,6 +1020,11 @@ export function useExecuteAction() {
 						continue;
 					}
 
+					const noteUpdate = UI_OUTPUT_MESSAGE_TYPES.has(message.type)
+						? onUpdate
+						: undefined;
+					noteUpdate?.("received");
+
 					if (
 						message.type === "navigateTo" &&
 						!canLeaveA2UISurface(appId, surfaceId)
@@ -948,6 +1032,7 @@ export function useExecuteAction() {
 						continue;
 					}
 					if (interceptA2UINavigationMessage(message, onNavigationMessage)) {
+						noteUpdate?.("applied");
 						continue;
 					}
 
@@ -1007,6 +1092,7 @@ export function useExecuteAction() {
 						} else {
 							router.push(navUrl);
 						}
+						noteUpdate?.("applied");
 						// Continue to next event, navigation is fully handled here
 						continue;
 					}
@@ -1033,6 +1119,7 @@ export function useExecuteAction() {
 						} else {
 							router.push(url.pathname + url.search);
 						}
+						noteUpdate?.("applied");
 						continue;
 					}
 
@@ -1055,6 +1142,7 @@ export function useExecuteAction() {
 						if (openDialog) {
 							console.log("[A2UI] Calling openDialog function");
 							openDialog(route, title, queryParams, dialogId);
+							noteUpdate?.("applied");
 						} else {
 							console.warn(
 								"[A2UI] openDialog not available, cannot open dialog. Make sure ActionProvider is inside RouteDialogProvider or openDialog prop is passed.",
@@ -1073,6 +1161,7 @@ export function useExecuteAction() {
 
 						if (closeDialog) {
 							closeDialog(dialogId);
+							noteUpdate?.("applied");
 						} else {
 							console.warn(
 								"[A2UI] closeDialog not available, cannot close dialog",
@@ -1087,6 +1176,7 @@ export function useExecuteAction() {
 							type: message.type,
 						});
 						onA2UIMessage(message);
+						noteUpdate?.("applied");
 					} else {
 						console.warn("[A2UI] No onA2UIMessage handler available!");
 					}
@@ -1106,12 +1196,12 @@ export function useExecuteAction() {
 	);
 
 	const executeAction = useCallback(
-		async (
+		async function executeAction(
 			action: Action | undefined,
 			triggeringComponentId?: string,
 			additionalContext: Record<string, unknown> = {},
 			options: ExecuteActionOptions = {},
-		) => {
+		): Promise<void> {
 			// Only execute actions in preview mode
 			if (!isPreviewMode || !action) {
 				if (options.requireSuccess) {
@@ -1136,6 +1226,20 @@ export function useExecuteAction() {
 			}
 			let executionError: Error | undefined;
 			let executionCompleted = false;
+			const trace =
+				name === "widget_event"
+					? startRunTrace("widget action")
+					: name === "workflow_event"
+						? startRunTrace("workflow action")
+						: undefined;
+			const updateMarks = new Set<"received" | "applied">();
+			const applyExecutionEvents = (events: IIntercomEvent[]) =>
+				handleA2UIEvents(events, (stage) => {
+					if (updateMarks.has(stage)) return;
+					updateMarks.add(stage);
+					// The handler has applied the message; React may paint it later.
+					trace?.mark(`first_a2ui_update_${stage}`);
+				});
 			const receiveExecutionEvents = options.requireSuccess
 				? (events: IIntercomEvent[]) => {
 						for (const event of events) {
@@ -1171,9 +1275,9 @@ export function useExecuteAction() {
 								}
 							}
 						}
-						handleA2UIEvents(events);
+						applyExecutionEvents(events);
 					}
-				: handleA2UIEvents;
+				: applyExecutionEvents;
 			const verifyExecution = (
 				runMeta: ILogMetadata | undefined,
 				capturedRunId: string | undefined,
@@ -1522,21 +1626,25 @@ export function useExecuteAction() {
 								// Always fetch the current element demand in preview mode.
 								// The flow graph can change without any cache invalidation signal.
 								const storedValues = getElementValues?.() ?? {};
-								const mergedElements = await collectRunElements({
-									backend,
-									appId: effectiveAppId,
-									// Governed Page runs do not need Board read permission: they use
-									// the demand their bootstrap returned instead of the Board endpoint.
-									boardId: pageAction ? undefined : effectiveBoardId,
-									boardVersion: inheritedBoardVersion,
-									demand: pageAction ? elementDemand : undefined,
-									surfaceId: surfaceId ?? "",
-									components,
-									storedValues,
-									widgetScope,
-									triggeringComponentId,
-									refresh: inheritedBoardVersion === undefined,
-								});
+								const mergedElements = await timeRunStep(
+									"action.collect_elements",
+									() =>
+										collectRunElements({
+											backend,
+											appId: effectiveAppId,
+											// Governed Page runs do not need Board read permission: they use
+											// the demand their bootstrap returned instead of the Board endpoint.
+											boardId: pageAction ? undefined : effectiveBoardId,
+											boardVersion: inheritedBoardVersion,
+											demand: pageAction ? elementDemand : undefined,
+											surfaceId: surfaceId ?? "",
+											components,
+											storedValues,
+											widgetScope,
+											triggeringComponentId,
+											refresh: inheritedBoardVersion === undefined,
+										}),
+								);
 
 								const inputComponents = widgetScope
 									? widgetComponentsForScope(components, widgetScope)
@@ -1567,9 +1675,11 @@ export function useExecuteAction() {
 										...(actionId !== undefined ? { _action_id: actionId } : {}),
 										_action_context: context,
 										_triggering_component_id: triggeringComponentId ?? "",
-										...(await buildWorkflowFrontendContext(
-											appId,
-											surfaceId || pathname,
+										...(await timeRunStep("action.frontend_context", () =>
+											buildWorkflowFrontendContext(
+												appId,
+												surfaceId || pathname,
+											),
 										)),
 									},
 								}) as {
@@ -1583,8 +1693,10 @@ export function useExecuteAction() {
 								let capturedRunId: string | undefined;
 								const captureRunId = (id: string) => {
 									capturedRunId = id;
+									trace?.mark("run_initiated", id);
 								};
 								let runMeta: ILogMetadata | undefined;
+								trace?.mark("dispatch");
 								if (pageAction) {
 									if (!eventId) {
 										throw new Error(
@@ -1709,24 +1821,20 @@ export function useExecuteAction() {
 							actionId,
 						);
 						if (route.kind === "actions") {
-							const executeNestedAction = executeActionRef.current;
-							if (
-								options.requireSuccess &&
-								(!executeNestedAction || route.actions.length === 0)
-							) {
+							if (options.requireSuccess && route.actions.length === 0) {
 								throw new Error(
 									"The widget event has no configured workflow action.",
 								);
 							}
-							if (executeNestedAction) {
-								for (const routedAction of route.actions) {
-									await executeNestedAction(
-										routedAction,
-										widgetInstance?.componentId ?? triggeringComponentId,
-										{ ...context, actionId },
-										{ ...options, componentEventName: actionId },
-									);
-								}
+							// Keep nested handlers in the activation's widget context,
+							// even if this hook has rendered another instance since then.
+							for (const routedAction of route.actions) {
+								await executeAction(
+									routedAction,
+									widgetInstance?.componentId ?? triggeringComponentId,
+									{ ...context, actionId },
+									{ ...options, componentEventName: actionId },
+								);
 							}
 							break;
 						}
@@ -1848,18 +1956,22 @@ export function useExecuteAction() {
 								});
 
 								const storedValues = getElementValues?.() ?? {};
-								const mergedElements = await collectRunElements({
-									backend,
-									appId: effectiveAppId,
-									boardId: pageAction ? undefined : effectiveBoardId,
-									boardVersion: inheritedBoardVersion,
-									demand: pageAction ? elementDemand : undefined,
-									surfaceId: surfaceId ?? "",
-									components,
-									storedValues,
-									widgetScope,
-									triggeringComponentId,
-								});
+								const mergedElements = await timeRunStep(
+									"action.collect_elements",
+									() =>
+										collectRunElements({
+											backend,
+											appId: effectiveAppId,
+											boardId: pageAction ? undefined : effectiveBoardId,
+											boardVersion: inheritedBoardVersion,
+											demand: pageAction ? elementDemand : undefined,
+											surfaceId: surfaceId ?? "",
+											components,
+											storedValues,
+											widgetScope,
+											triggeringComponentId,
+										}),
+								);
 
 								const inputComponents = widgetScope
 									? widgetComponentsForScope(components, widgetScope)
@@ -1885,9 +1997,11 @@ export function useExecuteAction() {
 										_action_id: actionId,
 										_action_context: { ...context, actionId },
 										_triggering_component_id: triggeringComponentId ?? "",
-										...(await buildWorkflowFrontendContext(
-											appId,
-											surfaceId || pathname,
+										...(await timeRunStep("action.frontend_context", () =>
+											buildWorkflowFrontendContext(
+												appId,
+												surfaceId || pathname,
+											),
 										)),
 									},
 								}) as { id: string; payload: Record<string, unknown> };
@@ -1898,8 +2012,10 @@ export function useExecuteAction() {
 								let capturedRunId: string | undefined;
 								const captureRunId = (id: string) => {
 									capturedRunId = id;
+									trace?.mark("run_initiated", id);
 								};
 								let runMeta: ILogMetadata | undefined;
+								trace?.mark("dispatch");
 								if (pageAction) {
 									if (!eventId) {
 										throw new Error(
@@ -2028,6 +2144,8 @@ export function useExecuteAction() {
 				if (triggeringComponentId) {
 					markComponentTriggering?.(triggeringComponentId, false);
 				}
+				trace?.mark("settled");
+				trace?.finish();
 			}
 		},
 		[
@@ -2054,7 +2172,5 @@ export function useExecuteAction() {
 			onNavigationMessage,
 		],
 	);
-	executeActionRef.current = executeAction;
-
 	return { executeAction, isPreviewMode: isPreviewMode ?? false };
 }

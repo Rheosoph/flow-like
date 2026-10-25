@@ -44,17 +44,7 @@ pub struct FlowScriptToolCallPreviewTracker {
 impl FlowScriptToolCallPreviewTracker {
     pub fn observe_name(&mut self, internal_call_id: &str, name: &str) {
         let call = self.calls.entry(internal_call_id.to_string()).or_default();
-        if name.is_empty() || call.tool_name == name || call.tool_name.ends_with(name) {
-            return;
-        }
-        if name.starts_with(&call.tool_name) {
-            // Some providers send the cumulative name on every delta.
-            call.tool_name.clear();
-            call.tool_name.push_str(name);
-        } else {
-            // Others send disjoint fragments.
-            call.tool_name.push_str(name);
-        }
+        merge_streamed_tool_name(&mut call.tool_name, name);
     }
 
     /// Append a provider argument delta and return a live workspace frame when enough new source
@@ -122,6 +112,20 @@ impl FlowScriptToolCallPreviewTracker {
             Some(internal_call_id),
             Some(call.sequence.saturating_add(1)),
         ))
+    }
+}
+
+fn merge_streamed_tool_name(current: &mut String, name: &str) {
+    if name.is_empty() || current == name || current.ends_with(name) {
+        return;
+    }
+    if name.starts_with(current.as_str()) {
+        // Some providers send the cumulative name on every delta.
+        current.clear();
+        current.push_str(name);
+    } else {
+        // Others send disjoint fragments.
+        current.push_str(name);
     }
 }
 
@@ -264,6 +268,269 @@ fn decode_partial_json_string(encoded: &str) -> Option<String> {
         }
     }
     Some(output)
+}
+
+const MAX_STREAMED_UI_DRAFT_ARGUMENT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_STREAMED_UI_DRAFT_COMPONENTS: usize = 300;
+const MAX_TRACKED_UI_DRAFT_CALLS: usize = 32;
+
+#[derive(Debug, Default)]
+struct PartialUiDraftToolCall {
+    tool_name: String,
+    arguments: String,
+    scanner: UiDraftScanner,
+    emitted_components: usize,
+    sequence: u64,
+    exhausted: bool,
+}
+
+impl PartialUiDraftToolCall {
+    fn exhaust(&mut self) {
+        self.exhausted = true;
+        self.arguments = String::new();
+        self.scanner = UiDraftScanner::default();
+    }
+}
+
+/// Tracks streamed `emit_ui` arguments and emits `<ui_draft>` frames carrying each component as
+/// soon as its JSON object closes, so the host can preview the tree while the model still writes
+/// it. Frames are deltas (only newly completed components) to keep payloads small; the completed
+/// tool call and its validated result stay authoritative.
+#[derive(Debug, Default)]
+pub struct UiDraftToolCallTracker {
+    calls: HashMap<String, PartialUiDraftToolCall>,
+}
+
+impl UiDraftToolCallTracker {
+    pub fn observe_name(&mut self, tool_call_id: &str, name: &str) {
+        if !self.calls.contains_key(tool_call_id) && self.calls.len() >= MAX_TRACKED_UI_DRAFT_CALLS
+        {
+            self.calls.clear();
+        }
+        let call = self.calls.entry(tool_call_id.to_string()).or_default();
+        merge_streamed_tool_name(&mut call.tool_name, name);
+    }
+
+    pub fn observe_arguments_delta(&mut self, tool_call_id: &str, delta: &str) -> Option<String> {
+        let call = self.calls.get_mut(tool_call_id)?;
+        if call.exhausted || delta.is_empty() || !is_ui_emit_tool(&call.tool_name) {
+            return None;
+        }
+        if call.arguments.len() + delta.len() > MAX_STREAMED_UI_DRAFT_ARGUMENT_BYTES {
+            call.exhaust();
+            return None;
+        }
+        call.arguments.push_str(delta);
+        let mut scan = call.scanner.scan(&call.arguments);
+        let remaining = MAX_STREAMED_UI_DRAFT_COMPONENTS.saturating_sub(call.emitted_components);
+        scan.components.truncate(remaining);
+        if scan.is_empty() {
+            return None;
+        }
+        call.emitted_components += scan.components.len();
+        call.sequence += 1;
+        let frame = ui_draft_frame(
+            tool_call_id,
+            call.sequence,
+            scan.components,
+            scan.root_component_id,
+            scan.canvas_settings,
+        );
+        if call.emitted_components >= MAX_STREAMED_UI_DRAFT_COMPONENTS {
+            call.exhaust();
+        }
+        Some(frame)
+    }
+
+    pub fn finish(&mut self, tool_call_id: &str) {
+        self.calls.remove(tool_call_id);
+    }
+}
+
+pub fn is_ui_emit_tool(tool_name: &str) -> bool {
+    tool_name.rsplit("__").next().unwrap_or(tool_name) == "emit_ui"
+}
+
+pub fn ui_draft_frame(
+    tool_call_id: &str,
+    sequence: u64,
+    components: Vec<Value>,
+    root_component_id: Option<String>,
+    canvas_settings: Option<Value>,
+) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "tool_call_id".to_string(),
+        Value::String(tool_call_id.to_string()),
+    );
+    payload.insert("sequence".to_string(), Value::from(sequence));
+    payload.insert("components".to_string(), Value::Array(components));
+    if let Some(root_component_id) = root_component_id {
+        payload.insert(
+            "root_component_id".to_string(),
+            Value::String(root_component_id),
+        );
+    }
+    if let Some(canvas_settings) = canvas_settings {
+        payload.insert("canvas_settings".to_string(), canvas_settings);
+    }
+    stream_frame("ui_draft", &Value::Object(payload))
+}
+
+#[derive(Debug, Default)]
+struct UiDraftScan {
+    components: Vec<Value>,
+    root_component_id: Option<String>,
+    canvas_settings: Option<Value>,
+}
+
+impl UiDraftScan {
+    fn is_empty(&self) -> bool {
+        self.components.is_empty()
+            && self.root_component_id.is_none()
+            && self.canvas_settings.is_none()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum UiDraftScanRoot {
+    #[default]
+    Pending,
+    Object,
+    Done,
+}
+
+/// Incremental, string/escape-aware scanner over a growing `emit_ui` argument object. It keeps its
+/// cursor between deltas, tracks only the top-level keys plus the direct elements of the top-level
+/// `components` array, and parses each element exactly once when its closing brace arrives.
+#[derive(Debug, Default)]
+struct UiDraftScanner {
+    cursor: usize,
+    depth: usize,
+    root: UiDraftScanRoot,
+    in_string: bool,
+    escaped: bool,
+    string_start: usize,
+    expecting_key: bool,
+    current_key: Option<String>,
+    components_depth: Option<usize>,
+    element_start: Option<usize>,
+    canvas_settings_start: Option<usize>,
+}
+
+impl UiDraftScanner {
+    fn scan(&mut self, text: &str) -> UiDraftScan {
+        let mut scan = UiDraftScan::default();
+        while self.cursor < text.len() && self.root != UiDraftScanRoot::Done {
+            let index = self.cursor;
+            self.cursor += 1;
+            let byte = text.as_bytes()[index];
+            if self.in_string {
+                self.step_in_string(byte, text, index, &mut scan);
+            } else if self.root == UiDraftScanRoot::Pending {
+                self.open_root(byte);
+            } else {
+                self.step_structure(byte, text, index, &mut scan);
+            }
+        }
+        scan
+    }
+
+    fn step_in_string(&mut self, byte: u8, text: &str, index: usize, scan: &mut UiDraftScan) {
+        if self.escaped {
+            self.escaped = false;
+        } else if byte == b'\\' {
+            self.escaped = true;
+        } else if byte == b'"' {
+            self.in_string = false;
+            self.close_string(text, index, scan);
+        }
+    }
+
+    fn open_root(&mut self, byte: u8) {
+        if byte == b'{' {
+            self.root = UiDraftScanRoot::Object;
+            self.depth = 1;
+            self.expecting_key = true;
+        } else if !byte.is_ascii_whitespace() {
+            self.root = UiDraftScanRoot::Done;
+        }
+    }
+
+    fn step_structure(&mut self, byte: u8, text: &str, index: usize, scan: &mut UiDraftScan) {
+        match byte {
+            b'"' => {
+                self.in_string = true;
+                self.string_start = index;
+            }
+            b'{' | b'[' => self.open_container(byte, index),
+            b'}' | b']' => self.close_container(byte, text, index, scan),
+            b':' if self.depth == 1 => self.expecting_key = false,
+            b',' if self.depth == 1 => {
+                self.expecting_key = true;
+                self.current_key = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn open_container(&mut self, byte: u8, index: usize) {
+        if self.depth == 1 {
+            match (self.current_key.as_deref(), byte) {
+                (Some("components"), b'[') => self.components_depth = Some(2),
+                (Some("canvasSettings"), b'{') => self.canvas_settings_start = Some(index),
+                _ => {}
+            }
+        } else if byte == b'{' && self.components_depth == Some(self.depth) {
+            self.element_start = Some(index);
+        }
+        self.depth += 1;
+    }
+
+    fn close_container(&mut self, byte: u8, text: &str, index: usize, scan: &mut UiDraftScan) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth == 0 {
+            self.root = UiDraftScanRoot::Done;
+        } else if byte == b'}' && self.components_depth == Some(self.depth) {
+            self.take_component(text, index, scan);
+        } else if self.depth == 1 {
+            self.close_top_level_value(byte, text, index, scan);
+        }
+    }
+
+    fn take_component(&mut self, text: &str, end: usize, scan: &mut UiDraftScan) {
+        if let Some(start) = self.element_start.take()
+            && let Ok(component) = serde_json::from_str::<Value>(&text[start..=end])
+        {
+            scan.components.push(component);
+        }
+    }
+
+    fn close_top_level_value(&mut self, byte: u8, text: &str, end: usize, scan: &mut UiDraftScan) {
+        if byte == b']' {
+            self.components_depth = None;
+        }
+        if let Some(start) = self.canvas_settings_start.take()
+            && let Ok(settings) = serde_json::from_str::<Value>(&text[start..=end])
+            && settings.is_object()
+        {
+            scan.canvas_settings = Some(settings);
+        }
+    }
+
+    fn close_string(&mut self, text: &str, end: usize, scan: &mut UiDraftScan) {
+        if self.depth != 1 {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<String>(&text[self.string_start..=end]) else {
+            return;
+        };
+        if self.expecting_key {
+            self.current_key = Some(value);
+        } else if self.current_key.as_deref() == Some("rootComponentId") {
+            scan.root_component_id = Some(value);
+        }
+    }
 }
 
 pub fn stream_frame(tag: &str, payload: &Value) -> String {
@@ -1726,6 +1993,295 @@ function pollSupportInbox() {
                 &json!({ "status": "scope_plan_accepted", "isError": false }).to_string()
             ),
             "done"
+        );
+    }
+
+    fn ui_draft_payload(frame: &str) -> Value {
+        let payload = frame
+            .strip_prefix("<ui_draft>")
+            .and_then(|value| value.strip_suffix("</ui_draft>"))
+            .expect("ui_draft frame");
+        serde_json::from_str(payload).expect("ui_draft JSON")
+    }
+
+    fn tricky_ui_components() -> Vec<Value> {
+        vec![
+            json!({
+                "id": "root",
+                "style": { "className": "flex {gap-2} [&>*]:p-1" },
+                "component": { "type": "column", "children": { "explicitList": ["title", "body"] } }
+            }),
+            json!({
+                "id": "title",
+                "type": "text",
+                "content": "Quote \" brace } bracket ] backslash \\ end\\",
+                "variant": "h3"
+            }),
+            json!({
+                "id": "body",
+                "type": "markdown",
+                "content": "Line\n{\"nested\": [1, {\"deep\": true}]} </ui_draft> \u{1F680}",
+                "rows": [[1, 2], { "k": [3, { "x": "}" }] }]
+            }),
+        ]
+    }
+
+    fn tricky_ui_canvas() -> Value {
+        json!({ "backgroundColor": "bg-background", "customCss": ".a { color: red; } /* ] */" })
+    }
+
+    fn tricky_emit_ui_arguments() -> String {
+        let components = tricky_ui_components()
+            .iter()
+            .map(|component| serde_json::to_string(component).unwrap())
+            .collect::<Vec<_>>();
+        format!(
+            "{{\n  \"canvasSettings\" : {},\n  \"components\": [\n    {},\n    {} ,{}\n  ],\n  \"rootComponentId\": \"root\"\n}}",
+            serde_json::to_string(&tricky_ui_canvas()).unwrap(),
+            components[0],
+            components[1],
+            components[2],
+        )
+    }
+
+    fn collect_ui_draft_frames(arguments: &str, split_points: &[usize]) -> Vec<Value> {
+        let mut tracker = UiDraftToolCallTracker::default();
+        tracker.observe_name("toolu_ui", "mcp__flowpilot__emit_ui");
+        let mut frames = Vec::new();
+        let mut previous = 0usize;
+        let end = arguments.len();
+        for &point in split_points.iter().chain(std::iter::once(&end)) {
+            if let Some(frame) =
+                tracker.observe_arguments_delta("toolu_ui", &arguments[previous..point])
+            {
+                assert_eq!(frame.matches("</ui_draft>").count(), 1, "{frame}");
+                frames.push(ui_draft_payload(&frame));
+            }
+            previous = point;
+        }
+        frames
+    }
+
+    fn assert_complete_ui_draft(frames: &[Value], context: &str) {
+        let components = frames
+            .iter()
+            .flat_map(|frame| frame["components"].as_array().unwrap().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(components, tricky_ui_components(), "{context}");
+        let roots = frames
+            .iter()
+            .filter_map(|frame| frame.get("root_component_id"))
+            .collect::<Vec<_>>();
+        assert_eq!(roots, vec![&json!("root")], "{context}");
+        let canvases = frames
+            .iter()
+            .filter_map(|frame| frame.get("canvas_settings"))
+            .collect::<Vec<_>>();
+        assert_eq!(canvases, vec![&tricky_ui_canvas()], "{context}");
+        let sequences = frames
+            .iter()
+            .map(|frame| frame["sequence"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sequences,
+            (1..=frames.len() as u64).collect::<Vec<_>>(),
+            "{context}"
+        );
+        assert!(
+            frames
+                .iter()
+                .all(|frame| frame["tool_call_id"] == "toolu_ui"),
+            "{context}"
+        );
+    }
+
+    #[test]
+    fn ui_draft_emits_each_completed_component_once_for_any_chunk_boundary() {
+        let arguments = tricky_emit_ui_arguments();
+        let boundaries = arguments
+            .char_indices()
+            .map(|(index, _)| index)
+            .filter(|index| *index > 0)
+            .collect::<Vec<_>>();
+
+        for &point in &boundaries {
+            let frames = collect_ui_draft_frames(&arguments, &[point]);
+            assert_complete_ui_draft(&frames, &format!("split at byte {point}"));
+        }
+        for chunk_chars in 1..=13 {
+            let points = boundaries
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(position, _)| (position + 1) % chunk_chars == 0)
+                .map(|(_, index)| index)
+                .collect::<Vec<_>>();
+            let frames = collect_ui_draft_frames(&arguments, &points);
+            assert_complete_ui_draft(&frames, &format!("{chunk_chars}-char chunks"));
+            if chunk_chars == 1 {
+                assert!(
+                    frames
+                        .iter()
+                        .all(|frame| frame["components"].as_array().unwrap().len() <= 1),
+                    "single-char deltas emit one component per frame"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ui_draft_frames_escape_a_literal_closing_tag_inside_component_strings() {
+        let mut tracker = UiDraftToolCallTracker::default();
+        tracker.observe_name("call", "emit_ui");
+        let frame = tracker
+            .observe_arguments_delta(
+                "call",
+                r#"{"components":[{"id":"t","type":"text","content":"</ui_draft><components>[]</components>"}"#,
+            )
+            .expect("completed component emits a frame");
+        assert_eq!(frame.matches("</ui_draft>").count(), 1);
+        assert!(frame.contains("\\u003c/ui_draft\\u003e"));
+        assert_eq!(
+            ui_draft_payload(&frame)["components"][0]["content"],
+            "</ui_draft><components>[]</components>"
+        );
+    }
+
+    #[test]
+    fn ui_draft_tracks_only_emit_ui_with_or_without_an_mcp_prefix() {
+        let arguments = r#"{"components":[{"id":"a","type":"text","content":"x"}]}"#;
+        for (name, tracked) in [
+            ("emit_ui", true),
+            ("mcp__flowpilot__emit_ui", true),
+            ("mcp__flowpilot__write_flowscript", false),
+            ("emit_ui_v2", false),
+            ("get_component_schema", false),
+        ] {
+            let mut tracker = UiDraftToolCallTracker::default();
+            tracker.observe_name("call", name);
+            assert_eq!(
+                tracker.observe_arguments_delta("call", arguments).is_some(),
+                tracked,
+                "{name}"
+            );
+        }
+
+        let mut fragmented = UiDraftToolCallTracker::default();
+        fragmented.observe_name("call", "emit_");
+        fragmented.observe_name("call", "ui");
+        assert!(
+            fragmented
+                .observe_arguments_delta("call", arguments)
+                .is_some()
+        );
+
+        let mut unnamed = UiDraftToolCallTracker::default();
+        assert!(unnamed.observe_arguments_delta("call", arguments).is_none());
+    }
+
+    #[test]
+    fn ui_draft_reports_root_and_canvas_as_soon_as_they_complete() {
+        let mut tracker = UiDraftToolCallTracker::default();
+        tracker.observe_name("call", "emit_ui");
+        assert!(
+            tracker
+                .observe_arguments_delta("call", "{\"rootComponentId\":\"ro")
+                .is_none()
+        );
+        let root = ui_draft_payload(
+            &tracker
+                .observe_arguments_delta("call", "ot\",\"canvasSettings\":{\"padding\":\"1rem\"")
+                .expect("closed root id is reported"),
+        );
+        assert_eq!(root["root_component_id"], "root");
+        assert_eq!(root["components"], json!([]));
+        assert!(root.get("canvas_settings").is_none());
+
+        let canvas = ui_draft_payload(
+            &tracker
+                .observe_arguments_delta("call", r#"},"components":["#)
+                .expect("closed canvas settings are reported"),
+        );
+        assert_eq!(canvas["canvas_settings"], json!({ "padding": "1rem" }));
+        assert!(canvas.get("root_component_id").is_none());
+        assert!(
+            tracker
+                .observe_arguments_delta("call", "{\"id\":\"a\",\"type\":\"text")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ui_draft_ignores_non_object_arguments_and_finished_calls() {
+        let mut tracker = UiDraftToolCallTracker::default();
+        tracker.observe_name("array", "emit_ui");
+        assert!(
+            tracker
+                .observe_arguments_delta("array", r#"[{"id":"a","type":"text"}]"#)
+                .is_none()
+        );
+
+        tracker.observe_name("done", "emit_ui");
+        tracker.finish("done");
+        assert!(
+            tracker
+                .observe_arguments_delta("done", r#"{"components":[{"id":"a"}]}"#)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn ui_draft_stops_emitting_after_the_component_cap() {
+        let mut tracker = UiDraftToolCallTracker::default();
+        tracker.observe_name("call", "emit_ui");
+        let mut emitted = 0usize;
+        let mut frames = 0usize;
+        let mut push = |tracker: &mut UiDraftToolCallTracker, delta: &str| {
+            if let Some(frame) = tracker.observe_arguments_delta("call", delta) {
+                frames += 1;
+                emitted += ui_draft_payload(&frame)["components"]
+                    .as_array()
+                    .unwrap()
+                    .len();
+            }
+        };
+        push(&mut tracker, r#"{"components":["#);
+        for index in 0..MAX_STREAMED_UI_DRAFT_COMPONENTS + 5 {
+            push(
+                &mut tracker,
+                &format!(r#"{{"id":"c{index}","type":"text","content":"{index}"}},"#),
+            );
+        }
+        push(&mut tracker, r#"],"rootComponentId":"c0"}"#);
+        assert_eq!(emitted, MAX_STREAMED_UI_DRAFT_COMPONENTS);
+        assert_eq!(frames, MAX_STREAMED_UI_DRAFT_COMPONENTS);
+    }
+
+    #[test]
+    fn ui_draft_stops_emitting_once_arguments_exceed_the_byte_cap() {
+        let mut tracker = UiDraftToolCallTracker::default();
+        tracker.observe_name("call", "emit_ui");
+        assert!(
+            tracker
+                .observe_arguments_delta(
+                    "call",
+                    r#"{"components":[{"id":"a","type":"text","content":"a"},"#
+                )
+                .is_some()
+        );
+        let oversized = format!(
+            r#"{{"id":"b","type":"text","content":"{}"}},"#,
+            "x".repeat(MAX_STREAMED_UI_DRAFT_ARGUMENT_BYTES)
+        );
+        assert!(
+            tracker
+                .observe_arguments_delta("call", &oversized)
+                .is_none()
+        );
+        assert!(
+            tracker
+                .observe_arguments_delta("call", r#"{"id":"c","type":"text","content":"c"}]}"#)
+                .is_none()
         );
     }
 }

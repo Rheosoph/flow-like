@@ -71,7 +71,7 @@ function fixture(events = [event()]) {
 			),
 		},
 		usageState: {
-			getExecutionHistory: vi.fn(async () => ({
+			getRecentExecutions: vi.fn(async () => ({
 				items: [
 					{
 						id: "run",
@@ -413,7 +413,7 @@ describe("native snapshots", () => {
 			{ id: "other-profile", app_id: "other", status: "Error" },
 			{ id: "missing-app", status: "Error" },
 		];
-		usage(backend).getExecutionHistory = vi.fn(async () => ({
+		usage(backend).getRecentExecutions = vi.fn(async () => ({
 			items: rows,
 		})) as never;
 		usage(backend).getExecutionActivity = vi.fn(async () => ({
@@ -532,7 +532,7 @@ describe("native snapshots", () => {
 		const backend = fixture();
 		const snapshot = await loadNativeSnapshot(backend, "local", [], false);
 		expect(backend.userState.listNotifications).not.toHaveBeenCalled();
-		expect(usage(backend).getExecutionHistory).not.toHaveBeenCalled();
+		expect(usage(backend).getRecentExecutions).not.toHaveBeenCalled();
 		expect(snapshot.apps).toEqual([]);
 		expect(snapshot.events).toEqual([]);
 		expect(snapshot.sections.find((item) => item.kind === "inbox")?.state).toBe(
@@ -871,7 +871,7 @@ describe("native navigation and active runs", () => {
 	});
 	test("active executions never turn a failed history read into history", async () => {
 		const backend = fixture();
-		usage(backend).getExecutionHistory = vi.fn(async () => {
+		usage(backend).getRecentExecutions = vi.fn(async () => {
 			throw new Error("offline");
 		});
 		const snapshot = await loadNativeSnapshot(backend, "account-a", [], true);

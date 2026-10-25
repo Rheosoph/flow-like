@@ -199,6 +199,39 @@ export function buildForecastPlot(
 	return [...points.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
+/** Join the series visually without adding an observed value to the predictions. */
+export function forecastBoundarySegment(
+	points: readonly ForecastPlotPoint[],
+	cutoff?: number,
+): [{ x: number; y: number }, { x: number; y: number }] | undefined {
+	const index = points.findIndex((point) => point.timestamp === cutoff);
+	if (index < 0) return;
+	const observed = points[index];
+	const predicted = points[index + 1];
+	if (
+		observed.history === null ||
+		!Number.isFinite(observed.history) ||
+		!predicted ||
+		predicted.timestamp <= observed.timestamp ||
+		predicted.forecast === null ||
+		!Number.isFinite(predicted.forecast)
+	)
+		return;
+	const gap = predicted.timestamp - observed.timestamp;
+	const previous = points[index - 1];
+	const next = points[index + 2];
+	// A shorter neighboring interval indicates missing steps at the boundary.
+	if (
+		(previous && gap > observed.timestamp - previous.timestamp) ||
+		(next && gap > next.timestamp - predicted.timestamp)
+	)
+		return;
+	return [
+		{ x: observed.timestamp, y: observed.history },
+		{ x: predicted.timestamp, y: predicted.forecast },
+	];
+}
+
 /** Keep endpoints, missing values and bucket extrema for long histories. */
 export function sampleTimeline<T extends { timestamp: number }>(
 	points: readonly T[],
@@ -250,6 +283,10 @@ export function sampleForecastPlot(
 		const start = points.findIndex((point) => point[field] !== null);
 		const end = points.findLastIndex((point) => point[field] !== null);
 		if (start < 0) continue;
+		// Keep adjacent steps and missing rows at each series boundary.
+		for (const index of [start - 1, start + 1, end - 1, end + 1]) {
+			if (points[index]) retained.add(points[index].timestamp);
+		}
 		for (const point of sampleTimeline(
 			points.slice(start, end + 1),
 			(point) => point[field],

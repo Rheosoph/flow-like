@@ -1,7 +1,9 @@
 "use client";
 
+import { useId } from "react";
 import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
+import { Label } from "../../ui/label";
 import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -31,12 +33,14 @@ export function A2UIDateTimeInput({
 	componentId,
 	surfaceId,
 }: ComponentProps<DateTimeInputComponent>) {
+	const inputId = useId();
 	const onAction = useOnAction();
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const [value, setValue] = useBoundInputValue<string>(component.value, "", {
 		revision: valueRevisionOf(component),
 	});
 	const disabled = useResolved<boolean>(component.disabled);
+	const label = useResolved<string>(component.label);
 	const mode = useResolved<string>(component.mode) ?? "date";
 	const min = useResolved<string>(component.min);
 	const max = useResolved<string>(component.max);
@@ -64,7 +68,9 @@ export function A2UIDateTimeInput({
 			className={cn("space-y-1.5", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>
+			{label && <Label htmlFor={inputId}>{label}</Label>}
 			<Input
+				id={inputId}
 				type={inputType}
 				value={value}
 				disabled={disabled}

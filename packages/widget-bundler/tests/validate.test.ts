@@ -127,7 +127,7 @@ describe("validateBundle", () => {
 	});
 
 	test("requires the exact entry and contract paths", () => {
-		const entries = unzipSync(bytes);
+		const entries: Entries = unzipSync(bytes);
 		entries["widgets/hello-widget/main.html"] = entries[
 			"widgets/hello-widget/index.html"
 		] as Uint8Array;

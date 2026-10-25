@@ -368,6 +368,13 @@ spec:
             - name: AUDIT_VERIFYING_KEYS
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.lockedStorage.bucket }}
+            {{- include "flow-like.lockedStorageEnv" . | nindent 12 }}
+            - name: LOCKED_BUCKET_MIN_RETENTION_DAYS
+              value: {{ .Values.lockedStorage.minRetentionDays | int64 | quote }}
+            - name: LOCKED_BUCKET_MAX_FILE_BYTES
+              value: {{ .Values.lockedStorage.maxFileBytes | int64 | quote }}
+            {{- end }}
             {{- with .Values.api.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

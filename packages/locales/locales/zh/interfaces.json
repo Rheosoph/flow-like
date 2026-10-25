@@ -742,7 +742,23 @@
 			"stopRun": "",
 			"stopTitle": "",
 			"undo": "",
-			"yes": ""
+			"yes": "",
+			"afterRun_one": "",
+			"capSentence_one": "",
+			"changes_one": "",
+			"clearedFiles_one": "",
+			"clearedRuns_one": "",
+			"failures_one": "",
+			"inputsInMisfit_one": "",
+			"inputsInPick_one": "",
+			"leftOutMany_one": "",
+			"missing_one": "",
+			"more_one": "",
+			"nextFilesRemoved_one": "",
+			"perRunNow_one": "",
+			"presetAppliedMisfit_one": "",
+			"problems_one": "",
+			"startSending_one": ""
 		},
 		"field": {
 			"changed": "",
@@ -764,7 +780,8 @@
 				"previousMonth": "",
 				"readsAs": "",
 				"readsAsPast_other": "",
-				"shortcutHint": ""
+				"shortcutHint": "",
+				"readsAsPast_one": ""
 			},
 			"file": {
 				"addIt": "",
@@ -865,14 +882,16 @@
 			"show": "",
 			"showAria": "",
 			"unsupported": "",
-			"withheldPlaceholder": ""
+			"withheldPlaceholder": "",
+			"count_one": ""
 		},
 		"preset": {
 			"button": {
 				"aria": {
 					"active": "",
 					"edited_other": "",
-					"none": ""
+					"none": "",
+					"edited_one": ""
 				},
 				"label": "",
 				"title": ""
@@ -889,7 +908,9 @@
 				"saveFirst": "",
 				"saveNew": "",
 				"title": "",
-				"update": ""
+				"update": "",
+				"changes_one": "",
+				"more_one": ""
 			},
 			"save": {
 				"cancel": "",
@@ -911,7 +932,8 @@
 				"submit": "",
 				"submitUpdate": "",
 				"title": "",
-				"titleUpdate": ""
+				"titleUpdate": "",
+				"defaults_one": ""
 			},
 			"sheet": {
 				"close": ""
@@ -922,7 +944,8 @@
 				"change": "",
 				"changeAria": "",
 				"none": "",
-				"summary_other": ""
+				"summary_other": "",
+				"summary_one": ""
 			},
 			"filter": {
 				"all": "",
@@ -975,7 +998,9 @@
 				"runs_other": "",
 				"stay": "",
 				"title": "",
-				"two": ""
+				"two": "",
+				"files_one": "",
+				"runs_one": ""
 			},
 			"live": {
 				"capReached_other": "",
@@ -983,7 +1008,8 @@
 				"failed": "",
 				"failedAt": "",
 				"lost": "",
-				"stopped": ""
+				"stopped": "",
+				"capReached_one": ""
 			},
 			"navigate": "",
 			"regionInputs": "",
@@ -1028,7 +1054,9 @@
 			"off": "",
 			"on": "",
 			"today": "",
-			"yesterday": ""
+			"yesterday": "",
+			"entries_one": "",
+			"files_one": ""
 		},
 		"stage": {
 			"action": {
@@ -1061,7 +1089,11 @@
 				"sendingSoon_other": "",
 				"step": "",
 				"stoppedAt": "",
-				"waitingForPlace": ""
+				"waitingForPlace": "",
+				"inLine_ordinal_one": "",
+				"inLine_ordinal_two": "",
+				"inLine_ordinal_few": "",
+				"sendingSoon_one": ""
 			},
 			"chips": {
 				"changedTo": "",
@@ -1081,7 +1113,8 @@
 				"secondRun": "",
 				"unpin": "",
 				"widen": "",
-				"widenBeside": ""
+				"widenBeside": "",
+				"differ_one": ""
 			},
 			"empty": {
 				"hint": "",
@@ -1119,7 +1152,9 @@
 			},
 			"more": {
 				"failed_other": "",
-				"label_other": ""
+				"label_other": "",
+				"failed_one": "",
+				"label_one": ""
 			},
 			"note": {
 				"failure": {
@@ -1186,7 +1221,8 @@
 			"steps": {
 				"finished_other": "",
 				"hide": "",
-				"show": ""
+				"show": "",
+				"finished_one": ""
 			},
 			"strip": {
 				"label": ""

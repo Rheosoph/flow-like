@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { resolveWidgetFileHandles } from "../micro-widget-upload";
 import type { Action, MicroWidgetInstanceComponent } from "../types";
 import {
 	type MicroWidgetFrameMount,
@@ -212,6 +213,123 @@ describe("resolveMicroWidgetContractEvent", () => {
 			kind: "dispatch",
 			route: { kind: "actions", actions: [action("workflow_event")] },
 			context: { index: 2, actionId: "pointSelected", payload: { index: 2 } },
+		});
+	});
+
+	describe("file handles", () => {
+		const handle = {
+			$flwFile: "flwf_AAAAAAAAAAAAAAAAAAAAAAAA",
+			name: "invoice.pdf",
+			size: 5,
+			mimeType: "application/pdf",
+		};
+		const file = {
+			name: "invoice.pdf",
+			size: 5,
+			type: "application/pdf",
+			url: "https://bucket.example.com/tmp/invoice.pdf?X-Amz-Signature=abc",
+			flowPath: {
+				path: "tmp/user/sub-1/apps/app-1/upload/invoice.pdf",
+				store_ref: "__flow_like_http_request_files",
+			},
+		};
+		const uploads = new Map([[handle.$flwFile, { handle, file }]]);
+		const resolveUploads = (payload: unknown) =>
+			resolveWidgetFileHandles(payload, uploads);
+		const attachmentPage = wildcardPage({
+			attachmentAdded: {
+				payloadSchema: {
+					type: "object",
+					properties: {
+						file: { type: "object", "x-flow-like-type": "file" },
+						note: { type: "string" },
+					},
+				},
+			},
+		});
+
+		test("swaps a minted handle for the uploaded file in the spread fields and the payload", () => {
+			expect(
+				resolveMicroWidgetContractEvent(
+					attachmentPage,
+					{ name: "attachmentAdded", payload: { file: handle, note: "Q3" } },
+					resolveUploads,
+				),
+			).toEqual({
+				kind: "dispatch",
+				route: { kind: "actions", actions: [action("workflow_event")] },
+				context: {
+					file,
+					note: "Q3",
+					actionId: "attachmentAdded",
+					payload: { file, note: "Q3" },
+				},
+			});
+		});
+
+		test("swaps handles nested in arrays of an undescribed payload", () => {
+			const resolution = resolveMicroWidgetContractEvent(
+				wildcardPage({ filesAdded: {} }),
+				{ name: "filesAdded", payload: { files: [[handle], handle] } },
+				resolveUploads,
+			);
+			expect(resolution).toMatchObject({
+				kind: "dispatch",
+				context: { files: [[file], file], payload: { files: [[file], file] } },
+			});
+		});
+
+		test("drops an event whose handle this widget did not upload", () => {
+			const foreign = { ...handle, $flwFile: "flwf_BBBBBBBBBBBBBBBBBBBBBBBB" };
+			expect(
+				resolveMicroWidgetContractEvent(
+					attachmentPage,
+					{ name: "attachmentAdded", payload: { file: foreign } },
+					resolveUploads,
+				),
+			).toEqual({ kind: "dropped", reason: "unknown_file" });
+			expect(
+				resolveMicroWidgetContractEvent(
+					wildcardPage({ filesAdded: {} }),
+					{
+						name: "filesAdded",
+						payload: {
+							files: [
+								handle,
+								{ $flwFile: "x", path: "apps/app-1/storage/secret.pdf" },
+							],
+						},
+					},
+					resolveUploads,
+				),
+			).toEqual({ kind: "dropped", reason: "unknown_file" });
+		});
+
+		test("without uploads every handle drops the event", () => {
+			expect(
+				resolveMicroWidgetContractEvent(wildcardPage({ filesAdded: {} }), {
+					name: "filesAdded",
+					payload: { file: handle },
+				}),
+			).toEqual({ kind: "dropped", reason: "unknown_file" });
+		});
+
+		test("validates the handle shape before any lookup", () => {
+			let lookups = 0;
+			expect(
+				resolveMicroWidgetContractEvent(
+					attachmentPage,
+					{
+						name: "attachmentAdded",
+						payload: { file: { ...handle, url: file.url } },
+					},
+					(payload) => {
+						lookups++;
+						return resolveUploads(payload);
+					},
+				),
+			).toMatchObject({ kind: "dropped", reason: "invalid_payload" });
+			expect(lookups).toBe(0);
 		});
 	});
 

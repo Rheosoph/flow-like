@@ -29,6 +29,7 @@ let root: Root;
 let host: HTMLElement;
 let client: import("@tanstack/react-query").QueryClient | undefined;
 let registryState: Record<string, unknown> | undefined;
+let helperState: Record<string, unknown> | undefined;
 let restoreFrameSrc: () => void;
 let restoreGlobals: () => void;
 let restoreTimers: () => void;
@@ -58,6 +59,7 @@ const MAP_HOST = "https://tiles.example.com";
 beforeEach(async () => {
 	client = undefined;
 	registryState = undefined;
+	helperState = undefined;
 	restoreBackend = undefined;
 	readyTimeout = undefined;
 	armedTimers.length = 0;
@@ -251,7 +253,11 @@ async function settle() {
  */
 async function renderWidget(
 	widgets: MicroWidgetInstanceComponent | MicroWidgetInstanceComponent[],
-	page?: { router: Record<string, unknown>; appId?: string },
+	page?: {
+		router: Record<string, unknown>;
+		appId?: string;
+		onAction?: (message: { name: string; context?: unknown }) => void;
+	},
 	reloader?: MicroWidgetReloader,
 ) {
 	const [
@@ -279,6 +285,7 @@ async function renderWidget(
 			eventState: {},
 			boardState: {},
 			registryState,
+			helperState,
 		} as never);
 	}
 	const list = Array.isArray(widgets) ? widgets : [widgets];
@@ -308,6 +315,7 @@ async function renderWidget(
 								{
 									surfaceId: "page-1",
 									appId: page.appId,
+									onAction: page.onAction,
 									isPreviewMode: true,
 									components: {},
 								} as never,
@@ -370,7 +378,7 @@ async function openFrameChannel() {
 		.map(([envelope]) => envelope as FlwEnvelope)
 		.find((envelope) => envelope.type === "init");
 	if (!init) throw new Error("The host did not send init to the iframe");
-	return (type: "event" | "ready", payload: unknown) =>
+	return (type: "event" | "ready" | "file:upload", payload: unknown) =>
 		fromFrame(
 			createEnvelope(type, payload as never, init.nonce, "sales-chart"),
 		);
@@ -924,6 +932,135 @@ describe("micro widget event dispatch", () => {
 		expect(opened.mock.calls).toEqual([
 			["https://authored.example/docs", "_blank", "noopener,noreferrer"],
 		]);
+	});
+});
+
+describe("micro widget file uploads", () => {
+	const FLOW_PATH = {
+		path: "tmp/user/sub-1/apps/app-1/upload/invoice.pdf",
+		store_ref: "__flow_like_http_request_files",
+	};
+	const SIGNED_URL =
+		"https://bucket.example.com/tmp/invoice.pdf?X-Amz-Signature=abc";
+
+	test("the workflow receives the uploaded file where the widget sent its handle", async () => {
+		const quiet = [
+			spyOn(console, "log").mockImplementation(() => {}),
+			spyOn(console, "warn").mockImplementation(() => {}),
+		];
+		cleanup.push(() => {
+			for (const spy of quiet) spy.mockRestore();
+		});
+		const warnings = quiet[1];
+		const uploads: { files: File[]; options: unknown }[] = [];
+		helperState = {
+			filesToTemporaryFiles: async (files: File[], options: unknown) => {
+				uploads.push({ files, options });
+				return [
+					{
+						file: files[0],
+						uploaded: { url: SIGNED_URL, flowPath: FLOW_PATH },
+					},
+				];
+			},
+		};
+		stubRegistry(() => ({ policy: { uploads: true } }));
+		const actions: { name: string; context?: unknown }[] = [];
+		await renderWidget(
+			component({
+				contract: {
+					contractVersion: 1,
+					id: "chart",
+					events: {
+						attachmentAdded: {
+							payloadSchema: {
+								type: "object",
+								properties: {
+									file: { type: "object", "x-flow-like-type": "file" },
+								},
+							},
+						},
+					},
+				} as MicroWidgetInstanceComponent["contract"],
+				eventHandlers: {
+					attachmentAdded: [{ name: "attach_file", context: {} }],
+				},
+			}),
+			{
+				router: {},
+				appId: "app-1",
+				onAction: (message) => actions.push(message),
+			},
+		);
+		expect(bodyText()).toContain("File uploads");
+		await click("Allow this time");
+
+		const say = await openFrameChannel();
+		const posted = () =>
+			(
+				frame()?.contentWindow?.postMessage as unknown as {
+					mock: { calls: [FlwEnvelope][] };
+				}
+			).mock.calls.map(([envelope]) => envelope);
+		const init = posted().find((envelope) => envelope.type === "init");
+		expect(init?.payload).toMatchObject({ capabilities: { uploads: true } });
+
+		await say("file:upload", {
+			requestId: "upload-1",
+			file: new File(["hello"], "invoice.pdf", { type: "application/pdf" }),
+			name: "invoice.pdf",
+			mimeType: "application/pdf",
+		});
+		await settle();
+		const result = posted().find((envelope) => envelope.type === "file:result")
+			?.payload as { ok: boolean; file: Record<string, unknown> };
+		expect(result).toMatchObject({ requestId: "upload-1", ok: true });
+		expect(Object.keys(result.file).sort()).toEqual([
+			"$flwFile",
+			"mimeType",
+			"name",
+			"size",
+		]);
+		expect(uploads).toHaveLength(1);
+		expect(uploads[0].files[0].name).toBe("invoice.pdf");
+		expect(uploads[0].options).toMatchObject({
+			appId: "app-1",
+			executionTarget: "remote",
+		});
+
+		await say("event", {
+			name: "attachmentAdded",
+			payload: { file: result.file },
+		});
+		const stored = {
+			name: "invoice.pdf",
+			size: 5,
+			type: "application/pdf",
+			url: SIGNED_URL,
+			flowPath: FLOW_PATH,
+		};
+		expect(actions).toHaveLength(1);
+		expect(actions[0]).toMatchObject({
+			name: "attach_file",
+			context: {
+				file: stored,
+				actionId: "attachmentAdded",
+				payload: { file: stored },
+			},
+		});
+
+		await say("event", {
+			name: "attachmentAdded",
+			payload: {
+				file: { ...result.file, $flwFile: `flwf_${"B".repeat(24)}` },
+			},
+		});
+		expect(actions).toHaveLength(1);
+		expect(
+			warnings.mock.calls.some(([message]) =>
+				String(message).includes("file handle this widget did not upload"),
+			),
+		).toBe(true);
 	});
 });
 

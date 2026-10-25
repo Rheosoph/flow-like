@@ -266,6 +266,7 @@ function Harness() {
 				searchPackages: async () => ({ packages: [], totalCount: 0 }),
 			},
 			usageState: {
+				getRecentExecutions: async () => ({ items: [] }),
 				getExecutionHistory: async () => ({
 					items: [],
 					total: 0,

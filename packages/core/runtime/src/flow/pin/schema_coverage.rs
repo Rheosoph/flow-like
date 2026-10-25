@@ -419,14 +419,28 @@ fn could_be(types: &Option<Vec<&str>>, kind: &str) -> bool {
     })
 }
 
+static NULL: Value = Value::Null;
+static BOOLEANS: [Value; 2] = [Value::Bool(false), Value::Bool(true)];
+
+/// The values a schema produces when they can be listed: its `const`, its `enum`, or every value
+/// of a `null`/`boolean` type. `Option<Enum>` projects `{type: "null"}` next to the enum, and the
+/// `{enum: [..., null]}` its FlowScript interface spells must cover it.
 fn literals(schema: &Schema) -> Option<Vec<&Value>> {
     if let Some(value) = schema.get("const") {
         return Some(vec![value]);
     }
-    schema
-        .get("enum")
-        .and_then(Value::as_array)
-        .map(|values| values.iter().collect())
+    if let Some(values) = schema.get("enum") {
+        return values.as_array().map(|values| values.iter().collect());
+    }
+    let mut produced = Vec::new();
+    for kind in types(schema)? {
+        match kind {
+            "null" => produced.push(&NULL),
+            "boolean" => produced.extend(&BOOLEANS),
+            _ => return None,
+        }
+    }
+    (!produced.is_empty()).then_some(produced)
 }
 
 fn strings<'a>(schema: &'a Schema, key: &str) -> Vec<&'a str> {
@@ -780,5 +794,37 @@ mod tests {
         let mut described = tuple.clone();
         described["description"] = json!("a pair");
         assert!(covers(tuple, described));
+    }
+
+    /// `Option<Enum>` projects as `anyOf[{$ref: Enum}, {type: null}]`; the FlowScript interface
+    /// spells the same field `{enum: [..., null]}`, which must cover it.
+    #[test]
+    fn a_nullable_enum_covers_the_enum_with_null_its_interface_spells() {
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        enum Thinking {
+            Off,
+            Low,
+        }
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        struct Request {
+            thinking: Option<Thinking>,
+        }
+        let projection = json!({
+            "type": "object",
+            "properties": {"thinking": {"enum": ["Off", "Low", null]}}
+        });
+        assert!(covers(schema::<Request>(), projection));
+        assert!(!covers(json!({"type": "null"}), json!({"enum": ["Off"]})));
+        assert!(covers(
+            json!({"type": "boolean"}),
+            json!({"enum": [true, false]})
+        ));
+        assert!(!covers(json!({"type": "boolean"}), json!({"enum": [true]})));
+        assert!(!covers(
+            json!({"type": "string"}),
+            json!({"enum": ["Off", null]})
+        ));
     }
 }

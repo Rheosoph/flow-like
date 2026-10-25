@@ -8,7 +8,7 @@ import {
 	COMPONENT_BASE_PROPS,
 	COMPONENT_PROPS,
 } from "../a2ui/component-prop-manifest";
-import type { SurfaceComponent } from "../a2ui/types";
+import type { FileEditorComponent, SurfaceComponent } from "../a2ui/types";
 import {
 	createDefaultComponent,
 	normalizeComponent,
@@ -150,15 +150,18 @@ describe("File Editor generated components", () => {
 
 	test("preserves the selected editor, optional source, and exact Save workflow", () => {
 		const component = {
-			type: "fileEditor" as const,
+			type: "fileEditor",
 			editor: { literalString: "solidcraft" },
 			url: { path: "$.file.url" },
 			eventHandlers: {
 				save: [{ name: "workflow_event", context: { nodeId: "save" } }],
 			},
-		};
-		const result = validateComponents([{ id: "editor", component }]);
-		expect(result.components[0]?.component).toEqual(component);
+		} satisfies Omit<FileEditorComponent, "id">;
+		const result = validateComponents([
+			{ id: "editor", component: { id: "editor", ...component } },
+		]);
+		// The surface entry owns the id; the validated component body carries none.
+		expect<unknown>(result.components[0]?.component).toEqual(component);
 		expect(result.warnings).toEqual([]);
 	});
 });
@@ -235,7 +238,7 @@ describe("named event handler validation", () => {
 	test("preserves ordered named handlers, explicit empty lists, and legacy actions", () => {
 		const legacyActions = [
 			{ name: "workflow_event", context: { nodeId: "legacy-node" } },
-			"legacy-extension-entry",
+			{ name: "legacy-extension-entry", context: {} },
 		];
 		const result = validateComponents([
 			{
@@ -276,10 +279,35 @@ describe("named event handler validation", () => {
 			],
 			delete: [],
 		});
-		expect(result.warnings).toEqual([]);
+		expect(result.warnings).toEqual([
+			'calendar: actions[1].name "legacy-extension-entry" is not a built-in action and will not run. The name is a fixed verb, never a board node / event / widget action id — put that id in the context. Valid: workflow_event, widget_event, navigate_page, external_link, navigate_app_config, navigate_app_overview, submit_feedback.',
+		]);
 	});
 
-	test("removes malformed handler names, action arrays, and action entries", () => {
+	test("lowering normalizes legacy action shorthands before validation", () => {
+		const result = validateComponents([
+			{
+				id: "button",
+				type: "button",
+				label: "Go",
+				actions: [
+					"external_link",
+					{ context: { url: "https://x.test" } },
+					{ name: "external_link", context: { url: "https://x.test" } },
+				],
+			},
+		]);
+		const component = result.components[0]?.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(component.actions).toEqual([
+			{ name: "external_link", context: {} },
+			{ name: "external_link", context: { url: "https://x.test" } },
+		]);
+	});
+
+	test("removes malformed handler names and entries; lowering wraps single actions", () => {
 		const result = validateComponents([
 			{
 				id: "gantt",
@@ -310,12 +338,14 @@ describe("named event handler validation", () => {
 			unknown
 		>;
 		expect(component.eventHandlers).toEqual({
+			open: [{ name: "workflow_event", context: {} }],
 			move: [
 				{
 					name: "workflow_event",
 					context: { nodeId: "move-node" },
 				},
 			],
+			resize: [{ name: "workflow_event", context: {} }],
 		});
 		expect(result.warnings.length).toBeGreaterThanOrEqual(5);
 	});
@@ -488,5 +518,128 @@ describe("AI component contract repair", () => {
 		expect(
 			result.warnings.some((warning) => warning.includes("contentComponentId")),
 		).toBe(true);
+	});
+});
+
+describe("plain-value authoring form", () => {
+	test("flat components with plain values lower to the canonical shape", () => {
+		const result = validateComponents([
+			{ id: "root", type: "column", gap: "12px", children: ["title", "pick"] },
+			{
+				id: "title",
+				type: "text",
+				content: "Recipe Remix",
+				variant: "heading",
+				style: { className: "mb-2" },
+			},
+			{
+				id: "pick",
+				type: "select",
+				value: "s",
+				options: ["s", { value: "m", label: "Medium" }],
+				action: { name: "external_link", context: { url: "https://x.test" } },
+			},
+		]);
+		expect(result.warnings).toEqual([]);
+		expect(result.components).toEqual([
+			{
+				id: "root",
+				component: {
+					type: "column",
+					gap: { literalString: "12px" },
+					children: { explicitList: ["title", "pick"] },
+				},
+			},
+			{
+				id: "title",
+				style: { className: "mb-2" },
+				component: {
+					type: "text",
+					content: { literalString: "Recipe Remix" },
+					variant: { literalString: "heading" },
+				},
+			},
+			{
+				id: "pick",
+				component: {
+					type: "select",
+					value: { literalString: "s" },
+					options: {
+						literalOptions: [
+							{ value: "s", label: "s" },
+							{ value: "m", label: "Medium" },
+						],
+					},
+					actions: [
+						{ name: "external_link", context: { url: "https://x.test" } },
+					],
+				},
+			},
+		] as unknown as SurfaceComponent[]);
+	});
+
+	test("bare children arrays in the canonical form are kept as explicit lists", () => {
+		const result = validateComponents([
+			{ id: "root", component: { type: "row", children: ["a", "gone"] } },
+			{ id: "a", component: { type: "divider" } },
+		]);
+		expect(result.components[0]?.component.children).toEqual({
+			explicitList: ["a"],
+		});
+	});
+
+	test("manifest kinds decide coercion: structured bound props wrap, plain props unwrap", () => {
+		const result = validateComponents([
+			{
+				id: "table",
+				type: "table",
+				columns: [{ id: "n", header: "Name", accessor: "name" }],
+				data: [{ name: "A" }],
+			},
+			{
+				id: "link",
+				type: "link",
+				href: "https://x.test",
+				target: { literalString: "_blank" },
+				underline: "none",
+			},
+			{
+				id: "tabs",
+				type: "tabs",
+				value: "a",
+				tabs: [{ id: "a", label: "First", contentComponentId: "table" }],
+			},
+		]);
+		const [table, link, tabs] = result.components.map(
+			(entry) => entry.component as unknown as Record<string, unknown>,
+		);
+		expect(table?.columns).toEqual({
+			literalJson: JSON.stringify([
+				{ id: "n", header: "Name", accessor: "name" },
+			]),
+		});
+		expect(table?.data).toEqual({ literalJson: '[{"name":"A"}]' });
+		expect(link?.target).toBe("_blank");
+		expect(link?.underline).toBe("none");
+		expect(tabs?.tabs).toEqual([
+			{
+				id: "a",
+				label: { literalString: "First" },
+				contentComponentId: "table",
+			},
+		]);
+	});
+
+	test("components that cannot be lowered are skipped with a warning", () => {
+		const result = validateComponents([
+			{ id: "untyped", content: "no type" },
+			{ id: "bad", component: "text" },
+			{ id: "ok", type: "divider" },
+		]);
+		expect(result.components.map((entry) => entry.id)).toEqual(["ok"]);
+		expect(result.warnings).toEqual([
+			"untyped: missing component `type`",
+			"bad: `component` must be an object with a `type`",
+		]);
 	});
 });

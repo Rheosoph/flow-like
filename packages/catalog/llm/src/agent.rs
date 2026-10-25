@@ -1,5 +1,5 @@
 use crate::embedding::CachedEmbeddingModel;
-use flow_like::bit::Bit;
+use flow_like::{a2ui::authoring::chat_ui_prompt_section, bit::Bit};
 use flow_like_model_provider::history::{History, Tool};
 use flow_like_types::JsonSchema;
 use memory::MemoryConfig;
@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 pub mod add_datafusion;
 pub mod editor_mcp;
+pub mod enable_interactive_ui;
 pub mod from_model;
 pub mod helpers;
 pub mod invoke;
@@ -400,6 +401,58 @@ pub struct Agent {
     /// autonomously store, recall, and compress observations across conversations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<MemoryConfig>,
+
+    /// Whether replies may contain an `a2ui` fence that the chat renders as an inline,
+    /// interactive interface. Adds the fence rules and component reference to the system prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub generative_ui: bool,
+}
+
+const DATA_ANALYSIS_PROMPT: &str = "\n\n## Data Analysis Capabilities\n\n\
+    You have access to SQL databases for data analysis. Use the `list_tables`, `describe_table`, and `execute_sql` tools to explore and query data.\n\n";
+
+const DATA_ANALYSIS_BEST_PRACTICES: &str = "**Best Practices:**\n\
+    1. Use `list_tables` to discover available tables\n\
+    2. Use `describe_table` to understand schema before querying\n\
+    3. Use LIMIT to avoid overwhelming output\n\
+    4. Prefer aggregations and summaries over raw data dumps\n";
+
+const TOOL_DISCOVERY_PROMPT: &str = "\n\n## Tool Discovery\n\n\
+    You have access to a large pool of tools beyond what is listed in your current tool set. \
+    If you need a capability that you don't see in your available tools, call the `_lazy_search_tools` \
+    tool with a description of what you need. Matching tools will be added to your available tools \
+    for subsequent calls.\n\
+    - Only search when you genuinely need a tool you don't already have.\n\
+    - Be specific in your search query for best results.\n\
+    - After searching, call the discovered tool directly in your next step.\n";
+
+const MEMORY_PROMPT: &str = "\n\n## Memory\n\n\
+    You have persistent memory across conversations. Use these tools proactively:\n\n\
+    - `_memory_search`: Search your memory for relevant context.\n\
+      Call this at the START of each conversation to recall relevant context.\n\
+      Parameters: query (string), role_filter (optional, one of: \"user\", \"assistant\", \"observation\", \"summary\", \"context\")\n\n\
+    - `_memory_store`: Store important facts, user preferences, decisions, and context.\n\
+      Call this for any information worth remembering across conversations.\n\
+      Parameters: content (string), role (one of: \"user\", \"assistant\", \"observation\")\n\n\
+    Memory compression happens automatically — you do not need to manage it.\n\
+    When older conversation messages are evicted from context, they are also stored \
+    to memory automatically so you can retrieve them with `_memory_search`.\n\n\
+    **Guidelines:**\n\
+    - ALWAYS search memory at the start of a new conversation\n\
+    - If the user asks you to remember something, call `_memory_store` immediately\n\
+    - Do not merely say you will remember something; store it with `_memory_store`\n\
+    - Store key facts, preferences, and decisions after learning them\n\
+    - Don't store trivial or transient information\n";
+
+/// System-prompt section that teaches a model to answer with inline interactive UI: `a2ui`
+/// fences the chat renders as live interfaces whose buttons can send follow-up messages.
+pub fn interactive_ui_instructions() -> String {
+    format!(
+        "## Interactive UI in replies\n\n\
+         The chat that shows your replies renders Markdown and turns `a2ui` fences into live interfaces.\n\n\
+         {}",
+        chat_ui_prompt_section()
+    )
 }
 
 impl Agent {
@@ -423,6 +476,7 @@ impl Agent {
             lazy_function_refs: Vec::new(),
             lazy_embedding_model: None,
             memory: None,
+            generative_ui: false,
         }
     }
 
@@ -444,6 +498,11 @@ impl Agent {
     /// Enable the thinking tool
     pub fn enable_thinking(&mut self) {
         self.thinking_enabled = true;
+    }
+
+    /// Let replies carry inline interactive UI (`a2ui` fences)
+    pub fn enable_generative_ui(&mut self) {
+        self.generative_ui = true;
     }
 
     /// Add a DataFusion context for SQL data analysis
@@ -482,58 +541,21 @@ impl Agent {
             String::new()
         };
 
-        // Append DataFusion context information
         if !self.datafusion_contexts.is_empty() {
-            base_prompt.push_str("\n\n## Data Analysis Capabilities\n\n");
-            base_prompt.push_str("You have access to SQL databases for data analysis. Use the `list_tables`, `describe_table`, and `execute_sql` tools to explore and query data.\n\n");
-
-            for (i, df_ctx) in self.datafusion_contexts.iter().enumerate() {
-                if self.datafusion_contexts.len() > 1 {
-                    base_prompt.push_str(&format!("### Data Source {}\n", i + 1));
-                }
-                base_prompt.push_str(&df_ctx.generate_system_prompt_extension());
-            }
-
-            base_prompt.push_str("**Best Practices:**\n");
-            base_prompt.push_str("1. Use `list_tables` to discover available tables\n");
-            base_prompt.push_str("2. Use `describe_table` to understand schema before querying\n");
-            base_prompt.push_str("3. Use LIMIT to avoid overwhelming output\n");
-            base_prompt.push_str("4. Prefer aggregations and summaries over raw data dumps\n");
+            base_prompt.push_str(&self.data_analysis_prompt());
         }
 
         if !self.lazy_function_refs.is_empty() {
-            base_prompt.push_str("\n\n## Tool Discovery\n\n");
-            base_prompt.push_str(
-                "You have access to a large pool of tools beyond what is listed in your current tool set. \
-                 If you need a capability that you don't see in your available tools, call the `_lazy_search_tools` \
-                 tool with a description of what you need. Matching tools will be added to your available tools \
-                 for subsequent calls.\n\
-                 - Only search when you genuinely need a tool you don't already have.\n\
-                 - Be specific in your search query for best results.\n\
-                 - After searching, call the discovered tool directly in your next step.\n",
-            );
+            base_prompt.push_str(TOOL_DISCOVERY_PROMPT);
         }
 
         if self.memory.is_some() {
-            base_prompt.push_str("\n\n## Memory\n\n");
-            base_prompt.push_str(
-                "You have persistent memory across conversations. Use these tools proactively:\n\n\
-                 - `_memory_search`: Search your memory for relevant context.\n\
-                   Call this at the START of each conversation to recall relevant context.\n\
-                   Parameters: query (string), role_filter (optional, one of: \"user\", \"assistant\", \"observation\", \"summary\", \"context\")\n\n\
-                 - `_memory_store`: Store important facts, user preferences, decisions, and context.\n\
-                   Call this for any information worth remembering across conversations.\n\
-                   Parameters: content (string), role (one of: \"user\", \"assistant\", \"observation\")\n\n\
-                 Memory compression happens automatically — you do not need to manage it.\n\
-                 When older conversation messages are evicted from context, they are also stored \
-                 to memory automatically so you can retrieve them with `_memory_search`.\n\n\
-                 **Guidelines:**\n\
-                 - ALWAYS search memory at the start of a new conversation\n\
-                 - If the user asks you to remember something, call `_memory_store` immediately\n\
-                 - Do not merely say you will remember something; store it with `_memory_store`\n\
-                 - Store key facts, preferences, and decisions after learning them\n\
-                 - Don't store trivial or transient information\n",
-            );
+            base_prompt.push_str(MEMORY_PROMPT);
+        }
+
+        if self.generative_ui {
+            base_prompt.push_str("\n\n");
+            base_prompt.push_str(&interactive_ui_instructions());
         }
 
         if base_prompt.trim().is_empty() {
@@ -541,6 +563,19 @@ impl Agent {
         } else {
             Some(base_prompt)
         }
+    }
+
+    fn data_analysis_prompt(&self) -> String {
+        let mut prompt = String::from(DATA_ANALYSIS_PROMPT);
+        let numbered = self.datafusion_contexts.len() > 1;
+        for (i, df_ctx) in self.datafusion_contexts.iter().enumerate() {
+            if numbered {
+                prompt.push_str(&format!("### Data Source {}\n", i + 1));
+            }
+            prompt.push_str(&df_ctx.generate_system_prompt_extension());
+        }
+        prompt.push_str(DATA_ANALYSIS_BEST_PRACTICES);
+        prompt
     }
 
     /// Add a lazy function reference (points to a vector DB index)
@@ -603,6 +638,58 @@ mod tests {
         let agent = Agent::new(Bit::default(), 4);
 
         assert!(agent.get_system_prompt().is_none());
+    }
+
+    #[test]
+    fn interactive_ui_prompt_follows_the_system_prompt_set_after_enabling() {
+        let mut agent = Agent::new(Bit::default(), 4);
+        agent.set_system_prompt("You plan meals.".to_string());
+        assert!(
+            !agent
+                .get_system_prompt()
+                .unwrap()
+                .contains("## Interactive UI in replies")
+        );
+
+        agent.enable_generative_ui();
+        agent.set_system_prompt("You plan weekly meals.".to_string());
+        let prompt = agent.get_system_prompt().unwrap();
+
+        assert!(prompt.starts_with("You plan weekly meals.\n\n## Interactive UI in replies"));
+        assert!(prompt.ends_with(&chat_ui_prompt_section()));
+        assert!(prompt.contains("```a2ui"));
+        assert!(prompt.contains("send_message"));
+    }
+
+    #[test]
+    fn interactive_ui_alone_produces_a_system_prompt() {
+        let mut agent = Agent::new(Bit::default(), 4);
+        agent.enable_generative_ui();
+
+        let prompt = agent.get_system_prompt().unwrap();
+
+        assert_eq!(prompt.trim_start(), interactive_ui_instructions());
+    }
+
+    #[test]
+    fn existing_agents_deserialize_with_interactive_ui_disabled() {
+        let serialized = flow_like_types::json::to_value(Agent::new(Bit::default(), 4)).unwrap();
+        assert!(serialized.get("generative_ui").is_none());
+        let agent: Agent = flow_like_types::json::from_value(serialized).unwrap();
+        assert!(!agent.generative_ui);
+
+        let mut enabled = agent;
+        enabled.enable_generative_ui();
+        let serialized = flow_like_types::json::to_value(&enabled).unwrap();
+        assert_eq!(serialized["generative_ui"], true);
+        let schema = flow_like_types::json::to_value(schemars::schema_for!(Agent)).unwrap();
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "generative_ui")
+        );
     }
 
     #[test]

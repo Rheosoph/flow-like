@@ -16,13 +16,13 @@ use crate::{
         AppUsageLimits, MONTHLY, get_app_usage_limits, get_app_usage_limits_for_scope,
         normalize_period, period_start, set_app_usage_limits, set_app_usage_limits_for_scope,
     },
-    utils::stats_period::StatsPeriod,
+    utils::day_buckets::Buckets,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, Select, Set,
@@ -119,7 +119,7 @@ struct PowerUserAggregate {
     total_tokens: i64,
     ai_invocations: u64,
     executions: u64,
-    active_days: HashSet<String>,
+    active_days: HashSet<i64>,
     last_seen: Option<DateTime<FixedOffset>>,
 }
 
@@ -128,8 +128,8 @@ impl PowerUserAggregate {
         self.ai_invocations + self.executions
     }
 
-    fn touch(&mut self, day: &str, last_seen: DateTime<FixedOffset>) {
-        self.active_days.insert(day.to_string());
+    fn touch(&mut self, day: i64, last_seen: DateTime<FixedOffset>) {
+        self.active_days.insert(day);
         self.last_seen = Some(match self.last_seen {
             Some(current) => current.max(last_seen),
             None => last_seen,
@@ -439,7 +439,7 @@ pub struct AdminPaginated<T> {
 
 #[derive(Debug, FromQueryResult)]
 struct PeriodAiUsageRow {
-    bucket: String,
+    bucket: i64,
     user_id: Option<String>,
     technical_user_id: Option<String>,
     app_id: Option<String>,
@@ -455,7 +455,7 @@ struct PeriodAiUsageRow {
 
 #[derive(Debug, FromQueryResult)]
 struct PeriodExecutionUsageRow {
-    bucket: String,
+    bucket: i64,
     user_id: Option<String>,
     technical_user_id: Option<String>,
     app_id: Option<String>,
@@ -465,7 +465,7 @@ struct PeriodExecutionUsageRow {
 
 #[derive(Debug, FromQueryResult)]
 struct NewUserBucketRow {
-    bucket: String,
+    bucket: i64,
     new_users: i64,
 }
 
@@ -477,11 +477,12 @@ struct UserCountsRow {
     new_users_monthly: i64,
 }
 
-/// Usage of the last 30 days per UTC day, user and app. `interactions` counts
-/// the whole group, the daily/weekly variants only its rows inside that window.
+/// Usage of the last 30 days per UTC day (its index in the window), user and
+/// app. `interactions` counts the whole group, the daily/weekly variants only
+/// its rows inside that window.
 #[derive(Debug, FromQueryResult)]
 struct RecentUsageRow {
-    day: String,
+    day: i64,
     user_id: Option<String>,
     app_id: Option<String>,
     interactions: i64,
@@ -676,17 +677,15 @@ fn count_since<C: ColumnTrait>(id: C, created_at: C, start: DateTime<FixedOffset
 /// app; callers add their own measures (and any further group keys).
 fn period_usage_select<E: EntityTrait>(
     columns: UsageColumns<E::Column>,
-    bucket: &SimpleExpr,
+    buckets: &Buckets,
     started_at: DateTime<FixedOffset>,
 ) -> Select<E> {
-    E::find()
-        .select_only()
-        .expr_as(bucket.clone(), "bucket")
+    buckets
+        .group(E::find().select_only(), "bucket")
         .column_as(columns.user_id, "user_id")
         .column_as(columns.technical_user_id, "technical_user_id")
         .column_as(columns.app_id, "app_id")
         .filter(columns.created_at.gte(started_at))
-        .group_by(bucket.clone())
         .group_by(columns.user_id)
         .group_by(columns.technical_user_id)
         .group_by(columns.app_id)
@@ -695,12 +694,12 @@ fn period_usage_select<E: EntityTrait>(
 fn ai_period_select<E: EntityTrait>(
     columns: AiUsageColumns<E::Column>,
     tokens: SimpleExpr,
-    bucket: &SimpleExpr,
+    buckets: &Buckets,
     started_at: DateTime<FixedOffset>,
 ) -> Select<E> {
     use sea_orm::sea_query::ExprTrait;
 
-    period_usage_select::<E>(columns.usage, bucket, started_at)
+    period_usage_select::<E>(columns.usage, buckets, started_at)
         .column_as(columns.model_id, "model_id")
         .column_as(columns.provider, "provider")
         .column_as(columns.endpoint, "endpoint")
@@ -715,12 +714,12 @@ fn ai_period_select<E: EntityTrait>(
 }
 
 fn execution_period_select(
-    bucket: &SimpleExpr,
+    buckets: &Buckets,
     started_at: DateTime<FixedOffset>,
 ) -> Select<execution_usage_tracking::Entity> {
     use sea_orm::sea_query::ExprTrait;
 
-    period_usage_select::<execution_usage_tracking::Entity>(EXECUTION_COLUMNS, bucket, started_at)
+    period_usage_select::<execution_usage_tracking::Entity>(EXECUTION_COLUMNS, buckets, started_at)
         .expr_as(Expr::col(EXECUTION_COLUMNS.id).count(), "executions")
         .expr_as(
             sum_bigint(Expr::col(execution_usage_tracking::Column::Microseconds)),
@@ -728,18 +727,13 @@ fn execution_period_select(
         )
 }
 
-fn new_users_select(
-    bucket: &SimpleExpr,
-    started_at: DateTime<FixedOffset>,
-) -> Select<user::Entity> {
+fn new_users_select(buckets: &Buckets, started_at: DateTime<FixedOffset>) -> Select<user::Entity> {
     use sea_orm::sea_query::ExprTrait;
 
-    user::Entity::find()
-        .select_only()
-        .expr_as(bucket.clone(), "bucket")
+    buckets
+        .group(user::Entity::find().select_only(), "bucket")
         .expr_as(Expr::col(user::Column::Id).count(), "new_users")
         .filter(user::Column::CreatedAt.gte(started_at))
-        .group_by(bucket.clone())
 }
 
 struct ActivityStarts {
@@ -765,14 +759,12 @@ fn recent_usage_select<E: EntityTrait>(
     columns: UsageColumns<E::Column>,
     price: SimpleExpr,
     tokens: SimpleExpr,
-    day: &SimpleExpr,
+    days: &Buckets,
     starts: &ActivityStarts,
 ) -> Select<E> {
     use sea_orm::sea_query::ExprTrait;
 
-    E::find()
-        .select_only()
-        .expr_as(day.clone(), "day")
+    days.group(E::find().select_only(), "day")
         .column_as(columns.user_id, "user_id")
         .column_as(columns.app_id, "app_id")
         .expr_as(Expr::col(columns.id).count(), "interactions")
@@ -788,7 +780,6 @@ fn recent_usage_select<E: EntityTrait>(
         .expr_as(tokens, "tokens")
         .expr_as(Expr::col(columns.created_at).max(), "last_seen")
         .filter(ColumnTrait::gte(&columns.created_at, starts.monthly))
-        .group_by(day.clone())
         .group_by(columns.user_id)
         .group_by(columns.app_id)
 }
@@ -817,20 +808,24 @@ pub async fn overview(
     };
 
     let backend = state.db.get_database_backend();
-    let monthly_buckets = period == crate::usage_limits::YEARLY;
-    let trend_period = if monthly_buckets {
-        StatsPeriod::Month
-    } else {
-        StatsPeriod::Day
-    };
-    let trend_bucket = trend_period.bucket_expr(backend, "createdAt");
-    let day_bucket = StatsPeriod::Day.bucket_expr(backend, "createdAt");
+    let trend_buckets = Buckets::new(
+        backend,
+        started_at.date_naive(),
+        now.date_naive(),
+        period == crate::usage_limits::YEARLY,
+    );
+    let recent_days = Buckets::new(
+        backend,
+        starts.monthly.date_naive(),
+        now.date_naive(),
+        false,
+    );
 
     let (llm_rows, embedding_rows, execution_rows, new_user_rows) = flow_like_types::tokio::join!(
         ai_period_select::<llm_usage_tracking::Entity>(
             LLM_COLUMNS,
             llm_tokens(),
-            &trend_bucket,
+            &trend_buckets,
             started_at,
         )
         .into_model::<PeriodAiUsageRow>()
@@ -838,15 +833,15 @@ pub async fn overview(
         ai_period_select::<embedding_usage_tracking::Entity>(
             EMBEDDING_COLUMNS,
             embedding_tokens(),
-            &trend_bucket,
+            &trend_buckets,
             started_at,
         )
         .into_model::<PeriodAiUsageRow>()
         .all(&state.db),
-        execution_period_select(&trend_bucket, started_at)
+        execution_period_select(&trend_buckets, started_at)
             .into_model::<PeriodExecutionUsageRow>()
             .all(&state.db),
-        new_users_select(&trend_bucket, started_at)
+        new_users_select(&trend_buckets, started_at)
             .into_model::<NewUserBucketRow>()
             .all(&state.db),
     );
@@ -860,7 +855,7 @@ pub async fn overview(
             LLM_COLUMNS.usage,
             sum_bigint(Expr::col(LLM_COLUMNS.price)),
             sum_bigint(llm_tokens()),
-            &day_bucket,
+            &recent_days,
             &starts,
         )
         .into_model::<RecentUsageRow>()
@@ -869,7 +864,7 @@ pub async fn overview(
             EMBEDDING_COLUMNS.usage,
             sum_bigint(Expr::col(EMBEDDING_COLUMNS.price)),
             sum_bigint(embedding_tokens()),
-            &day_bucket,
+            &recent_days,
             &starts,
         )
         .into_model::<RecentUsageRow>()
@@ -878,7 +873,7 @@ pub async fn overview(
             EXECUTION_COLUMNS,
             zero_bigint(),
             zero_bigint(),
-            &day_bucket,
+            &recent_days,
             &starts,
         )
         .into_model::<RecentUsageRow>()
@@ -931,9 +926,7 @@ pub async fn overview(
 
     let user_stats = build_user_stats(&user_counts, &recent);
     let trend = build_usage_trend(
-        monthly_buckets,
-        started_at,
-        now,
+        &trend_buckets,
         &llm_rows,
         &embedding_rows,
         &execution_rows,
@@ -1509,25 +1502,30 @@ fn build_activity_sets(recent: &RecentUsage, window: ActivityWindow) -> Activity
 }
 
 fn build_usage_trend(
-    monthly_buckets: bool,
-    started_at: DateTime<FixedOffset>,
-    now: DateTime<FixedOffset>,
+    buckets: &Buckets,
     llm_rows: &[PeriodAiUsageRow],
     embedding_rows: &[PeriodAiUsageRow],
     execution_rows: &[PeriodExecutionUsageRow],
     new_user_rows: &[NewUserBucketRow],
 ) -> Vec<AdminUsageTrendPoint> {
-    let mut buckets =
-        seed_trend_buckets(started_at.date_naive(), now.date_naive(), monthly_buckets);
+    fn at(totals: &mut [TrendBucket], index: i64) -> Option<&mut TrendBucket> {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| totals.get_mut(index))
+    }
+
+    let mut totals = vec![TrendBucket::default(); buckets.keys.len()];
 
     for row in new_user_rows {
-        let key = trend_key(&row.bucket, monthly_buckets);
-        buckets.entry(key).or_default().new_users += to_count(row.new_users);
+        if let Some(bucket) = at(&mut totals, row.bucket) {
+            bucket.new_users += to_count(row.new_users);
+        }
     }
 
     for row in llm_rows.iter().chain(embedding_rows) {
-        let key = trend_key(&row.bucket, monthly_buckets);
-        let bucket = buckets.entry(key).or_default();
+        let Some(bucket) = at(&mut totals, row.bucket) else {
+            continue;
+        };
         bucket.ai_invocations += to_count(row.invocations);
         bucket.tokens += row.tokens;
         bucket.cost += row.price;
@@ -1537,19 +1535,22 @@ fn build_usage_trend(
     }
 
     for row in execution_rows {
-        let key = trend_key(&row.bucket, monthly_buckets);
-        let bucket = buckets.entry(key).or_default();
+        let Some(bucket) = at(&mut totals, row.bucket) else {
+            continue;
+        };
         bucket.executions += to_count(row.executions);
         if let Some(user_id) = &row.user_id {
             bucket.active_users.insert(user_id.clone());
         }
     }
 
-    let mut points: Vec<_> = buckets
-        .into_iter()
-        .map(|(bucket, totals)| AdminUsageTrendPoint {
-            label: trend_label(&bucket, monthly_buckets),
-            bucket,
+    buckets
+        .keys
+        .iter()
+        .zip(totals)
+        .map(|(key, totals)| AdminUsageTrendPoint {
+            bucket: key.clone(),
+            label: trend_label(key, buckets.monthly),
             new_users: totals.new_users,
             active_users: totals.active_users.len() as u64,
             executions: totals.executions,
@@ -1557,53 +1558,7 @@ fn build_usage_trend(
             tokens: totals.tokens,
             cost: totals.cost,
         })
-        .collect();
-    points.sort_by(|a, b| a.bucket.cmp(&b.bucket));
-    points
-}
-
-fn seed_trend_buckets(
-    start: NaiveDate,
-    end: NaiveDate,
-    monthly_buckets: bool,
-) -> HashMap<String, TrendBucket> {
-    let mut buckets = HashMap::new();
-    if monthly_buckets {
-        let mut year = start.year();
-        let mut month = start.month();
-        loop {
-            let key = format!("{year:04}-{month:02}");
-            buckets.entry(key).or_default();
-            if year == end.year() && month == end.month() {
-                break;
-            }
-            month += 1;
-            if month > 12 {
-                month = 1;
-                year += 1;
-            }
-        }
-        return buckets;
-    }
-
-    let mut day = start;
-    while day <= end {
-        buckets
-            .entry(day.format("%Y-%m-%d").to_string())
-            .or_default();
-        day += Duration::days(1);
-    }
-    buckets
-}
-
-/// SQL buckets arrive as `YYYY-MM-DD` (the first of the month for monthly
-/// buckets); the monthly trend key is the `YYYY-MM` prefix.
-fn trend_key(bucket: &str, monthly_buckets: bool) -> String {
-    if monthly_buckets {
-        bucket.get(..7).unwrap_or(bucket).to_string()
-    } else {
-        bucket.to_string()
-    }
+        .collect()
 }
 
 fn trend_label(bucket: &str, monthly_buckets: bool) -> String {
@@ -1626,7 +1581,7 @@ fn build_power_user_aggregates(recent: &RecentUsage) -> HashMap<String, PowerUse
         entry.total_price += row.price;
         entry.total_tokens += row.tokens;
         entry.ai_invocations += to_count(row.interactions);
-        entry.touch(&row.day, row.last_seen);
+        entry.touch(row.day, row.last_seen);
     }
 
     for row in &recent.execution {
@@ -1635,7 +1590,7 @@ fn build_power_user_aggregates(recent: &RecentUsage) -> HashMap<String, PowerUse
         };
         let entry = users.entry(user_id.clone()).or_default();
         entry.executions += to_count(row.interactions);
-        entry.touch(&row.day, row.last_seen);
+        entry.touch(row.day, row.last_seen);
     }
 
     users
@@ -1803,4 +1758,98 @@ async fn load_scoped_limits(
         .into_iter()
         .map(|(user_id, rows)| (user_id, AppUsageLimits::from_rows(rows)))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{DbBackend, QueryTrait};
+
+    fn day(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
+    }
+
+    fn execution_row(bucket: i64, user_id: &str, executions: i64) -> PeriodExecutionUsageRow {
+        PeriodExecutionUsageRow {
+            bucket,
+            user_id: Some(user_id.to_string()),
+            technical_user_id: None,
+            app_id: None,
+            executions,
+            microseconds: 0,
+        }
+    }
+
+    /// See `utils::day_buckets`: the period rows must take their bucket from
+    /// the joined series, or DSQL sorts the whole window.
+    #[test]
+    fn period_rows_group_by_the_bucket_series_not_by_created_at() {
+        let buckets = Buckets::new(
+            DbBackend::Postgres,
+            day(2026, 9, 21),
+            day(2026, 10, 21),
+            false,
+        );
+        let started_at = day(2026, 9, 21)
+            .and_hms_opt(14, 0, 0)
+            .expect("valid time")
+            .and_utc()
+            .fixed_offset();
+        let sql = execution_period_select(&buckets, started_at)
+            .build(DbBackend::Postgres)
+            .to_string();
+
+        assert!(sql.contains(r#"AS "bucket_series" ON"#), "{sql}");
+        assert!(
+            sql.contains(r#"GROUP BY "bucket_series"."i", "ExecutionUsageTracking"."userId""#),
+            "{sql}"
+        );
+        assert!(!sql.contains("to_char"), "{sql}");
+    }
+
+    #[test]
+    fn trend_points_follow_the_bucket_order_and_drop_rows_outside_it() {
+        let buckets = Buckets::new(
+            DbBackend::Postgres,
+            day(2026, 10, 19),
+            day(2026, 10, 21),
+            false,
+        );
+        let trend = build_usage_trend(
+            &buckets,
+            &[],
+            &[],
+            &[
+                execution_row(2, "a", 5),
+                execution_row(0, "a", 1),
+                execution_row(0, "b", 2),
+                execution_row(3, "a", 7),
+            ],
+            &[NewUserBucketRow {
+                bucket: 1,
+                new_users: 4,
+            }],
+        );
+
+        let summary: Vec<_> = trend
+            .iter()
+            .map(|point| {
+                (
+                    point.bucket.as_str(),
+                    point.executions,
+                    point.active_users,
+                    point.new_users,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("2026-10-19", 3, 2, 0),
+                ("2026-10-20", 0, 0, 4),
+                ("2026-10-21", 5, 1, 0),
+            ]
+        );
+        assert_eq!(trend[0].label, "Oct 19");
+    }
 }

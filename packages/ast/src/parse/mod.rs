@@ -10,4 +10,8 @@ mod lexer;
 mod parser;
 
 pub use error::ParseError;
+// Editor diagnostics share the parser's token boundaries so strings and comments cannot be
+// mistaken for executable source.
+pub use lexer::{Tok, Token, lex};
+pub(crate) use lexer::{is_ident_continue, is_ident_start};
 pub use parser::parse;

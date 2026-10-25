@@ -483,7 +483,7 @@ async fn settle_usage_invocation_with_dialect(
 pub async fn settle_hosted_usage_invocation(
     state: &AppState,
     invocation_id: Option<&str>,
-    mut settlement: UsageInvocationSettlement,
+    settlement: UsageInvocationSettlement,
 ) -> Result<(), sea_orm::DbErr> {
     let Some(id) = invocation_id else {
         return Ok(());
@@ -495,6 +495,16 @@ pub async fn settle_hosted_usage_invocation(
     {
         tracing::warn!(operation_id = id, %error, "Could not retain hosted usage receipt; attempting database settlement");
     }
+    apply_hosted_usage_settlement(state, id, settlement).await
+}
+
+/// `settle_hosted_usage_invocation` for evidence that is already durable, such
+/// as a replayed receipt, so the receipt is not written again.
+pub(crate) async fn apply_hosted_usage_settlement(
+    state: &AppState,
+    id: &str,
+    mut settlement: UsageInvocationSettlement,
+) -> Result<(), sea_orm::DbErr> {
     let Some(row) = usage_invocation::Entity::find_by_id(id)
         .one(&state.db)
         .await?
@@ -559,6 +569,10 @@ pub async fn settle_hosted_usage_invocation(
         "provider-{}-{}-{}",
         settlement.status, settlement.cost_micro_dollars, latency_ms
     );
+    settlement.raw_usage = Some(detail.clone());
+    if holds_settlement(&row, &settlement) {
+        return Ok(());
+    }
     crate::quota::settle(
         state,
         id,
@@ -569,11 +583,10 @@ pub async fn settle_hosted_usage_invocation(
             ..Default::default()
         },
         finalized,
-        detail.clone(),
+        detail,
     )
     .await
     .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
-    settlement.raw_usage = Some(detail);
     settle_usage_invocation_with_dialect(
         &state.db,
         state.db_dialect,
@@ -582,6 +595,21 @@ pub async fn settle_hosted_usage_invocation(
         settlement,
     )
     .await
+}
+
+/// Only `apply_hosted_usage_settlement` writes the full settlement detail into
+/// `rawUsage`, after its quota revision committed. A row that already holds every
+/// value a replay would write needs neither transaction again.
+fn holds_settlement(row: &usage_invocation::Model, settlement: &UsageInvocationSettlement) -> bool {
+    row.status == settlement.status
+        && row.input_tokens == settlement.input_tokens.max(0)
+        && row.output_tokens == settlement.output_tokens.max(0)
+        && row.embedding_tokens == settlement.embedding_tokens.max(0)
+        && row.cost_micro_dollars == settlement.cost_micro_dollars.max(0)
+        && row.latency == settlement.latency_ms
+        && row.provider_request_id == settlement.provider_request_id
+        && row.error == settlement.error
+        && row.raw_usage == settlement.raw_usage
 }
 
 pub async fn record_provider_request_id(
@@ -646,6 +674,70 @@ pub async fn reconcile_stale_invocations(
     })
 }
 
+const PROVIDER_LOOKUP_BATCH: u64 = 50;
+const PROVIDER_LOOKUP_CONCURRENCY: usize = 4;
+/// A generation the provider has not reported for this long is left for review
+/// instead of being requested again every pass.
+const PROVIDER_LOOKUP_WINDOW_DAYS: i64 = 7;
+
+/// The provider's final generation record for `provider_id`, if it has one.
+async fn provider_generation(
+    client: &flow_like_types::reqwest::Client,
+    key: &str,
+    provider_id: &str,
+) -> Option<(Value, f64)> {
+    let response = client
+        .get("https://openrouter.ai/api/v1/generation")
+        .bearer_auth(key)
+        .query(&[("id", provider_id)])
+        .timeout(std::time::Duration::from_secs(4))
+        .send()
+        .await
+        .ok()
+        .filter(|response| response.status().is_success())?;
+    let usage = response.json::<Value>().await.ok()?.get_mut("data")?.take();
+    let cost = usage
+        .get("total_cost")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0)?;
+    (usage.get("id").and_then(Value::as_str) == Some(provider_id)
+        && usage
+            .get("finish_reason")
+            .is_some_and(|value| !value.is_null()))
+    .then_some((usage, cost))
+}
+
+/// Missing relay timing remains pending even when the provider bill is known.
+/// A provider's latency is not the API Lambda's duration.
+fn provider_settlement(
+    row: &usage_invocation::Model,
+    provider_id: &str,
+    usage: Value,
+    cost: f64,
+) -> UsageInvocationSettlement {
+    let tokens = |native: &str, reported: &str| {
+        usage
+            .get(native)
+            .or_else(|| usage.get(reported))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    };
+    UsageInvocationSettlement {
+        status: if row.latency.is_some() {
+            STATUS_COMPLETED
+        } else {
+            STATUS_UNKNOWN_USAGE
+        },
+        input_tokens: tokens("native_tokens_prompt", "tokens_prompt"),
+        output_tokens: tokens("native_tokens_completion", "tokens_completion"),
+        cost_micro_dollars: (cost * 1_000_000.0).ceil().min(i64::MAX as f64) as i64,
+        latency_ms: row.latency,
+        provider_request_id: Some(provider_id.to_owned()),
+        raw_usage: Some(usage),
+        ..Default::default()
+    }
+}
+
 /// Provider recovery is bounded per pass and never re-dispatches inference.
 /// Requests without a provider receipt retain their reservation for review.
 pub async fn reconcile_hosted_invocations(
@@ -653,13 +745,23 @@ pub async fn reconcile_hosted_invocations(
     older_than_minutes: i64,
 ) -> Result<UsageReconciliationResult, sea_orm::DbErr> {
     use flow_like_secrets::{ExposeSecret, SecretRef};
+    use futures::StreamExt;
     let mut result = reconcile_stale_invocations(&state.db, older_than_minutes).await?;
+    // A row that already holds the provider's generation waits only for relay
+    // timing, which the provider cannot supply; asking again changes nothing.
     let candidates = usage_invocation::Entity::find()
         .filter(usage_invocation::Column::Status.eq(STATUS_UNKNOWN_USAGE))
         .filter(usage_invocation::Column::Provider.eq("openrouter"))
         .filter(usage_invocation::Column::ProviderRequestId.is_not_null())
+        .filter(
+            usage_invocation::Column::StartedAt
+                .gt(Utc::now().fixed_offset() - Duration::days(PROVIDER_LOOKUP_WINDOW_DAYS)),
+        )
+        .filter(sea_orm::sea_query::Expr::cust(
+            r#"("rawUsage"->'providerUsage'->>'id') IS DISTINCT FROM "providerRequestId""#,
+        ))
         .order_by_asc(usage_invocation::Column::UpdatedAt)
-        .limit(50)
+        .limit(PROVIDER_LOOKUP_BATCH)
         .all(&state.db)
         .await?;
     if candidates.is_empty() {
@@ -674,73 +776,45 @@ pub async fn reconcile_hosted_invocations(
     };
     let client = flow_like_types::reqwest::Client::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
-    for row in candidates {
-        if std::time::Instant::now() >= deadline {
-            break;
+    // Futures are built before they enter the stream: a borrowing closure inside the stream
+    // type makes the handler's future fail axum's `Send` check for every lifetime.
+    let key = key.expose_secret();
+    let lookups = candidates
+        .iter()
+        .map(|row| {
+            let client = &client;
+            async move {
+                let provider_id = row.provider_request_id.as_deref()?;
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                let generation = provider_generation(client, key, provider_id).await?;
+                Some((row, provider_id, generation))
+            }
+        })
+        .collect::<Vec<_>>();
+    let generations = futures::stream::iter(lookups)
+        .buffer_unordered(PROVIDER_LOOKUP_CONCURRENCY)
+        .filter_map(std::future::ready)
+        .collect::<Vec<_>>()
+        .await;
+    for (row, provider_id, (usage, cost)) in generations {
+        let settlement = provider_settlement(row, provider_id, usage, cost);
+        match settle_hosted_usage_invocation(state, Some(&row.id), settlement).await {
+            Ok(()) => result.provider_usage_recovered += 1,
+            Err(error) => {
+                tracing::warn!(invocation_id = %row.id, %error, "Provider usage could not be settled; retried next pass")
+            }
         }
-        let Some(provider_id) = row.provider_request_id.as_deref() else {
-            continue;
-        };
-        let response = client
-            .get("https://openrouter.ai/api/v1/generation")
-            .bearer_auth(key.expose_secret())
-            .query(&[("id", provider_id)])
-            .timeout(std::time::Duration::from_secs(4))
-            .send()
-            .await;
-        let recovered = match response {
-            Ok(response) if response.status().is_success() => response.json::<Value>().await.ok(),
-            _ => None,
-        };
-        let usage = recovered.as_ref().and_then(|value| value.get("data"));
-        if let Some(usage) = usage
-            && let Some(cost) = usage
-                .get("total_cost")
-                .and_then(Value::as_f64)
-                .filter(|value| value.is_finite() && *value >= 0.0)
-            && usage.get("id").and_then(Value::as_str) == Some(provider_id)
-            && usage
-                .get("finish_reason")
-                .is_some_and(|value| !value.is_null())
-        {
-            // Missing relay timing remains pending even when the provider bill
-            // is known. A provider's latency is not the API Lambda's duration.
-            let final_status = if row.latency.is_some() {
-                STATUS_COMPLETED
-            } else {
-                STATUS_UNKNOWN_USAGE
-            };
-            settle_hosted_usage_invocation(
-                state,
-                Some(&row.id),
-                UsageInvocationSettlement {
-                    status: final_status,
-                    input_tokens: usage
-                        .get("native_tokens_prompt")
-                        .or_else(|| usage.get("tokens_prompt"))
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0),
-                    output_tokens: usage
-                        .get("native_tokens_completion")
-                        .or_else(|| usage.get("tokens_completion"))
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0),
-                    cost_micro_dollars: (cost * 1_000_000.0).ceil().min(i64::MAX as f64) as i64,
-                    latency_ms: row.latency,
-                    provider_request_id: Some(provider_id.to_owned()),
-                    raw_usage: Some(usage.clone()),
-                    ..Default::default()
-                },
-            )
-            .await?;
-            result.provider_usage_recovered += 1;
-        }
+    }
+    // Rotation only matters when more rows wait than one pass examines.
+    if candidates.len() as u64 == PROVIDER_LOOKUP_BATCH {
         usage_invocation::Entity::update_many()
             .set(usage_invocation::ActiveModel {
                 updated_at: Set(Utc::now().fixed_offset()),
                 ..Default::default()
             })
-            .filter(usage_invocation::Column::Id.eq(row.id))
+            .filter(usage_invocation::Column::Id.is_in(candidates.iter().map(|row| row.id.clone())))
             .exec(&state.db)
             .await?;
     }
@@ -779,6 +853,91 @@ pub fn estimate_text_tokens(text: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn invocation(settlement: &UsageInvocationSettlement) -> usage_invocation::Model {
+        let now = Utc::now().fixed_offset();
+        usage_invocation::Model {
+            id: "invocation".into(),
+            kind: "llm".into(),
+            status: settlement.status.into(),
+            user_id: None,
+            app_id: Some("app".into()),
+            provider: Some("openrouter".into()),
+            endpoint: None,
+            model_id: None,
+            provider_request_id: settlement.provider_request_id.clone(),
+            estimated_tokens: 0,
+            estimated_cost_micro_dollars: 0,
+            input_tokens: settlement.input_tokens,
+            output_tokens: settlement.output_tokens,
+            embedding_tokens: settlement.embedding_tokens,
+            cost_micro_dollars: settlement.cost_micro_dollars,
+            latency: settlement.latency_ms,
+            raw_usage: settlement.raw_usage.clone(),
+            error: settlement.error.clone(),
+            started_at: now,
+            completed_at: Some(now),
+            created_at: now,
+            updated_at: now,
+            technical_user_id: None,
+        }
+    }
+
+    #[test]
+    fn a_replayed_settlement_is_skipped_only_when_every_written_value_matches() {
+        let settlement = UsageInvocationSettlement {
+            status: STATUS_UNKNOWN_USAGE,
+            input_tokens: 12,
+            output_tokens: 3,
+            cost_micro_dollars: 40,
+            latency_ms: Some(812.5),
+            provider_request_id: Some("gen-1".into()),
+            raw_usage: Some(serde_json::json!({"costMicroEur": 37, "status": "unknown_usage"})),
+            ..Default::default()
+        };
+        let row = invocation(&settlement);
+        assert!(holds_settlement(&row, &settlement));
+
+        let changed = [
+            UsageInvocationSettlement {
+                status: STATUS_COMPLETED,
+                ..settlement.clone()
+            },
+            UsageInvocationSettlement {
+                output_tokens: 4,
+                ..settlement.clone()
+            },
+            UsageInvocationSettlement {
+                latency_ms: None,
+                ..settlement.clone()
+            },
+            UsageInvocationSettlement {
+                raw_usage: Some(serde_json::json!({"costMicroEur": 38, "status": "unknown_usage"})),
+                ..settlement.clone()
+            },
+        ];
+        for settlement in &changed {
+            assert!(!holds_settlement(&row, settlement));
+        }
+    }
+
+    #[test]
+    fn provider_bill_completes_only_with_relay_timing() {
+        let usage = serde_json::json!({"id": "gen-1", "native_tokens_prompt": 7, "tokens_prompt": 9, "tokens_completion": 2});
+        let mut row = invocation(&UsageInvocationSettlement {
+            status: STATUS_UNKNOWN_USAGE,
+            ..Default::default()
+        });
+        let pending = provider_settlement(&row, "gen-1", usage.clone(), 0.0000011);
+        assert_eq!(pending.status, STATUS_UNKNOWN_USAGE);
+        assert_eq!((pending.input_tokens, pending.output_tokens), (7, 2));
+        assert_eq!(pending.cost_micro_dollars, 2);
+
+        row.latency = Some(120.0);
+        let completed = provider_settlement(&row, "gen-1", usage, 0.0);
+        assert_eq!(completed.status, STATUS_COMPLETED);
+        assert_eq!(completed.latency_ms, Some(120.0));
+    }
 
     fn rate() -> HostedRateSnapshot {
         HostedRateSnapshot {

@@ -15,6 +15,7 @@ import { isChatEventType } from "../../lib/event-config";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import type { InlineAppChat } from "../../state/global-chat/global-chat-store";
 import { ChatInterfaceMemoized } from "../interfaces/chat-default";
+import { useInlineCardExpanded } from "./use-inline-card-expanded";
 
 interface InlineAppChatCardProps {
 	chat: InlineAppChat;
@@ -38,7 +39,10 @@ export function InlineAppChatCard({
 	const router = useRouter();
 	const [event, setEvent] = useState<IEvent | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [expanded, setExpanded] = useState(false);
+	const { expanded, setExpanded, remounted } = useInlineCardExpanded(
+		chat.id,
+		false,
+	);
 	const toolbarRef = useRef(null);
 	const sidebarRef = useRef(null);
 
@@ -73,7 +77,7 @@ export function InlineAppChatCard({
 	return (
 		<motion.div
 			layout
-			initial={{ opacity: 0, y: 8, scale: 0.98 }}
+			initial={remounted ? false : { opacity: 0, y: 8, scale: 0.98 }}
 			animate={{ opacity: 1, y: 0, scale: 1 }}
 			exit={{ opacity: 0, y: 8, scale: 0.98 }}
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}

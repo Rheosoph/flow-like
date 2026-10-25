@@ -10,6 +10,7 @@ export interface FlowScriptWorkerModelLike {
 	uri: unknown;
 	getValue: () => string;
 	getVersionId?: () => number;
+	onWillDispose?: (listener: () => void) => unknown;
 }
 
 export interface CancellationTokenLike {

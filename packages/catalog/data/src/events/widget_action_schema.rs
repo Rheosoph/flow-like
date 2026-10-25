@@ -2,11 +2,13 @@ use flow_like::a2ui::components::{
     excalidraw_event_context_schema, file_preview_event_context_schema,
 };
 use flow_like::a2ui::micro_widget::{MICRO_WIDGET_COMPONENT_TYPE, encode_package_widget_ref};
+use flow_like_catalog_core::UploadedFile;
 use flow_like_types::{
     Value,
     json::{Map, json},
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 /// Final action contexts are merged by agreement. Different contracts, or an untyped route,
 /// require an open payload so the output never promises fields a source omits.
@@ -122,6 +124,7 @@ pub(super) fn is_pending_component_context(schema: &Value, selected: &str) -> bo
 /// object payload is spread beside `actionId` and the untouched `payload`, and
 /// route context fields are merged in, so the root must stay open.
 pub(super) fn action_context_schema(payload: &Value) -> Value {
+    let payload = &resolve_file_markers(payload);
     let mut root = Map::new();
     let mut nested = payload.clone();
     if let Some(schema) = nested.as_object_mut() {
@@ -174,6 +177,168 @@ pub(super) fn action_context_schema(payload: &Value) -> Value {
     root.insert("required".to_string(), Value::Array(required));
     Value::Object(root)
 }
+
+const FILE_MARKER: &str = "file";
+const SUBSCHEMA_MAP_KEYWORDS: [&str; 6] = [
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "dependencies",
+];
+const SUBSCHEMA_KEYWORDS: [&str; 15] = [
+    "items",
+    "prefixItems",
+    "additionalItems",
+    "unevaluatedItems",
+    "contains",
+    "additionalProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+];
+
+/// `UploadedFile` as schemars emits it, split into its body and its `$defs`.
+static UPLOADED_FILE_SCHEMA: LazyLock<(Value, Map<String, Value>)> = LazyLock::new(|| {
+    let mut body = flow_like_types::json::to_value(schemars::schema_for!(UploadedFile))
+        .unwrap_or_else(|_| json!({"type": "object"}));
+    let defs = body
+        .as_object_mut()
+        .and_then(|schema| {
+            schema.remove("$schema");
+            schema.remove("$defs")
+        })
+        .and_then(|defs| match defs {
+            Value::Object(defs) => Some(defs),
+            _ => None,
+        })
+        .unwrap_or_default();
+    (body, defs)
+});
+
+fn is_file_marker(schema: &Value) -> bool {
+    schema.get("x-flow-like-type").and_then(Value::as_str) == Some(FILE_MARKER)
+}
+
+/// The host swaps every widget file handle for its stored `UploadedFile` before the run,
+/// so each `file` marker is typed as that shape. Its definitions join the payload's own
+/// definitions (renamed on a clash), which `action_context_schema` hoists to the root.
+fn resolve_file_markers(payload: &Value) -> Value {
+    let (body, file_defs) = &*UPLOADED_FILE_SCHEMA;
+    let key = if payload.get("definitions").is_some() {
+        "definitions"
+    } else {
+        "$defs"
+    };
+    let mut taken: BTreeSet<String> = payload
+        .get(key)
+        .and_then(Value::as_object)
+        .map(|defs| defs.keys().cloned().collect())
+        .unwrap_or_default();
+    let renames: BTreeMap<&str, String> = file_defs
+        .keys()
+        .map(|name| {
+            let free = (1..)
+                .map(|n| match n {
+                    1 => name.clone(),
+                    n => format!("{name}_{n}"),
+                })
+                .find(|candidate| !taken.contains(candidate))
+                .unwrap_or_else(|| name.clone());
+            taken.insert(free.clone());
+            (name.as_str(), free)
+        })
+        .collect();
+    let mut file = body.clone();
+    retarget_refs(&mut file, key, &renames);
+
+    let mut resolved = payload.clone();
+    if !replace_file_markers(&mut resolved, &file) {
+        return resolved;
+    }
+    let Some(schema) = resolved.as_object_mut() else {
+        return resolved;
+    };
+    let defs = schema
+        .entry(key)
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !defs.is_object() {
+        *defs = Value::Object(Map::new());
+    }
+    if let Some(defs) = defs.as_object_mut() {
+        for (name, def) in file_defs {
+            let mut def = def.clone();
+            retarget_refs(&mut def, key, &renames);
+            defs.insert(renames[name.as_str()].clone(), def);
+        }
+    }
+    resolved
+}
+
+fn replace_file_markers(schema: &mut Value, file: &Value) -> bool {
+    if is_file_marker(schema) {
+        let mut replacement = file.clone();
+        if let Some(description) = schema.get("description") {
+            replacement["description"] = description.clone();
+        }
+        *schema = replacement;
+        return true;
+    }
+    let Some(object) = schema.as_object_mut() else {
+        return false;
+    };
+    let mut replaced = false;
+    for (keyword, value) in object.iter_mut() {
+        let keyword = keyword.as_str();
+        if SUBSCHEMA_MAP_KEYWORDS.contains(&keyword) {
+            for child in value.as_object_mut().into_iter().flat_map(Map::values_mut) {
+                replaced |= replace_file_markers(child, file);
+            }
+        } else if SUBSCHEMA_KEYWORDS.contains(&keyword) {
+            match value {
+                Value::Array(children) => {
+                    for child in children {
+                        replaced |= replace_file_markers(child, file);
+                    }
+                }
+                child => replaced |= replace_file_markers(child, file),
+            }
+        }
+    }
+    replaced
+}
+
+fn retarget_refs(value: &mut Value, key: &str, renames: &BTreeMap<&str, String>) {
+    match value {
+        Value::Object(object) => {
+            for (keyword, child) in object.iter_mut() {
+                if keyword == "$ref"
+                    && let Some(name) = child.as_str().and_then(|r| r.strip_prefix("#/$defs/"))
+                    && let Some(renamed) = renames.get(name)
+                {
+                    *child = Value::String(format!("#/{key}/{renamed}"));
+                } else {
+                    retarget_refs(child, key, renames);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                retarget_refs(item, key, renames);
+            }
+        }
+        _ => {}
+    }
+}
+
+type ContextSchema = fn(&str) -> Option<Value>;
 
 pub(super) struct PageTarget<'a> {
     pub app_id: &'a str,
@@ -303,18 +468,17 @@ fn infer_exposed_component(
             }
         }
     };
-    let typed_events: Option<(&[&str], fn(&str) -> Option<Value>)> =
-        match component["type"].as_str() {
-            Some("filePreview" | "fileEditor") => Some((
-                &["save", "saved", "dirtyChange", "error"],
-                file_preview_event_context_schema,
-            )),
-            Some("excalidraw") => Some((
-                &["load", "save", "autoSave", "dirtyChange", "error"],
-                excalidraw_event_context_schema,
-            )),
-            _ => None,
-        };
+    let typed_events: Option<(&[&str], ContextSchema)> = match component["type"].as_str() {
+        Some("filePreview" | "fileEditor") => Some((
+            &["save", "saved", "dirtyChange", "error"],
+            file_preview_event_context_schema,
+        )),
+        Some("excalidraw") => Some((
+            &["load", "save", "autoSave", "dirtyChange", "error"],
+            excalidraw_event_context_schema,
+        )),
+        _ => None,
+    };
     if let Some((events, context_schema)) = typed_events {
         for &event in events {
             for action in component["eventHandlers"][event]
@@ -461,7 +625,7 @@ impl PageWalker<'_, '_> {
         &mut self,
         component: &Value,
         event_names: &[&str],
-        context_schema: fn(&str) -> Option<Value>,
+        context_schema: ContextSchema,
     ) {
         // These events require exact handlers. Neither wildcard nor historical
         // component actions can cause the renderer to dispatch them.
@@ -1517,6 +1681,126 @@ mod tests {
             action_context_schema(&identified)["properties"]["payload"],
             identified
         );
+    }
+
+    fn file_marker() -> Value {
+        json!({"type":"object","x-flow-like-type":"file"})
+    }
+
+    fn stored_file() -> Value {
+        json!(UploadedFile {
+            name: Some("report.pdf".into()),
+            size: Some(1024),
+            mime_type: Some("application/pdf".into()),
+            url: Some("https://files.example/report.pdf".into()),
+            flow_path: Some(flow_like_catalog_core::FlowPath::new(
+                "tmp/user/viewer/apps/app/uploads/report.pdf".into(),
+                "request-files".into(),
+                None,
+            )),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn file_markers_resolve_to_the_stored_file_in_spread_fields_and_payload() {
+        let mut attachment = file_marker();
+        attachment["description"] = json!("Picked attachment");
+        let payload = json!({"type":"object","properties":{
+                "note":{"type":"string"},
+                "attachment":attachment,
+                "gallery":{"type":"array","items":file_marker()},
+                "sample":{"type":"object","examples":[file_marker()]}},
+            "required":["attachment"]});
+        let schema = action_context_schema(&payload);
+        assert!(jsonschema::meta::is_valid(&schema));
+
+        let (body, defs) = &*UPLOADED_FILE_SCHEMA;
+        let mut described = body.clone();
+        described["description"] = json!("Picked attachment");
+        let nested = &schema["properties"]["payload"];
+        for fields in [&schema["properties"], &nested["properties"]] {
+            assert_eq!(fields["attachment"], described);
+            assert_eq!(fields["gallery"]["items"], *body);
+            assert_eq!(fields["sample"]["examples"][0], file_marker());
+        }
+        assert_eq!(schema["$defs"], Value::Object(defs.clone()));
+        assert!(nested.get("$defs").is_none());
+        assert_eq!(schema.to_string().matches("x-flow-like-type").count(), 2);
+
+        let file_pin = flow_like::flow::pin::Pin::schema_string_for::<UploadedFile>().unwrap();
+        for field in [
+            &schema["properties"]["attachment"],
+            &nested["properties"]["gallery"]["items"],
+        ] {
+            let mut broken_out = field.clone();
+            broken_out["$defs"] = schema["$defs"].clone();
+            assert!(flow_like::flow::pin::schema_covers(
+                &broken_out.to_string(),
+                &file_pin
+            ));
+        }
+
+        let context = |file: Value| {
+            let fields = json!({"note":"hi","attachment":file,"gallery":[file]});
+            let mut context = fields.clone();
+            context["actionId"] = json!("sent");
+            context["payload"] = fields;
+            context
+        };
+        assert!(jsonschema::is_valid(&schema, &context(stored_file())));
+        let mut broken = stored_file();
+        broken["flowPath"] = json!({"path":"tmp/user/viewer/apps/app/report.pdf"});
+        assert!(!jsonschema::is_valid(&schema, &context(broken)));
+        assert!(!jsonschema::is_valid(
+            &schema,
+            &context(json!({"size":"big"}))
+        ));
+    }
+
+    #[test]
+    fn file_markers_in_definitions_join_them_without_clobbering_payload_names() {
+        let payload = json!({"type":"object",
+            "properties":{"file":{"$ref":"#/definitions/upload"},"path":{"$ref":"#/definitions/FlowPath"}},
+            "definitions":{"upload":file_marker(),"FlowPath":{"type":"string"}}});
+        let schema = action_context_schema(&payload);
+        assert!(jsonschema::meta::is_valid(&schema));
+        assert!(schema.get("$defs").is_none());
+        let definitions = &schema["definitions"];
+        assert_eq!(definitions["FlowPath"], json!({"type":"string"}));
+        assert_eq!(
+            definitions["FlowPath_2"],
+            UPLOADED_FILE_SCHEMA.1["FlowPath"]
+        );
+        assert_eq!(
+            definitions["upload"]["properties"]["flowPath"]["anyOf"][0]["$ref"],
+            "#/definitions/FlowPath_2"
+        );
+        let fields = json!({"file":stored_file(),"path":"tmp/a.txt"});
+        let mut context = fields.clone();
+        context["actionId"] = json!("sent");
+        context["payload"] = fields;
+        assert!(jsonschema::is_valid(&schema, &context));
+        context["file"]["flowPath"] = json!("tmp/a.txt");
+        assert!(!jsonschema::is_valid(&schema, &context));
+    }
+
+    #[test]
+    fn a_file_payload_spreads_the_stored_file_fields() {
+        let schema = action_context_schema(&file_marker());
+        assert!(jsonschema::meta::is_valid(&schema));
+        assert_eq!(schema["required"], json!(["actionId", "payload"]));
+        assert_eq!(
+            schema["properties"]["payload"]["title"],
+            "A2UIFileInputFile"
+        );
+        for field in ["name", "size", "type", "url", "flowPath"] {
+            assert!(schema["properties"].get(field).is_some(), "{field}");
+        }
+        let mut context = stored_file();
+        context["actionId"] = json!("uploaded");
+        context["payload"] = stored_file();
+        assert!(jsonschema::is_valid(&schema, &context));
     }
 
     #[test]

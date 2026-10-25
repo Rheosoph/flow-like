@@ -63,7 +63,7 @@ The bundler reads `csp` statically, so every group must be an object literal and
 | `styleSrc` | `style-src` | `https` | Stylesheets |
 | `inputs` | | | Widget inputs whose values carry addresses ([Addresses known only at runtime](#addresses-known-only-at-runtime)) |
 
-No other directive can be extended. That includes `default-src`, `script-src`, `worker-src`, `child-src`, `frame-src`, `object-src`, `manifest-src`, `base-uri`, `form-action` and the `sandbox` flags. Remote scripts would replace reviewed bundle code at runtime. An approved third-party frame would get its own network context outside the widget's policy. Workers, WebAssembly, audio playback, microphone and downloads stay under `capabilities`.
+No other directive can be extended. That includes `default-src`, `script-src`, `worker-src`, `child-src`, `frame-src`, `object-src`, `manifest-src`, `base-uri`, `form-action` and the `sandbox` flags. Remote scripts would replace reviewed bundle code at runtime. An approved third-party frame would get its own network context outside the widget's policy. Workers, WebAssembly, audio playback, microphone, downloads and uploads stay under `capabilities`.
 
 | Limit | Value |
 | --- | --- |
@@ -139,7 +139,7 @@ Flow-Like classifies every source, declared or runtime, from the Public Suffix L
 | `shared` | Hosts user content | Many parties publish content there; they cannot receive requests. | `https://assets.ion.cesium.com`, `https://cdn.jsdelivr.net`, `https://*.github.io` | Neutral, with an info icon |
 | `broad` | Anyone can receive | Open hosting where anyone who signs up can receive what the widget sends, request-capture services and tunnels. | `https://*.s3.eu-central-1.amazonaws.com`, `https://s3.eu-central-1.amazonaws.com`, `https://storage.googleapis.com`, `https://*.pages.dev`, `https://webhook.site` | Destructive |
 
-Each group shows its highest level, and the dialog takes the highest level of all groups. The `downloads` capability counts as `broad`, because a download can be fetched from any site.
+Each group shows its highest level, and the dialog takes the highest level of all groups. The `downloads` capability counts as `broad`, because a download can be fetched from any site. The `uploads` capability counts as `known`: an uploaded file goes only to this app's temporary Flow-Like storage, and the widget gets back an opaque handle, never a URL.
 
 - **Up to `shared`,** the dialog stays calm: a neutral lead line, **Allow this time** as the primary button, and one sentence per card, such as "Data goes to Cesium ion." or "Cesium ion hosts content its users upload." The longer explanations (who could receive, who could publish) are in **Details**.
 - **Only `broad`** uses destructive styling: a destructive banner, **Don't allow** focused, and an inline confirmation before **Always allow for this project**.
@@ -269,7 +269,7 @@ Before install, the store shows each widget's network summary on its card and th
 
 ### Previews run without network access
 
-Widget previews, such as the live widget cards in the store, have `csp`, runtime inputs, `media` and `microphone` stripped on the server before a grant is issued. A preview never reaches the network, even if the viewer approved the same widget in an app. Local `data:` and `blob:` bytes still work. Test network features in a real mount: a page, or the **Test** tab of the package workspace on desktop (**Packages › Mine**, then open the package).
+Widget previews, such as the live widget cards in the store, have `csp`, runtime inputs, `media`, `microphone` and `uploads` stripped on the server before a grant is issued. A preview never reaches the network or uploads files, even if the viewer approved the same widget in an app. Local `data:` and `blob:` bytes still work. Test network features in a real mount: a page, or the **Test** tab of the package workspace on desktop (**Packages › Mine**, then open the package).
 
 ### How the policy is enforced
 
@@ -395,7 +395,7 @@ Approving a source is a trust decision. Browsers cannot block every channel, and
 
 - **Channels outside CSP.** WebRTC (STUN, TURN and ICE), DNS prefetch, preconnect and legacy prerender are not governed by CSP. In WebView2, WKWebView and browsers, any mounted widget can leak data through them, including a widget without extensions. WebKitGTK has WebRTC turned off by default.
 - **Downloads.** With the `downloads` capability, `<a download href="https://…">` can send a request to any site.
-- **Channels through the host.** A widget can encode data in the order in which it plays approved media items, and in contract events that flows handle.
+- **Channels through the host.** A widget can encode data in the order in which it plays approved media items, and in contract events that flows handle. With `uploads`, it can write anything it sees into a file that reaches the flow handling the event; the file stays in this app's temporary storage.
 - **Approved sources are full channels.** Anything the widget can see, including values the app passes to it, can be sent to an approved source. Because `'unsafe-inline'` is allowed, the widget can also run text fetched from one. Consent covers sources, not code.
 - **Account-mediated receivers.** A `known` or `external` service can still carry data to the publisher through the publisher's own credentials, for example ion asset writes or per-key usage metrics. Levels describe hosts, not credentials.
 - **Heuristic classification.** The Public Suffix List and the catalog cannot be complete. A new multi-tenant service classifies as `external` until the catalog lists it.

@@ -4,6 +4,7 @@ pub mod branch;
 pub mod find_llm;
 pub mod history;
 pub mod inspection;
+pub mod interactive_ui_instructions;
 pub mod invoke;
 pub mod invoke_simple;
 pub mod invoke_with_tools;

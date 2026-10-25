@@ -617,7 +617,8 @@ mod tests {
                 let server = tokio::spawn(async move {
                     let (mut socket, _) = listener.accept().await.unwrap();
                     let mut request = [0_u8; 1024];
-                    socket.read(&mut request).await.unwrap();
+                    let read = socket.read(&mut request).await.unwrap();
+                    assert!(read > 0, "the client sent no request");
                     socket
                         .write_all(
                             b"HTTP/1.1 307 Temporary Redirect\r\nlocation: /redirected\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",

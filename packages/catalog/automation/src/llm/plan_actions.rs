@@ -96,6 +96,7 @@ impl NodeLogic for LLMPlanActionsNode {
             "Automation/LLM/Planning",
         );
         node.set_flowscript_name("automation.llm", "planActions");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/bot-plan.svg");
         node.set_version(6);
 

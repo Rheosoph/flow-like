@@ -43,8 +43,8 @@ delta = ["flow-like-storage/delta"]
 iceberg = ["flow-like-storage/iceberg"]
 # Database providers (requires datafusion-table-providers)
 # Use rustls variants for postgres/mysql to avoid native-tls/openssl dependency
-postgres = ["datafusion-table-providers/postgres-rustls"]
-mysql = ["datafusion-table-providers/mysql-rustls"]
+postgres = ["datafusion-table-providers/postgres-rustls", "dep:rustls"]
+mysql = ["datafusion-table-providers/mysql-rustls", "dep:rustls"]
 sqlite = ["datafusion-table-providers/sqlite-bundled"]
 duckdb = ["datafusion-table-providers/duckdb"]
 clickhouse = ["datafusion-table-providers/clickhouse"]
@@ -90,6 +90,7 @@ flow-like-storage-contracts = { workspace = true, features = ["graph", "database
 flow-like-catalog-macros.workspace = true
 ahash.workspace = true
 blake3.workspace = true
+sha2 = "0.10"
 tracing.workspace = true
 schemars.workspace = true
 jsonschema.workspace = true
@@ -119,7 +120,10 @@ tempfile = { version = "3", optional = true }
 
 # Database providers retain our rustls and SQLite compatibility patches.
 # Arrow 58 and DataFusion 53 are shared by every provider.
-datafusion-table-providers = { git = "https://github.com/Rheosoph/datafusion-table-providers.git", rev = "5945dfd349bbafdf92612f7824a02e6bb2018368", default-features = false, optional = true }
+datafusion-table-providers = { git = "https://github.com/Rheosoph/datafusion-table-providers.git", rev = "2a4428f404f9542184943ccc799a964effd941f3", default-features = false, optional = true }
+
+# Only to install a process-wide crypto provider before the PostgreSQL/MySQL drivers build TLS configs.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"], optional = true }
 
 # Google BigQuery client for the BigQuery provider node (no BigQuery backend in datafusion-table-providers yet).
 gcp-bigquery-client = { version = "0.28", default-features = false, features = ["rust-tls", "ring"], optional = true }
@@ -135,6 +139,11 @@ futures = "0.3"
 [[test]]
 name = "datafusion_integration"
 path = "tests/datafusion_integration.rs"
+required-features = ["execute"]
+
+[[test]]
+name = "datafusion_session_e2e"
+path = "tests/datafusion_session_e2e/main.rs"
 required-features = ["execute"]
 
 [build-dependencies]

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::model::*;
 use crate::naming::is_keyword;
 use crate::schema::{normalize_object_schema, normalize_schema};
-use crate::text::{is_valid_identifier, quote_string, to_camel_case};
+use crate::text::{collapse_path_literal, is_valid_identifier, quote_string, to_camel_case};
 
 /// Options controlling text rendering.
 #[derive(Debug, Clone)]
@@ -260,6 +260,15 @@ impl Writer<'_> {
         self.schema_types.get(&normalized).map(String::as_str)
     }
 
+    /// `name`, or `name: Type` for a binding whose author declared its type.
+    fn binding_name(&mut self, name: &str, ty: Option<&TypeRef>) {
+        self.out.push_str(name);
+        if let Some(ty) = ty {
+            self.out.push_str(": ");
+            self.out.push_str(&render_type(ty));
+        }
+    }
+
     fn fn_decl(&mut self, func: &FnDecl) {
         if let Some(cache) = &func.cache {
             self.function_cache_decorator(cache);
@@ -312,6 +321,12 @@ impl Writer<'_> {
     }
 
     fn event_block(&mut self, event: &EventBlock) {
+        if let Some(description) = &event.description {
+            self.indent();
+            self.out.push_str("@description(");
+            self.out.push_str(&quote_string(description));
+            self.out.push_str(")\n");
+        }
         self.indent();
         self.out.push_str(&event.name);
         if let Some(event_name) = event
@@ -396,10 +411,15 @@ impl Writer<'_> {
 
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { name, call, anchor } => {
+            Stmt::Let {
+                name,
+                call,
+                anchor,
+                ty,
+            } => {
                 self.indent();
                 self.out.push_str("const ");
-                self.out.push_str(name);
+                self.binding_name(name, ty.as_ref());
                 self.out.push_str(" = ");
                 self.out.push_str(&render_call(call));
                 self.anchor("n", anchor.as_deref());
@@ -503,10 +523,13 @@ impl Writer<'_> {
                 name,
                 value,
                 anchor,
+                ty,
             } => {
                 self.indent();
-                self.out.push_str("let ");
-                self.out.push_str(name);
+                // `let name: Type = …` declares a layer variable, so a typed alias stays `const`.
+                self.out
+                    .push_str(if ty.is_some() { "const " } else { "let " });
+                self.binding_name(name, ty.as_ref());
                 self.out.push_str(" = ");
                 self.out.push_str(&render_expr(value));
                 self.anchor("n", anchor.as_deref());
@@ -540,8 +563,32 @@ impl Writer<'_> {
             Stmt::Handler(event) => {
                 self.event_block(event);
             }
+            Stmt::Collapse(group) => self.collapse_block(group),
             Stmt::Comment(text) => self.comment_lines(text),
         }
+    }
+
+    /// `@collapse("A/B") {   //@l:<id>` — a visual group around statements of this block. A
+    /// relative group without a name groups nothing, so its statements render in place.
+    fn collapse_block(&mut self, group: &CollapseBlock) {
+        if group.path.is_empty() && !group.absolute {
+            for stmt in &group.body.stmts {
+                self.stmt(stmt);
+            }
+            return;
+        }
+        self.indent();
+        self.out.push_str("@collapse(");
+        self.out
+            .push_str(&collapse_path_literal(group.absolute, &group.path));
+        self.out.push_str(") {");
+        if !group.path.is_empty() {
+            self.anchor("l", group.anchor.as_deref());
+        }
+        self.out.push('\n');
+        self.block(&group.body);
+        self.indent();
+        self.out.push_str("}\n");
     }
 
     /// A free-standing comment. Board comment text is free-form: it can span lines, and it can

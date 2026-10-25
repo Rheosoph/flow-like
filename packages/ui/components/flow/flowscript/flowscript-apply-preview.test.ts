@@ -3,6 +3,7 @@ import type { BoardCommand } from "../../../lib/schema/flow/copilot";
 import {
 	destructiveCommandSummaries,
 	groupBoardCommands,
+	summarizeApplyImpact,
 	summarizeBoardCommands,
 } from "./flowscript-apply-preview";
 
@@ -67,6 +68,231 @@ describe("FlowScript apply preview summary", () => {
 
 	test("an empty plan is all zeros", () => {
 		expect(summarizeBoardCommands([]).total).toBe(0);
+	});
+
+	test("description-only edits remain visible updates, including clearing", () => {
+		const commands: BoardCommand[] = [
+			{
+				command_type: "SetNodeDescription",
+				node_id: "tool",
+				description: "Look up an order.",
+				summary: "Describe findOrder",
+			},
+			{
+				command_type: "SetNodeDescription",
+				node_id: "event",
+				description: "",
+			},
+		];
+		expect(summarizeBoardCommands(commands)).toMatchObject({
+			updates: 2,
+			total: 2,
+			removedNodes: 0,
+		});
+		expect(summarizeApplyImpact(commands)).toEqual({
+			deletions: [],
+			moves: [],
+		});
+		expect(groupBoardCommands(commands)).toEqual([
+			{
+				type: "SetNodeDescription",
+				items: [
+					{
+						key: "Describe findOrder#1",
+						label: "Describe findOrder",
+						entityId: "tool",
+					},
+					{ key: "event#1", label: "event", entityId: "event" },
+				],
+			},
+		]);
+	});
+
+	test("recognizes both serialized and Rust deletion names", () => {
+		const commands = [
+			command({ command_type: "DeleteVariable", variable_id: "v1" }),
+			command({ command_type: "RemoveVariable", variable_id: "v2" }),
+			command({ command_type: "DeleteComment", comment_id: "c1" }),
+			command({ command_type: "RemoveComment", comment_id: "c2" }),
+		];
+		expect(summarizeBoardCommands(commands)).toMatchObject({
+			variables: 2,
+			comments: 2,
+			updates: 0,
+		});
+		expect(destructiveCommandSummaries(commands)).toEqual([
+			{ kind: "variable", label: "v1" },
+			{ kind: "variable", label: "v2" },
+			{ kind: "comment", label: "c1" },
+			{ kind: "comment", label: "c2" },
+		]);
+	});
+});
+
+describe("FlowScript apply impact", () => {
+	test("separates deleted items from items moved to another layer or the root", () => {
+		const impact = summarizeApplyImpact([
+			command({
+				command_type: "RemoveNode",
+				node_id: "old-node",
+				summary: "Remove Old Logger",
+			}),
+			command({
+				command_type: "MoveToLayer",
+				ids: ["moved-node", "moved-comment"],
+				target_layer: "module-1",
+				summary: "Move items into reporting",
+			}),
+			command({
+				command_type: "MoveToLayer",
+				ids: ["moved-layer"],
+				target_layer: null,
+			}),
+		]);
+		expect(impact.deletions).toEqual([
+			{
+				key: "node:old-node",
+				kind: "node",
+				id: "old-node",
+				label: "Remove Old Logger",
+			},
+		]);
+		expect(impact.moves).toEqual([
+			{
+				key: "move:moved-node",
+				id: "moved-node",
+				label: "Move items into reporting",
+				targetLayer: "module-1",
+			},
+			{
+				key: "move:moved-comment",
+				id: "moved-comment",
+				label: "Move items into reporting",
+				targetLayer: "module-1",
+			},
+			{
+				key: "move:moved-layer",
+				id: "moved-layer",
+				label: "moved-layer",
+				targetLayer: null,
+			},
+		]);
+	});
+
+	test("a deletion-only plan includes all entity kinds and deduplicates aliases", () => {
+		const impact = summarizeApplyImpact([
+			command({ command_type: "RemoveNode", node_id: "node-1" }),
+			command({ command_type: "DeleteVariable", variable_id: "variable-1" }),
+			command({ command_type: "RemoveVariable", variable_id: "variable-1" }),
+			command({ command_type: "RemoveLayer", layer_id: "layer-1" }),
+			command({ command_type: "DeleteComment", comment_id: "comment-1" }),
+			command({ command_type: "RemoveComment", comment_id: "comment-1" }),
+		]);
+		expect(impact.deletions.map(({ kind, id }) => ({ kind, id }))).toEqual([
+			{ kind: "node", id: "node-1" },
+			{ kind: "variable", id: "variable-1" },
+			{ kind: "layer", id: "layer-1" },
+			{ kind: "comment", id: "comment-1" },
+		]);
+		expect(impact.moves).toEqual([]);
+	});
+
+	test("a move-only plan counts each item once at its final destination", () => {
+		const impact = summarizeApplyImpact([
+			command({
+				command_type: "MoveToLayer",
+				ids: ["node-1", "node-1", "node-2"],
+				target_layer: "module-1",
+			}),
+			command({
+				command_type: "MoveToLayer",
+				ids: ["node-1"],
+				summary: "Move Logger to board root",
+			}),
+		]);
+		expect(impact.deletions).toEqual([]);
+		expect(impact.moves).toEqual([
+			{
+				key: "move:node-1",
+				id: "node-1",
+				label: "Move Logger to board root",
+				targetLayer: undefined,
+			},
+			{
+				key: "move:node-2",
+				id: "node-2",
+				label: "node-2",
+				targetLayer: "module-1",
+			},
+		]);
+	});
+
+	test("items scheduled for deletion are excluded from moves in any command order", () => {
+		const impact = summarizeApplyImpact([
+			command({ command_type: "RemoveLayer", layer_id: "layer-1" }),
+			command({
+				command_type: "MoveToLayer",
+				ids: ["node-1", "layer-1", "kept-node"],
+			}),
+			command({ command_type: "RemoveNode", node_id: "node-1" }),
+		]);
+		expect(impact.deletions).toHaveLength(2);
+		expect(impact.moves.map(({ id }) => id)).toEqual(["kept-node"]);
+	});
+
+	test("same-named items retain distinct IDs and stable keys", () => {
+		const commands = [
+			command({
+				command_type: "RemoveNode",
+				node_id: "node-1",
+				summary: "Remove Logger",
+			}),
+			command({
+				command_type: "RemoveNode",
+				node_id: "node-2",
+				summary: "Remove Logger",
+			}),
+			command({
+				command_type: "MoveToLayer",
+				ids: ["node-3", "node-4"],
+				summary: "Move Logger",
+			}),
+		];
+		const impact = summarizeApplyImpact(commands);
+		expect(impact.deletions.map(({ id }) => id)).toEqual(["node-1", "node-2"]);
+		expect(impact.moves.map(({ id }) => id)).toEqual(["node-3", "node-4"]);
+		expect(new Set(impact.deletions.map(({ key }) => key)).size).toBe(2);
+		expect(new Set(impact.moves.map(({ key }) => key)).size).toBe(2);
+		expect(summarizeApplyImpact(commands)).toEqual(impact);
+	});
+
+	test("retains complete deletion and move lists for a large board", () => {
+		const deletedIds = Array.from({ length: 20 }, (_, index) => `old-${index}`);
+		const movedIds = Array.from(
+			{ length: 1658 },
+			(_, index) => `kept-${index}`,
+		);
+		const impact = summarizeApplyImpact([
+			...deletedIds.map((id) =>
+				command({ command_type: "RemoveNode", node_id: id }),
+			),
+			command({ command_type: "MoveToLayer", ids: movedIds }),
+		]);
+		expect(impact.deletions.map(({ id }) => id)).toEqual(deletedIds);
+		expect(impact.moves.map(({ id }) => id)).toEqual(movedIds);
+		expect(impact.deletions.length + impact.moves.length).toBe(1678);
+	});
+
+	test("additions and canvas position changes have no deletion or relocation impact", () => {
+		expect(
+			summarizeApplyImpact([
+				command({ command_type: "AddNode", node_type: "log_info" }),
+				command({ command_type: "CreateLayer", name: "Group" }),
+				command({ command_type: "ConnectPins" }),
+				command({ command_type: "MoveNode", node_id: "node-1" }),
+				command({ command_type: "MoveToLayer", ids: [] }),
+			]),
+		).toEqual({ deletions: [], moves: [] });
 	});
 });
 

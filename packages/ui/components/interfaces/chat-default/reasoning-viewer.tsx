@@ -21,15 +21,15 @@ interface ReasoningViewerProps {
 	compact?: boolean;
 }
 
-export function ReasoningViewer({
+/**
+ * The reasoning text without a toggle of its own, for callers whose row already is the toggle —
+ * nesting a second "Reasoning" disclosure under an expanded step just repeats the label.
+ */
+export function ReasoningBody({
 	reasoning,
-	defaultExpanded = false,
 	compact = false,
-}: ReasoningViewerProps) {
+}: Readonly<{ reasoning: string; compact?: boolean }>) {
 	const { t } = useTranslation("chat");
-	const [isExpanded, setIsExpanded] = useState(defaultExpanded);
-	const [shouldRender, setShouldRender] = useState(defaultExpanded);
-
 	const displayReasoning = useMemo(
 		() => sanitizeReasoningForDisplay(reasoning),
 		[reasoning],
@@ -39,6 +39,62 @@ export function ReasoningViewer({
 		[reasoning],
 	);
 
+	if (displayReasoning.trim() === "") return null;
+
+	return (
+		<div
+			className={cn(
+				"overflow-y-auto scroll-smooth rounded-lg border border-border/50 bg-muted/25",
+				compact ? "mt-1.5 max-h-50 px-3 py-2" : "mt-2 max-h-75 px-3.5 py-2.5",
+			)}
+			style={{
+				containIntrinsicSize: compact ? "200px" : "300px",
+				contentVisibility: "auto",
+				maxWidth: "var(--fl-chat-measure, 38rem)",
+			}}
+		>
+			<div
+				className="text-muted-foreground/90"
+				style={{
+					fontFamily: "var(--fl-chat-prose-font)",
+					fontSize: compact ? "0.8125rem" : "0.85rem",
+					lineHeight: 1.7,
+				}}
+			>
+				<Suspense
+					fallback={
+						<div className="flex items-center justify-center py-4 text-muted-foreground">
+							<div className="animate-pulse">{t("loading", "Loading…")}</div>
+						</div>
+					}
+				>
+					{renderPlainText ? (
+						<div className="whitespace-normal wrap-break-word">
+							{displayReasoning}
+						</div>
+					) : (
+						<TextEditor
+							initialContent={displayReasoning}
+							isMarkdown={true}
+							editable={false}
+							minimal={true}
+						/>
+					)}
+				</Suspense>
+			</div>
+		</div>
+	);
+}
+
+export function ReasoningViewer({
+	reasoning,
+	defaultExpanded = false,
+	compact = false,
+}: ReasoningViewerProps) {
+	const { t } = useTranslation("chat");
+	const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+	const [shouldRender, setShouldRender] = useState(defaultExpanded);
+
 	// Lazy render on first expansion
 	const handleExpand = () => {
 		if (!isExpanded && !shouldRender) {
@@ -47,9 +103,7 @@ export function ReasoningViewer({
 		setIsExpanded(!isExpanded);
 	};
 
-	if (!displayReasoning || displayReasoning.trim() === "") {
-		return null;
-	}
+	if (reasoning.trim() === "") return null;
 
 	return (
 		<div className={compact ? "" : "mt-2"}>
@@ -73,49 +127,7 @@ export function ReasoningViewer({
 			</button>
 
 			{isExpanded && shouldRender && (
-				<div
-					className={cn(
-						"overflow-y-auto scroll-smooth rounded-lg border border-border/50 bg-muted/25",
-						compact ? "mt-1.5 max-h-50 px-3 py-2" : "mt-2 max-h-75 px-3.5 py-2.5",
-					)}
-					style={{
-						containIntrinsicSize: compact ? "200px" : "300px",
-						contentVisibility: "auto",
-						maxWidth: "var(--fl-chat-measure, 38rem)",
-					}}
-				>
-					<div
-						className="text-muted-foreground/90"
-						style={{
-							fontFamily: "var(--fl-chat-prose-font)",
-							fontSize: compact ? "0.8125rem" : "0.85rem",
-							lineHeight: 1.7,
-						}}
-					>
-						<Suspense
-							fallback={
-								<div className="flex items-center justify-center py-4 text-muted-foreground">
-									<div className="animate-pulse">
-										{t("loading", "Loading…")}
-									</div>
-								</div>
-							}
-						>
-							{renderPlainText ? (
-								<div className="whitespace-normal wrap-break-word">
-									{displayReasoning}
-								</div>
-							) : (
-								<TextEditor
-									initialContent={displayReasoning}
-									isMarkdown={true}
-									editable={false}
-									minimal={true}
-								/>
-							)}
-						</Suspense>
-					</div>
-				</div>
+				<ReasoningBody reasoning={reasoning} compact={compact} />
 			)}
 		</div>
 	);

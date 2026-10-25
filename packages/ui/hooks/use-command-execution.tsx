@@ -16,6 +16,7 @@ import {
 	LAST_EDIT_FIELD,
 	sanitizeLastEdit,
 } from "../lib/realtime/presence-signals";
+import type { SignalFieldSetter } from "../lib/realtime/presence-signals-store";
 import type { IGenericCommand } from "../lib/schema";
 import type { FlowIrCommitToken } from "../lib/schema/copilot";
 import type { IBoard } from "../lib/schema/flow/board";
@@ -30,6 +31,7 @@ import { injectData } from "./use-invoke";
 interface ExecuteCommandsOptions {
 	refetch?: boolean;
 	allowDeletions?: boolean;
+	/** The caller renders blocked-apply diagnostics itself, so skip the generic error toast. */
 	suppressBlockedToast?: boolean;
 	/** Who authored the FlowScript. Defaults to the editor; FlowPilot passes "agent". */
 	origin?: FlowScriptApplyOrigin;
@@ -73,7 +75,7 @@ export function useCommandExecution({
 	pushCommandsOnce,
 	withHistoryLock,
 }: UseCommandExecutionProps) {
-	const awarenessRef = useRef<any | undefined>(undefined);
+	const awarenessRef = useRef<SignalFieldSetter | undefined>(undefined);
 	const queryClient = useQueryClient();
 	const refetchBoard = useCallback(async () => {
 		const refreshed = await board.refetch();
@@ -188,7 +190,7 @@ export function useCommandExecution({
 	);
 
 	const executeCommand = useCallback(
-		async (command: IGenericCommand): Promise<any> => {
+		async (command: IGenericCommand): Promise<IGenericCommand | undefined> => {
 			const backend = useBackendStore.getState().backend;
 			if (!backend) {
 				console.error("[executeCommand] No backend available");
@@ -202,11 +204,7 @@ export function useCommandExecution({
 			}
 
 			return withHistoryLock(async () => {
-				console.log(
-					"[executeCommand] Executing:",
-					command.command_type,
-					command,
-				);
+				console.log("[executeCommand] Executing:", command.command_type);
 
 				let result: IGenericCommand;
 				let resultingBoard: IBoard | undefined;
@@ -234,7 +232,7 @@ export function useCommandExecution({
 					toastError(`Command failed: ${recoveredError.message}`, <XIcon />);
 					throw recoveredError;
 				}
-				console.log("[executeCommand] Success:", command.command_type, result);
+				console.log("[executeCommand] Success:", command.command_type);
 				await settleCommittedMutation(
 					() => pushCommand(result),
 					true,
@@ -399,10 +397,7 @@ export function useCommandExecution({
 							diagnostics: [...result.diagnostics, warning],
 						};
 					}
-					const suppressToast =
-						options.suppressBlockedToast === true &&
-						result.diagnostics[0]?.startsWith("FlowScript edit would delete ");
-					if (suppressToast) return result;
+					if (options.suppressBlockedToast === true) return result;
 					toastError(
 						`FlowScript apply blocked: ${result.diagnostics[0]}`,
 						<XIcon />,

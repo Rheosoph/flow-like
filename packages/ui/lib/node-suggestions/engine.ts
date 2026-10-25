@@ -81,7 +81,34 @@ export interface NodeSuggestionEngineOptions {
 	store: Promise<SuggestionStore>;
 	/** Runs the daily sync/train cycle; defaults to idle time after a start-up grace period. */
 	schedule?: (task: () => void) => void;
+	/**
+	 * Runs a cycle alone across this browser's tabs; defaults to a Web Lock per user. Every tab
+	 * used to sync and train at once, and a tab that waited now finds the models already stored.
+	 */
+	exclusive?: (task: () => Promise<void>, signal: AbortSignal) => Promise<void>;
+	/** Whether this device syncs and trains at all; defaults to {@link deviceCanLearn}. */
+	learn?: boolean;
 	now?: () => Date;
+}
+
+/** Below this `navigator.deviceMemory` (GB), fetching 400 boards and training on 1000 is not worth it. */
+const MIN_LEARNING_DEVICE_MEMORY_GB = 4;
+
+export function deviceCanLearn(): boolean {
+	const memory =
+		typeof navigator === "undefined"
+			? undefined
+			: (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+	return memory === undefined || memory >= MIN_LEARNING_DEVICE_MEMORY_GB;
+}
+
+function learningLock(sub: string) {
+	return async (task: () => Promise<void>, signal: AbortSignal) => {
+		const locks =
+			typeof navigator === "undefined" ? undefined : navigator.locks;
+		if (!locks) return task();
+		await locks.request(`flow-like:node-suggestions:${sub}`, { signal }, task);
+	};
 }
 
 export interface NodeSuggestionEngineHandle extends NodeSuggestionEngine {
@@ -175,6 +202,10 @@ class SuggestionEngine implements NodeSuggestionEngineHandle {
 	private readonly port: SuggestionWorkerPort;
 	private readonly store: Promise<SuggestionStore>;
 	private readonly schedule: (task: () => void) => void;
+	private readonly exclusive: NonNullable<
+		NodeSuggestionEngineOptions["exclusive"]
+	>;
+	private readonly learn: boolean;
 	private readonly now: () => Date;
 	private readonly loaded: Promise<void>;
 	private seq = 0;
@@ -193,6 +224,8 @@ class SuggestionEngine implements NodeSuggestionEngineHandle {
 		this.port = options.port;
 		this.store = options.store;
 		this.schedule = options.schedule ?? scheduleIdle;
+		this.exclusive = options.exclusive ?? learningLock(options.sub);
+		this.learn = options.learn ?? deviceCanLearn();
 		this.now = options.now ?? (() => new Date());
 		this.port.listen(
 			(response) => this.receive(response),
@@ -360,6 +393,7 @@ class SuggestionEngine implements NodeSuggestionEngineHandle {
 		if (
 			this.stopped ||
 			this.busy ||
+			!this.learn ||
 			!this.backend ||
 			this.catalog.length === 0
 		) {
@@ -377,35 +411,41 @@ class SuggestionEngine implements NodeSuggestionEngineHandle {
 	}
 
 	private async runCycle(today: string) {
+		const { signal } = this.controller;
 		try {
 			await this.loaded;
-			const store = await this.store;
-			const { signal } = this.controller;
-			const backend = this.backend;
-			if (signal.aborted || !backend) return;
-			if ((await store.getSyncDay(this.sub)) !== today) {
-				this.update({ phase: "syncing" });
-				const summary = await syncCorpus({
-					backend,
-					sub: this.sub,
-					today,
-					store,
-					extract: (board) => this.extract(board),
-					signal,
-				});
-				if (signal.aborted) return;
-				if (summary.complete) {
-					await store.setSyncDay(this.sub, today);
-					this.update({ lastSyncDay: today });
-				}
-			}
-			await this.train(store, signal);
+			await this.exclusive(() => this.learnOnce(today, signal), signal);
 		} catch (error) {
-			console.warn("[node-suggestions] learning cycle failed:", error);
+			// A disposed tab leaves the lock queue with an AbortError.
+			if (!signal.aborted)
+				console.warn("[node-suggestions] learning cycle failed:", error);
 		} finally {
 			this.busy = false;
 			this.update({ phase: this.settledPhase() });
 		}
+	}
+
+	private async learnOnce(today: string, signal: AbortSignal) {
+		const store = await this.store;
+		const backend = this.backend;
+		if (signal.aborted || !backend) return;
+		if ((await store.getSyncDay(this.sub)) !== today) {
+			this.update({ phase: "syncing" });
+			const summary = await syncCorpus({
+				backend,
+				sub: this.sub,
+				today,
+				store,
+				extract: (board) => this.extract(board),
+				signal,
+			});
+			if (signal.aborted) return;
+			if (summary.complete) {
+				await store.setSyncDay(this.sub, today);
+				this.update({ lastSyncDay: today });
+			}
+		}
+		await this.train(store, signal);
 	}
 
 	private async extract(board: IBoard): Promise<BoardFacts> {
@@ -429,10 +469,27 @@ class SuggestionEngine implements NodeSuggestionEngineHandle {
 			store.getModel(this.sub, "ngram"),
 			store.getModel(this.sub, "neural"),
 		]);
-		const needsNgram =
-			!this.status.ngram || ngramRow?.fingerprint !== ngramFingerprint;
-		const needsNeural =
-			!this.status.neural || neuralRow?.fingerprint !== neuralFingerprint;
+		const storedNgram =
+			ngramRow?.fingerprint === ngramFingerprint ? ngramRow : undefined;
+		const storedNeural =
+			neuralRow?.fingerprint === neuralFingerprint ? neuralRow : undefined;
+		// Another tab trained these while this one waited for the lock.
+		if (
+			(storedNgram && !this.status.ngram) ||
+			(storedNeural && !this.status.neural)
+		) {
+			const loaded = await this.expect(
+				{
+					type: "load",
+					ngram: this.status.ngram ? undefined : storedNgram?.payload,
+					neural: this.status.neural ? undefined : storedNeural?.payload,
+				},
+				"loaded",
+			);
+			this.update({ ngram: loaded.ngram, neural: loaded.neural });
+		}
+		const needsNgram = !this.status.ngram || !storedNgram;
+		const needsNeural = !this.status.neural || !storedNeural;
 		if (!needsNgram && !needsNeural) return;
 
 		const corpus = await store.readFacts(this.sub, boards);

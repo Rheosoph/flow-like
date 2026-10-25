@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	canApplyFlowScript,
+	flowScriptApplyFailureReport,
+	flowScriptApplyReport,
+	isRejectedFlowScriptDraft,
 	resolveFlowScriptScope,
 	resolveJoinableScopeNodeIds,
 	sameScopeNodeIds,
@@ -35,11 +38,84 @@ describe("FlowScript apply state", () => {
 			{ dirty: false },
 			{ applying: true },
 			{ loading: true },
+			{ rejectedDraft: true },
 		]) {
 			expect(canApplyFlowScript({ ...editableDirtyState, ...override })).toBe(
 				false,
 			);
 		}
+	});
+});
+
+describe("FlowScript apply report", () => {
+	const draft = { text: "edited", baseline: "rendered" };
+
+	test("a fetch failure stays visible without rejecting the draft or disabling retry", () => {
+		const report = flowScriptApplyFailureReport(
+			new TypeError("Failed to fetch"),
+			"Unknown apply error",
+		);
+		expect(report.failed).toBe(true);
+		expect(report.diagnostics).toEqual(["Failed to fetch"]);
+		expect(report.rejected).toBeUndefined();
+		expect(
+			canApplyFlowScript({
+				...editableDirtyState,
+				rejectedDraft: isRejectedFlowScriptDraft(report, draft),
+			}),
+		).toBe(true);
+	});
+
+	test("failure reports preserve backend messages and handle missing details", () => {
+		expect(
+			flowScriptApplyFailureReport(
+				{ message: "Gateway timeout" },
+				"Unknown apply error",
+			).diagnostics,
+		).toEqual(["Gateway timeout"]);
+		expect(
+			flowScriptApplyFailureReport(undefined, "Unknown apply error")
+				.diagnostics,
+		).toEqual(["Unknown apply error"]);
+	});
+
+	test("a clean apply reports nothing", () => {
+		expect(
+			flowScriptApplyReport({ commandCount: 3, diagnostics: [] }, draft),
+		).toBeUndefined();
+	});
+
+	test("diagnostics with no executed command reject the draft", () => {
+		const report = flowScriptApplyReport(
+			{ commandCount: 0, diagnostics: ["removing `A` leaves `B` unrun"] },
+			draft,
+		);
+		expect(report?.rejected).toEqual(draft);
+		expect(isRejectedFlowScriptDraft(report, draft)).toBe(true);
+	});
+
+	test("diagnostics alongside executed commands stay warnings", () => {
+		const report = flowScriptApplyReport(
+			{ commandCount: 2, diagnostics: ["advisory"] },
+			draft,
+		);
+		expect(report?.diagnostics).toEqual(["advisory"]);
+		expect(report?.rejected).toBeUndefined();
+		expect(isRejectedFlowScriptDraft(report, draft)).toBe(false);
+	});
+
+	test("editing the draft or refreshing the baseline lifts the rejection", () => {
+		const report = flowScriptApplyReport(
+			{ commandCount: 0, diagnostics: ["blocked"] },
+			draft,
+		);
+		expect(isRejectedFlowScriptDraft(report, { ...draft, text: "fixed" })).toBe(
+			false,
+		);
+		expect(
+			isRejectedFlowScriptDraft(report, { ...draft, baseline: "newer" }),
+		).toBe(false);
+		expect(isRejectedFlowScriptDraft(undefined, draft)).toBe(false);
 	});
 });
 

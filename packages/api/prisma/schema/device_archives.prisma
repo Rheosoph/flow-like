@@ -16,10 +16,18 @@ model DeviceArchive {
   expiresAt BigInt
   @@id([deviceId, archiveId])
   @@unique([deviceId, scope, kind, sequence])
-  @@index([ownerId, expiresAt])
-  // DSQL stores sizeBytes with INCLUDE; Prisma uses a third key for db push.
-  @@index([ownerId, expiresAt, sizeBytes])
+  // Serves owner sums, per-device usage and expired-row batches without row reads.
+  // DSQL stores sizeBytes and createdAt with INCLUDE; Prisma lists them as keys for db push.
+  @@index([ownerId, expiresAt, deviceId, archiveId, sizeBytes, createdAt], map: "DeviceArchive_ownerUsage_idx")
   @@index([expiresAt])
+}
+
+/// Bytes of an owner's stored archives, expired or not. Every insert and delete of
+/// DeviceArchive rows changes it in the same transaction, under the owner's User row
+/// fence. A missing row is initialized from the owner's archives on first use.
+model DeviceArchiveUsage {
+  ownerId   String @id
+  usedBytes BigInt
 }
 
 model DeviceArchiveHead {

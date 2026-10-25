@@ -4,6 +4,7 @@ export { WebBitState } from "./bit-state";
 export { WebUserState } from "./user-state";
 export { WebBoardState } from "./board-state";
 export { WebStorageState } from "./storage-state";
+export { WebLockedStorageState } from "./locked-storage-state";
 export { WebTeamState } from "./team-state";
 export { WebRoleState } from "./role-state";
 export { WebEventState } from "./event-state";

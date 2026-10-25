@@ -4,6 +4,7 @@ import type {
 	IExecutionUsageRecord,
 	ILlmUsageRecord,
 	IPaginatedResponse,
+	IRecentExecutionsResponse,
 	IUsageSummary,
 } from "@flow-like/flow-like-ui";
 import type { IUsageState } from "../usage-state";
@@ -16,6 +17,9 @@ export class EmptyUsageState implements IUsageState {
 		throw new Error("Method not implemented.");
 	}
 	getExecutionHistory(): Promise<IPaginatedResponse<IExecutionUsageRecord>> {
+		throw new Error("Method not implemented.");
+	}
+	getRecentExecutions(): Promise<IRecentExecutionsResponse> {
 		throw new Error("Method not implemented.");
 	}
 	getExecutionActivity(): Promise<IExecutionActivity> {

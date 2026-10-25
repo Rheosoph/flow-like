@@ -18,6 +18,7 @@ import { buildImportCommands } from "./importer/import-commands";
 import { translateImport } from "./importer/translate";
 import { toastSuccess } from "./messages";
 import { isWebkitLite } from "./platform";
+import { hasOfflineOnlyNodes } from "./runtime-vars-utils";
 import type { IGenericCommand, IValueType, IVariable } from "./schema";
 import { parseSchemaText, schemaCovers } from "./schema-coverage";
 import {
@@ -574,6 +575,110 @@ export function doPinsMatch(
 	return true;
 }
 
+const PRESENCE_FIELDS = [
+	"remoteSelections",
+	"remoteEditors",
+	"peerUsers",
+] as const;
+type PresenceData = Partial<Record<(typeof PRESENCE_FIELDS)[number], unknown>>;
+
+/**
+ * Presence (peer selections/editors, identity cache) is injected into node data by awareness
+ * effects that only re-run when presence changes — a node rebuilt by parseBoard after a re-hash
+ * (every drag) must carry it over by id, or the chips vanish until the next awareness event.
+ */
+function carriedPresence(
+	oldNodesById: ReadonlyMap<string, { data?: unknown }>,
+	id: string,
+) {
+	const data = oldNodesById.get(id)?.data as PresenceData | undefined;
+	const carried: PresenceData = {};
+	for (const field of PRESENCE_FIELDS) {
+		if (data?.[field]) carried[field] = data[field];
+	}
+	return carried;
+}
+
+interface BoardNodeHandlerDeps {
+	handleCopy: (event?: ClipboardEvent) => void;
+	pushLayer: (layer: ILayer) => void;
+	executeBoard: (node: INode, payload?: object) => Promise<void>;
+	executeCommand: (
+		command: IGenericCommand,
+		append: boolean,
+	) => Promise<unknown>;
+	remoteExecute?: (node: INode, payload?: object) => Promise<void>;
+	openCommentInCode?: (comment: IComment) => void;
+	currentLayer?: string;
+	readOnly: boolean;
+}
+
+/**
+ * Rendered node data outlives the parse that built it, so its handlers are made here and never
+ * inside parseBoard: a closure created there shares parseBoard's context, which holds the previous
+ * render's nodes, whose handlers hold the parse before — every past parse stays reachable.
+ */
+function boardNodeHandlers(deps: BoardNodeHandlerDeps) {
+	const { executeCommand, readOnly } = deps;
+	const upsertLayer = async (
+		layer: ILayer,
+		currentLayer: string | null | undefined,
+	) => {
+		if (readOnly) return;
+		const command = upsertLayerCommand({
+			current_layer: currentLayer,
+			layer: layer,
+			node_ids: [],
+		});
+		await executeCommand(command, false);
+	};
+	return {
+		pushLayer: async (layer: ILayer) => {
+			deps.pushLayer(layer);
+		},
+		onExecute: async (node: INode, payload?: object) => {
+			await deps.executeBoard(node, payload);
+		},
+		onRemoteExecute: deps.remoteExecute
+			? async (node: INode, payload?: object) => {
+					await deps.remoteExecute?.(node, payload);
+				}
+			: undefined,
+		onCopy: async () => {
+			deps.handleCopy();
+		},
+		onLayerUpdate: (layer: ILayer) => upsertLayer(layer, deps.currentLayer),
+		// Boundary nodes live *inside* the layer, so `currentLayer` is the layer itself — its own
+		// parent is the only correct value here.
+		onBoundaryLayerUpdate: (layer: ILayer) =>
+			upsertLayer(layer, layer.parent_id ?? null),
+		onLayerRemove: async (layer: ILayer, preserve_nodes: boolean) => {
+			if (readOnly) return;
+			const command = removeLayerCommand({
+				layer,
+				child_layers: [],
+				layer_nodes: [],
+				layers: [],
+				nodes: [],
+				preserve_nodes,
+			});
+			await executeCommand(command, false);
+		},
+		onCommentUpsert: async (comment: IComment) => {
+			if (readOnly) throw new Error("Historical board versions are read-only.");
+			const command = upsertCommentCommand({
+				comment: comment,
+				current_layer: deps.currentLayer,
+			});
+			await executeCommand(command, false);
+		},
+		commentInCode: (comment: IComment) =>
+			comment.node_id && deps.openCommentInCode
+				? () => deps.openCommentInCode?.(comment)
+				: undefined,
+	};
+}
+
 export function parseBoard(
 	board: IBoard,
 	appId: string,
@@ -610,6 +715,7 @@ export function parseBoard(
 	const boardContentToken = boardContentVersion(board);
 	const isOffline = remoteBoardExecution?.isOffline ?? true;
 	const hasRemoteExecute = remoteBoardExecution?.onRemoteExecute !== undefined;
+	const boardOnlyOffline = hasOfflineOnlyNodes(board);
 
 	// Hash only nodes that actually reference functions (sorted — serde HashMap
 	// order is unstable), so adding/removing unrelated nodes doesn't force every
@@ -628,11 +734,17 @@ export function parseBoard(
 	}
 	const fnRefsHash = fnRefEntries.sort().join(";");
 	const reduceEdgeMotion = isWebkitLite() || connectionCount > 150;
+	const handlers = boardNodeHandlers({
+		handleCopy,
+		pushLayer,
+		executeBoard,
+		executeCommand,
+		remoteExecute: remoteBoardExecution?.onRemoteExecute,
+		openCommentInCode: onOpenCommentInCode,
+		currentLayer,
+		readOnly: version !== undefined,
+	});
 
-	// Presence (peer selections/editors, identity cache) is injected into node
-	// data by awareness effects that only re-run when presence changes — a node
-	// rebuilt here after a re-hash (every drag) must carry it over by id, or
-	// the chips vanish until the next awareness event.
 	const oldNodesById = new Map<string, { data?: unknown }>();
 	for (const oldNode of oldNodes ?? []) {
 		if (typeof oldNode.id === "string") oldNodesById.set(oldNode.id, oldNode);
@@ -641,23 +753,6 @@ export function parseBoard(
 			oldNodesMap.set(renderedNodeCacheKey(oldNode.id, hash), oldNode);
 		}
 	}
-	const carriedPresence = (id: string) => {
-		const data = oldNodesById.get(id)?.data as
-			| {
-					remoteSelections?: unknown;
-					remoteEditors?: unknown;
-					peerUsers?: unknown;
-			  }
-			| undefined;
-		if (!data) return {};
-		return {
-			...(data.remoteSelections
-				? { remoteSelections: data.remoteSelections }
-				: {}),
-			...(data.remoteEditors ? { remoteEditors: data.remoteEditors } : {}),
-			...(data.peerUsers ? { peerUsers: data.peerUsers } : {}),
-		};
-	};
 
 	for (const edge of oldEdges ?? []) {
 		oldEdgesMap.set(edge.id, edge);
@@ -704,6 +799,7 @@ export function parseBoard(
 			oldNode.data?.isUnavailable === isUnavailable &&
 			oldNode.data?.executionMode === board.execution_mode &&
 			oldNode.data?.isOffline === isOffline &&
+			oldNode.data?.boardOnlyOffline === boardOnlyOffline &&
 			(oldNode.data?.onRemoteExecute !== undefined) === hasRemoteExecute &&
 			oldNode.data?.fnRefsHash === fnRefsHash &&
 			oldNode.data?.boardDataVersion === boardVersionToken &&
@@ -740,11 +836,9 @@ export function parseBoard(
 					boardContentVersion: boardContentToken,
 					executionMode: board.execution_mode,
 					isOffline,
+					boardOnlyOffline,
 					onRemoteExecute: hasRemoteExecute
-						? (oldNode.data?.onRemoteExecute ??
-							(async (node: INode, payload?: object) => {
-								await remoteBoardExecution?.onRemoteExecute?.(node, payload);
-							}))
+						? (oldNode.data?.onRemoteExecute ?? handlers.onRemoteExecute)
 						: undefined,
 					version,
 					functionLayerId,
@@ -787,26 +881,17 @@ export function parseBoard(
 					functionLayerId,
 					functionCache,
 					currentLayerId: currentLayer,
-					pushLayer: async (layer: ILayer) => {
-						pushLayer(layer);
-					},
-					onExecute: async (node: INode, payload?: object) => {
-						await executeBoard(node, payload);
-					},
-					onRemoteExecute: remoteBoardExecution?.onRemoteExecute
-						? async (node: INode, payload?: object) => {
-								await remoteBoardExecution.onRemoteExecute?.(node, payload);
-							}
-						: undefined,
+					pushLayer: handlers.pushLayer,
+					onExecute: handlers.onExecute,
+					onRemoteExecute: handlers.onRemoteExecute,
 					isOffline,
-					onCopy: async () => {
-						handleCopy();
-					},
+					boardOnlyOffline,
+					onCopy: handlers.onCopy,
 					onOpenInfo: onOpenInfo,
 					onExplain: onExplain,
 					onFilterLogs: onFilterLogs,
 					executionMode: board.execution_mode,
-					...carriedPresence(node.id),
+					...carriedPresence(oldNodesById, node.id),
 				},
 				selected: selected.has(node.id),
 			});
@@ -869,32 +954,9 @@ export function parseBoard(
 								pins: inputNodePins,
 							},
 							hash: layer.hash ?? -1,
-							pushLayer: async (layer: ILayer) => {
-								pushLayer(layer);
-							},
-							onLayerUpdate: async (layer: ILayer) => {
-								if (version !== undefined) return;
-								// These boundary nodes live *inside* the layer, so `currentLayer` is
-								// the layer itself — its own parent is the only correct value here.
-								const command = upsertLayerCommand({
-									current_layer: layer.parent_id ?? null,
-									layer: layer,
-									node_ids: [],
-								});
-								await executeCommand(command, false);
-							},
-							onLayerRemove: async (layer: ILayer, preserve_nodes: boolean) => {
-								if (version !== undefined) return;
-								const command = removeLayerCommand({
-									layer,
-									child_layers: [],
-									layer_nodes: [],
-									layers: [],
-									nodes: [],
-									preserve_nodes,
-								});
-								await executeCommand(command, false);
-							},
+							pushLayer: handlers.pushLayer,
+							onLayerUpdate: handlers.onBoundaryLayerUpdate,
+							onLayerRemove: handlers.onLayerRemove,
 						},
 						selected: selected.has(layer.id + "-input"),
 					});
@@ -921,32 +983,9 @@ export function parseBoard(
 								pins: returnNodePins,
 							},
 							hash: layer.hash ?? -1,
-							pushLayer: async (layer: ILayer) => {
-								pushLayer(layer);
-							},
-							onLayerUpdate: async (layer: ILayer) => {
-								if (version !== undefined) return;
-								// These boundary nodes live *inside* the layer, so `currentLayer` is
-								// the layer itself — its own parent is the only correct value here.
-								const command = upsertLayerCommand({
-									current_layer: layer.parent_id ?? null,
-									layer: layer,
-									node_ids: [],
-								});
-								await executeCommand(command, false);
-							},
-							onLayerRemove: async (layer: ILayer, preserve_nodes: boolean) => {
-								if (version !== undefined) return;
-								const command = removeLayerCommand({
-									layer,
-									child_layers: [],
-									layer_nodes: [],
-									layers: [],
-									nodes: [],
-									preserve_nodes,
-								});
-								await executeCommand(command, false);
-							},
+							pushLayer: handlers.pushLayer,
+							onLayerUpdate: handlers.onBoundaryLayerUpdate,
+							onLayerRemove: handlers.onLayerRemove,
 						},
 						selected: selected.has(layer.id + "-return"),
 					});
@@ -981,31 +1020,10 @@ export function parseBoard(
 					hash: layer.hash ?? -1,
 					version: version,
 					pinLookup: lookup,
-					...carriedPresence(layer.id),
-					pushLayer: async (layer: ILayer) => {
-						pushLayer(layer);
-					},
-					onLayerUpdate: async (layer: ILayer) => {
-						if (version !== undefined) return;
-						const command = upsertLayerCommand({
-							current_layer: currentLayer,
-							layer: layer,
-							node_ids: [],
-						});
-						await executeCommand(command, false);
-					},
-					onLayerRemove: async (layer: ILayer, preserve_nodes: boolean) => {
-						if (version !== undefined) return;
-						const command = removeLayerCommand({
-							layer,
-							child_layers: [],
-							layer_nodes: [],
-							layers: [],
-							nodes: [],
-							preserve_nodes,
-						});
-						await executeCommand(command, false);
-					},
+					...carriedPresence(oldNodesById, layer.id),
+					pushLayer: handlers.pushLayer,
+					onLayerUpdate: handlers.onLayerUpdate,
+					onLayerRemove: handlers.onLayerRemove,
 					onExplain: onExplain,
 				},
 				selected: selected.has(layer.id),
@@ -1225,19 +1243,8 @@ export function parseBoard(
 				boardRef: boardRef,
 				comment: { ...comment, is_locked: comment.is_locked ?? false },
 				presignedUrl: comment.presigned_url,
-				onUpsert: async (comment: IComment) => {
-					if (typeof version !== "undefined")
-						throw new Error("Historical board versions are read-only.");
-					const command = upsertCommentCommand({
-						comment: comment,
-						current_layer: currentLayer,
-					});
-					await executeCommand(command, false);
-				},
-				onOpenInCode:
-					comment.node_id && onOpenCommentInCode
-						? () => onOpenCommentInCode(comment)
-						: undefined,
+				onUpsert: handlers.onCommentUpsert,
+				onOpenInCode: handlers.commentInCode(comment),
 			},
 			selected: selected.has(comment.id),
 		});

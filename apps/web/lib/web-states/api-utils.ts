@@ -33,6 +33,7 @@ const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"fork",
 	"graph",
 	"invoke",
+	"locked",
 	"nodes",
 	"notifications",
 	"packages",
@@ -202,8 +203,9 @@ export async function apiFetch<T>(
 export async function apiGet<T>(
 	path: string,
 	auth?: AuthContextProps,
+	options?: RequestInit,
 ): Promise<T> {
-	return apiFetch<T>(path, { method: "GET" }, auth);
+	return apiFetch<T>(path, { ...options, method: "GET" }, auth);
 }
 
 export async function apiPost<T>(

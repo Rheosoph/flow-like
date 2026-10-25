@@ -97,8 +97,10 @@ impl ReportRunRequest {
             log_level: meta.log_level,
             start: meta.start,
             end: meta.end,
-            error_message: (meta.log_level >= LogLevel::Error.to_u8())
-                .then(|| format!("Local run failed with log_level {}", meta.log_level)),
+            error_message: meta.error_message.clone().or_else(|| {
+                (meta.log_level >= LogLevel::Error.to_u8())
+                    .then(|| format!("Local run failed with log_level {}", meta.log_level))
+            }),
             event_version: meta.event_version.clone(),
             nodes: meta.nodes.clone(),
             logs: meta.logs,
@@ -239,6 +241,7 @@ impl QueuedReport {
             event_version: self.report.event_version.clone(),
             event_id: self.report.event_id.clone().unwrap_or_default(),
             payload: Vec::new(),
+            error_message: None,
             is_remote: false,
         }
     }
@@ -922,6 +925,7 @@ mod tests {
             event_version: None,
             event_id: "event".to_string(),
             payload: Vec::new(),
+            error_message: None,
             is_remote: false,
         }
     }
@@ -1037,6 +1041,30 @@ mod tests {
         assert!(!upload(RunStatus::Failed, 2));
         assert!(!upload(RunStatus::Stopped, 4));
         assert!(!upload(RunStatus::Success, 3));
+    }
+
+    #[test]
+    fn reports_carry_the_recorded_failure_reason() {
+        assert_eq!(
+            ReportRunRequest::from_meta(&meta("run", 1)).error_message,
+            None
+        );
+        assert_eq!(
+            ReportRunRequest::from_meta(&meta("run", 3))
+                .error_message
+                .as_deref(),
+            Some("Local run failed with log_level 3")
+        );
+        let rejected = LogMeta {
+            error_message: Some("payload does not match the event schema".to_string()),
+            ..meta("run", 4)
+        };
+        assert_eq!(
+            ReportRunRequest::from_meta(&rejected)
+                .error_message
+                .as_deref(),
+            Some("payload does not match the event schema")
+        );
     }
 
     #[test]

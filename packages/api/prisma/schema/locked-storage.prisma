@@ -1,0 +1,77 @@
+/// A write-once file in the locked bucket (Revisionssicherheit). The row is the
+/// index of the file; every byte lives in an immutable `LockedItemVersion` object.
+/// No foreign keys: records outlive app and user deletion for as long as their
+/// objects are retained.
+model LockedItem {
+  id            String   @id
+  appId         String
+  /// PROJECT | USER
+  scope         String   @default("PROJECT")
+  /// Owner of a USER item; null for PROJECT items.
+  ownerId       String?
+  /// Lowercased scope, owner, folder and name. Unique per app.
+  pathKey       String
+  name          String
+  folder        String   @default("")
+  contentType   String?
+  /// Highest committed version number; 0 until the first upload is committed.
+  latestVersion Int      @default(0)
+  /// Size of the newest version that is still stored.
+  latestSize    BigInt   @default(0)
+  /// Committed versions that are still stored (not purged).
+  liveVersions  Int      @default(0)
+  /// Bytes of all stored versions, charged to the app's storage payer.
+  liveSize      BigInt   @default(0)
+  metadata      Json?
+  createdBy     String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([appId, pathKey])
+  @@index([appId, scope, folder])
+  @@index([appId, ownerId])
+}
+
+/// One immutable object of a locked item. `version` is assigned when the upload
+/// is committed, so abandoned uploads never leave gaps in the numbering.
+model LockedItemVersion {
+  id                   String    @id
+  itemId               String
+  appId                String
+  version              Int?
+  /// PENDING | LOCKED | PURGED
+  status               String    @default("PENDING")
+  objectKey            String
+  /// S3 VersionId, GCS generation or Azure versionid of the stored object.
+  providerVersionId    String?
+  fileName             String
+  contentType          String
+  size                 BigInt
+  /// Hex SHA-256 the uploader declared; `checksumVerified` once the store confirmed it.
+  sha256               String
+  checksumVerified     Boolean   @default(false)
+  /// GOVERNANCE | COMPLIANCE
+  retentionMode        String
+  retainUntil          DateTime  @db.Timestamptz(3)
+  /// OBJECT (lock set on the object) | BUCKET (bucket-level retention policy)
+  enforcement          String
+  legalHold            Boolean   @default(false)
+  /// The maintenance sweep purges the version once retention ends and no legal hold
+  /// remains. Null (rows from before the column) keeps it like false.
+  deleteAfterRetention Boolean?
+  comment              String?
+  metadata             Json?
+  uploadedBy           String
+  uploadExpiresAt      DateTime  @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(3)
+  lockedAt             DateTime? @db.Timestamptz(3)
+  /// Set when the object was deleted after its retention ended; the row stays as evidence.
+  purgedAt             DateTime? @db.Timestamptz(3)
+  purgedBy             String?
+
+  @@unique([itemId, version])
+  @@index([itemId, status])
+  @@index([status, uploadExpiresAt])
+  @@index([appId, status, retainUntil])
+  @@index([status, deleteAfterRetention, retainUntil])
+}

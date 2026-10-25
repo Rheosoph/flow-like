@@ -362,6 +362,8 @@ async fn spawn_message_reader(
             for entry in connected_nodes.iter() {
                 let (_id, ctx) = entry.pair();
                 let mut ctx = ctx.lock().await;
+                let scope = ctx.new_byte_scope();
+                let previous_scope = ctx.enter_byte_scope(&scope);
 
                 if single_string {
                     if let Ok(text) = std::str::from_utf8(&data) {
@@ -393,7 +395,7 @@ async fn spawn_message_reader(
                         .map(|p| (*p).clone())
                         .collect();
                     if let Some(pin) = pins.first() {
-                        pin.set_value(json!(data)).await;
+                        pin.set_value(ctx.bytes_value(data.clone()).await).await;
                     }
                 } else {
                     let payload_pins: Vec<_> = ctx
@@ -403,8 +405,9 @@ async fn spawn_message_reader(
                         .filter(|p| p.pin_type == PinType::Output && p.name.as_ref() == "payload")
                         .map(|p| (*p).clone())
                         .collect();
+                    let payload = ctx.bytes_value(data.clone()).await;
                     for pin in payload_pins {
-                        pin.set_value(json!(data)).await;
+                        pin.set_value(payload.clone()).await;
                     }
                 }
 
@@ -417,6 +420,7 @@ async fn spawn_message_reader(
                 if let Err(e) = run {
                     tracing::warn!("TCP on_message handler error: {:?}", e);
                 }
+                ctx.restore_byte_scope(previous_scope);
             }
         }
 

@@ -13,6 +13,7 @@ import {
 	type LucideIcon,
 	MessageCircleDashedIcon,
 	MessageCircleIcon,
+	MonitorIcon,
 	PlayCircleIcon,
 	SearchIcon,
 	VariableIcon,
@@ -1062,6 +1063,26 @@ function PinDot({
 	);
 }
 
+function useLocalOnlyLabel() {
+	const { t } = useTranslation("flow");
+	return t(
+		"paletteLocalOnly",
+		"Runs only in the Flow-Like app, not in the browser or the cloud",
+	);
+}
+
+function LocalOnlyMark() {
+	const label = useLocalOnlyLabel();
+	return (
+		<span title={label} className="-ml-1 inline-flex shrink-0">
+			<MonitorIcon
+				aria-label={label}
+				className="size-3 text-muted-foreground"
+			/>
+		</span>
+	);
+}
+
 function LandingHint({ fit }: Readonly<{ fit?: { target?: IPin } }>) {
 	if (!fit?.target) return null;
 	return (
@@ -1313,6 +1334,7 @@ const PaletteRowView = memo(function PaletteRowView({
 						<span className="truncate">
 							<MatchText text={entry.node.friendly_name} query={query} />
 						</span>
+						{entry.node.only_offline && <LocalOnlyMark />}
 						<LandingHint fit={fit} />
 					</span>
 					<span className="flex min-w-0 items-baseline gap-2.5 text-[11px] text-muted-foreground">
@@ -1332,6 +1354,7 @@ const PaletteRowView = memo(function PaletteRowView({
 			<span className="truncate" title={entry.node.friendly_name}>
 				{entry.node.friendly_name}
 			</span>
+			{entry.node.only_offline && <LocalOnlyMark />}
 			{fit ? (
 				<LandingHint fit={fit} />
 			) : (
@@ -2149,6 +2172,7 @@ function NodeDetail({
 	drop,
 }: Readonly<{ entry: PaletteEntry; drop?: NodePaletteDrop }>) {
 	const { t } = useTranslation("flow");
+	const localOnlyLabel = useLocalOnlyLabel();
 	const fit = drop?.fits.get(entry.key);
 	const { node } = entry;
 	return (
@@ -2170,6 +2194,12 @@ function NodeDetail({
 					</span>
 				)}
 			</p>
+			{node.only_offline && (
+				<p className="mt-2 flex items-center gap-1.5 text-[11.5px] text-muted-foreground leading-snug">
+					<MonitorIcon className="size-3.5 shrink-0" />
+					{localOnlyLabel}
+				</p>
+			)}
 			{node.scores && <QualityScores scores={node.scores} />}
 		</>
 	);

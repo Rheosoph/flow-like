@@ -20,6 +20,7 @@ import {
 	type IGenericCommand,
 	type IGraphState,
 	type IHelperState,
+	type ILockedStorageState,
 	type IPageState,
 	type IProfile,
 	type IQueryState,
@@ -60,7 +61,7 @@ import { createId } from "@paralleldrive/cuid2";
 import Dexie, { type EntityTable } from "dexie";
 import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
-import { appsDB } from "../lib/apps-db";
+import { type IShortcut, appsDB } from "../lib/apps-db";
 import { installNativeDeviceAdapter } from "../lib/device-adapter";
 import { ExecutionAuthBridge } from "../lib/execution-auth";
 import {
@@ -97,6 +98,7 @@ import { DatabaseState } from "./tauri-provider/db-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
+import { LockedStorageState } from "./tauri-provider/locked-storage-state";
 import { OfflineWritesState } from "./tauri-provider/offline-writes-state";
 import { PageState } from "./tauri-provider/page-state";
 import { QueryState } from "./tauri-provider/query-state";
@@ -158,6 +160,7 @@ export class TauriBackend implements IBackendState {
 	roleState: IRoleState;
 	routeState: IAppRouteState;
 	storageState: IStorageState;
+	lockedStorageState: ILockedStorageState;
 	teamState: ITeamState;
 	templateState: ITemplateState;
 	userState: IUserState;
@@ -189,7 +192,7 @@ export class TauriBackend implements IBackendState {
 	);
 
 	constructor(
-		public readonly backgroundTaskHandler: (task: Promise<any>) => void,
+		public readonly backgroundTaskHandler: (task: Promise<unknown>) => void,
 		public queryClient?: QueryClient,
 		auth?: AuthContextProps,
 		public profile?: IProfile,
@@ -208,6 +211,7 @@ export class TauriBackend implements IBackendState {
 		this.roleState = new RoleState(this);
 		this.routeState = new RouteState(this);
 		this.storageState = new StorageState(this);
+		this.lockedStorageState = new LockedStorageState(this);
 		this.teamState = new TeamState(this);
 		this.templateState = new TemplateState(this);
 		this.userState = new UserState(this);
@@ -1604,7 +1608,7 @@ export function ProfileSyncer({
 						.map((v) => v.appId),
 				);
 
-				const profileShortcuts: Map<string, any[]> = new Map();
+				const profileShortcuts = new Map<string, IShortcut[]>();
 				for (const p of Object.values(rawProfiles)) {
 					const profileId = p.hub_profile.id;
 					if (profileId) {
@@ -1751,28 +1755,27 @@ export function ProfileSyncer({
 						errorBody,
 					);
 					return;
-				} else {
-					const synced = await readApiJson<Partial<SyncResult> | null>(
-						response,
-						response.url,
-					);
-					// Without the created id remaps, the pull below would delete each
-					// freshly created profile as stale under its local id.
-					if (!isRecord(synced) || !Array.isArray(synced.created)) {
-						throw new Error("Unexpected profile sync response shape");
-					}
-					result = {
-						synced: asArray(synced.synced),
-						created: synced.created,
-						updated: asArray(synced.updated),
-						skipped: asArray(synced.skipped),
-						deleted: asArray(synced.deleted),
-					};
-					console.log(
-						"[ProfileSync] Sync result:",
-						JSON.stringify(result, null, 2),
-					);
 				}
+				const synced = await readApiJson<Partial<SyncResult> | null>(
+					response,
+					response.url,
+				);
+				// Without the created id remaps, the pull below would delete each
+				// freshly created profile as stale under its local id.
+				if (!isRecord(synced) || !Array.isArray(synced.created)) {
+					throw new Error("Unexpected profile sync response shape");
+				}
+				result = {
+					synced: asArray(synced.synced),
+					created: synced.created,
+					updated: asArray(synced.updated),
+					skipped: asArray(synced.skipped),
+					deleted: asArray(synced.deleted),
+				};
+				console.log(
+					"[ProfileSync] Sync result:",
+					JSON.stringify(result, null, 2),
+				);
 
 				// Delete local profiles that the server reports as soft-deleted (tombstones)
 				for (const deletedId of result.deleted) {
@@ -2089,7 +2092,7 @@ export function ProfileSyncer({
 								string,
 								{
 									hub_profile: IProfile;
-									execution_settings: any;
+									execution_settings: unknown;
 									updated: string;
 									created: string;
 								}
@@ -2266,6 +2269,44 @@ export function ProfileSyncer({
 								);
 							}
 						}
+					}
+
+					if (disposed) return;
+					try {
+						const customBitsResponse = await fetchWithDeadline(
+							`${apiBase}/api/v1/user/bits?device_models=true`,
+							{
+								method: "GET",
+								headers: { Authorization: `Bearer ${accessToken}` },
+							},
+						);
+						if (!customBitsResponse.ok) {
+							throw new Error("Could not check the custom bit library.");
+						}
+						const customBits: unknown = await customBitsResponse.json();
+						if (!Array.isArray(customBits)) {
+							throw new Error("The custom bit library response is invalid.");
+						}
+						const remoteCustomBitIds = customBits.map((bit: unknown) => {
+							if (
+								!isRecord(bit) ||
+								typeof bit.id !== "string" ||
+								!bit.id.trim()
+							) {
+								throw new Error("The custom bit library response is invalid.");
+							}
+							return bit.id;
+						});
+						if (disposed) return;
+						const prunedBits = await invoke<boolean>(
+							"prune_missing_profile_bits",
+							{ hub: apiBase, remoteCustomBitIds },
+						);
+						if (prunedBits && !disposed) {
+							void syncQueueRef.current.request(syncProfiles, true);
+						}
+					} catch (error) {
+						console.warn("Failed to remove missing profile bits:", error);
 					}
 
 					await backend.queryClient?.invalidateQueries({

@@ -1,8 +1,10 @@
 // AI — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -30,13 +32,14 @@ declare namespace agent {
      * @param infiniteContext (optional) — Enable automatic context window management to prevent overflow
      * @param maxContextTokens (optional) — Maximum tokens to retain when truncating (default: 32000)
      * @param contextMode (optional) — How to handle context overflow: 'truncate' (drop old messages) or 'summarize' (LLM compresses history)
+     * @param interactiveUi (optional) — Let the agent answer with interactive UI: an `a2ui` code block in its reply renders inline in the chat, and its buttons can send a follow-up message on the user's behalf
      * @returns chunk — Latest streamed agent chunk (final response)
      * @returns response — Final assistant response produced when the agent halts
      * @returns historyOut — Conversation history enriched with all agent/tool turns
      * @returns stats — Token usage, cost, and model statistics
      * @impure has side effects / drives control flow
      */
-    function simple({ model: Struct, history: Struct, maxIter?: int, infiniteContext?: bool, maxContextTokens?: int, contextMode?: string }): { chunk: Struct, response: Struct, historyOut: Struct, stats: Struct };
+    function simple({ model: Struct, history: Struct, maxIter?: int, infiniteContext?: bool, maxContextTokens?: int, contextMode?: string, interactiveUi?: bool }): { chunk: Struct, response: Struct, historyOut: Struct, stats: Struct };
 
     /**
      * Executes an Agent with streaming, emitting chunks in real-time
@@ -68,6 +71,14 @@ declare namespace agent {
     function addDatafusion(this: Agent, { agent: Struct, session: Struct, description: string, tableDescriptions: Struct, exampleQueries: any, discoverSchemas?: bool }): Struct;
 
     /**
+     * Lets the agent answer with interactive UI: a reply can contain an `a2ui` code block that the chat renders inline as cards, forms, tables or charts, and its buttons can send a follow-up message on the user's behalf
+     * @node agent_enable_interactive_ui @receiver agent_in @alias agentEnableInteractiveUi
+     * @param agentIn — Agent object to enable interactive UI replies on (receiver: `this` in `x.enableInteractiveUi(...)`)
+     * @returns agentOut — Agent object whose replies may contain inline interactive UI
+     */
+    function enableInteractiveUi(this: Agent, { agentIn: Struct }): Struct;
+
+    /**
      * Creates an Agent object from a model Bit with configuration
      * @node agent_from_model @alias agentFromModel
      * @param model — LLM model Bit that will power the agent
@@ -88,6 +99,16 @@ declare namespace agent {
      * @impure has side effects / drives control flow
      */
     function lazyRegisterFunctionTools(this: Agent, { agentIn: Struct, model: Struct }): Struct;
+
+    /**
+     * Gives the agent the tools exposed by the document open in a page's file editor. Reopening the document requires registering its new session.
+     * @node agent_register_editor_mcp_tools @receiver agent_in @alias agentRegisterEditorMcpTools
+     * @param agentIn — Agent to receive the editor tools (receiver: `this` in `x.registerEditorMcpTools(...)`)
+     * @param elementRef — Connect Element from Get Element, select the file editor, or use its full surface/component reference
+     * @param tools (optional) — Exact MCP tool names to expose. Leave empty to expose all tools provided by this editor.
+     * @returns agentOut — Agent connected to this live editor document
+     */
+    function registerEditorMcpTools(this: Agent, { agentIn: Struct, elementRef: any, tools?: string[] }): Struct;
 
     /**
      * Adds referenced Flow-Like functions as callable tool references to an Agent
@@ -238,6 +259,13 @@ declare namespace ai {
      * @impure has side effects / drives control flow
      */
     function findModel({ preferences?: Struct }): Struct;
+
+    /**
+     * System prompt section that teaches a model to answer with interactive UI: an `a2ui` code block in its reply renders inline in the chat, and its buttons can send a follow-up message on the user's behalf. Append it to your own system prompt (Invoke Simple, Set System Message); agents use Enable Interactive UI instead
+     * @node ai_generative_interactive_ui_instructions @alias aiGenerativeInteractiveUiInstructions
+     * @returns instructions — Markdown prompt section with the `a2ui` fence rules, an example and the component reference
+     */
+    function interactiveUiInstructions(): string;
 
     /**
      * Invokes the configured model with the provided chat history. Set history streaming off to preserve and replay structured media responses.
@@ -566,7 +594,7 @@ declare namespace ai {
          * @param kind (optional) — Which media input to prepare
          * @param maxFrames (optional) — Maximum uniformly sampled video frames
          * @param includeAudio (optional) — Include the video's audio track; missing audio returns an error
-         * @returns content — Decoded media for Embed Content
+         * @returns content — Content parts for Embed Content
          * @impure has side effects / drives control flow
          */
         function prepareMedia({ source: Struct, encoded?: bool, kind?: string, maxFrames?: int, includeAudio?: bool }): Struct;
@@ -902,6 +930,7 @@ declare namespace ai {
          * @param pagesPerBatch (optional) — Number of PDF pages to process in parallel (higher = faster but uses more memory).
          * @param temperature (optional) — LLM temperature (0.0 = deterministic, 1.0 = creative). Lower is better for extraction.
          * @param maxTokens (optional) — Maximum output tokens per LLM call. Leave at 0 for model default. Set lower for unreliable models.
+         * @param thinking (optional) — Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.
          * @param promptPreset (optional) — Prompt contract of the selected model. Document-parsing models only answer to their own trained prompt: • Default — a tuned general prompt for vision models (GPT-4o, Claude, Gemini, Qwen-VL) • Unlimited-OCR — baidu/Unlimited-OCR, self-hosted via vLLM • DeepSeek-OCR — deepseek-ai/DeepSeek-OCR and -OCR-2 • olmOCR — allenai/olmOCR-2, emits YAML front matter • Nanonets-OCR — nanonets/Nanonets-OCR-s and -OCR2 • dots.ocr — plain text extraction; use Page Prompt for its JSON layout mode • Granite-Docling — IBM Granite-Docling and SmolDocling, emits DocTags • PaddleOCR-VL — PaddlePaddle/PaddleOCR-VL  Every preset except Default forces full-page OCR and one image per request. Recommended temperature is 0.0 for all of them except olmOCR (0.1).
          * @param pagePrompt (optional) — Prompt for converting a rendered document page to text. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
          * @param imagePrompt (optional) — Prompt for describing a standalone or embedded image. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
@@ -910,7 +939,7 @@ declare namespace ai {
          * @returns pages — Extracted document pages with AI-generated descriptions and images.
          * @impure has side effects / drives control flow
          */
-        function extractDocumentAi({ file: Struct, model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
+        function extractDocumentAi({ file: Struct, model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, thinking?: string, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
 
         /**
          * Extracts text and content from multiple documents in parallel.
@@ -932,6 +961,7 @@ declare namespace ai {
          * @param pagesPerBatch (optional) — Number of PDF pages to process in parallel (higher = faster but uses more memory).
          * @param temperature (optional) — LLM temperature (0.0 = deterministic, 1.0 = creative). Lower is better for extraction.
          * @param maxTokens (optional) — Maximum output tokens per LLM call. Leave at 0 for model default. Set lower for unreliable models.
+         * @param thinking (optional) — Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.
          * @param promptPreset (optional) — Prompt contract of the selected model. Document-parsing models only answer to their own trained prompt: • Default — a tuned general prompt for vision models (GPT-4o, Claude, Gemini, Qwen-VL) • Unlimited-OCR — baidu/Unlimited-OCR, self-hosted via vLLM • DeepSeek-OCR — deepseek-ai/DeepSeek-OCR and -OCR-2 • olmOCR — allenai/olmOCR-2, emits YAML front matter • Nanonets-OCR — nanonets/Nanonets-OCR-s and -OCR2 • dots.ocr — plain text extraction; use Page Prompt for its JSON layout mode • Granite-Docling — IBM Granite-Docling and SmolDocling, emits DocTags • PaddleOCR-VL — PaddlePaddle/PaddleOCR-VL  Every preset except Default forces full-page OCR and one image per request. Recommended temperature is 0.0 for all of them except olmOCR (0.1).
          * @param pagePrompt (optional) — Prompt for converting a rendered document page to text. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
          * @param imagePrompt (optional) — Prompt for describing a standalone or embedded image. Switching the preset rewrites this unless you have typed your own. Leave empty to fall back to the preset.
@@ -940,7 +970,7 @@ declare namespace ai {
          * @returns results — Array of extracted document pages with AI descriptions for each file.
          * @impure has side effects / drives control flow
          */
-        function extractDocumentsAi({ files: Struct[], model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
+        function extractDocumentsAi({ files: Struct[], model: Struct, extractImages?: bool, imagesPerMessage?: int, pagesPerBatch?: int, temperature?: float, maxTokens?: int, thinking?: string, promptPreset?: string, pagePrompt?: string, imagePrompt?: string, batchPrompt?: string, forceOcr?: bool }): Struct[];
 
         /**
          * Extracts keywords from text using an LLM. The AI understands context and semantics, providing high-quality keyword extraction for complex or domain-specific content.
@@ -1020,6 +1050,30 @@ declare namespace ai {
          * @impure has side effects / drives control flow
          */
         function summarizeDocument({ pages: Struct[], model: Struct, detailLevel?: string, includeToc?: bool, strategy?: string, densification?: string, maxContextTokens?: int, chunkOverlap?: int, trackEntities?: bool, parallelRequests?: int, densitySteps?: int }): Struct;
+
+        /**
+         * Summarizes a document (PDF, DOCX, PPTX, XLSX, HTML, images, etc.) straight from the file: the model reads every page (text, page images, figures) and writes a summary, key points with page citations and short notes per page. Pages are read, never transcribed, so it is much faster and cheaper than extracting the document first and summarizing the text afterwards.
+         * @node ai_processing_summarize_file @alias aiProcessingSummarizeFile
+         * @param file — Document to summarize (PDF, DOCX, PPTX, XLSX, HTML, EPUB, images, etc.).
+         * @param model — Vision-capable model. Scanned pages, slides and figures are sent as images; a text-only model only works for documents with a text layer and Include Images turned off.
+         * @param focus (optional) — What the summary should concentrate on, e.g. "financial risks" or a question. Leave empty for a general summary.
+         * @param language (optional) — Language of the summary and notes, e.g. "English". Leave empty to write in the document's language.
+         * @param strategy (optional) — How long documents are read: • MapReduce — page windows are read in parallel, fastest • Sequential — windows are read in order with a running summary, so notes can resolve references to earlier pages (narratives, contracts, documents that build on themselves) Short documents are always read and summarized in a single request.
+         * @param summaryWords (optional) — Target length of the summary in words (at least 20).
+         * @param maxKeyPoints (optional) — Maximum number of key points. 0 disables them.
+         * @param includeImages (optional) — Send embedded images (figures, photos, slide graphics) to the model. Rendered pages of scanned or image-heavy PDFs are always sent.
+         * @param parallelRequests (optional) — Maximum number of concurrent model requests.
+         * @param temperature (optional) — Model temperature. Models that only accept their default temperature are retried without one automatically.
+         * @param maxTokens (optional) — Maximum output tokens per model request. Leave at 0 for the model default; leave headroom for reasoning models, whose thinking counts as output.
+         * @param thinking (optional) — Reasoning effort of models that think before they answer: off, low, mid or high. Reading pages rarely needs deep reasoning and thinking is billed as output, so low keeps runs fast and cheap. A level the model rejects is left out with a warning; models without a reasoning setting ignore it.
+         * @returns summary — The document summary as markdown prose.
+         * @returns keyPoints — The most important points, each citing its pages.
+         * @returns notes — Concise notes for every page that was read, in document order.
+         * @returns markdown — Summary, key points and page notes rendered as one markdown document.
+         * @returns failedPages — Pages that could not be read completely, so the summary may not cover them. Empty when every page was read.
+         * @impure has side effects / drives control flow
+         */
+        function summarizeFile({ file: Struct, model: Struct, focus?: string, language?: string, strategy?: string, summaryWords?: int, maxKeyPoints?: int, includeImages?: bool, parallelRequests?: int, temperature?: float, maxTokens?: int, thinking?: string }): { summary: string, keyPoints: string[], notes: Struct[], markdown: string, failedPages: int[] };
     }
 
     namespace provider {

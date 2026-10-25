@@ -136,8 +136,9 @@ impl ZipSource {
         // cursor, which is why `file` is only ever read at explicit offsets.
         let archive = ZipArchive::new(BufReader::new(file.try_clone()?))?;
 
-        let root = archive
-            .file_names()
+        let names = archive.file_names().collect::<Result<Vec<_>, _>>()?;
+        let root = names
+            .iter()
             .filter_map(|name| name.strip_suffix("data.pkl"))
             .filter(|root| root.is_empty() || root.ends_with('/'))
             .min_by_key(|root| root.len())
@@ -163,6 +164,8 @@ impl ZipSource {
         let mut archive = lock_ignoring_poison(&self.archive);
         let indices: Vec<usize> = archive
             .file_names()
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
             .filter(|name| name.starts_with(&data_prefix) && !name.ends_with('/'))
             .filter_map(|name| archive.index_for_name(name))
             .collect();

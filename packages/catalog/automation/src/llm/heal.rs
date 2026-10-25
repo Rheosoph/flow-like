@@ -116,6 +116,7 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
             "Automation/LLM/Healing",
         );
         node.set_flowscript_name("automation.llm", "diagnoseAndHeal");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/bot-fix.svg");
         node.set_version(5);
 

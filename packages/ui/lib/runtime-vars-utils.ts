@@ -1,5 +1,6 @@
 import { normalizeGeometryValue } from "./geometry";
 import type { IBoard, IVariable } from "./schema/flow/board";
+import type { INode } from "./schema/flow/node";
 import { IValueType, IVariableType } from "./schema/flow/pin";
 import { convertJsonToUint8Array, parseUint8ArrayToJson } from "./uint8";
 
@@ -78,10 +79,17 @@ export function getRuntimeConfiguredVariableIds(board: IBoard): string[] {
 }
 
 /**
- * Check if a board has any nodes that require offline-only execution
+ * Check if a board has any nodes that require offline-only execution. Servers refuse such a
+ * board whole, so layer nodes count as much as root ones.
  */
 export function hasOfflineOnlyNodes(board: IBoard): boolean {
-	return Object.values(board.nodes).some((node) => node.only_offline);
+	const isOfflineOnly = (node: INode) => Boolean(node.only_offline);
+	return (
+		Object.values(board.nodes).some(isOfflineOnly) ||
+		Object.values(board.layers ?? {}).some((layer) =>
+			Object.values(layer.nodes ?? {}).some(isOfflineOnly),
+		)
+	);
 }
 
 /**

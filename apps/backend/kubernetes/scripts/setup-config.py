@@ -310,6 +310,7 @@ def generate(namespace, release, image_pull_secrets=()):
     audit["database"] = {"existingSecret": audit_database}
     audit["exportSecret"] = system
     values["audit"] = audit
+    values["lockedStorage"] = {"bucket": os.environ.get("LOCKED_BUCKET", "")}
     password = os.environ.get("REDIS_PASSWORD") or secrets.token_hex(32)
     redis_url = os.environ.get("REDIS_URL")
     if redis_url:

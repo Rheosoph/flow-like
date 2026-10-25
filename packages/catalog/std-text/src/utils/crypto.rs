@@ -91,7 +91,7 @@ impl NodeLogic for GenerateEncryptionKeyNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         let key = random_vec(KEY_LEN)?;
-        context.set_pin_value("key", json!(key)).await?;
+        context.set_pin_bytes("key", key).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
@@ -583,7 +583,7 @@ async fn run_decrypt(
     key_array.zeroize();
     key.zeroize();
 
-    context.set_pin_value("plaintext", json!(result?)).await?;
+    context.set_pin_bytes("plaintext", result?).await?;
     context.activate_exec_pin("exec_out").await?;
     Ok(())
 }

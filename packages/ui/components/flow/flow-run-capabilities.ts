@@ -5,7 +5,10 @@ export interface FlowRunCapabilityInputs {
 	/** Offline apps can never reach the server; hosts without remote wiring pass `hasRemoteExecute: false`. */
 	isOffline?: boolean;
 	hasRemoteExecute: boolean;
+	/** The board holds an `only_offline` node. Servers refuse the whole board, not just that node. */
 	onlyOffline?: boolean | null;
+	/** Hosts whose "local" run still goes to the server (the web) pass `false`. */
+	canExecuteLocally?: boolean;
 }
 
 export interface FlowRunCapabilities {
@@ -23,10 +26,13 @@ export function deriveRunCapabilities({
 	isOffline,
 	hasRemoteExecute,
 	onlyOffline,
+	canExecuteLocally,
 }: FlowRunCapabilityInputs): FlowRunCapabilities {
 	const mode = executionMode ?? IExecutionMode.Hybrid;
 	return {
-		canLocalExecute: mode !== IExecutionMode.Remote,
+		canLocalExecute:
+			mode !== IExecutionMode.Remote &&
+			(!onlyOffline || canExecuteLocally !== false),
 		canRemoteExecute:
 			!isOffline &&
 			hasRemoteExecute &&

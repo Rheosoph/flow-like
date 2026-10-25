@@ -19,7 +19,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, OwnedSemaphorePermit};
 
 /// All events are sent as InterComEvent for consistent frontend handling
@@ -40,6 +40,23 @@ async fn execute_until_deadline<T>(
             let _ = execution.await;
             Err(())
         }
+    }
+}
+
+/// Delivering the tail only blocks while the client is connected but lags
+/// behind; a disconnected client fails the send immediately.
+const STREAM_TAIL_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn flush_stream_tail(intercom_handler: &BufferedInterComHandler) {
+    match tokio::time::timeout(STREAM_TAIL_TIMEOUT, intercom_handler.flush()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "Failed to flush the run's final stream events");
+        }
+        Err(_) => tracing::warn!(
+            timeout_secs = STREAM_TAIL_TIMEOUT.as_secs(),
+            "Dropped the run's final stream events: the client did not drain them in time"
+        ),
     }
 }
 
@@ -551,8 +568,11 @@ async fn execute_inner(
         .min(tokio::time::Instant::now() + runtime_timeout);
     let execution_result =
         execute_until_deadline(run.execute(state.clone()), &cancellation, deadline).await;
-    if let Some(lease) = &quota_lease {
-        let duration_ms = lease.elapsed_ms();
+    let lease_duration_ms = quota_lease.as_ref().map(|lease| lease.elapsed_ms());
+    // The run's last events (a chat's Push Response and chat_out) are still
+    // buffered; deliver them before anything below can return early.
+    flush_stream_tail(&intercom_handler).await;
+    if let (Some(lease), Some(duration_ms)) = (&quota_lease, lease_duration_ms) {
         let status = if execution_result.is_err() {
             "timeout".to_owned()
         } else {
@@ -565,11 +585,6 @@ async fn execute_inner(
         lease.finish(duration_ms, &status).await?;
     }
     channel.close().await;
-
-    // Flush any remaining buffered events
-    tracing::debug!("Flushing remaining buffered intercom events");
-    let _ = tokio::time::timeout(config.callback_timeout(), intercom_handler.flush()).await;
-    tracing::debug!("Intercom flush completed");
 
     match execution_result {
         Ok(log_meta) => {

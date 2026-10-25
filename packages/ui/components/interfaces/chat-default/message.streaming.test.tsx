@@ -101,6 +101,37 @@ describe("assistant streaming", () => {
 	});
 });
 
+describe("a live turn that is only thinking", () => {
+	test("names the thought once instead of stacking indicators", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const message = {
+			id: "a4",
+			timestamp: 0,
+			inner: { role: IRole.Assistant, content: "" },
+			plan_steps: [
+				{
+					id: "step-0",
+					title: "Thinking",
+					status: "progress",
+					reasoning: "Weighing the options.",
+					content_offset: 0,
+				},
+			],
+			current_step_id: "step-0",
+		} as unknown as IMessage;
+
+		await act(async () => {
+			root.render(<MessageComponent loading message={message} />);
+		});
+
+		const text = container.textContent ?? "";
+		expect(text.match(/Thinking/g)).toHaveLength(1);
+		expect(text).not.toContain("0/1");
+		expect(text).not.toContain("Reasoning");
+	});
+});
+
 describe("assistant streaming with inline step anchors", () => {
 	// The real FlowPilot stream anchors plan steps into the text via
 	// content_offset, which routes rendering through buildInlineSegments.

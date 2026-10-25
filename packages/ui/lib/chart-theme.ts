@@ -249,6 +249,39 @@ export function useChartTokens(element?: Element | null): IChartTokens {
 }
 
 /**
+ * Nivo's responsive wrapper is a 0×0 box, so the absolutely positioned tooltip
+ * shrinks to min-content unless it sizes itself; the table parts also have to
+ * undo the global `table`/`td` base styles.
+ */
+const NIVO_TOOLTIP_THEME = {
+	container: {
+		background: "var(--fl-chat-chart-tooltip-background, #14171c)",
+		color: "var(--fl-chat-chart-tooltip-foreground, #e8ebf0)",
+		border: "1px solid var(--fl-chat-chart-tooltip-border, #242a33)",
+		fontSize: 12,
+		lineHeight: 1.4,
+		borderRadius: "0.5rem",
+		padding: "0.375rem 0.5rem",
+		boxShadow: "0 0.75rem 2rem -1rem oklch(0 0 0 / 45%)",
+		width: "max-content",
+		maxWidth: "20rem",
+		overflowWrap: "normal" as const,
+		wordBreak: "normal" as const,
+	},
+	table: { margin: 0 },
+	tableCell: {
+		padding: "0.125rem 0.25rem",
+		border: 0,
+		background: "transparent",
+		verticalAlign: "middle",
+	},
+	tableCellValue: {
+		fontWeight: 600,
+		fontVariantNumeric: "tabular-nums",
+	},
+};
+
+/**
  * Nivo theme built from `var()` references. Safe to build once — the browser
  * re-resolves the variables when the theme changes, so it needs no React state.
  */
@@ -286,17 +319,7 @@ export function getNivoChartTheme(fontSize = 11) {
 			link: { stroke: axis },
 			outline: { stroke: axis },
 		},
-		tooltip: {
-			container: {
-				background: "var(--fl-chat-chart-tooltip-background, #14171c)",
-				color: "var(--fl-chat-chart-tooltip-foreground, #e8ebf0)",
-				border: "1px solid var(--fl-chat-chart-tooltip-border, #242a33)",
-				fontSize: 12,
-				borderRadius: "0.5rem",
-				padding: "0.375rem 0.5rem",
-				boxShadow: "0 0.75rem 2rem -1rem oklch(0 0 0 / 45%)",
-			},
-		},
+		tooltip: NIVO_TOOLTIP_THEME,
 		crosshair: { line: { stroke: "var(--primary)", strokeOpacity: 0.5 } },
 	};
 }

@@ -75,7 +75,7 @@ export function isNativePageBoardUnavailableError(error: unknown): boolean {
  * so every device that never opened the app's flow configuration hits this on
  * its first read. The server holds the authoritative payload in that case.
  */
-export function isNativePageContentUnavailableError(error: unknown): boolean {
+export function isNativePageContentUnavailableError(error: unknown) {
 	const message = nativeErrorMessage(error)?.trim();
 	return Boolean(
 		message?.startsWith("Failed to load page '") &&
@@ -85,9 +85,22 @@ export function isNativePageContentUnavailableError(error: unknown): boolean {
 
 /**
  * Both sides report the page payload's own revision, so equal timestamps mean equal content.
- * A cached page with no revision predates that contract and is refreshed once; a listing entry
+ * A cached page with no revision predates that contract and is refreshed once; a remote
  * without one carries no evidence of a change and is left alone.
  */
+function isRevisionOutdated(cached?: string, remote?: string) {
+	if (!remote) return false;
+	if (!cached) return true;
+
+	// A cached value may predate the API's move to offset-bearing timestamps, so
+	// both sides go through the parser that reads a zone-less string as UTC.
+	const remoteUpdated = parseDateValue(remote)?.getTime();
+	const cachedUpdated = parseDateValue(cached)?.getTime();
+	if (remoteUpdated === undefined || cachedUpdated === undefined) return false;
+
+	return remoteUpdated > cachedUpdated;
+}
+
 export function isCachedPageOutdated(
 	cached: PageListItem | undefined,
 	remote: PageListItem,
@@ -95,20 +108,48 @@ export function isCachedPageOutdated(
 	if (!cached) return true;
 	// An unreadable local payload is worth replacing whatever the revisions claim.
 	if (cached.unavailable) return true;
-	if (!remote.updatedAt) return false;
-	if (!cached.updatedAt) return true;
-
-	// A cached value may predate the API's move to offset-bearing timestamps, so
-	// both sides go through the parser that reads a zone-less string as UTC.
-	const remoteUpdated = parseDateValue(remote.updatedAt)?.getTime();
-	const cachedUpdated = parseDateValue(cached.updatedAt)?.getTime();
-	if (remoteUpdated === undefined || cachedUpdated === undefined) return false;
-
-	return remoteUpdated > cachedUpdated;
+	return isRevisionOutdated(cached.updatedAt, remote.updatedAt);
 }
 
 export class PageState implements IPageState {
+	private readonly localPageSyncs = new Set<string>();
+
 	constructor(private readonly backend: TauriBackend) {}
+
+	/**
+	 * A hosted Page renders the server's payload, but its actions run natively against this
+	 * device's copy, and board sync never carries page payloads. A page edited elsewhere then
+	 * renders actions the device does not hold: every click on one is refused as a stale Page
+	 * action, and the refetch that refusal triggers serves the same server page again.
+	 */
+	private syncLocalPageFromBootstrap(
+		appId: string,
+		bootstrap: IPageBootstrap,
+	): void {
+		const served = bootstrap.page;
+		// A pinned board version runs its immutable snapshot, never the draft written here.
+		if (!served?.id || bootstrap.event.board_version) return;
+		const pageId = served.id;
+		const boardId = served.boardId ?? bootstrap.event.board_id;
+		const key = `${appId}:${pageId}`;
+		if (this.localPageSyncs.has(key)) return;
+		this.localPageSyncs.add(key);
+
+		this.backend.backgroundTaskHandler(
+			(async () => {
+				// Without a local copy the action already runs on the server.
+				const localPage = await invoke<IPage>("get_page", {
+					appId,
+					pageId,
+					boardId,
+				});
+				if (!isRevisionOutdated(localPage.updatedAt, served.updatedAt)) return;
+				await this.revalidateLocalPage(appId, pageId, localPage, boardId);
+			})()
+				.catch(() => {})
+				.finally(() => this.localPageSyncs.delete(key)),
+		);
+	}
 
 	private async getLocalPageBootstrap(
 		appId: string,
@@ -164,6 +205,7 @@ export class PageState implements IPageState {
 		if (!isRecord(bootstrap) || !isRecord(bootstrap.event)) {
 			throw malformedResponseError(path, "a Page bootstrap");
 		}
+		this.syncLocalPageFromBootstrap(appId, bootstrap);
 		return bootstrap;
 	}
 

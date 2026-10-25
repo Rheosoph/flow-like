@@ -595,6 +595,7 @@ mod tests {
             event_version: None,
             event_id: "event".to_string(),
             payload: Vec::new(),
+            error_message: None,
             is_remote: false,
         }
     }

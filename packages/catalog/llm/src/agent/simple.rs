@@ -49,6 +49,10 @@ impl SimpleAgentNode {
         let infinite_context: bool = context.evaluate_pin("infinite_context").await?;
         let max_context_tokens: u64 = context.evaluate_pin("max_context_tokens").await?;
         let context_mode: String = context.evaluate_pin("context_mode").await?;
+        let interactive_ui: bool = context
+            .evaluate_pin("interactive_ui")
+            .await
+            .unwrap_or(false);
 
         // Parse context management mode
         let mode = match context_mode.to_lowercase().as_str() {
@@ -72,6 +76,8 @@ impl SimpleAgentNode {
             agent.enable_infinite_context(Some(max_context_tokens as u32));
             agent.set_context_management_mode(mode);
         }
+
+        agent.generative_ui = interactive_ui;
 
         // Store function references - tools will be generated at execution time
         for referenced_node in referenced_functions {
@@ -125,7 +131,7 @@ impl NodeLogic for SimpleAgentNode {
         node.set_flowscript_name("agent", "simple");
         node.add_icon("/flow/icons/for-each.svg");
         node.set_can_reference_fns(true);
-        node.set_version(6);
+        node.set_version(7);
 
         node.set_scores(
             NodeScores::new()
@@ -194,6 +200,14 @@ impl NodeLogic for SimpleAgentNode {
             VariableType::String,
         )
         .set_default_value(Some(json::json!("truncate")));
+
+        node.add_input_pin(
+            "interactive_ui",
+            "Interactive UI",
+            "Let the agent answer with interactive UI: an `a2ui` code block in its reply renders inline in the chat, and its buttons can send a follow-up message on the user's behalf",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json::json!(false)));
 
         node.add_output_pin(
             "on_stream",

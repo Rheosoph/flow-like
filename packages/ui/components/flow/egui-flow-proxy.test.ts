@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { type Edge, type Node, Position } from "@xyflow/react";
+import { adoptUserNodes, getNodesInside } from "@xyflow/system";
+import { DOM_RENDERER_NODE_BUDGET } from "../../lib/board-canvas/dom-visibility";
 import type { Scene } from "../../lib/board-canvas/scene";
 import {
+	createDomFlowGeometryCache,
 	createNativeFlowProjectionCache,
 	prepareNativeFlowEdges,
 	prepareNativeFlowNodes,
@@ -465,5 +468,98 @@ describe("native projection identity cache", () => {
 		).not.toBe(initial[0]);
 		cache.clear();
 		expect(cache.nodes(fixture.nodes, fixture.scene)[0]).not.toBe(initial[0]);
+	});
+});
+
+describe("DOM renderer geometry seeds", () => {
+	const pin = (id: string, pinType: "Input" | "Output") => ({
+		id,
+		name: id,
+		friendly_name: id,
+		pin_type: pinType,
+		data_type: "Execution",
+		index: 1,
+		connected_to: [],
+		depends_on: [],
+	});
+	const flowNode = (index: number): Node => ({
+		id: `n${index}`,
+		type: "node",
+		position: { x: (index % 30) * 300, y: Math.floor(index / 30) * 200 },
+		data: {
+			node: {
+				id: `n${index}`,
+				name: "log",
+				friendly_name: "Log",
+				pins: {
+					[`in${index}`]: pin(`in${index}`, "Input"),
+					[`out${index}`]: pin(`out${index}`, "Output"),
+				},
+			},
+		},
+	});
+	const board = (count: number) =>
+		Array.from({ length: count }, (_, index) => flowNode(index));
+	const view = { x: 0, y: 0, width: 1200, height: 600 };
+
+	test("small boards keep React Flow's own measurement", () => {
+		const nodes = board(DOM_RENDERER_NODE_BUDGET);
+		expect(createDomFlowGeometryCache()(nodes)).toBe(nodes);
+	});
+
+	test("React Flow mounts only nodes in view once never-measured nodes are seeded", () => {
+		const nodes = board(900);
+		const raw = new Map();
+		expect(adoptUserNodes(nodes, raw, new Map())).toBe(false);
+		// Without bounds React Flow force-renders every node, wherever it is.
+		expect(getNodesInside(raw, view, [0, 0, 1], true)).toHaveLength(900);
+		const seeded = createDomFlowGeometryCache()(nodes);
+		const lookup = new Map();
+		// All nodes count as initialized, so a queued fitView still runs.
+		expect(adoptUserNodes(seeded, lookup, new Map())).toBe(true);
+		expect(getNodesInside(lookup, view, [0, 0, 1], true)).toHaveLength(12);
+		expect(
+			seeded[0].handles?.map((handle) => [handle.id, handle.type]),
+		).toEqual([
+			["in0", "target"],
+			["out0", "source"],
+		]);
+	});
+
+	test("a node's first DOM measurement replaces its estimate for good", () => {
+		const nodes = board(900);
+		const geometry = createDomFlowGeometryCache();
+		const first = geometry(nodes);
+		expect(geometry(nodes)[5]).toBe(first[5]);
+		expect(Number.isInteger(first[5].measured?.width)).toBe(false);
+		const measured = nodes.map((node, index) =>
+			index === 5 ? { ...node, measured: { width: 150, height: 61 } } : node,
+		);
+		const next = geometry(measured);
+		expect(next[5]).toBe(measured[5]);
+		expect(next[5].handles).toBeUndefined();
+		expect(next[6]).toBe(first[6]);
+	});
+
+	test("fixed-size comments are seeded without handles and hidden nodes are left alone", () => {
+		const comment: Node = {
+			id: "comment",
+			type: "commentNode",
+			position: { x: 0, y: 0 },
+			width: 200,
+			height: 80,
+			data: {},
+		};
+		const hidden: Node = { ...flowNode(899), id: "hidden", hidden: true };
+		const seeded = createDomFlowGeometryCache()([
+			...board(DOM_RENDERER_NODE_BUDGET),
+			comment,
+			hidden,
+		]);
+		expect(seeded.at(-2)).toMatchObject({
+			measured: { width: 200.5, height: 80.5 },
+			handles: [],
+		});
+		expect(seeded.at(-1)).toBe(hidden);
 	});
 });

@@ -10,7 +10,7 @@ import {
 	validateContract,
 } from "../src/contract-types";
 import { extractContract, networkInputSchemaErrors } from "../src/extract";
-import { HELLO_WIDGET_CONFIG, tmpDir } from "./helpers";
+import { HELLO_WIDGET_CONFIG, tmpDir, writeSdkWidget } from "./helpers";
 
 const FIXTURE = join(
 	import.meta.dir,
@@ -728,4 +728,114 @@ describe("contract version rule", () => {
 		]);
 		expect(validateContract(canonical)).toEqual([]);
 	});
+});
+
+const FILE_MARKER = { type: "object", "x-flow-like-type": "file" };
+
+function uploadWidget(declarations: string, sections = "{}, Events, {}") {
+	return writeSdkWidget(
+		"flwb-upload",
+		`import { defineWidget, type WidgetFile } from "@flow-like/widget-sdk";
+${declarations}
+export default defineWidget<${sections}>({ id: "upload-widget", name: "Upload", capabilities: { uploads: true } });`,
+	);
+}
+
+const markerKeys = (schema: unknown) =>
+	Object.keys(schema as object).filter(
+		(key) => !["title", "description", "deprecated"].includes(key),
+	);
+
+describe("upload markers", () => {
+	test("WidgetFile in an event payload becomes the file marker, also inside arrays", () => {
+		const { contract } = extractContract(
+			uploadWidget(`interface Events {
+	attached: {
+		/** The picked file */
+		file: WidgetFile;
+		files: WidgetFile[];
+		note: string;
+	};
+	single: WidgetFile;
+}`),
+		);
+		const attached = contract.events.attached?.payloadSchema as {
+			properties: Record<string, Record<string, unknown>>;
+			required: string[];
+		};
+		expect(attached.properties.file).toEqual({
+			...FILE_MARKER,
+			description: "The picked file",
+		});
+		const items = attached.properties.files?.items;
+		expect(items).toMatchObject(FILE_MARKER);
+		expect(markerKeys(items)).toEqual(Object.keys(FILE_MARKER));
+		expect(attached.properties.files).toEqual({ type: "array", items });
+		expect([...attached.required].sort()).toEqual(["file", "files", "note"]);
+		expect(markerKeys(contract.events.single?.payloadSchema)).toEqual(
+			Object.keys(FILE_MARKER),
+		);
+		expect(contractToJson(contract)).not.toContain("$flwFile");
+	}, 30000);
+
+	test("@upload on a non-object type fails extraction", () => {
+		expect(() =>
+			extractContract(
+				uploadWidget(`interface Events {
+	attached: {
+		/** @upload */
+		file: string;
+	};
+}`),
+			),
+		).toThrow("@upload for event 'attached' must annotate an object type");
+		expect(() =>
+			extractContract(
+				uploadWidget(`interface Events {
+	attached: {
+		/** @upload */
+		files: WidgetFile[];
+	};
+}`),
+			),
+		).toThrow("annotate the element type for arrays and maps");
+		expect(() =>
+			extractContract(
+				uploadWidget(`/** @upload pdf */
+interface Pdf { name: string }
+interface Events { attached: Pdf }`),
+			),
+		).toThrow(
+			"Invalid @upload 'pdf' for event 'attached'; the tag takes no value",
+		);
+	}, 30000);
+
+	test("WidgetFile in inputs and queries fails extraction", () => {
+		expect(() =>
+			extractContract(
+				uploadWidget(
+					"interface Inputs { attachment?: WidgetFile }",
+					"Inputs, {}, {}",
+				),
+			),
+		).toThrow(
+			"Input 'attachment' of widget 'upload-widget' cannot carry a WidgetFile",
+		);
+		expect(() =>
+			extractContract(
+				uploadWidget(
+					"interface Queries { show: { args: { files: WidgetFile[] }; returns: void } }",
+					"{}, {}, Queries",
+				),
+			),
+		).toThrow("Query 'show' args cannot carry a WidgetFile");
+		expect(() =>
+			extractContract(
+				uploadWidget(
+					"interface Queries { pick: { args: void; returns: WidgetFile | null } }",
+					"{}, {}, Queries",
+				),
+			),
+		).toThrow("Query 'pick' result cannot carry a WidgetFile");
+	}, 30000);
 });

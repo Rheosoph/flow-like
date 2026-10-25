@@ -65,11 +65,13 @@ impl RetryPolicy {
         if ceiling.is_zero() {
             return ceiling;
         }
+        // Whole-timestamp nanos: the sub-second part alone stays below 1 s, which
+        // silently capped the jitter of any policy whose ceiling exceeds that.
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as u64)
+            .map(|d| d.as_nanos())
             .unwrap_or(0);
-        Duration::from_nanos(nanos % ceiling.as_nanos().max(1) as u64)
+        Duration::from_nanos((nanos % ceiling.as_nanos().max(1)) as u64)
     }
 
     /// The backoff before the next attempt, or `None` when `attempt` (which

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { BoundValue, ForecastChartComponent } from "../types";
 
@@ -67,6 +67,7 @@ describe("A2UI saved forecast rendering", () => {
 						userScoped: { literalBool: true },
 						view: { literalString: "evaluation" },
 						showMetrics: { literalBool: false },
+						showControls: { literalBool: false },
 					}}
 					componentId="outlook"
 					surfaceId="page"
@@ -83,6 +84,7 @@ describe("A2UI saved forecast rendering", () => {
 			userScoped: true,
 			view: "evaluation",
 			showMetrics: false,
+			showControls: false,
 		});
 		expect(elementRef).toHaveBeenCalledWith(host.firstElementChild);
 		expect(onAction).not.toHaveBeenCalled();

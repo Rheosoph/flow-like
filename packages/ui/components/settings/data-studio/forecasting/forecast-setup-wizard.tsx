@@ -95,7 +95,7 @@ export function ForecastSetupWizard({
 							className={cn(
 								"flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40",
 								index === step
-									? "border-orange-500/40 bg-orange-500/10 font-medium"
+									? "border-primary/40 bg-primary/10 font-medium"
 									: "hover:bg-muted",
 							)}
 						>
@@ -160,7 +160,7 @@ export function ForecastSetupWizard({
 								? onRun
 								: () => onStepChange((step + 1) as ForecastSetupStep)
 						}
-						className="gap-2 bg-orange-600 text-white hover:bg-orange-500"
+						className="gap-2"
 					>
 						{step === 3 ? (
 							<>

@@ -13,6 +13,7 @@ import {
 	ShieldCheckIcon,
 	ShieldOffIcon,
 	TriangleAlertIcon,
+	UploadIcon,
 	Volume2Icon,
 } from "lucide-react";
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -69,6 +70,7 @@ import { useMicroWidgetInertWindow } from "./use-micro-widget-inert-window";
 const CAPABILITY_ICONS: Readonly<Record<MicroWidgetCapability, LucideIcon>> = {
 	microphone: MicIcon,
 	downloads: DownloadIcon,
+	uploads: UploadIcon,
 	media: Volume2Icon,
 	workers: CpuIcon,
 	wasm: BinaryIcon,

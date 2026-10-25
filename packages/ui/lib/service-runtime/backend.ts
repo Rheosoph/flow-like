@@ -379,6 +379,7 @@ export function createServiceBackend(
 				return items;
 			},
 		}),
+		lockedStorageState: restricted(),
 		templateState: restricted(),
 		aiState: restricted(),
 		dbState: restricted(),

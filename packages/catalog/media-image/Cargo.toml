@@ -23,7 +23,7 @@ http = "1.4.0"
 ab_glyph = "0.2.29"
 imageproc.workspace = true
 rxing = { version = "0.7.1", features = ["serde", "image"] }
-hayro = { version = "0.5.0", features = ["embed-fonts"], optional = true }
+hayro = { version = "0.8.0", features = ["embed-fonts"], optional = true }
 rayon = { version = "1.11.0", optional = true }
 flow-like-catalog-media-support.workspace = true
 

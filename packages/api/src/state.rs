@@ -32,6 +32,7 @@ use std::{
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
+use tracing::Instrument;
 
 pub use crate::db::DbDialect;
 
@@ -132,6 +133,104 @@ pub(crate) fn segment_base_key(app_id: &str, board_id: &str, token: &str) -> Str
 pub struct CachedBoard {
     pub e_tag: String,
     pub board: Arc<Board>,
+    /// When storage last confirmed `e_tag`.
+    verified_at: parking_lot::Mutex<Instant>,
+    /// Start of the storage read that confirmed this entry. Waiting readers can
+    /// share it only if it started after their own request.
+    verification_started_at: parking_lot::Mutex<Option<Instant>>,
+    /// Pages of a pinned version, as immutable as the version that owns them.
+    version_pages: parking_lot::Mutex<HashMap<String, Arc<flow_like::a2ui::Page>>>,
+    /// Exact-ETag `.board` snapshot of a draft (`ensure_draft_board_snapshot`).
+    pub draft_snapshot: TrustedUntil,
+    /// Board-only prerun authority of a draft (`ensure_draft_prerun_manifest`).
+    pub draft_authority: TrustedUntil,
+}
+
+/// A pinned version's content never changes; revalidating it only bounds how long a deleted
+/// board keeps resolving on this instance.
+const PINNED_BOARD_REVALIDATE_AFTER: Duration = Duration::from_secs(5 * 60);
+
+impl CachedBoard {
+    pub(crate) fn new(e_tag: String, board: Board) -> Self {
+        Self {
+            e_tag,
+            board: Arc::new(board),
+            verified_at: parking_lot::Mutex::new(Instant::now()),
+            verification_started_at: parking_lot::Mutex::new(None),
+            version_pages: parking_lot::Mutex::new(HashMap::new()),
+            draft_snapshot: TrustedUntil::default(),
+            draft_authority: TrustedUntil::default(),
+        }
+    }
+
+    fn verified_recently(&self) -> bool {
+        self.verified_at.lock().elapsed() < PINNED_BOARD_REVALIDATE_AFTER
+    }
+
+    fn mark_verified(&self, started_at: Instant) {
+        *self.verified_at.lock() = Instant::now();
+        *self.verification_started_at.lock() = Some(started_at);
+    }
+
+    fn verified_since(&self, requested_at: Instant) -> bool {
+        self.verification_started_at
+            .lock()
+            .is_some_and(|started_at| started_at > requested_at)
+    }
+
+    /// A page of this pinned version read earlier. Never use it for a draft entry: draft pages
+    /// are saved independently of the board's ETag.
+    pub fn version_page(&self, page_id: &str) -> Option<flow_like::a2ui::Page> {
+        self.version_pages
+            .lock()
+            .get(page_id)
+            .map(|page| (**page).clone())
+    }
+
+    pub fn remember_version_page(&self, page: &flow_like::a2ui::Page) {
+        self.version_pages
+            .lock()
+            .insert(page.id.clone(), Arc::new(page.clone()));
+    }
+}
+
+fn recently_verified_pinned(
+    board_cache: &moka::sync::Cache<String, Arc<CachedBoard>>,
+    cache_key: &str,
+    version: Option<(u32, u32, u32)>,
+) -> Option<Arc<CachedBoard>> {
+    version?;
+    board_cache
+        .get(cache_key)
+        .filter(|entry| entry.verified_recently())
+}
+
+fn verified_board_after_wait(
+    board_cache: &moka::sync::Cache<String, Arc<CachedBoard>>,
+    cache_key: &str,
+    version: Option<(u32, u32, u32)>,
+    requested_at: Instant,
+) -> Option<Arc<CachedBoard>> {
+    board_cache.get(cache_key).filter(|entry| {
+        (version.is_some() && entry.verified_recently()) || entry.verified_since(requested_at)
+    })
+}
+
+/// Until when an object an entry depends on is known to exist without asking storage.
+#[derive(Default)]
+pub struct TrustedUntil(parking_lot::Mutex<Option<std::time::SystemTime>>);
+
+impl TrustedUntil {
+    pub fn holds(&self) -> bool {
+        self.0
+            .lock()
+            .is_some_and(|until| std::time::SystemTime::now() < until)
+    }
+
+    pub fn extend(&self, until: std::time::SystemTime) {
+        let mut current = self.0.lock();
+        *current = Some(current.map_or(until, |current| current.max(until)));
+    }
 }
 
 /// A registry of per-key process-local mutexes that forget themselves once nobody holds them.
@@ -487,21 +586,26 @@ pub struct State {
     /// Which concrete bucket, region and account each of the three stores above points
     /// at. The stores themselves cannot answer that, and every provider metrics API asks.
     pub storage_identity: crate::storage_identity::StorageIdentity,
+    /// The write-once bucket, when `LOCKED_BUCKET` (or a provider variant) is set.
+    pub locked_storage: Option<Arc<crate::locked_storage::LockedStorage>>,
     /// Positive cache for the pre-dispatch compiled-artifact check, keyed by
     /// (app, board, version|etag, registry fingerprint). Entries are
-    /// content-addressed. ETag-bound dispatches revalidate object existence
-    /// because lifecycle cleanup can remove an artifact before this entry.
-    pub compiled_artifact_cache: moka::sync::Cache<String, ()>,
+    /// content-addressed. The value is how long a draft artifact under
+    /// lifecycle-managed `tmp/` is trusted to exist; `None` for immutable
+    /// version artifacts.
+    pub compiled_artifact_cache: moka::sync::Cache<String, Option<std::time::SystemTime>>,
     /// Registries compiled artifacts are fingerprinted against, one per
     /// resolved WASM package set and current node metadata: the built-in
     /// catalog extended with the packages' manifest `Node`s. See
     /// [`State::artifact_registry`].
     pub artifact_registries: moka::sync::Cache<String, Arc<FlowNodeRegistryInner>>,
     /// Prerun manifests keyed by (app, board, version|etag). Content-addressed
-    /// like `compiled_artifact_cache`, so entries never go stale.
+    /// like `compiled_artifact_cache`, so entries never go stale. Keys start with
+    /// `{app_id}:{board_id}:` so deleting a board can drop its entries by prefix.
     pub prerun_manifest_cache:
         moka::sync::Cache<String, Arc<flow_like::flow::compiled::PrerunManifest>>,
     pub response_cache: moka::sync::Cache<String, Value>,
+    pub(crate) execution_usage_cache: crate::routes::usage::cache::UsageCache,
     /// WASM package permission cache: "wasm:{user_id}:{package_id}" -> the
     /// caller's grant. "No access" is never stored.
     pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
@@ -543,6 +647,396 @@ pub struct State {
     /// cache; this only spares a repeat on the same replica the round trip.
     pub trigger_idempotency:
         moka::sync::Cache<String, crate::routes::sink::trigger::ServiceTriggerResponse>,
+}
+
+macro_rules! init_span {
+    ($name:literal) => {
+        tracing::info_span!(target: "flow_like::observability", $name)
+    };
+    (parent: $parent:expr, $name:literal) => {
+        tracing::info_span!(target: "flow_like::observability", parent: $parent, $name)
+    };
+}
+
+type CatalogNodes = Arc<Vec<Arc<dyn NodeLogic>>>;
+
+/// The node catalog and its registry, built on a blocking thread. Both walk every node
+/// definition: CPU work that [`State::new_with_secrets`] overlaps with its network round trips.
+pub struct NodeCatalog(
+    flow_like_types::tokio::task::JoinHandle<(CatalogNodes, FlowNodeRegistryInner)>,
+);
+
+impl NodeCatalog {
+    pub fn spawn(build: impl FnOnce() -> Vec<Arc<dyn NodeLogic>> + Send + 'static) -> Self {
+        Self::spawn_with(|parent| {
+            Arc::new(init_span!(parent: parent, "api.init.catalog").in_scope(build))
+        })
+    }
+
+    fn spawn_with(catalog: impl FnOnce(&tracing::Span) -> CatalogNodes + Send + 'static) -> Self {
+        let parent = tracing::Span::current();
+        Self(flow_like_types::tokio::task::spawn_blocking(move || {
+            let catalog = catalog(&parent);
+            let registry = init_span!(parent: &parent, "api.init.registry")
+                .in_scope(|| FlowNodeRegistryInner::prepare(&catalog));
+            (catalog, registry)
+        }))
+    }
+
+    async fn ready(self) -> (CatalogNodes, FlowNodeRegistryInner) {
+        match self.0.await {
+            Ok(built) => built,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => panic!("building the node catalog was cancelled: {error}"),
+        }
+    }
+}
+
+impl From<CatalogNodes> for NodeCatalog {
+    fn from(catalog: CatalogNodes) -> Self {
+        Self::spawn_with(move |_| catalog)
+    }
+}
+
+struct RuntimeConfig {
+    platform: Hub,
+    mail_automation: crate::runtime_config::mail::MailAutomationConfig,
+    oauth_providers: HashMap<String, OAuthProviderConfig>,
+    openid: OpenIdValidationOverrides,
+}
+
+/// Selects a single complete document before any service initializes. Loader errors carry no
+/// document, filesystem path, or provider details.
+async fn load_runtime_config(secrets: &SecretStore) -> RuntimeConfig {
+    let effective_config = ConfigSource::from_env()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .load(secrets)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mail_automation = crate::runtime_config::mail::MailAutomationConfig::load_or_disabled(
+        effective_config.mail_automation,
+        secrets,
+    )
+    .await;
+    let mut platform = effective_config.hub;
+    crate::runtime_config::configure_mail_capability(&mut platform, mail_automation.enabled);
+    if platform.payments.creation_enabled() {
+        platform
+            .payments
+            .validate()
+            .unwrap_or_else(|error| panic!("Payment creation configuration is invalid: {error}"));
+    }
+    if platform
+        .authentication
+        .as_ref()
+        .is_some_and(|authentication| authentication.variant.eq_ignore_ascii_case("openid"))
+    {
+        openid_validation_settings_for_hub(&platform, &effective_config.openid).unwrap_or_else(
+            |_| panic!("OpenID validation configuration must be complete and exact"),
+        );
+    }
+    RuntimeConfig {
+        platform,
+        mail_automation,
+        oauth_providers: effective_config.oauth_providers,
+        openid: effective_config.openid,
+    }
+}
+
+async fn optional_secret(secrets: &SecretStore, name: &str) -> Option<String> {
+    secrets
+        .get_secret_string(&SecretRef::new(name))
+        .await
+        .ok()
+        .map(|secret| secret.expose_secret().to_string())
+}
+
+struct ServiceSecrets {
+    sink_secret: Option<String>,
+    maintenance_token: Option<String>,
+    encryption_key: [u8; 32],
+}
+
+async fn load_service_secrets(secrets: &SecretStore) -> ServiceSecrets {
+    let sink_secret = optional_secret(secrets, "SINK_SECRET").await;
+
+    if sink_secret.is_none() {
+        tracing::warn!("SINK_SECRET not configured — sink trigger endpoints will be unavailable");
+    }
+
+    let maintenance_token = optional_secret(secrets, "MAINTENANCE_TOKEN")
+        .await
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+        .and_then(|token| {
+            if token.len() < 32 {
+                tracing::error!(
+                    "MAINTENANCE_TOKEN must contain at least 32 bytes — maintenance endpoint disabled"
+                );
+                None
+            } else {
+                Some(token)
+            }
+        });
+
+    if maintenance_token.is_none() {
+        tracing::warn!(
+            "MAINTENANCE_TOKEN not configured — scheduled maintenance endpoint will be unavailable"
+        );
+    }
+
+    let encryption_key = {
+        let key_material = secrets
+            .get_secret_string(&SecretRef::new("SINK_TOKEN_ENCRYPTION_KEY"))
+            .await
+            .map(|s| s.expose_secret().to_string())
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. \
+                    Set SINK_TOKEN_ENCRYPTION_KEY in production!"
+                );
+                "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
+            });
+        *blake3::hash(key_material.as_bytes()).as_bytes()
+    };
+
+    ServiceSecrets {
+        sink_secret,
+        maintenance_token,
+        encryption_key,
+    }
+}
+
+/// Installs the process-wide backend JWT and audit entry keys; returns `AUDIT_KID`.
+async fn install_signing_keys(secrets: &SecretStore, platform_config: &Hub) -> Option<String> {
+    let backend_key = secrets
+        .get_secret_string(&SecretRef::new("BACKEND_KEY"))
+        .await
+        .inspect_err(|e| tracing::error!("Failed to fetch BACKEND_KEY from secret store: {e}"))
+        .ok()
+        .map(|s| s.expose_secret().to_string());
+    tracing::info!(
+        "BACKEND_KEY resolved: {}",
+        if backend_key.is_some() { "yes" } else { "no" }
+    );
+
+    crate::backend_jwt::init(
+        backend_key.as_deref(),
+        optional_secret(secrets, "BACKEND_PUB").await.as_deref(),
+        optional_secret(secrets, "BACKEND_KID").await,
+    );
+    let entry_key_source = crate::audit::keys::init_entry_key(
+        optional_secret(secrets, "AUDIT_ENTRY_KEY").await.as_deref(),
+        backend_key.as_deref(),
+    )
+    .expect("AUDIT_ENTRY_KEY must be base64 of 32 bytes");
+    crate::audit::keys::init_previous_entry_key(
+        optional_secret(secrets, "AUDIT_ENTRY_KEY_PREVIOUS")
+            .await
+            .as_deref(),
+        optional_secret(secrets, "BACKEND_KEY_PREVIOUS")
+            .await
+            .as_deref(),
+    )
+    .expect("AUDIT_ENTRY_KEY_PREVIOUS must be base64 of 32 bytes");
+    if platform_config.audit.enabled
+        && platform_config.audit.require_signing
+        && entry_key_source == crate::audit::keys::EntryKeySource::Ephemeral
+    {
+        panic!(
+            "AUDIT SIGNING REQUIRED: set AUDIT_ENTRY_KEY (base64 of 32 bytes) or BACKEND_KEY \
+             so the audit worker can verify pending records"
+        );
+    }
+    if let Some(keys) = optional_secret(secrets, "AUDIT_VERIFYING_KEYS")
+        .await
+        .filter(|value| !value.trim().is_empty())
+    {
+        crate::audit::signer::register_verifying_keys_json(&keys)
+            .expect("AUDIT_VERIFYING_KEYS must map key ids to P-256 SPKI PEM public keys");
+    }
+    optional_secret(secrets, "AUDIT_KID")
+        .await
+        .filter(|value| !value.trim().is_empty())
+}
+
+struct MasterStores {
+    content: Arc<FlowLikeStore>,
+    meta: Arc<FlowLikeStore>,
+    identity: crate::storage_identity::StorageIdentity,
+}
+
+/// Content and meta buckets from master credentials, the same mechanism board storage uses,
+/// so IAM roles and STS work unchanged.
+async fn open_master_stores() -> MasterStores {
+    let master_creds = RuntimeCredentials::master_credentials()
+        .await
+        .expect("Failed to load master credentials");
+    let (content, meta) =
+        flow_like_types::tokio::join!(master_creds.to_store(false), master_creds.to_store(true));
+    MasterStores {
+        content: Arc::new(content.expect("Failed to create content store from master credentials")),
+        meta: Arc::new(meta.expect("Failed to create meta store from master credentials")),
+        identity: crate::storage_identity::from_credentials(&master_creds),
+    }
+}
+
+async fn load_locked_storage(
+    secrets: &SecretStore,
+) -> Option<Arc<crate::locked_storage::LockedStorage>> {
+    crate::locked_storage::LockedStorage::load(secrets)
+        .await
+        .expect("Invalid locked storage configuration")
+        .map(Arc::new)
+}
+
+/// A supplied connection keeps the caller's dialect; otherwise `DATABASE_URL` is opened lazily.
+async fn connect_database(
+    database: Option<DatabaseConnection>,
+    dialect: Option<DbDialect>,
+    secrets: &SecretStore,
+    sqlx_logging: bool,
+) -> (DatabaseConnection, DbDialect) {
+    let db = match database {
+        Some(database) => database,
+        None => {
+            let db_url = secrets
+                .get_secret_string(&SecretRef::new("DATABASE_URL"))
+                .await
+                .expect("DATABASE_URL must be set");
+            let mut opt = ConnectOptions::new(db_url.expose_secret().to_owned());
+            let pool = flow_like_db::pool::PoolConfig::from_env()
+                .expect("Invalid database connection pool configuration");
+            opt.max_connections(pool.max_connections)
+                .min_connections(pool.min_connections)
+                .connect_timeout(Duration::from_secs(8))
+                .acquire_timeout(Duration::from_secs(8))
+                .connect_lazy(true)
+                .sqlx_logging(sqlx_logging);
+            pin_session_time_zone_to_utc(&mut opt);
+
+            Database::connect(opt)
+                .await
+                .expect("Failed to connect to database")
+        }
+    };
+    let db_dialect = DbDialect::resolve(dialect, &db).await;
+    tracing::info!(dialect = %db_dialect, "database dialect resolved");
+    (db, db_dialect)
+}
+
+async fn stripe_client(secrets: &SecretStore, premium: bool) -> Option<stripe::Client> {
+    if !premium {
+        return None;
+    }
+    let stripe_key = secrets
+        .get_secret_string(&SecretRef::new("STRIPE_SECRET_KEY"))
+        .await
+        .expect("STRIPE_SECRET_KEY must be set");
+    tracing::info!("Stripe client initialized");
+    Some(stripe::Client::new(stripe_key.expose_secret()))
+}
+
+struct MailClients {
+    transactional: Option<DynMailClient>,
+    automation: Option<DynMailClient>,
+}
+
+async fn mail_clients(
+    secrets: &SecretStore,
+    mail_config: Option<&flow_like::hub::MailConfig>,
+    mail_automation: &mut crate::runtime_config::mail::MailAutomationConfig,
+) -> MailClients {
+    let transactional = match mail_config {
+        Some(mail_config) => match create_mail_client(mail_config).await {
+            Ok(client) => Some(client),
+            Err(e) => {
+                tracing::warn!("Failed to initialize mail client: {}", e);
+                None
+            }
+        },
+        None => None,
+    };
+    let automation = mail_automation
+        .create_client_or_disable(secrets, mail_config, transactional.clone())
+        .await;
+    MailClients {
+        transactional,
+        automation,
+    }
+}
+
+struct CloudClients {
+    #[cfg(feature = "aws")]
+    aws: Arc<SdkConfig>,
+    channels: Arc<ChannelIssuer>,
+}
+
+async fn cloud_clients(secrets: &SecretStore) -> CloudClients {
+    #[cfg(feature = "aws")]
+    {
+        let aws = Arc::new(aws_config::load_from_env().await);
+        let channels = Arc::new(ChannelIssuer::from_env(secrets, aws.clone()).await);
+        CloudClients { aws, channels }
+    }
+    #[cfg(not(feature = "aws"))]
+    {
+        CloudClients {
+            channels: Arc::new(ChannelIssuer::from_env(secrets).await),
+        }
+    }
+}
+
+/// Priority: AWS EventBridge > Kubernetes > None (sink-service polls /schedules).
+async fn sink_scheduler_from_env() -> Option<Arc<dyn flow_like_sinks::SchedulerBackend>> {
+    use flow_like_sinks::scheduler::{self, SchedulerProvider};
+    let scheduler_provider = std::env::var("SINK_SCHEDULER_PROVIDER")
+        .ok()
+        .map(|s| SchedulerProvider::from_env_value(&s));
+
+    match scheduler_provider {
+        Some(SchedulerProvider::Aws) => {
+            #[cfg(feature = "aws")]
+            {
+                let scheduler = scheduler::AwsEventBridgeScheduler::from_env().await;
+                tracing::info!("Initialized AWS EventBridge sink scheduler");
+                Some(Arc::new(scheduler))
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                tracing::warn!("AWS scheduler requested but aws feature not enabled");
+                None
+            }
+        }
+        Some(SchedulerProvider::Kubernetes) => {
+            #[cfg(feature = "kubernetes")]
+            {
+                match scheduler::KubernetesScheduler::from_env().await {
+                    Ok(scheduler) => {
+                        tracing::info!("Initialized Kubernetes CronJob sink scheduler");
+                        Some(Arc::new(scheduler))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to initialize K8s scheduler: {}", e);
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "kubernetes"))]
+            {
+                tracing::warn!("Kubernetes scheduler requested but kubernetes feature not enabled");
+                None
+            }
+        }
+        Some(SchedulerProvider::Memory) => {
+            tracing::info!("Using in-memory sink scheduler");
+            Some(Arc::new(scheduler::InMemoryScheduler::new()))
+        }
+        None => {
+            tracing::debug!("No sink scheduler configured (SINK_SCHEDULER_PROVIDER not set)");
+            None
+        }
+    }
 }
 
 impl State {
@@ -712,6 +1206,7 @@ impl State {
         cdn_bucket: Arc<FlowLikeStore>,
         secret_store_config: Option<SecretStoreConfig>,
     ) -> Self {
+        let catalog = NodeCatalog::from(catalog);
         let secrets = Self::initialize_secret_store(secret_store_config).await;
         Self::new_with_secrets(catalog, cdn_bucket, secrets, None, None).await
     }
@@ -732,6 +1227,7 @@ impl State {
         database: DatabaseConnection,
         dialect: Option<DbDialect>,
     ) -> Self {
+        let catalog = NodeCatalog::from(catalog);
         let secrets = Self::initialize_secret_store(secret_store_config).await;
         Self::new_with_secrets(catalog, cdn_bucket, secrets, Some(database), dialect).await
     }
@@ -755,179 +1251,73 @@ impl State {
     /// preserves that cache without repeating provider prefetches. A supplied
     /// database uses the same connection and dialect rules as `new_with_database`;
     /// otherwise the connection comes from `DATABASE_URL`.
+    ///
+    /// Steps that only share the loaded configuration run concurrently, and the node
+    /// catalog finishes on its blocking thread meanwhile.
     pub async fn new_with_secrets(
-        catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
+        catalog: impl Into<NodeCatalog>,
         cdn_bucket: Arc<FlowLikeStore>,
         secrets: Arc<SecretStore>,
         database: Option<DatabaseConnection>,
         dialect: Option<DbDialect>,
     ) -> Self {
-        // Select a single complete document before initializing any service.
-        // Loader errors carry no document, filesystem path, or provider details.
-        let effective_config = ConfigSource::from_env()
-            .unwrap_or_else(|error| panic!("{error}"))
-            .load(&secrets)
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
-        let mut mail_automation =
-            crate::runtime_config::mail::MailAutomationConfig::load_or_disabled(
-                effective_config.mail_automation,
-                &secrets,
-            )
+        let catalog = catalog.into();
+        let RuntimeConfig {
+            platform: mut platform_config,
+            mut mail_automation,
+            oauth_providers,
+            openid: openid_validation_overrides,
+        } = load_runtime_config(&secrets)
+            .instrument(init_span!("api.init.config"))
             .await;
-        let mut platform_config = effective_config.hub;
-        crate::runtime_config::configure_mail_capability(
-            &mut platform_config,
-            mail_automation.enabled,
-        );
-        if platform_config.payments.creation_enabled() {
-            platform_config.payments.validate().unwrap_or_else(|error| {
-                panic!("Payment creation configuration is invalid: {error}")
-            });
-        }
-        let oauth_providers = effective_config.oauth_providers;
-        let openid_validation_overrides = effective_config.openid;
-        if platform_config
-            .authentication
-            .as_ref()
-            .is_some_and(|authentication| authentication.variant.eq_ignore_ascii_case("openid"))
-        {
-            openid_validation_settings_for_hub(&platform_config, &openid_validation_overrides)
-                .unwrap_or_else(|_| {
-                    panic!("OpenID validation configuration must be complete and exact")
-                });
-        }
 
-        let sink_secret = secrets
-            .get_secret_string(&SecretRef::new("SINK_SECRET"))
-            .await
-            .ok()
-            .map(|s| s.expose_secret().to_string());
-
-        if sink_secret.is_none() {
-            tracing::warn!(
-                "SINK_SECRET not configured — sink trigger endpoints will be unavailable"
-            );
-        }
-
-        let maintenance_token = secrets
-            .get_secret_string(&SecretRef::new("MAINTENANCE_TOKEN"))
-            .await
-            .ok()
-            .map(|secret| secret.expose_secret().trim().to_string())
-            .filter(|token| !token.is_empty())
-            .and_then(|token| {
-                if token.len() < 32 {
-                    tracing::error!(
-                        "MAINTENANCE_TOKEN must contain at least 32 bytes — maintenance endpoint disabled"
-                    );
-                    None
-                } else {
-                    Some(token)
-                }
-            });
-
-        if maintenance_token.is_none() {
-            tracing::warn!(
-                "MAINTENANCE_TOKEN not configured — scheduled maintenance endpoint will be unavailable"
-            );
-        }
-
-        let encryption_key = {
-            let key_material = secrets
-                .get_secret_string(&SecretRef::new("SINK_TOKEN_ENCRYPTION_KEY"))
-                .await
-                .map(|s| s.expose_secret().to_string())
-                .unwrap_or_else(|_| {
-                    tracing::warn!(
-                        "SINK_TOKEN_ENCRYPTION_KEY not set - using insecure development key. \
-                        Set SINK_TOKEN_ENCRYPTION_KEY in production!"
-                    );
-                    "flow-like-dev-encryption-key-DO-NOT-USE-IN-PRODUCTION".to_string()
-                });
-            *blake3::hash(key_material.as_bytes()).as_bytes()
-        };
-
-        // Initialize backend JWT keys from the secret store
-        let audit_kid: Option<String>;
-        {
-            let backend_key = secrets
-                .get_secret_string(&SecretRef::new("BACKEND_KEY"))
-                .await;
-            if let Err(ref e) = backend_key {
-                tracing::error!("Failed to fetch BACKEND_KEY from secret store: {e}");
-            }
-            let backend_key = backend_key.ok().map(|s| s.expose_secret().to_string());
-            tracing::info!(
-                "BACKEND_KEY resolved: {}",
-                if backend_key.is_some() { "yes" } else { "no" }
-            );
-
-            let backend_pub = secrets
-                .get_secret_string(&SecretRef::new("BACKEND_PUB"))
-                .await
-                .ok()
-                .map(|s| s.expose_secret().to_string());
-            let backend_kid = secrets
-                .get_secret_string(&SecretRef::new("BACKEND_KID"))
-                .await
-                .ok()
-                .map(|s| s.expose_secret().to_string());
-
-            crate::backend_jwt::init(
-                backend_key.as_deref(),
-                backend_pub.as_deref(),
-                backend_kid.clone(),
-            );
-            let entry_key = secrets
-                .get_secret_string(&SecretRef::new("AUDIT_ENTRY_KEY"))
-                .await
-                .ok()
-                .map(|s| s.expose_secret().to_string());
-            let entry_key_source =
-                crate::audit::keys::init_entry_key(entry_key.as_deref(), backend_key.as_deref())
-                    .expect("AUDIT_ENTRY_KEY must be base64 of 32 bytes");
-            let previous_entry_key = secrets
-                .get_secret_string(&SecretRef::new("AUDIT_ENTRY_KEY_PREVIOUS"))
-                .await
-                .ok()
-                .map(|s| s.expose_secret().to_string());
-            let previous_backend_key = secrets
-                .get_secret_string(&SecretRef::new("BACKEND_KEY_PREVIOUS"))
-                .await
-                .ok()
-                .map(|s| s.expose_secret().to_string());
-            crate::audit::keys::init_previous_entry_key(
-                previous_entry_key.as_deref(),
-                previous_backend_key.as_deref(),
+        let (
+            service_secrets,
+            audit_kid,
+            stores,
+            locked_storage,
+            (db, db_dialect),
+            stripe_client,
+            mail,
+            cloud,
+            sink_scheduler,
+        ) = flow_like_types::tokio::join!(
+            load_service_secrets(&secrets).instrument(init_span!("api.init.service_secrets")),
+            install_signing_keys(&secrets, &platform_config)
+                .instrument(init_span!("api.init.signing_keys")),
+            open_master_stores().instrument(init_span!("api.init.storage")),
+            load_locked_storage(&secrets).instrument(init_span!("api.init.locked_storage")),
+            connect_database(
+                database,
+                dialect,
+                &secrets,
+                platform_config.environment == Environment::Development,
             )
-            .expect("AUDIT_ENTRY_KEY_PREVIOUS must be base64 of 32 bytes");
-            if platform_config.audit.enabled
-                && platform_config.audit.require_signing
-                && entry_key_source == crate::audit::keys::EntryKeySource::Ephemeral
-            {
-                panic!(
-                    "AUDIT SIGNING REQUIRED: set AUDIT_ENTRY_KEY (base64 of 32 bytes) or BACKEND_KEY \
-                     so the audit worker can verify pending records"
-                );
-            }
-            audit_kid = secrets
-                .get_secret_string(&SecretRef::new("AUDIT_KID"))
-                .await
-                .ok()
-                .map(|s| s.expose_secret().to_string())
-                .filter(|value| !value.trim().is_empty());
-            if let Some(keys) = secrets
-                .get_secret_string(&SecretRef::new("AUDIT_VERIFYING_KEYS"))
-                .await
-                .ok()
-                .map(|value| value.expose_secret().to_string())
-                .filter(|value| !value.trim().is_empty())
-            {
-                crate::audit::signer::register_verifying_keys_json(&keys)
-                    .expect("AUDIT_VERIFYING_KEYS must map key ids to P-256 SPKI PEM public keys");
-            }
-        }
+            .instrument(init_span!("api.init.database")),
+            stripe_client(&secrets, platform_config.features.premium)
+                .instrument(init_span!("api.init.stripe")),
+            mail_clients(
+                &secrets,
+                platform_config.mail.as_ref(),
+                &mut mail_automation
+            )
+            .instrument(init_span!("api.init.mail")),
+            cloud_clients(&secrets).instrument(init_span!("api.init.cloud_clients")),
+            sink_scheduler_from_env().instrument(init_span!("api.init.sink_scheduler")),
+        );
+        let ServiceSecrets {
+            sink_secret,
+            maintenance_token,
+            encryption_key,
+        } = service_secrets;
+        let MasterStores {
+            content: content_bucket,
+            meta: meta_bucket,
+            identity: storage_identity,
+        } = stores;
+        #[cfg(feature = "aws")]
+        let aws_client = cloud.aws;
+        let channels = cloud.channels;
 
         let realtime_ice =
             RealtimeIceService::from_config(&platform_config.realtime, Arc::clone(&secrets))
@@ -940,71 +1330,16 @@ impl State {
         // existing bounded HTTPS refresh in `configured_jwk` fills it on first use.
         let jwks = JwkSet { keys: Vec::new() };
 
-        // Create content + meta buckets from master credentials (same mechanism
-        // that board/storage already uses — works with IAM roles, STS, etc.)
-        let master_creds = RuntimeCredentials::master_credentials()
-            .await
-            .expect("Failed to load master credentials");
-        let content_bucket = Arc::new(
-            master_creds
-                .to_store(false)
-                .await
-                .expect("Failed to create content store from master credentials"),
-        );
-        let meta_bucket = Arc::new(
-            master_creds
-                .to_store(true)
-                .await
-                .expect("Failed to create meta store from master credentials"),
-        );
-        let storage_identity = crate::storage_identity::from_credentials(&master_creds);
-        crate::routes::registry::widget_policy::init_widget_policy(
-            &mut platform_config,
-            &storage_identity.content,
-        );
+        init_span!("api.init.widget_policy").in_scope(|| {
+            crate::routes::registry::widget_policy::init_widget_policy(
+                &mut platform_config,
+                &storage_identity.content,
+            )
+        });
 
         let client: Client<HttpConnector, Body> =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
                 .build(HttpConnector::new());
-        let db = match database {
-            Some(database) => database,
-            None => {
-                let db_url = secrets
-                    .get_secret_string(&SecretRef::new("DATABASE_URL"))
-                    .await
-                    .expect("DATABASE_URL must be set");
-                let mut opt = ConnectOptions::new(db_url.expose_secret().to_owned());
-                let pool = flow_like_db::pool::PoolConfig::from_env()
-                    .expect("Invalid database connection pool configuration");
-                opt.max_connections(pool.max_connections)
-                    .min_connections(pool.min_connections)
-                    .connect_timeout(Duration::from_secs(8))
-                    .acquire_timeout(Duration::from_secs(8))
-                    .connect_lazy(true)
-                    .sqlx_logging(platform_config.environment == Environment::Development);
-                pin_session_time_zone_to_utc(&mut opt);
-
-                Database::connect(opt)
-                    .await
-                    .expect("Failed to connect to database")
-            }
-        };
-
-        let db_dialect = DbDialect::resolve(dialect, &db).await;
-        tracing::info!(dialect = %db_dialect, "database dialect resolved");
-
-        let stripe_client = if platform_config.features.premium {
-            let stripe_key = secrets
-                .get_secret_string(&SecretRef::new("STRIPE_SECRET_KEY"))
-                .await
-                .expect("STRIPE_SECRET_KEY must be set");
-            let exposed = stripe_key.expose_secret();
-            tracing::info!("Stripe client initialized");
-            let stripe_client = stripe::Client::new(exposed);
-            Some(stripe_client)
-        } else {
-            None
-        };
 
         let mut provider = ModelProviderConfiguration::default();
 
@@ -1020,8 +1355,6 @@ impl State {
             })
         }
 
-        let registry = FlowNodeRegistryInner::prepare(&catalog);
-
         let cache = moka::sync::Cache::builder()
             .max_capacity(32 * 1024 * 1024) // 32 MB
             .time_to_live(Duration::from_secs(20 * 60)) // Each cache hit also checks the provider expiration.
@@ -1033,46 +1366,27 @@ impl State {
             .time_to_live(Duration::from_secs(60))
             .build();
 
-        let mail_client = if let Some(mail_config) = &platform_config.mail {
-            match create_mail_client(mail_config).await {
-                Ok(client) => Some(client),
-                Err(e) => {
-                    tracing::warn!("Failed to initialize mail client: {}", e);
-                    None
-                }
+        // Both dispatchers build their clients once from env config.
+        let (dispatcher, compilation_dispatcher) = flow_like_types::tokio::join!(
+            async {
+                Dispatcher::new(DispatchConfig::from_env(), Some(meta_bucket.clone()))
+                    .await
+                    .with_channel_issuer(channels.clone())
             }
-        } else {
-            None
-        };
-        let automation_mail_client = mail_automation
-            .create_client_or_disable(&secrets, platform_config.mail.as_ref(), mail_client.clone())
-            .await;
-
-        #[cfg(feature = "aws")]
-        let aws_client = Arc::new(aws_config::load_from_env().await);
-
-        #[cfg(feature = "aws")]
-        let channels = ChannelIssuer::from_env(&secrets, aws_client.clone()).await;
-        #[cfg(not(feature = "aws"))]
-        let channels = ChannelIssuer::from_env(&secrets).await;
-        let channels = Arc::new(channels);
-
-        // Initialize dispatcher once with env config (caches AWS/Redis clients)
-        let dispatch_config = DispatchConfig::from_env();
-        let dispatcher = Dispatcher::new(dispatch_config, Some(meta_bucket.clone()))
-            .await
-            .with_channel_issuer(channels.clone());
-
-        // Initialize compilation dispatcher (mirrors execution dispatcher pattern)
-        let compilation_config = CompilationDispatchConfig::from_env();
-        tracing::info!(backend = ?compilation_config.backend, "Compilation dispatch backend");
-        let compilation_dispatcher = Arc::new(
-            CompilationDispatcher::new(
-                compilation_config,
-                content_bucket.clone(),
-                meta_bucket.clone(),
-            )
-            .await,
+            .instrument(init_span!("api.init.dispatcher")),
+            async {
+                let compilation_config = CompilationDispatchConfig::from_env();
+                tracing::info!(backend = ?compilation_config.backend, "Compilation dispatch backend");
+                Arc::new(
+                    CompilationDispatcher::new(
+                        compilation_config,
+                        content_bucket.clone(),
+                        meta_bucket.clone(),
+                    )
+                    .await,
+                )
+            }
+            .instrument(init_span!("api.init.compilation_dispatcher")),
         );
 
         // Initialize WASM registry if enabled (uses PostgreSQL)
@@ -1085,72 +1399,16 @@ impl State {
             None
         };
 
-        // Initialize sink scheduler based on environment
-        // Priority: AWS EventBridge > Kubernetes > None (sink-service polls /schedules)
-        let sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>> = {
-            let scheduler_provider = std::env::var("SINK_SCHEDULER_PROVIDER")
-                .ok()
-                .map(|s| flow_like_sinks::scheduler::SchedulerProvider::from_env_value(&s));
-
-            match scheduler_provider {
-                Some(flow_like_sinks::scheduler::SchedulerProvider::Aws) => {
-                    #[cfg(feature = "aws")]
-                    {
-                        let scheduler =
-                            flow_like_sinks::scheduler::AwsEventBridgeScheduler::from_env().await;
-                        tracing::info!("Initialized AWS EventBridge sink scheduler");
-                        Some(Arc::new(scheduler) as Arc<dyn flow_like_sinks::SchedulerBackend>)
-                    }
-                    #[cfg(not(feature = "aws"))]
-                    {
-                        tracing::warn!("AWS scheduler requested but aws feature not enabled");
-                        None
-                    }
-                }
-                Some(flow_like_sinks::scheduler::SchedulerProvider::Kubernetes) => {
-                    #[cfg(feature = "kubernetes")]
-                    {
-                        match flow_like_sinks::scheduler::KubernetesScheduler::from_env().await {
-                            Ok(scheduler) => {
-                                tracing::info!("Initialized Kubernetes CronJob sink scheduler");
-                                Some(Arc::new(scheduler)
-                                    as Arc<dyn flow_like_sinks::SchedulerBackend>)
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to initialize K8s scheduler: {}", e);
-                                None
-                            }
-                        }
-                    }
-                    #[cfg(not(feature = "kubernetes"))]
-                    {
-                        tracing::warn!(
-                            "Kubernetes scheduler requested but kubernetes feature not enabled"
-                        );
-                        None
-                    }
-                }
-                Some(flow_like_sinks::scheduler::SchedulerProvider::Memory) => {
-                    tracing::info!("Using in-memory sink scheduler");
-                    Some(
-                        Arc::new(flow_like_sinks::scheduler::InMemoryScheduler::new())
-                            as Arc<dyn flow_like_sinks::SchedulerBackend>,
-                    )
-                }
-                None => {
-                    tracing::debug!(
-                        "No sink scheduler configured (SINK_SCHEDULER_PROVIDER not set)"
-                    );
-                    None
-                }
-            }
-        };
-
         // A cache that cannot come up is surfaced as a 503 from the cache endpoints at
         // first use rather than as a failed boot for every other feature.
         let cache_backend = crate::cache::CacheBackendHandle::new(Arc::new(db.clone()));
         #[cfg(feature = "aws")]
         let cache_backend = cache_backend.with_aws_config(aws_client.clone());
+
+        let (catalog, registry) = catalog
+            .ready()
+            .instrument(init_span!("api.init.catalog_wait"))
+            .await;
 
         Self {
             platform_config,
@@ -1164,9 +1422,9 @@ impl State {
             stripe_client,
             payments_gateway: flow_like_types::tokio::sync::OnceCell::new(),
             legacy_payments_gateway: flow_like_types::tokio::sync::OnceCell::new(),
-            mail_client,
+            mail_client: mail.transactional,
             mail_automation,
-            automation_mail_client,
+            automation_mail_client: mail.automation,
             #[cfg(feature = "aws")]
             aws_client,
             #[cfg(feature = "aws")]
@@ -1241,7 +1499,9 @@ impl State {
             cdn_bucket,
             meta_bucket,
             storage_identity,
+            locked_storage,
             response_cache,
+            execution_usage_cache: Default::default(),
             wasm_permission_cache: moka::sync::Cache::builder()
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(120))
@@ -1532,11 +1792,13 @@ impl State {
 
     /// Load a board on master credentials, validated against storage but served from memory.
     ///
-    /// The cache is keyed by object identity, not by who wrote last: every call issues one
-    /// `If-None-Match` GET carrying the cached ETag. Storage answering `NotModified` proves the
-    /// cached hydration is still what a fresh load would produce, regardless of which replica,
+    /// Draft reads use an `If-None-Match` GET carrying the cached ETag. Concurrent callers
+    /// share a check only when it started after their request. Storage answering `NotModified`
+    /// proves the cached hydration is still what a fresh load would produce, regardless of which replica,
     /// fork job, CLI, or publish path wrote the object. A changed object arrives in that same
-    /// round trip, so a miss costs exactly what the old unconditional load did.
+    /// round trip, so a miss costs exactly what the old unconditional load did. Pinned versions
+    /// are immutable snapshots, so a confirmed one is served from memory and reconfirmed at most
+    /// once per [`PINNED_BOARD_REVALIDATE_AFTER`].
     ///
     /// The returned board is shared. Callers that mutate (WASM hydration, secret filtering,
     /// commands) must clone first — [`State::master_board`] does that for them.
@@ -1565,13 +1827,26 @@ impl State {
         app_state: Arc<FlowLikeState>,
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<Arc<CachedBoard>> {
+        let requested_at = Instant::now();
         let cache_key = board_cache_key(app_id, board_id, version);
+        if let Some(pinned) = self.recently_verified_pinned(&cache_key, version) {
+            return pinned;
+        }
         let load_lock = keyed_local_lock(&self.board_load_locks, cache_key.clone());
         let _single_flight = load_lock.lock().await;
+        // A queued burst shares a fresh check instead of serializing one storage
+        // round trip per action. Later requests still revalidate floating drafts.
+        if let Some(cached) =
+            verified_board_after_wait(&self.board_cache, &cache_key, version, requested_at)
+        {
+            cached.board.ensure_supported_format()?;
+            return Ok(cached);
+        }
 
         let cached = self.board_cache.get(&cache_key);
         let store = Board::meta_store(&app_state).await?;
         let storage_root = Path::from("apps").join(app_id.to_string());
+        let verification_started_at = Instant::now();
         let read = Board::load_proto_if_changed(
             store,
             &storage_root,
@@ -1589,6 +1864,7 @@ impl State {
                     )
                 })?;
                 cached.board.ensure_supported_format()?;
+                cached.mark_verified(verification_started_at);
                 return Ok(cached);
             }
             ConditionalRead::Fresh(proto, meta) => (proto, meta),
@@ -1596,10 +1872,11 @@ impl State {
 
         let board =
             Board::from_loaded_proto_for_version(proto, storage_root, app_state, version).await?;
-        let entry = Arc::new(CachedBoard {
-            e_tag: meta.e_tag.clone().unwrap_or_default(),
-            board: Arc::new(board),
-        });
+        let entry = Arc::new(CachedBoard::new(
+            meta.e_tag.clone().unwrap_or_default(),
+            board,
+        ));
+        entry.mark_verified(verification_started_at);
         // An object without an ETag can never be validated, so it is never cached.
         if meta.e_tag.is_some() {
             self.board_cache.insert(cache_key, entry.clone());
@@ -1627,13 +1904,26 @@ impl State {
         put: &flow_like::flow_like_storage::object_store::PutResult,
     ) -> Option<Arc<CachedBoard>> {
         let e_tag = put.e_tag.clone()?;
-        let entry = Arc::new(CachedBoard {
-            e_tag,
-            board: Arc::new(board),
-        });
+        let entry = Arc::new(CachedBoard::new(e_tag, board));
         self.board_cache
             .insert(board_cache_key(app_id, board_id, None), entry.clone());
         Some(entry)
+    }
+
+    fn recently_verified_pinned(
+        &self,
+        cache_key: &str,
+        version: Option<(u32, u32, u32)>,
+    ) -> Option<flow_like_types::Result<Arc<CachedBoard>>> {
+        let pinned = recently_verified_pinned(&self.board_cache, cache_key, version)?;
+        Some(pinned.board.ensure_supported_format().map(|()| pinned))
+    }
+
+    /// The draft entry this instance holds, without asking storage whether it is current.
+    /// Callers must compare `e_tag` against an identity they obtained from storage.
+    pub fn cached_draft_board(&self, app_id: &str, board_id: &str) -> Option<Arc<CachedBoard>> {
+        self.board_cache
+            .get(&board_cache_key(app_id, board_id, None))
     }
 
     /// Key under which `board_snapshot_heads` remembers the last snapshot built for a board.
@@ -2248,6 +2538,156 @@ mod tests {
         jwk::{Jwk, JwkSet},
     };
     use std::collections::{BTreeSet, HashMap};
+
+    fn cached_board() -> std::sync::Arc<super::CachedBoard> {
+        std::sync::Arc::new(super::CachedBoard::new(
+            "\"etag-1\"".to_string(),
+            flow_like::flow::board::Board::new_detached(
+                Some("board-1".into()),
+                flow_like::flow_like_storage::Path::from("apps").join("app-1"),
+            ),
+        ))
+    }
+
+    #[test]
+    fn pinned_boards_skip_revalidation_only_inside_the_window() {
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+        let pinned_key = super::board_cache_key("app-1", "board-1", Some((1, 2, 3)));
+        let draft_key = super::board_cache_key("app-1", "board-1", None);
+        let entry = cached_board();
+        cache.insert(pinned_key.clone(), entry.clone());
+        cache.insert(draft_key.clone(), entry.clone());
+
+        assert!(super::recently_verified_pinned(&cache, &pinned_key, Some((1, 2, 3))).is_some());
+        assert!(
+            super::recently_verified_pinned(&cache, &draft_key, None).is_none(),
+            "a floating draft is revalidated on every read"
+        );
+
+        *entry.verified_at.lock() = std::time::Instant::now()
+            - super::PINNED_BOARD_REVALIDATE_AFTER
+            - std::time::Duration::from_secs(1);
+        assert!(super::recently_verified_pinned(&cache, &pinned_key, Some((1, 2, 3))).is_none());
+        entry.mark_verified(std::time::Instant::now());
+        assert!(super::recently_verified_pinned(&cache, &pinned_key, Some((1, 2, 3))).is_some());
+    }
+
+    #[test]
+    fn queued_draft_reads_share_only_checks_started_after_the_request() {
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+        let key = super::board_cache_key("app-1", "board-1", None);
+        let entry = cached_board();
+        cache.insert(key.clone(), entry.clone());
+        let now = std::time::Instant::now();
+        let requested_at = now - std::time::Duration::from_millis(2);
+        let reusable = || super::verified_board_after_wait(&cache, &key, None, requested_at);
+
+        // Seeding after a write is not a fresh read of storage: another replica
+        // may already have written a newer revision.
+        assert!(reusable().is_none());
+
+        // A slow read can finish after this request but still carry an older
+        // snapshot. Completion time alone must never allow that read to be reused.
+        entry.mark_verified(requested_at - std::time::Duration::from_millis(1));
+        assert!(reusable().is_none());
+        entry.mark_verified(requested_at);
+        assert!(reusable().is_none());
+
+        entry.mark_verified(now - std::time::Duration::from_millis(1));
+        assert!(std::sync::Arc::ptr_eq(&reusable().unwrap(), &entry));
+        assert!(super::verified_board_after_wait(&cache, &key, None, now).is_none());
+
+        let other_app = super::board_cache_key("app-2", "board-1", None);
+        let pinned = super::board_cache_key("app-1", "board-1", Some((1, 0, 0)));
+        assert!(super::verified_board_after_wait(&cache, &other_app, None, requested_at).is_none());
+        assert!(
+            super::verified_board_after_wait(&cache, &pinned, Some((1, 0, 0)), requested_at)
+                .is_none()
+        );
+        cache.insert(key.clone(), cached_board());
+        assert!(
+            reusable().is_none(),
+            "a seeded replacement needs its own check"
+        );
+        cache.invalidate(&key);
+        assert!(reusable().is_none());
+    }
+
+    #[tokio::test]
+    async fn queued_draft_burst_reuses_one_revalidation_and_later_read_checks_again() {
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+        let key = super::board_cache_key("app-1", "board-1", None);
+        let entry = cached_board();
+        cache.insert(key.clone(), entry.clone());
+        let locks = parking_lot::Mutex::new(HashMap::new());
+        let load_lock = super::keyed_local_lock(&locks, key.clone());
+        let held = load_lock.lock().await;
+        let (queued, mut waiting) = tokio::sync::mpsc::unbounded_channel();
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..32 {
+            let (cache, key, entry, reads, queued) = (
+                cache.clone(),
+                key.clone(),
+                entry.clone(),
+                reads.clone(),
+                queued.clone(),
+            );
+            let load_lock = super::keyed_local_lock(&locks, key.clone());
+            tasks.push(tokio::spawn(async move {
+                let requested_at = std::time::Instant::now();
+                queued.send(()).unwrap();
+                let _guard = load_lock.lock().await;
+                if let Some(hit) =
+                    super::verified_board_after_wait(&cache, &key, None, requested_at)
+                {
+                    return hit;
+                }
+                let started_at = std::time::Instant::now();
+                reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                entry.mark_verified(started_at);
+                entry
+            }));
+        }
+        for _ in 0..32 {
+            waiting.recv().await.unwrap();
+        }
+        drop(held);
+        for task in tasks {
+            assert!(std::sync::Arc::ptr_eq(&task.await.unwrap(), &entry));
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            super::verified_board_after_wait(&cache, &key, None, std::time::Instant::now())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn pinned_pages_are_kept_with_their_version() {
+        let entry = cached_board();
+        assert!(entry.version_page("page-1").is_none());
+        let page = flow_like::a2ui::Page::new("page-1", "Page", "/");
+        entry.remember_version_page(&page);
+        assert_eq!(entry.version_page("page-1").unwrap().id, page.id);
+        assert!(entry.version_page("page-2").is_none());
+    }
+
+    #[test]
+    fn trust_only_extends_and_lapses_at_its_deadline() {
+        let trust = super::TrustedUntil::default();
+        assert!(!trust.holds());
+        let now = std::time::SystemTime::now();
+        trust.extend(now + std::time::Duration::from_secs(60));
+        assert!(trust.holds());
+        trust.extend(now - std::time::Duration::from_secs(60));
+        assert!(trust.holds(), "an older proof never shortens a newer one");
+
+        let lapsed = super::TrustedUntil::default();
+        lapsed.extend(now - std::time::Duration::from_secs(1));
+        assert!(!lapsed.holds());
+    }
 
     #[test]
     fn response_cache_accounts_for_large_keys_and_nested_values() {
@@ -2974,5 +3414,26 @@ mod tests {
             course_attempt_lock_id("user"),
             course_attempt_lock_id("other")
         );
+    }
+
+    #[tokio::test]
+    async fn node_catalog_registers_every_node_of_a_built_catalog() {
+        let node = flow_like::flow::node::Node::new("catalog_probe", "Probe", "Probe", "Test");
+        let logic: std::sync::Arc<dyn flow_like::flow::node::NodeLogic> =
+            std::sync::Arc::new(crate::execution::wasm_node_stubs::WasmNodeStub::new(node));
+        let catalog = std::sync::Arc::new(vec![logic]);
+
+        let (nodes, registry) = super::NodeCatalog::from(catalog.clone()).ready().await;
+
+        assert!(std::sync::Arc::ptr_eq(&nodes, &catalog));
+        assert!(registry.get_node("catalog_probe").is_ok());
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "catalog build failed")]
+    async fn node_catalog_resumes_a_build_panic_at_the_await() {
+        super::NodeCatalog::spawn(|| panic!("catalog build failed"))
+            .ready()
+            .await;
     }
 }

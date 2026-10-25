@@ -294,6 +294,7 @@ mod tests {
             event_version: None,
             event_id: "event-1".into(),
             payload: flow_like_types::json::to_vec(&json!({ "k": 1 })).unwrap(),
+            error_message: None,
             is_remote: false,
         };
         let candidate = CorpusCandidate::from_log_meta(&meta);

@@ -89,7 +89,7 @@ pub struct WidgetTarget<'a> {
 #[into_params(parameter_in = Query)]
 pub struct WidgetPolicyQuery {
     /// `true` describes the store preview, which never gets network sites,
-    /// media or microphone access.
+    /// media, microphone or upload access.
     #[serde(default)]
     pub preview: bool,
     /// Project the widget runs in. Members of a project that uses this

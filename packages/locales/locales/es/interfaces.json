@@ -1121,7 +1121,10 @@
 				"sendingSoon_other": "",
 				"step": "",
 				"stoppedAt": "",
-				"waitingForPlace": ""
+				"waitingForPlace": "",
+				"inLine_ordinal_one": "",
+				"inLine_ordinal_two": "",
+				"inLine_ordinal_few": ""
 			},
 			"chips": {
 				"changedTo": "",

@@ -508,9 +508,11 @@ Examples follow the request and source; other capabilities remain available. Rea
 declarations and usage notes. Ground database/storage/UI IDs with read-only tools unless supplied
 by the manifest.
 
-- Catalog calls use `namespace::alias({ exactPin: value })`. `::` selects a namespace; `.` reads a
+- Catalog calls use `namespace::alias({ exactPin: value })`. Rendered calls pass their first one or
+  two inputs positionally in declaration order (`log::info(msg)`, `db::open(name, { userScoped:
+  true })`); keep those and name every argument you add. `::` selects a namespace; `.` reads a
   value field or invokes a declared method. A declaration with `this:` supports a receiver method;
-  do not supply the receiver a second time. A single remaining argument may be positional.
+  do not supply the receiver a second time.
 - `use ns::*` belongs at the top of the document. Qualified calls need no import. Legacy camel-case
   aliases still resolve; prefer the spelling in the returned declaration. Repeat identically named
   input keys in declaration order when a declaration repeats them. Never invent pin selectors.

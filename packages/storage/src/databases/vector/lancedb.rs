@@ -67,6 +67,10 @@ mod reference_tests;
 #[path = "mutation_tests.rs"]
 mod mutation_tests;
 
+#[cfg(test)]
+#[path = "compaction_tests.rs"]
+mod compaction_tests;
+
 /// Tables live at the database root, so LanceDB's namespace manifest only
 /// costs a LIST + GET per connect and creates `__manifest` in fresh roots.
 pub fn connect_lance(uri: &str) -> lancedb::connection::ConnectBuilder {
@@ -967,6 +971,63 @@ impl LanceDBVectorStore {
         self.run_optimize_actions(prune_history_actions()).await
     }
 
+    /// Best effort after a committed write: a failure, such as losing a conflict to a
+    /// concurrent writer, leaves the fragments for the next write or an explicit optimize.
+    async fn compact_after_write(&self) {
+        if let Err(error) = self.compact_small_fragments().await {
+            eprintln!(
+                "[LanceDB] Skipped automatic compaction of table '{}': {error:#}",
+                self.table_name
+            );
+        }
+    }
+
+    async fn compact_small_fragments(&self) -> Result<()> {
+        if self.selector != DatabaseSelector::default() {
+            return Ok(());
+        }
+        let Some(wrapper) = self.table.as_ref().and_then(Table::dataset) else {
+            return Ok(());
+        };
+        let dataset = wrapper.get().await?;
+        let Some(plan) = automatic_compaction_plan(&dataset).await? else {
+            return Ok(());
+        };
+        wrapper.ensure_mutable()?;
+        let mut dataset = dataset.as_ref().clone();
+        lance::dataset::optimize::compact_files_with_planner(
+            &mut dataset,
+            None,
+            &PlannedCompaction(plan),
+        )
+        .await?;
+        wrapper.update(dataset);
+        Ok(())
+    }
+
+    /// Older Lance releases enabled auto cleanup on new tables, which re-reads every retained
+    /// manifest on every 20th commit. Optimize with pruning now governs this table's retention.
+    async fn drop_legacy_auto_cleanup(&self) -> Result<()> {
+        let Some(wrapper) = self.table.as_ref().and_then(Table::dataset) else {
+            return Ok(());
+        };
+        let dataset = wrapper.get().await?;
+        let config = dataset.config();
+        if LEGACY_AUTO_CLEANUP
+            .iter()
+            .any(|(key, value)| config.get(*key).map(String::as_str) != Some(*value))
+        {
+            return Ok(());
+        }
+        wrapper.ensure_mutable()?;
+        let mut dataset = dataset.as_ref().clone();
+        dataset
+            .update_config(LEGACY_AUTO_CLEANUP.map(|(key, _)| (key, None::<&str>)))
+            .await?;
+        wrapper.update(dataset);
+        Ok(())
+    }
+
     async fn run_optimize_actions(
         &self,
         actions: Vec<lancedb::table::OptimizeAction>,
@@ -1211,6 +1272,7 @@ impl LanceDBVectorStore {
             op = op.column(&column, &value);
         }
         op.execute().await?;
+        self.compact_after_write().await;
         Ok(())
     }
 
@@ -1524,10 +1586,11 @@ impl LanceDBVectorStore {
         if let Some(opts) = &self.write_options {
             add = add.write_options(opts.clone());
         }
-        match add.execute().await {
-            Ok(_) => Ok(()),
-            Err(err) => Err(anyhow!(err.to_string())),
-        }
+        add.execute()
+            .await
+            .map_err(|err| anyhow!(err.to_string()))?;
+        self.compact_after_write().await;
+        Ok(())
     }
 
     async fn write_batch_reader(&self, items: Vec<Value>) -> Result<ValueBatchReader> {
@@ -1970,6 +2033,100 @@ fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> 
     actions
 }
 
+const LEGACY_AUTO_CLEANUP: [(&str, &str); 2] = [
+    ("lance.auto_cleanup.interval", "20"),
+    ("lance.auto_cleanup.older_than", "14days"),
+];
+
+/// Each write adds a fragment, and every scan pays requests per fragment and per deletion file.
+const AUTO_COMPACTION_FRAGMENTS: usize = 16;
+/// Bounds the rewrite one write may add to its own latency.
+const AUTO_COMPACTION_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+struct PlannedCompaction(lance::dataset::optimize::CompactionPlan);
+
+#[async_trait]
+impl lance::dataset::optimize::CompactionPlanner for PlannedCompaction {
+    async fn plan(
+        &self,
+        _: &lance::Dataset,
+    ) -> lance::Result<lance::dataset::optimize::CompactionPlan> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Merge runs of unindexed small fragments, so no index is remapped or dropped and no
+/// version is pruned. A leading fragment at least as large as the rest of its run stays,
+/// so rows are rewritten a logarithmic number of times instead of on every compaction.
+async fn automatic_compaction_plan(
+    dataset: &lance::Dataset,
+) -> Result<Option<lance::dataset::optimize::CompactionPlan>> {
+    let options = CompactionOptions::default();
+    let indices = dataset.load_indices().await?;
+    if indices.iter().any(|index| index.fragment_bitmap.is_none()) {
+        return Ok(None);
+    }
+    let indexed = |fragment: &lance_table::format::Fragment| {
+        u32::try_from(fragment.id).map_or(true, |id| {
+            indices.iter().any(|index| {
+                index
+                    .fragment_bitmap
+                    .as_ref()
+                    .is_some_and(|bitmap| bitmap.contains(id))
+            })
+        })
+    };
+    let small = dataset
+        .manifest()
+        .fragments
+        .iter()
+        .filter(|fragment| {
+            fragment
+                .physical_rows
+                .is_some_and(|rows| rows < options.target_rows_per_fragment)
+                && !indexed(fragment)
+        })
+        .count();
+    if small < AUTO_COMPACTION_FRAGMENTS {
+        return Ok(None);
+    }
+
+    let mut plan = lance::dataset::optimize::plan_compaction(dataset, &options).await?;
+    let mut budget = AUTO_COMPACTION_MAX_BYTES;
+    plan.tasks.retain_mut(|task| {
+        if task.fragments.iter().any(indexed) {
+            return false;
+        }
+        let Some(mut sizes) = task
+            .fragments
+            .iter()
+            .map(fragment_bytes)
+            .collect::<Option<std::collections::VecDeque<_>>>()
+        else {
+            return false;
+        };
+        while sizes.len() > 1 && sizes[0] >= sizes.iter().skip(1).sum::<u64>() {
+            sizes.pop_front();
+            task.fragments.remove(0);
+        }
+        let bytes = sizes.iter().sum::<u64>();
+        if task.fragments.len() < AUTO_COMPACTION_FRAGMENTS || bytes > budget {
+            return false;
+        }
+        budget -= bytes;
+        true
+    });
+    Ok((!plan.tasks.is_empty()).then_some(plan))
+}
+
+fn fragment_bytes(fragment: &lance_table::format::Fragment) -> Option<u64> {
+    fragment
+        .files
+        .iter()
+        .map(|file| file.file_size_bytes.get().map(u64::from))
+        .sum()
+}
+
 /// Compact, rebuild indices, and prune unprotected history before an archive export.
 fn prune_history_actions() -> Vec<lancedb::table::OptimizeAction> {
     vec![
@@ -2384,6 +2541,7 @@ impl VectorStore for LanceDBVectorStore {
             .to_owned()
             .execute(items)
             .await?;
+        self.compact_after_write().await;
         Ok(())
     }
 
@@ -2429,12 +2587,11 @@ impl VectorStore for LanceDBVectorStore {
         if let Some(opts) = &self.write_options {
             add = add.write_options(opts.clone());
         }
-        match add.execute().await {
-            Ok(_) => return Ok(()),
-            Err(err) => {
-                return Err(anyhow!(err.to_string()));
-            }
-        }
+        add.execute()
+            .await
+            .map_err(|err| anyhow!(err.to_string()))?;
+        self.compact_after_write().await;
+        Ok(())
     }
 
     async fn delete(&self, filter: &str) -> Result<()> {
@@ -2456,7 +2613,14 @@ impl VectorStore for LanceDBVectorStore {
 
     async fn optimize(&self, keep_versions: bool) -> Result<()> {
         self.run_optimize_actions(optimize_actions(keep_versions))
-            .await
+            .await?;
+        if !keep_versions && let Err(error) = self.drop_legacy_auto_cleanup().await {
+            eprintln!(
+                "[LanceDB] Kept Lance's legacy auto cleanup on table '{}': {error:#}",
+                self.table_name
+            );
+        }
+        Ok(())
     }
 
     async fn list(

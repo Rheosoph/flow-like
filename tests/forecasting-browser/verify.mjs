@@ -18,6 +18,7 @@ const page = await browser.newPage({
 	viewport: { width: 1440, height: 1100 },
 	deviceScaleFactor: 1,
 });
+page.setDefaultTimeout(15_000);
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
 page.on("console", (message) => {
@@ -30,10 +31,11 @@ await page.route("**/*", (route) => {
 		? route.continue()
 		: route.abort();
 });
-const capture = async (name) => {
+const capture = async (name, fullPage = true) => {
+	await page.mouse.move(0, 0);
 	await page.screenshot({
 		path: `${output}/${name}.png`,
-		fullPage: true,
+		fullPage,
 		animations: "disabled",
 	});
 	if (/^0[1-4]-/.test(name))
@@ -63,6 +65,69 @@ const step = async (title, index) => {
 		.getByRole("heading", { name: `Step ${index} of 4: ${title}` })
 		.waitFor();
 };
+const forecastCallCount = () =>
+	page.evaluate(
+		() =>
+			window.forecastingQa.calls.filter((call) => call.method === "forecast")
+				.length,
+	);
+const chart = () =>
+	page.getByRole("region", { name: "Forecast visualization", exact: true });
+const visibleRange = async () =>
+	Promise.all(
+		["Visible range start", "Visible range end"].map(async (name) =>
+			Number(
+				await page
+					.getByRole("slider", { name, exact: true })
+					.getAttribute("aria-valuenow"),
+			),
+		),
+	);
+const rangeSpan = ([start, end]) => end - start;
+const waitForReady = () =>
+	page.getByText(/^Forecast ready with 72 predictions$/).waitFor();
+const chartColors = () =>
+	chart().evaluate((element) => {
+		const style = getComputedStyle(element);
+		return { background: style.backgroundColor, foreground: style.color };
+	});
+const verifyForecastTransition = async (scope = chart()) => {
+	const transitions = await scope
+		.locator(".forecast-transition")
+		.evaluateAll((groups) =>
+			groups.map((group) => {
+				const line = group.querySelector("line");
+				const paths = group
+					.closest("svg")
+					.querySelectorAll(".recharts-line-curve");
+				const history = paths[0].getPointAtLength(paths[0].getTotalLength());
+				const forecast = paths[paths.length - 1].getPointAtLength(0);
+				return {
+					dash: line.getAttribute("stroke-dasharray"),
+					startGap: Math.hypot(
+						Number(line.getAttribute("x1")) - history.x,
+						Number(line.getAttribute("y1")) - history.y,
+					),
+					endGap: Math.hypot(
+						Number(line.getAttribute("x2")) - forecast.x,
+						Number(line.getAttribute("y2")) - forecast.y,
+					),
+				};
+			}),
+		);
+	assert.equal(
+		transitions.length,
+		2,
+		"The main chart and overview include a forecast transition",
+	);
+	for (const transition of transitions) {
+		assert.equal(transition.dash, "3 3");
+		assert.ok(
+			transition.startGap < 0.02 && transition.endGap < 0.02,
+			`Transition joins the observed and forecast path endpoints: ${JSON.stringify(transition)}`,
+		);
+	}
+};
 
 try {
 	await page.goto("http://127.0.0.1:4344/", { waitUntil: "networkidle" });
@@ -90,9 +155,21 @@ try {
 	await fits();
 	await capture("04-review");
 	await page.getByRole("button", { name: "Run forecast", exact: true }).click();
-	await page.getByText(/Forecast ready with 72 predictions/).waitFor();
+	await waitForReady();
+	assert.equal(
+		await page
+			.getByRole("button", { name: "Outlook", exact: true })
+			.getAttribute("aria-pressed"),
+		"true",
+	);
+	assert.equal(
+		await page
+			.getByRole("slider", { name: "Holdout forecast as of", exact: true })
+			.count(),
+		0,
+	);
 	await select("Chart series", "Machine B");
-	await page.getByRole("button", { name: "Outlook", exact: true }).click();
+	await verifyForecastTransition();
 	await fits();
 	await capture("05-grouped-forecast");
 	await page
@@ -101,7 +178,231 @@ try {
 			path: `${output}/05-grouped-chart-detail.png`,
 			animations: "disabled",
 		});
+	const fullRange = await visibleRange();
+	const fullTicks = await chart()
+		.locator(".recharts-xAxis")
+		.first()
+		.textContent();
+	await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+	const zoomRange = await visibleRange();
+	assert.ok(
+		rangeSpan(zoomRange) < rangeSpan(fullRange),
+		"Zoom in narrows the visible range",
+	);
+	assert.notEqual(
+		await chart().locator(".recharts-xAxis").first().textContent(),
+		fullTicks,
+		"Zoom updates plotted timestamps",
+	);
+	await page.getByRole("button", { name: "Zoom out", exact: true }).click();
+	assert.ok(
+		rangeSpan(await visibleRange()) > rangeSpan(zoomRange),
+		"Zoom out expands the visible range",
+	);
+	await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+	await page.getByRole("button", { name: "Reset zoom", exact: true }).click();
+	assert.deepEqual(await visibleRange(), fullRange);
+	const plot = chart().locator(".recharts-cartesian-grid").first();
+	await plot.scrollIntoViewIfNeeded();
+	const plotBox = await plot.boundingBox();
+	assert.ok(plotBox);
+	await page.mouse.move(
+		plotBox.x + plotBox.width * 0.2,
+		plotBox.y + plotBox.height / 2,
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		plotBox.x + plotBox.width * 0.65,
+		plotBox.y + plotBox.height / 2,
+		{ steps: 12 },
+	);
+	await page.mouse.up();
+	assert.ok(
+		rangeSpan(await visibleRange()) < rangeSpan(fullRange),
+		"Dragging the main plot zooms to the selected timestamps",
+	);
+	await page.mouse.dblclick(
+		plotBox.x + plotBox.width / 2,
+		plotBox.y + plotBox.height / 2,
+	);
+	assert.deepEqual(
+		await visibleRange(),
+		fullRange,
+		"Double-click resets plot zoom",
+	);
+	const startSlider = page.getByRole("slider", {
+		name: "Visible range start",
+		exact: true,
+	});
+	await startSlider.focus();
+	await startSlider.press("ArrowRight");
+	assert.ok(
+		(await visibleRange())[0] > fullRange[0],
+		"The range is keyboard operable",
+	);
+	const rangeBeforeDrag = await visibleRange();
+	const startBox = await startSlider.boundingBox();
+	assert.ok(startBox);
+	await page.mouse.move(
+		startBox.x + startBox.width / 2,
+		startBox.y + startBox.height / 2,
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		startBox.x + startBox.width / 2 + 140,
+		startBox.y + startBox.height / 2,
+		{ steps: 8 },
+	);
+	await page.mouse.up();
+	assert.ok(
+		(await visibleRange())[0] > rangeBeforeDrag[0],
+		"The range responds to a pointer drag",
+	);
+	await page
+		.getByRole("button", { name: "Focus forecast", exact: true })
+		.click();
+	assert.ok(
+		rangeSpan(await visibleRange()) < rangeSpan(fullRange),
+		"Forecast focus narrows the range",
+	);
+	await select("Chart series", "Machine C");
+	assert.deepEqual(
+		await visibleRange(),
+		fullRange,
+		"Changing group resets the visible range",
+	);
+	await select("Chart series", "Machine B");
+	await page
+		.getByRole("button", { name: "Focus forecast", exact: true })
+		.click();
+	const focusedRange = await visibleRange();
+	await verifyForecastTransition();
+	await page.getByRole("button", { name: "Edit setup", exact: true }).click();
+	assert.deepEqual(
+		await visibleRange(),
+		focusedRange,
+		"Opening setup preserves chart zoom",
+	);
+	await page
+		.getByRole("button", { name: "Back to prediction", exact: true })
+		.click();
+	assert.deepEqual(
+		await visibleRange(),
+		focusedRange,
+		"Closing setup preserves chart zoom",
+	);
+	const fullscreenButton = page.getByRole("button", {
+		name: "Full screen",
+		exact: true,
+	});
+	await fullscreenButton.click();
+	await page.getByRole("dialog").waitFor();
+	assert.deepEqual(
+		await visibleRange(),
+		focusedRange,
+		"Full screen preserves the visible range",
+	);
+	await page.getByRole("dialog").evaluate(async (element) => {
+		await Promise.all(
+			element.getAnimations().map((animation) => animation.finished),
+		);
+	});
+	const dialogBox = await page.getByRole("dialog").boundingBox();
+	assert.ok(
+		dialogBox &&
+			dialogBox.width >= 1300 &&
+			dialogBox.height >= 900 &&
+			Math.abs(dialogBox.x) < 1 &&
+			Math.abs(dialogBox.y) < 1,
+		`Full screen uses the viewport: ${JSON.stringify(dialogBox)}`,
+	);
+	await capture("05a-fullscreen-forecast", false);
+	await verifyForecastTransition(page.getByRole("dialog"));
+	const transitionBox = await page
+		.getByRole("dialog")
+		.locator(".forecast-transition line")
+		.first()
+		.boundingBox();
+	assert.ok(transitionBox);
+	await page.screenshot({
+		path: `${output}/05c-forecast-boundary-detail.png`,
+		clip: {
+			x: Math.max(0, transitionBox.x - 90),
+			y: Math.max(0, transitionBox.y - 80),
+			width: transitionBox.width + 180,
+			height: transitionBox.height + 160,
+		},
+		animations: "disabled",
+	});
+	await page.keyboard.press("Escape");
+	await page.getByRole("dialog").waitFor({ state: "hidden" });
+	assert.deepEqual(
+		await visibleRange(),
+		focusedRange,
+		"Closing full screen preserves the visible range",
+	);
+	assert.ok(
+		await fullscreenButton.evaluate(
+			(element) => element === document.activeElement,
+		),
+		"Escape restores focus to the full screen button",
+	);
+	await page.getByRole("button", { name: "Reset zoom", exact: true }).click();
+	const darkColors = await chartColors();
+	await page
+		.getByRole("button", { name: "Toggle color theme", exact: true })
+		.click();
+	await page.waitForFunction(() =>
+		document.documentElement.classList.contains("light"),
+	);
+	const lightColors = await chartColors();
+	assert.notEqual(
+		lightColors.background,
+		darkColors.background,
+		"The chart background follows the theme",
+	);
+	assert.notEqual(
+		lightColors.foreground,
+		darkColors.foreground,
+		"The chart text follows the theme",
+	);
+	await capture("05b-light-forecast");
+	await page.evaluate(() =>
+		document.documentElement.style.setProperty(
+			"--chart-1",
+			"rgb(180, 20, 140)",
+		),
+	);
+	assert.ok(
+		await chart()
+			.locator(".recharts-line-curve")
+			.evaluateAll((paths) =>
+				paths.some(
+					(path) => getComputedStyle(path).stroke === "rgb(180, 20, 140)",
+				),
+			),
+		"Forecast lines use the chart theme token",
+	);
+	await page.evaluate(() =>
+		document.documentElement.style.removeProperty("--chart-1"),
+	);
+	await page
+		.getByRole("button", { name: "Toggle color theme", exact: true })
+		.click();
+	assert.equal(
+		await forecastCallCount(),
+		1,
+		"Chart exploration does not rerun inference",
+	);
+	await page
+		.getByRole("button", { name: "Focus forecast", exact: true })
+		.click();
 	await page.getByRole("button", { name: "Holdout", exact: true }).click();
+	assert.equal(
+		(await visibleRange())[0],
+		0,
+		"Changing to holdout resets the visible range",
+	);
 	const slider = page.getByRole("slider", {
 		name: "Holdout forecast as of",
 		exact: true,
@@ -113,7 +414,52 @@ try {
 			window.forecastingQa.calls.filter((call) => call.method === "forecast")
 				.length === 2,
 	);
-	await page.getByText(/Forecast ready with 72 predictions/).waitFor();
+	await waitForReady();
+	assert.equal(
+		await page
+			.getByRole("button", { name: "Holdout", exact: true })
+			.getAttribute("aria-pressed"),
+		"true",
+	);
+	const countBeforeDrag = await forecastCallCount();
+	const holdoutBeforeDrag = Number(await slider.getAttribute("aria-valuenow"));
+	const holdoutBox = await slider.boundingBox();
+	assert.ok(holdoutBox);
+	await page.mouse.move(
+		holdoutBox.x + holdoutBox.width / 2,
+		holdoutBox.y + holdoutBox.height / 2,
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		holdoutBox.x + holdoutBox.width / 2 - 160,
+		holdoutBox.y + holdoutBox.height / 2,
+		{ steps: 8 },
+	);
+	assert.notEqual(
+		Number(await slider.getAttribute("aria-valuenow")),
+		holdoutBeforeDrag,
+		"Dragging previews a different holdout cutoff",
+	);
+	assert.equal(
+		await forecastCallCount(),
+		countBeforeDrag,
+		"Dragging does not run a forecast before release",
+	);
+	await page.mouse.up();
+	await page.waitForFunction(
+		(count) =>
+			window.forecastingQa.calls.filter((call) => call.method === "forecast")
+				.length ===
+			count + 1,
+		countBeforeDrag,
+	);
+	await waitForReady();
+	assert.equal(
+		await page
+			.getByRole("button", { name: "Holdout", exact: true })
+			.getAttribute("aria-pressed"),
+		"true",
+	);
 	await fits();
 	await capture("06-historical-evaluation");
 	await page
@@ -180,7 +526,7 @@ try {
 	await capture("11-overall-columns");
 	assert.deepEqual(errors, []);
 	console.log(
-		`Forecast browser checks passed: source, grouped mapping, model, review, grouped forecast, historical cutoff rerun, point-only model, overall SQL preview, and desktop/mobile layouts. Screenshots: ${output}`,
+		`Forecast browser checks passed: setup, prediction-first results, zoom, keyboard and pointer range selection, full screen and focus restoration, theme tokens, holdout release-only reruns, point-only model, overall SQL preview, and desktop/mobile layouts. Screenshots: ${output}`,
 	);
 } catch (error) {
 	console.error("Browser errors:", errors);

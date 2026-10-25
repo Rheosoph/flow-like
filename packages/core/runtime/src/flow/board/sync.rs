@@ -283,6 +283,9 @@ pub struct SyncNode {
     /// Generated reroutes remain identifiable after catalog hydration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_reroute: Option<bool>,
+    /// FlowScript names stored on this instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_names: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<u64>,
     /// `fn_refs.fn_refs` is per-instance wiring, so the whole struct always ships.
@@ -347,6 +350,7 @@ impl SyncNode {
             error: node.error.clone(),
             pins_collapsed: node.pins_collapsed,
             auto_reroute: node.auto_reroute,
+            code_names: node.code_names.clone(),
             hash: node.hash,
             fn_refs: node.fn_refs.clone(),
             wasm: node.wasm.clone(),

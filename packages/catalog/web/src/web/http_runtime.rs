@@ -3,7 +3,8 @@ use ahash::AHashSet;
 #[cfg(all(feature = "execute", not(feature = "remote")))]
 use flow_like::flow::{
     execution::{
-        LogLevel, context::ExecutionContext, internal_node::InternalNode, log::LogMessage,
+        LogLevel, byte_store::ByteScope, context::ExecutionContext, internal_node::InternalNode,
+        log::LogMessage,
     },
     pin::PinType,
     variable::VariableType,
@@ -282,7 +283,7 @@ where
 }
 
 #[cfg(all(feature = "execute", not(feature = "remote")))]
-pub(crate) fn parse_body_value(request: &HttpRequest) -> Value {
+pub(crate) async fn parse_body_value(request: &HttpRequest, scope: &ByteScope) -> Value {
     if request.body.is_empty() {
         return Value::Null;
     }
@@ -300,7 +301,7 @@ pub(crate) fn parse_body_value(request: &HttpRequest) -> Value {
 
     match String::from_utf8(request.body.clone()) {
         Ok(text) => Value::String(text),
-        Err(_) => Value::Array(request.body.iter().map(|byte| Value::from(*byte)).collect()),
+        Err(_) => scope.bytes_value(request.body.clone()).await,
     }
 }
 
@@ -318,21 +319,26 @@ pub(crate) async fn create_shared_function_context(
     Arc::new(Mutex::new(sub))
 }
 
+/// Run one handler invocation in `scope` (the request's), or in a fresh scope of its own,
+/// so the bytes it creates are freed when the request ends.
 #[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn trigger_shared_function_context(
     context: &SharedFunctionContext,
     arguments: &Value,
+    scope: Option<&ByteScope>,
     parent_node_id: &str,
     log_name: &'static str,
 ) -> flow_like_types::Result<Value> {
     let mut context = context.lock().await;
-    trigger_function_context(&mut context, arguments, parent_node_id, log_name).await
+    let scope = scope.cloned().unwrap_or_else(|| context.new_byte_scope());
+    trigger_function_context(&mut context, arguments, &scope, parent_node_id, log_name).await
 }
 
 #[cfg(all(feature = "execute", not(feature = "remote")))]
 pub(crate) async fn trigger_streaming_function_context(
     context: &SharedFunctionContext,
     arguments: &Value,
+    scope: Option<&ByteScope>,
     parent_node_id: &str,
     chunks: tokio::sync::mpsc::Sender<Value>,
 ) -> flow_like_types::Result<Value> {
@@ -341,6 +347,7 @@ pub(crate) async fn trigger_streaming_function_context(
     // Keep the function lock for the whole invocation, but install the request callback
     // only on a clone. Cancellation must not leave a sender on the reusable context.
     let shared = context.lock().await;
+    let scope = scope.cloned().unwrap_or_else(|| shared.new_byte_scope());
     let original_callback = shared.callback().clone();
     let mut invocation = shared.clone_with_callback(Some(Arc::new(move |event: InterComEvent| {
         let chunks = chunks.clone();
@@ -360,6 +367,7 @@ pub(crate) async fn trigger_streaming_function_context(
     trigger_function_context(
         &mut invocation,
         arguments,
+        &scope,
         parent_node_id,
         "REST route handler",
     )
@@ -370,6 +378,21 @@ pub(crate) async fn trigger_streaming_function_context(
 async fn trigger_function_context(
     context: &mut ExecutionContext,
     arguments: &Value,
+    scope: &ByteScope,
+    parent_node_id: &str,
+    log_name: &'static str,
+) -> flow_like_types::Result<Value> {
+    let previous = context.enter_byte_scope(scope);
+    let result = run_function_context(context, arguments, scope, parent_node_id, log_name).await;
+    context.restore_byte_scope(previous);
+    result
+}
+
+#[cfg(all(feature = "execute", not(feature = "remote")))]
+async fn run_function_context(
+    context: &mut ExecutionContext,
+    arguments: &Value,
+    scope: &ByteScope,
     parent_node_id: &str,
     log_name: &'static str,
 ) -> flow_like_types::Result<Value> {
@@ -413,7 +436,11 @@ async fn trigger_function_context(
     }
 
     let result = match run {
-        Ok(_) => Ok(result.unwrap_or_else(|| json::json!({"ok": true}))),
+        Ok(_) => {
+            scope
+                .materialize(result.unwrap_or_else(|| json::json!({"ok": true})))
+                .await
+        }
         Err(error) => Err(anyhow!("Registered function failed: {:?}", error)),
     };
     if let Some(observer) = observer {

@@ -1,8 +1,10 @@
 // media — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -227,7 +229,7 @@ declare namespace ai {
          * @param kind (optional) — Which media input to prepare
          * @param maxFrames (optional) — Maximum uniformly sampled video frames
          * @param includeAudio (optional) — Include the video's audio track; missing audio returns an error
-         * @returns content — Decoded media for Embed Content
+         * @returns content — Content parts for Embed Content
          * @impure has side effects / drives control flow
          */
         function prepareMedia({ source: Struct, encoded?: bool, kind?: string, maxFrames?: int, includeAudio?: bool }): Struct;
@@ -798,6 +800,26 @@ declare namespace docx {
     function setMetadata({ template: Struct, title?: string, author?: string, subject?: string, keywords?: string, description?: string, output: Struct }): Struct;
 }
 
+declare namespace files {
+    // === Data/Files/Operations ===
+
+    /**
+     * Reports a file's name, size, timestamps, media type and kind, plus what its format says about it: dimensions for images, pages and document properties for PDFs and Office files. Type detection and image headers use ranged reads of the first bytes only; PDFs and Office files are read whole.
+     * @node file_get_metadata @receiver path @alias fileGetMetadata
+     * @param path — File to inspect (receiver: `this` in `x.getMetadata(...)`)
+     * @returns name — File name including its extension
+     * @returns extension — Text after the last dot of the name, without the dot; empty when there is none
+     * @returns size — Size in bytes
+     * @returns lastModified — When the file was last written
+     * @returns eTag — Entity tag the store reports; it changes whenever the content changes
+     * @returns mimeType — Media type detected from the file's leading bytes, falling back to its extension
+     * @returns kind — One of image, pdf, office, audio, video, archive, text or other
+     * @returns details — Metadata the file's format carries. image: width, height (upright, EXIF orientation applied), format, orientation. pdf: page_count, pdf_version, encrypted and whichever Info fields exist (title, author, subject, keywords, creator, producer, creation_date, modification_date as ISO 8601). office (docx, xlsx, pptx): title, creator, subject, keywords, created, modified, last_modified_by, pages, words, slides when present. Empty for every other kind or when the format cannot be parsed.
+     * @impure has side effects / drives control flow
+     */
+    function getMetadata(this: FlowPath, { path: Struct }): { name: string, extension: string, size: int, lastModified: Date, eTag: string, mimeType: string, kind: string, details: Struct };
+}
+
 declare namespace image {
     // === Data/QR ===
 
@@ -901,6 +923,19 @@ declare namespace image {
      * @impure has side effects / drives control flow
      */
     function readBarcodes(this: NodeImage, { imageIn: Struct, options?: Struct }): Struct[];
+
+    /**
+     * Reads width, height, format and EXIF orientation from an image file's header without decoding its pixels. Only the leading bytes the header needs are fetched, so it costs a fraction of Read Image + Get Dimensions on large photos.
+     * @node read_image_dimensions @receiver path @alias readImageDimensions
+     * @param path — Image file to inspect (receiver: `this` in `x.readDimensions(...)`)
+     * @param applyExifOrientation (optional) — Report the size of the upright image, swapping width and height when the EXIF orientation turns it by 90 degrees — the values Read Image + Get Dimensions return
+     * @returns width — Image width in pixels
+     * @returns height — Image height in pixels
+     * @returns format — Image format in lowercase, e.g. jpeg, png, webp or tiff
+     * @returns orientation — EXIF orientation tag (1–8); 1 when the file carries none
+     * @impure has side effects / drives control flow
+     */
+    function readDimensions(this: FlowPath, { path: Struct, applyExifOrientation?: bool }): { width: int, height: int, format: string, orientation: int };
 
     /**
      * Read image from path

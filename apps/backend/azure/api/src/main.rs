@@ -47,6 +47,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         meta_container = %config.meta_container,
         cdn_container = %config.cdn_container,
         log_container = %config.log_container,
+        locked_container = config.locked_container.as_deref().unwrap_or("disabled"),
+        locked_storage_account = config
+            .locked_storage_account_name
+            .as_deref()
+            .unwrap_or(&config.storage_account_name),
         cors_origin_count = config.cors_origin_count(),
         user_assigned_identity = config.managed_identity_client_id.is_some(),
         "starting Flow-Like Azure API"

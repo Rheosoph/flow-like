@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -494,6 +495,40 @@ class DeploymentTest(unittest.TestCase):
             self.assertTrue(any("AUDIT_BUCKET" in error for error in preflight.validate(values, config)), change)
         values, config = self.render({"AUDIT_BUCKET": ""})
         self.assertTrue(any("requires an immutable AUDIT_BUCKET" in error for error in preflight.validate(values, config)))
+
+    def test_locked_bucket_is_opt_in_and_reaches_only_its_consumers(self):
+        template = (ROOT / "proxy/object-store.conf.template").read_text()
+
+        def gateway_buckets(config):
+            env = config["services"]["object-gateway"]["environment"]
+            self.assertEqual(env["NGINX_ENVSUBST_FILTER"].replace("$$", "$"), "^(META_BUCKET|CONTENT_BUCKET|LOG_BUCKET|LOCKED_BUCKET)$")
+            rendered = re.sub(r"\$\{(\w+)\}", lambda match: env[match[1]], template)
+            return re.search(r"location ~ \^/\(([^)]*)\)", rendered)[1].split("|")
+
+        values, config = self.render()
+        services = config["services"]
+        self.assertEqual(preflight.validate(values, config), [])
+        self.assertEqual(services["api"]["environment"]["LOCKED_BUCKET"], "")
+        self.assertEqual(services["execution-manager"]["environment"]["LOCKED_BUCKET"], "")
+        self.assertEqual(gateway_buckets(config), ["flow-like-meta", "flow-like-content", "flow-like-logs", "_locked-storage-disabled_"])
+        values, config = self.render({"LOCKED_BUCKET": "flow-like-locked", "LOCKED_BUCKET_ENFORCEMENT": "bucket"})
+        services = config["services"]
+        self.assertEqual(preflight.validate(values, config), [])
+        self.assertEqual(gateway_buckets(config), ["flow-like-meta", "flow-like-content", "flow-like-logs", "flow-like-locked"])
+        for name in ("api", "object-store-init", "execution-manager"):
+            self.assertEqual(services[name]["environment"]["LOCKED_BUCKET"], "flow-like-locked", name)
+        init = services["object-store-init"]["environment"]
+        self.assertEqual((init["LOCKED_BUCKET_ENFORCEMENT"], init["LOCKED_BUCKET_LOCK_MODE"], init["LOCKED_BUCKET_RETENTION_DAYS"]),
+                         ("bucket", "COMPLIANCE", "3650"))
+        for name in ("audit-worker", "queue-bridge", "compiler", "web", "sink-services"):
+            self.assertFalse([key for key in services.get(name, {}).get("environment", {}) if key.startswith("LOCKED_")], name)
+        _, stack = self.render({"LOCKED_BUCKET": "flow-like-locked"}, compose_file="docker-stack.yml")
+        self.assertEqual(stack["services"]["api"]["environment"]["LOCKED_BUCKET"], "flow-like-locked")
+        for change in ({"LOCKED_BUCKET": "flow.like.locked"}, {"LOCKED_BUCKET": "flow-like-content"},
+                       {"LOCKED_BUCKET": "flow-like-audit"}, {"LOCKED_BUCKET_ENFORCEMENT": "prefix"},
+                       {"LOCKED_BUCKET_RETENTION_DAYS": "0"}, {"LOCKED_BUCKET_MIN_RETENTION_DAYS": "4000"}):
+            values, config = self.render({"LOCKED_BUCKET": "flow-like-locked", **change})
+            self.assertTrue(any("LOCKED_BUCKET" in error for error in preflight.validate(values, config)), change)
 
     def test_preflight_rejects_missing_worker_or_leaked_authority(self):
         values, config = self.render()

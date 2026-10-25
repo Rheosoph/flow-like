@@ -29,6 +29,9 @@ export function forecastBacktestRange(
 		offset <= maxOffset;
 	const train = times.length - horizon - offset;
 	return {
+		totalCount: times.length,
+		contextCount: valid ? train : 0,
+		maxHorizon: Math.max(0, minimumLength - 2),
 		maxOffset: Math.max(0, maxOffset),
 		available: maxOffset >= 0 && times.length > 0,
 		valid,

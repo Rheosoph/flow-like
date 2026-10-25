@@ -58,9 +58,7 @@ impl NodeLogic for ToBytesNode {
         } else {
             flow_like_types::json::to_vec(&normalized_value)?
         };
-        context
-            .set_pin_value("bytes", flow_like_types::json::json!(bytes))
-            .await?;
+        context.set_pin_bytes("bytes", bytes).await?;
         Ok(())
     }
 

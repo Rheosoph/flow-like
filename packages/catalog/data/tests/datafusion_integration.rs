@@ -1564,6 +1564,8 @@ mod clickhouse_integration_tests {
     const PASSWORD: &str = "flowlike_test";
     const DATABASE: &str = "flowlike_test";
 
+    /// `Err` only when ClickHouse is unreachable, so callers can skip. A reachable server
+    /// that rejects the query fails the test: its error text is not a result.
     async fn clickhouse_query(query: &str) -> Result<String, reqwest::Error> {
         let client = reqwest::Client::new();
         let response = client
@@ -1576,7 +1578,14 @@ mod clickhouse_integration_tests {
             .body(query.to_string())
             .send()
             .await?;
-        response.text().await
+        let status = response.status();
+        let body = response.text().await?;
+        assert!(
+            status.is_success(),
+            "ClickHouse rejected `{query}` ({status}): {body}\n\
+             Its fixtures come from `docker compose -f tests/docker-compose.test.yml up clickhouse-setup`."
+        );
+        Ok(body)
     }
 
     #[tokio::test]
@@ -1616,17 +1625,19 @@ mod clickhouse_integration_tests {
     #[tokio::test]
     async fn test_clickhouse_aggregation_by_event() {
         let result = clickhouse_query(
-            "SELECT event_type, COUNT(*) as cnt, AVG(value) as avg_val
+            "SELECT event_type, COUNT(*) AS cnt,
+                    SUM(JSONExtractUInt(event_data, 'duration')) AS total_duration
              FROM analytics
+             WHERE event_type IN ('page_view', 'click', 'purchase')
              GROUP BY event_type
-             ORDER BY cnt DESC
+             ORDER BY event_type
              FORMAT TabSeparated",
         )
         .await;
 
         match result {
             Ok(body) => {
-                assert!(!body.is_empty(), "Should have results");
+                assert_eq!(body, "click\t1\t0\npage_view\t3\t345\npurchase\t1\t0\n");
             }
             Err(e) => {
                 eprintln!("Skipping test - ClickHouse not available: {}", e);
@@ -1640,8 +1651,9 @@ mod clickhouse_integration_tests {
             "SELECT
                 toDate(timestamp) as day,
                 COUNT(*) as events,
-                SUM(value) as total_value
+                SUM(JSONExtractUInt(event_data, 'duration')) as total_duration
              FROM analytics
+             WHERE id <= 5
              GROUP BY day
              ORDER BY day
              FORMAT TabSeparated",
@@ -1650,7 +1662,24 @@ mod clickhouse_integration_tests {
 
         match result {
             Ok(body) => {
-                assert!(!body.is_empty(), "Should have time series results");
+                let (events, duration) = body
+                    .lines()
+                    .map(|line| {
+                        let fields: Vec<&str> = line.split('\t').collect();
+                        assert_eq!(fields.len(), 3, "unexpected time series row: {line}");
+                        (
+                            fields[1].parse::<u64>().unwrap(),
+                            fields[2].parse::<u64>().unwrap(),
+                        )
+                    })
+                    .fold((0, 0), |(e, d), (events, duration)| {
+                        (e + events, d + duration)
+                    });
+                assert_eq!(
+                    (events, duration),
+                    (5, 345),
+                    "the five seeded events, bucketed by day"
+                );
             }
             Err(e) => {
                 eprintln!("Skipping test - ClickHouse not available: {}", e);

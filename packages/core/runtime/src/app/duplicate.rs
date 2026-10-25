@@ -1242,11 +1242,23 @@ mod tests {
                 .iter()
                 .any(|rel| rel.starts_with("events/versions/"))
         );
+        let source_ids = [
+            SRC,
+            "board_main",
+            "board_helper",
+            "board_gone",
+            "widget_card",
+            "template_a",
+        ];
         assert!(
-            !copied_meta.iter().any(|rel| rel.contains("src_")
-                || rel.contains("board_")
-                || rel.contains("widget_card")
-                || rel.contains("template_a")),
+            !copied_meta
+                .iter()
+                .any(|rel| rel.split(['/', '.']).any(|segment| {
+                    let id = segment
+                        .trim_start_matches("_template_")
+                        .trim_start_matches('_');
+                    source_ids.contains(&id)
+                })),
             "no source id survives in a path: {copied_meta:?}"
         );
 

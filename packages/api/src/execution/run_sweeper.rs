@@ -21,6 +21,10 @@ use crate::entity::execution_run;
 use crate::entity::prelude::ExecutionRun;
 use crate::entity::sea_orm_active_enums::{AuditActorType, RunMode, RunStatus};
 
+const TIMEOUT_REASON: &str =
+    "Run exceeded grace period without completion event: its executor stopped without reporting";
+/// `LogLevel::Fatal`.
+const FATAL_LOG_LEVEL: i32 = 4;
 const DEFAULT_INTERVAL_SECS: u64 = 300;
 const DEFAULT_GRACE_SECS: u64 = 3600;
 const DEFAULT_BATCH_SIZE: u64 = 500;
@@ -166,11 +170,11 @@ pub async fn sweep_once(
     let update = ExecutionRun::update_many()
         .set(execution_run::ActiveModel {
             status: Set(RunStatus::Timeout),
+            // Run lists derive a run's outcome from its log level; an unknown outcome is a failure.
+            log_level: Set(FATAL_LOG_LEVEL),
             completed_at: Set(Some(now)),
             updated_at: Set(now),
-            error_message: Set(Some(
-                "Run exceeded grace period without completion event".to_string(),
-            )),
+            error_message: Set(Some(TIMEOUT_REASON.to_string())),
             ..Default::default()
         })
         .filter(execution_run::Column::Id.is_in(ids))
@@ -188,6 +192,12 @@ pub async fn sweep_once(
         record_execution_result(context, run, "run-sweeper", AuditActorType::System)
             .await
             .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+        if let Some(state) = &context.state
+            && let Err(error) =
+                crate::execution::rejection::record_failure_log(state, run, TIMEOUT_REASON).await
+        {
+            tracing::warn!(run_id = %run.id, %error, "Failed to log a stuck run's timeout");
+        }
     }
     Ok(timed_out.len() as u64)
 }

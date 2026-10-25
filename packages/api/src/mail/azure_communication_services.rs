@@ -239,7 +239,17 @@ struct AcsEmailRequest<'a> {
     reply_to: Vec<AcsEmailAddress<'a>>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     headers: std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<AcsAttachment<'a>>,
     user_engagement_tracking_disabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcsAttachment<'a> {
+    name: &'a str,
+    content_type: &'a str,
+    content_in_base64: String,
 }
 
 impl<'a> AcsEmailRequest<'a> {
@@ -277,6 +287,15 @@ impl<'a> AcsEmailRequest<'a> {
                 .collect(),
             user_engagement_tracking_disabled: true,
             headers: message.headers()?,
+            attachments: message
+                .attachments
+                .iter()
+                .map(|attachment| AcsAttachment {
+                    name: &attachment.filename,
+                    content_type: &attachment.content_type,
+                    content_in_base64: attachment.base64(),
+                })
+                .collect(),
         })
     }
 }
@@ -436,13 +455,19 @@ fn validate_message(message: &AutomationEmailMessage) -> Result<()> {
         ));
     }
 
-    let content_bytes = message.body_text.as_ref().map_or(0, String::len)
+    let body_bytes = message.body_text.as_ref().map_or(0, String::len)
         + message.body_html.as_ref().map_or(0, String::len);
-    if content_bytes == 0 {
+    if body_bytes == 0 {
         return Err(flow_like_types::anyhow!(
             "email must have either an HTML or text body"
         ));
     }
+    let content_bytes = body_bytes
+        + message
+            .attachments
+            .iter()
+            .map(|attachment| attachment.content.len().div_ceil(3) * 4)
+            .sum::<usize>();
     if content_bytes > MAX_CONTENT_BYTES {
         return Err(flow_like_types::anyhow!(
             "email content exceeds the {MAX_CONTENT_BYTES}-byte ACS safety limit"
@@ -565,7 +590,27 @@ mod tests {
             in_reply_to: None,
             references: Vec::new(),
             auto_submitted: None,
+            attachments: Vec::new(),
         }
+    }
+
+    #[test]
+    fn attachments_are_base64_and_count_toward_the_content_limit() {
+        let mut message = message();
+        message.attachments = vec![crate::mail::tests::pdf()];
+        let payload = AcsEmailRequest::new("platform@example.com", &message).unwrap();
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(
+            value["attachments"],
+            serde_json::json!([{
+                "name": "Order 42.pdf",
+                "contentType": "application/pdf",
+                "contentInBase64": "JVBERi0xLjcgb3JkZXI=",
+            }])
+        );
+        assert!(validate_message(&message).is_ok());
+        message.attachments[0].content = vec![0; MAX_CONTENT_BYTES / 4 * 3];
+        assert!(validate_message(&message).is_err());
     }
 
     #[test]

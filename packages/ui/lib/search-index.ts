@@ -1,4 +1,5 @@
 import MiniSearch, { type SearchOptions } from "minisearch";
+import { plainTextFromRichContent } from "./plate-text";
 import { asArray } from "./response-shape";
 
 export interface SearchIndexOptions<T> {
@@ -45,7 +46,8 @@ function readPath(source: unknown, path: string): unknown {
 
 function toText(value: unknown): string {
 	if (value === null || value === undefined) return "";
-	if (typeof value === "string") return value;
+	// Rich-text fields would otherwise index the editor's JSON keys and ids.
+	if (typeof value === "string") return plainTextFromRichContent(value);
 	if (typeof value === "number" || typeof value === "boolean")
 		return String(value);
 	if (value instanceof Date) return value.toISOString();

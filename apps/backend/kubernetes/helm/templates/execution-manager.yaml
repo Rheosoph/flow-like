@@ -98,6 +98,9 @@ spec:
             - {name: META_BUCKET, value: {{ default "flow-like-meta" $storage.metaBucket | quote }}}
             - {name: CONTENT_BUCKET, value: {{ default "flow-like-content" $storage.contentBucket | quote }}}
             - {name: LOG_BUCKET, value: {{ default "flow-like-logs" $storage.logBucket | quote }}}
+            {{- with .Values.lockedStorage.bucket }}
+            - {name: LOCKED_BUCKET, value: {{ . | quote }}}
+            {{- end }}
             - {name: EXECUTION_MANAGER_TOKEN_FILE, value: /secrets/execution/EXECUTION_MANAGER_TOKEN}
             {{- include "flow-like.redisEnv" . | nindent 12 }}
             - name: BACKEND_PUB

@@ -2,7 +2,12 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { ResponsiveBar } from "@nivo/bar";
-import { ResponsiveLine } from "@nivo/line";
+import {
+	type Point,
+	type PointTooltipProps,
+	ResponsiveLine,
+	type SliceTooltipProps,
+} from "@nivo/line";
 import { ResponsivePie } from "@nivo/pie";
 import { useMemo } from "react";
 import type {
@@ -10,16 +15,67 @@ import type {
 	IFlowPaymentDay,
 	ISalesOverview,
 } from "../../../state/backend-state/sales-state";
-import { formatDay } from "./sales-format";
+import { formatCurrency, formatDay } from "./sales-format";
 
-const axisTheme = {
+/** Theme tokens are `oklch()`, so they are referenced bare — `hsl(var(--x))` is an invalid colour. */
+const chartTheme = {
 	axis: {
-		ticks: { text: { fill: "hsl(var(--muted-foreground))" } },
-		legend: { text: { fill: "hsl(var(--muted-foreground))" } },
+		ticks: { text: { fill: "var(--muted-foreground)" } },
+		legend: { text: { fill: "var(--muted-foreground)" } },
 	},
-	grid: { line: { stroke: "hsl(var(--border))" } },
-	legends: { text: { fill: "hsl(var(--muted-foreground))" } },
+	grid: { line: { stroke: "var(--border)" } },
+	legends: { text: { fill: "var(--muted-foreground)" } },
+	labels: { text: { fill: "var(--foreground)" } },
+	crosshair: { line: { stroke: "var(--primary)" } },
+	tooltip: {
+		container: {
+			background: "var(--popover)",
+			color: "var(--popover-foreground)",
+			border: "1px solid var(--border)",
+			borderRadius: "8px",
+			fontSize: "12px",
+		},
+	},
 };
+
+type RevenueSeries = {
+	id: string;
+	data: { x: string; y: number; cents: number }[];
+};
+
+function RevenueTooltip({
+	points,
+}: {
+	points: readonly Point<RevenueSeries>[];
+}) {
+	return (
+		<div className="whitespace-nowrap rounded-lg border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-xl">
+			<div className="mb-1 font-medium">{points[0]?.data.x}</div>
+			{points.map((point) => (
+				<div key={point.id} className="flex items-center justify-between gap-5">
+					<span className="flex items-center gap-2 text-muted-foreground">
+						<span
+							className="h-2.5 w-2.5 shrink-0 rounded-sm"
+							style={{ backgroundColor: point.seriesColor }}
+						/>
+						{point.seriesId}
+					</span>
+					<span className="font-medium tabular-nums">
+						{formatCurrency(point.data.cents)}
+					</span>
+				</div>
+			))}
+		</div>
+	);
+}
+
+function RevenuePointTooltip({ point }: PointTooltipProps<RevenueSeries>) {
+	return <RevenueTooltip points={[point]} />;
+}
+
+function RevenueSliceTooltip({ slice }: SliceTooltipProps<RevenueSeries>) {
+	return <RevenueTooltip points={slice.points} />;
+}
 
 function ChartEmpty({ height, message }: { height: number; message: string }) {
 	return (
@@ -44,7 +100,7 @@ export function RevenueChart({
 	flows?: IFlowPaymentDay[];
 }) {
 	const { t } = useTranslation("settings");
-	const chartData = useMemo(() => {
+	const chartData = useMemo<RevenueSeries[]>(() => {
 		const days = [
 			...new Set([
 				...(store ?? []).map((day) => day.date),
@@ -52,14 +108,17 @@ export function RevenueChart({
 			]),
 		].sort();
 		if (days.length === 0) return [];
-		const series = (id: string, rows: { date: string; revenue: number }[]) => {
+		const series = (
+			id: string,
+			rows: { date: string; revenue: number }[],
+		): RevenueSeries => {
 			const revenue = new Map(rows.map((row) => [row.date, row.revenue]));
 			return {
 				id,
-				data: days.map((day) => ({
-					x: formatDay(day),
-					y: (revenue.get(day) ?? 0) / 100,
-				})),
+				data: days.map((day) => {
+					const cents = revenue.get(day) ?? 0;
+					return { x: formatDay(day), y: cents / 100, cents };
+				}),
 			};
 		};
 		return [
@@ -105,6 +164,8 @@ export function RevenueChart({
 				areaOpacity={stacked ? 0.25 : 0.1}
 				useMesh={true}
 				enableSlices={stacked ? "x" : false}
+				tooltip={RevenuePointTooltip}
+				sliceTooltip={RevenueSliceTooltip}
 				enableGridX={false}
 				legends={
 					stacked
@@ -117,15 +178,11 @@ export function RevenueChart({
 									itemHeight: 20,
 									symbolSize: 10,
 									symbolShape: "circle",
-									itemTextColor: "hsl(var(--muted-foreground))",
 								},
 							]
 						: []
 				}
-				theme={{
-					...axisTheme,
-					crosshair: { line: { stroke: "hsl(var(--primary))" } },
-				}}
+				theme={chartTheme}
 			/>
 		</div>
 	);
@@ -181,10 +238,9 @@ export function PurchasesChart({ data }: { data: IDailyStat[] }) {
 						translateX: 100,
 						itemWidth: 80,
 						itemHeight: 20,
-						itemTextColor: "hsl(var(--muted-foreground))",
 					},
 				]}
-				theme={axisTheme}
+				theme={chartTheme}
 			/>
 		</div>
 	);
@@ -237,14 +293,12 @@ export function RevenueBreakdownChart({ data }: { data: ISalesOverview }) {
 				activeOuterRadiusOffset={8}
 				colors={{ datum: "data.color" }}
 				arcLinkLabelsSkipAngle={10}
-				arcLinkLabelsTextColor="hsl(var(--muted-foreground))"
+				arcLinkLabelsTextColor="var(--muted-foreground)"
 				arcLinkLabelsThickness={2}
 				arcLabelsSkipAngle={10}
 				arcLabelsTextColor="white"
 				valueFormat={(v) => `€${v.toFixed(0)}`}
-				theme={{
-					labels: { text: { fill: "hsl(var(--foreground))" } },
-				}}
+				theme={chartTheme}
 			/>
 		</div>
 	);

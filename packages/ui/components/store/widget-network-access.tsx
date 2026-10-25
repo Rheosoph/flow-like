@@ -59,7 +59,7 @@ import {
 
 /** Capabilities that let a widget move data off the device or record the user. */
 const ELEVATED_WIDGET_CAPABILITIES: ReadonlySet<MicroWidgetCapability> =
-	new Set(["microphone", "downloads"]);
+	new Set(["microphone", "uploads", "downloads"]);
 
 const ELEVATED_CHIP =
 	"border-primary/35 bg-primary/10 font-normal text-primary";

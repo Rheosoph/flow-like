@@ -121,6 +121,13 @@ positions in `[longitude, latitude]` order. Feature wrappers are unsupported.
 An explicit nullable union stays JSON-shaped and does not produce a native
 Geometry pin.
 
+The SDK's `WidgetFile` upload handle carries `@upload` and becomes
+`{"type":"object","x-flow-like-type":"file"}`, keeping only its title,
+description and deprecation. Arrays keep their shape. Extraction accepts it
+only in event payloads, where the host swaps each handle for the stored file,
+and rejects it in inputs, query arguments and query results. `@upload` on a
+non-object type fails extraction.
+
 ## Network access
 
 A widget runs with no network access by default. It can always read bytes it

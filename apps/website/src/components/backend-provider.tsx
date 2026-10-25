@@ -9,6 +9,7 @@ import {
 	EmptyEventState,
 	EmptyGraphState,
 	EmptyHelperState,
+	EmptyLockedStorageState,
 	EmptyQueryState,
 	EmptyRoleState,
 	EmptyRouteState,
@@ -29,6 +30,7 @@ import {
 	type IEventState,
 	type IGraphState,
 	type IHelperState,
+	type ILockedStorageState,
 	type IPageState,
 	type IQueryState,
 	type IRegistryState,
@@ -68,6 +70,7 @@ export class EmptyBackend implements IBackendState {
 	helperState: IHelperState = new EmptyHelperState();
 	roleState: IRoleState = new EmptyRoleState();
 	storageState: IStorageState = new EmptyStorageState();
+	lockedStorageState: ILockedStorageState = new EmptyLockedStorageState();
 	teamState: ITeamState = new EmptyTeamState();
 	templateState: ITemplateState = new EmptyTemplateState();
 	userState: IUserState = new EmptyUserState();
@@ -96,8 +99,8 @@ export class EmptyBackend implements IBackendState {
 }
 
 export function EmptyBackendProvider({ data }: Readonly<{ data: string }>) {
-	const [nodes, setNodes] = useState<any[]>([]);
-	const [edges, setEdges] = useState<any[]>([]);
+	const [nodes, setNodes] = useState<unknown[]>([]);
+	const [edges, setEdges] = useState<unknown[]>([]);
 	const [loaded, setLoaded] = useState(false);
 	const { setBackend } = useBackendStore();
 

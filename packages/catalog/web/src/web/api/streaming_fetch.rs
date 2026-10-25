@@ -1,7 +1,8 @@
 use ahash::AHashSet;
 use flow_like::flow::{
     execution::{
-        LogLevel, context::ExecutionContext, internal_node::InternalNode, log::LogMessage,
+        LogLevel, byte_store::ByteScope, context::ExecutionContext, internal_node::InternalNode,
+        log::LogMessage,
     },
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
@@ -9,7 +10,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{
     async_trait,
-    json::json,
     sync::{DashMap, Mutex},
 };
 use std::sync::Arc;
@@ -110,19 +110,29 @@ impl NodeLogic for StreamingHttpFetchNode {
         }
 
         let parent_node_id = context.node.node.lock().await.id.clone();
+        let byte_scopes = context.byte_scope();
+        // Each chunk lives in its own scope until the next one replaces it, so a long
+        // stream never piles its chunks up in the run's store.
+        let chunk_scope = Arc::new(Mutex::new(ByteScope::default()));
+        let callback_chunk_scope = chunk_scope.clone();
+        let callback_pin = streaming_response_pin.clone();
         let callback: StreamingCallback = Arc::new(move |response: flow_like_types::Bytes| {
-            let response = response.to_vec();
-            let streaming_response_pin = streaming_response_pin.clone();
+            let streaming_response_pin = callback_pin.clone();
             let connected_nodes = connected_nodes.clone();
             let parent_node_id = parent_node_id.clone();
+            let scope = byte_scopes.child();
+            let chunk_scope = callback_chunk_scope.clone();
 
             Box::pin(async move {
                 let mut recursion_guard = AHashSet::new();
                 recursion_guard.insert(parent_node_id.clone());
-                streaming_response_pin.set_value(json!(response)).await;
+                streaming_response_pin
+                    .set_value(scope.bytes_value(response).await)
+                    .await;
                 for entry in connected_nodes.iter() {
                     let (_id, context) = entry.pair();
                     let mut context = context.lock().await;
+                    let previous_scope = context.enter_byte_scope(&scope);
                     let mut message =
                         LogMessage::new("Streaming Intermediate Response", LogLevel::Debug, None);
                     let run = InternalNode::trigger(
@@ -134,6 +144,7 @@ impl NodeLogic for StreamingHttpFetchNode {
                     message.end();
                     context.log(message);
                     context.end_trace();
+                    context.restore_byte_scope(previous_scope);
                     match run {
                         Ok(_) => {}
                         Err(err) => {
@@ -141,15 +152,20 @@ impl NodeLogic for StreamingHttpFetchNode {
                         }
                     }
                 }
+                *chunk_scope.lock().await = scope;
                 Ok(())
             })
         });
 
         let response = request.streaming_trigger(&client, Some(callback)).await?;
         context.deactivate_exec_pin_ref(&streaming_pin).await?;
+        if let Some(last_chunk) = streaming_response_pin.get_raw_value().await {
+            chunk_scope.lock().await.promote(&last_chunk).await?;
+        }
 
-        context.set_pin_value("response", json!(response)).await?;
         let success = response.is_success();
+        let response = response.into_pin_value(context).await;
+        context.set_pin_value("response", response).await?;
 
         if success {
             context.deactivate_exec_pin("exec_error").await?;

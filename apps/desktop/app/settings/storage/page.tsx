@@ -22,6 +22,7 @@ import {
 	Switch,
 	cn,
 } from "@flow-like/flow-like-ui";
+import { scanIndexedDatabase } from "@flow-like/flow-like-ui/lib/browser-storage/measure";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
@@ -141,82 +142,6 @@ const RETENTION_OPTIONS = [7, 14, 30, 60, 90, 180, 365];
 const BROWSER_DESCRIPTION =
 	"Local preferences and IndexedDB records kept inside Studio's embedded WebView. Sizes are estimates.";
 
-function estimateValueBytes(
-	value: unknown,
-	seen = new WeakSet<object>(),
-): number {
-	if (value === null || value === undefined) return 0;
-	if (typeof value === "string") return value.length * 2;
-	if (typeof value === "number" || typeof value === "bigint") return 8;
-	if (typeof value === "boolean") return 4;
-	if (value instanceof Blob) return value.size;
-	if (value instanceof ArrayBuffer) return value.byteLength;
-	if (ArrayBuffer.isView(value)) return value.byteLength;
-	if (value instanceof Date) return 8;
-	if (typeof value !== "object" || seen.has(value)) return 0;
-	seen.add(value);
-	if (Array.isArray(value)) {
-		return value.reduce(
-			(total, entry) => total + estimateValueBytes(entry, seen),
-			0,
-		);
-	}
-	return Object.entries(value as Record<string, unknown>).reduce(
-		(total, [key, entry]) =>
-			total + key.length * 2 + estimateValueBytes(entry, seen),
-		0,
-	);
-}
-
-function scanObjectStore(store: IDBObjectStore) {
-	return new Promise<{ bytes: number; records: number }>((resolve, reject) => {
-		let bytes = 0;
-		let records = 0;
-		const request = store.openCursor();
-		request.onsuccess = () => {
-			const cursor = request.result;
-			if (!cursor) {
-				resolve({ bytes, records });
-				return;
-			}
-			records += 1;
-			bytes +=
-				estimateValueBytes(cursor.key) + estimateValueBytes(cursor.value);
-			cursor.continue();
-		};
-		request.onerror = () => reject(request.error);
-	});
-}
-
-async function scanIndexedDatabase(name: string, version?: number) {
-	const database = await new Promise<IDBDatabase>((resolve, reject) => {
-		const request = indexedDB.open(name, version);
-		request.onsuccess = () => resolve(request.result);
-		request.onerror = () => reject(request.error);
-		request.onupgradeneeded = () => {
-			request.transaction?.abort();
-			reject(
-				new Error(`IndexedDB ${name} changed while it was being measured`),
-			);
-		};
-	});
-	try {
-		const stores = Array.from(database.objectStoreNames);
-		if (stores.length === 0) return { bytes: 0, records: 0, stores: 0 };
-		const transaction = database.transaction(stores, "readonly");
-		const results = await Promise.all(
-			stores.map((store) => scanObjectStore(transaction.objectStore(store))),
-		);
-		return {
-			bytes: results.reduce((total, result) => total + result.bytes, 0),
-			records: results.reduce((total, result) => total + result.records, 0),
-			stores: stores.length,
-		};
-	} finally {
-		database.close();
-	}
-}
-
 async function estimateBrowserStorage(): Promise<StorageCategory> {
 	const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
 	return {
@@ -266,7 +191,8 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 		for (const info of databases) {
 			if (!info.name) continue;
 			try {
-				const measured = await scanIndexedDatabase(info.name, info.version);
+				const measured = await scanIndexedDatabase(info.name);
+				const storeCount = Object.keys(measured.stores).length;
 				measuredBytes += measured.bytes;
 				items.push({
 					id: `browser:idb:${info.name}`,
@@ -275,8 +201,8 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 						"indexeddbStoresValVal2Records",
 						"IndexedDB · {{stores}} {{val}} · {{val2}} records",
 						{
-							stores: measured.stores,
-							val: measured.stores === 1 ? "store" : "stores",
+							stores: storeCount,
+							val: storeCount === 1 ? "store" : "stores",
 							val2: measured.records.toLocaleString(),
 						},
 					),
@@ -888,7 +814,7 @@ export default function LocalStoragePage() {
 												{t("automaticLogCleanup", "Automatic log cleanup")}
 											</CardTitle>
 											<CardDescription className="mt-1">
-												{`Keep debug runs from growing unnoticed.`}
+												{"Keep debug runs from growing unnoticed."}
 											</CardDescription>
 										</div>
 									</div>
@@ -1022,7 +948,7 @@ export default function LocalStoragePage() {
 								pendingDelete?.reduce((sum, item) => sum + item.sizeBytes, 0) ??
 									0,
 							)}{" "}
-							{`from this device.`}
+							{"from this device."}
 							{activeCategory === "apps" &&
 								t(
 									"deletedAppsAndTheirLocalProjectFilesCannotBeRecovered",

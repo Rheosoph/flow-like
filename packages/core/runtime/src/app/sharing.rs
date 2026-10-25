@@ -475,7 +475,7 @@ where
         .map_err(|e| anyhow!("Blocking task failed: {e}"))?
 }
 
-fn zip_options() -> FileOptions<'static, ExtendedFileOptions> {
+fn zip_options() -> FileOptions<'static, 'static, ExtendedFileOptions> {
     FileOptions::<ExtendedFileOptions>::default()
         .compression_method(CompressionMethod::Zstd)
         .compression_level(Some(3))

@@ -51,13 +51,9 @@ import {
 	ROOT_FOLDER,
 	resolveFolder,
 } from "../folder-picker";
-import {
-	CacheSettings,
-	type PinEdit,
-	PinList,
-	usePinEditor,
-} from "../layer-editing-menu";
+import { CacheSettings, PinList, usePinEditor } from "../layer-editing-menu";
 import { OverlayWindow } from "../overlay-window";
+import type { PinEdit } from "../pin-editor-model";
 import { typeToColor } from "../utils";
 
 const DEFAULT_CACHE: ILayerCache = {

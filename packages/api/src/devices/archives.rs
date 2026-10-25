@@ -20,8 +20,11 @@ use std::result::Result;
 /// However long a tier keeps history, the hub drops a record after this.
 const MAX_RETENTION_SECONDS: u64 = 31 * 86_400;
 const USAGE_DEVICES: i64 = 1000;
+/// Expired rows one transaction removes for an owner, within DSQL's per-transaction limits.
+const EXPIRED_BATCH: usize = 128;
+const OFFLOAD_PER_PASS: usize = 256;
 
-fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
+pub(super) fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, query, values)
 }
 fn invalid(error: impl std::fmt::Display) -> ApiError {
@@ -73,18 +76,132 @@ async fn account_tier<C: ConnectionTrait>(db: &C, owner: &str) -> Result<String,
         .to_uppercase())
 }
 
-/// Unexpired history of all of an owner's devices: what the quota counts.
-async fn used_bytes<C: ConnectionTrait>(db: &C, owner: &str, now: i64) -> Result<u64, ApiError> {
+/// History of all of an owner's devices that expires after `after`: at `now` what the quota
+/// counts, at `i64::MIN` every stored row.
+async fn used_bytes<C: ConnectionTrait>(db: &C, owner: &str, after: i64) -> Result<u64, ApiError> {
     let used = db
         .query_one_raw(sql(
             r#"SELECT COALESCE(SUM("sizeBytes"),0)::bigint AS used FROM "DeviceArchive" WHERE "ownerId"=$1 AND "expiresAt">$2"#,
-            [owner.into(), now.into()],
+            [owner.into(), after.into()],
         ))
         .await?
         .ok_or_else(|| ApiError::internal("Missing telemetry quota result"))?
         .try_get::<i64>("", "used")?;
     u64::try_from(used)
         .map_err(|_| ApiError::internal(format!("Telemetry usage of {owner} is negative: {used}")))
+}
+
+/// Every writer of an owner's archives updates the owner's row first, so uploads from several
+/// devices, sweeps and tier changes serialize: Postgres blocks on it, DSQL lets one commit win.
+/// Returns the tier read under the fence; `None` when no (active) account matched.
+async fn fence_owner<C: ConnectionTrait>(
+    db: &C,
+    owner: &str,
+    active_only: bool,
+) -> Result<Option<String>, ApiError> {
+    let status = if active_only {
+        " AND status='ACTIVE'"
+    } else {
+        ""
+    };
+    db.query_one_raw(sql(
+        &format!(r#"UPDATE "User" SET tier=tier WHERE id=$1{status} RETURNING tier::text AS tier"#),
+        [owner.into()],
+    ))
+    .await?
+    .map(|row| Ok(row.try_get::<String>("", "tier")?.to_uppercase()))
+    .transpose()
+}
+
+/// An owner's stored archive bytes inside a transaction that holds the owner's fence.
+/// `DeviceArchiveUsage` counts every row, expired or not, so the quota stays O(1) as history grows.
+struct OwnerUsage {
+    owner: String,
+    /// The counter as read; `None` before its first write.
+    stored: Option<i64>,
+    /// Bytes of every row the owner keeps once the transaction commits.
+    used: u64,
+    /// Expired rows removed here; a full batch may have left more behind.
+    swept: usize,
+}
+
+impl OwnerUsage {
+    /// Removes a batch of the owner's expired rows and reads the counter, counting the
+    /// remaining rows once when it is missing or no longer covers what was removed.
+    async fn settle<C: ConnectionTrait>(db: &C, owner: &str, now: i64) -> Result<Self, ApiError> {
+        let swept = db.query_all_raw(sql(
+            &format!(r#"DELETE FROM "DeviceArchive" WHERE ("deviceId","archiveId") IN (SELECT "deviceId","archiveId" FROM "DeviceArchive" WHERE "ownerId"=$1 AND "expiresAt"<=$2 LIMIT {EXPIRED_BATCH}) RETURNING "sizeBytes""#),
+            [owner.into(), now.into()],
+        )).await?;
+        let freed = swept
+            .iter()
+            .map(|row| row.try_get::<i64>("", "sizeBytes"))
+            .sum::<Result<i64, _>>()?;
+        let stored = Self::stored(db, owner).await?;
+        let used = match stored.map(|stored| stored.saturating_sub(freed)) {
+            Some(used) if used >= 0 => used as u64,
+            drifted => {
+                if let Some(used) = drifted {
+                    tracing::warn!(
+                        owner,
+                        used,
+                        "Device archive usage counter fell below zero; recounting the owner's archives"
+                    );
+                }
+                used_bytes(db, owner, i64::MIN).await?
+            }
+        };
+        Ok(Self {
+            owner: owner.into(),
+            stored,
+            used,
+            swept: swept.len(),
+        })
+    }
+
+    async fn stored<C: ConnectionTrait>(db: &C, owner: &str) -> Result<Option<i64>, ApiError> {
+        db.query_one_raw(sql(
+            r#"SELECT "usedBytes" FROM "DeviceArchiveUsage" WHERE "ownerId"=$1"#,
+            [owner.into()],
+        ))
+        .await?
+        .map(|row| Ok(row.try_get::<i64>("", "usedBytes")?))
+        .transpose()
+    }
+
+    /// Whether `size` more bytes stay within `max_bytes` of unexpired history. Only when this
+    /// transaction's batch left expired rows behind can the exact sum be below `used`.
+    async fn admits<C: ConnectionTrait>(
+        &self,
+        db: &C,
+        now: i64,
+        size: u64,
+        max_bytes: u64,
+    ) -> Result<bool, ApiError> {
+        if self.used.saturating_add(size) <= max_bytes {
+            return Ok(true);
+        }
+        Ok(self.swept == EXPIRED_BATCH
+            && used_bytes(db, &self.owner, now).await?.saturating_add(size) <= max_bytes)
+    }
+
+    async fn save<C: ConnectionTrait>(&self, db: &C) -> Result<(), ApiError> {
+        let used = i64::try_from(self.used).map_err(|_| {
+            ApiError::internal(format!(
+                "Telemetry usage of {} overflows: {}",
+                self.owner, self.used
+            ))
+        })?;
+        if self.stored == Some(used) {
+            return Ok(());
+        }
+        db.execute_raw(sql(
+            r#"INSERT INTO "DeviceArchiveUsage"("ownerId","usedBytes") VALUES($1,$2) ON CONFLICT("ownerId") DO UPDATE SET "usedBytes"=excluded."usedBytes""#,
+            [self.owner.clone().into(), used.into()],
+        ))
+        .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -126,11 +243,19 @@ async fn usage<C: ConnectionTrait>(
     ))
     .all(db)
     .await?;
+    let used_bytes = if devices.len() < USAGE_DEVICES as usize {
+        devices
+            .iter()
+            .map(|device| u64::try_from(device.used_bytes).unwrap_or_default())
+            .sum()
+    } else {
+        used_bytes(db, owner, now).await?
+    };
     Ok(ArchiveUsage {
         tier,
         max_bytes,
         retention_seconds,
-        used_bytes: used_bytes(db, owner, now).await?,
+        used_bytes,
         devices,
     })
 }
@@ -253,37 +378,54 @@ async fn retain_verified(
     payload: StoredArchive,
     digest: String,
 ) -> Result<bool, ApiError> {
-    retry_transaction(db,dialect,None,&RetryPolicy::default(),move|tx|{
+    let retention = retry_transaction(db,dialect,None,&RetryPolicy::default(),move|tx|{
         let id=id.clone();let manifest=manifest.clone();let payload=payload.clone();let digest=digest.clone();let limits=limits.clone();
         Box::pin(async move{
             let device=repository::lock_active_device(tx,&id,epoch).await?;
             let owner=device.status.owner_id;
-            // Every device under one owner conflicts on this row, fencing concurrent quota writes and tier changes.
-            let changed=tx.execute_raw(sql(r#"UPDATE "User" SET tier=tier WHERE id=$1 AND status='ACTIVE'"#,[owner.clone().into()])).await?.rows_affected();
-            if changed!=1{return Err(ApiError::FORBIDDEN);}
-            let tier=account_tier(tx,&owner).await?;
+            let Some(tier)=fence_owner(tx,&owner,true).await? else {return Err(ApiError::FORBIDDEN);};
             let Some((max_bytes,retention_seconds))=tier_limit(&limits,&tier) else {return Err(storage_refused("ARCHIVE_TIER_WITHOUT_HISTORY","This account tier does not store device telemetry"));};
             let now=chrono::Utc::now().timestamp();
-            // Bound deletion batches for both Postgres and DSQL. Expired rows never count toward quota or reads.
-            tx.execute_raw(sql(r#"DELETE FROM "DeviceArchive" WHERE ("deviceId","archiveId") IN (SELECT "deviceId","archiveId" FROM "DeviceArchive" WHERE "ownerId"=$1 AND "expiresAt"<=$2 LIMIT 128)"#,[owner.clone().into(),now.into()])).await?;
-            if let Some(old)=tx.query_one_raw(sql(r#"SELECT digest FROM "DeviceArchive" WHERE "deviceId"=$1 AND "archiveId"=$2"#,[id.clone().into(),manifest.archive_id.clone().into()])).await?{
-                if old.try_get::<String>("","digest")?!=digest{return Err(ApiError::conflict("Archive identifier was already used"));}
-                return Ok(true);
-            }
-            let scope=manifest.scope.clone();let kind=kind(&manifest.kind);
-            let head=tx.query_one_raw(sql(r#"SELECT sequence,digest FROM "DeviceArchiveHead" WHERE "deviceId"=$1 AND scope=$2 AND kind=$3"#,[id.clone().into(),scope.clone().into(),kind.into()])).await?;
-            let (sequence,previous)=head.map(|r|Ok::<_,ApiError>((r.try_get::<i64>("","sequence")? as u64,Some(r.try_get::<String>("","digest")?)))).transpose()?.unwrap_or((0,None));
-            if manifest.sequence==sequence && previous.as_ref()==Some(&digest){return Ok(false);}
-            if manifest.sequence!=sequence+1 || manifest.previous_manifest_digest!=previous{return Err(ApiError::conflict("Archive sequence does not extend the retained-history chain"));}
-            let expires=manifest.created_at.saturating_add(retention_seconds as i64);
-            if expires>now {
-                if used_bytes(tx,&owner,now).await?.saturating_add(payload.size_bytes as u64)>max_bytes{return Err(storage_refused("ARCHIVE_QUOTA_REACHED","Device telemetry storage quota reached"));}
-                tx.execute_raw(sql(r#"INSERT INTO "DeviceArchive"("deviceId","archiveId","ownerId",scope,kind,sequence,digest,bundle,"sizeBytes","createdAt","expiresAt","payloadRef","manifestJws","rosterJws") VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,[id.clone().into(),manifest.archive_id.clone().into(),owner.into(),scope.clone().into(),kind.into(),(manifest.sequence as i64).into(),digest.clone().into(),payload.bundle.into(),payload.size_bytes.into(),manifest.created_at.into(),expires.into(),payload.payload_ref.into(),payload.manifest_jws.into(),payload.roster_jws.into()])).await?;
-            }
-            tx.execute_raw(sql(r#"INSERT INTO "DeviceArchiveHead"("deviceId",scope,kind,sequence,digest) VALUES($1,$2,$3,$4,$5) ON CONFLICT("deviceId",scope,kind) DO UPDATE SET sequence=excluded.sequence,digest=excluded.digest"#,[id.into(),scope.into(),kind.into(),(manifest.sequence as i64).into(),digest.into()])).await?;
-            Ok(expires>now)
+            let mut usage=OwnerUsage::settle(tx,&owner,now).await?;
+            let counted=&mut usage;
+            let retention=async move{
+                if let Some(old)=tx.query_one_raw(sql(r#"SELECT digest FROM "DeviceArchive" WHERE "deviceId"=$1 AND "archiveId"=$2"#,[id.clone().into(),manifest.archive_id.clone().into()])).await?{
+                    if old.try_get::<String>("","digest")?!=digest{return Err(ApiError::conflict("Archive identifier was already used"));}
+                    return Ok(Retention::Kept(true));
+                }
+                let scope=manifest.scope.clone();let kind=kind(&manifest.kind);
+                let head=tx.query_one_raw(sql(r#"SELECT sequence,digest FROM "DeviceArchiveHead" WHERE "deviceId"=$1 AND scope=$2 AND kind=$3"#,[id.clone().into(),scope.clone().into(),kind.into()])).await?;
+                let (sequence,previous)=head.map(|r|Ok::<_,ApiError>((r.try_get::<i64>("","sequence")? as u64,Some(r.try_get::<String>("","digest")?)))).transpose()?.unwrap_or((0,None));
+                if manifest.sequence==sequence && previous.as_ref()==Some(&digest){return Ok(Retention::Kept(false));}
+                if manifest.sequence!=sequence+1 || manifest.previous_manifest_digest!=previous{return Err(ApiError::conflict("Archive sequence does not extend the retained-history chain"));}
+                let expires=manifest.created_at.saturating_add(retention_seconds as i64);
+                if expires>now {
+                    let size=payload.size_bytes as u64;
+                    if !counted.admits(tx,now,size,max_bytes).await?{return Ok(Retention::QuotaReached);}
+                    tx.execute_raw(sql(r#"INSERT INTO "DeviceArchive"("deviceId","archiveId","ownerId",scope,kind,sequence,digest,bundle,"sizeBytes","createdAt","expiresAt","payloadRef","manifestJws","rosterJws") VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,[id.clone().into(),manifest.archive_id.clone().into(),owner.into(),scope.clone().into(),kind.into(),(manifest.sequence as i64).into(),digest.clone().into(),payload.bundle.into(),payload.size_bytes.into(),manifest.created_at.into(),expires.into(),payload.payload_ref.into(),payload.manifest_jws.into(),payload.roster_jws.into()])).await?;
+                    counted.used=counted.used.saturating_add(size);
+                }
+                tx.execute_raw(sql(r#"INSERT INTO "DeviceArchiveHead"("deviceId",scope,kind,sequence,digest) VALUES($1,$2,$3,$4,$5) ON CONFLICT("deviceId",scope,kind) DO UPDATE SET sequence=excluded.sequence,digest=excluded.digest"#,[id.into(),scope.into(),kind.into(),(manifest.sequence as i64).into(),digest.into()])).await?;
+                Ok(Retention::Kept(expires>now))
+            }.await?;
+            usage.save(tx).await?;
+            Ok(retention)
         })
-    }).await
+    }).await?;
+    match retention {
+        Retention::Kept(stored) => Ok(stored),
+        Retention::QuotaReached => Err(storage_refused(
+            "ARCHIVE_QUOTA_REACHED",
+            "Device telemetry storage quota reached",
+        )),
+    }
+}
+
+/// What an upload transaction committed. A refused upload still commits the expired rows
+/// it removed, so a full account frees its expired history on the next attempt.
+enum Retention {
+    Kept(bool),
+    QuotaReached,
 }
 
 #[derive(Clone, Deserialize)]
@@ -617,13 +759,58 @@ async fn read_retained(
 /// then removes enrollments that lapsed without becoming devices.
 pub(crate) async fn sweep_expired(state: &AppState) -> Result<u64, ApiError> {
     let now = chrono::Utc::now().timestamp();
-    let deleted = state.db.execute_raw(sql(r#"DELETE FROM "DeviceArchive" WHERE ("deviceId","archiveId") IN (SELECT "deviceId","archiveId" FROM "DeviceArchive" WHERE "expiresAt"<=$1 LIMIT 128)"#,[now.into()])).await?.rows_affected();
+    let owners = state.db.query_all_raw(sql(
+        &format!(r#"SELECT DISTINCT "ownerId" FROM (SELECT "ownerId" FROM "DeviceArchive" WHERE "expiresAt"<=$1 LIMIT {EXPIRED_BATCH}) AS expired"#),
+        [now.into()],
+    )).await?;
+    let mut deleted = 0;
+    for row in owners {
+        let owner: String = row.try_get("", "ownerId")?;
+        match sweep_owner(&state.db, state.db_dialect, owner.clone(), now).await {
+            Ok(swept) => deleted += swept as u64,
+            Err(error) => {
+                tracing::warn!(%error, %owner, "Expired device history of one owner was not removed")
+            }
+        }
+    }
     match repository::prune_abandoned_enrollments(&state.db, state.db_dialect, now).await {
         Ok(0) => {}
         Ok(pruned) => tracing::info!(pruned, "Abandoned device enrollments removed"),
         Err(error) => tracing::warn!(%error, "Abandoned device enrollment cleanup failed"),
     }
     Ok(deleted)
+}
+
+/// Removes a batch of one owner's expired history under the fence uploads take, so the
+/// owner's usage counter changes with the rows. An owner without a `User` row has no uploads.
+async fn sweep_owner(
+    db: &sea_orm::DatabaseConnection,
+    dialect: crate::db::DbDialect,
+    owner: String,
+    now: i64,
+) -> Result<usize, ApiError> {
+    retry_transaction(db, dialect, None, &RetryPolicy::default(), move |tx| {
+        let owner = owner.clone();
+        Box::pin(async move {
+            fence_owner(tx, &owner, false).await?;
+            let usage = OwnerUsage::settle(tx, &owner, now).await?;
+            usage.save(tx).await?;
+            Ok(usage.swept)
+        })
+    })
+    .await
+}
+
+/// Moves a bounded batch of bundles stored inline before the content bucket existed into it
+/// and returns how many moved.
+pub(crate) async fn offload_inline(state: &AppState) -> Result<usize, ApiError> {
+    archive_payload::offload_inline(
+        &state.db,
+        &state.content_bucket,
+        chrono::Utc::now().timestamp(),
+        OFFLOAD_PER_PASS,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -856,6 +1043,9 @@ mod tests {
                 ),
                 include_str!(
                     "../../prisma/migrations/20261019120000_device_archive_payload_store/migration.sql"
+                ),
+                include_str!(
+                    "../../prisma/migrations/20261022143341_device_archive_usage/migration.sql"
                 ),
             ] {
                 for statement in migration.split(';').filter(|part| !part.trim().is_empty()) {
@@ -1648,6 +1838,219 @@ mod tests {
                 .unwrap_err()
                 .status(),
             axum::http::StatusCode::FORBIDDEN
+        );
+        scratch.discard().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to a disposable PostgreSQL server"]
+    async fn usage_counter_starts_from_stored_rows_and_moves_with_uploads_refusals_and_sweeps() {
+        let scratch = Scratch::with_accounts("('owner','PREMIUM')").await;
+        let db = scratch.db.clone();
+        device(&db, "one").await;
+        let counter = || async {
+            db.query_one_raw(sql(
+                r#"SELECT "usedBytes" FROM "DeviceArchiveUsage" WHERE "ownerId"='owner'"#,
+                [],
+            ))
+            .await
+            .unwrap()
+            .map(|row| row.try_get::<i64>("", "usedBytes").unwrap())
+        };
+        let store = |sequence: u64, max_bytes: u64| {
+            retain_verified(
+                &db,
+                DbDialect::Postgres,
+                [("PREMIUM".into(), (max_bytes, 3600))].into(),
+                "one".into(),
+                1,
+                ArchiveManifest {
+                    sequence,
+                    previous_manifest_digest: (sequence > 1)
+                        .then(|| format!("one-{}", sequence - 1)),
+                    ..manifest("one")
+                },
+                StoredArchive::inline("x".repeat(60_000)),
+                format!("one-{sequence}"),
+            )
+        };
+        let expire = |sequence: i64| {
+            db.execute_raw(sql(
+                r#"UPDATE "DeviceArchive" SET "expiresAt"=0 WHERE scope='device' AND sequence=$1"#,
+                [sequence.into()],
+            ))
+        };
+        let sweep = || {
+            sweep_owner(
+                &db,
+                DbDialect::Postgres,
+                "owner".into(),
+                chrono::Utc::now().timestamp(),
+            )
+        };
+
+        // An owner from before the counter: one kept segment and more expired rows than a batch.
+        assert!(store(1, 1_000_000).await.unwrap());
+        db.execute_unprepared(r#"DELETE FROM "DeviceArchiveUsage"; INSERT INTO "DeviceArchive"("deviceId","archiveId","ownerId",scope,kind,sequence,digest,bundle,"sizeBytes","createdAt","expiresAt") SELECT 'one','expired-'||n,'owner','old','logs',n,'digest','x',1000,0,0 FROM generate_series(1,200) AS n"#).await.unwrap();
+        // The counter still holds the 72 expired rows past the batch; the exact sum admits.
+        assert!(store(2, 150_000).await.unwrap());
+        assert_eq!(counter().await, Some(192_000));
+        assert_eq!(used_bytes(&db, "owner", i64::MIN).await.unwrap(), 192_000);
+        // A refusal still commits the expired rows it removed.
+        let refused = store(3, 150_000).await.unwrap_err();
+        assert_eq!(refused.public_code(), "ARCHIVE_QUOTA_REACHED");
+        assert_eq!(counter().await, Some(120_000));
+        assert!(store(3, 180_000).await.unwrap());
+        assert_eq!(counter().await, Some(180_000));
+
+        expire(1).await.unwrap();
+        assert_eq!(sweep().await.unwrap(), 1);
+        assert_eq!(counter().await, Some(120_000));
+        // A counter below what a delete releases is recounted from the rows.
+        db.execute_unprepared(r#"UPDATE "DeviceArchiveUsage" SET "usedBytes"=0"#)
+            .await
+            .unwrap();
+        expire(2).await.unwrap();
+        assert_eq!(sweep().await.unwrap(), 1);
+        assert_eq!(counter().await, Some(60_000));
+        assert_eq!(sweep().await.unwrap(), 0);
+        scratch.discard().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to a disposable PostgreSQL server"]
+    async fn inline_bundles_move_to_content_storage_newest_first_and_stay_readable() {
+        use flow_like_storage::{files::store::FlowLikeStore, object_store::memory::InMemory};
+        use std::sync::Arc;
+
+        let scratch = Scratch::with_accounts("('owner','PREMIUM')").await;
+        let db = scratch.db.clone();
+        let telemetry = device(&db, "shared").await;
+        let owner = SigningKey::generate();
+        let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+        let signed = signed_archive(&owner, &telemetry);
+        let (first, _) =
+            verify_archive_content(&signed, &owner.public_key(), &telemetry.public_key()).unwrap();
+        let next = |sequence: u64, previous: &EncryptedArchive| {
+            let bundle = EncryptedArchive {
+                manifest_jws: format!("manifest-{sequence}"),
+                roster_jws: "roster".into(),
+                ciphertext: "ciphertext".into(),
+                recipient_keys: Vec::new(),
+            };
+            let manifest = ArchiveManifest {
+                archive_id: format!("archive-{sequence}"),
+                sequence,
+                previous_manifest_digest: Some(compact_digest(&previous.manifest_jws)),
+                ..first.clone()
+            };
+            (manifest, bundle)
+        };
+        let retain = |manifest: ArchiveManifest, bundle: &EncryptedArchive, payload| {
+            retain_verified(
+                &db,
+                DbDialect::Postgres,
+                limits(),
+                "shared".into(),
+                1,
+                manifest,
+                payload,
+                compact_digest(&bundle.manifest_jws),
+            )
+        };
+        let mut bundles = vec![(first.clone(), signed.clone())];
+        for sequence in 2..=5 {
+            bundles.push(next(sequence, &bundles.last().unwrap().1));
+        }
+        for (manifest, bundle) in &bundles {
+            let inline = StoredArchive::inline(serde_json::to_string(bundle).unwrap());
+            assert!(retain(manifest.clone(), bundle, inline).await.unwrap());
+        }
+        let (manifest, bundle) = next(6, &bundles.last().unwrap().1);
+        let staged = archive_payload::stage(
+            &store,
+            &manifest,
+            &bundle,
+            serde_json::to_string(&bundle).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(retain(manifest, &bundle, staged).await.unwrap());
+
+        let inline = || async {
+            db.query_all_raw(sql(
+                r#"SELECT sequence FROM "DeviceArchive" WHERE bundle IS NOT NULL ORDER BY sequence"#,
+                [],
+            ))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<i64>("", "sequence").unwrap())
+            .collect::<Vec<_>>()
+        };
+        let offload = |budget| {
+            archive_payload::offload_inline(&db, &store, chrono::Utc::now().timestamp(), budget)
+        };
+        assert_eq!(inline().await, [1, 2, 3, 4, 5]);
+        assert_eq!(offload(2).await.unwrap(), 2);
+        assert_eq!(inline().await, [1, 2, 3]);
+        // A row that cannot move stops its stream there, so the inline rows stay a prefix.
+        db.execute_unprepared(r#"UPDATE "DeviceArchive" SET bundle='damaged' WHERE sequence=3"#)
+            .await
+            .unwrap();
+        assert_eq!(offload(10).await.unwrap(), 0);
+        assert_eq!(inline().await, [1, 2, 3]);
+        db.execute_raw(sql(
+            r#"UPDATE "DeviceArchive" SET bundle=$1 WHERE sequence=3"#,
+            [serde_json::to_string(&bundles[2].1).unwrap().into()],
+        ))
+        .await
+        .unwrap();
+        assert_eq!(offload(10).await.unwrap(), 3);
+        assert!(inline().await.is_empty());
+        assert_eq!(offload(10).await.unwrap(), 0);
+
+        for (manifest, bundle) in &bundles {
+            let encoded = serde_json::to_string(bundle).unwrap();
+            let row = db
+                .query_one_raw(sql(
+                    r#"SELECT "payloadRef","manifestJws","rosterJws","sizeBytes" FROM "DeviceArchive" WHERE "archiveId"=$1"#,
+                    [manifest.archive_id.clone().into()],
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                row.try_get::<String>("", "manifestJws").unwrap(),
+                bundle.manifest_jws
+            );
+            assert_eq!(
+                row.try_get::<String>("", "rosterJws").unwrap(),
+                bundle.roster_jws
+            );
+            let size = row.try_get::<i64>("", "sizeBytes").unwrap();
+            assert_eq!(size, encoded.len() as i64);
+            let reference = row.try_get::<String>("", "payloadRef").unwrap();
+            let moved = archive_payload::load(&store, manifest, &reference, size)
+                .await
+                .unwrap();
+            assert_eq!(serde_json::to_string(&moved).unwrap(), encoded);
+        }
+        let registered = repository::current_device(&db, "shared").await.unwrap();
+        let read = read_retained(
+            &db,
+            DbDialect::Postgres,
+            &store,
+            &registered,
+            "owner".into(),
+            owner.public_key(),
+            first.archive_id.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&read).unwrap(),
+            serde_json::to_string(&signed).unwrap()
         );
         scratch.discard().await;
     }

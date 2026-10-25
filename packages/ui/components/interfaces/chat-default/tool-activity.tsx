@@ -13,7 +13,7 @@ import { type ReactNode, useId, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { getToolActivityLabel } from "../../../state/global-chat/tool-step-activity";
 import type { IPlanStep, IToolActivityDetail } from "./chat-db";
-import { ReasoningViewer } from "./reasoning-viewer";
+import { ReasoningBody } from "./reasoning-viewer";
 
 type ActivitySource = NonNullable<IToolActivityDetail["sources"]>[number];
 
@@ -81,9 +81,24 @@ function WebsiteIcon({ source }: { source: ActivitySource }) {
 	);
 }
 
+const CHIP_CLASS =
+	"flex w-fit min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/60 bg-background/50 px-2 py-1 text-[11px] text-muted-foreground";
+
+function ContextChip({ text, isQuery }: { text: string; isQuery: boolean }) {
+	return (
+		<span className={CHIP_CLASS} title={text}>
+			{isQuery && (
+				<Search className="size-3 shrink-0 opacity-70" aria-hidden="true" />
+			)}
+			<span className="min-w-0 truncate font-medium text-foreground/80">
+				{text}
+			</span>
+		</span>
+	);
+}
+
 function SourceChip({ source }: { source: ActivitySource }) {
-	const className =
-		"group/source flex w-fit max-w-full items-center gap-1.5 rounded-md border border-border/60 bg-background/50 px-2 py-1 text-[11px] text-muted-foreground";
+	const className = cn("group/source", CHIP_CLASS);
 	const content = (
 		<>
 			<WebsiteIcon source={source} />
@@ -153,6 +168,16 @@ export function ActivitySources({ steps }: { steps: IPlanStep[] }) {
 	);
 }
 
+/** The outcome supersedes the in-flight progress note, so the meta line stays one line. */
+function activityNote(
+	detail: IToolActivityDetail,
+	description: string | undefined,
+	shown: (string | undefined)[],
+) {
+	if (detail.outcome) return detail.outcome;
+	return description && !shown.includes(description) ? description : undefined;
+}
+
 export function ToolActivityRow({
 	step,
 	detail,
@@ -174,38 +199,39 @@ export function ToolActivityRow({
 	const reasoningId = useId();
 	const hasReasoning = Boolean(step.reasoning?.trim());
 	const context = detail.query ?? detail.target;
-	const description = step.description?.trim();
 	const title = stepActivityTitle(step);
-	const showDescription =
-		description &&
-		description !== context &&
-		description !== title &&
-		description !== detail.label &&
-		description !== detail.outcome;
+	const note = activityNote(detail, step.description?.trim(), [
+		context,
+		title,
+		detail.label,
+	]);
+	const hasChips = Boolean(context || detail.sources?.length);
+	const hasMeta = Boolean(detail.method || note || hasReasoning);
 	return (
 		<div
 			className={cn(
-				"min-w-0 rounded-lg px-2 py-2 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-300",
+				"min-w-0 rounded-lg px-2 py-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-300",
 				isActive && "bg-primary/5",
 			)}
 			data-tool-activity={detail.category}
 		>
 			<div className="flex min-w-0 items-start gap-2.5">
 				<span
-					className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/30"
+					className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/30"
 					aria-hidden="true"
 				>
 					<Icon className="size-3.5 text-muted-foreground" />
 				</span>
-				<div className="min-w-0 flex-1 space-y-1.5">
-					<div className="flex min-w-0 items-center gap-2 text-xs">
+				<div className="min-w-0 flex-1 space-y-1">
+					<div className="flex min-h-7 min-w-0 items-center gap-2 text-xs">
 						<span
 							className={cn(
-								"min-w-0 flex-1 font-medium",
+								"min-w-0 flex-1 truncate font-medium",
 								step.status === "failed"
 									? "text-muted-foreground"
 									: "text-foreground/90",
 							)}
+							title={title}
 						>
 							{title}
 						</span>
@@ -216,64 +242,54 @@ export function ToolActivityRow({
 						)}
 						<span className="shrink-0">{statusIcon}</span>
 					</div>
-					{context && (
-						<p
-							className="line-clamp-2 break-words text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]"
-							title={context}
-						>
-							{context}
-						</p>
+					{hasChips && (
+						<div className="flex min-w-0 flex-wrap gap-1.5">
+							{context && (
+								<ContextChip
+									text={context}
+									isQuery={context === detail.query}
+								/>
+							)}
+							{detail.sources?.map((source) => (
+								<SourceChip key={source.url} source={source} />
+							))}
+						</div>
 					)}
-					{detail.sources?.map((source) => (
-						<SourceChip key={source.url} source={source} />
-					))}
-					{showDescription && (
-						<p
-							className="line-clamp-2 break-words text-[11px] leading-relaxed text-muted-foreground [overflow-wrap:anywhere]"
-							title={description}
-						>
-							{description}
-						</p>
-					)}
-					{(detail.method || detail.outcome) && (
-						<div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground/80">
+					{hasMeta && (
+						<div className="flex min-w-0 items-center gap-2 pt-0.5 text-[11px] text-muted-foreground/80">
 							{detail.method && (
-								<span className="rounded border border-border/60 px-1 font-mono">
+								<span className="shrink-0 rounded border border-border/60 px-1 font-mono text-[10px]">
 									{detail.method}
 								</span>
 							)}
-							{detail.outcome && (
-								<span className="min-w-0 break-words [overflow-wrap:anywhere]">
-									{detail.outcome}
+							{note && (
+								<span className="min-w-0 truncate" title={note}>
+									{note}
 								</span>
+							)}
+							{hasReasoning && (
+								<button
+									type="button"
+									onClick={() => onToggle(step.id)}
+									aria-expanded={isExpanded}
+									aria-controls={reasoningId}
+									className="ml-auto flex shrink-0 items-center gap-1 rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+								>
+									Details
+									<ChevronDown
+										className={cn(
+											"size-3 transition-transform",
+											isExpanded && "rotate-180",
+										)}
+										aria-hidden="true"
+									/>
+								</button>
 							)}
 						</div>
 					)}
-					{hasReasoning && (
-						<button
-							type="button"
-							onClick={() => onToggle(step.id)}
-							aria-expanded={isExpanded}
-							aria-controls={reasoningId}
-							className="flex items-center gap-1 rounded text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-						>
-							<ChevronDown
-								className={cn(
-									"size-3 transition-transform",
-									isExpanded && "rotate-180",
-								)}
-								aria-hidden="true"
-							/>
-							Details
-						</button>
-					)}
 					{isExpanded && hasReasoning && (
 						<div id={reasoningId}>
-							<ReasoningViewer
-								reasoning={step.reasoning ?? ""}
-								defaultExpanded
-								compact
-							/>
+							<ReasoningBody reasoning={step.reasoning ?? ""} compact />
 						</div>
 					)}
 				</div>

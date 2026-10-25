@@ -7,6 +7,7 @@ pub mod excel;
 pub use flow_like_catalog_data_github::data::github;
 pub use flow_like_catalog_data_google::data::google;
 pub use flow_like_catalog_data_linkedin::data::linkedin;
+pub mod locked;
 pub use flow_like_catalog_data_microsoft::data::microsoft;
 pub use flow_like_catalog_data_notion::data::notion;
 pub mod path;

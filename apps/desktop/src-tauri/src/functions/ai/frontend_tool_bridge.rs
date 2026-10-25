@@ -1,11 +1,12 @@
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, EventTarget, Manager};
 use tokio::sync::oneshot;
 
 use flow_like::flow::copilot::tool_spec::HTTP_REQUEST_TOOL;
@@ -36,6 +37,69 @@ pub const FLOWPILOT_FRONTEND_TOOL_LIFECYCLE_EVENT: &str = "flowpilot://frontend-
 pub const FLOWPILOT_FRONTEND_TOOL_CANCEL_EVENT: &str = "flowpilot://frontend-tool-cancel";
 
 const FRONTEND_DISPATCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Webview that answers each run channel's frontend tool requests.
+///
+/// Every window mounts the FlowPilot tool listeners, so a broadcast request runs once per open
+/// window; two copies of a nested specialist registered under one request id then cancel each
+/// other. Runs bind their channel to the webview that started them and requests go only there.
+static FRONTEND_TOOL_OWNERS: LazyLock<DashMap<String, FrontendToolOwner>> =
+    LazyLock::new(DashMap::new);
+
+struct FrontendToolOwner {
+    webview: String,
+    holders: usize,
+}
+
+/// Keeps a run channel bound to its webview while a run using that channel is alive.
+#[must_use]
+pub struct FrontendToolOwnerClaim {
+    channel_id: String,
+}
+
+impl Drop for FrontendToolOwnerClaim {
+    fn drop(&mut self) {
+        FRONTEND_TOOL_OWNERS.remove_if_mut(&self.channel_id, |_, owner| {
+            owner.holders = owner.holders.saturating_sub(1);
+            owner.holders == 0
+        });
+    }
+}
+
+/// The first claim on a channel picks its webview. Nested runs joining an owning chat's channel
+/// keep that chat's webview, since their tool requests belong to the same tool tree.
+pub fn claim_frontend_tool_owner(channel_id: &str, webview: &str) -> FrontendToolOwnerClaim {
+    FRONTEND_TOOL_OWNERS
+        .entry(channel_id.to_string())
+        .and_modify(|owner| owner.holders = owner.holders.saturating_add(1))
+        .or_insert_with(|| FrontendToolOwner {
+            webview: webview.to_string(),
+            holders: 1,
+        });
+    FrontendToolOwnerClaim {
+        channel_id: channel_id.to_string(),
+    }
+}
+
+fn frontend_tool_owner(channel_id: &str) -> Option<String> {
+    FRONTEND_TOOL_OWNERS
+        .get(channel_id)
+        .map(|owner| owner.webview.clone())
+}
+
+/// Main thread only. Falls back to a broadcast when no webview owns the run or the owning window
+/// was closed, so the request still reaches a listener instead of waiting out its deadline.
+fn emit_to_owner<S: Serialize + Clone>(
+    app_handle: &AppHandle,
+    owner: Option<&str>,
+    event: &str,
+    payload: S,
+) -> tauri::Result<()> {
+    match owner.filter(|label| app_handle.get_webview_window(label).is_some()) {
+        Some(label) => app_handle.emit_to(EventTarget::labeled(label), event, payload),
+        None => app_handle.emit(event, payload),
+    }
+}
 
 #[derive(Clone)]
 struct ScopedToolExecution {
@@ -365,6 +429,7 @@ struct FrontendToolTrace {
     argument_key_count: usize,
     started: Instant,
     lifecycle: Vec<FrontendToolLifecycleStep>,
+    owner_webview: Option<String>,
 }
 
 impl FrontendToolTrace {
@@ -416,6 +481,7 @@ impl FrontendToolTrace {
             argument_key_count,
             started: Instant::now(),
             lifecycle: Vec::new(),
+            owner_webview: None,
         };
         trace.record("request_created");
         trace
@@ -815,6 +881,7 @@ impl FrontendToolBridge {
         cancellation: Option<CancellationToken>,
     ) -> Value {
         apply_tool_context(&tool_name, &mut arguments, self.context.as_ref());
+        let owner_webview = frontend_tool_owner(self.channel.channel_id());
 
         let ticket = match self.channel.open(timeout).await {
             Ok(ticket) => ticket,
@@ -828,6 +895,7 @@ impl FrontendToolBridge {
                     self.context.as_ref(),
                     timeout,
                 );
+                trace.owner_webview = owner_webview;
                 trace.record("pending_response_registration_failed");
                 return finish_bridge_result(
                     &self.app_handle,
@@ -857,6 +925,7 @@ impl FrontendToolBridge {
             self.context.as_ref(),
             timeout,
         );
+        trace.owner_webview = owner_webview;
         trace.cap_deadline_to_channel(ticket.expires_at);
         trace.record("pending_response_registered");
 
@@ -880,11 +949,16 @@ impl FrontendToolBridge {
         let (event_tx, event_rx) = oneshot::channel();
         let emit_handle = self.app_handle.clone();
         let event_name = self.event.clone();
+        let owner_webview = trace.owner_webview.clone();
 
         if let Err(error) = self.app_handle.run_on_main_thread(move || {
-            let result = emit_handle
-                .emit(&event_name, &request)
-                .map_err(|error| error.to_string());
+            let result = emit_to_owner(
+                &emit_handle,
+                owner_webview.as_deref(),
+                &event_name,
+                &request,
+            )
+            .map_err(|error| error.to_string());
             let _ = event_tx.send(result);
         }) {
             self.channel.abandon(&ticket).await;
@@ -1386,12 +1460,16 @@ fn emit_lifecycle_report(
         );
         let request_id = report.request_id.clone();
         let emit_handle = app_handle.clone();
+        let owner_webview = trace.owner_webview.clone();
         if let Err(error) = queue_main_thread_job(
             app_handle,
             Box::new(move || {
-                if let Err(error) =
-                    emit_handle.emit(FLOWPILOT_FRONTEND_TOOL_LIFECYCLE_EVENT, &report)
-                {
+                if let Err(error) = emit_to_owner(
+                    &emit_handle,
+                    owner_webview.as_deref(),
+                    FLOWPILOT_FRONTEND_TOOL_LIFECYCLE_EVENT,
+                    &report,
+                ) {
                     eprintln!(
                         "[frontend-tool-bridge] failed to emit lifecycle report for request {}: {error}",
                         report.request_id
@@ -1455,10 +1533,16 @@ fn emit_cancellation(app_handle: &AppHandle, trace: &FrontendToolTrace, reason: 
         "context": trace.context,
     });
     let emit_handle = app_handle.clone();
+    let owner_webview = trace.owner_webview.clone();
     match queue_main_thread_job(
         app_handle,
         Box::new(move || {
-            if let Err(error) = emit_handle.emit(FLOWPILOT_FRONTEND_TOOL_CANCEL_EVENT, payload) {
+            if let Err(error) = emit_to_owner(
+                &emit_handle,
+                owner_webview.as_deref(),
+                FLOWPILOT_FRONTEND_TOOL_CANCEL_EVENT,
+                payload,
+            ) {
                 eprintln!(
                     "[frontend-tool-bridge] failed to emit cancellation for request {request_id}: {error}"
                 );
@@ -1512,6 +1596,20 @@ mod tests {
             None,
             Duration::from_secs(120),
         )
+    }
+
+    #[test]
+    fn nested_claims_keep_the_first_webview_until_every_holder_drops() {
+        let channel_id = format!("owner-test-{}", new_request_id());
+        let chat = claim_frontend_tool_owner(&channel_id, "main");
+        let nested = claim_frontend_tool_owner(&channel_id, "sidebar-packages");
+        assert_eq!(frontend_tool_owner(&channel_id).as_deref(), Some("main"));
+
+        drop(chat);
+        assert_eq!(frontend_tool_owner(&channel_id).as_deref(), Some("main"));
+
+        drop(nested);
+        assert_eq!(frontend_tool_owner(&channel_id), None);
     }
 
     #[test]

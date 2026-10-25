@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertTriangleIcon,
@@ -7,6 +8,7 @@ import {
 	EyeIcon,
 	LayoutGridIcon,
 	ListIcon,
+	Loader2Icon,
 	PlayIcon,
 	XIcon,
 } from "lucide-react";
@@ -58,8 +60,37 @@ interface PendingComponentsViewProps {
 	warnings?: string[];
 	/** Project the components were generated for; package widgets in the preview load through it. */
 	appId?: string;
+	/** Live preview of a generation still in progress: progress instead of Apply/Dismiss. */
+	drafting?: boolean;
 	onApply: () => void;
 	onDismiss: () => void;
+}
+
+function PendingComponentsHeading({
+	drafting,
+	count,
+}: Readonly<{ drafting: boolean; count: number }>) {
+	const { t } = useTranslation("chat");
+	if (!drafting)
+		return (
+			<div>
+				<div className="text-[10px] font-semibold">Ready to Apply</div>
+				<div className="text-[9px] text-muted-foreground">
+					{count} component
+					{count !== 1 ? "s" : ""}
+				</div>
+			</div>
+		);
+	return (
+		<div aria-live="polite">
+			<div className="text-[10px] font-semibold">
+				{t("drafting", "Drafting…")}
+			</div>
+			<div className="text-[9px] text-muted-foreground">
+				{t("countComponentsSoFar", "{{count}} component so far", { count })}
+			</div>
+		</div>
+	);
 }
 
 export const PendingComponentsView = memo(function PendingComponentsView({
@@ -67,6 +98,7 @@ export const PendingComponentsView = memo(function PendingComponentsView({
 	canvasSettings,
 	warnings = [],
 	appId,
+	drafting = false,
 	onApply,
 	onDismiss,
 }: PendingComponentsViewProps) {
@@ -97,15 +129,16 @@ export const PendingComponentsView = memo(function PendingComponentsView({
 				<div className="flex items-center justify-between gap-2 mb-2">
 					<div className="flex items-center gap-2">
 						<div className="p-1 bg-primary/20 rounded-md">
-							<LayoutGridIcon className="h-3 w-3 text-primary" />
+							{drafting ? (
+								<Loader2Icon className="h-3 w-3 text-primary animate-spin" />
+							) : (
+								<LayoutGridIcon className="h-3 w-3 text-primary" />
+							)}
 						</div>
-						<div>
-							<div className="text-[10px] font-semibold">Ready to Apply</div>
-							<div className="text-[9px] text-muted-foreground">
-								{components.length} component
-								{components.length !== 1 ? "s" : ""}
-							</div>
-						</div>
+						<PendingComponentsHeading
+							drafting={drafting}
+							count={components.length}
+						/>
 					</div>
 					<div className="flex items-center gap-1">
 						<Button
@@ -131,22 +164,26 @@ export const PendingComponentsView = memo(function PendingComponentsView({
 								className={`h-3 w-3 transition-transform ${isOpen ? "rotate-180" : ""}`}
 							/>
 						</Button>
-						<Button
-							size="sm"
-							className="h-6 px-2 text-[10px] gap-1"
-							onClick={onApply}
-						>
-							<PlayIcon className="h-3 w-3" />
-							Apply
-						</Button>
-						<Button
-							size="sm"
-							variant="ghost"
-							className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-							onClick={onDismiss}
-						>
-							<XIcon className="h-3 w-3" />
-						</Button>
+						{!drafting && (
+							<>
+								<Button
+									size="sm"
+									className="h-6 px-2 text-[10px] gap-1"
+									onClick={onApply}
+								>
+									<PlayIcon className="h-3 w-3" />
+									Apply
+								</Button>
+								<Button
+									size="sm"
+									variant="ghost"
+									className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+									onClick={onDismiss}
+								>
+									<XIcon className="h-3 w-3" />
+								</Button>
+							</>
+						)}
 					</div>
 				</div>
 

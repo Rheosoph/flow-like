@@ -7,7 +7,6 @@ import {
 	CHAT_PLACEHOLDER_BUBBLE_STATES,
 	CHAT_PLACEHOLDER_VISUALS,
 	DEFAULT_CHAT_AI_DISCLOSURE,
-	DEFAULT_CHAT_EXAMPLE_MESSAGES,
 	chatPlaceholderSupportsTypingMotion,
 	resolveChatPlaceholderBubbleState,
 	resolveChatPlaceholderTypingMotion,
@@ -1000,53 +999,11 @@ export function SimpleChatConfig({
 							</div>
 						)}
 
-						{/* An empty list is not "nothing" — the chat falls back to a
-						    built-in set, so show it here or nobody can find where the
-						    prompts they can see are configured. */}
-						{(config?.example_messages ?? []).length === 0 && (
-							<div className="space-y-2 rounded-md border border-dashed border-input p-3">
-								<div className="flex flex-wrap items-center gap-2">
-									<span className="text-sm font-medium">
-										{t(
-											"currentlyShowingTheBuiltinExamples",
-											"Currently showing the built-in examples",
-										)}
-									</span>
-									{isEditing && (
-										<button
-											type="button"
-											className="text-sm text-primary underline underline-offset-2"
-											onClick={() =>
-												setValue("example_messages", [
-													...DEFAULT_CHAT_EXAMPLE_MESSAGES,
-												])
-											}
-										>
-											{`Start from these`}
-										</button>
-									)}
-								</div>
-								<div className="flex flex-wrap gap-2">
-									{DEFAULT_CHAT_EXAMPLE_MESSAGES.slice(0, 4).map((message) => (
-										<div
-											key={message}
-											className="inline-flex max-w-xs items-center rounded-md border border-dashed border-input px-2 py-1 text-sm text-muted-foreground"
-										>
-											<span className="truncate">{message}</span>
-										</div>
-									))}
-								</div>
-								<p className="text-xs text-muted-foreground">
-									{t(
-										"theseAreGenericAddingYourOwnReplacesThemEntirely",
-										"These are generic. Adding your own replaces them entirely.",
-									)}
-								</p>
-							</div>
-						)}
-
 						<p className="text-sm text-muted-foreground">
-							{`Example messages to show users. Press Enter to add a new message.`}
+							{t(
+								"exampleMessagesHelp",
+								"Starter suggestions for this chat event. Press Enter to add a message. Leave the list empty to hide suggestions.",
+							)}
 						</p>
 					</div>
 				</>

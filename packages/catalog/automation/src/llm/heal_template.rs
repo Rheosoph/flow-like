@@ -130,6 +130,7 @@ impl NodeLogic for LLMHealTemplateNode {
             "Automation/LLM/Healing",
         );
         node.set_flowscript_name("automation.llm", "healTemplate");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/bot-fix.svg");
         node.set_version(5);
 

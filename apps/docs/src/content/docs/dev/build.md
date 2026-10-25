@@ -60,7 +60,11 @@ The desktop build also needs:
   for your operating system;
 - `protoc`, because Rust build scripts compile the repository's protobuf
   definitions;
-- a working C/C++ build toolchain for native dependencies.
+- a working C/C++ build toolchain for native dependencies;
+- on Linux, the unixODBC driver manager that ODBC nodes link
+  (`sudo apt install unixodbc-dev`, Fedora `unixODBC-devel`). macOS desktop builds
+  compile and bundle their own copy; macOS executor builds use Homebrew's
+  (`brew install unixodbc`). Windows uses the system ODBC library.
 
 Platform-specific native libraries and mobile toolchains have additional
 requirements. Use the task you intend to run as the final source of truth.

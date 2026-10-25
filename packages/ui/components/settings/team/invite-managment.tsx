@@ -10,13 +10,11 @@ import {
 	MailIcon,
 	MoreVerticalIcon,
 	PlusIcon,
-	SearchIcon,
 	Settings,
 	Trash2Icon,
 	User,
 	UserCheckIcon,
 	UserPlus2Icon,
-	UserPlusIcon,
 	Users,
 	UsersIcon,
 } from "lucide-react";
@@ -67,11 +65,9 @@ import { UserInviteSearchResults } from "../../ui/user-invite-search-results";
 import { SectionLockedPanel } from "../permission";
 import {
 	SectionHeading,
-	TEAM_ACTION_GRADIENT,
 	TEAM_ROW_META,
 	TEAM_ROW_TITLE,
 	TeamActionLock,
-	TeamCallout,
 	TeamHint,
 	TeamReadError,
 	TeamRowActions,
@@ -276,43 +272,6 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 
 	return (
 		<div className="space-y-8">
-			<TeamSection>
-				<SectionHeading
-					icon={UserPlusIcon}
-					title={t("inviteSomeoneDirectly", "Invite someone directly")}
-					description={t(
-						"searchAFlowlikeAccountAndSendItAnInvitationWithANote",
-						"Search a Flow-Like account and send it an invitation with a note.",
-					)}
-					actions={
-						<TeamActionLock
-							locked={!access.canAdminister}
-							reason={access.adminReason}
-						>
-							<InviteUserDialog
-								appId={appId}
-								trigger={
-									<Button
-										size="sm"
-										className={TEAM_ACTION_GRADIENT}
-										disabled={!access.canAdminister}
-									>
-										<UserPlusIcon className="size-4" />
-										{t("invitePeople", "Invite people")}
-									</Button>
-								}
-							/>
-						</TeamActionLock>
-					}
-				/>
-				<TeamCallout icon={SearchIcon}>
-					{t(
-						"matchingAccountsShowUpAsYouTypeAUsernameOrEmailPickTheRightOneAndItGetsTheInvitationStraightAwayAddAPersonalMessageAndItTravelsWithTheInvite",
-						"Matching accounts show up as you type a username or email — pick the right one and it gets the invitation straight away. Add a personal message and it travels with the invite.",
-					)}
-				</TeamCallout>
-			</TeamSection>
-
 			<TeamSection>
 				<SectionHeading
 					icon={LinkIcon}

@@ -4,6 +4,7 @@
 @import "./styles/scrollbars.css" layer(base);
 @import "./styles/chat-prose.css";
 @import "./styles/chat-rich-media.css";
+@import "./styles/chat-a2ui.css";
 @source "./components/**/*.{ts,tsx}";
 @source "./hooks/**/*.{ts,tsx}";
 @source "./lib/**/*.{ts,tsx}";

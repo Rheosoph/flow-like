@@ -2,6 +2,7 @@ import type { Monaco } from "@monaco-editor/react";
 import type { INode } from "../../../lib/schema/flow/node";
 import { IValueType, IVariableType } from "../../../lib/schema/flow/pin";
 import {
+	COLLAPSE_COMPLETION,
 	type CallArgs,
 	type CallHead,
 	type CallResolution,
@@ -23,6 +24,7 @@ import {
 	expandPath,
 	getFlowScriptEnvDoc,
 	getFlowScriptIndex,
+	inStatementBlock,
 	matchBracket,
 	methodParams,
 	namespaceKey,
@@ -79,7 +81,8 @@ export type FlowScriptDeclarationKind =
 	| "variable"
 	| "function"
 	| "event"
-	| "handler";
+	| "handler"
+	| "collapse";
 
 export interface FlowScriptParam {
 	name: string;
@@ -497,8 +500,35 @@ function computeAnalysis(
 	const isTopLevel = (offset: number) =>
 		braceDepth[offset] === moduleDepthAt(offset);
 
+	// `@collapse("…") { … }` is a visual group, not a scope: a binding declared in its body stays
+	// visible after it, exactly as if the statement were written in the enclosing block.
+	const collapseBlocks: {
+		path: string;
+		nameSpan: Span;
+		span: Span;
+		bodySpan: Span;
+	}[] = [];
+	const collapseBodies = new Set<number>();
+	const collapseRe = /@collapse\s*\(\s*(["'])[^"'\n]*\1\s*\)\s*\{/g;
+	for (let m = collapseRe.exec(masked); m; m = collapseRe.exec(masked)) {
+		const bodyOpen = m.index + m[0].length - 1;
+		const body = pairByOpen.get(bodyOpen);
+		if (!body) continue;
+		const quote = masked.indexOf(m[1], m.index);
+		const quoteClose = masked.indexOf(m[1], quote + 1);
+		collapseBodies.add(bodyOpen);
+		collapseBlocks.push({
+			path: text.slice(quote + 1, quoteClose),
+			nameSpan: { start: quote, end: quoteClose + 1 },
+			span: { start: m.index, end: body.close + 1 },
+			bodySpan: { start: bodyOpen, end: body.close + 1 },
+		});
+	}
+
+	const scopePairs = pairs.filter((pair) => !collapseBodies.has(pair.open));
+
 	const scopeFor = (offset: number, nameStart: number): Span => {
-		const brace = enclosingBrace(pairs, offset);
+		const brace = enclosingBrace(scopePairs, offset);
 		return brace
 			? { start: nameStart, end: brace.close }
 			: { start: 0, end: masked.length };
@@ -801,7 +831,20 @@ function computeAnalysis(
 		});
 	}
 
-	// Attach nested callables (handlers) to their enclosing declaration.
+	for (const block of collapseBlocks) {
+		callables.push({
+			kind: "collapse",
+			name: block.path || '""',
+			detail: "@collapse",
+			nameSpan: block.nameSpan,
+			span: block.span,
+			bodySpan: block.bodySpan,
+			params: [],
+			children: [],
+		});
+	}
+
+	// Attach nested callables (handlers) and collapse groups to their enclosing declaration.
 	callables.sort((a, b) => a.span.start - b.span.start);
 	const roots: FlowScriptDeclaration[] = [];
 	const nesting: FlowScriptDeclaration[] = [];
@@ -918,7 +961,7 @@ function computeAnalysis(
 	}
 	const declByStart = new Map<number, FlowScriptDeclaration>();
 	const stampDecl = (decl: FlowScriptDeclaration) => {
-		declByStart.set(decl.nameSpan.start, decl);
+		if (decl.kind !== "collapse") declByStart.set(decl.nameSpan.start, decl);
 		for (const child of decl.children) stampDecl(child);
 	};
 	for (const decl of declarations) {
@@ -1789,6 +1832,15 @@ function statementSnippetItems(
 			sortText: "6_cache",
 		},
 	];
+	if (inStatementBlock(analysis.masked, offset))
+		items.push({
+			...COLLAPSE_COMPLETION,
+			kind,
+			insertTextRules: snippet,
+			filterText: "collapse",
+			range,
+			sortText: "6_collapse",
+		});
 	for (const info of analysis.index.byName.values()) {
 		if (!isEventEntry(info)) continue;
 		const params = info.outputs
@@ -1965,6 +2017,7 @@ export interface FlowScriptDocumentSymbol {
 	name: string;
 	detail: string;
 	kind: FlowScriptSymbolKindTag;
+	declarationKind?: FlowScriptDeclaration["kind"];
 	range: RangeLike;
 	selectionRange: RangeLike;
 	children: FlowScriptDocumentSymbol[];
@@ -1978,6 +2031,7 @@ export function buildFlowScriptDocumentSymbols(
 		decl: FlowScriptDeclaration,
 	): FlowScriptDocumentSymbol => ({
 		name: decl.name,
+		declarationKind: decl.kind,
 		detail:
 			decl.kind === "event" || decl.kind === "handler"
 				? [decl.eventType, decl.detail].filter(Boolean).join(" ")
@@ -1985,7 +2039,7 @@ export function buildFlowScriptDocumentSymbols(
 					? "module"
 					: (decl.detail ?? ""),
 		kind:
-			decl.kind === "module"
+			decl.kind === "module" || decl.kind === "collapse"
 				? "namespace"
 				: decl.kind === "interface"
 					? "interface"

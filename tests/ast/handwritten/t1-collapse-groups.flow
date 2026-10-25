@@ -1,0 +1,31 @@
+use log::{ info }
+use string::{ join, slugify, split, toLower, trim }
+
+function normalize(raw: string): (slug: string, words: string[]) {
+    const trimmed = raw.trim()
+    const lowered = trimmed.toLower()
+    @collapse("Report") {
+        info({ message: lowered, toast: false })
+    }
+    const slug = lowered.slugify({ separator: "-", maxLength: 60 })
+    const words = lowered.split({ separator: " ", skipEmpty: true })
+    return slug, words
+}
+
+eventsSimple normalizeTitle() {
+    const raw = "   The Quick   Brown Fox  "
+    @collapse("Normalize") {
+        const { slug, words } = normalize(raw)
+        @collapse("Announce/Start") {
+            info({ message: slug, toast: false })
+        }
+        const rejoined = words.join({ separator: "+" })
+        if (rejoined == "") {
+            @collapse("/") {
+                info({ message: "nothing to join", toast: false })
+            }
+        } else {
+            info({ message: `${slug} / ${rejoined}`, toast: false })
+        }
+    }
+}

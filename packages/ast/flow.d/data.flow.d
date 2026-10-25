@@ -1,8 +1,10 @@
 // Data — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -1730,6 +1732,23 @@ declare namespace df {
     function registerMysql(this: DataFusionSession, { session: Struct, host?: string, port?: int, database: string, username: string, password: string, sourceTable: string, tableName: string, sslMode?: string, readonly?: bool }): { sessionOut: Struct, connectionUrl: string };
 
     /**
+     * Register a table from any database with an installed ODBC driver (Snowflake, SQL Server, Teradata, …) for federated queries. The driver and an ODBC driver manager must be installed where the flow runs.
+     * @node df_register_odbc @receiver session @alias dfRegisterOdbc
+     * @param session — DataFusion session (receiver: `this` in `x.registerOdbc(...)`)
+     * @param connectionString — ODBC connection string without credentials, e.g. Driver={SnowflakeDSIIDriver};Server=<account>.snowflakecomputing.com;Database=SALES;Warehouse=COMPUTE_WH
+     * @param username (optional) — Database username, sent as UID (leave empty if the connection string authenticates)
+     * @param password (optional) — Database password, sent as PWD
+     * @param catalog (optional) — Catalog (database) of the source table; empty uses the connection default
+     * @param schema (optional) — Schema of the source table; empty uses the connection default
+     * @param sourceTable — Table name exactly as the source spells it (case is preserved)
+     * @param tableName — Name to register in DataFusion
+     * @param maxTextSize (optional) — Largest text value fetched per cell, in bytes. Drivers report columns like Snowflake VARCHAR or PostgreSQL TEXT as unbounded, so the fetch buffers need a cap; longer values fail the query.
+     * @returns sessionOut — DataFusion session
+     * @impure has side effects / drives control flow
+     */
+    function registerOdbc(this: DataFusionSession, { session: Struct, connectionString: string, username?: string, password?: string, catalog?: string, schema?: string, sourceTable: string, tableName: string, maxTextSize?: int }): Struct;
+
+    /**
      * Register an Oracle database table for federated queries via ODBC. Requires Oracle Instant Client with ODBC driver installed.
      * @node df_register_oracle @receiver session @alias dfRegisterOracle
      * @param session — DataFusion session (receiver: `this` in `x.registerOracle(...)`)
@@ -2351,6 +2370,22 @@ declare namespace files {
      * @impure has side effects / drives control flow
      */
     function getChanges({ manifest: Struct, root: Struct, recursive?: bool, mode?: string }): { added: Struct[], updated: Struct[], deleted: Struct[], session: Struct };
+
+    /**
+     * Reports a file's name, size, timestamps, media type and kind, plus what its format says about it: dimensions for images, pages and document properties for PDFs and Office files. Type detection and image headers use ranged reads of the first bytes only; PDFs and Office files are read whole.
+     * @node file_get_metadata @receiver path @alias fileGetMetadata
+     * @param path — File to inspect (receiver: `this` in `x.getMetadata(...)`)
+     * @returns name — File name including its extension
+     * @returns extension — Text after the last dot of the name, without the dot; empty when there is none
+     * @returns size — Size in bytes
+     * @returns lastModified — When the file was last written
+     * @returns eTag — Entity tag the store reports; it changes whenever the content changes
+     * @returns mimeType — Media type detected from the file's leading bytes, falling back to its extension
+     * @returns kind — One of image, pdf, office, audio, video, archive, text or other
+     * @returns details — Metadata the file's format carries. image: width, height (upright, EXIF orientation applied), format, orientation. pdf: page_count, pdf_version, encrypted and whichever Info fields exist (title, author, subject, keywords, creator, producer, creation_date, modification_date as ISO 8601). office (docx, xlsx, pptx): title, creator, subject, keywords, created, modified, last_modified_by, pages, words, slides when present. Empty for every other kind or when the format cannot be parsed.
+     * @impure has side effects / drives control flow
+     */
+    function getMetadata(this: FlowPath, { path: Struct }): { name: string, extension: string, size: int, lastModified: Date, eTag: string, mimeType: string, kind: string, details: Struct };
 
     /**
      * Reads a range of bytes from a file
@@ -5093,6 +5128,137 @@ declare namespace linkedin {
     function shareText({ provider: Struct, authorId: string, text: string, visibility?: string }): { postId: string, errorMessage: string };
 }
 
+declare namespace lockedFiles {
+    // === Data/Files/Locked ===
+
+    /**
+     * Downloads one version of a write-once, revision-safe file into the run's cache and checks its size and SHA-256 against the record
+     * @node locked_download_item @alias lockedDownloadItem
+     * @param itemId (optional) — ID of the locked file to download
+     * @param version (optional) — Version number to download; 0 downloads the newest locked version
+     * @returns path — The downloaded bytes in the run's cache
+     * @returns file — The downloaded version with its lock details
+     * @returns verified — True when the storage provider also confirmed the SHA-256 when the version was locked; the downloaded bytes always match the recorded SHA-256
+     * @impure has side effects / drives control flow
+     */
+    function download({ itemId?: string, version?: int }): { path: Struct, file: Struct, verified: bool };
+
+    /**
+     * Moves the retention date of a locked version further into the future. Retention can only be extended, never shortened; needs app admin rights and per-object locks
+     * @node locked_extend_retention @alias lockedExtendRetention
+     * @param itemId (optional) — ID of the locked file
+     * @param versionId (optional) — ID of the version to extend; empty extends the newest locked version
+     * @param retainUntil (optional) — New retention date as RFC 3339 date-time (2036-12-31T00:00:00Z) or date (2036-12-31); leave empty when using Retain Days From Now
+     * @param extendDays (optional) — Retain until this many days from now instead of a fixed date; 0 uses Retain Until
+     * @returns version — The version with its new retention date
+     * @impure has side effects / drives control flow
+     */
+    function extendRetention({ itemId?: string, versionId?: string, retainUntil?: string, extendDays?: int }): Struct;
+
+    /**
+     * Looks up a write-once, revision-safe file by its ID, or by scope, folder and name, with every version and its lock details
+     * @node locked_get_item @alias lockedGetItem
+     * @param itemId (optional) — ID of the locked file; leave empty to look it up by scope, folder and name
+     * @param scope (optional) — project: shared with everyone in the project; user: private to the user running the flow
+     * @param folder (optional) — Folder of the file when looking it up by name; empty for the root
+     * @param name (optional) — Name of the file when looking it up without an ID
+     * @returns file — The file with its newest locked version
+     * @returns versions — Every version of the file, newest first, including purged ones
+     * @returns found — Whether the file exists and is visible to this run
+     * @impure has side effects / drives control flow
+     */
+    function get({ itemId?: string, scope?: string, folder?: string, name?: string }): { file: Struct, versions: Struct[], found: bool };
+
+    /**
+     * Lists the write-once, revision-safe files of this app in a folder, with their newest locked version
+     * @node locked_list_items @alias lockedListItems
+     * @param scope (optional) — project: shared with everyone in the project; user: private to the user running the flow
+     * @param folder (optional) — Folder to list, such as invoices/2026; empty lists the root
+     * @param recursive (optional) — Also list files in all subfolders
+     * @param search (optional) — Only files whose name contains this text, ignoring case; empty lists all
+     * @param limit (optional) — Maximum number of files to return
+     * @returns files — Files in the folder, ordered by name
+     * @returns folders — Names of the folder's direct subfolders; empty for recursive listings
+     * @impure has side effects / drives control flow
+     */
+    function list({ scope?: string, folder?: string, recursive?: bool, search?: string, limit?: int }): { files: Struct[], folders: string[] };
+
+    /**
+     * Deletes the stored bytes of a locked file and frees its storage quota. Only works after the retention period ended and without a legal hold; the server refuses while any selected version is still retained. The record itself, including its SHA-256, is kept as evidence
+     * @node locked_purge @alias lockedPurge
+     * @param itemId (optional) — ID of the locked file
+     * @param versionId (optional) — ID of the one version to delete; empty deletes every version of the file
+     * @returns file — The locked file after the deletion, with its remaining stored size
+     * @returns versions — Every version of the file, newest first, including purged ones
+     * @impure has side effects / drives control flow
+     */
+    function purge({ itemId?: string, versionId?: string }): { file: Struct, versions: Struct[] };
+
+    /**
+     * Chooses whether a locked version is deleted automatically once its retention ends and no legal hold remains. The retention itself does not change; project files need app admin rights
+     * @node locked_set_auto_delete @alias lockedSetAutoDelete
+     * @param itemId (optional) — ID of the locked file
+     * @param versionId (optional) — ID of the version to change; empty uses the newest locked version
+     * @param enabled (optional) — True deletes the version once its retention ends, false keeps it until someone deletes it; false also cancels a deletion that is due
+     * @returns version — The version with its automatic deletion state
+     * @impure has side effects / drives control flow
+     */
+    function setAutoDelete({ itemId?: string, versionId?: string, enabled?: bool }): Struct;
+
+    /**
+     * Places or lifts a legal hold on a locked version. A held version cannot be deleted even after its retention ends; needs app admin rights and a provider with legal hold support
+     * @node locked_set_legal_hold @alias lockedSetLegalHold
+     * @param itemId (optional) — ID of the locked file
+     * @param versionId (optional) — ID of the version to hold; empty uses the newest locked version
+     * @param enabled (optional) — True places the legal hold, false lifts it
+     * @returns version — The version with its legal hold state
+     * @impure has side effects / drives control flow
+     */
+    function setLegalHold({ itemId?: string, versionId?: string, enabled?: bool }): Struct;
+
+    /**
+     * Reads whether this server offers write-once, revision-safe storage and its retention limits
+     * @node locked_storage_status @alias lockedStorageStatus
+     * @returns status — Provider, enforcement, retention bounds and size limit of locked storage
+     * @returns enabled — Whether locked storage is configured on this server
+     * @impure has side effects / drives control flow
+     */
+    function status(): { status: Struct, enabled: bool };
+
+    /**
+     * Stores a file write-once and revision-safe: once committed nobody can change or delete it until its retention ends. Fails when storage is full
+     * @node locked_upload_item @alias lockedUploadItem
+     * @param path — File to lock; it is read twice, once to hash and once to upload
+     * @param scope (optional) — project: shared with everyone in the project; user: private to the user running the flow
+     * @param folder (optional) — Folder to store the file in, such as invoices/2026; empty for the root
+     * @param name (optional) — Display name of the locked file; empty uses the file's name
+     * @param retentionDays (optional) — Days the version stays write-once and undeletable; 0 uses the server default. The server clamps it to its allowed range and ignores it under a bucket-wide policy
+     * @param deleteAfterRetention (optional) — Delete the version automatically once its retention ends and no legal hold remains; otherwise it stays stored until someone deletes it. Project files need app admin rights
+     * @param comment (optional) — Note stored with this version, such as why it was archived
+     * @param metadata (optional) — Optional JSON object stored with this version
+     * @param ifExists (optional) — error: fail when a file with this name already exists in the folder; new_version: add the upload as its next version
+     * @returns file — The locked file with the uploaded version
+     * @returns version — The uploaded version with its lock details
+     * @impure has side effects / drives control flow
+     */
+    function upload({ path: Struct, scope?: string, folder?: string, name?: string, retentionDays?: int, deleteAfterRetention?: bool, comment?: string, metadata?: Struct, ifExists?: string }): { file: Struct, version: Struct };
+
+    /**
+     * Adds a new write-once version to an existing locked file; earlier versions stay unchanged. Fails when storage is full
+     * @node locked_upload_version @alias lockedUploadVersion
+     * @param itemId (optional) — ID of the locked file to add a version to
+     * @param path — File to lock; it is read twice, once to hash and once to upload
+     * @param retentionDays (optional) — Days the version stays write-once and undeletable; 0 uses the server default. The server clamps it to its allowed range and ignores it under a bucket-wide policy
+     * @param deleteAfterRetention (optional) — Delete the version automatically once its retention ends and no legal hold remains; otherwise it stays stored until someone deletes it. Project files need app admin rights
+     * @param comment (optional) — Note stored with this version, such as why it was archived
+     * @param metadata (optional) — Optional JSON object stored with this version
+     * @returns file — The locked file with the uploaded version
+     * @returns version — The uploaded version with its lock details
+     * @impure has side effects / drives control flow
+     */
+    function uploadVersion({ itemId?: string, path: Struct, retentionDays?: int, deleteAfterRetention?: bool, comment?: string, metadata?: Struct }): { file: Struct, version: Struct };
+}
+
 declare namespace microsoft {
     // === Data/Microsoft ===
 
@@ -5964,12 +6130,13 @@ declare namespace microsoft {
          * @param subject — Email subject
          * @param body — Email body content
          * @param isHtml (optional) — Whether the body is HTML content
-         * @param attachments — Optional file attachments to include in the message
+         * @param attachments — Outlook attachments to include, such as those from Get Message Attachments
          * @param saveToSentItems (optional) — Save the message to Sent Items folder
+         * @param files (optional) — Files to attach, together at most 3 MiB
          * @returns errorMessage
          * @impure has side effects / drives control flow
          */
-        function sendMessage({ provider: Struct, to: string, cc?: string, subject: string, body: string, isHtml?: bool, attachments: Struct[], saveToSentItems?: bool }): string;
+        function sendMessage({ provider: Struct, to: string, cc?: string, subject: string, body: string, isHtml?: bool, attachments: Struct[], saveToSentItems?: bool, files?: Struct[] }): string;
 
         /**
          * Update an existing Outlook calendar event

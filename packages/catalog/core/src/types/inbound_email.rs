@@ -18,6 +18,21 @@ pub struct MailMessageRef {
     pub delivery_id: String,
 }
 
+/// Platform email attachments travel inside the JSON send request, so they stay well
+/// below the 6 MB request limit of serverless API deployments once base64-encoded.
+pub const MAX_MAIL_ATTACHMENT_BYTES: u64 = 3 * 1024 * 1024;
+pub const MAX_MAIL_ATTACHMENTS: usize = 10;
+
+/// A file sent with platform email.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MailAttachment {
+    pub filename: String,
+    pub content_type: String,
+    /// The file's bytes as standard base64.
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct InboundEmailAddress {
     #[serde(default)]

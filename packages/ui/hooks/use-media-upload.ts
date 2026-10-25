@@ -17,9 +17,12 @@ interface UseMediaUploadOptions {
 	appId: string;
 	boardId: string;
 	backend: IBackendState;
-	executeCommand: (command: IGenericCommand, append?: boolean) => Promise<void>;
+	executeCommand: (
+		command: IGenericCommand,
+		append?: boolean,
+	) => Promise<unknown>;
 	currentLayer?: string;
-	setNodes?: React.Dispatch<React.SetStateAction<Node<any>[]>>;
+	setNodes?: React.Dispatch<React.SetStateAction<Node[]>>;
 }
 
 const SUPPORTED_IMAGE_TYPES = [

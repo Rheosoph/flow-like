@@ -4,7 +4,7 @@ use lettre::{
     Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
     address::Envelope,
     message::{
-        Mailbox, MultiPart, SinglePart,
+        Attachment, Mailbox, MultiPart, SinglePart,
         header::{ContentType, HeaderName, HeaderValue},
     },
     transport::smtp::authentication::Credentials,
@@ -131,38 +131,65 @@ fn build_message(
         ));
     }
 
-    let email = match (&message.body_html, &message.body_text) {
-        (Some(html), Some(text)) => email_builder
-            .multipart(
-                MultiPart::alternative()
-                    .singlepart(
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_PLAIN)
-                            .body(text.clone()),
-                    )
-                    .singlepart(
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_HTML)
-                            .body(html.clone()),
-                    ),
-            )
-            .map_err(|e| flow_like_types::anyhow!("Failed to build email: {}", e))?,
-        (Some(html), None) => email_builder
-            .header(ContentType::TEXT_HTML)
-            .body(html.clone())
-            .map_err(|e| flow_like_types::anyhow!("Failed to build email: {}", e))?,
-        (None, Some(text)) => email_builder
-            .header(ContentType::TEXT_PLAIN)
-            .body(text.clone())
-            .map_err(|e| flow_like_types::anyhow!("Failed to build email: {}", e))?,
+    match with_attachments(content(message)?, message)? {
+        Content::Single(part) => email_builder.singlepart(part),
+        Content::Multi(parts) => email_builder.multipart(parts),
+    }
+    .map_err(|e| flow_like_types::anyhow!("Failed to build email: {}", e))
+}
+
+enum Content {
+    Single(SinglePart),
+    Multi(MultiPart),
+}
+
+fn text_part(content_type: ContentType, text: &str) -> SinglePart {
+    SinglePart::builder()
+        .header(content_type)
+        .body(text.to_owned())
+}
+
+fn content(message: &AutomationEmailMessage) -> Result<Content> {
+    Ok(match (&message.body_html, &message.body_text) {
+        (Some(html), Some(text)) => Content::Multi(
+            MultiPart::alternative()
+                .singlepart(text_part(ContentType::TEXT_PLAIN, text))
+                .singlepart(text_part(ContentType::TEXT_HTML, html)),
+        ),
+        (Some(html), None) => Content::Single(text_part(ContentType::TEXT_HTML, html)),
+        (None, Some(text)) => Content::Single(text_part(ContentType::TEXT_PLAIN, text)),
         (None, None) => {
             return Err(flow_like_types::anyhow!(
                 "Email must have either HTML or text body"
             ));
         }
-    };
+    })
+}
 
-    Ok(email)
+/// Attachments follow the body inside a multipart/mixed message.
+fn with_attachments(content: Content, message: &AutomationEmailMessage) -> Result<Content> {
+    if message.attachments.is_empty() {
+        return Ok(content);
+    }
+    let mut mixed = match content {
+        Content::Single(part) => MultiPart::mixed().singlepart(part),
+        Content::Multi(parts) => MultiPart::mixed().multipart(parts),
+    };
+    for attachment in &message.attachments {
+        let content_type = ContentType::parse(&attachment.content_type).map_err(|e| {
+            flow_like_types::anyhow!(
+                "Invalid content type {:?} for attachment {:?}: {}",
+                attachment.content_type,
+                attachment.filename,
+                e
+            )
+        })?;
+        mixed = mixed.singlepart(
+            Attachment::new(attachment.filename.clone())
+                .body(attachment.content.clone(), content_type),
+        );
+    }
+    Ok(Content::Multi(mixed))
 }
 
 #[async_trait::async_trait]
@@ -250,5 +277,37 @@ mod tests {
         .unwrap();
         let raw = String::from_utf8(message.formatted()).unwrap();
         assert!(raw.contains("From: Platform <no-reply@mail.example.com>\r\n"));
+    }
+
+    #[test]
+    fn attachments_follow_the_body_in_a_mixed_message() {
+        let mut message = crate::mail::tests::reply_message();
+        message.attachments = vec![crate::mail::tests::pdf()];
+        let raw = String::from_utf8(
+            build_message(
+                &message,
+                "platform@example.com",
+                "Platform",
+                "platform@example.com",
+            )
+            .unwrap()
+            .formatted(),
+        )
+        .unwrap();
+        assert!(raw.contains("multipart/mixed"));
+        assert!(raw.contains("Reply body"));
+        assert!(raw.contains("Content-Type: application/pdf"));
+        assert!(raw.contains("filename=\"Order 42.pdf\""));
+
+        message.attachments[0].content_type = "not a type".into();
+        assert!(
+            build_message(
+                &message,
+                "platform@example.com",
+                "Platform",
+                "platform@example.com",
+            )
+            .is_err()
+        );
     }
 }

@@ -1,9 +1,35 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export function tmpDir(prefix: string): string {
 	return mkdtempSync(join(tmpdir(), `${prefix}-`));
+}
+
+/** A widget.config.ts whose `@flow-like/widget-sdk` imports resolve to this repo's SDK. */
+export function writeSdkWidget(prefix: string, source: string): string {
+	const dir = tmpDir(prefix);
+	mkdirSync(join(dir, "node_modules/@flow-like"), { recursive: true });
+	symlinkSync(
+		join(import.meta.dir, "../../widget-sdk"),
+		join(dir, "node_modules/@flow-like/widget-sdk"),
+		"dir",
+	);
+	writeFileSync(
+		join(dir, "tsconfig.json"),
+		JSON.stringify({
+			compilerOptions: {
+				module: "ESNext",
+				moduleResolution: "Bundler",
+				target: "ES2022",
+				strict: true,
+				skipLibCheck: true,
+			},
+		}),
+	);
+	const config = join(dir, "widget.config.ts");
+	writeFileSync(config, source);
+	return config;
 }
 
 export const HELLO_WIDGET_CONFIG = `import { defineWidget } from "@flow-like/widget-sdk";

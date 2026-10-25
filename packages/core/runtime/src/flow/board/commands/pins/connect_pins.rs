@@ -6,7 +6,7 @@ use crate::{
     flow::{
         board::{Board, Layer, commands::Command},
         node::Node,
-        pin::PinType,
+        pin::{Pin, PinType},
         variable::VariableType,
     },
     state::FlowLikeState,
@@ -57,6 +57,39 @@ fn find_node_or_layer(board: &Board, id: &str) -> flow_like_types::Result<NodeOr
     Err(flow_like_types::anyhow!("Entity ({}) not found", id))
 }
 
+fn endpoint_pin<'a>(board: &'a Board, entity_id: &str, pin_id: &str) -> Option<&'a Pin> {
+    board
+        .nodes
+        .get(entity_id)
+        .map(|node| &node.pins)
+        .or_else(|| board.layers.get(entity_id).map(|layer| &layer.pins))?
+        .get(pin_id)
+}
+
+/// Checked in `validate`: a command that fails while executing is undone, and undoing an edge
+/// command that never touched the board fails a second time on the same missing endpoint.
+pub(super) fn ensure_edge_endpoints(
+    board: &Board,
+    from_node: &str,
+    from_pin: &str,
+    to_node: &str,
+    to_pin: &str,
+) -> Result<(), String> {
+    for (entity_id, pin_id) in [(from_node, from_pin), (to_node, to_pin)] {
+        let pins = if let Some(node) = board.nodes.get(entity_id) {
+            &node.pins
+        } else if let Some(layer) = board.layers.get(entity_id) {
+            &layer.pins
+        } else {
+            return Err(format!("node or layer `{entity_id}` not found"));
+        };
+        if !pins.contains_key(pin_id) {
+            return Err(format!("`{entity_id}` has no pin `{pin_id}`"));
+        }
+    }
+    Ok(())
+}
+
 fn upsert_node_or_layer(board: &mut Board, entity: NodeOrLayer) {
     match entity {
         NodeOrLayer::Node(node) => {
@@ -71,9 +104,30 @@ fn upsert_node_or_layer(board: &mut Board, entity: NodeOrLayer) {
 #[async_trait]
 impl Command for ConnectPinsCommand {
     async fn validate(&self, board: &Board, _: Arc<FlowLikeState>) -> flow_like_types::Result<()> {
+        if self.from_node == self.to_node {
+            return Err(flow_like_types::anyhow!(
+                "Cannot connect a node to itself".to_string()
+            ));
+        }
+        ensure_edge_endpoints(
+            board,
+            &self.from_node,
+            &self.from_pin,
+            &self.to_node,
+            &self.to_pin,
+        )
+        .map_err(|reason| {
+            flow_like_types::anyhow!(
+                "Cannot connect pin `{}` of `{}` to pin `{}` of `{}`: {reason}",
+                self.from_pin,
+                self.from_node,
+                self.to_pin,
+                self.to_node
+            )
+        })?;
         if let (Some(source), Some(target)) = (
-            board.get_pin_by_id(&self.from_pin),
-            board.get_pin_by_id(&self.to_pin),
+            endpoint_pin(board, &self.from_node, &self.from_pin),
+            endpoint_pin(board, &self.to_node, &self.to_pin),
         ) && !crate::flow::pin::geometry_pins_are_compatible(source, target, &board.refs)?
         {
             return Err(flow_like_types::anyhow!(

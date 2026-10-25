@@ -1,3 +1,4 @@
+import type { BoardRenderer } from "@flow-like/flow-like-ui/hooks/use-board-renderer";
 import type { LayoutStyle } from "@flow-like/flow-like-ui/lib/flow-auto-layout";
 import type { IBoard } from "@flow-like/flow-like-ui/lib/schema/flow/board";
 import type { INode } from "@flow-like/flow-like-ui/lib/schema/flow/node";
@@ -33,6 +34,7 @@ export interface WorkflowScreenshotCliOptions {
 	viewport: { width: number; height: number };
 	dpr: number;
 	theme: DocScreenshotTheme;
+	renderer: BoardRenderer;
 	quality?: number;
 	frontendUrl?: string;
 	port?: number;

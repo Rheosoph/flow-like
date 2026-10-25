@@ -563,4 +563,96 @@ describe("hosted page bootstrap", () => {
 		await expect(state.getPageBootstrap("app-1", "/")).rejects.toBe(refusal);
 		expect(mocks.invoke).not.toHaveBeenCalled();
 	});
+
+	function hostedBootstrap(
+		pageUpdatedAt: string,
+		boardVersion?: number[],
+	): IPageBootstrapFixture {
+		return {
+			event: {
+				id: "event-1",
+				board_id: "board-1",
+				board_version: boardVersion ?? null,
+			},
+			page: { id: "page-1", boardId: "board-1", updatedAt: pageUpdatedAt },
+		};
+	}
+
+	async function settleBackgroundSync(
+		backend: ReturnType<typeof onlineBackend>,
+	) {
+		await Promise.all(
+			backend.backgroundTaskHandler.mock.calls.map(([task]) => task),
+		);
+	}
+
+	test("adopts a newer served page into the copy native actions resolve against", async () => {
+		const backend = onlineBackend();
+		const remotePage = {
+			id: "page-1",
+			boardId: "board-1",
+			updatedAt: "2026-10-21T10:00:00Z",
+		};
+		mocks.fetcher
+			.mockResolvedValueOnce(hostedBootstrap("2026-10-21T10:00:00Z"))
+			.mockResolvedValueOnce(remotePage);
+		mocks.invoke.mockImplementation(async (command: string) =>
+			command === "get_page"
+				? {
+						id: "page-1",
+						boardId: "board-1",
+						updatedAt: "2026-08-02T19:16:53Z",
+					}
+				: remotePage,
+		);
+		const state = new PageState(backend as never);
+
+		await state.getPageBootstrap("app-1", "/");
+		await settleBackgroundSync(backend);
+
+		expect(mocks.invoke).toHaveBeenCalledWith("update_page", {
+			appId: "app-1",
+			page: remotePage,
+		});
+	});
+
+	test("leaves a device copy that is already current", async () => {
+		const backend = onlineBackend();
+		mocks.fetcher.mockResolvedValueOnce(
+			hostedBootstrap("2026-10-21T10:00:00Z"),
+		);
+		mocks.invoke.mockResolvedValue({
+			id: "page-1",
+			boardId: "board-1",
+			updatedAt: "2026-10-21T10:00:00Z",
+		});
+		const state = new PageState(backend as never);
+
+		await state.getPageBootstrap("app-1", "/");
+		await settleBackgroundSync(backend);
+
+		expect(mocks.fetcher).toHaveBeenCalledTimes(1);
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"update_page",
+			expect.anything(),
+		);
+	});
+
+	test("never writes the draft page for an Event pinned to a board version", async () => {
+		const backend = onlineBackend();
+		mocks.fetcher.mockResolvedValueOnce(
+			hostedBootstrap("2026-10-21T10:00:00Z", [1, 0, 0]),
+		);
+		const state = new PageState(backend as never);
+
+		await state.getPageBootstrap("app-1", "/");
+
+		expect(backend.backgroundTaskHandler).not.toHaveBeenCalled();
+		expect(mocks.invoke).not.toHaveBeenCalled();
+	});
 });
+
+interface IPageBootstrapFixture {
+	event: { id: string; board_id: string; board_version: number[] | null };
+	page: { id: string; boardId: string; updatedAt: string };
+}

@@ -1,6 +1,7 @@
 import type React from "react";
 import type { IBoard, ILogMetadata } from "../../../lib";
 import type { FlowScriptApplyOrigin } from "../../../lib/flowscript-apply-failure";
+import type { IFlowScriptChanges } from "../../../lib/flowscript/changes";
 import type { FlowIrCommitToken } from "../../../lib/schema/copilot";
 import type {
 	BoardCommand,
@@ -41,6 +42,8 @@ export interface FlowScriptApplyResultLike {
 	corrections?: string[];
 	diagnostics?: string[];
 	final_board_node_count?: number;
+	/** What the apply changed on the board; absent when nothing applied. */
+	changes?: IFlowScriptChanges;
 }
 
 export interface FlowScriptApplyOptions {

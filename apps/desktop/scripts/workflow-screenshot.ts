@@ -36,6 +36,7 @@ Rendering:
   --viewport <WxH>        CSS viewport (default: 1624x1060)
   --dpr <number>          Device scale factor, 0.5-4 (default: 2)
   --theme <light|dark>    App color scheme (default: dark)
+  --renderer <name>       egui (default) or react-flow board renderer
   --quality <1-100>       JPEG quality; only valid for .jpg/.jpeg output
   --timeout-ms <number>   Navigation/action timeout (default: 120000)
   --settle-ms <number>    Delay after fit/focus before capture (default: 650)

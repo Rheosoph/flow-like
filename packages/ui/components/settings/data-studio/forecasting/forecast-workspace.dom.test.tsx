@@ -371,6 +371,9 @@ async function firstEvaluation() {
 	await click("Next: Review");
 	expect(button("Run forecast").disabled).toBe(false);
 	await click("Run forecast");
+	expect(fixture.chart?.backtest).toBe(false);
+	expect(button("Outlook").getAttribute("aria-pressed")).toBe("true");
+	await click("Holdout");
 }
 
 beforeEach(() => {
@@ -388,8 +391,12 @@ beforeEach(() => {
 	});
 	fixture.query.forecast
 		.mockReset()
-		.mockImplementation(async (_app: string, payload: StudioForecastPayload) =>
-			result(payload.backtest_offset),
+		.mockImplementation(
+			async (_app: string, payload: StudioForecastPayload) => {
+				const forecast = result(payload.backtest_offset);
+				if (!payload.backtest_horizon) forecast.backtest = null;
+				return forecast;
+			},
 		);
 	fixture.chart = undefined;
 	fixture.library = undefined;
@@ -404,6 +411,50 @@ afterEach(async () => {
 });
 
 describe("forecast workspace historical evaluation", () => {
+	it("starts with future predictions and offers holdout evaluation after the forecast", async () => {
+		await mount();
+		await click("Next: Columns");
+		await click("Next: Model");
+		expect(
+			container.querySelector<HTMLInputElement>("#forecast-evaluate")?.checked,
+		).toBe(false);
+		await change("#forecast-horizon", "2");
+		await click("Next: Review");
+		await click("Run forecast");
+		expect(fixture.query.forecast.mock.calls[0][1]).toMatchObject({
+			backtest_horizon: 0,
+			backtest_offset: 0,
+		});
+		expect(fixture.chart).toMatchObject({ backtest: false, cutoff: day(8) });
+		expect(
+			container.querySelector('input[aria-label="Historical cutoff"]'),
+		).toBeNull();
+		await click("Holdout");
+		expect(fixture.query.forecast).toHaveBeenCalledTimes(1);
+		expect(slider().disabled).toBe(false);
+		expect(fixture.chart?.backtest).toBe(false);
+		expect(container.textContent).toContain("History: 6 stepsHoldout: 2 steps");
+		const windowLength =
+			'section[aria-label="Historical forecast cutoff"] input[type="number"]';
+		await change(windowLength, "0");
+		expect(button("Evaluate window").disabled).toBe(true);
+		expect(
+			container.querySelector<HTMLInputElement>(windowLength)?.disabled,
+		).toBe(false);
+		await change(windowLength, "2");
+		expect(button("Evaluate window").disabled).toBe(false);
+		expect(fixture.query.forecast).toHaveBeenCalledTimes(1);
+		await click("Evaluate window");
+		expect(fixture.query.forecast.mock.calls[1][1]).toMatchObject({
+			backtest_horizon: 2,
+			backtest_offset: 0,
+		});
+		expect(fixture.chart?.backtest).toBe(true);
+		await click("Run forecast");
+		expect(fixture.chart).toMatchObject({ backtest: false, cutoff: day(8) });
+		expect(button("Outlook").getAttribute("aria-pressed")).toBe("true");
+	});
+
 	it("requests native point-only output for TinyTimeMixer and prevents unsupported covariates", async () => {
 		const pointResult = result();
 		pointResult.model.family = "tiny_time_mixer";
@@ -473,7 +524,9 @@ describe("forecast workspace historical evaluation", () => {
 		expect(metrics()?.textContent).toContain("20%");
 		await click("cost");
 		await change('select[aria-label="Chart series"]', JSON.stringify("south"));
+		const previousPoints = required(fixture.chart).points;
 		await moveSlider(2);
+		expect(fixture.chart?.points).toBe(previousPoints);
 		expect(fixture.query.forecast).toHaveBeenCalledTimes(1);
 		expect(metrics()).toBeNull();
 		expect(fixture.chart?.stale).toBe(true);
@@ -567,6 +620,8 @@ describe("forecast workspace historical evaluation", () => {
 		await mount();
 		await act(async () => required(fixture.library).onOpen(snapshot(2)));
 		expect(fixture.query.forecast).not.toHaveBeenCalled();
+		expect(fixture.chart).toMatchObject({ cutoff: day(8), backtest: false });
+		await click("Holdout");
 		expect(Number(slider().max) - Number(slider().value)).toBe(2);
 		expect(slider().disabled).toBe(false);
 		expect(fixture.chart).toMatchObject({
@@ -595,6 +650,7 @@ describe("forecast workspace historical evaluation", () => {
 				result: { ...legacy.result, backtest: legacyBacktest },
 			}),
 		);
+		await click("Holdout");
 		expect(Number(slider().max) - Number(slider().value)).toBe(0);
 		expect(fixture.chart?.stale).toBe(false);
 		expect(metrics()?.textContent).toContain("20%");

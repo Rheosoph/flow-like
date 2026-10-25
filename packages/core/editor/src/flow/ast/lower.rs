@@ -21,6 +21,8 @@ const REROUTE_NODE: &str = "reroute";
 /// Variable accessor node types (sugared to bare refs / assignments).
 const VARIABLE_GET: &str = "variable_get";
 const VARIABLE_SET: &str = "variable_set";
+/// Input naming the variable a by-reference node (`array::pushRef`, `clearRef`, …) operates on.
+const VAR_REF_PIN: &str = "var_ref";
 
 /// Struct node types (sugared to `{…}` literals and `.field` access).
 const STRUCT_MAKE: &str = "struct_make";
@@ -116,6 +118,10 @@ const TOOLS_ARG: &str = "tools";
 /// Synthetic argument name carrying a node's generic function references.
 const FN_REFS_ARG: &str = "fnRefs";
 
+/// Most values a call passes positionally, a method receiver included. Past two, a reader needs
+/// the pin order to tell the values apart, so the rest stay named.
+const MAX_POSITIONAL_VALUES: usize = 2;
+
 /// Comparison/arithmetic/logic nodes sugared to a binary `lhs <op> rhs` expression. Only applied
 /// when the node exposes exactly two data inputs; operands are read by pin index (their names are
 /// inconsistent across the int/float/string/bool families, e.g. `integer1`/`base`/`string`).
@@ -204,6 +210,8 @@ pub(crate) fn sugared_loop_head_pin(node_type: &str) -> &'static str {
 }
 
 /// Board-side mapping helpers (depend on core's `VariableType`/`ValueType`).
+mod groups;
+
 mod util {
     /// Board name -> FlowScript identifier for anything the document DECLARES (variables,
     /// functions, parameters, modules, event headers). Keyword-safe, unlike bare camelization.
@@ -383,14 +391,132 @@ pub fn lower_board(board: &Board) -> BoardAst {
     let opened = derive_uses(&ast, board);
     let minted = lowering.minted_names();
     if opened.reserved.is_disjoint(&minted) {
-        return apply_uses(ast, opened);
+        return lowering.finish(ast, opened);
     }
     let mut reserved = reserved;
     reserved.extend(opened.reserved);
     let mut lowering = Lowering::new(board, reserved);
     let ast = lowering.run();
     let opened = derive_uses(&ast, board);
-    apply_uses(ast, opened)
+    lowering.finish(ast, opened)
+}
+
+/// Every name a render of `board` can give each anchored node's value, keyed by (node id,
+/// `Node.code_names` key). A whole-board document and a scoped or per-file one can differ: a name
+/// that collides only with a namespace the whole document opens is minted again with a suffix.
+pub(crate) fn renderable_code_names(board: &Board) -> HashMap<(String, String), HashSet<String>> {
+    let first_pass = {
+        let board = &*without_reroutes(board);
+        Lowering::new(board, declared_names(board)).run()
+    };
+    let mut names: HashMap<(String, String), HashSet<String>> = HashMap::new();
+    for ast in [first_pass, lower_board(board)] {
+        for (key, name) in rendered_code_names(&ast) {
+            names.entry(key).or_default().insert(name);
+        }
+    }
+    names
+}
+
+/// The names a lowered document gives each anchored node's values, keyed by (node id,
+/// `Node.code_names` key): `""` for the node's own binding, an output pin name otherwise.
+fn rendered_code_names(ast: &BoardAst) -> HashMap<(String, String), String> {
+    type Names = HashMap<(String, String), String>;
+    fn record(names: &mut Names, anchor: Option<&String>, key: &str, name: &str) {
+        if let Some(anchor) = anchor
+            && name != "_"
+        {
+            names.insert((anchor.clone(), key.to_string()), name.to_string());
+        }
+    }
+    fn block(block: &Block, names: &mut Names) {
+        for statement in &block.stmts {
+            stmt(statement, names);
+        }
+    }
+    fn stmt(statement: &Stmt, names: &mut Names) {
+        match statement {
+            Stmt::Let { name, anchor, .. } => record(names, anchor.as_ref(), "", name),
+            Stmt::LocalAlias { name, anchor, .. } => record(names, anchor.as_ref(), "", name),
+            Stmt::Destructure { fields, anchor, .. } => {
+                for field in fields {
+                    record(names, anchor.as_ref(), &field.pin, &field.name);
+                }
+            }
+            Stmt::Branch {
+                bind, arms, anchor, ..
+            } => {
+                if let Some(bind) = bind {
+                    record(names, anchor.as_ref(), "", bind);
+                }
+                for arm in arms {
+                    block(&arm.body, names);
+                }
+            }
+            Stmt::Loop {
+                bind,
+                element,
+                index,
+                body,
+                anchor,
+                ..
+            } => {
+                for (key, name) in [
+                    ("", bind),
+                    (LOOP_VALUE_PIN, element),
+                    (LOOP_INDEX_PIN, index),
+                ] {
+                    if let Some(name) = name {
+                        record(names, anchor.as_ref(), key, name);
+                    }
+                }
+                block(body, names);
+            }
+            Stmt::Handler(event) => block(&event.body, names),
+            Stmt::Collapse(group) => block(&group.body, names),
+            Stmt::Call { .. }
+            | Stmt::Assign { .. }
+            | Stmt::FieldAssign { .. }
+            | Stmt::Return { .. }
+            | Stmt::Local(_)
+            | Stmt::Comment(_) => {}
+        }
+    }
+    fn sections(
+        functions: &[FnDecl],
+        events: &[EventBlock],
+        detached: &[Block],
+        modules: &[ModuleDecl],
+        names: &mut Names,
+    ) {
+        for function in functions {
+            block(&function.body, names);
+        }
+        for event in events {
+            block(&event.body, names);
+        }
+        for chain in detached {
+            block(chain, names);
+        }
+        for module in modules {
+            sections(
+                &module.functions,
+                &module.events,
+                &module.detached,
+                &module.modules,
+                names,
+            );
+        }
+    }
+    let mut names = Names::new();
+    sections(
+        &ast.functions,
+        &ast.events,
+        &ast.detached,
+        &ast.modules,
+        &mut names,
+    );
+    names
 }
 
 /// A board slice lowered for selection-scoped editing (see [`lower_board_scoped`]).
@@ -418,7 +544,7 @@ pub fn lower_board_scoped(board: &Board, node_ids: &[String]) -> ScopedBoardAst 
     let minted = lowering.minted_names();
     if opened.reserved.is_disjoint(&minted) {
         return ScopedBoardAst {
-            ast: apply_uses(scoped.ast, opened),
+            ast: lowering.finish(scoped.ast, opened),
             scope_anchors: scoped.scope_anchors,
         };
     }
@@ -428,7 +554,7 @@ pub fn lower_board_scoped(board: &Board, node_ids: &[String]) -> ScopedBoardAst 
     let scoped = filter_ast_to_selection(lowering.run(), &selection);
     let opened = derive_uses(&scoped.ast, board);
     ScopedBoardAst {
-        ast: apply_uses(scoped.ast, opened),
+        ast: lowering.finish(scoped.ast, opened),
         scope_anchors: scoped.scope_anchors,
     }
 }
@@ -484,7 +610,7 @@ pub fn lower_board_file(
     let minted = lowering.minted_names();
     if opened.reserved.is_disjoint(&minted) {
         return Ok(ScopedBoardAst {
-            ast: apply_uses(scoped.ast, opened),
+            ast: lowering.finish(scoped.ast, opened),
             scope_anchors: scoped.scope_anchors,
         });
     }
@@ -494,7 +620,7 @@ pub fn lower_board_file(
     let scoped = filter_ast_to_file(lowering.run(), file)?;
     let opened = derive_uses(&scoped.ast, board);
     Ok(ScopedBoardAst {
-        ast: apply_uses(scoped.ast, opened),
+        ast: lowering.finish(scoped.ast, opened),
         scope_anchors: scoped.scope_anchors,
     })
 }
@@ -587,7 +713,10 @@ fn expand_selection(board: &Board, node_ids: &[String]) -> HashSet<String> {
     selected
 }
 
-fn filter_ast_to_selection(mut ast: BoardAst, selection: &HashSet<String>) -> ScopedBoardAst {
+pub(super) fn filter_ast_to_selection(
+    mut ast: BoardAst,
+    selection: &HashSet<String>,
+) -> ScopedBoardAst {
     let keep = {
         let mut sections: Vec<SectionRef> = Vec::new();
         collect_sections(
@@ -767,7 +896,8 @@ fn push_anchor<'b>(anchor: &'b Option<String>, out: &mut Vec<&'b str>) {
 
 /// Every node anchor a block carries: statement anchors, call anchors at any expression depth,
 /// and nested handler entries. `Stmt::Local` anchors are variable ids, not node ids, and are
-/// intentionally skipped.
+/// intentionally skipped. A `@collapse` group's layer anchor is kept, so selecting a group on the
+/// canvas scopes the render to the section that draws it.
 fn block_node_anchors<'b>(block: &'b Block, out: &mut Vec<&'b str>) {
     for stmt in &block.stmts {
         match stmt {
@@ -822,6 +952,10 @@ fn block_node_anchors<'b>(block: &'b Block, out: &mut Vec<&'b str>) {
             Stmt::Handler(event) => {
                 push_anchor(&event.anchor, out);
                 block_node_anchors(&event.body, out);
+            }
+            Stmt::Collapse(group) => {
+                push_anchor(&group.anchor, out);
+                block_node_anchors(&group.body, out);
             }
             Stmt::Local(_) | Stmt::Comment(_) => {}
         }
@@ -920,6 +1054,93 @@ fn collect_ref_names(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// Whether `block` reads or writes the variable `name`: a bare reference, an assignment or
+/// struct-field-write target, or a `varRef` literal spelling it.
+fn block_mentions_name(block: &Block, name: &str) -> bool {
+    block.stmts.iter().any(|stmt| match stmt {
+        Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
+            call_mentions_name(call, name)
+        }
+        Stmt::Branch {
+            call,
+            condition,
+            arms,
+            ..
+        } => {
+            call_mentions_name(call, name)
+                || condition
+                    .as_ref()
+                    .is_some_and(|condition| expr_mentions_name(condition, name))
+                || arms.iter().any(|arm| block_mentions_name(&arm.body, name))
+        }
+        Stmt::Loop {
+            call,
+            iterable,
+            body,
+            ..
+        } => {
+            call_mentions_name(call, name)
+                || iterable
+                    .as_ref()
+                    .is_some_and(|iterable| expr_mentions_name(iterable, name))
+                || block_mentions_name(body, name)
+        }
+        Stmt::Assign { target, value, .. } => target == name || expr_mentions_name(value, name),
+        Stmt::FieldAssign { base, value, .. } => base == name || expr_mentions_name(value, name),
+        Stmt::LocalAlias { value, .. } => expr_mentions_name(value, name),
+        Stmt::Return { values, .. } => values.iter().any(|value| expr_mentions_name(value, name)),
+        Stmt::Handler(event) => block_mentions_name(&event.body, name),
+        Stmt::Collapse(group) => block_mentions_name(&group.body, name),
+        Stmt::Local(_) | Stmt::Comment(_) => false,
+    })
+}
+
+fn call_mentions_name(call: &Call, name: &str) -> bool {
+    call.receiver
+        .as_deref()
+        .is_some_and(|receiver| expr_mentions_name(receiver, name))
+        || call
+            .positional
+            .iter()
+            .any(|value| expr_mentions_name(value, name))
+        || call.args.iter().any(|arg| {
+            expr_mentions_name(&arg.value, name)
+                || (arg.name == VAR_REF_PIN
+                    && matches!(&arg.value, Expr::Literal(Literal::String(value)) if value == name))
+        })
+}
+
+fn expr_mentions_name(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Ref(reference) => reference == name,
+        Expr::Call(call) => call_mentions_name(call, name),
+        Expr::Field { base, .. } | Expr::Member { base, .. } => expr_mentions_name(base, name),
+        Expr::Object(fields) => fields
+            .iter()
+            .any(|field| expr_mentions_name(&field.value, name)),
+        Expr::Array(values) => values.iter().any(|value| expr_mentions_name(value, name)),
+        Expr::Index { base, index } => {
+            expr_mentions_name(base, name) || expr_mentions_name(index, name)
+        }
+        Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_mentions_name(cond, name)
+                || expr_mentions_name(then, name)
+                || expr_mentions_name(otherwise, name)
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_mentions_name(lhs, name) || expr_mentions_name(rhs, name)
+        }
+        Expr::Template { parts } => parts
+            .iter()
+            .any(|part| matches!(part, TemplatePart::Expr(expr) if expr_mentions_name(expr, name))),
+        Expr::Literal(_) => false,
+    }
+}
+
 /// One declared FlowScript name per board variable, keyed by variable id.
 ///
 /// Camelization is not injective: `user id`, `user_id` and `userId` all become `userId`, so two
@@ -932,7 +1153,7 @@ fn collect_ref_names(expr: &Expr, out: &mut HashSet<String>) {
 /// board-level `const`, so uniquifying across that boundary would rename correct code. Allocation
 /// order is by (name, id) — the same order the declarations render in — so the result is stable
 /// across runs and machines.
-fn variable_names(board: &Board) -> HashMap<&str, String> {
+pub(crate) fn variable_names(board: &Board) -> HashMap<&str, String> {
     fn allocate<'a>(
         variables: impl Iterator<Item = &'a Variable>,
         used: &mut HashSet<String>,
@@ -1093,6 +1314,30 @@ pub(crate) fn function_params(layer: &Layer) -> Vec<&Pin> {
         }
     }
     distinct
+}
+
+/// A Function layer's return pins in order, each with the name the text declares it by. The
+/// canvas can leave two outputs with one name (or an output named like a parameter), and
+/// declaring that name twice rejected the whole document ("duplicate FlowScript function
+/// return"). A repeat takes the next free numbered spelling; reconcile maps the rendered names
+/// back to these pins by position.
+pub(crate) fn function_returns(layer: &Layer) -> Vec<(&Pin, String)> {
+    let mut pins: Vec<&Pin> = layer
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == PinType::Output && !is_exec(pin))
+        .collect();
+    pins.sort_by_key(|pin| (pin.index, pin.id.as_str()));
+    let mut used: HashSet<String> = function_params(layer)
+        .into_iter()
+        .map(|pin| util::declared_name(&pin.name).to_lowercase())
+        .collect();
+    pins.into_iter()
+        .map(|pin| {
+            let name = unique_name(&util::declared_name(&pin.name), &mut used);
+            (pin, name)
+        })
+        .collect()
 }
 
 /// Every parameter the text declares: Function layer inputs and trigger-entry payload outputs.
@@ -1434,6 +1679,9 @@ struct Lowering<'a> {
     event_params: HashMap<&'a str, String>,
     /// variable id -> camelCase variable name (for `varRef` sugar).
     var_names: HashMap<&'a str, String>,
+    /// The lookup reconcile resolves this document's `varRef` literals with: board variables by
+    /// name plus every global's declared spelling.
+    variable_refs: super::reconcile::VariableRefLookup,
     /// function-layer id -> camelCase function name (for `fnRef`/`functionLayerId` sugar).
     fn_names: HashMap<&'a str, String>,
     /// function-layer id -> the `Module` layer owning it (the nearest module ancestor of the
@@ -1462,14 +1710,22 @@ struct Lowering<'a> {
     struct_accumulators: HashMap<String, String>,
     /// node id -> the consumed outputs of a binding rendered as `const { pin, … } = call(...)`.
     destructured: HashMap<String, Vec<DestructureField>>,
+    /// node id -> pin names of the leading arguments its call renders positionally.
+    positional_args: HashMap<String, Vec<String>>,
     /// output pin id -> the bare local its read renders as: a destructured binding's local, or
     /// the pin-named binding of a single-data-output value.
     destructure_locals: HashMap<&'a str, String>,
     /// Lowercase names every minted binding must avoid.
     reserved: HashSet<String>,
     /// Lowercase names minted or reserved so far (bindings, loop element/index names,
-    /// accumulators, destructured locals).
-    used_names: HashSet<String>,
+    /// accumulators, destructured locals), one pool per naming scope: each Function layer by id,
+    /// and all event code under `None`. Nested handlers share their event's pool, so a name never
+    /// shadows one their body can still read.
+    used_names: HashMap<Option<&'a str>, HashSet<String>>,
+    /// node id -> the Function layer whose naming scope the node belongs to.
+    naming_scope: HashMap<&'a str, &'a str>,
+    /// (node id, `code_names` key) -> the stored name that node won in its scope.
+    stored_names: HashMap<(String, String), String>,
     /// node ids already emitted during the current exec walk.
     visited: HashSet<String>,
     /// guard against cycles while inlining pure expressions.
@@ -1530,6 +1786,12 @@ impl<'a> Lowering<'a> {
         // function-layer ids -> camelCase function names. These back the `varRef` / `fnRef`
         // sugar so the clean text never leaks a CUID.
         let var_names = variable_names(board);
+        let mut variable_refs = super::reconcile::VariableRefLookup::from_board(board);
+        for id in board.variables.keys() {
+            if let Some(name) = var_names.get(id.as_str()) {
+                variable_refs.insert(id, name, None);
+            }
+        }
         let mut fn_names = HashMap::new();
         let mut module_of_function = HashMap::new();
         let mut module_paths = HashMap::new();
@@ -1560,6 +1822,7 @@ impl<'a> Lowering<'a> {
             boundary_pins,
             event_params: HashMap::new(),
             var_names,
+            variable_refs,
             fn_names,
             module_of_function,
             module_of_node,
@@ -1571,8 +1834,11 @@ impl<'a> Lowering<'a> {
             loop_bindings: HashMap::new(),
             struct_accumulators: HashMap::new(),
             destructured: HashMap::new(),
+            positional_args: HashMap::new(),
             destructure_locals: HashMap::new(),
-            used_names: reserved.clone(),
+            used_names: HashMap::new(),
+            naming_scope: HashMap::new(),
+            stored_names: HashMap::new(),
             reserved,
             visited: HashSet::new(),
             inlining: HashSet::new(),
@@ -1582,13 +1848,76 @@ impl<'a> Lowering<'a> {
     /// Lowercase names this lowering minted (everything in `used_names` that was not reserved).
     fn minted_names(&self) -> HashSet<String> {
         self.used_names
-            .difference(&self.reserved)
+            .values()
+            .flatten()
+            .filter(|name| !self.reserved.contains(*name))
             .cloned()
             .collect()
     }
 
+    fn name_pool(&mut self, node_id: &str) -> &mut HashSet<String> {
+        let scope = self.naming_scope.get(node_id).copied();
+        let reserved = &self.reserved;
+        self.used_names
+            .entry(scope)
+            .or_insert_with(|| reserved.clone())
+    }
+
+    /// The name of `node`'s value `key` (`""` for its binding, else an output pin name): the
+    /// name stored on the node when it won it, else `base` made unique in the node's scope.
+    fn mint_name(&mut self, node: &Node, key: &str, base: &str) -> String {
+        if let Some(stored) = self
+            .stored_names
+            .get(&(node.id.clone(), key.to_string()))
+            .cloned()
+        {
+            self.name_pool(&node.id).insert(stored.to_lowercase());
+            return stored;
+        }
+        unique_name(base, self.name_pool(&node.id))
+    }
+
+    /// Give a minted binding name back to the pool. A stored name stays taken: its node may
+    /// still claim it under another form.
+    fn release_name(&mut self, node: &Node, name: &str) {
+        let stored = self.stored_names.get(&(node.id.clone(), String::new()));
+        if stored.is_some_and(|stored| stored == name) {
+            return;
+        }
+        self.name_pool(&node.id).remove(&name.to_lowercase());
+    }
+
+    /// Pre-pass: reserve every name stored on a node (`Node.code_names`) before anything is
+    /// minted, so a generated name can never take it and an unrelated edit never renames it.
+    /// A stored name that is no identifier, is declared elsewhere, or was already won in its
+    /// scope by a node with a smaller id falls back to a generated name.
+    fn reserve_stored_names(&mut self) {
+        let mut nodes: Vec<&'a Node> = self.nodes_by_id.values().copied().collect();
+        nodes.sort_by(|a, b| a.id.cmp(&b.id));
+        nodes.dedup_by(|a, b| a.id == b.id);
+        for node in nodes {
+            let Some(code_names) = &node.code_names else {
+                continue;
+            };
+            for (key, name) in code_names {
+                if !is_valid_identifier(name) || flow_like_ast::is_keyword(name) {
+                    continue;
+                }
+                if self.name_pool(&node.id).insert(name.to_lowercase()) {
+                    self.stored_names
+                        .insert((node.id.clone(), key.clone()), name.clone());
+                }
+            }
+        }
+    }
+
     fn run(&mut self) -> BoardAst {
         let (function_nodes, root_nodes) = self.scope_nodes();
+        self.naming_scope = function_nodes
+            .iter()
+            .flat_map(|(layer_id, nodes)| nodes.iter().map(|node| (node.id.as_str(), *layer_id)))
+            .collect();
+        self.reserve_stored_names();
         self.assign_bindings();
         self.assign_struct_accumulators();
         self.assign_destructures(&function_nodes, &root_nodes);
@@ -1615,9 +1944,11 @@ impl<'a> Lowering<'a> {
             functions.push(self.lower_function(layer, &nodes));
         }
 
-        let (events, detached) = self.lower_events(&root_nodes);
-        let (functions, events, detached, modules) =
+        let (mut events, mut detached) = self.lower_events(&root_nodes);
+        self.group_sections(&mut functions, &mut events, &mut detached);
+        let (functions, events, detached, mut modules) =
             self.partition_modules(functions, events, detached);
+        self.declare_module_variables(&mut modules);
 
         BoardAst {
             board_id: self.board.id.clone(),
@@ -1629,6 +1960,12 @@ impl<'a> Lowering<'a> {
             detached,
             modules,
         }
+    }
+
+    /// Spell the lowered document's calls: positional arguments, then the derived `use` lines.
+    fn finish(&self, mut ast: BoardAst, opened: OpenedNamespaces) -> BoardAst {
+        self.apply_positional_args(&mut ast, &opened.globs);
+        apply_uses(ast, opened)
     }
 
     /// Split the lowered sections into the top-level document and the `module` blocks that own
@@ -1740,6 +2077,49 @@ impl<'a> Lowering<'a> {
         (root_functions, root_events, root_detached, modules)
     }
 
+    /// Declare a module layer's own variables — what a `let` in one of its events creates — as a
+    /// `let` at the head of the first of its events or `detached` blocks that names them, where
+    /// such a declaration is written. Undeclared, the board's own text assigned a name that
+    /// resolved to nothing and every apply of it was refused. Other sections of the module read
+    /// the variable through reconcile's module scope.
+    fn declare_module_variables(&self, modules: &mut [ModuleDecl]) {
+        for module in modules {
+            self.declare_module_variables(&mut module.modules);
+            let Some(layer) = module
+                .anchor
+                .as_deref()
+                .and_then(|layer_id| self.board.layers.get(layer_id))
+            else {
+                continue;
+            };
+            let mut variables: Vec<&Variable> = layer.variables.values().collect();
+            variables.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+            for variable in variables {
+                let Some(name) = self.var_names.get(variable.id.as_str()) else {
+                    continue;
+                };
+                let Some(body) = module
+                    .events
+                    .iter_mut()
+                    .map(|event| &mut event.body)
+                    .chain(module.detached.iter_mut())
+                    .find(|body| block_mentions_name(body, name))
+                else {
+                    continue;
+                };
+                let at = body
+                    .stmts
+                    .iter()
+                    .take_while(|stmt| matches!(stmt, Stmt::Local(_)))
+                    .count();
+                body.stmts.insert(
+                    at,
+                    Stmt::Local(var_decl_of(variable, &self.board.refs, name)),
+                );
+            }
+        }
+    }
+
     /// Group every node by the function layer it ultimately belongs to (or the root scope).
     #[allow(clippy::type_complexity)]
     fn scope_nodes(&self) -> (HashMap<&'a str, Vec<&'a Node>>, Vec<&'a Node>) {
@@ -1801,9 +2181,8 @@ impl<'a> Lowering<'a> {
     /// Pre-pass: assign a stable `const` name to every impure node whose data output is
     /// consumed by another node.
     fn assign_bindings(&mut self) {
-        let mut used_names = std::mem::take(&mut self.used_names);
         // Deterministic order for stable name suffixes.
-        let mut nodes: Vec<&Node> = self.pin_owner.values().copied().collect();
+        let mut nodes: Vec<&'a Node> = self.pin_owner.values().copied().collect();
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
         nodes.dedup_by(|a, b| a.id == b.id);
 
@@ -1811,7 +2190,7 @@ impl<'a> Lowering<'a> {
             if !is_impure(node) {
                 continue;
             }
-            if self.assign_loop_sugar(node, &mut used_names) {
+            if self.assign_loop_sugar(node) {
                 continue;
             }
             // Read consumption from both directions, as `assign_destructures` does: an edge a
@@ -1825,11 +2204,9 @@ impl<'a> Lowering<'a> {
             if !produces_consumed_output {
                 continue;
             }
-            let base = binding_base_name(node);
-            let name = unique_name(&base, &mut used_names);
+            let name = self.mint_name(node, "", &binding_base_name(node));
             self.bindings.insert(node.id.clone(), name);
         }
-        self.used_names = used_names;
     }
 
     /// Pre-pass over bindings whose reads only select outputs (`b.pin`) and which nothing needs
@@ -1931,10 +2308,9 @@ impl<'a> Lowering<'a> {
         }
 
         // The handle name is no longer rendered: release it so a local may take it.
-        let mut used_names = std::mem::take(&mut self.used_names);
         for (node, _, _) in &candidates {
             if let Some(name) = self.bindings.remove(&node.id) {
-                used_names.remove(&name.to_lowercase());
+                self.release_name(node, &name);
             }
         }
         for (node, outputs, single_output) in candidates {
@@ -1946,34 +2322,31 @@ impl<'a> Lowering<'a> {
                 } else {
                     binding_base_name(node)
                 };
-                let name = unique_name(&base, &mut used_names);
+                let name = self.mint_name(node, "", &base);
                 self.destructure_locals
                     .insert(pin.id.as_str(), name.clone());
                 self.bindings.insert(node.id.clone(), name);
                 continue;
             }
-            let fields: Vec<DestructureField> = outputs
-                .iter()
-                .map(|pin| {
-                    let local = unique_name(&util::to_camel_case(&pin.name), &mut used_names);
-                    self.destructure_locals
-                        .insert(pin.id.as_str(), local.clone());
-                    DestructureField {
-                        pin: pin.name.clone(),
-                        name: local,
-                    }
-                })
-                .collect();
+            let mut fields = Vec::with_capacity(outputs.len());
+            for pin in outputs {
+                let local = self.mint_name(node, &pin.name, &util::to_camel_case(&pin.name));
+                self.destructure_locals
+                    .insert(pin.id.as_str(), local.clone());
+                fields.push(DestructureField {
+                    pin: pin.name.clone(),
+                    name: local,
+                });
+            }
             self.destructured.insert(node.id.clone(), fields);
         }
-        self.used_names = used_names;
     }
 
     /// Register a loop node for its sugared form when the text can carry it losslessly: only
     /// the `value`/`index` outputs are read, every input the sugar cannot spell holds its
     /// default, and the array (or `while` condition) is present. The element/index names
     /// replace the handle binding; `_` stands in for an unread element.
-    fn assign_loop_sugar(&mut self, node: &'a Node, used_names: &mut HashSet<String>) -> bool {
+    fn assign_loop_sugar(&mut self, node: &'a Node) -> bool {
         let is_for_each = node.name == FOR_EACH || node.name == PAR_FOR_EACH;
         if !is_for_each && node.name != WHILE_LOOP {
             return false;
@@ -2027,11 +2400,11 @@ impl<'a> Lowering<'a> {
                     continue;
                 }
                 if pin.name == LOOP_VALUE_PIN {
-                    let name = unique_name(LOOP_ELEMENT_NAME, used_names);
+                    let name = self.mint_name(node, &pin.name, LOOP_ELEMENT_NAME);
                     self.loop_bindings.insert(pin.id.as_str(), name.clone());
                     sugar.element = Some(name);
                 } else {
-                    let name = unique_name(LOOP_INDEX_NAME, used_names);
+                    let name = self.mint_name(node, &pin.name, LOOP_INDEX_NAME);
                     self.loop_bindings.insert(pin.id.as_str(), name.clone());
                     sugar.index = Some(name);
                 }
@@ -2048,8 +2421,7 @@ impl<'a> Lowering<'a> {
     /// visible and anchored while making the data-flow shape much easier to continue editing:
     /// `row = structSet({ structIn: row, ... }).structOut`.
     fn assign_struct_accumulators(&mut self) {
-        let mut used_names = std::mem::take(&mut self.used_names);
-        let mut nodes: Vec<&Node> = self.nodes_by_id.values().copied().collect();
+        let mut nodes: Vec<&'a Node> = self.nodes_by_id.values().copied().collect();
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
         nodes.dedup_by(|a, b| a.id == b.id);
 
@@ -2061,7 +2433,8 @@ impl<'a> Lowering<'a> {
                 continue;
             }
 
-            let name = unique_name(self.struct_accumulator_base_name(node), &mut used_names);
+            let base = self.struct_accumulator_base_name(node);
+            let name = self.mint_name(node, "", base);
             let mut current = Some(node);
             while let Some(struct_set) = current {
                 self.struct_accumulators
@@ -2069,7 +2442,6 @@ impl<'a> Lowering<'a> {
                 current = self.next_struct_set(struct_set);
             }
         }
-        self.used_names = used_names;
     }
 
     fn struct_accumulator_base_name(&self, start: &'a Node) -> &'static str {
@@ -2194,15 +2566,9 @@ impl<'a> Lowering<'a> {
             .into_iter()
             .map(|pin| Param::new(util::declared_name(&pin.name), self.type_ref_for_pin(pin)))
             .collect();
-        let mut outputs: Vec<&Pin> = layer
-            .pins
-            .values()
-            .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
-            .collect();
-        outputs.sort_by_key(|p| (p.index, p.id.as_str()));
-        let returns = outputs
+        let returns = function_returns(layer)
             .into_iter()
-            .map(|pin| Param::new(util::declared_name(&pin.name), self.type_ref_for_pin(pin)))
+            .map(|(pin, name)| Param::new(name, self.type_ref_for_pin(pin)))
             .collect();
 
         let mut body = self.lower_scope_body(nodes);
@@ -2431,6 +2797,7 @@ impl<'a> Lowering<'a> {
                     name: event_type_name(entry),
                     node_type: entry.name.clone(),
                     event_name,
+                    description: self.event_description(entry),
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -2780,6 +3147,7 @@ impl<'a> Lowering<'a> {
                     name: event_type_name(entry),
                     node_type: entry.name.clone(),
                     event_name,
+                    description: self.event_description(entry),
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -2792,6 +3160,12 @@ impl<'a> Lowering<'a> {
             }
         }
         block
+    }
+
+    fn event_description(&self, entry: &Node) -> Option<String> {
+        let description = crate::flow::pin::resolve_schema(&entry.description, &self.board.refs)
+            .unwrap_or(&entry.description);
+        (!description.is_empty()).then(|| description.to_string())
     }
 
     /// Body of an exec entry (event or function entry): the entry node itself becomes the
@@ -3079,6 +3453,13 @@ impl<'a> Lowering<'a> {
         let Some(node) = self.nodes_by_id.get(node_id).copied() else {
             return (Vec::new(), true);
         };
+        // A loop's body returns into the loop; execution leaves it through `done` only.
+        if loop_keyword(node).is_some() {
+            return match self.exec_target_by_name(node, LOOP_DONE_PIN) {
+                Some(done) => (vec![done], false),
+                None => (Vec::new(), true),
+            };
+        }
         let mut outputs: Vec<&Pin> = node
             .pins
             .values()
@@ -3091,15 +3472,24 @@ impl<'a> Lowering<'a> {
 
         let mut successors = Vec::new();
         let mut has_terminal_output = false;
+        let mut connected = 0;
         for output in outputs {
             match self.first_exec_target(output) {
-                Some(target) => successors.push(target),
+                Some(target) => {
+                    connected += 1;
+                    successors.push(target);
+                }
                 None => has_terminal_output = true,
             }
         }
+        // A node with one connected output renders as a plain statement, and the text continues
+        // from that output. Its unconnected outputs (an unhandled `execError`) are no branch the
+        // text can show, so they must not keep a later fan-in from being the join: otherwise the
+        // statement after a branch renders inside one arm and the next apply wires it there only.
+        let plain_statement = connected == 1 && node.name != CONTROL_BRANCH;
         successors.sort();
         successors.dedup();
-        (successors, has_terminal_output)
+        (successors, has_terminal_output && !plain_statement)
     }
 
     fn is_exec_fan_in(&self, node_id: &str) -> bool {
@@ -3140,6 +3530,7 @@ impl<'a> Lowering<'a> {
                     name: target.clone(),
                     value,
                     anchor: Some(node.id.clone()),
+                    ty: None,
                 };
             }
             return Stmt::Assign {
@@ -3183,6 +3574,7 @@ impl<'a> Lowering<'a> {
                 name: name.clone(),
                 call,
                 anchor: Some(node.id.clone()),
+                ty: None,
             }
         } else {
             Stmt::Call {
@@ -3195,9 +3587,10 @@ impl<'a> Lowering<'a> {
     /// Build a call expression for a node, resolving its connected/literal data inputs.
     ///
     /// Catalog nodes render as `ns::alias({ … })`, or in method form `recv.alias(…)` when the
-    /// receiver pin qualifies (see [`Self::method_receiver`]); the single remaining written
-    /// input of a method call is rendered positionally when it is the data input right after
-    /// the receiver. Function calls keep their function name.
+    /// receiver pin qualifies (see [`Self::method_receiver`]). Every written input is a named
+    /// argument here; the leading ones that may render positionally are recorded and moved by
+    /// [`Self::apply_positional_args`] once lowering is done. Function calls keep their function
+    /// name.
     fn build_call(&mut self, node: &'a Node) -> Call {
         let mut data_inputs: Vec<&'a Pin> = node
             .pins
@@ -3236,28 +3629,24 @@ impl<'a> Lowering<'a> {
 
         let alias = node.flowscript_alias();
         if let Some(receiver_pin) = self.method_receiver(node, &data_inputs, &written, &alias) {
-            let (receiver, mut rest): (Vec<_>, Vec<_>) = written
+            let (receiver, rest): (Vec<_>, Vec<_>) = written
                 .into_iter()
                 .partition(|(pin, _)| pin.id == receiver_pin.id);
             let receiver = receiver.into_iter().next().map(|(_, expr)| expr);
-            let receiver_first =
-                data_inputs.first().map(|pin| pin.id.as_str()) == Some(receiver_pin.id.as_str());
-            let next_input = data_inputs.get(1).map(|pin| pin.id.as_str());
-            // A trailing `{ … }` is the named-argument object, so an object value is never
-            // positional; neither is a pin a node mints on update (`string_format`
-            // placeholders), whose name is the only thing that identifies it.
-            let positional = match rest.as_slice() {
-                [(pin, expr)]
-                    if tools.is_none()
-                        && receiver_first
-                        && Some(pin.id.as_str()) == next_input
-                        && !is_object_literal(expr)
-                        && !super::reconcile::accepts_dynamic_named_args(&node.name) =>
-                {
-                    rest.pop().map(|(_, expr)| expr)
-                }
-                _ => None,
-            };
+            if tools.is_none() {
+                let bindable: Vec<&Pin> = data_inputs
+                    .iter()
+                    .copied()
+                    .filter(|pin| pin.id != receiver_pin.id)
+                    .collect();
+                self.record_positional_args(
+                    node,
+                    &data_inputs,
+                    &bindable,
+                    &rest,
+                    MAX_POSITIONAL_VALUES - 1,
+                );
+            }
             let mut args: Vec<Arg> = rest
                 .into_iter()
                 .map(|(pin, expr)| Arg {
@@ -3271,12 +3660,21 @@ impl<'a> Lowering<'a> {
                 display: alias,
                 path: Vec::new(),
                 receiver: receiver.map(Box::new),
-                positional: positional.into_iter().collect(),
+                positional: Vec::new(),
                 args,
                 anchor: Some(node.id.clone()),
             };
         }
 
+        if tools.is_none() {
+            self.record_positional_args(
+                node,
+                &data_inputs,
+                &data_inputs,
+                &written,
+                MAX_POSITIONAL_VALUES,
+            );
+        }
         let mut args = args;
         args.extend(tools);
         Call {
@@ -3290,6 +3688,73 @@ impl<'a> Lowering<'a> {
             args,
             anchor: Some(node.id.clone()),
         }
+    }
+
+    /// Record which leading written inputs of `node`'s call render positionally (see
+    /// [`positional_prefix_len`]). `bindable` is what positionals fill on read-back: the data
+    /// inputs in pin order with the receiver left out.
+    fn record_positional_args(
+        &mut self,
+        node: &'a Node,
+        data_inputs: &[&'a Pin],
+        bindable: &[&'a Pin],
+        written: &[(&'a Pin, Expr)],
+        budget: usize,
+    ) {
+        let count = positional_prefix_len(node, data_inputs, bindable, written, budget);
+        if count == 0 {
+            return;
+        }
+        let names = written[..count]
+            .iter()
+            .map(|(pin, _)| pin.name.clone())
+            .collect();
+        self.positional_args.insert(node.id.clone(), names);
+    }
+
+    /// Move each call's recorded leading arguments into positional form. This runs on the
+    /// finished document because the sugar passes before it (loop heads, branch conditions,
+    /// `structSet` field writes, `varRef` scans) look arguments up by pin name; a call whose
+    /// leading arguments no longer match the record keeps them named. A call `globs` renders
+    /// bare stays named when an opened namespace exports its alias for another node: reconcile
+    /// tells those apart by the argument names.
+    fn apply_positional_args(&self, ast: &mut BoardAst, globs: &BTreeMap<String, Vec<String>>) {
+        if self.positional_args.is_empty() {
+            return;
+        }
+        for_each_call_mut(ast, &mut |call| {
+            let Some(names) = call
+                .anchor
+                .as_deref()
+                .and_then(|anchor| self.positional_args.get(anchor))
+            else {
+                return;
+            };
+            let shared_bare_alias = call.receiver.is_none()
+                && globs.contains_key(&path_key(&call.path))
+                && globs.values().any(|glob| {
+                    crate::flow::copilot::opened_alias_reaches_other(
+                        glob,
+                        &call.display,
+                        &call.node_type,
+                    )
+                });
+            let recorded = !shared_bare_alias
+                && call.positional.is_empty()
+                && call.args.len() >= names.len()
+                && call
+                    .args
+                    .iter()
+                    .zip(names)
+                    .all(|(arg, name)| &arg.name == name);
+            if recorded {
+                let named = call.args.split_off(names.len());
+                call.positional = std::mem::replace(&mut call.args, named)
+                    .into_iter()
+                    .map(|arg| arg.value)
+                    .collect();
+            }
+        });
     }
 
     /// The `::` module path a call to a FlowScript `function` renders with.
@@ -3358,6 +3823,12 @@ impl<'a> Lowering<'a> {
         {
             return Some(Expr::Ref(name));
         }
+        if pin.name == VAR_REF_PIN
+            && let Literal::String(id) = &lit
+            && let Some(name) = self.portable_variable_ref(node, id)
+        {
+            return Some(Expr::Literal(Literal::String(name)));
+        }
         Some(self.sugar_literal(lit))
     }
 
@@ -3370,8 +3841,9 @@ impl<'a> Lowering<'a> {
     /// `hash::md5` with `receiver("input")` renders as `content.md5()`); the receiver is wired
     /// to a source whose board type reconcile recovers as that same class, or holds a string
     /// literal (numeric, boolean, null and JSON literals stay static); no user `function`
-    /// shadows the alias (UFCS); and the node is not a statement with its own sugar (loops,
-    /// `if`, `structSet` accumulators).
+    /// shadows the alias (UFCS); the node is not a statement with its own sugar (loops, `if`,
+    /// `structSet` accumulators); and it is not a `structGet` of a field path, whose `x.get(…)`
+    /// a function's purity prescan cannot type and counts among the impure `get` nodes.
     fn method_receiver(
         &self,
         node: &'a Node,
@@ -3379,7 +3851,9 @@ impl<'a> Lowering<'a> {
         written: &[(&'a Pin, Expr)],
         alias: &str,
     ) -> Option<&'a Pin> {
-        if loop_keyword(node).is_some() || matches!(node.name.as_str(), CONTROL_BRANCH | STRUCT_SET)
+        if loop_keyword(node).is_some()
+            || matches!(node.name.as_str(), CONTROL_BRANCH | STRUCT_SET)
+            || self.reads_a_field_path(node)
         {
             return None;
         }
@@ -3601,6 +4075,94 @@ impl<'a> Lowering<'a> {
         bp.depends_on.iter().next().cloned()
     }
 
+    /// The base of a `base.field` read of `owner`'s `input` value. Reconcile reads `.name` on an
+    /// inlined call or a `const x = call()` binding as an output pin of that node FIRST, so the
+    /// FlowPath field read `child(...).path` came back as the `path` pin itself whenever the
+    /// producer has an output answering to the field. That read names the pin it reads from
+    /// explicitly: `child(...).path.path`.
+    /// Whether `input` on `owner` is wired from a value the text cannot type as an array: a
+    /// struct field read (whose pin only took the array type from its consumer) or any output
+    /// that is not an array.
+    fn input_is_untyped_source(&self, owner: &Node, input: &str) -> bool {
+        let Some(source) = owner
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == input)
+            .and_then(|pin| pin.depends_on.iter().next())
+            .map(|source| self.traced_source_pin(source))
+        else {
+            return false;
+        };
+        let field_read = self
+            .pin_owner
+            .get(source.as_str())
+            .is_some_and(|producer| matches!(producer.name.as_str(), STRUCT_GET | STRUCT_BREAK));
+        field_read
+            || self
+                .pins
+                .get(source.as_str())
+                .is_some_and(|pin| pin.value_type != crate::flow::pin::ValueType::Array)
+    }
+
+    fn member_base(&mut self, owner: &'a Node, input: &str, field: &str) -> Option<Expr> {
+        let base = self.input_expr(owner, input)?;
+        let Some(source_pin_id) = owner
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == input)
+            .and_then(|pin| pin.depends_on.iter().next())
+        else {
+            return Some(base);
+        };
+        let source_pin_id = self.traced_source_pin(source_pin_id);
+        let (Some(source_pin), Some(producer)) = (
+            self.pins.get(source_pin_id.as_str()).copied(),
+            self.pin_owner.get(source_pin_id.as_str()).copied(),
+        ) else {
+            return Some(base);
+        };
+        let segment = field.split(['.', '[']).next().unwrap_or(field);
+        if !self.reads_as_node(&base, source_pin, producer)
+            || !output_pin_answers_to(producer, segment)
+        {
+            return Some(base);
+        }
+        Some(Expr::Field {
+            base: Box::new(base),
+            pin: source_pin.name.clone(),
+        })
+    }
+
+    /// The producer pin `output_pin_id` carries, past reroutes and collapsed-frame bridges.
+    fn traced_source_pin(&self, output_pin_id: &str) -> String {
+        let mut current = output_pin_id.to_string();
+        let mut seen = HashSet::new();
+        while seen.insert(current.clone()) {
+            match self
+                .reroute_passthrough(&current)
+                .or_else(|| self.boundary_passthrough(&current))
+            {
+                Some(upstream) => current = upstream,
+                None => break,
+            }
+        }
+        current
+    }
+
+    /// Whether reconcile binds `base`, rendered for `source_pin`, to the producing NODE rather
+    /// than to that pin: an inlined call, or the `const x = call()` binding of a single-output
+    /// node.
+    fn reads_as_node(&self, base: &Expr, source_pin: &Pin, producer: &Node) -> bool {
+        match base {
+            Expr::Call(call) => call.anchor.as_deref() == Some(producer.id.as_str()),
+            Expr::Ref(name) => {
+                self.destructure_locals.get(source_pin.id.as_str()) == Some(name)
+                    && !self.destructured.contains_key(&producer.id)
+            }
+            _ => false,
+        }
+    }
+
     /// Sugar a data-plumbing source node into an idiomatic expression. Returns `None` for nodes
     /// that should keep their literal call form. `source_pin` is the specific output being read.
     fn sugar_source(&mut self, owner: &'a Node, source_pin: &'a Pin) -> Option<Expr> {
@@ -3621,9 +4183,11 @@ impl<'a> Lowering<'a> {
             STRUCT_MAKE_SCHEMA => Some(self.struct_object(owner)),
             // `makeArray` -> empty array literal `[]`.
             MAKE_ARRAY => Some(Expr::Array(Vec::new())),
-            // `arrayLength` -> `base.length` member access.
+            // `arrayLength` -> `base.length` member access, only over a source that is an array:
+            // on an untyped value (a struct field read) `.length` reads back as a field.
+            ARRAY_LENGTH if self.input_is_untyped_source(owner, "array") => None,
             ARRAY_LENGTH => {
-                let base = self.input_expr(owner, "array")?;
+                let base = self.member_base(owner, "array", "length")?;
                 Some(Expr::Member {
                     base: Box::new(base),
                     field: "length".to_string(),
@@ -3660,10 +4224,12 @@ impl<'a> Lowering<'a> {
                     otherwise: Box::new(otherwise.unwrap_or(Expr::Literal(Literal::Null))),
                 })
             }
-            // `structGet` -> `base.field` member access (only when the field key is a literal).
-            STRUCT_GET => {
-                let base = self.input_expr(owner, "struct")?;
+            // `structGet` -> `base.field` member access (only the `value` output, and only when
+            // the field key is a literal). `found` keeps the call form: a member read means the
+            // value, so `.found` spelled as `base.field` came back as the field's value.
+            STRUCT_GET if source_pin.name == "value" && !self.reads_a_field_path(owner) => {
                 let field = self.pin_literal_string(owner, "field")?;
+                let base = self.member_base(owner, "struct", &field)?;
                 Some(Expr::Member {
                     base: Box::new(base),
                     field,
@@ -3676,7 +4242,7 @@ impl<'a> Lowering<'a> {
                     .strip_prefix(BREAK_STRUCT_PREFIX)
                     .unwrap_or(&source_pin.name)
                     .to_string();
-                let base = self.input_expr(owner, "struct_in")?;
+                let base = self.member_base(owner, "struct_in", &field)?;
                 Some(Expr::Member {
                     base: Box::new(base),
                     field,
@@ -3834,10 +4400,31 @@ impl<'a> Lowering<'a> {
         }
     }
 
+    /// A `structGet` whose literal key is a field path (`asset.hostname`, `items[0]`). Spelled as
+    /// a member chain it reads back as one accessor per segment, so it keeps the static call form.
+    fn reads_a_field_path(&self, node: &'a Node) -> bool {
+        node.name == STRUCT_GET
+            && self
+                .pin_literal_string(node, "field")
+                .is_some_and(|field| field.contains(['.', '[']))
+    }
+
     /// The camelCase variable name backing a `variableGet`/`variableSet` node's `var_ref` pin.
     fn var_name_of(&self, node: &'a Node) -> Option<String> {
         let id = self.pin_literal_string(node, "var_ref")?;
         self.var_names.get(id.as_str()).cloned()
+    }
+
+    /// The declared name a `varRef` literal holding variable `id` is spelled as, when reconcile's
+    /// lookup from the node's scope resolves that name back to the same variable. A raw id means
+    /// nothing on a board the text is pasted into; one that does not resolve back stays an id.
+    fn portable_variable_ref(&self, node: &Node, id: &str) -> Option<String> {
+        let name = self.var_names.get(id)?;
+        let scope = super::reconcile::board_node_semantic_scope(self.board, node);
+        match self.variable_refs.resolve(name, scope.as_deref()) {
+            Ok(Some(resolved)) if resolved == id => Some(name.clone()),
+            _ => None,
+        }
     }
 
     /// Resolve a `controlCallReference` target node id literal to that node's display name (its
@@ -4199,6 +4786,61 @@ fn is_object_literal(expr: &Expr) -> bool {
     }
 }
 
+/// A boolean, number or `null` literal: without its pin name it says nothing about its role.
+fn is_bare_scalar_literal(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Literal(Literal::Bool(_) | Literal::Int(_) | Literal::Float(_) | Literal::Null)
+    )
+}
+
+/// How many of `written` (in pin order) render positionally: the unbroken run filling
+/// `bindable` from its first pin, at most `budget` long. Reconcile binds positionals to the data
+/// inputs in pin order with the receiver skipped (`fold_call_arguments`), so the run stops at
+/// the first unwritten input. It also stops at an object value (a trailing `{ … }` reads back as
+/// the named arguments), a `varRef`, and a bare boolean/number/`null` unless it is the call's
+/// only argument. Nodes with `on_update`-minted pins stay named (a minted pin's name is all that
+/// identifies it), as do nodes whose pin order is ambiguous (tied indices). A positional may not
+/// share its pin name with a named argument: both would claim the same occurrence of that
+/// repeated input.
+fn positional_prefix_len(
+    node: &Node,
+    data_inputs: &[&Pin],
+    bindable: &[&Pin],
+    written: &[(&Pin, Expr)],
+    budget: usize,
+) -> usize {
+    if super::reconcile::accepts_dynamic_named_args(&node.name)
+        || data_inputs
+            .windows(2)
+            .any(|pair| pair[0].index == pair[1].index)
+    {
+        return 0;
+    }
+    let sole = written.len() == 1;
+    let mut count = bindable
+        .iter()
+        .zip(written)
+        .take(budget)
+        .take_while(|(pin, (written_pin, expr))| {
+            pin.id == written_pin.id
+                && pin.name != VAR_REF_PIN
+                && !is_object_literal(expr)
+                && (sole || !is_bare_scalar_literal(expr))
+        })
+        .count();
+    while count > 0
+        && written[count..].iter().any(|(named, _)| {
+            written[..count]
+                .iter()
+                .any(|(positional, _)| positional.name == named.name)
+        })
+    {
+        count -= 1;
+    }
+    count
+}
+
 /// The method class of a pin's value (`string`, `array`, a schema title, …), `None` for
 /// `Generic`/`Execution` pins.
 /// If the named argument holds a bare reference (a resolved function/node name), return it.
@@ -4317,6 +4959,9 @@ fn collect_calls_in_block_with<'a>(
             Stmt::Handler(event) if include_handlers => {
                 collect_calls_in_block_with(&event.body, calls, include_handlers, rendered_only);
             }
+            Stmt::Collapse(group) => {
+                collect_calls_in_block_with(&group.body, calls, include_handlers, rendered_only);
+            }
             Stmt::Handler(_) | Stmt::Local(_) | Stmt::Comment(_) => {}
         }
     }
@@ -4425,6 +5070,7 @@ fn for_each_call_mut(ast: &mut BoardAst, visit: &mut dyn FnMut(&mut Call)) {
                 }
             }
             Stmt::Handler(event) => block(&mut event.body, visit),
+            Stmt::Collapse(group) => block(&mut group.body, visit),
             Stmt::Local(_) | Stmt::Comment(_) => {}
         }
     }
@@ -4606,6 +5252,17 @@ fn arm_label(node: &Node, pin: &Pin) -> String {
         Some(0) | None => pin.name.clone(),
         Some(occurrence) => super::pin_occurrence_ref(&pin.name, occurrence),
     }
+}
+
+/// Whether reconcile's `.segment` on `node` selects one of its output pins: a pin whose name or
+/// friendly name is `segment`, raw or camelCased (`find_output_pin`'s test).
+fn output_pin_answers_to(node: &Node, segment: &str) -> bool {
+    node.pins.values().any(|pin| {
+        pin.pin_type == PinType::Output
+            && [&pin.name, &pin.friendly_name]
+                .into_iter()
+                .any(|name| name == segment || util::to_camel_case(name) == segment)
+    })
 }
 
 fn binding_base_name(node: &Node) -> String {
@@ -4826,7 +5483,7 @@ mod operator_tests {
         let text =
             super::super::board_to_flowscript(&equality_board(false), &RenderOptions::default());
         assert!(
-            text.contains("log::bool({ value: \"a\" == \"b\" })"),
+            text.contains("log::bool(\"a\" == \"b\")"),
             "untouched ignore_case must render as an operator:\n{text}"
         );
     }
@@ -4836,7 +5493,7 @@ mod operator_tests {
         let text =
             super::super::board_to_flowscript(&equality_board(true), &RenderOptions::default());
         assert!(
-            text.contains("\"a\".equal({ string: \"b\", ignoreCase: true })"),
+            text.contains("\"a\".equal(\"b\", { ignoreCase: true })"),
             "an edited ignore_case must stay an explicit call so the flag survives:\n{text}"
         );
     }
@@ -4988,7 +5645,7 @@ mod rendering_tests {
     fn wired_string_receiver_renders_the_method_form() {
         let board = trim_board(None);
         let text = text(&board);
-        assert!(text.contains("log::info({ message: s.trim() })"), "{text}");
+        assert!(text.contains("log::info(s.trim())"), "{text}");
         assert_roundtrip(&board);
     }
 
@@ -4996,10 +5653,7 @@ mod rendering_tests {
     fn string_literal_receiver_renders_the_method_form() {
         let board = trim_board(Some(" x "));
         let text = text(&board);
-        assert!(
-            text.contains("log::info({ message: \" x \".trim() })"),
-            "{text}"
-        );
+        assert!(text.contains("log::info(\" x \".trim())"), "{text}");
         assert_roundtrip(&board);
     }
 
@@ -5017,10 +5671,7 @@ mod rendering_tests {
         wire(&mut board, ("start", "exec_out"), ("log", "exec_in"));
         wire(&mut board, ("abs", "result"), ("log", "message"));
         let text = text(&board);
-        assert!(
-            text.contains("log::info({ message: int::abs({ value: -5 }) })"),
-            "{text}"
-        );
+        assert!(text.contains("log::info(int::abs(-5))"), "{text}");
         assert_roundtrip(&board);
     }
 
@@ -5061,7 +5712,7 @@ mod rendering_tests {
         wire(&mut board, ("trim", "result"), ("log", "message"));
         let text = text(&board);
         assert!(
-            text.contains("for (const item of items) {\n        log::info({ message: string::trim({ string: item }) })"),
+            text.contains("for (const item of items) {\n        log::info(string::trim(item))"),
             "a Generic loop element is not a typed receiver:\n{text}"
         );
         assert_roundtrip(&board);
@@ -5102,28 +5753,293 @@ mod rendering_tests {
     fn single_following_input_renders_positionally() {
         let board = contains_board(None);
         let text = text(&board);
-        assert!(
-            text.contains("log::info({ message: s.contains(\"?\") })"),
-            "{text}"
-        );
+        assert!(text.contains("log::info(s.contains(\"?\"))"), "{text}");
         assert_roundtrip(&board);
     }
 
     #[test]
-    fn several_written_inputs_stay_named() {
+    fn a_method_call_passes_one_input_after_its_receiver_positionally() {
         let board = contains_board(Some(true));
         let text = text(&board);
         assert!(
-            text.contains(
-                "log::info({ message: s.contains({ substring: \"?\", ignoreCase: true }) })"
+            text.contains("log::info(s.contains(\"?\", { ignoreCase: true }))"),
+            "{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    /// A pure, static-only `test::join` over `inputs` (in pin order) feeding `log`; the event
+    /// exposes strings `a`, `b` and `c`.
+    fn join_board(inputs: &[(&str, VariableType)]) -> Board {
+        let mut board = board();
+        add(
+            &mut board,
+            event(
+                "start",
+                &[
+                    ("a", VariableType::String),
+                    ("b", VariableType::String),
+                    ("c", VariableType::String),
+                ],
             ),
+        );
+        let mut join = Node::new("test_join", "Join", "", "Test");
+        join.id = "join".to_string();
+        join.set_flowscript_name("test", "join").set_receiver("");
+        for (name, ty) in inputs {
+            join.add_input_pin(name, name, "", ty.clone());
+        }
+        join.add_output_pin("result", "Result", "", VariableType::String);
+        add(&mut board, join);
+        add(&mut board, log("log"));
+        wire(&mut board, ("start", "exec_out"), ("log", "exec_in"));
+        wire(&mut board, ("join", "result"), ("log", "message"));
+        board
+    }
+
+    fn set_join_default(board: &mut Board, pin: &str, value: flow_like_types::Value) {
+        board
+            .nodes
+            .get_mut("join")
+            .unwrap()
+            .pins
+            .values_mut()
+            .find(|candidate| candidate.name == pin)
+            .unwrap()
+            .set_default_value(Some(value));
+    }
+
+    /// The `join` input pins named `name`, in pin order.
+    fn join_inputs_named(board: &Board, name: &str) -> Vec<String> {
+        let mut pins: Vec<&Pin> = board.nodes["join"]
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Input && pin.name == name)
+            .collect();
+        pins.sort_by_key(|pin| pin.index);
+        pins.into_iter().map(|pin| pin.id.clone()).collect()
+    }
+
+    fn wire_event_to_pin(board: &mut Board, param: &str, input_id: &str) {
+        let from_id = board.nodes["start"]
+            .pins
+            .values()
+            .find(|pin| pin.name == param && pin.pin_type == PinType::Output)
+            .unwrap()
+            .id
+            .clone();
+        board
+            .nodes
+            .get_mut("start")
+            .unwrap()
+            .pins
+            .get_mut(&from_id)
+            .unwrap()
+            .connected_to
+            .insert(input_id.to_string());
+        board
+            .nodes
+            .get_mut("join")
+            .unwrap()
+            .pins
+            .get_mut(input_id)
+            .unwrap()
+            .depends_on
+            .insert(from_id);
+    }
+
+    #[test]
+    fn a_static_call_passes_at_most_two_leading_inputs_positionally() {
+        let mut board = join_board(&[
+            ("first", VariableType::String),
+            ("second", VariableType::String),
+            ("third", VariableType::String),
+        ]);
+        wire(&mut board, ("start", "a"), ("join", "first"));
+        wire(&mut board, ("start", "b"), ("join", "second"));
+        wire(&mut board, ("start", "c"), ("join", "third"));
+        let text = text(&board);
+        assert!(
+            text.contains("log::info(test::join(a, b, { third: c }))"),
             "{text}"
         );
         assert_roundtrip(&board);
     }
 
     #[test]
-    fn static_calls_render_qualified_and_named() {
+    fn positionals_stop_at_the_first_unwritten_input() {
+        let mut board = join_board(&[
+            ("first", VariableType::String),
+            ("second", VariableType::String),
+            ("third", VariableType::String),
+        ]);
+        wire(&mut board, ("start", "b"), ("join", "second"));
+        wire(&mut board, ("start", "c"), ("join", "third"));
+        let text = text(&board);
+        assert!(
+            text.contains("log::info(test::join({ second: b, third: c }))"),
+            "an input after an unwritten one would bind to the wrong pin:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn a_scalar_literal_stays_named_unless_it_is_the_only_argument() {
+        let mut board = join_board(&[
+            ("name", VariableType::String),
+            ("flag", VariableType::Boolean),
+            ("size", VariableType::Integer),
+        ]);
+        wire(&mut board, ("start", "a"), ("join", "name"));
+        set_join_default(&mut board, "flag", json!(true));
+        set_join_default(&mut board, "size", json!(5));
+        let rendered = text(&board);
+        assert!(
+            rendered.contains("log::info(test::join(a, { flag: true, size: 5 }))"),
+            "{rendered}"
+        );
+        assert_roundtrip(&board);
+
+        let mut board = join_board(&[("flag", VariableType::Boolean)]);
+        set_join_default(&mut board, "flag", json!(true));
+        let text = text(&board);
+        assert!(text.contains("log::info(test::join(true))"), "{text}");
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn an_object_literal_stays_named() {
+        let mut board = join_board(&[("value", VariableType::Struct)]);
+        set_join_default(&mut board, "value", json!({ "k": 1 }));
+        let text = text(&board);
+        assert!(
+            text.contains("log::info(test::join({ value: {"),
+            "a trailing `{{ … }}` reads back as the named arguments:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn a_repeated_input_family_is_positional_only_when_no_member_stays_named() {
+        let mut board = join_board(&[
+            ("part", VariableType::String),
+            ("part", VariableType::String),
+        ]);
+        let parts = join_inputs_named(&board, "part");
+        wire_event_to_pin(&mut board, "a", &parts[0]);
+        wire_event_to_pin(&mut board, "b", &parts[1]);
+        let rendered = text(&board);
+        assert!(
+            rendered.contains("log::info(test::join(a, b))"),
+            "{rendered}"
+        );
+        assert_roundtrip(&board);
+
+        let mut board = join_board(&[
+            ("part", VariableType::String),
+            ("part", VariableType::String),
+            ("part", VariableType::String),
+        ]);
+        let parts = join_inputs_named(&board, "part");
+        for (param, pin) in ["a", "b", "c"].into_iter().zip(&parts) {
+            wire_event_to_pin(&mut board, param, pin);
+        }
+        let spilled = text(&board);
+        assert!(
+            spilled.contains("log::info(test::join({ part: a, part: b, part: c }))"),
+            "a positional and a named `part` would claim the same occurrence:\n{spilled}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    /// An impure static-only `namespace::alias` node over the string inputs `first` and `second`.
+    fn binary_statement(id: &str, node_type: &str, namespace: &str, alias: &str) -> Node {
+        let mut node = Node::new(node_type, alias, "", "Test");
+        node.id = id.to_string();
+        node.set_flowscript_name(namespace, alias).set_receiver("");
+        node.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        node.add_input_pin("first", "First", "", VariableType::String);
+        node.add_input_pin("second", "Second", "", VariableType::String);
+        node.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        node.add_output_pin("result", "Result", "", VariableType::String);
+        node
+    }
+
+    /// `use int::*` opens `int::subtract` too, although only `gcd` is called through it.
+    #[test]
+    fn a_bare_call_whose_alias_another_opened_namespace_exports_stays_named() {
+        let mut board = board();
+        add(
+            &mut board,
+            event(
+                "start",
+                &[("a", VariableType::String), ("b", VariableType::String)],
+            ),
+        );
+        let chain = [
+            ("gcd_a", "int_gcd", "int", "gcd"),
+            ("gcd_b", "int_gcd", "int", "gcd"),
+            (
+                "sub_a",
+                "float_vector_subtraction",
+                "math.vector",
+                "subtract",
+            ),
+            (
+                "sub_b",
+                "float_vector_subtraction",
+                "math.vector",
+                "subtract",
+            ),
+        ];
+        let mut previous = "start";
+        for (id, node_type, namespace, alias) in chain {
+            add(
+                &mut board,
+                binary_statement(id, node_type, namespace, alias),
+            );
+            wire(&mut board, (previous, "exec_out"), (id, "exec_in"));
+            wire(&mut board, ("start", "a"), (id, "first"));
+            wire(&mut board, ("start", "b"), (id, "second"));
+            previous = id;
+        }
+        let text = text(&board);
+        assert!(
+            text.contains("use int::*") && text.contains("use math::vector::*"),
+            "{text}"
+        );
+        assert_eq!(text.matches("    gcd(a, b)").count(), 2, "{text}");
+        assert_eq!(
+            text.matches("    subtract({ first: a, second: b })")
+                .count(),
+            2,
+            "`subtract(a, b)` would be ambiguous with `int::subtract`:\n{text}"
+        );
+        assert_roundtrip(&board);
+    }
+
+    #[test]
+    fn tied_pin_indices_keep_every_argument_named() {
+        let mut board = join_board(&[
+            ("first", VariableType::String),
+            ("second", VariableType::String),
+        ]);
+        for pin in board.nodes.get_mut("join").unwrap().pins.values_mut() {
+            pin.index = 1;
+        }
+        wire(&mut board, ("start", "a"), ("join", "first"));
+        wire(&mut board, ("start", "b"), ("join", "second"));
+        let text = text(&board);
+        assert!(
+            text.contains("log::info(test::join({ ")
+                && text.contains("first: a")
+                && text.contains("second: b"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn static_calls_render_qualified() {
         let mut board = board();
         add(&mut board, event("start", &[("n", VariableType::Integer)]));
         let mut from_int = Node::new("string_from_int", "From Int", "", "Utils/String");
@@ -5137,7 +6053,7 @@ mod rendering_tests {
         wire(&mut board, ("from_int", "result"), ("log", "message"));
         let text = text(&board);
         assert!(
-            text.contains("log::info({ message: string::fromInt({ value: n }) })"),
+            text.contains("log::info(string::fromInt(n))"),
             "a string node whose first input is not a string is static:\n{text}"
         );
         assert!(!text.contains("use "), "{text}");
@@ -5162,10 +6078,7 @@ mod rendering_tests {
         let board = two_logs_board();
         let text = text(&board);
         assert!(text.starts_with("use log::*\n\n"), "{text}");
-        assert!(
-            text.contains("    info({ message: s })\n    info({ message: s })\n"),
-            "{text}"
-        );
+        assert!(text.contains("    info(s)\n    info(s)\n"), "{text}");
         let result = assert_roundtrip(&board);
         assert!(result.corrections.is_empty(), "{:?}", result.corrections);
     }
@@ -5211,7 +6124,7 @@ mod rendering_tests {
         board.layers.insert(layer.id.clone(), layer);
         let text = text(&board);
         assert!(!text.contains("use "), "{text}");
-        assert!(text.contains("log::info({ message: s })"), "{text}");
+        assert!(text.contains("log::info(s)"), "{text}");
         assert_roundtrip(&board);
     }
 
@@ -5227,10 +6140,7 @@ mod rendering_tests {
         wire(&mut board, ("clash", "result"), ("c", "message"));
         let text = text(&board);
         assert!(!text.contains("use "), "{text}");
-        assert!(
-            text.contains("log::info({ message: other::info() })"),
-            "{text}"
-        );
+        assert!(text.contains("log::info(other::info())"), "{text}");
     }
 
     #[test]
@@ -5286,9 +6196,7 @@ mod rendering_tests {
         let board = hash_board(false, false);
         let single = text(&board);
         assert!(
-            single.contains(
-                "    const hash = s.stats()\n    info({ message: hash })\n    info({ message: hash })\n"
-            ),
+            single.contains("    const hash = s.stats()\n    info(hash)\n    info(hash)\n"),
             "a single-output node is a value, not an object:\n{single}"
         );
         assert!(!single.contains("const {"), "{single}");
@@ -5297,7 +6205,9 @@ mod rendering_tests {
         let board = hash_board(false, true);
         let multi = text(&board);
         assert!(
-            multi.contains("    const { hash, length } = s.stats()\n    info({ message: hash })\n    info({ message: length })\n"),
+            multi.contains(
+                "    const { hash, length } = s.stats()\n    info(hash)\n    info(length)\n"
+            ),
             "{multi}"
         );
         assert_roundtrip(&board);
@@ -5311,7 +6221,7 @@ mod rendering_tests {
             text.contains("const { hash: hash2, length } = s.stats()"),
             "{text}"
         );
-        assert!(text.contains("info({ message: hash2 })"), "{text}");
+        assert!(text.contains("info(hash2)"), "{text}");
         assert_roundtrip(&board);
     }
 
@@ -5328,7 +6238,7 @@ mod rendering_tests {
             renamed.contains("const hash2 = s.stats()"),
             "a binding colliding with a param keeps the dedupe suffix:\n{renamed}"
         );
-        assert!(renamed.contains("info({ message: hash2 })"), "{renamed}");
+        assert!(renamed.contains("info(hash2)"), "{renamed}");
         assert_roundtrip(&board);
     }
 
@@ -5357,7 +6267,7 @@ mod rendering_tests {
             text.contains("registerFunctionTools({ tools: [mD5Hash] })"),
             "{text}"
         );
-        assert!(text.contains("info({ message: mD5Hash.hash })"), "{text}");
+        assert!(text.contains("info(mD5Hash.hash)"), "{text}");
     }
 
     #[test]

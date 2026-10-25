@@ -15,6 +15,7 @@ use crate::{
     },
     error::ApiError,
     execution::{normalize_run_version_label, run_summary::RunSummary},
+    execution_usage_rollup::count_late_execution,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
@@ -108,8 +109,9 @@ async fn track_reported_execution_usage(
         return Ok(());
     }
 
+    let now = chrono::Utc::now().fixed_offset();
     let instance = std::env::var("INSTANCE_ID").ok();
-    execution_usage_tracking::ActiveModel {
+    let record = execution_usage_tracking::ActiveModel {
         id: Set(flow_like_types::create_id()),
         instance: Set(instance),
         board_id: Set(board_id.to_string()),
@@ -121,11 +123,20 @@ async fn track_reported_execution_usage(
         technical_user_id: Set(None),
         app_id: Set(Some(app_id.to_string())),
         created_at: Set(created_at),
-        updated_at: Set(chrono::Utc::now().fixed_offset()),
-    }
-    .insert(&state.db)
-    .await
-    .map_err(|e| anyhow!("Failed to track execution usage: {}", e))?;
+        updated_at: Set(now),
+    };
+    // A run reported after its day closed is counted in that day's rollup in
+    // the same transaction, so the day never misses or double-counts it.
+    state
+        .transaction(|txn| {
+            let record = record.clone();
+            Box::pin(async move {
+                let execution = record.insert(txn).await?;
+                count_late_execution(txn, &execution, now).await
+            })
+        })
+        .await
+        .map_err(|e: sea_orm::DbErr| anyhow!("Failed to track execution usage: {}", e))?;
 
     Ok(())
 }

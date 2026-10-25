@@ -4,12 +4,21 @@ import type {
 	IExecutionUsageRecord,
 	ILlmUsageRecord,
 	IPaginatedResponse,
+	IRecentExecutionsResponse,
+	IUsageRequestOptions,
 	IUsageState,
 	IUsageSummary,
 } from "@flow-like/flow-like-ui";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+
+function requestOptions(options?: IUsageRequestOptions): RequestInit {
+	return {
+		method: "GET",
+		...(options?.fresh ? { headers: { "Cache-Control": "no-cache" } } : {}),
+	};
+}
 
 function expectPage<T>(
 	page: IPaginatedResponse<T>,
@@ -76,6 +85,7 @@ export class UsageState implements IUsageState {
 		page = 0,
 		pageSize = 50,
 		appId?: string,
+		options?: IUsageRequestOptions,
 	): Promise<IPaginatedResponse<IExecutionUsageRecord>> {
 		const params = new URLSearchParams({
 			page: String(page),
@@ -87,16 +97,36 @@ export class UsageState implements IUsageState {
 			await fetcher<IPaginatedResponse<IExecutionUsageRecord>>(
 				this.profile(),
 				`usage/executions?${params}`,
-				{ method: "GET" },
+				requestOptions(options),
 				this.backend.auth,
 			),
 			"usage/executions",
 		);
 	}
 
+	async getRecentExecutions(
+		limit = 50,
+		appId?: string,
+		options?: IUsageRequestOptions,
+	): Promise<IRecentExecutionsResponse> {
+		const params = new URLSearchParams({ limit: String(limit) });
+		if (appId) params.set("app_id", appId);
+		const recent = await fetcher<IRecentExecutionsResponse>(
+			this.profile(),
+			`usage/executions/recent?${params}`,
+			requestOptions(options),
+			this.backend.auth,
+		);
+		if (!isRecord(recent)) {
+			throw new Error("Unexpected response from usage/executions/recent");
+		}
+		return { items: asArray(recent.items) };
+	}
+
 	async getExecutionActivity(
 		days = 7,
 		appId?: string,
+		options?: IUsageRequestOptions,
 	): Promise<IExecutionActivity> {
 		const params = new URLSearchParams({ days: String(days) });
 		if (appId) params.set("app_id", appId);
@@ -104,7 +134,7 @@ export class UsageState implements IUsageState {
 		const activity = await fetcher<IExecutionActivity>(
 			this.profile(),
 			`usage/executions/activity?${params}`,
-			{ method: "GET" },
+			requestOptions(options),
 			this.backend.auth,
 		);
 		if (!isRecord(activity)) {
@@ -118,11 +148,13 @@ export class UsageState implements IUsageState {
 		};
 	}
 
-	async getUsageSummary(): Promise<IUsageSummary> {
+	async getUsageSummary(
+		options?: IUsageRequestOptions,
+	): Promise<IUsageSummary> {
 		const summary = await fetcher<IUsageSummary>(
 			this.profile(),
 			"usage/summary",
-			{ method: "GET" },
+			requestOptions(options),
 			this.backend.auth,
 		);
 		if (!isRecord(summary)) {

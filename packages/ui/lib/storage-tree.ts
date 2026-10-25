@@ -56,6 +56,27 @@ export function decodeStorageSegment(segment: string): string {
 	}
 }
 
+const OBJECT_PATH_RESERVED = new Set('/\\{^}%`]">[~<#|*?');
+
+/**
+ * The listed form of one display name: `object_store`'s `PathPart` encoding,
+ * which percent-encodes control and non-ASCII bytes plus the reserved set, and
+ * the whole segment when it is `.` or `..`. Inverse of `decodeStorageSegment`.
+ */
+export function encodeStorageSegment(name: string): string {
+	if (name === ".") return "%2E";
+	if (name === "..") return "%2E%2E";
+	let encoded = "";
+	for (const byte of new TextEncoder().encode(name)) {
+		const char = String.fromCharCode(byte);
+		encoded +=
+			byte < 0x20 || byte >= 0x7f || OBJECT_PATH_RESERVED.has(char)
+				? `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
+				: char;
+	}
+	return encoded;
+}
+
 export function storageDisplayName(location: string): string {
 	return decodeStorageSegment(basename(location));
 }

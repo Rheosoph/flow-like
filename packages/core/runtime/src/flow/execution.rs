@@ -46,6 +46,7 @@ use std::{sync::Arc, time::SystemTime};
 use trace::Trace;
 
 pub mod branch;
+pub mod byte_store;
 pub mod context;
 pub mod device;
 pub mod egress;
@@ -388,6 +389,10 @@ pub struct LogMeta {
     pub event_version: Option<String>,
     pub event_id: String,
     pub payload: Vec<u8>,
+    /// Why the run failed when its logs cannot say: a rejected trigger, a
+    /// crashed executor, a run the sweeper timed out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
     /// Runtime-only field - not stored, set based on fetch source
     #[serde(default)]
     pub is_remote: bool,
@@ -650,6 +655,7 @@ impl Run {
                 event_id: self.event_id.clone().unwrap_or("".to_string()),
                 event_version: self.event_version.clone(),
                 payload,
+                error_message: None,
                 is_remote: false,
             };
             (Some(meta), summary)

@@ -272,9 +272,14 @@ async fn maintenance_handler(event: LambdaEvent<ScheduledMaintenancePayload>) ->
                 batch_full = result.swept >= result.batch_size,
                 "Run sweep maintenance completed"
             );
-            if env::var("FLOW_LIKE_COMPUTE_REPORT_RECONCILIATION").as_deref() == Ok("1") {
-                compute_reports::reconcile(get_http_client()?, api_base_url, maintenance_token)
-                    .await?;
+            // The sweep already committed. Failing here would make Lambda retry
+            // the whole sweep and dead-letter it; the SSM cursor resumes instead.
+            if env::var("FLOW_LIKE_COMPUTE_REPORT_RECONCILIATION").as_deref() == Ok("1")
+                && let Err(error) =
+                    compute_reports::reconcile(get_http_client()?, api_base_url, maintenance_token)
+                        .await
+            {
+                tracing::error!(%error, "Lambda REPORT reconciliation incomplete");
             }
         }
         (MaintenanceJob::StateCleanup, MaintenanceRunResponse::StateCleanup(result)) => {

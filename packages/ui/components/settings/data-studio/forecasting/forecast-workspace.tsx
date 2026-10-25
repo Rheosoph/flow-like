@@ -42,22 +42,17 @@ import { type CovariateTimeline, ForecastChart } from "./forecast-chart";
 import {
 	buildForecastPlot,
 	finiteValue,
-	numericInputValue,
 	forecastCovariateSupport,
 	forecastOutputLabel,
 	forecastingColumns,
 	formatForecastTime,
+	numericInputValue,
 	sampleForecastPlot,
 	sampleTimeline,
 	tableForecastSql,
 	timestampValue,
 	visibleCovariatePoints,
 } from "./forecast-data";
-import {
-	inspectForecastTimestamps,
-	nativeTimestampUnit,
-	timestampFormatOptions,
-} from "./forecast-timestamps";
 import { ForecastLibrary } from "./forecast-library";
 import { ForecastMetrics } from "./forecast-metrics";
 import {
@@ -73,6 +68,11 @@ import {
 	restoreForecastSetup,
 	withoutSeriesTarget,
 } from "./forecast-snapshots";
+import {
+	inspectForecastTimestamps,
+	nativeTimestampUnit,
+	timestampFormatOptions,
+} from "./forecast-timestamps";
 
 export interface ForecastWorkspaceProps {
 	appId: string;
@@ -439,7 +439,7 @@ function ForecastWorkspaceBody({
 					? current
 					: (result.forecasts[0]?.series_id ?? ""),
 			);
-			setView(evaluate ? "evaluation" : "forecast");
+			setView(selectedOffset !== undefined ? "evaluation" : "forecast");
 			setSetupOpen(false);
 		} catch (error) {
 			if (sequence === runSequence.current) setRunError(getErrorMessage(error));
@@ -464,10 +464,13 @@ function ForecastWorkspaceBody({
 	const series = resultSeries.includes(activeSeries)
 		? activeSeries
 		: (resultSeries[0] ?? "");
-	const history =
-		result?.history.filter(
-			(point) => point.target === target && point.series_id === series,
-		) ?? [];
+	const history = useMemo(
+		() =>
+			result?.history.filter(
+				(point) => point.target === target && point.series_id === series,
+			) ?? [],
+		[result?.history, target, series],
+	);
 	const backtestRange = useMemo(
 		() =>
 			forecastBacktestRange(
@@ -479,24 +482,33 @@ function ForecastWorkspaceBody({
 			),
 		[result?.history, target, series, holdout, backtestOffset],
 	);
-	const predictions =
-		(view === "evaluation"
-			? result?.backtest?.forecasts
-			: result?.forecasts
-		)?.filter(
-			(point) => point.target === target && point.series_id === series,
-		) ?? [];
+	const viewingEvaluation = view === "evaluation" && Boolean(result?.backtest);
+	const predictions = useMemo(
+		() =>
+			(viewingEvaluation
+				? result?.backtest?.forecasts
+				: result?.forecasts
+			)?.filter(
+				(point) => point.target === target && point.series_id === series,
+			) ?? [],
+		[
+			viewingEvaluation,
+			result?.backtest?.forecasts,
+			result?.forecasts,
+			target,
+			series,
+		],
+	);
 	const firstPrediction = predictions.reduce(
 		(min, point) => Math.min(min, point.timestamp_ms),
 		Number.POSITIVE_INFINITY,
 	);
-	const evaluationEnd =
-		view === "evaluation"
-			? predictions.reduce(
-					(last, point) => Math.max(last, point.timestamp_ms),
-					Number.NEGATIVE_INFINITY,
-				)
-			: Number.POSITIVE_INFINITY;
+	const evaluationEnd = viewingEvaluation
+		? predictions.reduce(
+				(last, point) => Math.max(last, point.timestamp_ms),
+				Number.NEGATIVE_INFINITY,
+			)
+		: Number.POSITIVE_INFINITY;
 	const cutoff = history
 		.filter((point) => point.timestamp_ms < firstPrediction)
 		.reduce<number | undefined>(
@@ -525,7 +537,26 @@ function ForecastWorkspaceBody({
 			),
 		[history, predictions, cutoff, result?.quantile_levels, evaluationEnd],
 	);
-	const displayedPlot = sampleForecastPlot(plot);
+	const displayedPlot = useMemo(() => sampleForecastPlot(plot), [plot]);
+	const openEvaluation = () => {
+		if (!evaluate) {
+			setEvaluate(true);
+			setHoldout(
+				String(
+					Math.max(
+						1,
+						Math.min(
+							Number(holdout),
+							Number(horizon),
+							backtestRange.maxHorizon,
+						),
+					),
+				),
+			);
+			setBacktestOffset(0);
+		}
+		setView("evaluation");
+	};
 	const selectedMetrics = result?.backtest?.metrics.find(
 		(metric) => metric.target === target && metric.series_id === series,
 	);
@@ -592,7 +623,7 @@ function ForecastWorkspaceBody({
 					visibleCovariatePoints(
 						points.filter((point) => point.timestamp <= evaluationEnd),
 						timelineRole,
-						view === "evaluation",
+						viewingEvaluation,
 						cutoff,
 					).sort((a, b) => a.timestamp - b.timestamp),
 					(point) => point.value,
@@ -644,7 +675,7 @@ function ForecastWorkspaceBody({
 			saved.result.forecasts[0]?.target ?? request.mapping.targets[0] ?? "",
 		);
 		setActiveSeries(saved.result.forecasts[0]?.series_id ?? "");
-		setView(request.backtest_horizon ? "evaluation" : "forecast");
+		setView("forecast");
 		setSetupOpen(false);
 		setSetupStep(3);
 	};
@@ -911,7 +942,7 @@ function ForecastWorkspaceBody({
 									})),
 							]}
 						/>
-						<div className="space-y-2 rounded-lg border border-orange-500/20 bg-orange-500/5 p-3">
+						<div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
 							<p className="text-xs font-medium">
 								{seriesId
 									? `Forecast each ${seriesId} separately`
@@ -970,7 +1001,7 @@ function ForecastWorkspaceBody({
 											className={cn(
 												"flex items-center gap-1 rounded-md border px-2 py-1.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 												targets.includes(column.name)
-													? "border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-300"
+													? "border-primary/30 bg-primary/10 text-primary"
 													: "text-muted-foreground hover:bg-muted",
 											)}
 										>
@@ -1227,7 +1258,7 @@ function ForecastWorkspaceBody({
 					Steps follow the time interval in your data.{" "}
 					{pointOnly
 						? "This model returns a point forecast without a quantile band."
-						: "Models that provide quantiles display them as an orange band. Use holdout evaluation to measure accuracy."}
+						: "Models that provide quantiles display them as a shaded band. Use holdout evaluation to measure accuracy."}
 				</p>
 				<div className="border-t pt-3">
 					<div className="flex items-center justify-between gap-3">
@@ -1276,7 +1307,7 @@ function ForecastWorkspaceBody({
 				<div className="flex flex-wrap items-center justify-between gap-3">
 					<div>
 						<h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-							<TrendingUp className="size-5 text-orange-500" />
+							<TrendingUp className="size-5 text-primary" />
 							Forecasting
 						</h2>
 						<p className="mt-1 text-xs text-muted-foreground">
@@ -1315,7 +1346,7 @@ function ForecastWorkspaceBody({
 							<Button
 								onClick={() => void runForecast()}
 								disabled={Boolean(disabledReason) || running}
-								className="gap-2 bg-orange-600 text-white hover:bg-orange-500"
+								className="gap-2"
 								title={disabledReason ?? undefined}
 							>
 								{running ? (
@@ -1443,12 +1474,16 @@ function ForecastWorkspaceBody({
 											</Select>
 										</div>
 									)}
-									{result?.backtest && (
-										<div className="flex rounded-lg border bg-card p-0.5">
+									{result && (
+										<fieldset
+											className="flex rounded-lg border bg-card p-0.5"
+											aria-label="Forecast view"
+										>
 											<Button
 												variant={view === "forecast" ? "secondary" : "ghost"}
 												size="sm"
 												className="h-7 px-2 text-[11px]"
+												aria-pressed={view === "forecast"}
 												onClick={() => setView("forecast")}
 											>
 												Outlook
@@ -1457,15 +1492,17 @@ function ForecastWorkspaceBody({
 												variant={view === "evaluation" ? "secondary" : "ghost"}
 												size="sm"
 												className="h-7 px-2 text-[11px]"
-												onClick={() => setView("evaluation")}
+												aria-pressed={view === "evaluation"}
+												disabled={running}
+												onClick={openEvaluation}
 											>
 												Holdout
 											</Button>
-										</div>
+										</fieldset>
 									)}
 								</div>
 							</div>
-							{evaluate && (
+							{view === "evaluation" && (
 								<ForecastBacktestControls
 									range={backtestRange}
 									offset={backtestOffset}
@@ -1480,12 +1517,23 @@ function ForecastWorkspaceBody({
 											: undefined)
 									}
 									running={running}
+									onHorizonChange={(value) => {
+										setHoldout(String(value));
+										setBacktestOffset(0);
+									}}
 									onChange={setBacktestOffset}
 									onCommit={(offset) => {
 										setBacktestOffset(offset);
 										void runForecast(offset);
 									}}
 								/>
+							)}
+							{view === "evaluation" && !result?.backtest && (
+								<p className="px-1 text-xs text-muted-foreground">
+									Choose a holdout window and evaluate it to compare predictions
+									with observed values. The chart shows your future outlook
+									until the evaluation finishes.
+								</p>
 							)}
 							<ForecastChart
 								points={displayedPlot}
@@ -1506,7 +1554,7 @@ function ForecastWorkspaceBody({
 								loading={running}
 								stale={stale}
 								failedRefresh={runError !== null}
-								backtest={view === "evaluation"}
+								backtest={viewingEvaluation}
 								covariates={covariateTimelines}
 								onCovariateToggle={toggleCovariate}
 								canUseCovariates={canUseCovariates}
@@ -1533,7 +1581,7 @@ function ForecastWorkspaceBody({
 										steps
 									</span>
 									<span className="flex items-center gap-1.5">
-										<span className="size-1.5 rounded-full bg-orange-400" />
+										<span className="size-1.5 rounded-full bg-primary" />
 										{result.model.family}{" "}
 										<span className="text-muted-foreground/50">/</span>{" "}
 										{result.point_statistic === "mean" ? "Mean" : "Median"}{" "}

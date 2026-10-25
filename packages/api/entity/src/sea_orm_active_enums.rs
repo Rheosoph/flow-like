@@ -413,6 +413,44 @@ pub enum LessonStatus {
     #[sea_orm(string_value = "COMPLETED")]
     Completed,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+#[serde(rename_all = "lowercase")]
+pub enum LockedEnforcement {
+    #[sea_orm(string_value = "OBJECT")]
+    Object,
+    #[sea_orm(string_value = "BUCKET")]
+    Bucket,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+#[serde(rename_all = "lowercase")]
+pub enum LockedItemScope {
+    #[sea_orm(string_value = "PROJECT")]
+    Project,
+    #[sea_orm(string_value = "USER")]
+    User,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+#[serde(rename_all = "lowercase")]
+pub enum LockedRetentionMode {
+    #[sea_orm(string_value = "GOVERNANCE")]
+    Governance,
+    #[sea_orm(string_value = "COMPLIANCE")]
+    Compliance,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+#[serde(rename_all = "lowercase")]
+pub enum LockedVersionStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "LOCKED")]
+    Locked,
+    #[sea_orm(string_value = "PURGED")]
+    Purged,
+}
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum NotificationType {

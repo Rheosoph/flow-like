@@ -23,6 +23,7 @@ const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"fork",
 	"graph",
 	"invoke",
+	"locked",
 	"nodes",
 	"notifications",
 	"packages",
@@ -127,7 +128,7 @@ export async function get<T>(
 export async function post<T>(
 	profile: IProfile,
 	path: string,
-	body?: any,
+	body?: unknown,
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
 	ensureProtectedAppRouteAuth(path, auth, "POST");
@@ -162,7 +163,7 @@ export async function post<T>(
 export async function put<T>(
 	profile: IProfile,
 	path: string,
-	body?: any,
+	body?: unknown,
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
 	ensureProtectedAppRouteAuth(path, auth, "PUT");

@@ -20,6 +20,9 @@ use std::collections::BTreeMap;
 #[cfg(feature = "execute")]
 use std::sync::Arc;
 
+#[cfg(all(test, feature = "execute"))]
+mod tests;
+
 #[derive(Default, Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct NodeDBConnection {
     pub cache_key: String,
@@ -40,6 +43,8 @@ pub struct CachedDB {
 #[cfg(feature = "execute")]
 #[async_trait]
 pub trait CachedDBRefresher: Send + Sync {
+    /// Source handles must use `load_unflushed_with_generation` here so refreshing
+    /// a writer cannot recursively flush that writer through another handle.
     async fn refresh(&self, context: &ExecutionContext) -> flow_like_types::Result<()>;
 
     /// Monotonically increasing generation of the credential-bearing store.
@@ -277,15 +282,29 @@ impl NodeDBConnection {
         Ok(self.load_with_generation(context).await?.0)
     }
 
-    /// Loads the database and returns the current refresh generation. Local
-    /// databases always use generation zero.
+    /// Loads the database and returns its freshness generation. Before refreshing
+    /// an unpinned read-only handle, flushes writers for the same database, table
+    /// and branch so reads include writes buffered earlier in this run.
     pub async fn load_with_generation(
         &self,
         context: &mut ExecutionContext,
     ) -> flow_like_types::Result<(CachedDB, u64)> {
+        self.load_inner(context, true).await
+    }
+
+    /// Inspects committed state without flushing pending writes. Used by reference
+    /// metadata and credential refresh hooks that load a view's source handle.
+    pub async fn load_unflushed_with_generation(
+        &self,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<(CachedDB, u64)> {
+        self.load_inner(context, false).await
+    }
+
+    async fn refresh(&self, context: &ExecutionContext) -> flow_like_types::Result<u64> {
         let refresh_key = Self::refresh_cache_key(&self.cache_key);
         let refresh_hook = context.cache.read().await.get(&refresh_key).cloned();
-        let generation = if let Some(refresh_hook) = refresh_hook {
+        if let Some(refresh_hook) = refresh_hook {
             let refresh_hook = refresh_hook
                 .as_any()
                 .downcast_ref::<CachedDBRefreshHook>()
@@ -294,11 +313,18 @@ impl NodeDBConnection {
                 })?
                 .clone();
             refresh_hook.refresh(context).await?;
-            refresh_hook.generation()
+            Ok(refresh_hook.generation())
         } else {
-            0
-        };
+            Ok(0)
+        }
+    }
 
+    async fn load_inner(
+        &self,
+        context: &ExecutionContext,
+        flush_writers: bool,
+    ) -> flow_like_types::Result<(CachedDB, u64)> {
+        let generation = self.refresh(context).await?;
         let cached = context
             .cache
             .read()
@@ -310,7 +336,81 @@ impl NodeDBConnection {
             .as_any()
             .downcast_ref::<CachedDB>()
             .ok_or(flow_like_types::anyhow!("Could not downcast"))?;
-        let generation = generation.wrapping_add(db.db.read().await.inner().mutation_generation());
+        if flush_writers {
+            Self::flush_related_writers(context, db).await?;
+        }
+        let store = db.db.write().await;
+        let inner = store.inner();
+        let selector = inner.selector();
+        let mut generation = generation.wrapping_add(inner.mutation_generation());
+        if selector.read_only && !selector.is_pinned() && !inner.is_durably_managed() {
+            // Read-only is a capability restriction, not a version pin. A separate
+            // writer advances its own Lance handle, so this cached reader must
+            // resolve latest again before a node or a retained SQL provider reads it.
+            let table = inner.raw().await?;
+            table.checkout_latest().await?;
+            generation = generation.wrapping_add(table.version().await?);
+        }
+        drop(store);
         Ok((db.clone(), generation))
+    }
+
+    async fn flush_related_writers(
+        context: &ExecutionContext,
+        reader: &CachedDB,
+    ) -> flow_like_types::Result<()> {
+        let (uri, table, branch) = {
+            let store = reader.db.read().await;
+            let inner = store.inner();
+            let selector = inner.selector();
+            if !selector.read_only || selector.is_pinned() || inner.is_durably_managed() {
+                return Ok(());
+            }
+            (
+                inner.connection()?.uri().to_owned(),
+                inner.table_name().to_owned(),
+                selector.branch,
+            )
+        };
+        // Release the run cache and reader locks before touching another handle.
+        // Refresh hooks may themselves load the source of a derived view.
+        let writers = context
+            .cache
+            .read()
+            .await
+            .iter()
+            .filter_map(|(key, cached)| {
+                cached
+                    .as_any()
+                    .downcast_ref::<CachedDB>()
+                    .filter(|cached| !Arc::ptr_eq(&cached.db, &reader.db))
+                    .map(|cached| {
+                        (
+                            NodeDBConnection {
+                                cache_key: key.clone(),
+                            },
+                            cached.clone(),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        for (connection, cached) in writers {
+            let matches = {
+                let store = cached.db.read().await;
+                let inner = store.inner();
+                let selector = inner.selector();
+                !selector.is_read_only()
+                    && !inner.is_durably_managed()
+                    && inner.table_name() == table
+                    && selector.branch == branch
+                    && inner.connection()?.uri() == uri
+                    && (store.is_dirty() || store.has_write_failures())
+            };
+            if matches {
+                connection.refresh(context).await?;
+                cached.ensure_flushed().await?;
+            }
+        }
+        Ok(())
     }
 }

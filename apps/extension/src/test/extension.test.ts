@@ -120,6 +120,28 @@ function calculatePricing() {
 		assert.ok(!model.calls.some((call) => call.name === "cache"));
 		assert.ok(!model.symbols.some((symbol) => symbol.name === "cache"));
 	});
+
+	test("collapse group is not indexed as a call and keeps its statements visible", async () => {
+		const document = await flowDocument(`eventsSimple onLoad() {
+	@collapse("Load/Parse") {
+		const { hash: h, other } = hash::md5({ input: "x" })
+	}
+}`);
+		const model = analyzeFlowDocument(document);
+
+		assert.ok(!model.localNames.has("collapse"));
+		assert.ok(!model.calls.some((call) => call.name === "collapse"));
+		assert.ok(!model.symbols.some((symbol) => symbol.name === "collapse"));
+		assert.ok(
+			model.symbols.some(
+				(symbol) => symbol.name === "onLoad" && symbol.kind === "event",
+			),
+		);
+		assert.strictEqual(
+			model.variables.find((v) => v.name === "h")?.initCall,
+			"hash::md5",
+		);
+	});
 });
 
 suite("Declaration registry", () => {

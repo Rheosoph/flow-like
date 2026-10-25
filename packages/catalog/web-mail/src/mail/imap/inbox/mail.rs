@@ -5,13 +5,24 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{Value, async_trait, json::json};
 
 pub mod copy;
 pub mod delete;
 pub mod draft;
 pub mod mark_seen;
 pub mod mv;
+
+async fn attachments_value(context: &ExecutionContext, attachments: Vec<Attachment>) -> Value {
+    let mut values = Vec::with_capacity(attachments.len());
+    for mut attachment in attachments {
+        let data = std::mem::take(&mut attachment.data);
+        let mut value = json!(attachment);
+        value["data"] = context.bytes_value(data).await;
+        values.push(value);
+    }
+    Value::Array(values)
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -68,9 +79,12 @@ impl NodeLogic for FetchMailNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         let email: EmailRef = context.evaluate_pin("email_ref").await?;
-        let parsed = email.fetch(context).await?;
+        let mut parsed = email.fetch(context).await?;
+        let attachments = std::mem::take(&mut parsed.attachments);
+        let mut parsed = json!(parsed);
+        parsed["attachments"] = attachments_value(context, attachments).await;
 
-        context.set_pin_value("email", json!(parsed)).await?;
+        context.set_pin_value("email", parsed).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
@@ -239,9 +253,8 @@ impl NodeLogic for EmailAttachmentsNode {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let email: Email = context.evaluate_pin("email").await?;
-        context
-            .set_pin_value("attachments", json!(email.attachments))
-            .await?;
+        let attachments = attachments_value(context, email.attachments).await;
+        context.set_pin_value("attachments", attachments).await?;
         Ok(())
     }
 }
@@ -352,7 +365,7 @@ impl NodeLogic for AttachmentFieldsNode {
         context
             .set_pin_value("content_type", json!(a.content_type))
             .await?;
-        context.set_pin_value("data", json!(a.data)).await?;
+        context.set_pin_bytes("data", a.data).await?;
         Ok(())
     }
 }

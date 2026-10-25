@@ -463,6 +463,10 @@ export const sidebar = [
 				slug: "self-hosting/audit-trail",
 			},
 			{
+				label: "Locked Storage",
+				slug: "self-hosting/locked-storage",
+			},
+			{
 				label: "Local Backend Development",
 				slug: "self-hosting/local-development",
 			},

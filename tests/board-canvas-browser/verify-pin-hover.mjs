@@ -99,7 +99,8 @@ try {
 	});
 
 	await api("reset");
-	await api("setViewport", 20, -1200, 2.5);
+	// The referenced square sits at the right end of ref-b's header; keep it on screen.
+	await api("setViewport", -120, -1200, 2.5);
 	const ref = page.locator(
 		'[data-nodeid="ref-a"][data-handleid="ref_out_ref-a"]',
 	);

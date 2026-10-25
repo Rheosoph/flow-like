@@ -72,6 +72,9 @@ class ChartTest(unittest.TestCase):
             result[item["name"]] = item
         return result
 
+    def job_env(self, suffix, docs=None):
+        return {item["name"]: item for item in self.resource("Job", suffix, docs)["spec"]["template"]["spec"]["containers"][0]["env"]}
+
     def assert_worker_config_is_compiled_in(self, docs=None):
         env = self.env("audit-worker", docs)
         self.assertFalse(any(name.startswith("FLOW_LIKE_CONFIG") or name in ("AUDIT_WORKER_PAUSED", "AUDIT_API_DATABASE_ROLE") for name in env))
@@ -379,6 +382,55 @@ class ChartTest(unittest.TestCase):
         self.assertFalse(any(x["kind"] == "Deployment" and x["metadata"]["name"] == "flow-like-audit-worker" for x in docs))
         self.assertEqual(self.env("api", docs)["AUDIT_WORKER"]["value"], "off")
         self.assertNotIn("AUDIT_BUCKET", self.env("api", docs))
+
+    def test_locked_storage_stays_off_without_a_bucket(self):
+        for env in [self.env("api"), self.env("execution-manager"), self.job_env("object-init-1"), self.job_env("object-store-conformance")]:
+            self.assertFalse(any(name.startswith("LOCKED_") for name in env))
+        self.assertIn("location ~ ^/(flow-like-meta|flow-like-content|flow-like-logs)(/|$) {", self.resource("ConfigMap", "object-gateway")["data"]["nginx.conf"])
+        docs = self.render("--set", "audit.worker=false", "--set-string", "audit.bucket=")
+        conformance = self.resource("Job", "object-store-conformance", docs)["spec"]["template"]["spec"]["containers"][0]
+        self.assertNotIn({"secretRef": {"name": "flow-like-rustfs-root"}}, conformance["envFrom"])
+
+    def test_locked_bucket_reaches_only_the_api_its_bootstrap_and_the_gateways(self):
+        def holders(docs):
+            return {doc["metadata"]["name"] for doc in docs if doc["kind"] in ("Deployment", "StatefulSet", "Job", "Secret") and "flow-like-locked" in json.dumps(doc)}
+        docs = self.render("--set", "lockedStorage.bucket=flow-like-locked")
+        self.assertEqual({name: item["value"] for name, item in self.env("api", docs).items() if name.startswith("LOCKED_")}, {
+            "LOCKED_BUCKET": "flow-like-locked", "LOCKED_BUCKET_ENFORCEMENT": "object", "LOCKED_BUCKET_LOCK_MODE": "COMPLIANCE",
+            "LOCKED_BUCKET_RETENTION_DAYS": "3650", "LOCKED_BUCKET_MIN_RETENTION_DAYS": "1", "LOCKED_BUCKET_MAX_FILE_BYTES": "5368709120"})
+        self.assertEqual({name: item["value"] for name, item in self.job_env("object-init-1", docs).items() if name.startswith("LOCKED_")}, {
+            "LOCKED_BUCKET": "flow-like-locked", "LOCKED_BUCKET_ENFORCEMENT": "object", "LOCKED_BUCKET_LOCK_MODE": "COMPLIANCE", "LOCKED_BUCKET_RETENTION_DAYS": "3650"})
+        self.assertEqual(self.env("execution-manager", docs)["LOCKED_BUCKET"]["value"], "flow-like-locked")
+        self.assertEqual(self.job_env("object-store-conformance", docs)["LOCKED_BUCKET"]["value"], "flow-like-locked")
+        conformance = self.resource("Job", "object-store-conformance", docs)["spec"]["template"]["spec"]["containers"][0]
+        self.assertIn({"secretRef": {"name": "flow-like-rustfs-root"}}, conformance["envFrom"])
+        nginx = self.resource("ConfigMap", "object-gateway", docs)["data"]["nginx.conf"]
+        self.assertIn("location ~ ^/(flow-like-meta|flow-like-content|flow-like-logs|flow-like-locked)(/|$) {", nginx)
+        self.assertEqual(holders(docs), {"flow-like-api", "flow-like-execution-manager", "flow-like-object-init-1", "flow-like-object-store-conformance"})
+        docs = self.render("--set", "lockedStorage.bucket=flow-like-locked,execution.isolationMode=trusted_shared,execution.asyncBackend=http")
+        self.assertEqual(holders(docs), {"flow-like-api", "flow-like-object-init-1", "flow-like-object-store-conformance"})
+
+    def test_locked_storage_rejects_unsafe_settings(self):
+        locked = "lockedStorage.bucket=flow-like-locked,"
+        for overrides, problem in [
+            ("lockedStorage.bucket=flow.like.locked", "without periods"),
+            ("lockedStorage.bucket=Flow-Like-Locked", "without periods"),
+            ("lockedStorage.bucket=flow-like-content", "separate from the metadata, content, logs and audit buckets"),
+            ("lockedStorage.bucket=flow-like-audit", "separate from the metadata, content, logs and audit buckets"),
+            (locked + "lockedStorage.enforcement=foo", "lockedStorage.enforcement must be object or bucket"),
+            (locked + "lockedStorage.lockMode=legal", "lockedStorage.lockMode must be GOVERNANCE or COMPLIANCE"),
+            (locked + "lockedStorage.retentionDays=0", "lockedStorage.retentionDays must be between 1 and 36500"),
+            (locked + "lockedStorage.retentionDays=36501", "lockedStorage.retentionDays must be between 1 and 36500"),
+            (locked + "lockedStorage.retentionDays=1.5", "lockedStorage.retentionDays must be a whole number"),
+            (locked + "lockedStorage.minRetentionDays=3651", "lockedStorage.minRetentionDays must be between 1 and lockedStorage.retentionDays"),
+            (locked + "lockedStorage.maxFileBytes=0", "lockedStorage.maxFileBytes must be a positive number of bytes"),
+            ("api.env[0].name=LOCKED_BUCKET,api.env[0].value=flow-like-locked", "api.env cannot override chart-managed LOCKED_BUCKET"),
+        ]:
+            with self.subTest(overrides=overrides):
+                self.assertIn(problem, self.render("--set", overrides, valid=False))
+        docs = self.render("--set", locked + "lockedStorage.enforcement=bucket,lockedStorage.lockMode=GOVERNANCE,lockedStorage.retentionDays=30,lockedStorage.minRetentionDays=30")
+        init = self.job_env("object-init-1", docs)
+        self.assertEqual((init["LOCKED_BUCKET_ENFORCEMENT"]["value"], init["LOCKED_BUCKET_LOCK_MODE"]["value"], init["LOCKED_BUCKET_RETENTION_DAYS"]["value"]), ("bucket", "GOVERNANCE", "30"))
 
     def test_tls_database_separates_migration_api_and_worker_credentials(self):
         database = self.resource("StatefulSet", "cockroachdb")["spec"]["template"]["spec"]

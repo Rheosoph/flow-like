@@ -28,6 +28,12 @@ import {
 	homeUsageDollars,
 	normalizeHomeActivity,
 } from "../home-activity-statistics";
+import {
+	homeExecutionActivityQuery,
+	homeRecentExecutionsQuery,
+	homeUsageSummaryQuery,
+	refreshHomeUsageQuery,
+} from "../home-usage-query";
 import { useHomeLibrary } from "./collections";
 import {
 	type HomeContentProps,
@@ -168,21 +174,23 @@ function useHomeExecutions(
 ) {
 	const backend = useBackend();
 	const scope = useHomeScope();
-	return useQuery({
-		queryKey: ["home", ...scope, "executions", appId, limit],
-		queryFn: () => {
-			if (!backend.usageState)
-				throw new Error("Usage history is unavailable on this backend.");
-			return backend.usageState.getExecutionHistory(
-				0,
-				limit,
-				appId || undefined,
-			);
-		},
+	const client = useQueryClient();
+	const options = homeRecentExecutionsQuery(
+		backend.usageState,
+		scope,
+		appId,
+		limit,
+		editing,
+	);
+	const result = useQuery({
+		...options,
 		enabled: enabled && Boolean(backend.usageState),
-		staleTime: 30_000,
-		refetchInterval: editing ? false : 60_000,
 	});
+	return {
+		...result,
+		refetch: () =>
+			refreshHomeUsageQuery(client, options.queryKey, result.refetch),
+	};
 }
 
 /**
@@ -199,22 +207,40 @@ export function useHomeActivity(
 ) {
 	const backend = useBackend();
 	const scope = useHomeScope();
-	const window = homeActivityDays(days);
-	return useQuery({
-		queryKey: ["home", ...scope, "activity", appId, window],
-		queryFn: () => {
-			if (!backend.usageState)
-				throw new Error("Usage history is unavailable on this backend.");
-			return backend.usageState.getExecutionActivity(
-				window,
-				appId || undefined,
-			);
-		},
+	const client = useQueryClient();
+	const options = homeExecutionActivityQuery(
+		backend.usageState,
+		scope,
+		days,
+		appId,
+		editing,
+	);
+	const result = useQuery({
+		...options,
 		select: normalizeHomeActivity,
 		enabled: enabled && Boolean(backend.usageState),
-		staleTime: 30_000,
-		refetchInterval: editing ? false : 60_000,
 	});
+	return {
+		...result,
+		refetch: () =>
+			refreshHomeUsageQuery(client, options.queryKey, result.refetch),
+	};
+}
+
+function useHomeUsageSummary(editing = false, enabled = true) {
+	const backend = useBackend();
+	const scope = useHomeScope();
+	const client = useQueryClient();
+	const options = homeUsageSummaryQuery(backend.usageState, scope, editing);
+	const result = useQuery({
+		...options,
+		enabled: enabled && Boolean(backend.usageState),
+	});
+	return {
+		...result,
+		refetch: () =>
+			refreshHomeUsageQuery(client, options.queryKey, result.refetch),
+	};
 }
 
 export function HomeRunActivity({ widget, editing }: HomeContentProps) {
@@ -438,18 +464,7 @@ export function HomeExecutionsByApp({ widget, editing }: HomeContentProps) {
 
 export function HomeAiUsage({ editing }: HomeContentProps) {
 	const backend = useBackend();
-	const scope = useHomeScope();
-	const summary = useQuery({
-		queryKey: ["home", ...scope, "usage-summary"],
-		queryFn: () => {
-			if (!backend.usageState)
-				throw new Error("Usage history is unavailable on this backend.");
-			return backend.usageState.getUsageSummary();
-		},
-		enabled: Boolean(backend.usageState),
-		staleTime: 30_000,
-		refetchInterval: editing ? false : 60_000,
-	});
+	const summary = useHomeUsageSummary(editing);
 	if (!backend.usageState)
 		return (
 			<HomeEmpty>Usage history is not available on this backend.</HomeEmpty>
@@ -529,26 +544,17 @@ export function HomeNeedsAttention(props: HomeContentProps) {
 	);
 }
 
-export function HomeRunStats({ widget }: HomeContentProps) {
+export function HomeRunStats({ widget, editing }: HomeContentProps) {
 	const backend = useBackend();
-	const scope = useHomeScope();
 	const metric = textConfig(widget.config, "metric", "overview");
 	const sample = metric === "errors" || metric === "duration";
 	const executions = useHomeActivity(
 		widget.config.days,
 		textConfig(widget.config, "appId"),
 		sample,
+		editing,
 	);
-	const summary = useQuery({
-		queryKey: ["home", ...scope, "usage-summary"],
-		queryFn: () => {
-			if (!backend.usageState)
-				throw new Error("Usage history is unavailable on this backend.");
-			return backend.usageState.getUsageSummary();
-		},
-		enabled: !sample && Boolean(backend.usageState),
-		staleTime: 30_000,
-	});
+	const summary = useHomeUsageSummary(editing, !sample);
 	const state = sample ? executions : summary;
 	if (!backend.usageState)
 		return (

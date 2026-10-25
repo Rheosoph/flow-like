@@ -15,7 +15,10 @@ use super::runtime::{
 use super::sdk_chat::copilot_sdk_chat_internal;
 use super::stream_events::utf8_prefix;
 use super::telemetry::{AGENT_STAGE_RUN, instrumented_agent_stage};
-use crate::{functions::ai::frontend_tool_bridge::FrontendToolContext, state::TauriFlowLikeState};
+use crate::{
+    functions::ai::frontend_tool_bridge::{FrontendToolContext, claim_frontend_tool_owner},
+    state::TauriFlowLikeState,
+};
 use dashmap::DashMap;
 use flow_like::{
     copilot::{ChatImage, CopilotScope, UnifiedChatMessage, UnifiedCopilotResponse},
@@ -325,6 +328,7 @@ pub(super) fn global_run_tool_context(
 #[tauri::command]
 pub async fn global_chat(
     app_handle: AppHandle,
+    webview: tauri::Webview,
     state: State<'_, TauriFlowLikeState>,
     scope: CopilotScope,
     user_prompt: String,
@@ -423,6 +427,7 @@ pub async fn global_chat(
         COPILOT_RUN_CHANNEL_LIFETIME,
     )
     .await;
+    let _tool_owner = claim_frontend_tool_owner(chat_channel.channel_id(), webview.label());
     let run = run_id
         .as_ref()
         .map(|id| register_global_chat_run(id, channel.clone(), chat_channel.clone()));

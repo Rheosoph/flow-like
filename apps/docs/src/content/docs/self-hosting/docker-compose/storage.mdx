@@ -34,6 +34,9 @@ The default mode requires three distinct bucket names. `CDN_BUCKET_NAME`
 defaults to the content bucket in the S3 adapter; this does not make that bucket
 public.
 
+The optional write-once bucket for revision-safe files is described in
+[Locked storage](/self-hosting/locked-storage/#docker-compose).
+
 Setup generates three independent identities:
 
 - `RUSTFS_ROOT_USER` and `RUSTFS_ROOT_PASSWORD` reach the store and bootstrap only.

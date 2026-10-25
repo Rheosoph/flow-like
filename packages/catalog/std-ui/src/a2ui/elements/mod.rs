@@ -73,6 +73,7 @@ pub mod update_schemas;
 pub mod update_sprite;
 pub mod update_table;
 pub mod update_toggle;
+pub mod uploaded_file_to_path;
 pub mod url_decode;
 pub mod url_encode;
 pub mod write_csv_to_table;

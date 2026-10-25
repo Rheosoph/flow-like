@@ -147,6 +147,8 @@ pub struct WidgetCapabilities {
     pub wasm: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub downloads: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uploads: Option<bool>,
 }
 
 /// Typed contract of a package widget (`contract.json`)
@@ -263,21 +265,21 @@ impl WidgetContract {
                     )),
                 }
             }
-            if let (Some(min), Some(max)) = (input.min, input.max) {
-                if min > max {
-                    errors.push(format!(
-                        "Input '{}' in widget '{}' has min {} > max {}",
-                        key, self.id, min, max
-                    ));
-                }
+            if let (Some(min), Some(max)) = (input.min, input.max)
+                && min > max
+            {
+                errors.push(format!(
+                    "Input '{}' in widget '{}' has min {} > max {}",
+                    key, self.id, min, max
+                ));
             }
-            if let Some(default) = &input.default {
-                if !default_matches_type(default, input) {
-                    errors.push(format!(
-                        "Default value for input '{}' in widget '{}' does not match its declared type",
-                        key, self.id
-                    ));
-                }
+            if let Some(default) = &input.default
+                && !default_matches_type(default, input)
+            {
+                errors.push(format!(
+                    "Default value for input '{}' in widget '{}' does not match its declared type",
+                    key, self.id
+                ));
             }
         }
 
@@ -353,10 +355,11 @@ mod tests {
 
     #[test]
     fn widget_capabilities_roundtrip_and_reject_unknown_fields() {
-        let value = serde_json::json!({"contractVersion":1,"id":"globe","capabilities":{"workers":true,"media":true,"microphone":true,"wasm":true,"downloads":true}});
+        let value = serde_json::json!({"contractVersion":1,"id":"globe","capabilities":{"workers":true,"media":true,"microphone":true,"wasm":true,"downloads":true,"uploads":true}});
         let contract: WidgetContract = serde_json::from_value(value).unwrap();
         let serialized = serde_json::to_value(contract).unwrap();
         assert_eq!(serialized["capabilities"]["downloads"], true);
+        assert_eq!(serialized["capabilities"]["uploads"], true);
         assert!(serde_json::from_value::<WidgetContract>(serde_json::json!({"contractVersion":1,"id":"globe","capabilities":{"sameOrigin":true}})).is_err());
         assert!(serde_json::from_value::<WidgetContract>(serde_json::json!({"contractVersion":1,"id":"globe","capabilities":{"resources":true}})).is_err());
     }

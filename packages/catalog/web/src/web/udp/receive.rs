@@ -197,6 +197,8 @@ impl NodeLogic for UdpReceiveNode {
                 for entry in connected_nodes.iter() {
                     let (_id, ctx) = entry.pair();
                     let mut ctx = ctx.lock().await;
+                    let scope = ctx.new_byte_scope();
+                    let previous_scope = ctx.enter_byte_scope(&scope);
 
                     if has_sender_addr_pin {
                         let addr_pins: Vec<_> = ctx
@@ -244,7 +246,7 @@ impl NodeLogic for UdpReceiveNode {
                             .map(|p| (*p).clone())
                             .collect();
                         if let Some(pin) = pins.first() {
-                            pin.set_value(json!(data.clone())).await;
+                            pin.set_value(ctx.bytes_value(data.clone()).await).await;
                         }
                     } else {
                         let payload_pins: Vec<_> = ctx
@@ -256,8 +258,9 @@ impl NodeLogic for UdpReceiveNode {
                             })
                             .map(|p| (*p).clone())
                             .collect();
+                        let payload = ctx.bytes_value(data.clone()).await;
                         for pin in payload_pins {
-                            pin.set_value(json!(data.clone())).await;
+                            pin.set_value(payload.clone()).await;
                         }
                     }
 
@@ -271,6 +274,7 @@ impl NodeLogic for UdpReceiveNode {
                     if let Err(e) = run {
                         tracing::warn!("UDP on_message handler error: {:?}", e);
                     }
+                    ctx.restore_byte_scope(previous_scope);
                 }
             }
 

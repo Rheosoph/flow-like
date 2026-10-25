@@ -36,6 +36,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import { betweenFrames } from "../../lib/board-canvas/frames";
 
 export { useEdgesState, useNodesState } from "@xyflow/react";
 
@@ -119,6 +120,22 @@ function sameMeasuredHandles(a: HandleBounds, b: HandleBounds): boolean {
 	return true;
 }
 
+/** Rescales a camera to `zoom` while keeping the world point under the screen centre fixed. */
+export function zoomAboutCenter(
+	viewport: Viewport,
+	zoom: number,
+	width: number,
+	height: number,
+): Viewport {
+	if (zoom === viewport.zoom || !(viewport.zoom > 0)) return viewport;
+	const ratio = zoom / viewport.zoom;
+	return {
+		x: width / 2 - (width / 2 - viewport.x) * ratio,
+		y: height / 2 - (height / 2 - viewport.y) * ratio,
+		zoom,
+	};
+}
+
 export function createBoardRuntime(): BoardRuntime {
 	const listeners = new Set<Listener>();
 	const keyed = new Set<{
@@ -129,7 +146,7 @@ export function createBoardRuntime(): BoardRuntime {
 		| { flow: ReactFlowInstance; store: ReturnType<typeof useLegacyStoreApi> }
 		| undefined;
 	let animation:
-		| { frame: number; finish: (completed: boolean) => void }
+		| { cancel: () => void; finish: (completed: boolean) => void }
 		| undefined;
 	let selectedNodeIds: string[] = [];
 	let selectedEdgeIds: string[] = [];
@@ -288,7 +305,7 @@ export function createBoardRuntime(): BoardRuntime {
 	});
 	const cancelAnimation = () => {
 		if (!animation) return;
-		cancelAnimationFrame(animation.frame);
+		animation.cancel();
 		animation.finish(false);
 		animation = undefined;
 	};
@@ -296,7 +313,20 @@ export function createBoardRuntime(): BoardRuntime {
 		next,
 		options = {},
 	) => {
-		if (legacy) return legacy.flow.setViewport(next, options);
+		if (legacy) {
+			// React Flow's setViewport skips its own zoom limits, and below them it
+			// mounts every node of a large board (restored native cameras go to 0.02).
+			const { minZoom, maxZoom, width, height } = legacy.store.getState();
+			return legacy.flow.setViewport(
+				zoomAboutCenter(
+					next,
+					Math.max(minZoom, Math.min(maxZoom, next.zoom)),
+					width,
+					height,
+				),
+				options,
+			);
+		}
 		if (![next.x, next.y, next.zoom].every(Number.isFinite) || next.zoom <= 0)
 			return false;
 		cancelAnimation();
@@ -323,7 +353,7 @@ export function createBoardRuntime(): BoardRuntime {
 			const start = performance.now();
 			const duration = options.duration ?? 0;
 			const current = {
-				frame: 0,
+				cancel: () => {},
 				finish(completed: boolean) {
 					if (notify) state.onMoveEnd?.(null, viewport());
 					resolve(completed);
@@ -339,14 +369,15 @@ export function createBoardRuntime(): BoardRuntime {
 					y: from.y + (target.y - from.y) * progress,
 					zoom: from.zoom + (target.zoom - from.zoom) * progress,
 				});
-				if (fraction < 1) current.frame = requestAnimationFrame(tick);
+				// Between frames, so the canvases draw each step with the DOM.
+				if (fraction < 1) current.cancel = betweenFrames(tick);
 				else {
 					animation = undefined;
 					current.finish(true);
 				}
 			};
 			animation = current;
-			current.frame = requestAnimationFrame(tick);
+			current.cancel = betweenFrames(tick);
 		});
 	};
 	const updateNodeInternals: ReactFlowState["updateNodeInternals"] = (
@@ -594,14 +625,13 @@ export function createBoardRuntime(): BoardRuntime {
 		},
 		zoomTo: (zoom, options) => {
 			if (legacy) return legacy.flow.zoomTo(zoom, options);
-			const next = Math.max(state.minZoom, Math.min(state.maxZoom, zoom));
-			const ratio = next / state.transform[2];
 			return setViewport(
-				{
-					x: state.width / 2 - (state.width / 2 - state.transform[0]) * ratio,
-					y: state.height / 2 - (state.height / 2 - state.transform[1]) * ratio,
-					zoom: next,
-				},
+				zoomAboutCenter(
+					viewport(),
+					Math.max(state.minZoom, Math.min(state.maxZoom, zoom)),
+					state.width,
+					state.height,
+				),
 				options,
 			);
 		},

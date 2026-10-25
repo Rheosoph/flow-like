@@ -42,6 +42,8 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub execution_runs: HasMany<super::execution_run::Entity>,
     #[sea_orm(has_many)]
+    pub execution_usage_dailies: HasMany<super::execution_usage_daily::Entity>,
+    #[sea_orm(has_many)]
     pub execution_usage_trackings: HasMany<super::execution_usage_tracking::Entity>,
     #[sea_orm(has_many)]
     pub llm_usage_trackings: HasMany<super::llm_usage_tracking::Entity>,

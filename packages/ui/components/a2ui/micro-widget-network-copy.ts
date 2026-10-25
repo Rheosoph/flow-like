@@ -264,6 +264,14 @@ export const WIDGET_CAPABILITY_COPY: Readonly<
 				"Flow-Like records through your microphone whenever the widget asks (up to 60 seconds and 8 MB per request) and hands the audio to the widget. A stop button is shown while recording.",
 			),
 	},
+	uploads: {
+		label: (t) => t("widgetCapabilityUploads", "File uploads"),
+		description: (t) =>
+			t(
+				"widgetCapabilityUploadsDescription",
+				"The widget may send files you pick to this app's temporary storage (up to 25 MB each), where the app's workflows can read them.",
+			),
+	},
 	downloads: {
 		label: (t) => t("widgetCapabilityDownloads", "File downloads"),
 		description: (t) =>

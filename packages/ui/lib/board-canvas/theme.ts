@@ -43,10 +43,34 @@ export function canvasColor(value: string): RGBA {
 	throw new Error(`The egui preview cannot resolve theme color: ${value}`);
 }
 
+/** The run, log and lint tints the production components take from these classes. */
+function statusPalette(
+	textColor: (className: string, fallback: RGBA) => RGBA,
+): Pick<
+	Palette,
+	"success" | "caution" | "warning" | "info" | "remote" | "fatal"
+> {
+	return {
+		success: textColor(
+			"text-green-600 dark:text-green-400",
+			[34, 197, 94, 255],
+		),
+		caution: textColor(
+			"text-yellow-600 dark:text-yellow-400",
+			[234, 179, 8, 255],
+		),
+		warning: textColor("text-amber-500", [245, 158, 11, 255]),
+		info: textColor("text-sky-500", [14, 165, 233, 255]),
+		remote: textColor("text-blue-500", [59, 130, 246, 255]),
+		fatal: textColor("text-red-800", [153, 27, 27, 255]),
+	};
+}
+
 export interface CanvasTheme {
 	palette: Palette;
 	pinColors: Record<string, RGBA>;
 	referenceColor: RGBA;
+	headerColors: { function: RGBA; testEvent: RGBA };
 	rootFontSize: number;
 	nodeRadius: number;
 	rerouteRadius: number;
@@ -122,7 +146,36 @@ export function readCanvasTheme(host: HTMLElement): CanvasTheme {
 			: Number.NaN;
 		return Number.isFinite(pixels) ? Math.max(0, pixels) : fallback;
 	};
+	// Chrome colors the painter can derive itself; a theme without them still renders.
+	const optional = (token: string) =>
+		computed.getPropertyValue(token).trim() ? read(token) : undefined;
+	const resolved = (value: string): RGBA | undefined => {
+		if (!value) return undefined;
+		try {
+			return canvasColor(value);
+		} catch {
+			return browserColor(value);
+		}
+	};
+	/** A text color class as the stylesheet resolves it; a class the build dropped falls back. */
+	const textColor = (className: string, fallback: RGBA): RGBA => {
+		probe.className = "";
+		const inherited = getComputedStyle(probe).color;
+		probe.className = className;
+		const value = getComputedStyle(probe).color;
+		return (value !== inherited && resolved(value)) || fallback;
+	};
+	/** Colors the production node takes from classes, read through the real stylesheet. */
+	const styled = (className: string) => {
+		probe.className = className;
+		const style = getComputedStyle(probe);
+		return {
+			color: resolved(style.color),
+			background: resolved(style.backgroundColor),
+		};
+	};
 	try {
+		const node = styled("react-flow__node-default");
 		const palette: Palette = {
 			background: read("--background"),
 			card: read("--card"),
@@ -131,6 +184,14 @@ export function readCanvasTheme(host: HTMLElement): CanvasTheme {
 			border: read("--border"),
 			primary: read("--primary"),
 			tertiary: read("--tertiary"),
+			nodeText: node.color,
+			nodeBackdrop: node.background,
+			input: optional("--input"),
+			checkbox: styled("dark:bg-input/30").background,
+			primaryForeground: optional("--primary-foreground"),
+			mutedBackground: optional("--muted"),
+			destructive: optional("--destructive"),
+			...statusPalette(textColor),
 		};
 		const types = [
 			"String",
@@ -159,6 +220,10 @@ export function readCanvasTheme(host: HTMLElement): CanvasTheme {
 			palette,
 			pinColors,
 			referenceColor: read("--pin-fn-ref", palette.tertiary),
+			headerColors: {
+				function: read("--color-violet-500", [141, 84, 255, 255]),
+				testEvent: read("--color-cyan-500", [0, 183, 215, 255]),
+			},
 			rootFontSize:
 				Number.isFinite(rootFontSize) && rootFontSize > 0 ? rootFontSize : 16,
 			nodeRadius: radius("rounded-md", 4),

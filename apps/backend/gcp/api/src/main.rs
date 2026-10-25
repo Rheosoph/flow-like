@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         meta_bucket = %config.meta_bucket,
         cdn_bucket = %config.cdn_bucket,
         log_bucket = %config.log_bucket,
+        locked_bucket = config.locked_bucket.as_deref().unwrap_or("disabled"),
         cors_origin_count = config.cors_origin_count(),
         "starting Flow-Like GCP API"
     );

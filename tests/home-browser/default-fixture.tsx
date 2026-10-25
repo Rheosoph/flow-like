@@ -387,6 +387,15 @@ function DefaultScenario({
 			usageState: offline
 				? undefined
 				: {
+						getRecentExecutions: async (limit = 50, appId?: string) => {
+							record("history");
+							account();
+							return {
+								items: history
+									.filter((row) => !appId || row.app_id === appId)
+									.slice(0, limit),
+							};
+						},
 						getExecutionHistory: async (
 							page = 0,
 							pageSize = 100,

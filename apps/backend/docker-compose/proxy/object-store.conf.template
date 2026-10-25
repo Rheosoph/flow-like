@@ -10,7 +10,8 @@ server {
     # reach RustFS through this data gateway; private bucket IAM still applies.
     if ($arg_action != '') { return 403; }
     location = /health { access_log off; return 200 'ok'; }
-    location ~ ^/(${META_BUCKET}|${CONTENT_BUCKET}|${LOG_BUCKET})(/|$) {
+    # Without LOCKED_BUCKET, Compose substitutes a name S3 rejects, so no bucket matches it.
+    location ~ ^/(${META_BUCKET}|${CONTENT_BUCKET}|${LOG_BUCKET}|${LOCKED_BUCKET})(/|$) {
         proxy_pass http://s3_store;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;

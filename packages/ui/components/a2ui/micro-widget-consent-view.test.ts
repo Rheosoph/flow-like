@@ -5,11 +5,12 @@ import {
 	partitionWidgetChips,
 	widgetConsentViewSignature,
 } from "./micro-widget-consent-view";
-import type {
-	WidgetNetworkSource,
-	WidgetPolicy,
-	WidgetRuntimeSourceEntry,
-	WidgetSourceLevel,
+import {
+	type WidgetNetworkSource,
+	type WidgetPolicy,
+	type WidgetRuntimeSourceEntry,
+	type WidgetSourceLevel,
+	policyCapabilities,
 } from "./micro-widget-policy";
 import type { MicroWidgetConsentPrompt } from "./use-micro-widget-grant";
 
@@ -311,5 +312,20 @@ describe("consent view", () => {
 		expect(signature(promptFor([calm], { includeRuntime: false }))).toBe(
 			signature(shown),
 		);
+	});
+
+	test("file uploads ask calmly, unlike downloads", () => {
+		const asking = (policy: WidgetPolicy) =>
+			buildWidgetConsentView(
+				promptFor([], {
+					declared: { policy, levels: {}, covered: false },
+					newCapabilities: policyCapabilities(policy),
+				}),
+			);
+		const uploads = asking({ uploads: true });
+		expect(uploads.capabilities).toEqual(["uploads"]);
+		expect(uploads.tone).toBe("known");
+		expect(uploads.title).toBe("capabilities");
+		expect(asking({ uploads: true, downloads: true }).tone).toBe("broad");
 	});
 });

@@ -336,20 +336,29 @@ continue to use the configured `from_email`.
 
 Connect the inbound event's Session output to Send Platform Email. To answer
 the received message, connect both Session and Message to Reply Platform Email.
-The backend checks that the session belongs to the current app and event, and
-chooses the event's active From address. A reply derives its recipient, subject,
-and threading headers from the stored original message. Reply requires that
-the original receipt has not expired. Callers provide neither sender addresses
-nor raw headers.
+The backend checks that the session belongs to the current app and that its
+event is still active, and sends from the event's alias, or from its stable
+address when the event has no alias. The optional Sender Name sets the name
+recipients see; when it is empty, they see the event's name. Any live
+run of that app may use the session, whichever event started it, so a
+scheduled or manually started flow can send with a session it stored earlier.
+A reply derives its recipient, subject, and threading headers from the stored
+original message. Reply requires that the original receipt has not expired.
+Callers provide neither sender addresses nor raw headers.
 
 The corresponding endpoints are `POST /api/v1/apps/{app_id}/mail/send` with
-`{session,to,cc,bcc,subject,text,html}` and
-`POST /api/v1/apps/{app_id}/mail/reply` with `{session,message,text,html}`.
-Both return the session and a request ID after provider acceptance. The default
-limit is one message per app every five seconds, configured with
-`MAIL_CONFIG.min_send_interval_seconds`. A message can address at most 20
-recipients across To, CC, and BCC, with at most 1 MiB of body content. The send
-endpoint and node currently support text and HTML bodies without attachments.
+`{session,to,cc,bcc,subject,text,html,attachments,sender_name}` and
+`POST /api/v1/apps/{app_id}/mail/reply` with
+`{session,message,text,html,attachments,sender_name}`. Both return the session and a
+request ID after provider acceptance. The default limit is one message per app
+every five seconds, configured with `MAIL_CONFIG.min_send_interval_seconds`. A
+message can address at most 20 recipients across To, CC, and BCC, with at most
+1 MiB of body content. It can carry up to 10 attachments totaling 3 MiB, each
+`{filename,content_type,content}` with base64 content; the nodes read them from
+FlowPaths. Attachments travel base64-encoded inside the JSON request, so 3 MiB
+of files take about 4 MiB of the 6 MB Lambda request limit. Executable and
+script types that SES refuses, such as `.exe` or `.js`, are rejected for every
+provider.
 
 Request [SES production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html)
 in the sending region before sending to arbitrary recipients. In the sandbox,

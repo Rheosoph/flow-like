@@ -848,25 +848,26 @@ export function A2UITable({
 			)}
 
 			<div className="overflow-x-auto">
-				<table
-					className={cn(
-						"w-full text-sm",
-						bordered && "border border-border",
-						compact ? "text-xs" : "text-sm",
-					)}
+				{/* Outside the table: dnd-kit renders its live-region divs where the context mounts. */}
+				<DndContext
+					sensors={sensors}
+					collisionDetection={closestCenter}
+					onDragEnd={handleColumnDragEnd}
 				>
-					{caption && (
-						<caption className="text-muted-foreground text-sm py-2">
-							{caption}
-						</caption>
-					)}
-					<thead
-						className={cn(stickyHeader && "sticky top-0 bg-background z-10")}
+					<table
+						className={cn(
+							"w-full text-sm",
+							bordered && "border border-border",
+							compact ? "text-xs" : "text-sm",
+						)}
 					>
-						<DndContext
-							sensors={sensors}
-							collisionDetection={closestCenter}
-							onDragEnd={handleColumnDragEnd}
+						{caption && (
+							<caption className="text-muted-foreground text-sm py-2">
+								{caption}
+							</caption>
+						)}
+						<thead
+							className={cn(stickyHeader && "sticky top-0 bg-background z-10")}
 						>
 							<SortableContext
 								items={visibleColumns.map((idx) => `col-${idx}`)}
@@ -896,81 +897,84 @@ export function A2UITable({
 									))}
 								</tr>
 							</SortableContext>
-						</DndContext>
-					</thead>
-					<tbody>
-						{paginatedRows.map((row, rowIdx) => (
-							<tr
-								key={row.index}
-								className={cn(
-									bordered && "border-b border-border",
-									striped && rowIdx % 2 === 1 && "bg-muted/50",
-									hoverable && "hover:bg-muted/30 transition-colors",
-									selectable && selectedRows.has(row.index) && "bg-primary/10",
-									rowsInteractive && "cursor-pointer",
-								)}
-								tabIndex={rowsInteractive ? 0 : undefined}
-								onClick={
-									rowsInteractive
-										? (event) => handleRowActivate(row, event.target, true)
-										: undefined
-								}
-								onKeyDown={
-									rowsInteractive
-										? (event) => {
-												if (event.key !== "Enter" && event.key !== " ") return;
-												event.preventDefault();
-												handleRowActivate(row, event.target, false);
-											}
-										: undefined
-								}
-							>
-								{selectable && (
-									<td className="w-8 px-2 py-1.5">
-										<Checkbox
-											checked={selectedRows.has(row.index)}
-											onCheckedChange={() => toggleRowSelection(row.index)}
-											className="h-3.5 w-3.5"
-											onClick={(event) => event.stopPropagation()}
-										/>
-									</td>
-								)}
-								{visibleColumns.map((colIdx) => {
-									const align = getColumnAlign(colIdx);
-									const alignClass =
-										align === "center"
-											? "text-center"
-											: align === "right"
-												? "text-right"
-												: "text-left";
-									return (
-										<td
-											key={colIdx}
-											data-column-index={colIdx}
-											className={cn(
-												"px-2 py-1.5",
-												alignClass,
-												compact && "py-1",
-											)}
-										>
-											{row.cells[colIdx]}
-										</td>
-									);
-								})}
-							</tr>
-						))}
-						{paginatedRows.length === 0 && (
-							<tr>
-								<td
-									colSpan={visibleColumns.length + (selectable ? 1 : 0)}
-									className="text-center py-8 text-muted-foreground"
+						</thead>
+						<tbody>
+							{paginatedRows.map((row, rowIdx) => (
+								<tr
+									key={row.index}
+									className={cn(
+										bordered && "border-b border-border",
+										striped && rowIdx % 2 === 1 && "bg-muted/50",
+										hoverable && "hover:bg-muted/30 transition-colors",
+										selectable &&
+											selectedRows.has(row.index) &&
+											"bg-primary/10",
+										rowsInteractive && "cursor-pointer",
+									)}
+									tabIndex={rowsInteractive ? 0 : undefined}
+									onClick={
+										rowsInteractive
+											? (event) => handleRowActivate(row, event.target, true)
+											: undefined
+									}
+									onKeyDown={
+										rowsInteractive
+											? (event) => {
+													if (event.key !== "Enter" && event.key !== " ")
+														return;
+													event.preventDefault();
+													handleRowActivate(row, event.target, false);
+												}
+											: undefined
+									}
 								>
-									{t("noDataAvailable", "No data available")}
-								</td>
-							</tr>
-						)}
-					</tbody>
-				</table>
+									{selectable && (
+										<td className="w-8 px-2 py-1.5">
+											<Checkbox
+												checked={selectedRows.has(row.index)}
+												onCheckedChange={() => toggleRowSelection(row.index)}
+												className="h-3.5 w-3.5"
+												onClick={(event) => event.stopPropagation()}
+											/>
+										</td>
+									)}
+									{visibleColumns.map((colIdx) => {
+										const align = getColumnAlign(colIdx);
+										const alignClass =
+											align === "center"
+												? "text-center"
+												: align === "right"
+													? "text-right"
+													: "text-left";
+										return (
+											<td
+												key={colIdx}
+												data-column-index={colIdx}
+												className={cn(
+													"px-2 py-1.5",
+													alignClass,
+													compact && "py-1",
+												)}
+											>
+												{row.cells[colIdx]}
+											</td>
+										);
+									})}
+								</tr>
+							))}
+							{paginatedRows.length === 0 && (
+								<tr>
+									<td
+										colSpan={visibleColumns.length + (selectable ? 1 : 0)}
+										className="text-center py-8 text-muted-foreground"
+									>
+										{t("noDataAvailable", "No data available")}
+									</td>
+								</tr>
+							)}
+						</tbody>
+					</table>
+				</DndContext>
 			</div>
 
 			{paginated && totalPages > 1 && (

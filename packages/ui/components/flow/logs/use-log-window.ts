@@ -10,6 +10,9 @@ import { useLogAggregation } from "../../../state/log-aggregation-state";
 import { queryKey } from "./filter-model";
 import { LogPageCache } from "./log-page-cache";
 
+// One entry per run, revision and filter: the app-wide 24 h gcTime plus persistence kept them all.
+const RUN_LOG_CACHE = { gcTime: 5 * 60_000, meta: { persist: false } };
+
 /** Changes when the run gains logs, so a live run never serves stale pages. */
 export function runKey(meta: ILogMetadata): string {
 	return [
@@ -31,6 +34,7 @@ export function useRunLogSummary(
 		enabled: !!meta,
 		retry: 1,
 		staleTime: 60_000,
+		...RUN_LOG_CACHE,
 	});
 }
 
@@ -65,6 +69,7 @@ export function useRunLogCount(
 		retry: 1,
 		staleTime: 60_000,
 		enabled,
+		...RUN_LOG_CACHE,
 	});
 }
 

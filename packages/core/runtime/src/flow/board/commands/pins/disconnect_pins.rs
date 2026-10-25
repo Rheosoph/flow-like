@@ -8,7 +8,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::connect_pins::{connect_pins, disconnect_pins};
+use super::connect_pins::{connect_pins, disconnect_pins, ensure_edge_endpoints};
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DisconnectPinsCommand {
@@ -31,6 +31,25 @@ impl DisconnectPinsCommand {
 
 #[async_trait]
 impl Command for DisconnectPinsCommand {
+    async fn validate(&self, board: &Board, _: Arc<FlowLikeState>) -> flow_like_types::Result<()> {
+        ensure_edge_endpoints(
+            board,
+            &self.from_node,
+            &self.from_pin,
+            &self.to_node,
+            &self.to_pin,
+        )
+        .map_err(|reason| {
+            flow_like_types::anyhow!(
+                "Cannot disconnect pin `{}` of `{}` from pin `{}` of `{}`: {reason}",
+                self.from_pin,
+                self.from_node,
+                self.to_pin,
+                self.to_node
+            )
+        })
+    }
+
     async fn execute(
         &mut self,
         board: &mut Board,

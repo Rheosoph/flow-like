@@ -252,6 +252,17 @@ Storage secret name - based on provider
       key: REDIS_URL
 {{- end -}}
 
+{{- define "flow-like.lockedStorageEnv" -}}
+- name: LOCKED_BUCKET
+  value: {{ .Values.lockedStorage.bucket | quote }}
+- name: LOCKED_BUCKET_ENFORCEMENT
+  value: {{ .Values.lockedStorage.enforcement | quote }}
+- name: LOCKED_BUCKET_LOCK_MODE
+  value: {{ .Values.lockedStorage.lockMode | quote }}
+- name: LOCKED_BUCKET_RETENTION_DAYS
+  value: {{ .Values.lockedStorage.retentionDays | int64 | quote }}
+{{- end -}}
+
 {{- define "flow-like.executionSecretName" -}}
 {{- default (printf "%s-execution" (include "flow-like.fullname" .)) .Values.execution.existingSecret -}}
 {{- end -}}

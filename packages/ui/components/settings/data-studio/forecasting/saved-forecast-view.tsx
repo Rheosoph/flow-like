@@ -224,6 +224,7 @@ function SavedForecastContent({
 					backtest={chart.evaluation}
 					covariates={showCovariates ? chart.covariates : []}
 					readOnly
+					showControls={showControls}
 					compact={compact}
 					height={height}
 				/>

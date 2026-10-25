@@ -17,10 +17,15 @@ vi.mock("./api-utils", () => ({
 	apiPut: vi.fn(),
 }));
 
-import { WebPageState } from "./page-state";
+vi.mock("../oauth-db", () => ({
+	oauthConsentStore: {},
+	oauthTokenStore: {},
+}));
+
 import { WebBoardState } from "./board-state";
 import { WebDatabaseState } from "./database-state";
 import { WebEventState } from "./event-state";
+import { WebPageState } from "./page-state";
 import { WebRouteState } from "./route-state";
 import { WebWidgetState } from "./widget-state";
 
@@ -161,6 +166,24 @@ describe("web authoritative resource reads", () => {
 			"apps/app-1/board/board-1?version=2_0_1",
 			"apps/app-1/board/board-1/flowscript?version=2_0_1&anchors=true",
 		]);
+	});
+
+	test("rejects an empty FlowScript body instead of rendering undefined", async () => {
+		mocks.apiGet
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ flowscript: "fn a() {}\n" });
+		const state = new WebBoardState(backend);
+
+		await expect(
+			state.getFlowScriptFile("app-1", "board-1", "main"),
+		).rejects.toThrow("The hub returned no FlowScript for board board-1");
+		await expect(
+			state.getFlowScriptScoped("app-1", "board-1", ["node-1"]),
+		).rejects.toThrow("The hub returned no FlowScript for board board-1");
+		await expect(
+			state.getFlowScriptFile("app-1", "board-1", "main"),
+		).resolves.toEqual({ flowscript: "fn a() {}\n", scope_anchors: [] });
 	});
 
 	test("propagates authoritative Board and Event failures", async () => {

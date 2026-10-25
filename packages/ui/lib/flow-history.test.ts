@@ -16,6 +16,7 @@ import {
 	withCursor,
 } from "./flow-history";
 import type { IGenericCommand } from "./schema";
+import type { IBoard } from "./schema/flow/board";
 
 const command = (id: string): IGenericCommand =>
 	({ command_type: "MoveNode", node_id: id }) as unknown as IGenericCommand;
@@ -208,6 +209,34 @@ describe("remote board applied events", () => {
 			detail: { appId: "a", boardId: "b" },
 		});
 		expect(readRemoteBoardApplied(legacy)?.reason).toBe("sync");
+	});
+
+	test("preserves the exact boards involved in a remote merge", () => {
+		const before = { id: "b", nodes: {} } as IBoard;
+		const after = { ...before, name: "Updated flow" };
+		const merge = { before, after };
+		const event = new CustomEvent("flow:remote-board-applied", {
+			detail: { appId: "a", boardId: "b", reason: "sync", merge },
+		});
+		const detail = readRemoteBoardApplied(event);
+		expect(detail?.merge).toBe(merge);
+		expect(detail?.merge?.before).toBe(before);
+		expect(detail?.merge?.after).toBe(after);
+	});
+
+	test("ignores an incomplete merge snapshot without dropping the event", () => {
+		const event = new CustomEvent("flow:remote-board-applied", {
+			detail: {
+				appId: "a",
+				boardId: "b",
+				merge: { before: { id: "b", nodes: {} } },
+			},
+		});
+		expect(readRemoteBoardApplied(event)).toEqual({
+			appId: "a",
+			boardId: "b",
+			reason: "sync",
+		});
 	});
 
 	test("ignores malformed events", () => {

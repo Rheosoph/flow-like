@@ -20,7 +20,11 @@ import {
 	collectClipboard,
 	pasteClipboard,
 } from "./builderClipboard";
-import { moveComponentInTree } from "./componentTree";
+import {
+	canAcceptComponentChildren,
+	getExplicitChildren,
+	moveComponentInTree,
+} from "./componentTree";
 import type {
 	CreateWorkflowEventRequest,
 	WorkflowEventInfo,
@@ -136,6 +140,12 @@ export interface BuilderContextType {
 	// Widget refs - widget definitions stored by instance ID
 	widgetRefs: Map<string, IWidgetRef>;
 	addWidgetRef: (instanceId: string, widget: IWidgetRef) => void;
+	insertWidgetInstance: (
+		widget: IWidgetRef,
+		appId: string,
+		parentId: string,
+		index?: number,
+	) => void;
 	getWidgetRef: (instanceId: string) => IWidgetRef | undefined;
 	removeWidgetRef: (instanceId: string) => void;
 
@@ -195,6 +205,10 @@ export interface BuilderProviderProps {
 		components: SurfaceComponent[],
 		widgetRefs: Record<string, IWidgetRef>,
 	) => void;
+	onRawJsonApply?: (
+		components: SurfaceComponent[],
+		widgetRefs: Record<string, IWidgetRef>,
+	) => void;
 	initialCanvasSettings?: Partial<CanvasSettings>;
 	onCanvasSettingsChange?: (settings: CanvasSettings) => void;
 	actionContext?: ActionContext;
@@ -205,6 +219,7 @@ export function BuilderProvider({
 	initialComponents = [],
 	initialWidgetRefs = {},
 	onChange,
+	onRawJsonApply,
 	initialCanvasSettings,
 	onCanvasSettingsChange,
 	actionContext,
@@ -304,6 +319,9 @@ export function BuilderProvider({
 	// Store onChange in ref to avoid dependency issues
 	const onChangeRef = useRef(onChange);
 	onChangeRef.current = onChange;
+	const onRawJsonApplyRef = useRef(onRawJsonApply);
+	onRawJsonApplyRef.current = onRawJsonApply;
+	const rawJsonApplyPendingRef = useRef(false);
 
 	// Notify onChange when components or widgetRefs change (not on initial mount)
 	useEffect(() => {
@@ -311,10 +329,13 @@ export function BuilderProvider({
 			isFirstRender.current = false;
 			return;
 		}
-		onChangeRef.current?.(
-			Array.from(componentsMap.values()),
-			Object.fromEntries(widgetRefsMap),
-		);
+		const components = Array.from(componentsMap.values());
+		const widgetRefs = Object.fromEntries(widgetRefsMap);
+		const appliedRawJson = rawJsonApplyPendingRef.current;
+		rawJsonApplyPendingRef.current = false;
+		onChangeRef.current?.(components, widgetRefs);
+		// Save after the host receives the committed draft, including canvas settings.
+		if (appliedRawJson) onRawJsonApplyRef.current?.(components, widgetRefs);
 	}, [componentsMap, widgetRefsMap]);
 
 	// Viewport state
@@ -415,6 +436,8 @@ export function BuilderProvider({
 						return false;
 					}
 				}
+
+				rawJsonApplyPendingRef.current = true;
 
 				// Update components
 				setComponentsMap(
@@ -835,6 +858,65 @@ export function BuilderProvider({
 	);
 
 	// Widget ref methods
+	const insertWidgetInstance = useCallback(
+		(widget: IWidgetRef, appId: string, parentId: string, index?: number) => {
+			// Imports finish asynchronously. Use the current parent and child list.
+			const parent = componentsRef.current.get(parentId);
+			if (!parent || !canAcceptComponentChildren(parent)) return;
+			const componentIds = new Set(
+				widget.components.map((component) => component.id),
+			);
+			const rootComponentId = componentIds.has("root")
+				? "root"
+				: componentIds.has(widget.rootComponentId)
+					? widget.rootComponentId
+					: widget.components[0]?.id;
+			if (!rootComponentId) return;
+
+			const instanceId = `widget-${createId()}`;
+			const id = `widgetInstance-${instanceId}`;
+			const instance: SurfaceComponent = {
+				id,
+				component: {
+					id,
+					type: "widgetInstance",
+					instanceId,
+					widgetId: widget.id,
+					appId,
+					exposedPropValues: {},
+					actionBindings: {},
+				},
+			};
+			const children = [...getExplicitChildren(parent)];
+			children.splice(index ?? children.length, 0, id);
+			const nextComponents = new Map(componentsRef.current);
+			nextComponents.set(id, instance);
+			nextComponents.set(parentId, {
+				...parent,
+				component: {
+					...parent.component,
+					children: { explicitList: children },
+				} as A2UIComponent,
+			});
+			const nextRefs = new Map(widgetRefsRef.current);
+			nextRefs.set(instanceId, structuredClone({ ...widget, rootComponentId }));
+			const snapshot = getSnapshot();
+			componentsRef.current = nextComponents;
+			widgetRefsRef.current = nextRefs;
+			setHistory((previous) => ({
+				past: [...previous.past, snapshot],
+				present: {
+					components: [...nextComponents.values()],
+					widgetRefs: Object.fromEntries(nextRefs),
+				},
+				future: [],
+			}));
+			setComponentsMap(nextComponents);
+			setWidgetRefsMap(nextRefs);
+		},
+		[getSnapshot],
+	);
+
 	const addWidgetRef = useCallback((instanceId: string, widget: IWidgetRef) => {
 		setWidgetRefsMap((prev) => {
 			const next = new Map(prev);
@@ -889,6 +971,7 @@ export function BuilderProvider({
 
 		widgetRefs: widgetRefsMap,
 		addWidgetRef,
+		insertWidgetInstance,
 		getWidgetRef,
 		removeWidgetRef,
 

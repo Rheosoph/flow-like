@@ -173,6 +173,17 @@ export default function ActivityFixture() {
 						: rows.filter((row) => !appId || row.app_id === appId);
 					return activityFrom(scoped, window);
 				},
+				getRecentExecutions: async (limit = 50, appId?: string) => {
+					checkScenario();
+					return {
+						items:
+							scenarioRef.current === "empty"
+								? []
+								: rows
+										.filter((row) => !appId || row.app_id === appId)
+										.slice(0, limit),
+					};
+				},
 				getExecutionHistory: async (
 					_page?: number,
 					pageSize = 100,

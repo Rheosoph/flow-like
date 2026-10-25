@@ -446,6 +446,37 @@ audit:
   # The API and worker share only these ingestion keys, never BACKEND_KEY.
 
 # =============================================================================
+# Locked Storage (Revisionssicherheit)
+# =============================================================================
+# Write-once, versioned files in a dedicated Object Lock bucket. Only the API
+# holds access to it; browsers, desktop clients and executors get a presigned
+# URL for one exact object version, which the object gateway and the per-run
+# gateway forward. Unlike the audit bucket, the API reaches it like the
+# application buckets.
+# Object Lock must be enabled when the bucket is created; it cannot be enabled
+# later. With bundled RustFS the object-store init job creates the bucket,
+# applies CORS from api.corsAllowedOrigins and attaches the flow-like-locked-v1
+# policy to the existing API identity. External stores must grant the API
+# identity the same: PutObject, GetObject, GetObjectVersion, Put/GetObjectRetention,
+# Put/GetObjectLegalHold, ListBucket, GetBucketObjectLockConfiguration, DeleteObject
+# and DeleteObjectVersion (Object Lock refuses deleting retained versions; used for
+# never-committed uploads and purges after retention). Never grant
+# BypassGovernanceRetention or PutBucketObjectLockConfiguration.
+lockedStorage:
+  # Lowercase DNS name without periods. Empty disables locked storage.
+  bucket: ""
+  # object: the API locks each version at commit; the bucket has Object Lock
+  # but no default retention rule. bucket: a default retention rule of
+  # retentionDays locks every write; required for Cloudflare R2.
+  enforcement: object
+  # COMPLIANCE or GOVERNANCE
+  lockMode: COMPLIANCE
+  retentionDays: 3650
+  # Shortest retention a caller may choose per upload (object enforcement).
+  minRetentionDays: 1
+  maxFileBytes: 5368709120
+
+# =============================================================================
 # LLM Provider Configuration
 # =============================================================================
 # Configure upstream credentials for the API's authenticated hosted-model

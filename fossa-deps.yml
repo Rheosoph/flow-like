@@ -1,6 +1,12 @@
-# Source code copied into the repository that no package manifest declares.
-# packages/browser/NOTICE lists every derived file.
+# Source code copied into the repository, or native libraries the builds ship, that no
+# package manifest declares. packages/browser/NOTICE lists every derived file.
 custom-dependencies:
+  - name: unixODBC
+    version: 2.3.14
+    license: LGPL-2.1-or-later
+    metadata:
+      homepage: https://www.unixodbc.org/
+      description: ODBC driver manager linked dynamically. macOS desktop bundles an unmodified libodbc.2.dylib built by apps/desktop/scripts/prepare-odbc.ts; Linux packages and server images depend on the distribution package. The GPL command-line tools are not shipped.
   - name: agent-browser
     version: d01253d9db28d75080e36da3c1c31ef89454731e
     license: Apache-2.0

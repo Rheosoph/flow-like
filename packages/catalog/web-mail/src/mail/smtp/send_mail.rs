@@ -361,7 +361,7 @@ pub fn build_rfc5322_message_send(
         for (filename, content) in attachments {
             message.push_str(&format!("--{}{}", mixed_boundary, crlf));
 
-            let mime_type = detect_mime_type(filename, content);
+            let mime_type = flow_like_catalog_core::mime_type_for(filename);
             message.push_str(&format!("Content-Type: {}", mime_type));
             message.push_str(crlf);
             message.push_str("Content-Transfer-Encoding: base64");
@@ -384,41 +384,6 @@ pub fn build_rfc5322_message_send(
     }
 
     message
-}
-
-#[cfg(feature = "execute")]
-fn detect_mime_type(filename: &str, _content: &[u8]) -> String {
-    let extension = filename.split('.').next_back().unwrap_or("").to_lowercase();
-    match extension.as_str() {
-        "pdf" => "application/pdf",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ppt" => "application/vnd.ms-powerpoint",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "txt" => "text/plain",
-        "html" | "htm" => "text/html",
-        "csv" => "text/csv",
-        "json" => "application/json",
-        "xml" => "application/xml",
-        "zip" => "application/zip",
-        "tar" => "application/x-tar",
-        "gz" => "application/gzip",
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        "webp" => "image/webp",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "mp4" => "video/mp4",
-        "avi" => "video/x-msvideo",
-        "mov" => "video/quicktime",
-        _ => "application/octet-stream",
-    }
-    .to_string()
 }
 
 #[cfg(feature = "execute")]

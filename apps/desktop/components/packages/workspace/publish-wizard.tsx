@@ -27,6 +27,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import { invalidatePackageLists } from "@flow-like/flow-like-ui/components/store/package-workspace/use-workspace-data";
 import { packageWorkspaceHref } from "@flow-like/flow-like-ui/components/store/package-workspace/workspace-href";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import type {
 	PackageInspection,
 	PublishArtifacts,
@@ -330,7 +331,8 @@ export function PublishWizard({
 				setFormData(formFromManifest(m));
 			})
 			.catch((err) => {
-				if (!cancelled) toast.error(`Failed to read manifest: ${err}`);
+				if (!cancelled)
+					toast.error(`Failed to read manifest: ${getErrorMessage(err)}`);
 			});
 
 		// Full inspection only resolves the build; an unbuilt project can still fill in its metadata.
@@ -451,7 +453,7 @@ export function PublishWizard({
 						{
 							id: formData.id,
 							version: formData.version,
-							error: String(error),
+							error: getErrorMessage(error),
 						},
 					),
 				);
@@ -471,12 +473,13 @@ export function PublishWizard({
 				});
 			}
 
-			// Release-mode artifact detection: root node.wasm / widgets.flwb first,
-			// then the legacy wasm lookups.
+			// Publish the artifacts shown in review. An unbuilt node scaffold
+			// does not prevent publishing the package's built widgets.
 			const artifacts = await invoke<PublishArtifacts>(
 				"developer_find_publish_artifacts",
 				{
 					projectPath,
+					includeWasm: Boolean(inspection.wasmPath),
 				},
 			);
 
@@ -600,7 +603,7 @@ export function PublishWizard({
 				response?.version || formData.version,
 			);
 		} catch (err) {
-			toast.error(`Publish failed: ${err}`);
+			toast.error(`Publish failed: ${getErrorMessage(err)}`);
 		} finally {
 			setPublishing(false);
 		}
@@ -1119,6 +1122,14 @@ export function PublishWizard({
 											count: inspection.widgets.length,
 										})}
 									</h4>
+									{!inspection.wasmPath && (
+										<p className="text-sm text-muted-foreground">
+											{t(
+												"publishWidgetsOnlyNote",
+												"Only widgets will be published. Node source files in this project are not included.",
+											)}
+										</p>
+									)}
 									<div className="space-y-2">
 										{inspection.widgets.map((widget) => (
 											<div

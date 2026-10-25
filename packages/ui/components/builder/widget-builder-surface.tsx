@@ -458,7 +458,7 @@ export function WidgetBuilderSurface({
 					<Button
 						variant="outline"
 						size="sm"
-						onClick={() => setShowSettings(!showSettings)}
+						onClick={() => setShowSettings(true)}
 					>
 						<Settings className="h-4 w-4 mr-2" />
 						{t("settings", "Settings")}
@@ -486,6 +486,7 @@ export function WidgetBuilderSurface({
 					className={`flex-1 min-h-0 min-w-0 ${showSettings ? "lg:mr-80" : ""}`}
 				>
 					<WidgetBuilder
+						fitContent
 						initialComponents={widget.components}
 						widgetId={widget.id}
 						surfaceId={`widget-${widget.id}`}

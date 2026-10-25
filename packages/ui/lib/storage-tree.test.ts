@@ -3,6 +3,7 @@ import type { IStorageItem } from "./schema/storage/storage-item";
 import {
 	childPrefix,
 	decodeStorageSegment,
+	encodeStorageSegment,
 	normalizeStorageLocation,
 	parentPrefix,
 	parseStorageNodeId,
@@ -126,6 +127,27 @@ describe("decodeStorageSegment", () => {
 	test("keeps a malformed escape as it is", () => {
 		expect(decodeStorageSegment("%zz.txt")).toBe("%zz.txt");
 		expect(decodeStorageSegment("trailing%")).toBe("trailing%");
+	});
+});
+
+describe("encodeStorageSegment", () => {
+	test("produces the listed key for a display name", () => {
+		expect(encodeStorageSegment(RAW_NAME)).toBe(ENCODED_NAME);
+		expect(encodeStorageSegment("Übersicht")).toBe("%C3%9Cbersicht");
+		expect(encodeStorageSegment("100%.txt")).toBe("100%25.txt");
+		expect(encodeStorageSegment("a/b|c*?.txt")).toBe("a%2Fb%7Cc%2A%3F.txt");
+	});
+
+	test("encodes dot segments whole and keeps single dots in names", () => {
+		expect(encodeStorageSegment(".")).toBe("%2E");
+		expect(encodeStorageSegment("..")).toBe("%2E%2E");
+		expect(encodeStorageSegment("a.pdf")).toBe("a.pdf");
+	});
+
+	test("round-trips through decodeStorageSegment", () => {
+		for (const name of [RAW_NAME, 'Ünïcode ✓ [1] {x} ~y`z"', "tab\there"]) {
+			expect(decodeStorageSegment(encodeStorageSegment(name))).toBe(name);
+		}
 	});
 });
 

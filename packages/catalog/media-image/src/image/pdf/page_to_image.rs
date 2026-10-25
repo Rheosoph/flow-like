@@ -1,8 +1,5 @@
 #[cfg(feature = "execute")]
-use crate::image::pdf::{
-    load_pdf_from_flowpath, pixmap_to_dynamic_image, resolve_bg_color, resolve_page_index,
-    validate_scale,
-};
+use crate::image::pdf::{load_pdf_from_flowpath, render_page, resolve_page_index, validate_scale};
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::PinOptions;
@@ -11,9 +8,7 @@ use flow_like_catalog_core::FlowPath;
 use flow_like_catalog_core::NodeImage;
 use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
-use hayro::hayro_interpret::InterpreterSettings;
-#[cfg(feature = "execute")]
-use hayro::{RenderSettings, render};
+use hayro::RenderCache;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -124,17 +119,6 @@ async fn render_pdf_page(
     let pdf = load_pdf_from_flowpath(context, pdf_path).await?;
     let pages = pdf.pages();
     let index = resolve_page_index(page_number, pages.len())?;
-    let page = &pages[index];
-    let interpreter_settings = InterpreterSettings::default();
-    let render_settings = RenderSettings {
-        x_scale: scale,
-        y_scale: scale,
-        width: None,
-        height: None,
-        bg_color: resolve_bg_color(bg_color_hex),
-    };
-
-    let pixmap = render(page, &interpreter_settings, &render_settings);
-    let image = pixmap_to_dynamic_image(pixmap)?;
+    let image = render_page(&pages[index], &RenderCache::new(), scale, bg_color_hex)?;
     Ok(NodeImage::new(context, image).await)
 }

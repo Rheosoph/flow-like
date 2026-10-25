@@ -57,11 +57,7 @@ import {
 	PopoverTrigger,
 } from "../popover";
 import { subgraphFromCypherRows } from "./cypher-subgraph";
-import {
-	GraphCanvas,
-	type GraphCanvasApi,
-	type GraphLayoutCommand,
-} from "./graph-canvas";
+import type { GraphCanvasApi, GraphLayoutCommand } from "./graph-canvas";
 import { buildClusterModel } from "./graph-clusters";
 import {
 	collapseClusters,
@@ -97,6 +93,7 @@ import {
 	getGraphStageMinHeight,
 } from "./graph-shell-layout";
 import { nodeCaptionAccountId } from "./graph-user-caption";
+import { GraphCanvas } from "./lazy-graph-canvas";
 
 const GRAPH_VIEW_LIMIT_OPTIONS = [
 	50, 100, 200, 500, 1000, 2500, 5000, 10000,

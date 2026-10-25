@@ -22,6 +22,17 @@ struct SendgridEmail {
     reply_to: Option<EmailAddress>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     headers: std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<SendgridAttachment>,
+}
+
+#[derive(Serialize)]
+struct SendgridAttachment {
+    content: String,
+    filename: String,
+    #[serde(rename = "type")]
+    content_type: String,
+    disposition: &'static str,
 }
 
 #[derive(Serialize)]
@@ -87,6 +98,17 @@ impl SendgridEmail {
             ));
         }
 
+        let attachments = message
+            .attachments
+            .iter()
+            .map(|attachment| SendgridAttachment {
+                content: attachment.base64(),
+                filename: attachment.filename.clone(),
+                content_type: attachment.content_type.clone(),
+                disposition: "attachment",
+            })
+            .collect();
+
         Ok(Self {
             personalizations: vec![Personalization {
                 to: message.to.into_iter().map(EmailAddress::from).collect(),
@@ -101,6 +123,7 @@ impl SendgridEmail {
             content,
             reply_to: message.reply_to.map(EmailAddress::from),
             headers,
+            attachments,
         })
     }
 }
@@ -174,5 +197,23 @@ mod tests {
             "<first@example.net> <parent@example.net>"
         );
         assert!(value.get("reply_to").is_none());
+        assert!(value.get("attachments").is_none());
+    }
+
+    #[test]
+    fn attachments_are_base64_files() {
+        let mut message = crate::mail::tests::reply_message();
+        message.attachments = vec![crate::mail::tests::pdf()];
+        let email = SendgridEmail::new(message, "platform@example.com", "Platform").unwrap();
+        let value = serde_json::to_value(email).unwrap();
+        assert_eq!(
+            value["attachments"],
+            serde_json::json!([{
+                "content": "JVBERi0xLjcgb3JkZXI=",
+                "filename": "Order 42.pdf",
+                "type": "application/pdf",
+                "disposition": "attachment",
+            }])
+        );
     }
 }

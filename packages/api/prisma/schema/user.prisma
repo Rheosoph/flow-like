@@ -33,6 +33,7 @@ model User {
   llmUsage                    LLMUsageTracking[]
   embeddingUsage              EmbeddingUsageTracking[]
   executionUsage              ExecutionUsageTracking[]
+  executionUsageDaily         ExecutionUsageDaily[]
   executionRuns               ExecutionRun[]
   feedback                    Feedback[]
   flowScriptApplyFailures     FlowScriptApplyFailure[]
@@ -262,11 +263,55 @@ model ExecutionUsageTracking {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  @@index([createdAt])
+  // Day roll-ups read only this index; DSQL includes the final five columns as payload.
+  @@index([createdAt, userId, technicalUserId, appId, status, microseconds], map: "ExecutionUsageTracking_createdAt_rollup_idx")
   @@index([appId, createdAt])
+  // DSQL includes the final three columns as payload; Prisma uses trailing keys.
+  @@index([userId, createdAt, id, appId, status, microseconds], map: "ExecutionUsageTracking_userId_createdAt_id_idx")
+  @@index([userId, status, createdAt, id])
+  // Keep exact account counts on a narrower index than the activity projection.
   @@index([userId, createdAt])
   @@index([technicalUserId, createdAt])
   @@index([version])
+}
+
+/// Executions per UTC day, account, technical user, app and severity. A day is
+/// rolled up from ExecutionUsageTracking once it has closed (see
+/// `execution_usage_rollup.rs`); `id` hashes the key, so the roll-up and a late
+/// report write the same row. The day leads the key, so a roll-up reads a day
+/// and retention deletes one as a single key range.
+model ExecutionUsageDaily {
+  day DateTime @db.Date
+  id  String
+
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId String?
+
+  technicalUserId String?
+  technicalUser   TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+
+  app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String?
+
+  status       String
+  executions   BigInt
+  microseconds BigInt
+
+  @@id([day, id])
+  // DSQL includes the final four columns as payload; Prisma uses trailing keys.
+  @@index([userId, day, appId, status, executions, microseconds], map: "ExecutionUsageDaily_userId_day_idx")
+  @@index([appId])
+  @@index([technicalUserId])
+}
+
+/// A UTC day of ExecutionUsageDaily: rolled up once `rolledUpAt` is set. While
+/// a roll-up runs, `claim` names it and every write it makes checks the claim,
+/// so a second runner can take over a stalled day but never write beside it.
+model ExecutionUsageDay {
+  day        DateTime  @id @db.Date
+  rolledUpAt DateTime? @db.Timestamptz(3)
+  claim      String?
+  claimedAt  DateTime? @db.Timestamptz(3)
 }
 
 model UsageInvocation {

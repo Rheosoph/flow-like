@@ -161,6 +161,16 @@ default once a board covers more than one domain: one module per domain (`module
   moves out of a module to the root are additionally gated like deletions.
 - Keep an existing board's module structure unless the user asks for reorganization or the edit
   clearly belongs in a new domain.
+
+### VISUAL GROUPS (@collapse)
+`@collapse("Name") { ... }` around statements in an event, function or branch body draws their
+nodes as one collapsed group on the canvas; nest blocks or write `"Phase/Step"` for sub-groups.
+Groups are visual only: no scope (bindings stay visible after the block) and no runtime effect, so
+they never replace `function`/`module` decomposition. Use them to label the phases of a long event
+or function body.
+- Preserve every existing `@collapse` wrapper and the `//@l:` anchor on its `{` line when editing;
+  dropping a wrapper ungroups those nodes.
+- Write new statements inside the group they belong to.
 "#;
 
 /// Function-layer result-cache syntax and safety contract shared by every board-capable prompt.

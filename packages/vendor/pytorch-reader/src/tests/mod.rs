@@ -1535,13 +1535,14 @@ fn test_tensor_read_errors_are_not_zeros() {
         let mut target = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
         for i in 0..source.len() {
             let mut entry = source.by_index(i).unwrap();
+            let name = entry.name().unwrap().into_owned();
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
-            if entry.name().ends_with("/data/0") {
+            if name.ends_with("/data/0") {
                 bytes.truncate(8);
             }
             target
-                .start_file(entry.name(), zip::write::SimpleFileOptions::default())
+                .start_file(name, zip::write::SimpleFileOptions::default())
                 .unwrap();
             std::io::Write::write_all(&mut target, &bytes).unwrap();
         }
@@ -1617,12 +1618,12 @@ fn rezip(
     let mut writer = zip::ZipWriter::new(std::fs::File::create(target).unwrap());
     for i in 0..source.len() {
         let mut entry = source.by_index(i).unwrap();
+        let entry_name = entry.name().unwrap().into_owned();
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
-        let name = entry
-            .name()
+        let name = entry_name
             .split_once('/')
-            .map_or(entry.name(), |(_, rest)| rest);
+            .map_or(entry_name.as_str(), |(_, rest)| rest);
         edit(name, &mut bytes);
         writer
             .start_file(

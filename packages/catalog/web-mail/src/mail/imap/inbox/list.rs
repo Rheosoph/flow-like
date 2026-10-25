@@ -144,7 +144,7 @@ impl EmailRef {
                 .collect(),
             subject: mail.subject().map(|s| s.to_string()),
             date: mail.date().map(|d| d.to_rfc3339()).map(|s| s.to_string()),
-            plain: mail.body_text(0).map(|s| s.to_string()),
+            plain: flow_like_catalog_core::mail::body_text(&mail, 0).map(|s| s.into_owned()),
             html: mail.body_html(0).map(|s| s.to_string()),
             attachments: mail
                 .attachments()

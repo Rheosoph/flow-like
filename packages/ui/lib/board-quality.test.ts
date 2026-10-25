@@ -284,22 +284,164 @@ describe("missing input", () => {
 });
 
 describe("function without return", () => {
-	test("reports an entry with nothing wired, an exec output nothing reaches, and an unassigned output", () => {
+	test("reports an unwired entry and unassigned output on a called empty function", () => {
 		const fn = layer("fn", ILayerType.Function, [
 			execIn("fn.in"),
 			execOut("fn.out"),
 			{ id: "fn.result", name: "result", direction: IPinType.Output },
 		]);
-		const kinds = ofRule(analyzeBoardQuality(board([], [fn])), "no-return").map(
-			(finding) => finding.detail.kind,
+		const call = node(
+			"call",
+			[
+				{
+					id: "call.function",
+					name: "function_layer_id",
+					direction: IPinType.Input,
+					value: fn.id,
+				},
+			],
+			{ name: "control_call_function" },
 		);
-		expect(kinds).toEqual(
-			expect.arrayContaining([
-				"entry-unwired",
-				"exec-never-returns",
-				"output-unassigned",
+		const findings = ofRule(
+			analyzeBoardQuality(board([call], [fn])),
+			"no-return",
+		);
+		expect(findings.map((finding) => finding.detail.kind)).toEqual([
+			"entry-unwired",
+			"output-unassigned",
+		]);
+		expect(findings[0].severity).toBe("error");
+	});
+
+	test.each(["absent", "stale"] as const)(
+		"keeps empty-function errors for a dynamic call with a default that is %s",
+		(defaultKind) => {
+			const fn = layer("fn", ILayerType.Function, [execIn("fn.in")]);
+			const source = node("source", [
+				{
+					id: "source.out",
+					name: "value",
+					direction: IPinType.Output,
+					value: fn.id,
+				},
+			]);
+			const call = node(
+				"call",
+				[
+					{
+						id: "call.function",
+						name: "function_layer_id",
+						direction: IPinType.Input,
+						value: defaultKind === "stale" ? "another-function" : undefined,
+					},
+				],
+				{ name: "control_call_function" },
+			);
+			connect([source, call], "source.out", "call.function");
+
+			expect(
+				ofRule(analyzeBoardQuality(board([source, call], [fn])), "no-return"),
+			).toMatchObject([
+				{
+					severity: "error",
+					target: { id: fn.id },
+					detail: { kind: "entry-unwired" },
+				},
+			]);
+		},
+	);
+
+	test("unused shells do not inflate the error and warning count on a large board", () => {
+		const shells = Array.from({ length: 150 }, (_, index) =>
+			layer(`shell${index}`, ILayerType.Function, [
+				execIn(`shell${index}.in`),
+				execOut(`shell${index}.out`),
+				{
+					id: `shell${index}.result`,
+					name: "result",
+					direction: IPinType.Output,
+				},
 			]),
 		);
+		const start = startNode("start");
+		const sink = node("sink", [
+			execIn("sink.in"),
+			{ id: "sink.url", name: "url", direction: IPinType.Input },
+		]);
+		connect([start, sink], "start.out", "sink.in");
+		const report = analyzeBoardQuality(board([start, sink], shells));
+
+		expect(report.counts).toEqual({ error: 0, warning: 1, info: 150 });
+		expect(ofRule(report, "no-return")).toHaveLength(0);
+		expect(ofRule(report, "missing-input")[0].target.id).toBe("sink");
+		expect(report.marks.shell0.severity).toBe("info");
+	});
+
+	test("empty child groups do not turn an unused shell into a broken function", () => {
+		const fn = layer("fn", ILayerType.Function, [execIn("fn.in")]);
+		const group = layer("group", ILayerType.Collapsed, [], {
+			parent_id: fn.id,
+		});
+		const report = analyzeBoardQuality(board([], [fn, group]));
+
+		expect(report.counts).toEqual({ error: 0, warning: 0, info: 1 });
+		expect(ofRule(report, "no-return")).toHaveLength(0);
+	});
+
+	test.each(["direct", "nested", "inline"] as const)(
+		"keeps unwired-entry errors for an unused function with %s body storage",
+		(placement) => {
+			const fn = layer("fn", ILayerType.Function, [execIn("fn.in")]);
+			const group = layer("group", ILayerType.Collapsed, [], {
+				parent_id: fn.id,
+			});
+			const body = node("body", [execIn("body.in")], {
+				layer: placement === "nested" ? group.id : fn.id,
+			});
+			if (placement === "inline") fn.nodes[body.id] = body;
+			const report = analyzeBoardQuality(
+				board(placement === "inline" ? [] : [body], [fn, group]),
+			);
+
+			expect(ofRule(report, "no-return")).toMatchObject([
+				{
+					severity: "error",
+					target: { id: fn.id },
+					detail: { kind: "entry-unwired" },
+				},
+			]);
+		},
+	);
+
+	test("an unwired execution output does not prevent a function from returning", () => {
+		const fn = layer("fn", ILayerType.Function, [
+			execIn("fn.in"),
+			execOut("fn.out"),
+		]);
+		const body = node("body", [execIn("body.in")], { layer: fn.id });
+		connect([fn, body], "fn.in", "body.in");
+
+		expect(
+			ofRule(analyzeBoardQuality(board([body], [fn])), "no-return"),
+		).toHaveLength(0);
+	});
+
+	test("an unused boundary-only function still reports an invalid execution entry", () => {
+		const fn = layer("fn", ILayerType.Function, [
+			execIn("fn.in"),
+			execOut("fn.out"),
+		]);
+		connect([fn], "fn.in", "fn.out");
+
+		expect(
+			ofRule(analyzeBoardQuality(board([], [fn])), "no-return"),
+		).toMatchObject([
+			{
+				severity: "error",
+				target: { id: fn.id },
+				detail: { kind: "entry-unwired" },
+			},
+		]);
 	});
 
 	test("a fully wired function is clean", () => {

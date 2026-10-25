@@ -213,6 +213,7 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
         receiver: None,
         pins_collapsed: None,
         auto_reroute: None,
+        code_names: None,
     };
     node.ensure_flowscript_names();
     node

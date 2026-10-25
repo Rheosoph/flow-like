@@ -37,6 +37,41 @@ pub enum ConnectionKind {
     Reference,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PinContainer {
+    Array,
+    Set,
+    Map,
+}
+
+impl PinContainer {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Array => "glyph:array",
+            Self::Set => "glyph:set",
+            Self::Map => "glyph:map",
+        }
+    }
+}
+
+/// Inline editors of an unconnected input, drawn without mounting the DOM node.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PinEditor {
+    /// The default-value button, highlighted while no default value is set.
+    Variable {
+        set: bool,
+    },
+    Boolean {
+        checked: bool,
+    },
+    /// An enum select. The pin label holds its value, or a muted placeholder, before a chevron.
+    Select {
+        placeholder: bool,
+    },
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pin {
@@ -50,6 +85,26 @@ pub struct Pin {
     pub font_size: f32,
     pub color: Rgba,
     pub kind: ConnectionKind,
+    pub container: Option<PinContainer>,
+    pub editor: Option<PinEditor>,
+}
+
+/// The strip that hides unconnected pins.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Latch {
+    pub collapsed: bool,
+    #[serde(default)]
+    pub hidden: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Header {
+    pub color: Rgba,
+    /// The gradient runs from the right edge, as on callback events.
+    #[serde(default)]
+    pub reversed: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -66,6 +121,9 @@ pub struct Node {
     #[serde(default = "default_header_height")]
     pub header_height: f32,
     pub corner_radius: Option<f32>,
+    pub icon: Option<String>,
+    pub header: Option<Header>,
+    pub latch: Option<Latch>,
     pub kind: String,
     #[serde(default)]
     pub pins: Vec<Pin>,
@@ -75,6 +133,11 @@ pub struct Node {
     pub dimmed: bool,
     #[serde(default)]
     pub dom: bool,
+    /// Mirror WebKit's DOM node: flat pins and its text baselines.
+    #[serde(default)]
+    pub lite: bool,
+    #[serde(default)]
+    pub long_running: bool,
 }
 
 impl Node {
@@ -142,6 +205,7 @@ pub struct Scene {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Palette {
     pub background: Rgba,
     pub card: Rgba,
@@ -150,6 +214,76 @@ pub struct Palette {
     pub border: Rgba,
     pub primary: Rgba,
     pub tertiary: Rgba,
+    /// Card text; xyflow's dark node color differs from the theme foreground.
+    pub node_text: Option<Rgba>,
+    /// xyflow's node background, behind container pin glyphs.
+    pub node_backdrop: Option<Rgba>,
+    pub input: Option<Rgba>,
+    pub checkbox: Option<Rgba>,
+    pub primary_foreground: Option<Rgba>,
+    pub muted_background: Option<Rgba>,
+    /// Status colors for runs, logs and lint marks.
+    pub destructive: Option<Rgba>,
+    pub success: Option<Rgba>,
+    pub caution: Option<Rgba>,
+    pub warning: Option<Rgba>,
+    pub info: Option<Rgba>,
+    pub remote: Option<Rgba>,
+    pub fatal: Option<Rgba>,
+}
+
+impl Palette {
+    pub fn node_text(&self) -> Rgba {
+        self.node_text.unwrap_or(self.foreground)
+    }
+
+    pub fn node_backdrop(&self) -> Rgba {
+        self.node_backdrop.unwrap_or(self.card)
+    }
+
+    pub fn input(&self) -> Rgba {
+        self.input.unwrap_or(self.border)
+    }
+
+    pub fn checkbox(&self) -> Rgba {
+        self.checkbox.unwrap_or([0; 4])
+    }
+
+    pub fn primary_foreground(&self) -> Rgba {
+        self.primary_foreground.unwrap_or([255; 4])
+    }
+
+    pub fn muted_background(&self) -> Rgba {
+        self.muted_background.unwrap_or(self.border)
+    }
+
+    pub fn destructive(&self) -> Rgba {
+        self.destructive.unwrap_or([239, 68, 68, 255])
+    }
+
+    pub fn success(&self) -> Rgba {
+        self.success.unwrap_or([34, 197, 94, 255])
+    }
+
+    pub fn caution(&self) -> Rgba {
+        self.caution.unwrap_or([234, 179, 8, 255])
+    }
+
+    pub fn warning(&self) -> Rgba {
+        self.warning.unwrap_or([245, 158, 11, 255])
+    }
+
+    pub fn info(&self) -> Rgba {
+        self.info.unwrap_or([14, 165, 233, 255])
+    }
+
+    pub fn remote(&self) -> Rgba {
+        self.remote.unwrap_or([59, 130, 246, 255])
+    }
+
+    pub fn fatal(&self) -> Rgba {
+        self.fatal.unwrap_or([153, 27, 27, 255])
+    }
 }
 
 #[derive(Deserialize)]
@@ -360,6 +494,82 @@ mod tests {
         scene.nodes[0].pins[0].font_size = 12.0;
         scene.nodes[0].label_font_size = f32::INFINITY;
         assert!(SceneIndex::new(&scene).is_err());
+    }
+
+    #[test]
+    fn node_chrome_and_palette_extensions_are_optional() {
+        let node: Node = serde_json::from_value(serde_json::json!({
+            "id": "rows", "x": 0, "y": 0, "width": 150, "height": 83, "label": "Rows",
+            "kind": "standard", "icon": "/flow/icons/box.svg", "lite": true, "longRunning": true,
+            "header": {"color": [1, 2, 3, 255], "reversed": true},
+            "latch": {"collapsed": true, "hidden": 4},
+            "pins": [
+                {"id": "a", "direction": "input", "x": 1, "y": 29, "label": "A",
+                 "color": [255, 255, 255, 255], "kind": "data",
+                 "editor": {"kind": "variable", "set": false}},
+                {"id": "b", "direction": "input", "x": 1, "y": 44, "label": "B",
+                 "color": [255, 255, 255, 255], "kind": "data",
+                 "editor": {"kind": "boolean", "checked": true}},
+                {"id": "c", "direction": "input", "x": 1, "y": 59, "label": "Select c",
+                 "color": [255, 255, 255, 255], "kind": "data",
+                 "editor": {"kind": "select", "placeholder": true}},
+                {"id": "d", "direction": "output", "x": 149, "y": 29, "label": "D",
+                 "color": [255, 255, 255, 255], "kind": "data", "container": "map"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(node.icon.as_deref(), Some("/flow/icons/box.svg"));
+        assert!(node.lite && node.long_running);
+        assert_eq!(
+            node.header,
+            Some(Header {
+                color: [1, 2, 3, 255],
+                reversed: true
+            })
+        );
+        assert_eq!(
+            node.latch,
+            Some(Latch {
+                collapsed: true,
+                hidden: 4
+            })
+        );
+        assert_eq!(
+            node.pins
+                .iter()
+                .map(|pin| pin.editor.clone())
+                .collect::<Vec<_>>(),
+            [
+                Some(PinEditor::Variable { set: false }),
+                Some(PinEditor::Boolean { checked: true }),
+                Some(PinEditor::Select { placeholder: true }),
+                None,
+            ]
+        );
+        assert_eq!(
+            node.pins[3].container.map(PinContainer::glyph),
+            Some("glyph:map")
+        );
+
+        let plain = fixture();
+        assert!(plain.nodes[0].header.is_none() && plain.nodes[0].latch.is_none());
+        assert!(!plain.nodes[0].lite && plain.nodes[0].pins[0].editor.is_none());
+        assert!(!plain.nodes[0].long_running);
+
+        let palette: Palette = serde_json::from_value(serde_json::json!({
+            "background": [0, 0, 0, 255], "card": [10, 10, 10, 255],
+            "foreground": [240, 240, 240, 255], "muted": [100, 100, 100, 255],
+            "border": [50, 50, 50, 255], "primary": [250, 100, 60, 255],
+            "tertiary": [200, 150, 50, 255], "nodeText": [248, 248, 248, 255]
+        }))
+        .unwrap();
+        assert_eq!(palette.node_text(), [248, 248, 248, 255]);
+        assert_eq!(palette.node_backdrop(), palette.card);
+        assert_eq!(palette.input(), palette.border);
+        assert_eq!(palette.checkbox(), [0; 4]);
+        assert_eq!(palette.primary_foreground(), [255; 4]);
+        assert_eq!(palette.destructive(), [239, 68, 68, 255]);
+        assert_eq!(palette.remote(), [59, 130, 246, 255]);
     }
 
     #[test]

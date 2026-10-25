@@ -19,6 +19,23 @@ pub async fn database() -> DatabaseConnection {
     )
     .await
     .unwrap();
+    db.execute_unprepared(
+        r#"CREATE TABLE public."ExecutionUsageDaily" (
+            day TEXT NOT NULL, id TEXT NOT NULL, "userId" TEXT,
+            "technicalUserId" TEXT, "appId" TEXT, status TEXT NOT NULL,
+            executions INTEGER NOT NULL, microseconds INTEGER NOT NULL,
+            PRIMARY KEY (day, id)
+        )"#,
+    )
+    .await
+    .unwrap();
+    db.execute_unprepared(
+        r#"CREATE TABLE public."ExecutionUsageDay" (
+            day TEXT PRIMARY KEY, "rolledUpAt" TEXT, claim TEXT, "claimedAt" TEXT
+        )"#,
+    )
+    .await
+    .unwrap();
     db
 }
 

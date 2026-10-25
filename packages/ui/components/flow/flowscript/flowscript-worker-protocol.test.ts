@@ -234,6 +234,28 @@ describe("FlowScript worker protocol", () => {
 		expect(rerun?.kind).toBe("ok");
 	});
 
+	test("a forgotten document no longer answers requests that omit its text", () => {
+		const state = initState();
+		handleFlowScriptWorkerMessage(state, {
+			kind: "folding",
+			id: 9,
+			catalogId: 1,
+			doc: { uri: "a", version: 1, text: DOC },
+		});
+		expect(state.docs.has("a")).toBe(true);
+		expect(
+			handleFlowScriptWorkerMessage(state, { kind: "forget-doc", uri: "a" }),
+		).toBeNull();
+		expect(state.docs.size).toBe(0);
+		const response = handleFlowScriptWorkerMessage(state, {
+			kind: "folding",
+			id: 10,
+			catalogId: 1,
+			doc: { uri: "a", version: 1 },
+		});
+		expect(response?.kind).toBe("error");
+	});
+
 	test("env snapshot hydrates into a working type environment", () => {
 		const state = initState();
 		const result = okResult(

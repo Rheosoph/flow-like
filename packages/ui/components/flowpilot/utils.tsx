@@ -28,6 +28,7 @@ export function getCommandIcon(cmd: BoardCommand, size = "w-4 h-4") {
 		case "DisconnectPins":
 			return <Unlink2Icon className={size} />;
 		case "UpdateNodePin":
+		case "SetNodeDescription":
 			return <PencilIcon className={size} />;
 		case "MoveNode":
 			return <MoveIcon className={size} />;
@@ -43,6 +44,7 @@ export function getCommandIcon(cmd: BoardCommand, size = "w-4 h-4") {
 		case "RenameLayer":
 		case "MoveToLayer":
 		case "UpdateLayerCache":
+		case "UpdateFunctionSignature":
 		case "AddNodesToLayer":
 		case "RemoveNodesFromLayer":
 			return <SquarePenIcon className={size} />;
@@ -66,10 +68,18 @@ export function getCommandSummary(cmd: BoardCommand): string {
 			return `Set ${cmd.pin_id}`;
 		case "MoveNode":
 			return "Move node";
+		case "SetNodeCodeNames":
+			return "Name FlowScript values";
+		case "SetNodeDescription":
+			return cmd.description
+				? "Set node description"
+				: "Clear node description";
 		case "UpdateLayerCache":
 			return cmd.cache?.enabled
 				? "Configure function cache"
 				: "Disable function cache";
+		case "UpdateFunctionSignature":
+			return "Change function signature";
 		default:
 			return cmd.command_type.replace(/([A-Z])/g, " $1").trim();
 	}
@@ -86,6 +96,7 @@ export function getCommandColor(cmd: BoardCommand): string {
 		case "DisconnectPins":
 			return "from-orange-500/20 to-amber-500/10 border-orange-500/30";
 		case "UpdateNodePin":
+		case "SetNodeDescription":
 			return "from-violet-500/20 to-purple-500/10 border-violet-500/30";
 		default:
 			return "from-primary/20 to-primary/10 border-primary/30";

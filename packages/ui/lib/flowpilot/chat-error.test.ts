@@ -123,6 +123,20 @@ describe("buildChatMessageError", () => {
 		expect(error.detail ?? error.message).not.toContain("abc.def.ghi");
 	});
 
+	test("reads a native command rejection and names the chat that failed", () => {
+		const error = buildChatMessageError(
+			"bits",
+			{ error: "Automation approval is required for this workflow revision." },
+			"Support",
+		);
+
+		expect(error.kind).toBe("generic");
+		expect(error.title).toBe("Support could not finish this response");
+		expect(error.message).toBe(
+			"Automation approval is required for this workflow revision.",
+		);
+	});
+
 	test("never leaves a failure without a usable card", () => {
 		const error = buildChatMessageError("bits", undefined);
 

@@ -19,7 +19,7 @@ use crate::{
 };
 use axum::{
     body::Body,
-    http::{HeaderMap, HeaderValue},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::Response as AxumResponse,
 };
 use flow_like::bit::{Bit, BitTypes};
@@ -829,6 +829,65 @@ async fn finalize_llm_usage(
     }
 }
 
+fn upstream_error_response(
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: Bytes,
+    latency_ms: f64,
+) -> (AxumResponse, UsageInvocationSettlement) {
+    let error = format!(
+        "Upstream error {status}: {}",
+        String::from_utf8_lossy(&body)
+    );
+    tracing::warn!(%status, body = %String::from_utf8_lossy(&body), "LLM invoke upstream error");
+    let usage = extract_usage_from_body(&body);
+    let settlement = UsageInvocationSettlement {
+        // A rejected request incurred no inference usage. Timeouts and server
+        // failures can follow dispatch, so retain their reservation for reconciliation.
+        status: if matches!(
+            status,
+            StatusCode::BAD_REQUEST
+                | StatusCode::UNAUTHORIZED
+                | StatusCode::PAYMENT_REQUIRED
+                | StatusCode::FORBIDDEN
+                | StatusCode::NOT_FOUND
+                | StatusCode::PAYLOAD_TOO_LARGE
+                | StatusCode::UNSUPPORTED_MEDIA_TYPE
+                | StatusCode::UNPROCESSABLE_ENTITY
+                | StatusCode::TOO_MANY_REQUESTS
+        ) && usage.is_none()
+        {
+            crate::usage_accounting::STATUS_FAILED
+        } else {
+            crate::usage_accounting::STATUS_UNKNOWN_USAGE
+        },
+        input_tokens: usage.as_ref().and_then(|usage| usage.in_tok).unwrap_or(0),
+        output_tokens: usage.as_ref().and_then(|usage| usage.out_tok).unwrap_or(0),
+        cost_micro_dollars: usage
+            .as_ref()
+            .and_then(|usage| usage.cost_micro)
+            .unwrap_or(0),
+        provider_request_id: usage
+            .as_ref()
+            .and_then(|usage| usage.provider_request_id.clone()),
+        raw_usage: usage.and_then(|usage| usage.raw_usage),
+        error: Some(error),
+        latency_ms: Some(latency_ms),
+        ..Default::default()
+    };
+    let mut response = AxumResponse::builder().status(status).header(
+        axum::http::header::CONTENT_TYPE,
+        headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .cloned()
+            .unwrap_or_else(|| HeaderValue::from_static("application/json")),
+    );
+    if let Some(retry_after) = headers.get(axum::http::header::RETRY_AFTER) {
+        response = response.header(axum::http::header::RETRY_AFTER, retry_after);
+    }
+    (response.body(Body::from(body)).unwrap(), settlement)
+}
+
 pub(super) async fn handle_streaming(
     request_builder: flow_like_types::reqwest::RequestBuilder,
     state: AppState,
@@ -862,20 +921,36 @@ pub(super) async fn handle_streaming(
     };
     if !resp.status().is_success() {
         let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        tracing::error!(status=%status, body=%text, "Upstream error");
-        let _ = settle_hosted_usage_invocation(
-            &state,
-            invocation_id.as_deref(),
-            UsageInvocationSettlement {
-                status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
-                error: Some(format!("Upstream error {status}: {text}")),
-                latency_ms: Some(started_at.elapsed().as_secs_f64() * 1000.0),
-                ..Default::default()
-            },
-        )
-        .await;
-        return Err(ApiError::bad_request("Upstream error"));
+        let headers = resp.headers().clone();
+        let body = match resp.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                let _ = settle_hosted_usage_invocation(
+                    &state,
+                    invocation_id.as_deref(),
+                    UsageInvocationSettlement {
+                        status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
+                        error: Some(error.to_string()),
+                        latency_ms: Some(started_at.elapsed().as_secs_f64() * 1000.0),
+                        ..Default::default()
+                    },
+                )
+                .await;
+                return Err(ApiError::internal_error(anyhow!(
+                    "Failed to read upstream error body: {error}"
+                )));
+            }
+        };
+        let (response, settlement) = upstream_error_response(
+            status,
+            &headers,
+            body,
+            started_at.elapsed().as_secs_f64() * 1000.0,
+        );
+        let _ = settle_hosted_usage_invocation(&state, invocation_id.as_deref(), settlement).await;
+        // The worker must retain a completed HTTP rejection as a response.
+        // Returning Err here would replace its status and body with a generic 502.
+        return Ok(response);
     }
 
     let mut builder = AxumResponse::builder().status(resp.status());
@@ -1097,72 +1172,60 @@ pub(super) async fn handle_non_streaming(
             return Err(error);
         }
     };
-    if status.is_success() {
-        tracing::info!(model = %upstream_model_id, bytes = body_bytes.len(), latency_ms = latency_ms, "LLM invoke success (non-stream)");
-        let usage = extract_usage_from_body(&body_bytes);
-        let cost = if let Some(usage) = &usage {
-            resolved_provider_cost(
-                state,
-                invocation_id,
-                usage.in_tok,
-                usage.out_tok,
-                usage.cost_micro,
-            )
-            .await
-        } else {
-            None
-        };
-        if let (Some(usage), Some(cost)) = (usage, cost) {
-            if let Err(e) = track_llm_usage(
-                state,
-                user_sub,
-                upstream_model_id,
-                usage.in_tok.unwrap_or(0),
-                usage.out_tok.unwrap_or(0),
-                cost,
-                latency_ms,
-                usage_context.app_id.as_deref(),
-                usage_context.technical_user_id.as_deref(),
-                Some(provider),
-                Some(endpoint),
-                invocation_id,
-                usage.provider_request_id.as_deref(),
-                usage.raw_usage,
-                crate::usage_accounting::STATUS_COMPLETED,
-            )
-            .await
-            {
-                tracing::warn!(error=%e, "Failed to track LLM usage");
-            }
-        } else if let Err(e) = settle_hosted_usage_invocation(
+    if !status.is_success() {
+        let (response, settlement) =
+            upstream_error_response(status, &headers, body_bytes, latency_ms);
+        let _ = settle_hosted_usage_invocation(state, invocation_id, settlement).await;
+        return Ok(response);
+    }
+    tracing::info!(model = %upstream_model_id, bytes = body_bytes.len(), latency_ms = latency_ms, "LLM invoke success (non-stream)");
+    let usage = extract_usage_from_body(&body_bytes);
+    let cost = if let Some(usage) = &usage {
+        resolved_provider_cost(
             state,
             invocation_id,
-            UsageInvocationSettlement {
-                status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
-                latency_ms: Some(latency_ms),
-                ..Default::default()
-            },
+            usage.in_tok,
+            usage.out_tok,
+            usage.cost_micro,
+        )
+        .await
+    } else {
+        None
+    };
+    if let (Some(usage), Some(cost)) = (usage, cost) {
+        if let Err(e) = track_llm_usage(
+            state,
+            user_sub,
+            upstream_model_id,
+            usage.in_tok.unwrap_or(0),
+            usage.out_tok.unwrap_or(0),
+            cost,
+            latency_ms,
+            usage_context.app_id.as_deref(),
+            usage_context.technical_user_id.as_deref(),
+            Some(provider),
+            Some(endpoint),
+            invocation_id,
+            usage.provider_request_id.as_deref(),
+            usage.raw_usage,
+            crate::usage_accounting::STATUS_COMPLETED,
         )
         .await
         {
-            tracing::warn!(error=%e, "Failed to settle unknown LLM usage");
+            tracing::warn!(error=%e, "Failed to track LLM usage");
         }
-    } else {
-        tracing::warn!(status = %status, body = %String::from_utf8_lossy(&body_bytes), "LLM invoke upstream error");
-        let _ = settle_hosted_usage_invocation(
-            state,
-            invocation_id,
-            UsageInvocationSettlement {
-                status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
-                error: Some(format!(
-                    "Upstream error {status}: {}",
-                    String::from_utf8_lossy(&body_bytes)
-                )),
-                latency_ms: Some(latency_ms),
-                ..Default::default()
-            },
-        )
-        .await;
+    } else if let Err(e) = settle_hosted_usage_invocation(
+        state,
+        invocation_id,
+        UsageInvocationSettlement {
+            status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
+            latency_ms: Some(latency_ms),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        tracing::warn!(error=%e, "Failed to settle unknown LLM usage");
     }
     let content_type = headers
         .get(axum::http::header::CONTENT_TYPE)
@@ -1504,6 +1567,117 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn upstream_rejections_preserve_status_body_and_retry_after() {
+        for (status, body, retry_after) in [
+            (
+                StatusCode::NOT_FOUND,
+                r#"{"error":{"code":404,"message":"No endpoints available","metadata":{"reason":"free-model-training-violation-by-account"}}}"#,
+                None,
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                r#"{"error":{"code":429,"message":"Rate limit exceeded"}}"#,
+                Some("30"),
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            if let Some(retry_after) = retry_after {
+                headers.insert(
+                    axum::http::header::RETRY_AFTER,
+                    HeaderValue::from_static(retry_after),
+                );
+            }
+            let (response, settlement) = upstream_error_response(
+                status,
+                &headers,
+                Bytes::from_static(body.as_bytes()),
+                25.0,
+            );
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response.headers()[axum::http::header::CONTENT_TYPE],
+                "application/json; charset=utf-8"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(axum::http::header::RETRY_AFTER)
+                    .map(|value| value.to_str().unwrap()),
+                retry_after
+            );
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+                body
+            );
+            assert_eq!(settlement.status, crate::usage_accounting::STATUS_FAILED);
+            assert_eq!(settlement.cost_micro_dollars, 0);
+            assert_eq!(settlement.input_tokens, 0);
+            assert_eq!(settlement.output_tokens, 0);
+            assert_eq!(settlement.latency_ms, Some(25.0));
+            assert!(settlement.error.unwrap().contains(body));
+        }
+    }
+
+    #[test]
+    fn ambiguous_upstream_failures_keep_usage_reserved() {
+        for (status, body) in [
+            (StatusCode::REQUEST_TIMEOUT, "{}"),
+            (StatusCode::from_u16(499).unwrap(), "{}"),
+            (StatusCode::BAD_GATEWAY, "{}"),
+            (StatusCode::SERVICE_UNAVAILABLE, "{}"),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":{"message":"failed"},"usage":{"prompt_tokens":12,"completion_tokens":2,"cost":0.01}}"#,
+            ),
+        ] {
+            let (response, settlement) = upstream_error_response(
+                status,
+                &HeaderMap::new(),
+                Bytes::from_static(body.as_bytes()),
+                25.0,
+            );
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                settlement.status,
+                crate::usage_accounting::STATUS_UNKNOWN_USAGE
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_errors_keep_reported_usage_for_reconciliation() {
+        let body = serde_json::json!({
+            "id": "gen-partial",
+            "error": {"message": "Provider failed after generation"},
+            "usage": {"prompt_tokens": 12, "completion_tokens": 2, "cost": 0.01},
+        });
+        let (_, settlement) = upstream_error_response(
+            StatusCode::BAD_GATEWAY,
+            &HeaderMap::new(),
+            Bytes::from(serde_json::to_vec(&body).unwrap()),
+            25.0,
+        );
+        assert_eq!(
+            settlement.status,
+            crate::usage_accounting::STATUS_UNKNOWN_USAGE
+        );
+        assert_eq!(settlement.input_tokens, 12);
+        assert_eq!(settlement.output_tokens, 2);
+        assert_eq!(settlement.cost_micro_dollars, 10_000);
+        assert_eq!(
+            settlement.provider_request_id.as_deref(),
+            Some("gen-partial")
+        );
+        assert_eq!(settlement.raw_usage, Some(body["usage"].clone()));
+    }
 
     fn test_bit(pricing: JsonValue) -> Bit {
         Bit {

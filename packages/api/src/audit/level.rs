@@ -53,6 +53,11 @@ const MINIMAL_ACTIONS: &[&str] = &[
     "database.table.drop",
     "database.column.access",
     "graph.overlay.delete",
+    "locked_file.version.commit",
+    "locked_file.version.purge",
+    "locked_file.retention.extend",
+    "locked_file.legal_hold.set",
+    "locked_file.auto_delete.set",
 ];
 
 /// High-frequency records whose content is already persisted elsewhere.
@@ -62,6 +67,7 @@ const VERBOSE_ACTIONS: &[&str] = &[
     "graph.nodes.upsert",
     "graph.edges.upsert",
     "file.access.authorize",
+    "locked_file.access.authorize",
     "database.rows.offline_replay",
     "storage.files.offline_replay",
 ];
@@ -155,6 +161,7 @@ mod tests {
         ("app.delete", AuditLevel::Minimal),
         ("app.settings.appearance", AuditLevel::Standard),
         ("app.settings.forking", AuditLevel::Minimal),
+        ("app.settings.legal", AuditLevel::Standard),
         ("app.update", AuditLevel::Standard),
         ("app.visibility", AuditLevel::Minimal),
         ("app.visibility.request", AuditLevel::Minimal),
@@ -240,6 +247,14 @@ mod tests {
         ("instance.schedules.claim", AuditLevel::Standard),
         ("instance.storage.lease", AuditLevel::Standard),
         ("invite.create", AuditLevel::Minimal),
+        ("locked_file.access.authorize", AuditLevel::Verbose),
+        ("locked_file.auto_delete.set", AuditLevel::Minimal),
+        ("locked_file.legal_hold.set", AuditLevel::Minimal),
+        ("locked_file.retention.extend", AuditLevel::Minimal),
+        ("locked_file.upload.authorize", AuditLevel::Standard),
+        ("locked_file.version.abort", AuditLevel::Standard),
+        ("locked_file.version.commit", AuditLevel::Minimal),
+        ("locked_file.version.purge", AuditLevel::Minimal),
         ("invite.delete", AuditLevel::Minimal),
         ("membership.accept", AuditLevel::Minimal),
         ("membership.invite", AuditLevel::Minimal),

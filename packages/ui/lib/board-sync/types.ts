@@ -104,6 +104,7 @@ export interface ISyncNode {
 	error?: string | null;
 	pins_collapsed?: boolean | null;
 	auto_reroute?: boolean | null;
+	code_names?: Record<string, string> | null;
 	hash?: number | null;
 	fn_refs?: IFnRefs | null;
 	wasm?: INodeWasm | null;

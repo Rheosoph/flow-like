@@ -7,9 +7,11 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{Query, State},
+    http::HeaderMap,
 };
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, QueryTrait, Select,
 };
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
@@ -31,7 +33,7 @@ fn default_page_size() -> u64 {
     50
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct PaginatedResponse<T: Serialize> {
     pub items: Vec<T>,
     pub total: u64,
@@ -199,7 +201,7 @@ pub async fn get_embedding_history(
 
 // -- Execution Usage History --
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct ExecutionUsageRecord {
     pub id: String,
     pub instance: Option<String>,
@@ -243,10 +245,109 @@ impl From<execution_usage_tracking::Model> for ExecutionUsageRecord {
 pub async fn get_execution_history(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
-    Query(params): Query<PaginationParams>,
+    Query(mut params): Query<PaginationParams>,
+    headers: HeaderMap,
 ) -> Result<Json<PaginatedResponse<ExecutionUsageRecord>>, ApiError> {
     let sub = user.sub()?;
-    execution_history(&state.db, &sub, params).await.map(Json)
+    params.page_size = params.page_size.clamp(1, 100);
+    let key = super::cache::cache_key((
+        "history",
+        &sub,
+        &params.app_id,
+        params.page,
+        params.page_size,
+    ));
+    // Cache the page and its exact total together so a hit does not mix old
+    // counts with a newly fetched page. Recent-only widgets use the route below.
+    state
+        .execution_usage_cache
+        .get_or_compute(
+            &state.cache,
+            key,
+            super::cache::CacheMode::from_headers(&headers),
+            execution_history(&state.db, &sub, params),
+        )
+        .await
+        .map(Json)
+}
+
+#[derive(Clone, Debug, Deserialize, IntoParams)]
+pub struct RecentExecutionParams {
+    #[serde(default = "default_page_size")]
+    pub limit: u64,
+    pub app_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct RecentExecutionResponse {
+    pub items: Vec<ExecutionUsageRecord>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/usage/executions/recent",
+    tag = "usage",
+    params(RecentExecutionParams),
+    responses((status = 200, description = "Newest execution records without a lifetime count", body = RecentExecutionResponse))
+)]
+#[tracing::instrument(name = "GET /usage/executions/recent", skip_all)]
+pub async fn get_recent_executions(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Query(params): Query<RecentExecutionParams>,
+) -> Result<Json<RecentExecutionResponse>, ApiError> {
+    let sub = user.sub()?;
+    recent_executions(&state.db, &sub, params).await.map(Json)
+}
+
+async fn recent_executions(
+    db: &DatabaseConnection,
+    sub: &str,
+    params: RecentExecutionParams,
+) -> Result<RecentExecutionResponse, ApiError> {
+    let mut query = execution_usage_tracking::Entity::find()
+        .filter(execution_usage_tracking::Column::UserId.eq(sub));
+    if let Some(app_id) = params.app_id {
+        query = query.filter(execution_usage_tracking::Column::AppId.eq(app_id));
+    }
+    let records = execution_page(query, 0, params.limit.clamp(1, 100))
+        .all(db)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "usage.executions.recent",
+            db.operation = "select",
+            db.table = "ExecutionUsageTracking",
+        ))
+        .await
+        .map_err(|e| ApiError::internal_error(e.into()))?;
+    Ok(RecentExecutionResponse {
+        items: records
+            .into_iter()
+            .map(ExecutionUsageRecord::from)
+            .collect(),
+    })
+}
+
+fn execution_page(
+    scoped: Select<execution_usage_tracking::Entity>,
+    page: u64,
+    page_size: u64,
+) -> Select<execution_usage_tracking::Entity> {
+    // Selecting IDs first lets DSQL use the ordered covering index and fetch
+    // only this page's full records. A wide SELECT with LIMIT chose a full scan.
+    let ids = scoped
+        .clone()
+        .select_only()
+        .column(execution_usage_tracking::Column::Id)
+        .order_by_desc(execution_usage_tracking::Column::CreatedAt)
+        .order_by_desc(execution_usage_tracking::Column::Id)
+        .limit(page_size)
+        .offset(page.saturating_mul(page_size))
+        .into_query();
+    scoped
+        .filter(execution_usage_tracking::Column::Id.in_subquery(ids))
+        .order_by_desc(execution_usage_tracking::Column::CreatedAt)
+        .order_by_desc(execution_usage_tracking::Column::Id)
 }
 
 async fn execution_history(
@@ -264,10 +365,7 @@ async fn execution_history(
     }
 
     let count_query = query.clone();
-    let page_query = query
-        .order_by_desc(execution_usage_tracking::Column::CreatedAt)
-        .order_by_desc(execution_usage_tracking::Column::Id)
-        .paginate(db, page_size);
+    let page_query = execution_page(query, params.page, page_size);
     let (total, records) = flow_like_types::tokio::try_join!(
         count_query.count(db).instrument(tracing::info_span!(
             target: "flow_like::observability",
@@ -275,14 +373,12 @@ async fn execution_history(
             db.operation = "select",
             db.table = "ExecutionUsageTracking",
         )),
-        page_query
-            .fetch_page(params.page)
-            .instrument(tracing::info_span!(
-                target: "flow_like::observability",
-                "usage.executions.page",
-                db.operation = "select",
-                db.table = "ExecutionUsageTracking",
-            )),
+        page_query.all(db).instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "usage.executions.page",
+            db.operation = "select",
+            db.table = "ExecutionUsageTracking",
+        )),
     )
     .map_err(|e| ApiError::internal_error(e.into()))?;
 
@@ -301,7 +397,7 @@ async fn execution_history(
 
 // -- Usage Summary --
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct UsageSummary {
     pub total_llm_price: i64,
     pub total_embedding_price: i64,
@@ -318,24 +414,37 @@ pub struct UsageSummary {
         (status = 200, description = "Usage summary", body = UsageSummary)
     )
 )]
-#[tracing::instrument(name = "GET /usage/summary", skip(state, user))]
+#[tracing::instrument(name = "GET /usage/summary", skip_all)]
 pub async fn get_usage_summary(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
+    headers: HeaderMap,
 ) -> Result<Json<UsageSummary>, ApiError> {
     let sub = user.sub()?;
+    state
+        .execution_usage_cache
+        .get_or_compute(
+            &state.cache,
+            super::cache::cache_key(("summary", &sub)),
+            super::cache::CacheMode::from_headers(&headers),
+            usage_summary(&state.db, &sub),
+        )
+        .await
+        .map(Json)
+}
 
+async fn usage_summary(db: &DatabaseConnection, sub: &str) -> Result<UsageSummary, ApiError> {
     let (user_record, llm_count, embedding_count, execution_count) = flow_like_types::tokio::join!(
-        user::Entity::find_by_id(&sub).one(&state.db),
+        user::Entity::find_by_id(sub).one(db),
         llm_usage_tracking::Entity::find()
-            .filter(llm_usage_tracking::Column::UserId.eq(&sub))
-            .count(&state.db),
+            .filter(llm_usage_tracking::Column::UserId.eq(sub))
+            .count(db),
         embedding_usage_tracking::Entity::find()
-            .filter(embedding_usage_tracking::Column::UserId.eq(&sub))
-            .count(&state.db),
+            .filter(embedding_usage_tracking::Column::UserId.eq(sub))
+            .count(db),
         execution_usage_tracking::Entity::find()
-            .filter(execution_usage_tracking::Column::UserId.eq(&sub))
-            .count(&state.db),
+            .filter(execution_usage_tracking::Column::UserId.eq(sub))
+            .count(db),
     );
 
     let user_record = user_record?.ok_or(ApiError::FORBIDDEN)?;
@@ -343,13 +452,13 @@ pub async fn get_usage_summary(
     let embedding_count = embedding_count.map_err(|e| ApiError::internal_error(e.into()))?;
     let execution_count = execution_count.map_err(|e| ApiError::internal_error(e.into()))?;
 
-    Ok(Json(UsageSummary {
+    Ok(UsageSummary {
         total_llm_price: user_record.total_llm_price,
         total_embedding_price: user_record.total_embedding_price,
         total_llm_invocations: llm_count,
         total_embedding_invocations: embedding_count,
         total_executions: execution_count,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -436,5 +545,102 @@ mod tests {
             (all_apps.total, all_apps.page_size, all_apps.items.len()),
             (4, 1, 1)
         );
+
+        let recent = recent_executions(
+            &db,
+            "alice",
+            RecentExecutionParams {
+                limit: 2,
+                app_id: Some("app".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            recent
+                .items
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "b"]
+        );
+        let single = recent_executions(
+            &db,
+            "alice",
+            RecentExecutionParams {
+                limit: 0,
+                app_id: Some("app".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(single.items.len(), 1);
+        let missing = recent_executions(
+            &db,
+            "nobody",
+            RecentExecutionParams {
+                limit: 50,
+                app_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(missing.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn history_snapshot_keeps_its_total_and_items_together() {
+        let db = database().await;
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-04T12:00:00Z").unwrap();
+        insert(&db, "old", "alice", None, at, ExecutionStatus::Info, 100).await;
+        let cache = super::super::cache::UsageCache::default();
+        let shared = crate::cache::CacheBackendHandle::memory_for_test();
+        let params = || PaginationParams {
+            page: 0,
+            page_size: 50,
+            app_id: None,
+        };
+        let first = cache
+            .get_or_compute(
+                &shared,
+                "alice".into(),
+                super::super::cache::CacheMode::Cached,
+                execution_history(&db, "alice", params()),
+            )
+            .await
+            .unwrap();
+        insert(
+            &db,
+            "new",
+            "alice",
+            None,
+            at + chrono::Duration::seconds(1),
+            ExecutionStatus::Info,
+            100,
+        )
+        .await;
+        let cached = cache
+            .get_or_compute(
+                &shared,
+                "alice".into(),
+                super::super::cache::CacheMode::Cached,
+                execution_history(&db, "alice", params()),
+            )
+            .await
+            .unwrap();
+        assert_eq!((first.total, cached.total, cached.items.len()), (1, 1, 1));
+        assert_eq!(cached.items[0].id, "old");
+        let recent = recent_executions(
+            &db,
+            "alice",
+            RecentExecutionParams {
+                limit: 50,
+                app_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(recent.items.len(), 2);
+        assert_eq!(recent.items[0].id, "new");
     }
 }

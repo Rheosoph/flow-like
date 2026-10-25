@@ -57,9 +57,9 @@ impl NodeLogic for PutNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         let path: FlowPath = context.evaluate_pin("path").await?;
-        let bytes_vec: Vec<u8> = context.evaluate_pin("bytes").await?;
+        let bytes = context.evaluate_pin_bytes("bytes").await?;
 
-        path.put(context, bytes_vec, false).await?;
+        path.put_bytes(context, bytes, false).await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

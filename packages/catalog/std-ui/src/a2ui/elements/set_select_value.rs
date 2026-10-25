@@ -1,8 +1,6 @@
-use flow_like::a2ui::components::SelectProps;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
-    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -38,10 +36,8 @@ impl NodeLogic for SetSelectValue {
             "element_ref",
             "Select",
             "Element ID string or element object from Get Element",
-            VariableType::Struct,
-        )
-        .set_schema::<SelectProps>()
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+            VariableType::Generic,
+        );
         node.add_input_pin(
             "value",
             "Value",
@@ -52,6 +48,7 @@ impl NodeLogic for SetSelectValue {
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 
         node.set_long_running(true);
+        node.set_version(1);
 
         node
     }

@@ -44,7 +44,11 @@ function required<T>(value: T | null | undefined): T {
 const thumb = () =>
 	required(container.querySelector<HTMLElement>('[role="slider"]'));
 const latest = () =>
-	required(container.querySelector<HTMLButtonElement>("button"));
+	required(
+		[...container.querySelectorAll<HTMLButtonElement>("button")].find(
+			(button) => button.textContent === "Latest window",
+		),
+	);
 async function render(initialOffset = 0, running = false) {
 	await act(async () => {
 		root.render(<Controls initialOffset={initialOffset} running={running} />);
@@ -102,11 +106,45 @@ describe("historical cutoff Radix controls", () => {
 			`Compare ${formatForecastTime(day(6), true)} UTC to ${formatForecastTime(day(7), true)} UTC`,
 		);
 		expect(container.textContent).toContain(
-			"Move the cutoff and release to rerun the holdout.",
+			"Drag the cutoff and release to evaluate.",
 		);
 		expect(container.textContent).toContain(
 			"Outlook continues from the latest observation.",
 		);
+		expect(container.textContent).toContain(
+			"History: 5 stepsHoldout: 2 stepsLater: 1 step",
+		);
+	});
+
+	it("supports Home and End to reach the earliest and latest windows", async () => {
+		await render();
+		for (const [key, offset] of [
+			["Home", 4],
+			["End", 0],
+		] as const) {
+			await act(async () =>
+				thumb().dispatchEvent(
+					new KeyboardEvent("keydown", {
+						key,
+						bubbles: true,
+						cancelable: true,
+					}),
+				),
+			);
+			expect(onCommit).toHaveBeenLastCalledWith(offset);
+		}
+	});
+
+	it("evaluates the selected window explicitly without moving the cutoff", async () => {
+		await render(2);
+		const evaluate = required(
+			[...container.querySelectorAll<HTMLButtonElement>("button")].find(
+				(button) => button.textContent === "Evaluate window",
+			),
+		);
+		await act(async () => evaluate.click());
+		expect(onCommit).toHaveBeenCalledExactlyOnceWith(2);
+		expect(onChange).not.toHaveBeenCalled();
 	});
 
 	it("resets and commits the latest window in one click", async () => {

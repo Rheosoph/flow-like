@@ -54,7 +54,9 @@ describe("flowLikeWidgets", () => {
 			config: UserConfig,
 			env: ConfigEnv,
 		) => UserConfig;
-		const patch = configHook({ root: fixture.groupDir }, ENV);
+		const patch = configHook({ root: fixture.groupDir, base: "/" }, ENV);
+
+		expect(patch.base).toBe("./");
 
 		const rollup = patch.build?.rollupOptions;
 		expect(rollup?.input).toEqual({

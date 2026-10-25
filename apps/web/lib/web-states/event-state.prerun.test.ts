@@ -1,3 +1,4 @@
+import type { IEvent } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type { PageTrigger } from "@flow-like/flow-like-ui/lib/schema/flow/page-trigger";
 import {
 	IValueType,
@@ -140,6 +141,67 @@ beforeEach(() => {
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+});
+
+describe("event dispatch Hub configuration", () => {
+	test.each(["page action", "direct event"])(
+		"a %s without OAuth does not wait for Hub configuration",
+		async (kind) => {
+			const backend = backendRef();
+			backend.profile.hub = "hub.test";
+			const state = new WebEventState(backend as unknown as WebBackendRef);
+			mocks.apiGet.mockImplementation(async (path: string) =>
+				path.endsWith("/prerun")
+					? prerun()
+					: { id: "event-1", board_id: "board-1" },
+			);
+			vi.mocked(fetch).mockImplementation((url) =>
+				String(url).endsWith("/api/v1")
+					? new Promise<Response>(() => {})
+					: Promise.resolve(new Response(null)),
+			);
+
+			if (kind === "page action") {
+				await execute(state);
+			} else {
+				await state.executeEvent("app-1", "event-1", { id: "node" });
+			}
+
+			expect(fetch).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+				"https://api.test/api/v1/apps/app-1/events/event-1/invoke",
+			);
+			expect(
+				mocks.checkOAuthTokensFromPrerun.mock.calls[0]?.[2],
+			).toBeUndefined();
+		},
+	);
+
+	test("an OAuth action still loads provider configuration before checking tokens", async () => {
+		const backend = backendRef();
+		backend.profile.hub = "hub.test";
+		const state = new WebEventState(backend as unknown as WebBackendRef);
+		const requirements = [{ provider_id: "google", scopes: ["mail"] }];
+		const hub = { oauth_providers: { google: { id: "google" } } };
+		mocks.apiPost.mockResolvedValue({
+			...prerun(),
+			oauth_requirements: requirements,
+		});
+		vi.mocked(fetch).mockImplementation(async (url) =>
+			String(url).endsWith("/api/v1") ? Response.json(hub) : new Response(null),
+		);
+
+		await execute(state);
+
+		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+			"https://hub.test/api/v1",
+			"https://api.test/api/v1/apps/app-1/events/event-1/invoke",
+		]);
+		expect(mocks.checkOAuthTokensFromPrerun.mock.calls[0]?.[0]).toEqual(
+			requirements,
+		);
+		expect(mocks.checkOAuthTokensFromPrerun.mock.calls[0]?.[2]).toEqual(hub);
+	});
 });
 
 describe("web Page prerun handoff", () => {
@@ -404,5 +466,77 @@ describe("web Page prerun handoff", () => {
 		);
 		expect(fetch).not.toHaveBeenCalled();
 		expect(mocks.notifyPageContractRejected).toHaveBeenCalled();
+	});
+});
+
+describe("direct event OAuth for members without ReadBoards", () => {
+	const event = {
+		id: "event-1",
+		board_id: "board-1",
+		board_version: [1, 2, 3],
+	} as unknown as IEvent;
+	const requirements = [{ provider_id: "google", scopes: ["mail"] }];
+
+	beforeEach(() => {
+		mocks.apiGet.mockImplementation(async (path: string) => {
+			if (path === "apps/app-1/events/event-1") return event;
+			if (path === "apps/app-1/events/event-1/prerun?version=1_2_3") {
+				return { ...prerun(), oauth_requirements: requirements };
+			}
+			throw new Error(`[FORBIDDEN] Forbidden: ${path}`);
+		});
+	});
+
+	function executeDirect(state: WebEventState) {
+		return state.executeEvent(
+			"app-1",
+			"event-1",
+			{ id: "chat", payload: {} },
+			false,
+		);
+	}
+
+	test("a chat run resolves OAuth from the pinned prerun and never reads the board", async () => {
+		await executeDirect(new WebEventState({}));
+
+		expect(mocks.apiGet.mock.calls.map(([path]) => path)).toEqual([
+			"apps/app-1/events/event-1",
+			"apps/app-1/events/event-1/prerun?version=1_2_3",
+		]);
+		expect(mocks.checkOAuthTokensFromPrerun.mock.calls[0]?.[0]).toEqual(
+			requirements,
+		);
+		expect(vi.mocked(fetch).mock.calls.at(-1)?.[0]).toBe(
+			"https://api.test/api/v1/apps/app-1/events/event-1/invoke",
+		);
+	});
+
+	test("a missing OAuth token still blocks the run before invocation", async () => {
+		mocks.checkOAuthTokensFromPrerun.mockResolvedValue({
+			...noProviders,
+			missingProviders: [{ id: "google", name: "Google" }],
+			requiredProviders: [{ id: "google", name: "Google" }],
+		});
+
+		await expect(executeDirect(new WebEventState({}))).rejects.toMatchObject({
+			isOAuthError: true,
+		});
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	test("the chat OAuth preflight reports missing providers without reading the board", async () => {
+		const google = { id: "google", name: "Google" };
+		mocks.checkOAuthTokensFromPrerun.mockResolvedValue({
+			...noProviders,
+			missingProviders: [google],
+			requiredProviders: [google],
+		});
+
+		const result = await new WebEventState({}).checkEventOAuth("app-1", event);
+
+		expect(result.missingProviders).toEqual([google]);
+		expect(mocks.apiGet.mock.calls.map(([path]) => path)).toEqual([
+			"apps/app-1/events/event-1/prerun?version=1_2_3",
+		]);
 	});
 });

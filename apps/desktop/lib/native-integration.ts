@@ -176,7 +176,7 @@ export async function loadNativeSnapshot(
 			? backend.userState.listNotifications(true, undefined, 0, 8)
 			: Promise.resolve(undefined),
 		authenticated && backend.usageState
-			? backend.usageState.getExecutionHistory(0, 8)
+			? backend.usageState.getRecentExecutions(8)
 			: Promise.resolve(undefined),
 		authenticated && backend.usageState
 			? backend.usageState.getExecutionActivity(7)

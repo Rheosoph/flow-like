@@ -439,10 +439,27 @@ function couldBe(kinds: string[] | undefined, kind: string): boolean {
 	);
 }
 
+/** Every value of the types that have finitely many. */
+const FINITE_TYPES = new Map<string, unknown[]>([
+	["null", [null]],
+	["boolean", [false, true]],
+]);
+
+/**
+ * Mirrors `literals`: the values a schema produces when they can be listed — its `const`, its
+ * `enum`, or every value of a `null`/`boolean` type. `Option<Enum>` projects `{type: "null"}` next
+ * to the enum, and the `{enum: [..., null]}` its interface spells must cover it.
+ */
 function literals(schema: Schema): unknown[] | undefined {
 	if (has(schema, "const")) return [schema.const];
-	const values = get(schema, "enum");
-	return Array.isArray(values) ? values : undefined;
+	if (has(schema, "enum")) {
+		const values = schema.enum;
+		return Array.isArray(values) ? values : undefined;
+	}
+	const kinds = types(schema);
+	if (!kinds?.length || !kinds.every((kind) => FINITE_TYPES.has(kind)))
+		return undefined;
+	return kinds.flatMap((kind) => FINITE_TYPES.get(kind) ?? []);
 }
 
 function strings(schema: Schema, key: string): string[] {

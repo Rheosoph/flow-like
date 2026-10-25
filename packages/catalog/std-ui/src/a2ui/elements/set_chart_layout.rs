@@ -1,9 +1,7 @@
 use super::element_utils::extract_element_id;
-use flow_like::a2ui::components::PlotlyChartProps;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
-    pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -37,10 +35,8 @@ impl NodeLogic for SetChartLayout {
             "element_ref",
             "Chart",
             "Reference to the chart element (ID or element object)",
-            VariableType::Struct,
-        )
-        .set_schema::<PlotlyChartProps>()
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+            VariableType::Generic,
+        );
 
         node.add_input_pin(
             "layout",
@@ -52,6 +48,7 @@ impl NodeLogic for SetChartLayout {
         node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 
         node.set_long_running(true);
+        node.set_version(1);
 
         node
     }

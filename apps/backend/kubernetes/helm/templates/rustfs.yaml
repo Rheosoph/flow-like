@@ -150,6 +150,9 @@ spec:
             - name: AUDIT_BUCKET_RETENTION_YEARS
               value: {{ .Values.audit.retentionYears | quote }}
             {{- end }}
+            {{- if .Values.lockedStorage.bucket }}
+            {{- include "flow-like.lockedStorageEnv" . | nindent 12 }}
+            {{- end }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532

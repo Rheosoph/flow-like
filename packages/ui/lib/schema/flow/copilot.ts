@@ -129,6 +129,20 @@ export type BoardCommand =
 			summary?: string;
 	  }
 	| {
+			command_type: "SetNodeDescription";
+			node_id: string;
+			/** An empty string clears the description. */
+			description: string;
+			summary?: string;
+	  }
+	| {
+			/** Merge FlowScript value names into `Node.code_names` (keyed by output pin name; `""` is the node's own binding). */
+			command_type: "SetNodeCodeNames";
+			node_id: string;
+			code_names: { [key: string]: string };
+			summary?: string;
+	  }
+	| {
 			command_type: "SetNodeFunctionRefs";
 			node_id: string;
 			/** Referenced targets as ref tokens (`$N` ref-ids, node/layer anchors, or names). */
@@ -240,6 +254,17 @@ export type BoardCommand =
 			command_type: "RenameLayer";
 			layer_id: string;
 			name: string;
+			summary?: string;
+	  }
+	| {
+			/**
+			 * Rewrite a Function layer's data boundary to `pins`: parameters as `Input`, then returns
+			 * as `Output`, each in written order. Execution pins stay. A data pin whose name and
+			 * direction survive keeps its id and wiring; every call node mirrors the new pins.
+			 */
+			command_type: "UpdateFunctionSignature";
+			layer_id: string;
+			pins: PlaceholderPinDef[];
 			summary?: string;
 	  }
 	| {

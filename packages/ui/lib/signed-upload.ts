@@ -20,6 +20,12 @@ export interface ISignedUploadOptions {
 	contentDisposition?: string;
 	/** S3 POST policy fields, including its exact destination and byte bound. */
 	fields?: Readonly<Record<string, string>>;
+	/**
+	 * Headers the URL was signed with, sent verbatim. Replaces the derived
+	 * content type, disposition and Azure blob headers, which would otherwise
+	 * duplicate or contradict the signed ones.
+	 */
+	headers?: Readonly<Record<string, string>>;
 }
 
 export function uploadToSignedUrl(
@@ -27,7 +33,8 @@ export function uploadToSignedUrl(
 	file: Blob,
 	options: ISignedUploadOptions = {},
 ): Promise<void> {
-	const { onBytes, signal, contentType, contentDisposition, fields } = options;
+	const { onBytes, signal, contentType, contentDisposition, fields, headers } =
+		options;
 
 	return new Promise<void>((resolve, reject) => {
 		if (signal?.aborted) {
@@ -114,23 +121,35 @@ export function uploadToSignedUrl(
 			xhr.send(form);
 			return;
 		}
-		xhr.setRequestHeader(
-			"Content-Type",
-			contentType || file.type || "application/octet-stream",
-		);
-		if (contentDisposition) {
-			xhr.setRequestHeader(
-				isAzureBlobStorageUrl(signedUrl)
-					? "x-ms-blob-content-disposition"
-					: "Content-Disposition",
-				contentDisposition,
-			);
-		}
-		if (isAzureBlobStorageUrl(signedUrl)) {
-			xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
+		if (headers) {
+			for (const [name, value] of Object.entries(headers))
+				xhr.setRequestHeader(name, value);
+		} else {
+			setDerivedHeaders(xhr, signedUrl, file, contentType, contentDisposition);
 		}
 
 		signal?.addEventListener("abort", onAbort, { once: true });
 		xhr.send(file);
 	});
+}
+
+function setDerivedHeaders(
+	xhr: XMLHttpRequest,
+	signedUrl: string,
+	file: Blob,
+	contentType?: string,
+	contentDisposition?: string,
+) {
+	xhr.setRequestHeader(
+		"Content-Type",
+		contentType || file.type || "application/octet-stream",
+	);
+	const azure = isAzureBlobStorageUrl(signedUrl);
+	if (contentDisposition) {
+		xhr.setRequestHeader(
+			azure ? "x-ms-blob-content-disposition" : "Content-Disposition",
+			contentDisposition,
+		);
+	}
+	if (azure) xhr.setRequestHeader("x-ms-blob-type", "BlockBlob");
 }

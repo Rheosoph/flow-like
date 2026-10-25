@@ -1,8 +1,10 @@
 // UI — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -297,7 +299,7 @@ declare namespace ui {
      * @param nodeId — For workflow_event: the ID of the workflow node to trigger
      * @impure has side effects / drives control flow
      */
-    function setElementAction({ elementRef: Struct, eventName?: string, actionType?: string, route: string, queryParams: string, url: string, nodeId: string }): void;
+    function setElementAction({ elementRef: any, eventName?: string, actionType?: string, route: string, queryParams: string, url: string, nodeId: string }): void;
 
     /**
      * Enables or disables an element
@@ -306,7 +308,7 @@ declare namespace ui {
      * @param disabled — Whether the element should be disabled
      * @impure has side effects / drives control flow
      */
-    function setElementDisabled({ elementRef: Struct, disabled: bool }): void;
+    function setElementDisabled({ elementRef: any, disabled: bool }): void;
 
     /**
      * Sets the loading state of a button element
@@ -315,7 +317,7 @@ declare namespace ui {
      * @param loading — Whether the element is in loading state
      * @impure has side effects / drives control flow
      */
-    function setElementLoading({ elementRef: Struct, loading: bool }): void;
+    function setElementLoading({ elementRef: any, loading: bool }): void;
 
     /**
      * Sets style properties of an element
@@ -333,7 +335,7 @@ declare namespace ui {
      * @param text — The new text content
      * @impure has side effects / drives control flow
      */
-    function setElementText({ elementRef: Struct, text: string }): void;
+    function setElementText({ elementRef: any, text: string }): void;
 
     /**
      * Sets the value of an input element
@@ -342,7 +344,7 @@ declare namespace ui {
      * @param value — The new value for the input
      * @impure has side effects / drives control flow
      */
-    function setElementValue({ elementRef: Struct, value: string }): void;
+    function setElementValue({ elementRef: any, value: string }): void;
 
     /**
      * Shows or hides an element
@@ -386,7 +388,7 @@ declare namespace ui {
      * @param label — The new label text
      * @impure has side effects / drives control flow
      */
-    function setButtonLabel({ elementRef: Struct, label: string }): void;
+    function setButtonLabel({ elementRef: any, label: string }): void;
 
     // === UI/Elements/Calendar ===
 
@@ -420,7 +422,7 @@ declare namespace ui {
      * @param layout — Chart layout object (Plotly layout format)
      * @impure has side effects / drives control flow
      */
-    function setChartLayout({ elementRef: Struct, layout: any }): void;
+    function setChartLayout({ elementRef: any, layout: any }): void;
 
     /**
      * Configure Nivo chart appearance
@@ -571,6 +573,17 @@ declare namespace ui {
      */
     function setProgress({ elementRef: Struct, value: float }): void;
 
+    // === UI/Elements/Excalidraw ===
+
+    /**
+     * Loads an Excalidraw scene with its elements, application state and image files
+     * @node a2ui_set_excalidraw_scene @alias a2uiSetExcalidrawScene
+     * @param elementRef — Reference to the Excalidraw element
+     * @param scene — Complete Excalidraw representation, including embedded image files
+     * @impure has side effects / drives control flow
+     */
+    function setExcalidrawScene({ elementRef: Struct, scene: Struct }): void;
+
     // === UI/Elements/Files ===
 
     /**
@@ -582,7 +595,16 @@ declare namespace ui {
      * @returns flowPaths — Temporary FlowPaths for uploaded files when available
      * @returns exists — Whether the file input element exists
      */
-    function getFileInputFiles({ elementRef: Struct }): { files: Struct[], signedUrls: string[], flowPaths: Struct[], exists: bool };
+    function getFileInputFiles({ elementRef: any }): { files: Struct[], signedUrls: string[], flowPaths: Struct[], exists: bool };
+
+    /**
+     * Turns an uploaded file from a widget upload or File Input into a FlowPath that file nodes can read. Downloads the file into this run when only its URL is known.
+     * @node a2ui_uploaded_file_to_path @alias a2uiUploadedFileToPath
+     * @param file — Uploaded file, e.g. a file field of a widget event or one entry of Get File Input Files
+     * @returns path — FlowPath of the uploaded file in this run's temporary storage
+     * @impure has side effects / drives control flow
+     */
+    function uploadedFileToPath({ file: Struct }): Struct;
 
     // === UI/Elements/Game ===
 
@@ -708,7 +730,7 @@ declare namespace ui {
      * @param placeholder — The new placeholder text
      * @impure has side effects / drives control flow
      */
-    function setInputPlaceholder({ elementRef: Struct, placeholder: string }): void;
+    function setInputPlaceholder({ elementRef: any, placeholder: string }): void;
 
     /**
      * Sets the error state or message of a text field
@@ -845,7 +867,7 @@ declare namespace ui {
      * @param value — The value to select
      * @impure has side effects / drives control flow
      */
-    function setSelectValue({ elementRef: Struct, value: string }): void;
+    function setSelectValue({ elementRef: any, value: string }): void;
 
     // === UI/Elements/Set ===
 
@@ -879,7 +901,7 @@ declare namespace ui {
      * @param data — Array of row objects
      * @impure has side effects / drives control flow
      */
-    function updateTable({ elementRef: Struct, operation?: string, data: Struct }): void;
+    function updateTable({ elementRef: Struct, operation?: string, data: Struct[] }): void;
 
     /**
      * Push CSV or Table data directly to a table element

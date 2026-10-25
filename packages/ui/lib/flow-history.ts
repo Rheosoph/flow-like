@@ -1,4 +1,5 @@
 import type { IGenericCommand } from "./schema";
+import type { IBoard } from "./schema/flow/board";
 
 /**
  * One recorded edit: the executed command batch, serialized once at record time.
@@ -250,6 +251,8 @@ export interface RemoteBoardAppliedDetail {
 	appId: string;
 	boardId: string;
 	reason?: RemoteBoardAppliedReason;
+	/** The local board and merged result isolate incoming changes from edits already applied here. */
+	merge?: { before: IBoard; after: IBoard };
 }
 
 export const readRemoteBoardApplied = (
@@ -262,5 +265,8 @@ export const readRemoteBoardApplied = (
 		appId: detail.appId,
 		boardId: detail.boardId,
 		reason: detail.reason === "reset" ? "reset" : "sync",
+		...(detail.merge?.before && detail.merge?.after
+			? { merge: detail.merge }
+			: {}),
 	};
 };

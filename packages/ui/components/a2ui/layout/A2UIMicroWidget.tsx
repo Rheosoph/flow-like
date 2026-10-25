@@ -24,7 +24,7 @@ import { useInvoke } from "../../../hooks/use-invoke";
 import { getApiUrl } from "../../../lib/api-url";
 import { isTauri } from "../../../lib/platform";
 import { cn } from "../../../lib/utils";
-import { useBackend } from "../../../state/backend-state";
+import { useBackend, useSignedIn } from "../../../state/backend-state";
 import { Card, CardContent } from "../../ui/card";
 import { Skeleton } from "../../ui/skeleton";
 import {
@@ -73,6 +73,14 @@ import { createMicroWidgetMicrophone } from "../micro-widget-microphone";
 import { policyHostCount } from "../micro-widget-policy";
 import { useMicroWidgetReloader } from "../micro-widget-reload";
 import { MicroWidgetNoticeSlot } from "../micro-widget-runtime-banner";
+import {
+	type MicroWidgetUpload,
+	type WidgetFileResolution,
+	type WidgetUploadTarget,
+	createMicroWidgetUpload,
+	resolveWidgetFileHandles,
+	uploadWidgetFile,
+} from "../micro-widget-upload";
 import type {
 	Action,
 	ActionBinding,
@@ -133,6 +141,7 @@ type MicroWidgetContractEvent = NonNullable<
 export type MicroWidgetContractEventResolution =
 	| { kind: "dropped"; reason: "undeclared" }
 	| { kind: "dropped"; reason: "invalid_payload"; errors: string[] }
+	| { kind: "dropped"; reason: "unknown_file" }
 	| {
 			kind: "dispatch";
 			route: MicroWidgetEventRoute;
@@ -165,14 +174,22 @@ export function readDeclaredMicroWidgetEvent(
 	return isRecord(spec) ? spec : null;
 }
 
+const resolveWithoutUploads = (payload: unknown): WidgetFileResolution =>
+	resolveWidgetFileHandles(payload, new Map());
+
 /**
  * Gate an iframe event on the contract, validate its payload, and resolve the
  * page-authored route it may start. Anything not declared is dropped before
- * named, wildcard, binding or legacy routing is consulted.
+ * named, wildcard, binding or legacy routing is consulted. File handles in a
+ * valid payload are swapped for the files this host uploaded; a handle it did
+ * not mint for this widget drops the event.
  */
 export function resolveMicroWidgetContractEvent(
 	component: MicroWidgetInstanceComponent,
 	event: EventPayload,
+	resolveFiles: (
+		payload: unknown,
+	) => WidgetFileResolution = resolveWithoutUploads,
 ): MicroWidgetContractEventResolution {
 	const spec = readDeclaredMicroWidgetEvent(component.contract, event.name);
 	if (!spec) return { kind: "dropped", reason: "undeclared" };
@@ -187,7 +204,9 @@ export function resolveMicroWidgetContractEvent(
 			errors: validation.errors,
 		};
 	}
-	const payload = event.payload;
+	const files = resolveFiles(event.payload);
+	if (!files.ok) return { kind: "dropped", reason: "unknown_file" };
+	const payload = files.payload;
 	return {
 		kind: "dispatch",
 		route: resolveMicroWidgetEventRoute(component, event.name),
@@ -197,6 +216,22 @@ export function resolveMicroWidgetContractEvent(
 			payload,
 		},
 	};
+}
+
+function droppedEventMessage(
+	resolution: Extract<MicroWidgetContractEventResolution, { kind: "dropped" }>,
+	eventName: string,
+	instanceId: string,
+): string {
+	const prefix = `[MicroWidget] dropped event "${eventName}" from "${instanceId}"`;
+	switch (resolution.reason) {
+		case "undeclared":
+			return `${prefix}: not declared in the contract`;
+		case "invalid_payload":
+			return `${prefix} with invalid payload: ${resolution.errors.join("; ")}`;
+		case "unknown_file":
+			return `${prefix}: it carries a file handle this widget did not upload`;
+	}
 }
 
 type ExecuteAction = ReturnType<typeof useExecuteAction>["executeAction"];
@@ -314,6 +349,22 @@ function MicroWidgetErrorCard({
 	);
 }
 
+/** Where this viewer's widget uploads go; an upload reads it when it starts. */
+function useMicroWidgetUploadTarget() {
+	const backend = useBackend();
+	const { appId, resolveTemporaryUploadTarget } = useActionContext();
+	const signedIn = useSignedIn();
+	const target: WidgetUploadTarget = {
+		helper: backend.helperState,
+		appId,
+		signedIn,
+		executionTarget: resolveTemporaryUploadTarget,
+	};
+	const targetRef = useRef(target);
+	targetRef.current = target;
+	return targetRef;
+}
+
 interface MicroWidgetFrameProps {
 	elementRef?: ComponentProps["elementRef"];
 	component: MicroWidgetInstanceComponent;
@@ -344,6 +395,7 @@ function MicroWidgetFrame({
 	const setElementValue = useSetElementValue();
 	const { executeAction } = useExecuteAction();
 	const { appId } = useActionContext();
+	const uploadTargetRef = useMicroWidgetUploadTarget();
 
 	const desktop = isTauri();
 	// Consent, capabilities and hosts come from the backend's descriptor of the
@@ -426,11 +478,13 @@ function MicroWidgetFrame({
 	const microphoneRef = useRef<ReturnType<
 		typeof createMicroWidgetMicrophone
 	> | null>(null);
+	const uploadRef = useRef<MicroWidgetUpload | null>(null);
 	const hostCapabilities: InitCapabilities = {
 		preview: preview === true,
 		media: mediaGranted,
 		mediaIds: mediaGrants.map((mediaGrant) => mediaGrant.id),
 		microphone: framePolicy?.microphone === true,
+		uploads: preview !== true && framePolicy?.uploads === true,
 	};
 	const capabilitiesRef = useRef(hostCapabilities);
 	capabilitiesRef.current = hostCapabilities;
@@ -548,6 +602,7 @@ function MicroWidgetFrame({
 			setPhase("loading");
 			correlatorRef.current?.dispose();
 			microphoneRef.current?.revoke();
+			uploadRef.current?.revoke("failed");
 			mediaRef.current?.stop();
 		}
 		sendInit();
@@ -562,13 +617,14 @@ function MicroWidgetFrame({
 				);
 				return;
 			}
-			const resolution = resolveMicroWidgetContractEvent(component, payload);
+			const resolution = resolveMicroWidgetContractEvent(
+				component,
+				payload,
+				(value) =>
+					uploadRef.current?.resolve(value) ?? resolveWithoutUploads(value),
+			);
 			if (resolution.kind === "dropped") {
-				console.warn(
-					resolution.reason === "undeclared"
-						? `[MicroWidget] dropped event "${payload.name}" from "${instanceId}": not declared in the contract`
-						: `[MicroWidget] dropped event "${payload.name}" from "${instanceId}" with invalid payload: ${resolution.errors.join("; ")}`,
-				);
+				console.warn(droppedEventMessage(resolution, payload.name, instanceId));
 				return;
 			}
 			await dispatchMicroWidgetContractEvent(
@@ -583,6 +639,7 @@ function MicroWidgetFrame({
 	const handleEnvelope = useCallback(
 		(envelope: FlwEnvelope) => {
 			microphoneRef.current?.handle(envelope);
+			uploadRef.current?.handle(envelope);
 			mediaRef.current?.handle(envelope);
 			switch (envelope.type) {
 				case "hello":
@@ -692,7 +749,7 @@ function MicroWidgetFrame({
 		};
 	}, [instanceId, nonce, post]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: every document gets its own microphone and media session
+	// biome-ignore lint/correctness/useExhaustiveDependencies: every document gets its own microphone, upload and media session
 	useEffect(() => {
 		const microphone = createMicroWidgetMicrophone({
 			enabled: () => capabilitiesRef.current.microphone === true,
@@ -713,13 +770,23 @@ function MicroWidgetFrame({
 			result: (result) =>
 				post(createEnvelope("media:result", result, nonce, instanceId)),
 		});
+		const upload = createMicroWidgetUpload({
+			enabled: () => capabilitiesRef.current.uploads === true,
+			upload: (file, signal) =>
+				uploadWidgetFile(file, uploadTargetRef.current, signal),
+			result: (payload) =>
+				post(createEnvelope("file:result", payload, nonce, instanceId)),
+		});
 		mediaRef.current = media;
 		microphoneRef.current = microphone;
+		uploadRef.current = upload;
 		return () => {
 			microphone.dispose();
 			media.dispose();
+			upload.dispose();
 			mediaRef.current = null;
 			microphoneRef.current = null;
+			uploadRef.current = null;
 		};
 	}, [instanceId, nonce, post, src]);
 
@@ -728,6 +795,7 @@ function MicroWidgetFrame({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: serialized capability changes revoke outstanding work
 	useEffect(() => {
 		if (!capabilitiesRef.current.microphone) microphoneRef.current?.revoke();
+		if (!capabilitiesRef.current.uploads) uploadRef.current?.revoke();
 		mediaRef.current?.revoke();
 		if (initSentRef.current)
 			post(

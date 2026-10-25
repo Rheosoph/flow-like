@@ -24,8 +24,9 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type PeerUserInfo, colorFromSub } from "../../../hooks/use-peer-users";
-import { plainTextFromRichContent } from "../../../lib/plate-text";
 import { prepareCommentSave } from "../../../lib/flow-comment-edit";
+import { PLATE_JSON_PREFIX } from "../../../lib/plate-document";
+import { plainTextFromRichContent } from "../../../lib/plate-text";
 import type { IComment } from "../../../lib/schema/flow/board";
 import { userInitials } from "../../../lib/user-display";
 import {
@@ -36,7 +37,6 @@ import {
 	Button,
 	RelativeTime,
 	Textarea,
-	TextEditor,
 } from "../../ui";
 import {
 	canModifyFlowScriptComment,
@@ -255,6 +255,8 @@ function CommentRow({
 	const info = author ? authors.get(author) : undefined;
 	const name = info?.name ?? t("common:user", "User");
 	const canModify = editable && canModifyFlowScriptComment(comment, sub);
+	// Rich comments come from the board editor; a plain textarea would show their JSON and drop formatting.
+	const isRich = comment.content.startsWith(PLATE_JSON_PREFIX);
 
 	const saveEdit = async () => {
 		const trimmed = draft.trim();
@@ -311,21 +313,23 @@ function CommentRow({
 				/>
 				{canModify && !editing && (
 					<span className="ml-auto flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-						<Button
-							variant="ghost"
-							size="icon"
-							className="h-5 w-5"
-							title={t("edit", "Edit")}
-							disabled={busy}
-							onClick={() => {
-								setDraft(comment.content);
-								setBaseContent(comment.content);
-								setError(undefined);
-								setEditing(true);
-							}}
-						>
-							<PencilIcon className="h-3 w-3" />
-						</Button>
+						{!isRich && (
+							<Button
+								variant="ghost"
+								size="icon"
+								className="h-5 w-5"
+								title={t("edit", "Edit")}
+								disabled={busy}
+								onClick={() => {
+									setDraft(comment.content);
+									setBaseContent(comment.content);
+									setError(undefined);
+									setEditing(true);
+								}}
+							>
+								<PencilIcon className="h-3 w-3" />
+							</Button>
+						)}
 						<Button
 							variant="ghost"
 							size="icon"
@@ -372,7 +376,7 @@ function CommentRow({
 				</div>
 			) : (
 				<p className="mt-1 whitespace-pre-wrap break-words text-xs">
-					{comment.content}
+					{plainTextFromRichContent(comment.content)}
 				</p>
 			)}
 		</div>

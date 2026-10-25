@@ -99,6 +99,82 @@ export function visibleDomIds({
 	};
 }
 
+/** React Flow's floor from before the native canvas; it never zooms out further. */
+export const DOM_RENDERER_MIN_ZOOM = 0.1;
+/**
+ * Rich editors React Flow may mount at once. Each costs about half a megabyte of
+ * renderer memory; 2,000 of them get the tab OOM-killed on a small machine.
+ */
+export const DOM_RENDERER_NODE_BUDGET = 400;
+
+// Cell (x, y) is keyed (x + offset) · stride + y + offset, so x and y shift by arithmetic.
+const CELL_OFFSET = 2 ** 20;
+const CELL_STRIDE = 2 ** 21;
+
+function addTo(sums: Map<number, number>, key: number, count: number) {
+	const sum = (sums.get(key) ?? 0) + count;
+	sums.set(key, sum);
+	return sum;
+}
+
+function cellCounts(
+	nodes: readonly Node[],
+	cellWidth: number,
+	cellHeight: number,
+) {
+	const cells = new Map<number, number>();
+	for (const { position } of nodes)
+		addTo(
+			cells,
+			(Math.floor(position.x / cellWidth) + CELL_OFFSET) * CELL_STRIDE +
+				Math.floor(position.y / cellHeight) +
+				CELL_OFFSET,
+			1,
+		);
+	return cells;
+}
+
+function anyBlockExceeds(cells: Map<number, number>, budget: number) {
+	const rows = new Map<number, number>();
+	for (const [key, count] of cells)
+		for (let dx = 0; dx < 3; dx++) addTo(rows, key - dx * CELL_STRIDE, count);
+	const blocks = new Map<number, number>();
+	for (const [key, count] of rows)
+		for (let dy = 0; dy < 3; dy++)
+			if (addTo(blocks, key - dy, count) > budget) return true;
+	return false;
+}
+
+/**
+ * The lowest zoom at which no screen-sized window can hold more than `budget` nodes.
+ * Any such window lies inside a 3×3 block of half-screen cells, so block sums bound
+ * it from above (by at most 2.25× on evenly spread boards).
+ */
+export function domRendererMinZoom(
+	nodes: readonly Node[],
+	width: number,
+	height: number,
+	budget = DOM_RENDERER_NODE_BUDGET,
+) {
+	if (nodes.length <= budget || width <= 0 || height <= 0)
+		return DOM_RENDERER_MIN_ZOOM;
+	const crowded = (zoom: number) =>
+		anyBlockExceeds(
+			cellCounts(nodes, width / zoom / 2, height / zoom / 2),
+			budget,
+		);
+	let low = DOM_RENDERER_MIN_ZOOM;
+	let high = 1;
+	if (!crowded(low)) return low;
+	if (crowded(high)) return high;
+	for (let step = 0; step < 8; step++) {
+		const middle = (low + high) / 2;
+		if (crowded(middle)) low = middle;
+		else high = middle;
+	}
+	return high;
+}
+
 export function equalVisibleIds(
 	a: ReturnType<typeof visibleDomIds>,
 	b: ReturnType<typeof visibleDomIds>,

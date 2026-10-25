@@ -1,0 +1,30 @@
+---
+title: "HTTP Node Catalog"
+description: "Events/HTTP Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "HTTP"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "HTTP nodes, Events/HTTP, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Events/HTTP"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"HTTP Node Catalog\",\"description\":\"Events/HTTP Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/events/http/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Events/HTTP\",\"keywords\":\"HTTP nodes, Events/HTTP, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Events/HTTP"}
+	label="HTTP"
+	nodes={nodesByCategory["Events/HTTP"] ?? []}
+	client:load
+/>

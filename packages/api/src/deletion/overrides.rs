@@ -140,6 +140,16 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "appId",
                     "storage event deduplication outlives the app",
                 ),
+                keep(
+                    "LockedItem",
+                    "appId",
+                    "revision-safe records outlive the app while their objects are retained",
+                ),
+                keep(
+                    "LockedItemVersion",
+                    "appId",
+                    "revision-safe records outlive the app while their objects are retained",
+                ),
                 keep("AuditEntry", "chainId", "audit trail outlives the app"),
                 keep("AuditRecord", "chainId", "audit trail outlives the app"),
                 keep("AuditSeal", "chainId", "audit trail outlives the app"),
@@ -160,6 +170,11 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 ("WasmPackageInvitation", "inviteeId"),
             ],
             keep: vec![
+                keep(
+                    "LockedItem",
+                    "ownerId",
+                    "retention obligations outlive the account that uploaded the file",
+                ),
                 keep(
                     "AppPurchase",
                     "userId",

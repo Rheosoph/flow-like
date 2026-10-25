@@ -74,6 +74,7 @@ impl NodeLogic for LLMHealSelectorNode {
             "Automation/LLM/Healing",
         );
         node.set_flowscript_name("automation.llm", "healSelector");
+        node.set_only_offline(true);
         node.add_icon("/flow/icons/bot-fix.svg");
         node.set_version(5);
 

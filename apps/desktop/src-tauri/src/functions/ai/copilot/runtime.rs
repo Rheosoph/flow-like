@@ -1,9 +1,11 @@
 //! Run cancellation, frontend channels, and SDK activity deadlines.
 
-use crate::functions::ai::frontend_tool_bridge::FrontendToolContext;
+use crate::functions::ai::frontend_tool_bridge::{
+    FrontendToolContext, FrontendToolOwnerClaim, claim_frontend_tool_owner,
+};
 use dashmap::DashMap;
 use flow_like_types::{
-    channel::{InProcessChannel, MAX_TTL},
+    channel::{Channel, InProcessChannel, MAX_TTL},
     tokio_util::sync::CancellationToken,
 };
 use std::{
@@ -285,6 +287,39 @@ pub(super) async fn frontend_tool_channel(
         .map(str::to_string)
         .unwrap_or_else(flow_like_types::create_id);
     InProcessChannel::register(channel_id, COPILOT_RUN_CHANNEL_LIFETIME).await
+}
+
+/// Keeps a run's tool channel registered and bound to the webview that started the run.
+pub(super) struct RunToolOwner {
+    _channel: Arc<InProcessChannel>,
+    _claim: FrontendToolOwnerClaim,
+}
+
+/// Resolve the run's tool channel before any backend opens it and bind it to `webview`, so its
+/// frontend tool requests reach only that window. Nested runs join the owning chat's channel and
+/// keep its webview. Without a stable id every backend mints its own channel and requests
+/// broadcast as before.
+pub(super) async fn claim_run_tool_owner(
+    webview: &str,
+    tool_context: Option<&FrontendToolContext>,
+    request_id: Option<&str>,
+) -> Option<RunToolOwner> {
+    let has_stable_id = [
+        tool_context.and_then(|context| context.run_id.as_deref()),
+        request_id,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|id| !id.trim().is_empty());
+    if !has_stable_id {
+        return None;
+    }
+    let channel = frontend_tool_channel(tool_context, request_id).await;
+    let claim = claim_frontend_tool_owner(channel.channel_id(), webview);
+    Some(RunToolOwner {
+        _channel: channel,
+        _claim: claim,
+    })
 }
 
 /// Unsolicited channel messages are steering text; anything non-string is forwarded verbatim as

@@ -459,10 +459,7 @@ pub(crate) fn ensure_board_mutation_not_reserved_by_flowpilot(
     }
     let reserved = board_mutation_is_reserved(&jobs, app_id, board_id);
     if reserved {
-        Err(
-            "FlowPilot has an applying, failed-recovery, or pending-delivery edit for this board. Retry/dismiss it or finish receipt delivery before making another board mutation."
-                .to_string(),
-        )
+        Err(flow_like::flow::ast::flowpilot_board_reserved_message())
     } else {
         Ok(())
     }

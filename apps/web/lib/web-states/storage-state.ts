@@ -209,9 +209,4 @@ export class WebStorageState implements IStorageState {
 			options,
 		);
 	}
-
-	async writeStorageItems(items: IStorageItemActionResult[]): Promise<void> {
-		// In web mode, items are stored directly on the server
-		// This method is primarily for desktop local file writing
-	}
 }

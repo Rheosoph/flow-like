@@ -146,6 +146,8 @@ export type FlowNode = Node<
 		onExecute: (node: INode, payload?: object) => Promise<void>;
 		onRemoteExecute?: (node: INode, payload?: object) => Promise<void>;
 		isOffline?: boolean;
+		/** Some node on this board is `only_offline`, so no part of it runs on the server. */
+		boardOnlyOffline?: boolean;
 		onCopy: () => Promise<void>;
 		remoteSelections?: RemoteSelectionParticipant[];
 		/** Peers whose FlowScript editor cursor/claims sit on this node. */
@@ -175,6 +177,22 @@ type NodeInternalsUpdates = Parameters<
 >[0];
 
 const pendingInternalsUpdates = new WeakMap<FlowStoreApi, Set<string>>();
+
+const fnRefTargetCache = new WeakMap<
+	IBoard["nodes"],
+	{ hash?: string; targets: ReadonlySet<string> }
+>();
+
+/** Every node asks this on mount; scanning the board per node made a large board's first mount O(N²). */
+function fnRefTargets(nodes: IBoard["nodes"], fnRefsHash?: string) {
+	const cached = fnRefTargetCache.get(nodes);
+	if (cached && cached.hash === fnRefsHash) return cached.targets;
+	const targets = new Set<string>();
+	for (const node of Object.values(nodes))
+		for (const id of node.fn_refs?.fn_refs ?? []) targets.add(id);
+	fnRefTargetCache.set(nodes, { hash: fnRefsHash, targets });
+	return targets;
+}
 
 /**
  * React Flow's own hook schedules one animation frame per call, and each
@@ -233,6 +251,8 @@ const FlowNodeInner = memo(
 			props.data.boardId,
 		);
 		const nativePinControls = props.data.__flowNativeDom === true;
+		// The native canvas paints run glows, the spinner and corner badges around this node.
+		const canvasMarks = nativePinControls;
 		const { resolvedTheme } = useTheme();
 		const invalidate = useInvalidateInvoke();
 		// Field selectors: subscribing to the whole log store re-renders every
@@ -879,15 +899,12 @@ const FlowNodeInner = memo(
 			],
 		);
 
-		// Compute connection states efficiently - only track the specific fn_refs we care about
+		// biome-ignore lint/correctness/useExhaustiveDependencies: fnRefsHash moves whenever any node's fn refs do; the board ref is read, not watched.
 		const refInConnected = useMemo(() => {
-			const board = props.data.boardRef?.current;
-			if (!board) return false;
-			const currentNodeId = props.data.node.id;
-			// Only check nodes, return boolean to avoid object reference changes
-			return Object.values(board.nodes || {}).some((node) =>
-				node.fn_refs?.fn_refs?.includes(currentNodeId),
-			);
+			const nodes = props.data.boardRef?.current?.nodes;
+			return nodes
+				? fnRefTargets(nodes, props.data.fnRefsHash).has(props.data.node.id)
+				: false;
 		}, [props.data.node.id, props.data.fnRefsHash]);
 
 		const refOutConnected = useMemo(() => {
@@ -982,16 +999,22 @@ const FlowNodeInner = memo(
 			refOutConnected,
 			props.data.node.id,
 		]);
+		const canExecuteLocally = useBackendStore(
+			(state) => state.backend?.capabilities().canExecuteLocally,
+		);
 		const playNode = useMemo(() => {
 			if (!props.data.node.start) return null;
 
-			// Execution mode restrictions; only_offline nodes can never run remotely.
+			// Execution mode restrictions; a board holding only_offline nodes never runs remotely.
 			// Shared with the FlowScript run lenses — see flow-run-capabilities.ts.
+			const onlyOffline =
+				props.data.node.only_offline || props.data.boardOnlyOffline;
 			const { canLocalExecute, canRemoteExecute } = deriveRunCapabilities({
 				executionMode: props.data.executionMode,
 				isOffline: props.data.isOffline,
 				hasRemoteExecute: props.data.onRemoteExecute !== undefined,
-				onlyOffline: props.data.node.only_offline,
+				onlyOffline,
+				canExecuteLocally,
 			});
 
 			if (
@@ -1015,6 +1038,23 @@ const FlowNodeInner = memo(
 						<CircleStopIcon className="w-3 h-3 group-hover/play:scale-110 text-primary" />
 					</button>
 				);
+
+			if (onlyOffline && !canLocalExecute && !canRemoteExecute) {
+				const reason = i18next.t(
+					"boardRunsOnlyLocally",
+					"This board uses local-only nodes, so it can't run on the server",
+				);
+				return (
+					<span
+						role="img"
+						aria-label={reason}
+						title={reason}
+						className="bg-background rounded-md border p-1 absolute left-0 top-0 translate-x-[calc(-120%)] text-muted-foreground"
+					>
+						<MonitorIcon className="w-3 h-3" />
+					</span>
+				);
+			}
 
 			const handleLocalExecute = async (payloadObj?: object) => {
 				if (executing) return;
@@ -1122,7 +1162,10 @@ const FlowNodeInner = memo(
 			props.data.onExecute,
 			props.data.onRemoteExecute,
 			props.data.isOffline,
+			props.data.boardOnlyOffline,
+			canExecuteLocally,
 			props.data.node,
+			props.data.boardRef,
 			props.data.executionMode,
 		]);
 
@@ -1134,7 +1177,7 @@ const FlowNodeInner = memo(
 				style={
 					isReroute
 						? nodeStyle
-						: props.data.remoteExecuting
+						: props.data.remoteExecuting && !canvasMarks
 							? {
 									boxShadow:
 										"0 0 12px 2px rgba(59, 130, 246, 0.5), 0 0 4px 1px rgba(59, 130, 246, 0.3)",
@@ -1150,11 +1193,11 @@ const FlowNodeInner = memo(
 					participants={presence.list}
 					peerUsers={props.data.peerUsers}
 				/>
-				{props.data.remoteExecuting && (
+				{props.data.remoteExecuting && !canvasMarks && (
 					<div className="absolute inset-0 rounded-md pointer-events-none animate-pulse ring-2 ring-blue-400/60" />
 				)}
 				{playNode}
-				{props.data.node.long_running && (
+				{props.data.node.long_running && !canvasMarks && (
 					<div
 						title={i18next.t("longRunningNode", "Long-running node")}
 						className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(-50%)] left-0 text-center bg-background rounded-full"
@@ -1185,7 +1228,7 @@ const FlowNodeInner = memo(
 						<BoxIcon className="w-2 h-2 text-amber-500" />
 					</div>
 				)}
-				{!props.data.isUnavailable && !isReroute && (
+				{!props.data.isUnavailable && !isReroute && !canvasMarks && (
 					<FlowNodeQualityBadge
 						boardId={props.data.boardId}
 						targetId={props.data.node.id}
@@ -1203,7 +1246,7 @@ const FlowNodeInner = memo(
 						<TriangleAlertIcon className="w-2 h-2 text-destructive-foreground" />
 					</div>
 				)}
-				{severity !== ILogLevel.Debug && (
+				{severity !== ILogLevel.Debug && !canvasMarks && (
 					<div className="absolute top-0 z-10 translate-y-[calc(-50%)] translate-x-[calc(50%)] right-0 text-center bg-background rounded-full">
 						{severity === ILogLevel.Fatal && (
 							<BanIcon className="w-3 h-3 text-red-800" />
@@ -1216,7 +1259,7 @@ const FlowNodeInner = memo(
 						)}
 					</div>
 				)}
-				{nodeHeat && !isReroute && (
+				{nodeHeat && !isReroute && !canvasMarks && (
 					<>
 						<div
 							className="pointer-events-none absolute inset-0 rounded-md"
@@ -1303,7 +1346,7 @@ const FlowNodeInner = memo(
 							) : (
 								<WorkflowIcon className="w-2 h-2 shrink-0" />
 							)}
-							<small className="font-medium leading-none text-start truncate">
+							<small className="font-medium leading-tight text-start truncate">
 								<AutoResizeText
 									text={props.data.node?.friendly_name}
 									maxChars={30}
@@ -1330,7 +1373,7 @@ const FlowNodeInner = memo(
 								executed={executed === true}
 								onFilterLogs={props.data.onFilterLogs}
 							/>
-							{debouncedExecutionState === "running" && (
+							{debouncedExecutionState === "running" && !canvasMarks && (
 								<PuffLoader
 									color={resolvedTheme === "dark" ? "white" : "black"}
 									size={10}
@@ -1349,7 +1392,7 @@ const FlowNodeInner = memo(
 									{runActivity.formattedTime}
 								</span>
 							)}
-							{debouncedExecutionState === "done" && (
+							{debouncedExecutionState === "done" && !canvasMarks && (
 								<SquareCheckIcon className="w-2 h-2 text-primary" />
 							)}
 						</div>
@@ -1382,6 +1425,7 @@ const FlowNodeInner = memo(
 			next.props.data.boardContentVersion &&
 		prev.props.data.executionMode === next.props.data.executionMode &&
 		prev.props.data.isOffline === next.props.data.isOffline &&
+		prev.props.data.boardOnlyOffline === next.props.data.boardOnlyOffline &&
 		prev.props.data.onExecute === next.props.data.onExecute &&
 		prev.props.data.onRemoteExecute === next.props.data.onRemoteExecute &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
@@ -1905,6 +1949,7 @@ function flowNodeAreEqual(
 		prev.data.boardContentVersion === next.data.boardContentVersion &&
 		prev.data.executionMode === next.data.executionMode &&
 		prev.data.isOffline === next.data.isOffline &&
+		prev.data.boardOnlyOffline === next.data.boardOnlyOffline &&
 		prev.data.onExecute === next.data.onExecute &&
 		prev.data.onRemoteExecute === next.data.onRemoteExecute &&
 		sameFunctionCache(prev.data.functionCache, next.data.functionCache) &&

@@ -5,7 +5,11 @@ use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
 use flow_like_types::image::{DynamicImage, ImageBuffer, Rgba};
 #[cfg(feature = "execute")]
+use hayro::hayro_interpret::InterpreterSettings;
+#[cfg(feature = "execute")]
 use hayro::hayro_syntax::Pdf;
+#[cfg(feature = "execute")]
+use hayro::hayro_syntax::page::Page;
 #[cfg(feature = "execute")]
 use hayro::vello_cpu::Pixmap;
 #[cfg(feature = "execute")]
@@ -15,7 +19,9 @@ use hayro::vello_cpu::color::Srgb;
 #[cfg(feature = "execute")]
 use hayro::vello_cpu::color::palette::css::TRANSPARENT;
 #[cfg(feature = "execute")]
-use std::sync::Arc;
+use hayro::vello_cpu::peniko::ImageAlphaType;
+#[cfg(feature = "execute")]
+use hayro::{PixmapSettings, RenderCache, RenderSettings, render};
 
 pub mod page_count;
 pub mod page_to_image;
@@ -27,20 +33,38 @@ pub(super) async fn load_pdf_from_flowpath(
     flow_path: &FlowPath,
 ) -> flow_like_types::Result<Pdf> {
     let bytes = flow_path.get(context, false).await?;
-    let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(bytes);
 
-    Pdf::new(data).map_err(|err| flow_like_types::anyhow!("Failed to load PDF: {:?}", err))
+    Pdf::new(bytes).map_err(|err| flow_like_types::anyhow!("Failed to load PDF: {:?}", err))
 }
 
 #[cfg(feature = "execute")]
-pub(super) fn pixmap_to_dynamic_image(pixmap: Pixmap) -> flow_like_types::Result<DynamicImage> {
+pub(super) fn render_page<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    scale: f32,
+    bg_color: &str,
+) -> flow_like_types::Result<DynamicImage> {
+    let pixmap_settings = PixmapSettings {
+        x_scale: scale,
+        y_scale: scale,
+        bg_color: resolve_bg_color(bg_color),
+    };
+    let pixmap = render(
+        page,
+        cache,
+        &InterpreterSettings::default(),
+        &RenderSettings::default(),
+        &pixmap_settings,
+    );
+
+    pixmap_to_dynamic_image(pixmap)
+}
+
+#[cfg(feature = "execute")]
+fn pixmap_to_dynamic_image(pixmap: Pixmap) -> flow_like_types::Result<DynamicImage> {
     let width = pixmap.width() as u32;
     let height = pixmap.height() as u32;
-    let data: Vec<u8> = pixmap
-        .take_unpremultiplied()
-        .into_iter()
-        .flat_map(|p| [p.r, p.g, p.b, p.a])
-        .collect();
+    let data = pixmap.take_rgba8(ImageAlphaType::Alpha);
 
     let buffer: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_vec(width, height, data)
         .ok_or_else(|| {
@@ -82,7 +106,7 @@ pub(super) fn resolve_page_index(
 }
 
 #[cfg(feature = "execute")]
-pub(super) fn resolve_bg_color(name: &str) -> AlphaColor<Srgb> {
+fn resolve_bg_color(name: &str) -> AlphaColor<Srgb> {
     match name {
         "Black" => AlphaColor::new([0.0, 0.0, 0.0, 1.0]),
         "White" => AlphaColor::new([1.0, 1.0, 1.0, 1.0]),

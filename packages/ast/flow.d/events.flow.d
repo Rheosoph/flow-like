@@ -1,8 +1,10 @@
 // Events — FlowScript node declarations (generated, do not edit).
 // One `function` per catalog node, grouped by FlowScript namespace. Call a node as
 // `ns::alias({ pin: value })`, or write `use ns::*` once at the top of a .flow file and
-// call `alias({ pin: value })`. A `this: T` parameter marks the receiver pin: such a node
-// is also a method on that value (`x.alias(...)`, remaining inputs positional or named).
+// call `alias({ pin: value })`. Leading inputs may also be passed positionally, in
+// declaration order, before the named object: `ns::alias(a, b, { pin: value })`. A
+// `this: T` parameter marks the receiver pin: such a node is also a method on that value
+// (`x.alias(...)`, remaining inputs positional or named).
 // JSDoc tags carry the node type (`@node`), the receiver pin (`@receiver`) and the legacy
 // camelCase spelling (`@alias`), which is still accepted.
 
@@ -273,12 +275,12 @@ declare namespace events {
     function simple(): void;
 
     /**
-     * Entry point triggered when a widget action is invoked. Provides action context data.
+     * Entry point for component events and widget actions. Provides action context data.
      * @node events_widget_action @alias eventsWidgetAction
-     * @param actionId (optional) — The action identifier that triggers this event (e.g., 'clicked_delete', 'clicked_open')
+     * @param actionId (optional) — The component event or widget action identifier (e.g., 'save', 'clicked_delete')
      * @returns widgetInstanceId — The unique ID of the widget instance that triggered the action
      * @returns eventName — The action ID / event name that was triggered
-     * @returns actionContext — The context data passed from the widget action (JSON object with field values)
+     * @returns actionContext — The context data passed from the component event or widget action
      * @returns inputValues — Map of component ID to current value for components marked as event-relevant
      * @impure has side effects / drives control flow
      */

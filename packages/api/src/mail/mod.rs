@@ -47,6 +47,21 @@ impl AutoSubmitted {
 }
 
 #[derive(Clone)]
+pub struct EmailAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub content: Vec<u8>,
+}
+
+impl EmailAttachment {
+    #[cfg(any(feature = "sendgrid", feature = "acs-email"))]
+    pub(crate) fn base64(&self) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(&self.content)
+    }
+}
+
+#[derive(Clone)]
 pub struct AutomationEmailMessage {
     /// Resolved by the API from the authorized event's active address.
     pub from_email: Option<String>,
@@ -62,6 +77,7 @@ pub struct AutomationEmailMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub auto_submitted: Option<AutoSubmitted>,
+    pub attachments: Vec<EmailAttachment>,
 }
 
 impl AutomationEmailMessage {
@@ -140,6 +156,7 @@ impl From<EmailMessage> for AutomationEmailMessage {
             in_reply_to: None,
             references: Vec::new(),
             auto_submitted: None,
+            attachments: Vec::new(),
         }
     }
 }
@@ -256,6 +273,15 @@ mod tests {
             in_reply_to: Some("<parent@example.net>".into()),
             references: vec!["<first@example.net>".into(), "<parent@example.net>".into()],
             auto_submitted: Some(AutoSubmitted::Replied),
+            attachments: Vec::new(),
+        }
+    }
+
+    pub(super) fn pdf() -> EmailAttachment {
+        EmailAttachment {
+            filename: "Order 42.pdf".into(),
+            content_type: "application/pdf".into(),
+            content: b"%PDF-1.7 order".to_vec(),
         }
     }
 

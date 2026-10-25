@@ -254,9 +254,7 @@ function renderCaseQueue(): (shown: int) {
     const { element: header } = ui::getElement({ elementRef: "queue_header" })
     ui::setElementText({ elementRef: header, text: `${openCount} open SOC cases in ${socRegion}` })
     const { element: table } = ui::getElement({ elementRef: "case_table" })
-    let tableData = {}
-    tableData.rows = rows
-    ui::updateTable({ elementRef: table, operation: "replace", data: tableData })
+    ui::updateTable({ elementRef: table, operation: "Set Data", data: rows })
 
     const { element: container } = ui::getElement({ elementRef: "case_cards" })
     ui::clearChildren({ containerRef: container })

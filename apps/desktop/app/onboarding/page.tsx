@@ -1,45 +1,57 @@
 "use client";
-import type { IHub, UseQueryResult } from "@flow-like/flow-like-ui";
+
 import {
 	Bit,
 	Button,
+	type IHub,
+	type UseQueryResult,
 	isHostableLlmModel,
 	isLocalLlmModel,
 	useBackend,
+	useQueryClient,
 } from "@flow-like/flow-like-ui";
-import {
-	Alert,
-	AlertDescription,
-	AlertTitle,
-} from "@flow-like/flow-like-ui/components/ui/alert";
-import {
-	Avatar,
-	AvatarFallback,
-	AvatarImage,
-} from "@flow-like/flow-like-ui/components/ui/avatar";
-import { Badge } from "@flow-like/flow-like-ui/components/ui/badge";
-import { BitHover } from "@flow-like/flow-like-ui/components/ui/bit-hover";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
-import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
-import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
+import {
+	type IBit,
+	IBitTypes,
+} from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { Trans, useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { ArrowBigRight, CloudDownload, Loader2, LogIn } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAuth } from "react-oidc-context";
 import {
-	useInvalidateTauriInvoke,
-	useTauriInvoke,
-} from "../../components/useInvoke";
+	ArrowRight,
+	Check,
+	Cloud,
+	Download,
+	Layers3,
+	Loader2,
+	LogIn,
+	Monitor,
+	Plus,
+	RefreshCw,
+	RotateCcw,
+} from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+	type CSSProperties,
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useState,
+} from "react";
+import { useAuth } from "react-oidc-context";
+import { useTauriInvoke } from "../../components/useInvoke";
 import {
 	type OnlineProfile,
 	getDefaultApiBase,
 	toLocalProfile,
 } from "../../lib/profile-sync";
+import { OnboardingFlow } from "./onboarding-flow";
+import styles from "./onboarding.module.css";
 
 type ProfileEntry = {
 	profile: ISettingsProfile;
@@ -50,641 +62,681 @@ type ProfileEntry = {
 };
 
 const LLM_TYPES = new Set<IBitTypes>([IBitTypes.Llm, IBitTypes.Vlm]);
-
 const usesLocalArtifacts = (bit: IBit): boolean =>
 	(bit.size ?? 0) > 0 ||
 	Boolean(bit.download_link) ||
 	(bit.dependencies?.length ?? 0) > 0;
-
-const requiresHostedSignIn = (bit: IBit): boolean => {
-	return !isLocalLlmModel(bit) && !usesLocalArtifacts(bit);
-};
-
-// Module-level flag — survives component remounts within the same SPA session,
-// unlike useRef which resets every time the route re-mounts the component.
-let hasInitiatedProfilePull = false;
 
 export default function Onboarding() {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
-	const invalidate = useInvalidateTauriInvoke();
+	const queryClient = useQueryClient();
 	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
 	const isAuthenticated = Boolean(auth?.isAuthenticated);
-	const [profiles, setProfiles] = useState<[ISettingsProfile, IBit[]][]>([]);
-	const [route, setRoute] = useState("");
-	const [totalSize, setTotalSize] = useState(0);
+	const accessToken = auth?.user?.access_token;
+	const [activeProfiles, setActiveProfiles] = useState<string[]>([]);
+	const [introRun, setIntroRun] = useState(0);
+	const [size, setSize] = useState<number | null>(0);
+	const [sizeFailed, setSizeFailed] = useState(false);
 	const [isPullingProfiles, setIsPullingProfiles] = useState(false);
+	const [restoreFailed, setRestoreFailed] = useState(false);
+	const [restoreAttempt, setRestoreAttempt] = useState(0);
+	const [isSigningIn, setIsSigningIn] = useState(false);
+	const [signInOpened, setSignInOpened] = useState(false);
+	const [signInFailed, setSignInFailed] = useState(false);
 	const defaultProfiles: UseQueryResult<[[ISettingsProfile, IBit[]][], IHub]> =
 		useTauriInvoke("get_default_profiles", {});
-	const [activeProfiles, setActiveProfiles] = useState<string[]>([]);
 
 	const processedProfiles = useMemo<ProfileEntry[]>(
 		() =>
-			profiles.map(([profile, bits]) => {
-				const llmLikeBits = bits.filter((bit) => LLM_TYPES.has(bit.type));
-				const hasLocalModels = llmLikeBits.some(
-					(bit) => isLocalLlmModel(bit) || usesLocalArtifacts(bit),
-				);
-				const hasUnsupportedModels = llmLikeBits.some(
-					(bit) => !isHostableLlmModel(bit, { canHostLlamaCPP, canHostMLX }),
-				);
-				const requiresSignIn =
-					llmLikeBits.length > 0 && llmLikeBits.every(requiresHostedSignIn);
-
+			(defaultProfiles.data?.[0] ?? []).map(([profile, bits]) => {
+				const models = bits.filter((bit) => LLM_TYPES.has(bit.type));
 				return {
 					profile,
 					bits,
-					hasLocalModels,
-					hasUnsupportedModels,
-					requiresSignIn,
+					hasLocalModels: models.some(
+						(bit) => isLocalLlmModel(bit) || usesLocalArtifacts(bit),
+					),
+					hasUnsupportedModels: models.some(
+						(bit) => !isHostableLlmModel(bit, { canHostLlamaCPP, canHostMLX }),
+					),
+					requiresSignIn:
+						models.length > 0 &&
+						models.every(
+							(bit) => !isLocalLlmModel(bit) && !usesLocalArtifacts(bit),
+						),
 				};
 			}),
-		[profiles, canHostLlamaCPP, canHostMLX],
+		[defaultProfiles.data, canHostLlamaCPP, canHostMLX],
 	);
-
-	const availableProfiles = useMemo<ProfileEntry[]>(
-		() => processedProfiles.filter((entry) => !entry.hasUnsupportedModels),
+	const availableProfiles = useMemo(
+		() =>
+			processedProfiles.filter(
+				(entry) => !entry.hasUnsupportedModels && entry.profile.hub_profile.id,
+			),
 		[processedProfiles],
 	);
-
-	const filteredOutCount = processedProfiles.length - availableProfiles.length;
-	const signInRequiredProfiles = useMemo(
-		() => availableProfiles.filter((entry) => entry.requiresSignIn),
-		[availableProfiles],
-	);
-	const availableProfileIds = useMemo(
+	const filteredOutCount = processedProfiles.filter(
+		(entry) => entry.hasUnsupportedModels,
+	).length;
+	const selectedProfiles = useMemo(
 		() =>
-			availableProfiles
-				.map(({ profile }) => profile.hub_profile.id)
-				.filter((id): id is string => Boolean(id)),
-		[availableProfiles],
+			availableProfiles.filter(({ profile }) =>
+				activeProfiles.includes(profile.hub_profile.id ?? ""),
+			),
+		[availableProfiles, activeProfiles],
 	);
-	const hasSignInProfiles = signInRequiredProfiles.length > 0;
-	const noProfilesAvailable = availableProfiles.length === 0;
-	const canTriggerSignIn = Boolean(auth?.signinRedirect) && !isAuthenticated;
-	const selectedRequiresSignIn = useMemo(
-		() =>
-			signInRequiredProfiles.some(({ profile }) => {
-				const id = profile.hub_profile.id;
-				return id ? activeProfiles.includes(id) : false;
-			}),
-		[signInRequiredProfiles, activeProfiles],
+	const selectedRequiresSignIn = selectedProfiles.some(
+		(entry) => entry.requiresSignIn,
 	);
-	const downloadHref =
-		route.length > 0 ? `/onboarding/download?${route}` : null;
-	const showLocalModelAlert = filteredOutCount > 0;
+	const downloadHref = useMemo(() => {
+		const params = new URLSearchParams();
+		for (const { profile } of selectedProfiles) {
+			if (profile.hub_profile.id)
+				params.append("profiles", profile.hub_profile.id);
+		}
+		return selectedProfiles.length > 0
+			? `/onboarding/download?${params.toString()}`
+			: null;
+	}, [selectedProfiles]);
+	const signInBusy =
+		isSigningIn || auth?.isLoading || Boolean(auth?.activeNavigator);
+	const canSignIn = Boolean(
+		auth?.settings?.authority &&
+			auth.settings?.client_id &&
+			!signInBusy &&
+			!isAuthenticated,
+	);
 
 	const handleSignIn = useCallback(async () => {
-		if (!auth?.signinRedirect) return;
+		if (!canSignIn) return;
+		setIsSigningIn(true);
+		setSignInFailed(false);
 		try {
 			await auth.signinRedirect();
+			setSignInOpened(true);
 		} catch (error) {
-			console.error("signinRedirect failed:", error);
+			console.error("Sign-in failed:", error);
+			setSignInFailed(true);
+		} finally {
+			setIsSigningIn(false);
 		}
-	}, [auth]);
+	}, [auth, canSignIn]);
 
+	// The retry counter explicitly starts another restore after a failed request.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: restoreAttempt is the user-triggered retry signal.
 	useEffect(() => {
-		const accessToken = auth?.user?.access_token;
-		if (!isAuthenticated || !accessToken) return;
-		if (hasInitiatedProfilePull) return;
-		hasInitiatedProfilePull = true;
-
+		if (!isAuthenticated || !accessToken) {
+			setIsPullingProfiles(false);
+			setRestoreFailed(false);
+			return;
+		}
 		let cancelled = false;
 		const pullServerProfiles = async () => {
 			setIsPullingProfiles(true);
+			setRestoreFailed(false);
 			try {
-				const apiBase = getDefaultApiBase();
-				const url = `${apiBase}/api/v1/profile`;
-				const response = await tauriFetch(url, {
-					method: "GET",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${accessToken}`,
+				const response = await tauriFetch(
+					`${getDefaultApiBase()}/api/v1/profile`,
+					{
+						method: "GET",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${accessToken}`,
+						},
 					},
-				});
-
-				if (!response.ok || cancelled) {
-					if (!response.ok) hasInitiatedProfilePull = false;
-					if (!cancelled) setIsPullingProfiles(false);
-					return;
-				}
-
+				);
+				if (cancelled) return;
+				if (!response.ok) throw new Error("Could not restore profiles");
 				const allProfiles = (await response.json()) as OnlineProfile[];
 				if (cancelled) return;
-				if (!Array.isArray(allProfiles))
+				if (!Array.isArray(allProfiles)) {
 					throw new Error("Profile list response is not an array");
+				}
 				const serverProfiles = allProfiles.filter(
-					(p) => isRecord(p) && typeof p.id === "string" && !p.deleted_at,
+					(profile) =>
+						isRecord(profile) &&
+						typeof profile.id === "string" &&
+						!profile.deleted_at,
 				);
-
-				if (serverProfiles.length > 0) {
-					let firstProfileId: string | null = null;
-					for (const op of serverProfiles) {
-						try {
-							const localProfile = toLocalProfile(op);
-							await invoke("upsert_profile", {
-								profile: localProfile,
-							});
-							firstProfileId ??= op.id;
-						} catch (error) {
-							console.error("Failed to create profile:", op.id, error);
-						}
-					}
-
-					if (firstProfileId && !cancelled) {
-						await invoke("set_current_profile", {
-							profileId: firstProfileId,
+				let firstProfileId: string | null = null;
+				for (const profile of serverProfiles) {
+					if (cancelled) return;
+					try {
+						await invoke("upsert_profile", {
+							profile: toLocalProfile(profile),
 						});
-						await invalidate("get_profiles");
-						// Re-check: a deep link (e.g. /join) may have navigated away
-						// during the awaits above — don't drag the user back to home.
-						if (!cancelled) router.replace("/");
-						return;
+						firstProfileId ??= profile.id;
+					} catch (error) {
+						console.error("Failed to restore profile:", profile.id, error);
 					}
 				}
+				if (cancelled) return;
+				if (firstProfileId) {
+					await invoke("set_current_profile", { profileId: firstProfileId });
+					await queryClient.invalidateQueries({
+						queryKey: ["get", "profiles"],
+					});
+					// A deep link may have navigated away while profiles were restoring.
+					if (!cancelled) router.replace("/");
+				} else if (serverProfiles.length > 0) {
+					throw new Error("No profiles could be restored");
+				}
 			} catch (error) {
-				hasInitiatedProfilePull = false;
 				console.warn("Failed to pull server profiles:", error);
+				if (!cancelled) setRestoreFailed(true);
+			} finally {
+				if (!cancelled) setIsPullingProfiles(false);
 			}
-			if (!cancelled) setIsPullingProfiles(false);
 		};
-
-		pullServerProfiles();
+		void pullServerProfiles();
 		return () => {
 			cancelled = true;
 		};
-	}, [isAuthenticated, auth?.user?.access_token, router]);
-
-	const handleToggleProfile = useCallback((profileId: string) => {
-		setActiveProfiles((previous) =>
-			previous.includes(profileId)
-				? previous.filter((id) => id !== profileId)
-				: [...previous, profileId],
-		);
-	}, []);
+	}, [isAuthenticated, accessToken, queryClient, router, restoreAttempt]);
 
 	useEffect(() => {
-		setActiveProfiles((previous) => {
-			if (availableProfileIds.length === 0) {
-				return previous.length === 0 ? previous : [];
-			}
-
-			const allowed = new Set(availableProfileIds);
-			const filtered = previous.filter((id) => allowed.has(id));
-			if (filtered.length === previous.length) return previous;
-			return filtered;
-		});
-	}, [availableProfileIds]);
-
-	const calculateSize = useCallback(async () => {
-		const uniqueBits = new Map<string, Bit>();
-		for (const profileId of activeProfiles) {
-			const profileEntry = profiles.find(
-				([profile]) => profile.hub_profile.id === profileId,
-			);
-			if (!profileEntry) continue;
-			const [, profileBits] = profileEntry;
-			for (const bit of profileBits) {
-				const bitInstance = Bit.fromObject(bit);
-				bitInstance.setBackend(backend);
-				uniqueBits.set(bit.id, bitInstance);
-			}
-		}
-
-		const sizes = await Promise.all(
-			Array.from(uniqueBits.values()).map((bit) =>
-				backend.bitState.getBitSize(bit.toObject()),
-			),
-		);
-		setTotalSize(sizes.reduce((acc, size) => acc + size, 0));
-	}, [activeProfiles, profiles, backend]);
-
-	useEffect(() => {
-		if (!backend) return;
-		void calculateSize();
-		if (activeProfiles.length === 0) {
-			setRoute("");
+		let cancelled = false;
+		setSizeFailed(false);
+		if (selectedProfiles.length === 0) {
+			setSize(0);
 			return;
 		}
+		setSize(null);
+		const uniqueBits = new Map<string, IBit>();
+		for (const { bits } of selectedProfiles) {
+			for (const bit of bits) uniqueBits.set(bit.id, bit);
+		}
+		void Promise.all(
+			Array.from(uniqueBits.values()).map((bit) => {
+				const instance = Bit.fromObject(bit);
+				instance.setBackend(backend);
+				return backend.bitState.getBitSize(instance.toObject());
+			}),
+		)
+			.then((sizes) => {
+				if (!cancelled)
+					setSize(sizes.reduce((total, bytes) => total + bytes, 0));
+			})
+			.catch(() => {
+				if (!cancelled) setSizeFailed(true);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [selectedProfiles, backend]);
 
-		const params = activeProfiles.map((id) => `profiles=${id}`).join("&");
-		setRoute(params);
-	}, [activeProfiles, backend, calculateSize]);
-
-	useEffect(() => {
-		if (!defaultProfiles.data) return;
-		const profiles = defaultProfiles.data as [
-			[ISettingsProfile, IBit[]][],
-			IHub,
-		];
-		setProfiles(profiles[0]);
-	}, [defaultProfiles.data]);
-
-	return (
-		<div className="flex flex-col items-center justify-start w-full min-h-0 px-3 py-4 sm:px-6 sm:py-6 pb-12 sm:pb-16 z-10 gap-8">
-			<OnboardingIntro />
-			{isPullingProfiles ? (
-				<RestoreProfilesLoading />
-			) : (
-				<>
-					{!isAuthenticated && (
-						<ExistingAccountBanner onSignIn={handleSignIn} />
-					)}
-					<ProfilesSection
-						showLocalModelAlert={showLocalModelAlert}
-						filteredOutCount={filteredOutCount}
-						hasSignInProfiles={hasSignInProfiles}
-						isAuthenticated={isAuthenticated}
-						noProfilesAvailable={noProfilesAvailable}
-						availableProfiles={availableProfiles}
-						activeProfiles={activeProfiles}
-						onToggleProfile={handleToggleProfile}
-					/>
-					<DownloadPanel
-						totalSize={totalSize}
-						selectedRequiresSignIn={selectedRequiresSignIn}
-						hasSignInProfiles={hasSignInProfiles}
-						canTriggerSignIn={canTriggerSignIn}
-						isAuthenticated={isAuthenticated}
-						onSignIn={handleSignIn}
-						downloadHref={downloadHref}
-					/>
-				</>
-			)}
-			<br />
-		</div>
-	);
-}
-
-function OnboardingIntro() {
-	const { t } = useTranslation("common");
-	return (
-		<div className="text-center space-y-4 max-w-2xl px-1 sm:px-2">
-			<div className="space-y-2">
-				<h1 className="text-3xl sm:text-5xl font-bold text-foreground tracking-tight">
-					<Trans i18nKey="welcomeToSpanClassnamehighlightflowlikespan">
-						Welcome to <span className="highlight">Flow-Like</span>
-					</Trans>
-				</h1>
-				<div className="w-24 h-1 mx-auto rounded-full bg-gradient-to-r from-primary to-primary/70" />
-			</div>
-			<h2 className="text-xl sm:text-2xl text-muted-foreground font-medium mt-4 sm:mt-6">
-				{t("selectYourStartingProfile", "Select your starting profile")}
-			</h2>
-			<p className="text-sm sm:text-base text-muted-foreground/80 max-w-lg mx-auto leading-relaxed">
-				{t(
-					"chooseOneOrMoreProfilesThatMatchYourInterestsYouCanAlwaysAddChangeOrRemoveProfilesLater",
-					"Choose one or more profiles that match your interests. You can always add, change or remove profiles later.",
-				)}
-			</p>
-		</div>
-	);
-}
-
-function ExistingAccountBanner({
-	onSignIn,
-}: Readonly<{ onSignIn: () => void }>) {
-	const { t } = useTranslation("common");
-	const handleClick = () => {
-		console.log("[Onboarding] ExistingAccountBanner Sign in clicked");
-		onSignIn();
+	const toggleProfile = (id: string) => {
+		setActiveProfiles((previous) =>
+			previous.includes(id)
+				? previous.filter((selected) => selected !== id)
+				: [...previous, id],
+		);
 	};
+	const signInLabel = signInBusy
+		? t("onboarding.openingSignIn", "Connecting…")
+		: signInOpened
+			? t("onboarding.openSignInAgain", "Open sign-in again")
+			: t("signIn", "Sign in");
+
 	return (
-		<div className="w-full max-w-6xl">
-			<div className="flex flex-col items-center gap-4 rounded-xl border bg-card/80 backdrop-blur-sm px-6 py-6 shadow-sm">
-				<div className="text-center space-y-2">
-					<h3 className="text-lg font-semibold">
-						{t("alreadyHaveAnAccount", "Already have an account?")}
-					</h3>
-					<p className="text-sm text-muted-foreground">
-						{`Sign in to restore your profiles and settings from another device.`}
+		<main className={styles.page}>
+			<header className={styles.header}>
+				<div className={styles.brand}>
+					<img src="/app-logo.webp" width={34} height={34} alt="" />
+					<span>Flow-Like</span>
+				</div>
+				{!isAuthenticated ? (
+					<div className={styles.returning}>
+						<div>
+							<strong>
+								{t("onboarding.returning", "Already use Flow-Like?")}
+							</strong>
+							<span>
+								{t(
+									"onboarding.restoreHint",
+									"Bring your profiles to this device.",
+								)}
+							</span>
+						</div>
+						<Button
+							variant="outline"
+							className={styles.signIn}
+							disabled={!canSignIn}
+							onClick={handleSignIn}
+						>
+							{signInBusy ? (
+								<Loader2 className="animate-spin" aria-hidden="true" />
+							) : (
+								<LogIn aria-hidden="true" />
+							)}
+							{signInLabel}
+						</Button>
+					</div>
+				) : (
+					<span className={styles.signedIn}>
+						<Check size={15} aria-hidden="true" />
+						{t("onboarding.signedIn", "Signed in")}
+					</span>
+				)}
+			</header>
+
+			<section className={styles.hero} aria-labelledby="welcome-heading">
+				<div className={styles.heroCopy}>
+					<p className={styles.eyebrow}>
+						{t("onboarding.welcome", "Welcome to your new workspace")}
+					</p>
+					<h1 id="welcome-heading">
+						<Trans ns="common" i18nKey="onboarding.heroTitle">
+							Make your <span className={styles.heroAccent}>ideas flow.</span>
+						</Trans>
+					</h1>
+					<p className={styles.intro}>
+						{t(
+							"onboarding.intro",
+							"Build workflows with your tools and AI, all in one workspace.",
+						)}
 					</p>
 				</div>
-				<Button variant="outline" className="gap-2" onClick={handleClick}>
-					<LogIn className="h-4 w-4" />
-					{t("signIn", "Sign in")}
-				</Button>
-			</div>
-			<div className="relative mt-8">
-				<div className="absolute inset-0 flex items-center">
-					<div className="w-full border-t border-border/60" />
+				<div className={styles.heroArt}>
+					<OnboardingFlow key={introRun} />
 				</div>
-				<div className="relative flex justify-center text-xs uppercase">
-					<span className="bg-background px-2 text-muted-foreground">
-						{t("orChooseAStarterProfile", "Or choose a starter profile")}
-					</span>
-				</div>
-			</div>
-		</div>
-	);
-}
+				<button
+					type="button"
+					className={styles.replay}
+					onClick={() => setIntroRun((run) => run + 1)}
+					aria-label={t("onboarding.replayIntro", "Replay welcome animation")}
+					title={t("onboarding.replayIntro", "Replay welcome animation")}
+				>
+					<RotateCcw size={14} aria-hidden="true" />
+				</button>
+			</section>
 
-function RestoreProfilesLoading() {
-	const { t } = useTranslation("common");
-	return (
-		<div className="w-full max-w-6xl flex flex-col items-center gap-4 py-12">
-			<Loader2 className="h-8 w-8 animate-spin text-primary" />
-			<p className="text-sm text-muted-foreground">
-				{t("restoringYourProfiles", "Restoring your profiles…")}
-			</p>
-		</div>
-	);
-}
-
-function ProfilesSection({
-	showLocalModelAlert,
-	filteredOutCount,
-	hasSignInProfiles,
-	noProfilesAvailable,
-	isAuthenticated,
-	availableProfiles,
-	activeProfiles,
-	onToggleProfile,
-}: Readonly<{
-	showLocalModelAlert: boolean;
-	filteredOutCount: number;
-	hasSignInProfiles: boolean;
-	noProfilesAvailable: boolean;
-	isAuthenticated: boolean;
-	availableProfiles: ProfileEntry[];
-	activeProfiles: string[];
-	onToggleProfile: (profileId: string) => void;
-}>) {
-	const { t } = useTranslation("common");
-	const hiddenMessage = t(
-		"countProfilesIncludeDownloadableLocalLlmsvlmsAndArentAvailableOnThisDevice",
-		{
-			defaultValue_one:
-				"1 profile includes a downloadable local LLM/VLM and isn't available on this device.",
-			defaultValue_other:
-				"{{count}} profiles include downloadable local LLMs/VLMs and aren't available on this device.",
-			count: filteredOutCount,
-		},
-	);
-
-	return (
-		<div className="w-full max-w-6xl space-y-4 sm:space-y-6">
-			{showLocalModelAlert && (
-				<Alert className="bg-card/80 backdrop-blur-sm border-border/60 shadow-sm">
-					<AlertTitle>
-						{t("localModelHostingRequired", "Local model hosting required")}
-					</AlertTitle>
-					<AlertDescription>{hiddenMessage}</AlertDescription>
-				</Alert>
-			)}
-			{hasSignInProfiles && (
-				<Alert className="bg-muted/60 border-border/60 backdrop-blur-sm">
-					<AlertTitle>
-						{isAuthenticated
-							? t("hostedModelsUnlocked", "Hosted models unlocked")
-							: t("hostedModelsNeedASignin", "Hosted models need a sign-in")}
-					</AlertTitle>
-					<AlertDescription>
-						{isAuthenticated
+			{!isAuthenticated && (signInFailed || signInOpened) && (
+				<div className={styles.notice} role={signInFailed ? "alert" : "status"}>
+					<LogIn size={18} aria-hidden="true" />
+					<p>
+						{signInFailed
 							? t(
-									"youreAlreadySignedInhostedProfilesWillConnectAutomaticallyWhenYouDownload",
-									"You're already signed in—hosted profiles will connect automatically when you download.",
+									"onboarding.signInFailed",
+									"Sign-in could not open. Try again, or choose a profile to get started.",
 								)
 							: t(
-									"profilesMarkedRequiresSignInRelyOnHostedLlmsOrVlmsContinueNowAndSignInWheneverYoureReady",
-									"Profiles marked “Requires sign in” rely on hosted LLMs or VLMs. Continue now and sign in whenever you're ready.",
+									"onboarding.finishSignIn",
+									"Finish signing in in your browser. Your saved profiles will appear here automatically.",
 								)}
-					</AlertDescription>
-				</Alert>
+					</p>
+				</div>
 			)}
-			{noProfilesAvailable ? (
-				<div className="rounded-2xl border border-dashed border-border/60 bg-muted/40 px-6 py-12 text-center text-sm text-muted-foreground">
-					{t(
-						"noCompatibleProfilesAreAvailableForYourCurrentSetupEnableLocalModelHostingOrSignInToUnlockMoreStarterProfiles",
-						"No compatible profiles are available for your current setup. Enable local model hosting or sign in to unlock more starter profiles.",
-					)}
+
+			{isPullingProfiles ? (
+				<div className={styles.restore} aria-live="polite">
+					<Loader2 className="animate-spin" size={28} aria-hidden="true" />
+					<h2>{t("restoringYourProfiles", "Restoring your profiles…")}</h2>
+					<p>
+						{t(
+							"onboarding.restoringHint",
+							"Getting your workspace ready on this device.",
+						)}
+					</p>
 				</div>
 			) : (
-				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-					{availableProfiles.map(
-						({ profile, bits, hasLocalModels, requiresSignIn }) => {
-							const profileId = profile.hub_profile.id;
-							if (!profileId) return null;
-							const isActive = activeProfiles.includes(profileId);
-							return (
-								<PreviewCard
-									key={profileId}
-									bits={bits}
-									profile={profile}
-									active={isActive}
-									hasLocalModels={hasLocalModels}
-									requiresSignIn={requiresSignIn}
-									isAuthenticated={isAuthenticated}
-									onClick={() => onToggleProfile(profileId)}
-								/>
-							);
-						},
-					)}
-				</div>
-			)}
-		</div>
-	);
-}
-
-function DownloadPanel({
-	totalSize,
-	selectedRequiresSignIn,
-	hasSignInProfiles,
-	canTriggerSignIn,
-	isAuthenticated,
-	onSignIn,
-	downloadHref,
-}: Readonly<{
-	totalSize: number;
-	selectedRequiresSignIn: boolean;
-	hasSignInProfiles: boolean;
-	canTriggerSignIn: boolean;
-	isAuthenticated: boolean;
-	onSignIn: () => Promise<void> | void;
-	downloadHref: string | null;
-}>) {
-	const { t } = useTranslation("common");
-	const downloadDisabled = !downloadHref;
-
-	return (
-		<div className="w-full max-w-6xl pb-8">
-			<div className="flex items-center justify-between gap-4 rounded-xl border bg-card/80 backdrop-blur-sm px-4 py-3 shadow-sm">
-				<div className="flex items-center gap-3">
-					<CloudDownload className="h-5 w-5 text-primary" />
-					<div className="flex items-baseline gap-2">
-						<span className="text-lg font-medium">
-							{humanFileSize(totalSize)}
-						</span>
-						{hasSignInProfiles && (
-							<Badge
+				<>
+					{restoreFailed && (
+						<div className={styles.notice} role="alert">
+							<p>
+								{t(
+									"onboarding.restoreFailed",
+									"We couldn't restore your saved profiles. Try again, or start with a profile below.",
+								)}
+							</p>
+							<Button
 								variant="outline"
-								className={`text-[0.65rem] ${
-									isAuthenticated
-										? "bg-emerald-500/10 text-emerald-500 border-emerald-500/40"
-										: "text-amber-600"
-								}`}
+								onClick={() => setRestoreAttempt((attempt) => attempt + 1)}
 							>
-								{isAuthenticated
-									? "Ready"
-									: t("signinNeeded", "Sign-in needed")}
-							</Badge>
-						)}
-					</div>
-				</div>
-
-				<div className="flex items-center gap-2">
-					{hasSignInProfiles && canTriggerSignIn && (
-						<Button variant="outline" size="sm" onClick={onSignIn}>
-							<LogIn className="h-4 w-4" />
-						</Button>
+								<RefreshCw aria-hidden="true" />
+								{t("tryAgain", "Try again")}
+							</Button>
+						</div>
 					)}
-					<Button
-						className={`gap-2 ${
-							downloadDisabled
-								? "bg-muted text-muted-foreground cursor-not-allowed"
-								: "bg-primary text-primary-foreground hover:bg-primary/90"
-						}`}
-						disabled={downloadDisabled}
-						asChild={Boolean(downloadHref)}
+					<section
+						className={styles.profiles}
+						aria-labelledby="profiles-heading"
+						aria-busy={defaultProfiles.isLoading}
 					>
-						{downloadHref ? (
-							<a href={downloadHref}>
-								<ArrowBigRight className="w-4 h-4" />{" "}
-								{t("download", "Download")}
-							</a>
+						<div className={styles.sectionHeading}>
+							<div>
+								<p className={styles.eyebrow}>
+									{t("onboarding.makeItYours", "Make it yours")}
+								</p>
+								<h2 id="profiles-heading">
+									{t(
+										"onboarding.chooseProfiles",
+										"Choose your starting profiles",
+									)}
+								</h2>
+								<p>
+									{t(
+										"onboarding.profilesHint",
+										"Profiles bring together your tools and AI models. Choose one or more to get started.",
+									)}
+								</p>
+							</div>
+							<span className={styles.changeLater}>
+								{t("onboarding.changeLater", "You can change these anytime")}
+							</span>
+						</div>
+
+						{defaultProfiles.isLoading ? (
+							<output className={styles.empty}>
+								<Loader2 className="animate-spin" aria-hidden="true" />
+								{t(
+									"onboarding.loadingProfiles",
+									"Finding your starting profiles…",
+								)}
+							</output>
+						) : defaultProfiles.isError ? (
+							<div className={styles.empty} role="alert">
+								<p>
+									{t(
+										"onboarding.loadFailed",
+										"We couldn't load the starting profiles. Check your connection and try again.",
+									)}
+								</p>
+								<Button
+									variant="outline"
+									disabled={defaultProfiles.isFetching}
+									onClick={() => {
+										void defaultProfiles.refetch();
+									}}
+								>
+									<RefreshCw aria-hidden="true" />
+									{t("tryAgain", "Try again")}
+								</Button>
+							</div>
+						) : availableProfiles.length === 0 ? (
+							<div className={styles.empty}>
+								<Layers3 aria-hidden="true" />
+								<p>
+									{t(
+										"onboarding.noProfiles",
+										"No compatible profiles are available for this device yet. Try refreshing, or sign in to restore your own.",
+									)}
+								</p>
+								<Button
+									variant="outline"
+									disabled={defaultProfiles.isFetching}
+									onClick={() => {
+										void defaultProfiles.refetch();
+									}}
+								>
+									{t("refresh", "Refresh")}
+								</Button>
+							</div>
 						) : (
-							<>
-								<ArrowBigRight className="w-4 h-4" />{" "}
-								{t("selectProfiles", "Select profiles")}
-							</>
+							<div className={styles.grid}>
+								{availableProfiles.map((entry, index) => (
+									<ProfileCard
+										key={entry.profile.hub_profile.id}
+										entry={entry}
+										index={index}
+										active={activeProfiles.includes(
+											entry.profile.hub_profile.id ?? "",
+										)}
+										isAuthenticated={isAuthenticated}
+										onToggle={() =>
+											toggleProfile(entry.profile.hub_profile.id ?? "")
+										}
+									/>
+								))}
+							</div>
 						)}
-					</Button>
-				</div>
-			</div>
-		</div>
+						{filteredOutCount > 0 && (
+							<p className={styles.compatibility}>
+								<Monitor size={14} aria-hidden="true" />
+								{t(
+									"onboarding.compatibility",
+									"Profiles with local models that this device cannot run are hidden.",
+								)}
+							</p>
+						)}
+					</section>
+
+					<footer
+						className={styles.footer}
+						data-ready={selectedProfiles.length > 0}
+					>
+						<div
+							className={styles.selection}
+							aria-live="polite"
+							aria-atomic="true"
+						>
+							{selectedProfiles.length > 0 ? (
+								<span className={styles.selectedAvatars} aria-hidden="true">
+									{selectedProfiles.slice(0, 3).map(({ profile }) => (
+										<span key={profile.hub_profile.id}>
+											<img
+												src={profile.hub_profile.thumbnail || "/app-logo.webp"}
+												alt=""
+												onError={(event) => {
+													event.currentTarget.style.visibility = "hidden";
+												}}
+											/>
+										</span>
+									))}
+								</span>
+							) : (
+								<span className={styles.selectionIcon}>
+									<Layers3 size={20} aria-hidden="true" />
+								</span>
+							)}
+							<div>
+								<strong>
+									{selectedProfiles.length > 0
+										? t("onboarding.selectedProfiles", {
+												defaultValue_one: "{{count}} profile selected",
+												defaultValue_other: "{{count}} profiles selected",
+												count: selectedProfiles.length,
+											})
+										: t("onboarding.selectToStart", "No profiles selected")}
+								</strong>
+								<p>
+									{selectedProfiles.length === 0
+										? t(
+												"onboarding.selectionHint",
+												"Choose one or more to continue.",
+											)
+										: sizeFailed
+											? t(
+													"onboarding.sizeUnavailable",
+													"Download size unavailable",
+												)
+											: size === null
+												? t(
+														"onboarding.calculatingSize",
+														"Calculating download size…",
+													)
+												: size === 0
+													? t(
+															"onboarding.noDownload",
+															"No model download needed",
+														)
+													: t(
+															"onboarding.downloadSize",
+															"{{size}} to download",
+															{ size: humanFileSize(size) },
+														)}
+								</p>
+							</div>
+						</div>
+						<div className={styles.continueArea}>
+							{selectedRequiresSignIn && !isAuthenticated && (
+								<span className={styles.hostedHint}>
+									{t(
+										"onboarding.hostedHint",
+										"Hosted models need sign-in. You can do that later.",
+									)}
+								</span>
+							)}
+							<Button
+								className={styles.continueButton}
+								disabled={!downloadHref}
+								asChild={Boolean(downloadHref)}
+							>
+								{downloadHref ? (
+									<Link href={downloadHref}>
+										{t("continue", "Continue")}
+										<ArrowRight aria-hidden="true" />
+									</Link>
+								) : (
+									<>
+										{t("continue", "Continue")}
+										<ArrowRight aria-hidden="true" />
+									</>
+								)}
+							</Button>
+						</div>
+					</footer>
+				</>
+			)}
+		</main>
 	);
 }
 
-function PreviewCard({
-	profile,
-	bits,
-	onClick,
+function ProfileCard({
+	entry,
+	index,
 	active,
-	hasLocalModels = false,
-	requiresSignIn = false,
-	isAuthenticated = false,
-}: Readonly<{
-	bits: IBit[];
-	profile: ISettingsProfile;
-	onClick?: () => void;
-	active?: boolean;
-	hasLocalModels?: boolean;
-	requiresSignIn?: boolean;
-	isAuthenticated?: boolean;
-}>) {
+	isAuthenticated,
+	onToggle,
+}: {
+	entry: ProfileEntry;
+	index: number;
+	active: boolean;
+	isAuthenticated: boolean;
+	onToggle: () => void;
+}) {
 	const { t } = useTranslation("common");
+	const {
+		profile: { hub_profile: profile },
+		bits,
+		hasLocalModels,
+		requiresSignIn,
+	} = entry;
+	const [imageFailed, setImageFailed] = useState(false);
+	const cardId = useId();
 	return (
 		<button
 			type="button"
-			onClick={onClick}
+			className={styles.profileCard}
+			style={{ "--card-order": Math.min(index, 7) } as CSSProperties}
 			aria-pressed={active}
-			className={`group relative flex flex-col w-full max-w-full sm:w-64 transition-all duration-500 rounded-2xl z-20 border-2 hover:shadow-2xl transform hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-				active
-					? "border-primary bg-primary/5 shadow-lg shadow-primary/20 scale-105"
-					: "border-border bg-card/50 backdrop-blur-sm hover:border-primary/50 hover:bg-card/80"
-			}`}
+			onClick={onToggle}
+			aria-labelledby={`${cardId}-name`}
+			aria-describedby={`${cardId}-description ${cardId}-details${hasLocalModels || requiresSignIn ? ` ${cardId}-requirement` : ""}`}
 		>
-			{/* Selection Indicator */}
-			{active && (
-				<div className="absolute top-4 right-4 z-10">
-					<div className="w-6 h-6 bg-primary rounded-full flex items-center justify-center shadow-lg animate-in zoom-in-50 duration-300">
-						<div className="w-2 h-2 bg-primary-foreground rounded-full" />
+			<div className={styles.thumbnail}>
+				{profile.thumbnail && !imageFailed ? (
+					<img
+						src={profile.thumbnail}
+						alt=""
+						loading="lazy"
+						decoding="async"
+						onError={() => setImageFailed(true)}
+					/>
+				) : (
+					<div className={styles.thumbnailFallback}>
+						<Layers3 size={40} strokeWidth={1} aria-hidden="true" />
 					</div>
-				</div>
-			)}
-
-			{/* Thumbnail Section - 16:9 aspect ratio */}
-			<div className="relative w-full aspect-video overflow-hidden rounded-t-xl">
-				<img
-					className="absolute rounded-t-xl inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-					src={profile.hub_profile.thumbnail ?? "/placeholder-thumbnail.webp"}
-					width={1280}
-					height={640}
-					alt={profile.hub_profile.name}
-					loading="lazy"
-					decoding="async"
-					fetchPriority="low"
-				/>
-				<div
-					className={`absolute inset-0 transition-all duration-300 ${
-						active ? "bg-primary/20" : "bg-black/20 group-hover:bg-primary/10"
-					}`}
-				/>
-
-				{/* Gradient Overlay */}
-				<div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
+				)}
+				<span className={styles.selectIndicator} aria-hidden="true">
+					{active ? <Check size={14} strokeWidth={3} /> : <Plus size={14} />}
+				</span>
+				<span className={styles.profileType}>
+					{hasLocalModels ? (
+						<>
+							<Monitor size={12} aria-hidden="true" />
+							{t("onboarding.local", "Local models")}
+						</>
+					) : requiresSignIn ? (
+						<>
+							<Cloud size={12} aria-hidden="true" />
+							{t("onboarding.hosted", "Hosted models")}
+						</>
+					) : (
+						<>
+							<Layers3 size={12} aria-hidden="true" />
+							{t("onboarding.starter", "Starter profile")}
+						</>
+					)}
+				</span>
 			</div>
-
-			{/* Content Section */}
-			<div className="flex flex-col p-4 space-y-3 flex-1 max-w-full overflow-hidden">
-				<h3 className="font-semibold text-foreground text-left leading-tight truncate line-clamp-1 max-w-full overflow-hidden">
-					{profile.hub_profile.name}
-				</h3>
-
-				<p className="text-sm text-muted-foreground text-left line-clamp-2 leading-relaxed max-w-full overflow-hidden">
-					{profile.hub_profile.description}
+			<div className={styles.cardBody}>
+				<div className={styles.cardTitle}>
+					<h3 id={`${cardId}-name`}>{profile.name}</h3>
+				</div>
+				<p id={`${cardId}-description`} className={styles.description}>
+					{profile.description}
 				</p>
-
-				{(hasLocalModels || requiresSignIn) && (
-					<div className="flex flex-wrap items-center gap-2 pt-1">
-						{hasLocalModels && (
-							<Badge
-								variant={active ? "default" : "secondary"}
-								className="text-[0.65rem] uppercase tracking-wide"
-							>
-								{t("localModelDownload", "Local model download")}
-							</Badge>
+				<div
+					id={`${cardId}-details`}
+					className={styles.cardMeta}
+					title={bits.map((bit) => bit.meta?.en?.name ?? bit.id).join(", ")}
+				>
+					<span className={styles.bitIcons} aria-hidden="true">
+						{bits.slice(0, 3).map((bit) => (
+							<img
+								key={bit.id}
+								src={bit.meta?.en?.icon || "/app-logo.webp"}
+								alt=""
+								width={22}
+								height={22}
+								onError={(event) => {
+									event.currentTarget.style.visibility = "hidden";
+								}}
+							/>
+						))}
+					</span>
+					<span>
+						{t("onboarding.includedTools", {
+							defaultValue_one: "{{count}} included tool",
+							defaultValue_other: "{{count}} included tools",
+							count: bits.length,
+						})}
+					</span>
+					<span className={styles.cardAction} aria-hidden="true">
+						{active ? (
+							<>
+								<Check size={12} />
+								{t("onboarding.profileSelected", "Selected")}
+							</>
+						) : (
+							<>
+								<Plus size={12} />
+								{t("onboarding.add", "Add")}
+							</>
 						)}
-						{requiresSignIn && (
-							<Badge
-								variant="outline"
-								className={`text-[0.65rem] uppercase tracking-wide ${
-									isAuthenticated
-										? "bg-emerald-500/10 text-emerald-500 border-emerald-500/40"
-										: ""
-								}`}
-							>
+					</span>
+				</div>
+				{(hasLocalModels || requiresSignIn) && (
+					<span id={`${cardId}-requirement`} className={styles.cardRequirement}>
+						{hasLocalModels ? (
+							<>
+								<Download size={12} aria-hidden="true" />
+								{t("localModelDownload", "Local model download")}
+							</>
+						) : (
+							<>
+								<LogIn size={12} aria-hidden="true" />
 								{isAuthenticated
 									? t("hostedModelReady", "Hosted model ready")
 									: t("requiresSignIn", "Requires sign in")}
-							</Badge>
+							</>
 						)}
-					</div>
+					</span>
 				)}
-
-				{/* Bits Preview */}
-				<div className="flex flex-row flex-wrap gap-1.5 pt-2">
-					{bits.slice(0, 6).map((bit) => (
-						<BitHover bit={bit} key={bit.id}>
-							<Avatar className="border bg-background/90 w-7 h-7 transition-transform duration-200 hover:scale-110">
-								<AvatarImage
-									className="p-0.5"
-									src={bit.meta?.en?.icon ?? "/app-logo.webp"}
-								/>
-								<AvatarFallback className="text-xs">NA</AvatarFallback>
-							</Avatar>
-						</BitHover>
-					))}
-					{bits.length > 6 && (
-						<div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center">
-							<span className="text-xs text-muted-foreground">
-								+{bits.length - 6}
-							</span>
-						</div>
-					)}
-				</div>
 			</div>
 		</button>
 	);

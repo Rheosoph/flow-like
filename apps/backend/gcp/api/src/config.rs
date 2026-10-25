@@ -1,7 +1,8 @@
 use axum::http::{
     HeaderName, HeaderValue, Method,
     header::{
-        ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, RANGE, WWW_AUTHENTICATE,
+        ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, RANGE,
+        WWW_AUTHENTICATE,
     },
 };
 use flow_like_gcp_data::metadata::ensure_no_forbidden_credential_env;
@@ -68,6 +69,7 @@ const GCP_PROVIDER_SETTINGS: &[&str] = &[
     "META_BUCKET_PROVIDER",
     "CONTENT_BUCKET_PROVIDER",
     "LOGS_BUCKET_PROVIDER",
+    "LOCKED_BUCKET_PROVIDER",
 ];
 
 /// `BucketConfig::from_env` in packages/api prefers the GCP-specific name for
@@ -84,6 +86,10 @@ const BUCKET_ALIASES: &[(&str, &str)] = &[
     ("GCP_CDN_BUCKET", "CDN_BUCKET_NAME"),
 ];
 
+/// Locked storage is optional, so either spelling may enable it alone; when both
+/// are set they must agree for the same reason as `BUCKET_ALIASES`.
+const LOCKED_BUCKET_ALIAS: (&str, &str) = ("GCP_LOCKED_BUCKET", "LOCKED_BUCKET");
+
 /// Secret Manager caps a secret ID at 255 characters. The prefix is joined to
 /// the secret name with a hyphen, so it is capped well below that to leave room
 /// for the longest key this API resolves.
@@ -97,6 +103,7 @@ pub struct Config {
     pub meta_bucket: String,
     pub cdn_bucket: String,
     pub log_bucket: String,
+    pub locked_bucket: Option<String>,
     pub secret_prefix: String,
     cors_allowed_origins: Vec<HeaderValue>,
 }
@@ -139,6 +146,9 @@ impl Config {
             require_matching_alias(canonical, alias)?;
         }
 
+        let locked_bucket =
+            optional_locked_bucket([&content_bucket, &meta_bucket, &cdn_bucket, &log_bucket])?;
+
         let secret_prefix = required_env("SECRET_PREFIX")?;
         validate_secret_prefix(&secret_prefix)?;
 
@@ -154,6 +164,7 @@ impl Config {
             meta_bucket,
             cdn_bucket,
             log_bucket,
+            locked_bucket,
             secret_prefix,
             cors_allowed_origins,
         })
@@ -192,6 +203,7 @@ impl Config {
             ])
             .allow_headers([
                 AUTHORIZATION,
+                CACHE_CONTROL,
                 CONTENT_TYPE,
                 ACCEPT,
                 RANGE,
@@ -336,6 +348,44 @@ fn require_matching_alias(canonical: &'static str, alias: &'static str) -> Resul
     }
 
     Ok(())
+}
+
+fn optional_locked_bucket(app_buckets: [&str; 4]) -> Result<Option<String>, ConfigError> {
+    let (canonical, alias) = LOCKED_BUCKET_ALIAS;
+    resolve_locked_bucket(
+        optional_nonempty_env(canonical)?,
+        optional_nonempty_env(alias)?,
+        app_buckets,
+    )
+}
+
+fn resolve_locked_bucket(
+    canonical: Option<String>,
+    alias: Option<String>,
+    app_buckets: [&str; 4],
+) -> Result<Option<String>, ConfigError> {
+    let (canonical_name, alias_name) = LOCKED_BUCKET_ALIAS;
+    if let (Some(canonical), Some(alias)) = (&canonical, &alias)
+        && canonical != alias
+    {
+        return Err(ConfigError::invalid(
+            alias_name,
+            "must name the same bucket as its GCP_-prefixed counterpart",
+        ));
+    }
+    let Some(bucket) = canonical.or(alias) else {
+        return Ok(None);
+    };
+    validate_bucket_name(canonical_name, &bucket)?;
+    // Retention locks every object the bucket holds, and the scoped
+    // credentials the other buckets hand out must never reach a locked one.
+    if app_buckets.contains(&bucket.as_str()) {
+        return Err(ConfigError::invalid(
+            canonical_name,
+            "must be a dedicated bucket, separate from the content, meta, CDN and log buckets",
+        ));
+    }
+    Ok(Some(bucket))
 }
 
 /// Validate the project ID's shape.
@@ -637,6 +687,28 @@ mod tests {
         assert!(validate_bucket_name("TEST", "goog-flowlike").is_err());
         assert!(validate_bucket_name("TEST", "flowlike-google-dev").is_err());
         assert!(validate_bucket_name("TEST", "192.168.0.1").is_err());
+    }
+
+    #[test]
+    fn locked_bucket_is_optional_and_either_spelling_must_agree() {
+        let apps = ["content", "meta", "cdn", "logs"];
+        let locked = || Some("flowlike-dev-locked".to_string());
+        assert!(resolve_locked_bucket(None, None, apps).unwrap().is_none());
+        assert_eq!(
+            resolve_locked_bucket(locked(), None, apps).unwrap(),
+            locked()
+        );
+        assert_eq!(
+            resolve_locked_bucket(None, locked(), apps).unwrap(),
+            locked()
+        );
+        assert_eq!(
+            resolve_locked_bucket(locked(), locked(), apps).unwrap(),
+            locked()
+        );
+        assert!(resolve_locked_bucket(locked(), Some("flowlike-dev-other".into()), apps).is_err());
+        assert!(resolve_locked_bucket(None, Some("Flowlike-Locked".into()), apps).is_err());
+        assert!(resolve_locked_bucket(Some("logs".into()), None, apps).is_err());
     }
 
     #[test]

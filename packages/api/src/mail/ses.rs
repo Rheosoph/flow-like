@@ -1,4 +1,10 @@
-use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message, MessageHeader};
+use aws_sdk_sesv2::{
+    primitives::Blob,
+    types::{
+        Attachment, AttachmentContentDisposition, Body, Content, Destination, EmailContent,
+        Message, MessageHeader,
+    },
+};
 use flow_like::hub::MailConfig;
 use flow_like_types::Result;
 
@@ -24,12 +30,6 @@ impl SesMailClient {
 }
 
 fn build_content(message: &AutomationEmailMessage) -> Result<EmailContent> {
-    let headers = message
-        .headers()?
-        .into_iter()
-        .map(|(name, value)| MessageHeader::builder().name(name).value(value).build())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
     let mut body_builder = Body::builder();
 
     if let Some(html) = &message.body_html {
@@ -50,10 +50,39 @@ fn build_content(message: &AutomationEmailMessage) -> Result<EmailContent> {
                         .build()?,
                 )
                 .body(body_builder.build())
-                .set_headers((!headers.is_empty()).then_some(headers))
+                .set_headers(headers(message)?)
+                .set_attachments(attachments(message)?)
                 .build(),
         )
         .build())
+}
+
+fn headers(message: &AutomationEmailMessage) -> Result<Option<Vec<MessageHeader>>> {
+    let headers = message
+        .headers()?
+        .into_iter()
+        .map(|(name, value)| MessageHeader::builder().name(name).value(value).build())
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok((!headers.is_empty()).then_some(headers))
+}
+
+fn attachments(message: &AutomationEmailMessage) -> Result<Option<Vec<Attachment>>> {
+    if message.attachments.is_empty() {
+        return Ok(None);
+    }
+    message
+        .attachments
+        .iter()
+        .map(|attachment| {
+            Ok(Attachment::builder()
+                .file_name(&attachment.filename)
+                .content_type(&attachment.content_type)
+                .content_disposition(AttachmentContentDisposition::Attachment)
+                .raw_content(Blob::new(attachment.content.clone()))
+                .build()?)
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
 }
 
 #[async_trait::async_trait]
@@ -120,5 +149,23 @@ mod tests {
             "<first@example.net> <parent@example.net>"
         );
         assert_eq!(headers["Auto-Submitted"], "auto-replied");
+        assert!(simple.attachments().is_empty());
+    }
+
+    #[test]
+    fn attachments_are_sent_as_named_files() {
+        let mut message = crate::mail::tests::reply_message();
+        message.attachments = vec![crate::mail::tests::pdf()];
+        let content = build_content(&message).unwrap();
+        let [attachment] = content.simple().unwrap().attachments() else {
+            panic!("expected exactly one attachment");
+        };
+        assert_eq!(attachment.file_name(), "Order 42.pdf");
+        assert_eq!(attachment.content_type(), Some("application/pdf"));
+        assert_eq!(
+            attachment.content_disposition(),
+            Some(&AttachmentContentDisposition::Attachment)
+        );
+        assert_eq!(attachment.raw_content().as_ref(), b"%PDF-1.7 order");
     }
 }

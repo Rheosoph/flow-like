@@ -683,7 +683,7 @@ mod tests {
 
         let mut clip = clip();
         let path = FlowPath::new(
-            "apps/app/invoke/clip.wav".into(),
+            "tmp/user/user/apps/app/2026/09/13/clip.wav".into(),
             REQUEST_FILES_STORE_REF.into(),
             None,
         );

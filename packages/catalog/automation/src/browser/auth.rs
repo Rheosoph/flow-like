@@ -653,6 +653,7 @@ impl NodeLogic for TotpCodeNode {
         node.set_version(1);
         node.set_flowscript_name("browser", "totpCode");
         node.add_icon("/flow/icons/key.svg");
+        node.set_only_offline(true);
         node.set_scores(
             flow_like::flow::node::NodeScores::new()
                 .set_privacy(8)

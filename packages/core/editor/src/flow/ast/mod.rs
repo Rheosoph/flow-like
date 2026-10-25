@@ -7,6 +7,7 @@
 //! See `todo/ast.md`.
 
 mod apply;
+mod changes;
 mod diagnostics;
 mod lower;
 mod reconcile;
@@ -15,10 +16,17 @@ mod template;
 mod types;
 
 pub use apply::{
-    ApplyFlowScriptResult, DESTRUCTIVE_BLOCK_PREFIX, apply_board_commands_to_board,
-    apply_flowscript_to_board, apply_flowscript_to_board_file, apply_flowscript_to_board_scoped,
-    blocked_destructive_flowscript_message, destructive_flowscript_command_summaries,
-    ensure_module_layer, is_destructive_block, validate_module_apply_params,
+    ApplyFlowScriptResult, DESTRUCTIVE_BLOCK_PREFIX, FLOWPILOT_BOARD_RESERVED_PREFIX,
+    apply_board_commands_to_board, apply_flowscript_to_board, apply_flowscript_to_board_file,
+    apply_flowscript_to_board_scoped, blocked_destructive_flowscript_message,
+    destructive_flowscript_command_summaries, ensure_module_layer,
+    flowpilot_board_reserved_message, is_destructive_block, is_flowpilot_board_reservation,
+    validate_module_apply_params,
+};
+pub use changes::{
+    FlowScriptChangedLayer, FlowScriptChangedNode, FlowScriptChanges, FlowScriptConnection,
+    FlowScriptConnectionKind, FlowScriptDescriptionChange, FlowScriptEndpoint, FlowScriptMovedNode,
+    FlowScriptNameChange, FlowScriptValueChange, planned_changes,
 };
 pub use diagnostics::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
@@ -1483,7 +1491,7 @@ mod lower_tests {
             "event preserves its catalog type, alias, and payload param:\n{text_out}"
         );
         assert!(
-            text_out.contains("log({ text: title })"),
+            text_out.contains("log(title)"),
             "body reads the bare param name:\n{text_out}"
         );
         assert!(
@@ -2122,7 +2130,7 @@ mod lower_tests {
             "two static sites inside a module block still open the namespace:\n{text}"
         );
         assert!(
-            text.contains("        logInfo({ message: \"one\" })"),
+            text.contains("        logInfo(\"one\")"),
             "the opened members render bare inside the module block:\n{text}"
         );
     }
@@ -3010,7 +3018,7 @@ mod module_reconcile_tests {
         let main = file(&board, FlowScriptFile::Main);
         for (path, layer) in [("alpha::helper", "fn-a"), ("beta::helper", "fn-b")] {
             let called = append_to_last_block(&main.text, &format!("{path}()"));
-            let result = reconcile_text_with_catalog(&board, &called, &board_catalog(&board));
+            let result = reconcile_file(&board, &called, &main.scope_anchors, FlowScriptFile::Main);
             assert!(
                 result.diagnostics.is_empty(),
                 "{path}: {:?}",
@@ -3395,10 +3403,10 @@ mod scoped_flowscript {
             baseline.diagnostics
         );
 
-        let needle = "name: \"memory\", userScoped: true, batchSize: 1000";
+        let needle = "\"memory\", { userScoped: true, batchSize: 1000 }";
         let edited = scoped
             .text
-            .replace(needle, "name: \"memory\", userScoped: true, batchSize: 500");
+            .replace(needle, "\"memory\", { userScoped: true, batchSize: 500 }");
         assert_ne!(
             edited, scoped.text,
             "literal edit must apply:\n{}",

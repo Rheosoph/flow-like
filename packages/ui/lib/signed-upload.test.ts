@@ -80,4 +80,27 @@ describe("signed uploads", () => {
 		expect(UploadRequest.last.headers.get("x-ms-blob-type")).toBe("BlockBlob");
 		expect(UploadRequest.last.body).toBe(file);
 	});
+
+	test("signed headers are sent verbatim without derived ones", async () => {
+		globalThis.XMLHttpRequest =
+			UploadRequest as unknown as typeof XMLHttpRequest;
+		const file = new File(["data"], "Übersicht (2)#1.pdf", {
+			type: "application/pdf",
+		});
+		const headers = {
+			"content-type": "application/octet-stream",
+			"x-amz-checksum-sha256": "c2lnbmVk",
+			"x-amz-object-lock-mode": "COMPLIANCE",
+			"x-ms-blob-type": "BlockBlob",
+		};
+		await uploadToSignedUrl(
+			"https://account.blob.core.windows.net/locked/item?sig=test",
+			file,
+			{ headers, contentDisposition: "attachment" },
+		);
+		const request = UploadRequest.last;
+		expect(request.method).toBe("PUT");
+		expect(Object.fromEntries(request.headers)).toEqual(headers);
+		expect(request.body).toBe(file);
+	});
 });

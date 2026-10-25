@@ -266,6 +266,46 @@ def validate(values, config):
     if worker.get("AUDIT_BUCKET") and worker.get("AUDIT_BUCKET_ENDPOINT") == "http://object-store:9000" and "object-store" not in services:
         errors.append("AUDIT_BUCKET_ENDPOINT names the bundled object store, which this deployment does not run; configure the external endpoint or clear AUDIT_BUCKET")
     errors.extend(audit_key_errors(worker, "object-store" in services))
+    errors.extend(locked_storage_errors(services, api, worker))
+    return errors
+
+
+def locked_storage_errors(services, api, worker):
+    """The API signs one-object URLs; the data gateway and run gateways must forward exactly that bucket."""
+    bucket = api.get("LOCKED_BUCKET", "")
+    if not bucket:
+        return []
+    errors = []
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket):
+        errors.append("LOCKED_BUCKET must be a DNS-compatible bucket without periods for gateway matching")
+    if bucket in {api.get("META_BUCKET"), api.get("CONTENT_BUCKET"), api.get("LOG_BUCKET"), worker.get("AUDIT_BUCKET")}:
+        errors.append("LOCKED_BUCKET must be separate from the metadata, content, logs and audit buckets")
+    errors.extend(f"{name} must receive the same LOCKED_BUCKET as the API"
+                  for name in ("object-store-init", "object-gateway", "execution-manager")
+                  if name in services and services[name].get("environment", {}).get("LOCKED_BUCKET") != bucket)
+    return errors + locked_choice_errors(api) + locked_limit_errors(api)
+
+
+def locked_choice_errors(api):
+    """Empty keeps the API default: object enforcement (bucket for R2) and COMPLIANCE."""
+    choices = {"LOCKED_BUCKET_ENFORCEMENT": ("object", "bucket"), "LOCKED_BUCKET_LOCK_MODE": ("COMPLIANCE", "GOVERNANCE")}
+    return [f"{key} must be {' or '.join(options)}" for key, options in choices.items()
+            if api.get(key, "").lower() not in {"", *(option.lower() for option in options)}]
+
+
+def locked_limit_errors(api):
+    """Empty values keep the API defaults: 3650 retention days, a 1-day minimum and 5 GiB per
+    version. No store holds one object above 5 TiB."""
+    limits = {"LOCKED_BUCKET_RETENTION_DAYS": (3650, 36500), "LOCKED_BUCKET_MIN_RETENTION_DAYS": (1, 36500),
+              "LOCKED_BUCKET_MAX_FILE_BYTES": (5368709120, 5497558138880)}
+    errors, numbers = [], {}
+    for key, (default, maximum) in limits.items():
+        value = str(api.get(key, "") or default)
+        numbers[key] = int(value) if value.isdigit() else 0
+        if not 1 <= numbers[key] <= maximum:
+            errors.append(f"{key} must be a whole number from 1 to {maximum}")
+    if not errors and numbers["LOCKED_BUCKET_MIN_RETENTION_DAYS"] > numbers["LOCKED_BUCKET_RETENTION_DAYS"]:
+        errors.append("LOCKED_BUCKET_MIN_RETENTION_DAYS must not exceed LOCKED_BUCKET_RETENTION_DAYS")
     return errors
 
 

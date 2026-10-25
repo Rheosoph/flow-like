@@ -51,3 +51,22 @@ pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
         Vec::new()
     }
 }
+
+#[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn every_node_requires_local_execution() {
+        let runnable_on_servers: Vec<String> = get_catalog()
+            .iter()
+            .map(|logic| logic.get_node())
+            .filter(|node| !node.only_offline)
+            .map(|node| node.name)
+            .collect();
+        assert!(
+            runnable_on_servers.is_empty(),
+            "servers list this package as metadata only, so these nodes must set only_offline: {runnable_on_servers:?}"
+        );
+    }
+}

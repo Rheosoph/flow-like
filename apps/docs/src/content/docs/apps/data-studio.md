@@ -84,7 +84,9 @@ Timestamp columns can contain native dates, date text, or Unix epochs. The wizar
 
 Metrics and covariates can also contain numeric text such as `"62.43"` or `"1.2e3"`. The wizard labels these columns **numeric text**. Conversion applies only to the forecast; it does not alter the source table. Currency symbols, thousands separators, blank strings and invalid values must be cleaned in the source query. Null target values remain missing observations. If **Next** is disabled, the message beside it identifies the missing selection or invalid format.
 
-Set the forecast horizon and run the model. New predictions use each checkpoint's native output. The chart places observed values and forecasts on a shared timeline, with an orange forecast line and a quantile band when the model provides quantiles. TinyTimeMixer displays a mean **Point forecast only**, without a band. Saved predictions retain any explicitly requested quantiles. Covariate tracks share the same timeline; changing their selection requires a new run.
+Set the forecast horizon and run the model. New predictions open in **Outlook**, with historical evaluation turned off by default. The chart places observed values and forecasts on a shared timeline, using your theme's chart colors. New predictions use each checkpoint's native output, including a quantile band when available. TinyTimeMixer displays a mean **Point forecast only**, without a band. Saved predictions retain any explicitly requested quantiles. Covariate tracks share the same timeline; changing their selection requires a new run.
+
+Drag across the plot or move the time-range handles to inspect a smaller window. Zoom buttons adjust the visible range, and **Reset zoom** restores all dates. **Focus forecast** brings the prediction period into view. Choose **Full screen** for more space and press **Escape** to return. Zooming also aligns the covariate tracks and leaves the forecast results unchanged.
 
 Supported models include Timestral, Chronos-2, Toto 2, TimesFM 2.5 and IBM Granite TinyTimeMixer. TimesFM 2.5 and the supported TinyTimeMixer checkpoints accept one target per series and no covariates. TimesFM supports horizons up to 1,024 steps. The included TinyTimeMixer R2 MSE checkpoint predicts up to 96 steps and targets minutely to hourly observations; provide 512 historical steps where possible. Other TinyTimeMixer variants have different requirements. Choose the model's supported history range in SQL if your table contains more rows per series than it accepts.
 
@@ -106,7 +108,7 @@ Each series can have its own time interval and last observed timestamp. The hori
 
 ### Evaluate a historical window
 
-Enable **Evaluate on held-out data** and choose how many observed steps to predict. After a run, move the **Holdout forecast as of** slider back through history. Releasing it runs a new evaluation from that cutoff. The chart overlays predictions and actual values for the selected window; **Latest window** returns to the most recent complete window. Keyboard arrow keys also move the cutoff. **Outlook** continues from the latest observation.
+Enable **Evaluate on held-out data** and choose how many observed steps to predict. After a run, select **Holdout** to compare predictions with actual values. Drag the holdout window through the timeline or move the **Holdout forecast as of** slider; releasing it runs a new evaluation from that cutoff. **Latest window** returns to the most recent complete window. Keyboard arrow keys also move the cutoff. **Outlook** continues from the latest observation and remains the default view after a forecast run.
 
 The model receives targets and past covariates only through the cutoff. Inputs marked as known future covariates remain available for the evaluation window. Each series uses the same number of steps back from its own end, and the slider dates follow the selected series. The shortest series limits how far back you can move.
 

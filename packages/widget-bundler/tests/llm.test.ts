@@ -1,34 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { validateSchema } from "@flow-like/widget-sdk/validate";
 import { extractContract } from "../src/extract";
-import { tmpDir } from "./helpers";
+import { writeSdkWidget } from "./helpers";
 
-function widget(source: string) {
-	const dir = tmpDir("flwb-llm");
-	mkdirSync(join(dir, "node_modules/@flow-like"), { recursive: true });
-	symlinkSync(
-		join(import.meta.dir, "../../widget-sdk"),
-		join(dir, "node_modules/@flow-like/widget-sdk"),
-		"dir",
-	);
-	writeFileSync(
-		join(dir, "tsconfig.json"),
-		JSON.stringify({
-			compilerOptions: {
-				module: "ESNext",
-				moduleResolution: "Bundler",
-				target: "ES2022",
-				strict: true,
-				skipLibCheck: true,
-			},
-		}),
-	);
-	const config = join(dir, "widget.config.ts");
-	writeFileSync(config, source);
-	return config;
-}
+const widget = (source: string) => writeSdkWidget("flwb-llm", source);
 
 const marker = (kind: string) => ({
 	type: "object",

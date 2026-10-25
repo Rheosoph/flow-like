@@ -62,6 +62,16 @@ export const CONTRACT_VERSION = 2;
 export const BASE_CONTRACT_VERSION = 1;
 export const WIDGET_PROTOCOL = "flw/1";
 
+/** Capability keys in serde field order */
+export const WIDGET_CAPABILITY_KEYS = [
+	"workers",
+	"media",
+	"microphone",
+	"wasm",
+	"downloads",
+	"uploads",
+] as const satisfies readonly (keyof WidgetCapabilities)[];
+
 export type ContractInputType =
 	| "string"
 	| "number"
@@ -330,9 +340,9 @@ export function canonicalizeContract(contract: WidgetContract): WidgetContract {
 		},
 		...(contract.capabilities && {
 			capabilities: Object.fromEntries(
-				(["workers", "media", "microphone", "wasm", "downloads"] as const)
-					.filter((key) => contract.capabilities?.[key] !== undefined)
-					.map((key) => [key, contract.capabilities?.[key]]),
+				WIDGET_CAPABILITY_KEYS.filter(
+					(key) => contract.capabilities?.[key] !== undefined,
+				).map((key) => [key, contract.capabilities?.[key]]),
 			),
 		}),
 		...(csp && { csp }),

@@ -43,6 +43,24 @@ describe("widget capabilities", () => {
 			"connect-src data: blob:; worker-src 'none'; media-src data: blob:",
 		);
 	});
+	test("uploads is accepted and serialized after downloads", () => {
+		const path = join(tmpDir("widget-caps-uploads"), "widget.config.ts");
+		writeFileSync(
+			path,
+			HELLO_WIDGET_CONFIG.replace(
+				'id: "hello-widget",',
+				'id: "hello-widget", capabilities: {uploads:true,downloads:false,workers:true},',
+			),
+		);
+		const json = contractToJson(extractContract(path).contract);
+		expect(Object.keys(JSON.parse(json).capabilities)).toEqual([
+			"workers",
+			"downloads",
+			"uploads",
+		]);
+		expect(json).toContain('"uploads": true');
+		expect(buildCsp(null, { uploads: true })).toBe(buildCsp(null));
+	});
 	test("rejects the removed resources capability", () => {
 		const path = join(tmpDir("widget-caps-resources"), "widget.config.ts");
 		writeFileSync(

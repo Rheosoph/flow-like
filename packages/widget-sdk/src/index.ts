@@ -38,6 +38,7 @@ export { isLlmKind, llmSchema } from "./llm";
 export * from "./mount";
 export * from "./protocol";
 export * from "./microphone";
+export * from "./upload";
 export * from "./theme";
 export * from "./validate";
 

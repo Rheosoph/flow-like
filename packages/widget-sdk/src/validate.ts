@@ -1,6 +1,7 @@
 import type { ContractInput, JsonSchema } from "./contract";
 import { checkGeometrySchema } from "./geometry";
 import { markedLlmSchema } from "./llm";
+import { markedUploadSchema } from "./upload";
 
 export interface ValidationResult {
 	valid: boolean;
@@ -195,6 +196,11 @@ function validateAt(
 	// A Flow-Like model type marker validates against the native schema it names.
 	if (llm) {
 		validateAt(llm, value, path, errors);
+		return;
+	}
+	const upload = markedUploadSchema(schema);
+	if (upload) {
+		validateAt(upload, value, path, errors);
 		return;
 	}
 

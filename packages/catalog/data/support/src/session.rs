@@ -5,6 +5,8 @@ use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
+use flow_like_storage::datafusion::catalog::TableProvider;
+#[cfg(feature = "execute")]
 use flow_like_storage::datafusion::common::TableReference;
 #[cfg(feature = "execute")]
 use flow_like_storage::datafusion::execution::object_store::{
@@ -144,6 +146,21 @@ impl CachedDataFusionSession {
         }
     }
 
+    /// Registers `provider` as `table`, replacing whatever is registered under that name.
+    ///
+    /// The catalog refuses a name it already holds, yet registration nodes legitimately
+    /// run again — inside a loop, or when a re-run of the board reuses the named session.
+    pub fn replace_table(
+        &self,
+        table: impl Into<TableReference>,
+        provider: Arc<dyn TableProvider>,
+    ) -> flow_like_types::Result<()> {
+        let table = table.into();
+        self.ctx.deregister_table(table.clone())?;
+        self.ctx.register_table(table, provider)?;
+        Ok(())
+    }
+
     /// Queue a mount to run when the session is next materialized by a consumer. A
     /// queued mount with the same dedupe key is replaced, not duplicated.
     pub async fn defer_mount(&self, mount: Arc<dyn DeferredMount>) {
@@ -173,7 +190,7 @@ impl CachedDataFusionSession {
     }
 
     /// Remembers a Lance registration so derived DataFusion providers can be
-    /// replaced when a remote database rotates its scoped credentials.
+    /// replaced when credentials rotate or a read-only handle advances its version.
     pub async fn track_lance_table(
         &self,
         table_name: String,
@@ -197,10 +214,10 @@ impl CachedDataFusionSession {
         for (table_name, registration) in registrations.iter_mut() {
             let (cached_db, generation) =
                 registration.database.load_with_generation(context).await?;
-            // Flush before the generation short-circuit: local databases never
-            // rotate generations, but SQL run through this session — including
-            // UPDATE/DELETE — must see the flow's own buffered writes (a flush
-            // after a DELETE would otherwise resurrect the deleted rows).
+            // Flush before the generation short-circuit: a writable handle may
+            // have buffered rows without a new generation. SQL, including
+            // UPDATE/DELETE, must see those rows before it runs, otherwise a
+            // later flush could resurrect deleted rows.
             cached_db.ensure_flushed().await?;
             if generation == registration.generation {
                 continue;

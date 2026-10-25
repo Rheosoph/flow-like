@@ -50,6 +50,8 @@ LOG_BUCKET=flow-like-logs
 
 Provider-specific names such as `AWS_CONTENT_BUCKET`,
 `AZURE_CONTENT_CONTAINER`, and `GCP_CONTENT_BUCKET` override the generic names.
+A separate Object Lock or immutable bucket for write-once files is set with
+`LOCKED_BUCKET`; see [Locked storage](/self-hosting/locked-storage/).
 
 ### Device archive payloads
 

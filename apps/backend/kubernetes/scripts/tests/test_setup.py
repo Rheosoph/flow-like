@@ -50,6 +50,15 @@ class SetupTest(unittest.TestCase):
                 self.assertEqual(json.loads(secret["stringData"]["flow-like.config.json"]), marker)
                 self.assertNotIn("configured.example.test", json.dumps(values))
 
+    def test_locked_bucket_is_opt_in_and_needs_no_new_identity(self):
+        with patch.dict(os.environ, {}, clear=True):
+            baseline, values = setup.generate("flow-like", "flow-like")
+        self.assertEqual(values["lockedStorage"], {"bucket": ""})
+        with patch.dict(os.environ, {"LOCKED_BUCKET": "flow-like-locked"}, clear=True):
+            objects, values = setup.generate("flow-like", "flow-like")
+        self.assertEqual(values["lockedStorage"], {"bucket": "flow-like-locked"})
+        self.assertEqual([x["metadata"]["name"] for x in objects["items"]], [x["metadata"]["name"] for x in baseline["items"]])
+
     def test_secret_reference_generates_no_hub_json_secret(self):
         with patch.dict(os.environ, {"FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference"}, clear=True):
             objects, values = setup.generate("flow-like", "flow-like")

@@ -14,6 +14,7 @@ import {
 	type IGenericCommand,
 	type IGraphState,
 	type IHelperState,
+	type ILockedStorageState,
 	type IPageState,
 	type IProfile,
 	type IQueryState,
@@ -53,6 +54,7 @@ import {
 	WebEventState,
 	WebGraphState,
 	WebHelperState,
+	WebLockedStorageState,
 	WebPageState,
 	WebQueryState,
 	WebRegistryState,
@@ -81,6 +83,7 @@ export class WebBackend implements IBackendState {
 	roleState: IRoleState;
 	routeState: IAppRouteState;
 	storageState: IStorageState;
+	lockedStorageState: ILockedStorageState;
 	teamState: ITeamState;
 	templateState: ITemplateState;
 	userState: IUserState;
@@ -99,7 +102,7 @@ export class WebBackend implements IBackendState {
 	private backendRef: WebBackendRef;
 
 	constructor(
-		public readonly backgroundTaskHandler: (task: Promise<any>) => void,
+		public readonly backgroundTaskHandler: (task: Promise<unknown>) => void,
 		public queryClient?: QueryClient,
 		public auth?: AuthContextProps,
 		public profile?: IProfile,
@@ -116,6 +119,7 @@ export class WebBackend implements IBackendState {
 		this.roleState = new WebRoleState(this.backendRef);
 		this.routeState = new WebRouteState(this.backendRef);
 		this.storageState = new WebStorageState(this.backendRef);
+		this.lockedStorageState = new WebLockedStorageState(this.backendRef);
 		this.teamState = new WebTeamState(this.backendRef);
 		this.templateState = new WebTemplateState(this.backendRef);
 		this.userState = new WebUserState(this.backendRef);

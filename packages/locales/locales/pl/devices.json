@@ -81,7 +81,8 @@
 			"tooMany": "",
 			"unknown": "",
 			"unverified": "",
-			"wrongPassword": ""
+			"wrongPassword": "",
+			"unknownPermissions": ""
 		},
 		"facts": {
 			"code": "",
@@ -3520,7 +3521,12 @@
 			"modelsUnknown": "",
 			"ownerConsentRead": "",
 			"ownerConsentWrite": "",
-			"thisApp": ""
+			"thisApp": "",
+			"modelsHint": "",
+			"modelHostedFallback": "",
+			"modelLocalApproved": "",
+			"localModels": "",
+			"localModelsHint": ""
 		},
 		"form": {
 			"approve": "",
@@ -4080,7 +4086,13 @@
 			"tokenOwn": "",
 			"tokenPerDevice": "",
 			"tokenSame": "",
-			"who": ""
+			"who": "",
+			"onDemandTitle": "",
+			"onDemandEnable": "",
+			"onDemandHint": "",
+			"tokenNone": "",
+			"tokenOptNone": "",
+			"sharedNone": ""
 		},
 		"exception": {
 			"botOpen": "",
@@ -4515,7 +4527,8 @@
 			"whyRunsAlone": "",
 			"whyScheduled": "",
 			"whySplit": "",
-			"whyWrites": ""
+			"whyWrites": "",
+			"whyHostedOnDemand": ""
 		},
 		"settings": {
 			"blocked": "",
@@ -4714,7 +4727,8 @@
 			"values_few": "",
 			"values_many": "",
 			"values_other": "",
-			"writesOn": ""
+			"writesOn": "",
+			"noToken": ""
 		},
 		"thisApp": "",
 		"title": {
@@ -4929,6 +4943,18 @@
 			"updateNewest": "",
 			"updateNewestLabel": "",
 			"updateOption": ""
+		},
+		"models": {
+			"approval": "",
+			"cancel": "",
+			"edit": "",
+			"finish": "",
+			"save": "",
+			"saved": "",
+			"scope": "",
+			"searchLabel": "",
+			"title": "",
+			"working": ""
 		}
 	},
 	"deployShip": {
@@ -5068,7 +5094,10 @@
 			"whenAll": "",
 			"whenEach": "",
 			"whenFirst": "",
-			"whenOne": ""
+			"whenOne": "",
+			"endpointNoToken": "",
+			"onDemandPageNoToken": "",
+			"noToken": ""
 		},
 		"copy": {
 			"abort": "",
@@ -5164,7 +5193,11 @@
 			"setting": "",
 			"spending": "",
 			"token": "",
-			"writeBuffering": ""
+			"writeBuffering": "",
+			"currentToken": "",
+			"authentication": "",
+			"noToken": "",
+			"tokenRequired": ""
 		},
 		"exception": {
 			"agent": "",
@@ -5310,7 +5343,8 @@
 				"relaying": "",
 				"sending": "",
 				"verifying": "",
-				"waiting": ""
+				"waiting": "",
+				"downloadingHere": ""
 			},
 			"stop": "",
 			"title": ""
@@ -5378,7 +5412,8 @@
 			"staysStopped": "",
 			"title": "",
 			"updateNewest": "",
-			"updateSettings": ""
+			"updateSettings": "",
+			"noToken": ""
 		},
 		"result": {
 			"deployedAll_one": "",
@@ -7195,7 +7230,10 @@
 			"stopNote": "",
 			"updateAgent": "",
 			"updateAgentExplain": "",
-			"updateAgentNote": ""
+			"updateAgentNote": "",
+			"serviceConnect": "",
+			"serviceConnectExplain": "",
+			"serviceConnectNote": ""
 		},
 		"certMode": {
 			"acme": "",
@@ -10267,11 +10305,11 @@
 			"block": {
 				"disk": "",
 				"engineUnavailable": "",
-				"fileTooLarge": "",
 				"noFingerprint": "",
 				"projectorMissing": "",
 				"splitIncomplete": "",
-				"tooManyFiles": ""
+				"tooManyFiles": "",
+				"invalidFileSize": ""
 			},
 			"detail": {
 				"cpu": "",
@@ -11659,6 +11697,51 @@
 			"through": "",
 			"turnedAway": "",
 			"unavailable": ""
+		},
+		"executions": {
+			"allLevels": "",
+			"allNodes": "",
+			"back": "",
+			"debug": "",
+			"download": "",
+			"duration": "",
+			"empty": "",
+			"entries": "",
+			"error": "",
+			"errorsAbove": "",
+			"eventValue": "",
+			"failed": "",
+			"fatal": "",
+			"filter": "",
+			"flowVersion": "",
+			"hint": "",
+			"info": "",
+			"infoAbove": "",
+			"highestLevel": "",
+			"inspect": "",
+			"invalidNode": "",
+			"limit": "",
+			"level": "",
+			"list": "",
+			"more": "",
+			"moreLogs": "",
+			"noAccess": "",
+			"noLogs": "",
+			"node": "",
+			"nodeValue": "",
+			"operationValue": "",
+			"reading": "",
+			"readingLogs": "",
+			"refresh": "",
+			"refreshLogs": "",
+			"retry": "",
+			"runValue": "",
+			"title": "",
+			"truncated": "",
+			"unsupported": "",
+			"unsupportedText": "",
+			"warning": "",
+			"warningsAbove": ""
 		}
 	},
 	"overlay": {
@@ -12802,7 +12885,9 @@
 			"spending": "",
 			"storedSecret": "",
 			"tokenNew": "",
-			"tokenOld": ""
+			"tokenOld": "",
+			"authentication": "",
+			"tokenRequired": ""
 		},
 		"edit": {
 			"review": "",
@@ -12861,7 +12946,9 @@
 			"tokenSent": "",
 			"tokenSet": "",
 			"tokenWaiting": "",
-			"urlUnknown": ""
+			"urlUnknown": "",
+			"tokenNone": "",
+			"tokenNoneHint": ""
 		},
 		"error": {
 			"incompatible": "",
@@ -13203,6 +13290,63 @@
 		},
 		"variable": {
 			"unnamed": ""
+		},
+		"tunnels": {
+			"title": "",
+			"intro": "",
+			"target": "",
+			"method": "",
+			"path": "",
+			"headers": "",
+			"headersHint": "",
+			"body": "",
+			"send": "",
+			"stopRequest": "",
+			"response": "",
+			"truncated": "",
+			"tcpHint": "",
+			"port": "",
+			"portHint": "",
+			"copied": "",
+			"copy": "",
+			"stopForward": "",
+			"startForward": "",
+			"desktopHint": "",
+			"empty": "",
+			"refresh": "",
+			"saved": "",
+			"listeners": "",
+			"listenersHint": "",
+			"listenerNumber": "",
+			"listenerId": "",
+			"protocol": "",
+			"deviceHost": "",
+			"devicePort": "",
+			"tlsName": "",
+			"tlsPin": "",
+			"tlsPinHint": "",
+			"remove": "",
+			"add": "",
+			"healthChecks": "",
+			"saveChecks": "",
+			"saveRestart": "",
+			"save": ""
+		},
+		"runtime": {
+			"title": "",
+			"sessionHint": "",
+			"open": "",
+			"intro": "",
+			"interface": "",
+			"loading": "",
+			"opening": "",
+			"routeUnavailable": "",
+			"empty": "",
+			"locked": "",
+			"disconnected": "",
+			"tokenHint": "",
+			"token": "",
+			"reopen": ""
 		}
 	},
 	"serviceEndpoint": {
@@ -13224,7 +13368,8 @@
 				"failed": "",
 				"live": "",
 				"role": ""
-			}
+			},
+			"noToken": ""
 		},
 		"runFromDevices": ""
 	},
