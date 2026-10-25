@@ -122,6 +122,15 @@ async fn value(context: &ExecutionContext, name: &str) -> flow_like_types::Value
         .await
         .unwrap_or_default()
 }
+fn warnings(context: &ExecutionContext) -> Vec<&str> {
+    context
+        .trace
+        .logs
+        .iter()
+        .filter(|log| log.log_level == LogLevel::Warn)
+        .map(|log| log.message.as_str())
+        .collect()
+}
 
 #[test]
 fn try_catch_is_registered_once_as_an_online_control_node_with_compatible_pins() {
@@ -179,6 +188,35 @@ async fn try_catch_routes_real_action_errors() {
             .unwrap()
             .contains("test action failed")
     );
+    let warnings = warnings(&context);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("test action failed"));
+}
+
+#[tokio::test]
+async fn try_catch_hints_when_a_wired_error_has_no_message() {
+    let logic = Arc::new(TryCatchNode::new());
+    let mut context = context(
+        logic.clone(),
+        Action {
+            calls: Arc::new(AtomicUsize::new(0)),
+            failures: 0,
+        },
+    )
+    .await;
+    context
+        .node
+        .get_pin_by_name("error_occurred")
+        .await
+        .unwrap()
+        .set_value(json!(true))
+        .await;
+    logic.run(&mut context).await.unwrap();
+    assert_eq!(value(&context, "exec_catch").await, json!(true));
+    assert_eq!(value(&context, "message").await, json!(""));
+    let warnings = warnings(&context);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Error Message"));
 }
 
 #[tokio::test]
@@ -199,4 +237,5 @@ async fn try_catch_executes_successful_actions_once_and_clears_the_branch() {
     assert_eq!(value(&context, "exec_catch").await, json!(false));
     assert_eq!(value(&context, "exec_try").await, json!(false));
     assert_eq!(value(&context, "message").await, json!(""));
+    assert!(warnings(&context).is_empty());
 }

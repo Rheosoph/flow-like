@@ -32,6 +32,7 @@ import {
 import {
 	Fragment,
 	createContext,
+	useCallback,
 	useContext,
 	useEffect,
 	useLayoutEffect,
@@ -46,6 +47,7 @@ import {
 } from "react-oidc-context";
 import { get } from "../lib/api";
 import { bindHubAuth, renewHubAuth, setHubAuthActive } from "../lib/hub-auth";
+import { SignInLinkDialog } from "./sign-in-link-dialog";
 import { ProfileSyncer, TauriBackend } from "./tauri-provider";
 
 const AUTH_CHANGED_EVENT = "fl-auth-changed";
@@ -112,19 +114,41 @@ export class OIDCTokenProvider implements TokenProvider {
 	}
 }
 
+/** Sign-out redirects share the navigator; only an authorization request carries response_type. */
+function isAuthorizeRequest(url: string): boolean {
+	try {
+		return new URL(url).searchParams.has("response_type");
+	} catch {
+		return false;
+	}
+}
+
 class TauriWindow implements IWindow {
+	private readonly onSignInOpened: (url: string) => void;
+
+	constructor(onSignInOpened: (url: string) => void) {
+		this.onSignInOpened = onSignInOpened;
+	}
+
 	close() {
 		return;
 	}
 	async navigate(params: NavigateParams): Promise<NavigateResponse> {
+		if (isAuthorizeRequest(params.url)) this.onSignInOpened(params.url);
 		await openUrl(params.url);
 		return { url: params.url };
 	}
 }
 
 class TauriRedirectNavigator implements INavigator {
+	private readonly onSignInOpened: (url: string) => void;
+
+	constructor(onSignInOpened: (url: string) => void) {
+		this.onSignInOpened = onSignInOpened;
+	}
+
 	async prepare(params: unknown): Promise<IWindow> {
-		return new TauriWindow();
+		return new TauriWindow(this.onSignInOpened);
 	}
 
 	async callback(url: string, params?: unknown): Promise<void> {
@@ -174,6 +198,8 @@ export function DesktopAuthProvider({
 }: Readonly<{ children: React.ReactNode }>) {
 	const [authConfig, setAuthConfig] = useState<AuthConfigState>();
 	const [lifted, setLifted] = useState<LiftedAuth>();
+	const [signInUrl, setSignInUrl] = useState<string>();
+	const clearSignInUrl = useCallback(() => setSignInUrl(undefined), []);
 	const openIdAuthConfig = authConfig?.settings;
 	const userManager = authConfig?.userManager;
 	const scope = authConfig?.scope ?? 0;
@@ -198,6 +224,13 @@ export function DesktopAuthProvider({
 		lifted?.auth && !matchesHub && authConfig
 			? { ...lifted.auth, user: null, isAuthenticated: false, isLoading: true }
 			: lifted?.auth;
+	const signedInToken = visibleAuth?.isAuthenticated
+		? visibleAuth.user?.access_token
+		: undefined;
+
+	useEffect(() => {
+		if (signedInToken) setSignInUrl(undefined);
+	}, [signedInToken]);
 
 	useEffect(() => {
 		if (matchesHub) userManager?.startSilentRenew();
@@ -231,7 +264,8 @@ export function DesktopAuthProvider({
 			});
 			response.userStore = store;
 			response.automaticSilentRenew = true;
-			const navigator = new TauriRedirectNavigator();
+			setSignInUrl(undefined);
+			const navigator = new TauriRedirectNavigator(setSignInUrl);
 			const userManagerInstance = new UserManager(response, navigator);
 			coordinateOidcRenewal(userManagerInstance);
 			response.userManager = userManagerInstance;
@@ -518,6 +552,7 @@ export function DesktopAuthProvider({
 					</Fragment>
 				)}
 			</AuthContext.Provider>
+			<SignInLinkDialog url={signInUrl} onClose={clearSignInUrl} />
 		</UserManagerContext.Provider>
 	);
 }

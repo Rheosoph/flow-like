@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: widget_bench
+      POSTGRES_DB: widget_bench
+      POSTGRES_PASSWORD: ${BENCH_POSTGRES_PASSWORD:?Run stack.py prepare}
+    ports:
+      - "127.0.0.1:${BENCH_POSTGRES_PORT:-55440}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U widget_bench -d widget_bench"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${BENCH_REDIS_PORT:-56440}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  object-store:
+    image: rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ROOT_USER:?Run stack.py prepare}
+      RUSTFS_SECRET_KEY: ${RUSTFS_ROOT_PASSWORD:?Run stack.py prepare}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: :9000
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_OBS_LOG_DIRECTORY: /logs
+    ports:
+      - "127.0.0.1:${BENCH_S3_PORT:-9044}:9000"
+    volumes:
+      - objects:/data
+      - object-logs:/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+  object-store-init:
+    image: python:3.13.15-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e
+    profiles: ["bootstrap"]
+    depends_on:
+      object-store:
+        condition: service_healthy
+    environment:
+      S3_INTERNAL_ENDPOINT: http://object-store:9000
+      AWS_REGION: us-east-1
+      RUSTFS_ROOT_USER: ${RUSTFS_ROOT_USER}
+      RUSTFS_ROOT_PASSWORD: ${RUSTFS_ROOT_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      STS_ISSUER_ACCESS_KEY: ${STS_ISSUER_ACCESS_KEY}
+      STS_ISSUER_SECRET_KEY: ${STS_ISSUER_SECRET_KEY}
+      META_BUCKET: widget-bench-meta
+      CONTENT_BUCKET: widget-bench-content
+      LOG_BUCKET: widget-bench-logs
+      S3_CORS_ALLOWED_ORIGINS: http://localhost:3440,http://127.0.0.1:3440
+    volumes:
+      - ../../apps/backend/docker-compose/object-store:/bootstrap:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - pip install --disable-pip-version-check --root-user-action=ignore --no-cache-dir -r /bootstrap/requirements.txt && python /bootstrap/bootstrap.py
+volumes:
+  postgres:
+  redis:
+  objects:
+  object-logs:

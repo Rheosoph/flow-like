@@ -1131,7 +1131,7 @@ describe("micro widget consent and grants", () => {
 		expect(findButton("Allow this time")).toBeNull();
 	});
 
-	test("blocking shows the host count and can run the widget at baseline", async () => {
+	test("Don't allow runs the widget without its permissions and offers Allow in place", async () => {
 		const calls = stubRegistry(() => ({
 			policy: {
 				downloads: true,
@@ -1144,22 +1144,50 @@ describe("micro widget consent and grants", () => {
 		await renderWidget(component(), { router: {} });
 
 		await click("Don't allow");
-		expect(frame()).toBeNull();
-		expect(host.textContent).toContain("Blocked network access to 2 sites");
-		expect(host.textContent).toContain("Anyone can receive");
-		expect(activeText()).toBe("Review permissions");
-
-		await click("Run without these permissions");
 		expect(frameSrc()).toEndWith(frameUrl("0"));
 		expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts");
 		expect(host.textContent).toContain(
-			"runs without the permissions you blocked",
+			"Permission declined: File downloads and network access to 2 sites",
 		);
+		expect(activeText()).toBe("Allow…");
 		expect(calls.mint).toEqual([]);
 
-		await click("Review permissions");
+		await click("Allow…");
 		expect(frame()).toBeNull();
-		expect(findButton("Allow this time")).not.toBeNull();
+		await click("Allow this time");
+		expect(calls.mint).toHaveLength(1);
+		expect(frame()?.getAttribute("sandbox")).toBe(
+			"allow-scripts allow-downloads",
+		);
+	});
+
+	test("a declined widget opens without asking again in the same project", async () => {
+		const consent = await import("../micro-widget-capability-consent");
+		const items = installLocalStorage();
+		const calls = stubRegistry(() => ({ policy: { downloads: true } }));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		await click("Don't allow");
+		expect([...items.keys()].some((key) => key.includes(":declined:"))).toBe(
+			true,
+		);
+
+		consent.resetMicroWidgetConsentForTests();
+		await act(() => root.unmount());
+		root = createRoot(host);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(dialogs()).toBe(0);
+		expect(frameSrc()).toEndWith(frameUrl("0"));
+		expect(host.textContent).toContain("Permission declined: File downloads");
+		expect(calls.mint).toEqual([]);
+
+		await click("Allow…");
+		expect(dialogs()).toBe(1);
+		await click("Allow this time");
+		expect(calls.mint).toHaveLength(1);
+		expect([...items.keys()].some((key) => key.includes(":declined:"))).toBe(
+			false,
+		);
 	});
 
 	test("a project grant is remembered on this device", async () => {
@@ -2801,7 +2829,7 @@ describe("micro widget consent dialog", () => {
 		expect(calls.mint).toHaveLength(1);
 	});
 
-	test("Escape means Don't allow and focus returns to Review", async () => {
+	test("Escape means Don't allow and focus returns to Allow", async () => {
 		figures([TILE_SERVER]);
 		await renderWidget(component(), { router: {} });
 		await act(async () => {
@@ -2814,9 +2842,10 @@ describe("micro widget consent dialog", () => {
 
 		await pressEscape();
 		expect(dialogs()).toBe(0);
-		expect(host.textContent).toContain("Blocked network access to 1 site");
-		expect(host.textContent).toContain("External site");
-		expect(activeText()).toBe("Review permissions");
+		expect(host.textContent).toContain(
+			"Permission declined: network access to 1 site",
+		);
+		expect(activeText()).toBe("Allow…");
 	});
 
 	test("a trailing wss address outside the catalog stays visible while Details is closed", async () => {

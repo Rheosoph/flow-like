@@ -154,6 +154,16 @@ function errorMessage(error: unknown): string {
 	return "Unexpected error";
 }
 
+function pageBuilderHref(
+	appId: string,
+	pageId: string | null | undefined,
+	boardId: string | null | undefined,
+): string {
+	const params = new URLSearchParams({ id: pageId ?? "", app: appId });
+	if (boardId) params.set("board", boardId);
+	return `/page-builder?${params.toString()}`;
+}
+
 function newEventDefinition(
 	draft: Partial<IEvent>,
 	priority: number,
@@ -2157,7 +2167,11 @@ function EventConfiguration({
 												<Link
 													title={t("openPageEditor", "Open Page Editor")}
 													className="flex flex-row items-center"
-													href={`/library/config/page-editor?id=${appId}&pageId=${event.default_page_id}`}
+													href={pageBuilderHref(
+														appId,
+														event.default_page_id,
+														event.board_id,
+													)}
 												>
 													{t("page", "Page")}
 													<Button
@@ -2225,7 +2239,11 @@ function EventConfiguration({
 												<Link
 													title={t("openPageEditor", "Open Page Editor")}
 													className="flex flex-row items-center"
-													href={`/library/config/page-editor?id=${appId}&pageId=${formData.default_page_id}`}
+													href={pageBuilderHref(
+														appId,
+														formData.default_page_id,
+														formData.board_id,
+													)}
 												>
 													{t("page", "Page")}
 													<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">

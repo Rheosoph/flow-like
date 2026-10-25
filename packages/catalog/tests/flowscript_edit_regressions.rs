@@ -1033,11 +1033,33 @@ eventsSimple callReport() {
     assert_round_trips(&board);
 }
 
+/// The `log::info` statements of `function` run in `messages` order, the last one leads out of the
+/// function, and nothing loops back to the first.
+fn assert_body_runs_in_order(board: &Board, function: &str, messages: &[&str]) {
+    for pair in messages.windows(2) {
+        assert!(
+            runs_before(board, info(board, pair[0]), info(board, pair[1])),
+            "{:?} must run before {:?}:\n{}",
+            pair[0],
+            pair[1],
+            anchored(board)
+        );
+    }
+    let (first, last) = (messages[0], messages[messages.len() - 1]);
+    assert!(
+        exec_pin(info(board, last), PinType::Output)
+            .connected_to
+            .contains(&function_exit(board, function).id)
+    );
+    assert!(!runs_before(board, info(board, last), info(board, first)));
+}
+
 /// A re-join supersedes the exit's old tail, and the plan re-targets the only other statement that
-/// fed it: the exit is left with nothing, which must be refused rather than applied as a loop.
+/// fed it. That used to leave the exit unfed (refused rather than applied as a loop); the statement
+/// written last now leads out of the function.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_reorder_that_leaves_the_function_exit_unfed_is_refused() {
-    let board = board_from(
+async fn a_reorder_that_supersedes_the_function_exit_rewires_it() {
+    let mut board = board_from(
         r#"function report() {
     log::info({ message: "first", toast: false })
     log::info({ message: "second", toast: false })
@@ -1067,20 +1089,17 @@ eventsSimple callReport() {
             body_line(&text, "first"),
         ],
     );
-    let diagnostics = reconcile_diagnostics(&board, &edited);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("exit of Function `report`")),
-        "{diagnostics:?}\n{edited}"
-    );
+    apply_edit(&mut board, &edited).await;
+    assert_body_runs_in_order(&board, "report", &["second", "yes", "no", "new", "first"]);
+    assert_round_trips(&board);
 }
 
 /// The removed node's surviving successor was also fed by a statement the plan now re-targets:
-/// counting that stale edge as "still fed" silently orphaned it.
+/// counting that stale edge as "still fed" silently orphaned it. The successor now gets the edge
+/// the text writes.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_successor_fed_only_by_a_retargeted_statement_is_not_orphaned_silently() {
-    let board = board_from(
+    let mut board = board_from(
         r#"function report() {
     if (1 > 0) {
         log::info({ message: "then", toast: false })
@@ -1109,13 +1128,10 @@ eventsSimple callReport() {
             body_line(&text, "then"),
         ],
     );
-    let diagnostics = reconcile_diagnostics(&board, &edited);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("no execution predecessor")),
-        "{diagnostics:?}\n{edited}"
-    );
+    apply_edit(&mut board, &edited).await;
+    assert_body_runs_in_order(&board, "report", &["joined", "otherwise", "new", "then"]);
+    assert!(!node_types_on(&board).contains(&"control_branch"));
+    assert_round_trips(&board);
 }
 
 /// `tools:` is only a function-reference list when the callee has no `tools` input. On a node that
@@ -2091,6 +2107,70 @@ async fn removing_a_whole_function_body_never_wires_the_layer_to_itself() {
         .find(|node| node.name == "events_simple")
         .expect("the event keeps its entry");
     assert!(runs_before(&board, entry, info(&board, "after")));
+    assert_round_trips(&board);
+}
+
+/// "Empty function shells stay on the board": deleting a `function` removed its body but kept the
+/// layer, which rendered back as `function helper() {}`.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_function_removes_its_layer() {
+    let mut board = board_from(HELPER_AND_CALLER).await;
+    let deleted = without_line(
+        &without_block(&anchored(&board), "function helper()"),
+        "helper()",
+    );
+    apply_edit(&mut board, &deleted).await;
+    assert!(board.layers.is_empty(), "{:?}", board.layers.keys());
+    assert!(!anchored(&board).contains("function helper"));
+    assert_round_trips(&board);
+}
+
+/// The groups and comments inside a deleted function go with it instead of moving to the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_function_removes_its_groups_and_comments() {
+    let mut board = board_from(
+        r#"function helper() {
+    log::info({ message: "inside", toast: false })
+    @collapse("Steps") {
+        log::info({ message: "grouped", toast: false })
+    }
+}
+
+eventsSimple run() {
+    log::info({ message: "after", toast: false })
+}
+"#,
+    )
+    .await;
+    let helper = board
+        .layers
+        .values()
+        .find(|layer| layer.name == "helper")
+        .map(|layer| layer.id.clone())
+        .expect("function `helper` exists");
+    apply_commands(
+        &mut board,
+        vec![BoardCommand::AddComment {
+            content: "note".to_string(),
+            position: NodePosition { x: 0.0, y: 0.0 },
+            width: None,
+            height: None,
+            color: None,
+            target_layer: Some(helper),
+            summary: None,
+        }],
+    )
+    .await;
+    assert_eq!(board.layers.len(), 2);
+    assert_eq!(board.comments.len(), 1);
+
+    let deleted = without_block(&anchored(&board), "function helper()");
+    apply_edit(&mut board, &deleted).await;
+    assert!(board.layers.is_empty(), "{:?}", board.layers.keys());
+    assert!(board.comments.is_empty());
+    let mut node_types = node_types_on(&board);
+    node_types.sort_unstable();
+    assert_eq!(node_types, ["events_simple", "log_info"]);
     assert_round_trips(&board);
 }
 

@@ -26,8 +26,10 @@ use flow_like_storage::Path;
 use flow_like_types::channel::{Channel, ChannelTicket};
 use flow_like_types::create_id;
 use flow_like_types::intercom::BufferedInterComHandler;
+use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
@@ -65,7 +67,7 @@ pub(crate) fn request_registry(
 }
 
 /// Cache of compiled run templates, keyed by
-/// `(app_id, board_id, version, registry fingerprint, wasm bundle)`.
+/// `(app_id, board_id, version, registry fingerprint, wasm bundle, artifact path)`.
 ///
 /// A cached template has already gone through artifact decode (or full
 /// compile: fetch, decompress, decode, `node_updates`, `compile_board`) plus
@@ -77,6 +79,22 @@ fn wasm_registry_signature(request: &ExecutionRequest) -> String {
     flow_like_types::dispatch::wasm_package_set_revision(request.wasm_packages.as_ref())
 }
 
+fn template_cache_key(
+    request: &ExecutionRequest,
+    fingerprint: &[u8; 32],
+) -> Result<String, ExecutorError> {
+    // Widget edits produce a new artifact path without changing the board version.
+    let artifact_identity = blake3::hash(request.artifact.path.as_bytes());
+    let salt = format!("{}:{}", wasm_registry_signature(request), artifact_identity);
+    Ok(TemplateCache::cache_key(
+        &request.app_id,
+        &request.board_id,
+        &artifact_version_key(request)?,
+        fingerprint,
+        &salt,
+    ))
+}
+
 /// Resolve the request's board into a shared run template from the compiled
 /// artifact the API presigned into the dispatch payload.
 ///
@@ -85,8 +103,9 @@ fn wasm_registry_signature(request: &ExecutionRequest) -> String {
 /// never compiles and never writes anything back — it has no storage
 /// credential that could. The cache is keyed on the board's content identity
 /// (pinned version or source ETag), the registry fingerprint and the WASM
-/// bundle signature, so a hit needs no revalidation. Anything short of a
-/// decodable artifact for our own registry fails the run at Resolution.
+/// bundle signature and artifact path, so a hit needs no revalidation.
+/// Anything short of a decodable artifact for our own registry fails the run
+/// at Resolution.
 pub(crate) async fn resolve_run_template(
     state: &Arc<FlowLikeState>,
     request: &ExecutionRequest,
@@ -94,18 +113,20 @@ pub(crate) async fn resolve_run_template(
     let registry = state.node_registry.read().await.node_registry.clone();
     let fingerprint = registry.fingerprint();
     let version_key = artifact_version_key(request)?;
-    let cache_key = TemplateCache::cache_key(
-        &request.app_id,
-        &request.board_id,
-        &version_key,
-        &fingerprint,
-        &wasm_registry_signature(request),
-    );
+    let cache_key = template_cache_key(request, &fingerprint)?;
     if let Some(template) = TEMPLATE_CACHE.get(&cache_key) {
         template
             .ensure_execution_environment(state.execution_environment)
             .map_err(|e| ExecutorError::BoardLoad(e.to_string()))?;
         tracing::debug!(cache_key = %cache_key, "Template cache hit");
+        crate::widgets::register_widget_snapshot(
+            state,
+            template.widget_snapshot.as_deref(),
+            &request.app_id,
+            &request.board_id,
+            &version_key,
+        )
+        .await;
         return Ok(template);
     }
 
@@ -126,6 +147,14 @@ pub(crate) async fn resolve_run_template(
         state.execution_environment,
     )?;
     TEMPLATE_CACHE.insert(cache_key, template.clone());
+    crate::widgets::register_widget_snapshot(
+        state,
+        template.widget_snapshot.as_deref(),
+        &request.app_id,
+        &request.board_id,
+        &version_key,
+    )
+    .await;
     Ok(template)
 }
 
@@ -574,11 +603,20 @@ pub async fn execute(
 ) -> Result<ExecutionResult, ExecutorError> {
     let mut callback_task = CallbackTask::default();
     let quota_token = request.executor_jwt.clone();
-    if let Ok(claims) = verify_jwt_async(&quota_token).await {
-        crate::quota::record_compute(&claims, &quota_token, "started").await;
-    }
-    let result = execute_inner(request, config, &mut callback_task).await;
+    let mut compute_start = match verify_jwt_async(&quota_token).await {
+        Ok(claims) => crate::quota::start_compute(&claims, &quota_token).await,
+        Err(_) => crate::quota::ComputeStart::default(),
+    };
+    let result = AssertUnwindSafe(execute_inner(
+        request,
+        config,
+        &mut callback_task,
+        &mut compute_start,
+    ))
+    .catch_unwind()
+    .await;
     callback_task.abort_and_join().await;
+    let result = compute_start.complete(result).await;
     if result.is_err() {
         if let Ok(claims) = verify_jwt_async(&quota_token).await {
             crate::quota::reject(&claims, &quota_token).await;
@@ -622,7 +660,7 @@ impl Drop for CallbackTask {
     }
 }
 
-fn check_execution_deadline(config: &ExecutorConfig) -> Result<(), ExecutorError> {
+pub(crate) fn check_execution_deadline(config: &ExecutorConfig) -> Result<(), ExecutorError> {
     if config
         .execution_deadline()
         .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
@@ -639,6 +677,7 @@ async fn execute_inner(
     request: ExecutionRequest,
     config: ExecutorConfig,
     callback_task: &mut CallbackTask,
+    compute_start: &mut crate::quota::ComputeStart,
 ) -> Result<ExecutionResult, ExecutorError> {
     check_execution_deadline(&config)?;
     let start = Instant::now();
@@ -1043,6 +1082,7 @@ async fn execute_inner(
         run.set_user_context(user_context);
     }
 
+    compute_start.wait().await;
     if let Err(error) = check_execution_deadline(&config) {
         channel.close().await;
         return Err(error);
@@ -2407,6 +2447,22 @@ mod shadow_claim_binding_tests {
         );
     }
 
+    #[test]
+    fn widget_artifact_revisions_separate_templates_but_presigned_urls_do_not() {
+        let mut request = request(false);
+        request.artifact.source_etag = Some("same-board-etag".into());
+        let first = template_cache_key(&request, &[0; 32]).unwrap();
+        request.artifact.url = "https://store.example/new-signature".into();
+        assert_eq!(template_cache_key(&request, &[0; 32]).unwrap(), first);
+        request.artifact.path.push_str("-changed-widget-revision");
+        assert_ne!(template_cache_key(&request, &[0; 32]).unwrap(), first);
+
+        request.board_version = Some((1, 0, 0));
+        let pinned = template_cache_key(&request, &[0; 32]).unwrap();
+        request.artifact.path.push_str("-another-widget-revision");
+        assert_ne!(template_cache_key(&request, &[0; 32]).unwrap(), pinned);
+    }
+
     /// The in-process isolation is driven by the signed claim, never by the
     /// unsigned payload byte: any disagreement fails closed.
     #[test]
@@ -2504,13 +2560,7 @@ mod offline_node_tests {
             ExecutionEnvironment::Local,
         )
         .expect("a local host can load offline nodes");
-        let cache_key = TemplateCache::cache_key(
-            &request.app_id,
-            &request.board_id,
-            &artifact_version_key(&request).unwrap(),
-            &fingerprint,
-            &wasm_registry_signature(&request),
-        );
+        let cache_key = template_cache_key(&request, &fingerprint).unwrap();
         TEMPLATE_CACHE.insert(cache_key, template);
         let registry = Arc::new(registry);
         for environment in [ExecutionEnvironment::Local, ExecutionEnvironment::Server] {
@@ -2533,6 +2583,122 @@ mod offline_node_tests {
 mod hub_widget_source_tests {
     use super::shadow_claim_binding_tests::request;
     use super::*;
+
+    #[tokio::test]
+    async fn fetched_and_cached_templates_install_the_current_widget_revision() {
+        use flow_like::a2ui::{micro_widget::load_app_widget, widget::Widget};
+        use flow_like::flow::{board::Board, compiled};
+        use std::sync::atomic::AtomicUsize;
+
+        async fn run_state() -> Arc<FlowLikeState> {
+            let state =
+                FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+            state
+                .register_app_widget_source(Arc::new(crate::widgets::HubWidgetSource::new(
+                    "http://127.0.0.1:9",
+                    "jwt".into(),
+                )))
+                .await;
+            Arc::new(state)
+        }
+
+        let first_state = run_state().await;
+        let registry = first_state.node_registry.read().await.node_registry.clone();
+        let fingerprint = registry.fingerprint();
+        let board = Board::new_detached(Some("board-1".into()), Path::default());
+        let base = compiled::encode_artifact(
+            &compiled::compile::compile_board_with_catalog(&board, &registry).unwrap(),
+            &fingerprint,
+        )
+        .unwrap();
+        let bundle = |revision: &str| {
+            let mut widget = Widget::new("widget", "Widget", "root");
+            widget.description = Some(revision.to_string());
+            compiled::append_widget_snapshot(
+                &base,
+                &compiled::ArtifactWidgetSnapshot {
+                    format_version: 1,
+                    app_id: "app-1".into(),
+                    board_id: "board-1".into(),
+                    board_identity: "latest@same-board".into(),
+                    revision: revision.into(),
+                    widgets: vec![compiled::ArtifactWidgetEntry {
+                        selector: "Widget".into(),
+                        widget_id: "widget".into(),
+                        source_etag: revision.into(),
+                        widget,
+                    }],
+                },
+            )
+            .unwrap()
+        };
+        let first_bytes = bundle("first");
+        let second_bytes = bundle("second");
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = reads.clone();
+        let router = axum::Router::new().route(
+            "/{revision}",
+            axum::routing::get(
+                move |axum::extract::Path(revision): axum::extract::Path<String>| {
+                    let bytes = if revision == "first" {
+                        first_bytes.clone()
+                    } else {
+                        second_bytes.clone()
+                    };
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    async move { bytes }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut request = request(false);
+        request.artifact.source_etag = Some("same-board".into());
+        request.artifact.path = format!("{}/first.flcb", create_id());
+        request.artifact.url = format!("{base_url}/first");
+        let first = resolve_run_template(&first_state, &request).await.unwrap();
+        assert_eq!(
+            load_app_widget("app-1", "Widget", first_state)
+                .await
+                .unwrap()
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("first")
+        );
+
+        let cached_state = run_state().await;
+        request.artifact.url = "http://127.0.0.1:9/unreachable".into();
+        let cached = resolve_run_template(&cached_state, &request).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &cached));
+        assert_eq!(
+            load_app_widget("app-1", "Widget", cached_state)
+                .await
+                .unwrap()
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("first")
+        );
+
+        request.artifact.path.push_str("-second");
+        request.artifact.url = format!("{base_url}/second");
+        let second_state = run_state().await;
+        let second = resolve_run_template(&second_state, &request).await.unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            load_app_widget("app-1", "Widget", second_state)
+                .await
+                .unwrap()
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("second")
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
 
     #[tokio::test]
     async fn a_run_with_a_hub_gets_a_source_for_both_widget_lists_and_one_without_gets_none() {

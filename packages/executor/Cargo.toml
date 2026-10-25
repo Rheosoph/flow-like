@@ -9,6 +9,12 @@ description = "Environment-agnostic execution runtime for Flow-Like"
 # Workspace products disable defaults and select one of the complete bundles
 # below so a remote-only runtime does not regain ONNX metadata by unification.
 default = ["portable-metadata"]
+benchmarks = [
+    "flow-like-catalog/compat",
+    "dep:flow-like-catalog-data",
+    "dep:flow-like-catalog-std-ui",
+    "tokio/full",
+]
 portable-metadata = ["flow-like-catalog/portable-metadata"]
 # Compatibility aliases retain their historical all-implementation semantics.
 execute = ["flow-like-catalog/execute"]
@@ -46,6 +52,8 @@ flow-like-storage.workspace = true
 flow-like-catalog.workspace = true
 flow-like-wasm = { workspace = true, features = ["model"] }
 flow-like-channels.workspace = true
+flow-like-catalog-data = { workspace = true, optional = true, features = ["execute"] }
+flow-like-catalog-std-ui = { workspace = true, optional = true, features = ["execute"] }
 
 blake3.workspace = true
 moka.workspace = true
@@ -67,3 +75,7 @@ p256 = { version = "0.13", features = ["pkcs8", "pem"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+
+[[example]]
+name = "widget_action_bench"
+required-features = ["benchmarks"]

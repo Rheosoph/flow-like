@@ -3,7 +3,7 @@
 //!
 //! Pipeline:
 //! - compile: post-`node_updates` [`crate::flow::board::Board`] → [`CompiledBoard`]
-//! - artifact: [`CompiledBoard`] ⇄ bytes (envelope + lz4 + rkyv), see below
+//! - artifact: [`CompiledBoard`] ⇄ bytes (envelope + compressed rkyv), see below
 //! - template: [`CompiledBoard`] + node registry → shared, immutable
 //!   run template the executor caches per (board version, registry fingerprint)
 //!
@@ -22,6 +22,8 @@
 //! both invisible next to one storage round trip. The header is readable
 //! without decompressing, so a loader can reject a stale artifact from the
 //! first bytes alone.
+//! API artifacts may append a Zstd skippable frame containing widget definitions.
+//! The board archive and format version stay unchanged for older readers.
 
 pub mod codes;
 pub mod compile;
@@ -30,6 +32,7 @@ pub mod prerun;
 pub mod resolver;
 pub mod template;
 pub mod view;
+pub mod widget_snapshot;
 
 pub use compile::{compile_board, compile_board_with_catalog};
 pub use format::{CompiledBoard, FORMAT_VERSION, MAGIC};
@@ -40,6 +43,10 @@ pub use prerun::{
 };
 pub use resolver::{TemplateCache, persist_artifact, template_from_bytes};
 pub use template::CompiledRunTemplate;
+pub use widget_snapshot::{
+    ArtifactWidgetEntry, ArtifactWidgetSnapshot, append_widget_snapshot, decode_widget_snapshot,
+    static_widget_selectors,
+};
 
 use flow_like_storage::Path;
 use flow_like_types::{Result, anyhow};

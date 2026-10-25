@@ -76,6 +76,7 @@ import {
 	ChevronRight,
 	ChevronsUpDown,
 	Edit3Icon,
+	LogInIcon,
 	type LucideIcon,
 	Plus,
 } from "lucide-react";
@@ -949,6 +950,7 @@ export function NavUser({
 	const auth = useAuth();
 	const backend = useBackend();
 	const { developerMode } = useDeveloperMode();
+	const [isSigningIn, setIsSigningIn] = useState(false);
 	const authQueryDeps = [auth?.user?.profile?.sub, auth?.isAuthenticated];
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -969,7 +971,7 @@ export function NavUser({
 		() =>
 			userDisplayName(
 				auth?.isAuthenticated ? info.data : undefined,
-				t("offline", "Offline"),
+				t("account", "Account"),
 			),
 		[info.data, auth?.isAuthenticated, t],
 	);
@@ -992,6 +994,49 @@ export function NavUser({
 	const notificationCount =
 		(notifications.data?.unread_count ?? 0) +
 		(notifications.data?.invites_count ?? 0);
+
+	const handleSignIn = async () => {
+		if (!auth || isSigningIn || auth.activeNavigator) return;
+		setIsSigningIn(true);
+		try {
+			await auth.signinRedirect({ url_state: currentRelativeUrl() });
+		} catch (error) {
+			console.error("[Login] signinRedirect failed:", error);
+			toast.error(
+				t("signInFailedTryAgain", "Could not sign in. Please try again."),
+			);
+		} finally {
+			setIsSigningIn(false);
+		}
+	};
+
+	if (!auth || auth.isLoading) return null;
+
+	if (!auth.isAuthenticated) {
+		const label = t("signIn", "Sign In");
+		const disabled = isSigningIn || Boolean(auth.activeNavigator);
+		return compact ? (
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label={label}
+				title={label}
+				disabled={disabled}
+				onClick={handleSignIn}
+			>
+				<LogInIcon className="size-4" />
+			</Button>
+		) : (
+			<SidebarMenuButton
+				tooltip={label}
+				disabled={disabled}
+				onClick={handleSignIn}
+			>
+				<LogInIcon className="size-4" />
+				<span>{label}</span>
+			</SidebarMenuButton>
+		);
+	}
 
 	return (
 		<AccountMenu
@@ -1023,18 +1068,7 @@ export function NavUser({
 				await clearPageSurfaceCache();
 				await auth?.signoutRedirect();
 			}}
-			onSignIn={async () => {
-				if (!auth) {
-					toast.error("Authentication is not configured.");
-					return;
-				}
-				try {
-					await auth.signinRedirect({ url_state: currentRelativeUrl() });
-				} catch (error) {
-					console.error("[Login] signinRedirect failed:", error);
-					toast.error(`Login failed: ${error}`);
-				}
-			}}
+			onSignIn={handleSignIn}
 		/>
 	);
 }

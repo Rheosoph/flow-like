@@ -113,7 +113,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Switch,
-	TextEditor,
 	Textarea,
 	Tooltip,
 	TooltipContent,
@@ -142,6 +141,7 @@ import {
 	type TemporalCell,
 	TemporalValueEditor,
 } from "./temporal-value-editor";
+import { TextValueDetail } from "./text-value-detail";
 import { UserIdentityCard, UserInlineTag } from "./user-identity";
 
 export type LanceFieldKind =
@@ -1824,7 +1824,7 @@ const CellViewDialog: React.FC<{
 				);
 			default: {
 				if (typeof value === "string") {
-					return <TextEditor initialContent={value} isMarkdown={true} />;
+					return <TextValueDetail text={value} />;
 				}
 				return (
 					<pre className="whitespace-pre-wrap break-all text-sm bg-muted/50 rounded-md p-3 overflow-x-auto max-w-full">
@@ -1846,15 +1846,15 @@ const CellViewDialog: React.FC<{
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-7xl w-full min-w-fit overflow-hidden">
+			<DialogContent className="overflow-hidden sm:max-w-[min(80rem,calc(100%-2rem))]">
 				<DialogHeader>
-					<DialogTitle className="flex items-center justify-between">
-						<span>
+					<DialogTitle className="flex min-w-0 items-center justify-between gap-3">
+						<span className="min-w-0 truncate">
 							{isEditing
 								? t("editName", "Edit {{name}}", { name: field.name })
 								: t("previewName", "Preview {{name}}", { name: field.name })}
 						</span>
-						<div className="flex items-center gap-3 mr-4">
+						<div className="flex shrink-0 items-center gap-3 mr-4">
 							<div className="flex items-center gap-2">
 								<Label
 									htmlFor="edit-switch"
@@ -1881,11 +1881,11 @@ const CellViewDialog: React.FC<{
 						</div>
 					</DialogTitle>
 				</DialogHeader>
-				<div className="space-y-4 overflow-hidden">
+				<div className="min-w-0 space-y-4 overflow-hidden">
 					{!isEditing ? (
 						<div
 							className={cn(
-								"max-h-[60vh] overflow-auto pr-1",
+								"max-h-[60vh] min-w-0 overflow-auto pr-1",
 								file && "flex h-[60vh] flex-col overflow-hidden",
 							)}
 						>

@@ -94,7 +94,7 @@ describe("applyElementUpdate setMediaSource", () => {
 				mediaKind: "file",
 			},
 		);
-		expect(updated.component).toEqual({
+		expect(updated.component as unknown).toEqual({
 			id: "picture",
 			type: "image",
 			src: { literalString: "/signed-file" },
@@ -523,5 +523,79 @@ describe("applyA2UIMessage widget instance routing", () => {
 				{ type: "setVisibility", visible: false },
 			],
 		});
+	});
+});
+
+describe("flow-driven element updates keep the component schema", () => {
+	const button = (): SurfaceComponent =>
+		({
+			id: "save",
+			component: { type: "button", label: { literalString: "Save" } },
+		}) as unknown as SurfaceComponent;
+	const preview = (): Surface => ({
+		id: "page",
+		rootComponentId: "preview",
+		components: {
+			preview: {
+				id: "preview",
+				component: { type: "filePreview", src: { literalString: "a.pdf" } },
+			} as unknown as SurfaceComponent,
+		},
+	});
+	const data = (component: SurfaceComponent) =>
+		component.component as unknown as Record<string, unknown>;
+
+	test("setDisabled and setLoading store BoundValues", () => {
+		for (const flag of [true, false]) {
+			const disabled = applyElementUpdate(button(), {
+				type: "setDisabled",
+				disabled: flag,
+			});
+			const loading = applyElementUpdate(button(), {
+				type: "setLoading",
+				loading: flag,
+			});
+			expect(data(disabled).disabled).toEqual({ literalBool: flag });
+			expect(data(loading).loading).toEqual({ literalBool: flag });
+		}
+		const bound = applyElementUpdate(button(), {
+			type: "setDisabled",
+			disabled: { path: "$.locked" },
+		});
+		expect(data(bound).disabled).toEqual({ path: "$.locked" });
+	});
+
+	test("a props payload without a type merges only its props", () => {
+		const updated = applyA2UIMessage(preview(), {
+			type: "upsertElement",
+			element_id: "page/preview",
+			value: { mode: "setProps", props: { src: "/home/u/x.pdf" } },
+		});
+		expect(updated.components.preview.component).toEqual({
+			type: "filePreview",
+			src: "/home/u/x.pdf",
+		} as never);
+	});
+
+	test.each([
+		["createComponent without a component", { type: "createComponent" }],
+		[
+			"createComponent with props only",
+			{ type: "createComponent", props: { src: "/home/u/x.pdf" } },
+		],
+		[
+			"createComponent without a type",
+			{ type: "createComponent", component: { src: "x.pdf" } },
+		],
+		["a primitive value", "x.pdf"],
+		["null", null],
+	])("drops %s instead of storing an unrenderable entry", (_, value) => {
+		const original = preview();
+		const updated = applyA2UIMessage(original, {
+			type: "upsertElement",
+			element_id: "page/preview",
+			value,
+		} as never);
+		expect(updated).toBe(original);
 	});
 });

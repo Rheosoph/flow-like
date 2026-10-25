@@ -236,6 +236,45 @@ pub trait PackageWidgetSource: Send + Sync {
 #[async_trait]
 pub trait AppWidgetSource: Send + Sync {
     async fn list_app_widgets(&self, app_id: &str) -> flow_like_types::Result<Arc<Vec<Widget>>>;
+
+    /// Resolve one selector. Hosts with bundled definitions can answer without
+    /// fetching the full inventory; existing sources retain their list lookup.
+    async fn get_app_widget(
+        &self,
+        app_id: &str,
+        selector: &str,
+    ) -> flow_like_types::Result<Option<Arc<Widget>>> {
+        let widgets = self.list_app_widgets(app_id).await?;
+        Ok(find_app_widget_by_selector(&widgets, selector)
+            .cloned()
+            .map(Arc::new))
+    }
+}
+
+/// An exact ID takes precedence over a name; duplicate names follow inventory order.
+pub fn find_app_widget_by_selector<'a>(
+    widgets: &'a [Widget],
+    selector: &str,
+) -> Option<&'a Widget> {
+    widgets
+        .iter()
+        .find(|widget| widget.id == selector)
+        .or_else(|| widgets.iter().find(|widget| widget.name == selector))
+}
+
+/// Resolve one declarative widget through the host, or through the local store.
+pub async fn load_app_widget(
+    app_id: &str,
+    selector: &str,
+    state: Arc<FlowLikeState>,
+) -> flow_like_types::Result<Option<Arc<Widget>>> {
+    if let Some(source) = state.app_widget_source().await {
+        return source.get_app_widget(app_id, selector).await;
+    }
+    let widgets = load_app_widgets(app_id, state).await?;
+    Ok(find_app_widget_by_selector(&widgets, selector)
+        .cloned()
+        .map(Arc::new))
 }
 
 /// An app's declarative widgets, through the registered [`AppWidgetSource`]
@@ -347,10 +386,7 @@ impl WidgetProvider {
     }
 
     pub fn resolve_declarative(&self, selector: &str) -> Option<&Widget> {
-        self.declarative
-            .iter()
-            .find(|w| w.id == selector)
-            .or_else(|| self.declarative.iter().find(|w| w.name == selector))
+        find_app_widget_by_selector(&self.declarative, selector)
     }
 
     pub fn resolve_package(&self, package_id: &str, widget_id: &str) -> Option<&PackageWidgetRef> {
@@ -364,6 +400,50 @@ impl WidgetProvider {
 mod tests {
     use super::*;
     use flow_like_types::json::json;
+
+    #[tokio::test]
+    async fn a_list_only_source_retains_selector_precedence() {
+        struct LegacySource(Arc<Vec<Widget>>);
+
+        #[async_trait]
+        impl AppWidgetSource for LegacySource {
+            async fn list_app_widgets(&self, _: &str) -> flow_like_types::Result<Arc<Vec<Widget>>> {
+                Ok(self.0.clone())
+            }
+        }
+
+        let source = LegacySource(Arc::new(vec![
+            Widget::new("first", "duplicate", "root"),
+            Widget::new("second", "duplicate", "root"),
+            Widget::new("duplicate", "Exact ID", "root"),
+        ]));
+        assert_eq!(
+            source
+                .get_app_widget("app", "duplicate")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "duplicate"
+        );
+        let names = LegacySource(Arc::new(source.0[..2].to_vec()));
+        assert_eq!(
+            names
+                .get_app_widget("app", "duplicate")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "first"
+        );
+        assert!(
+            names
+                .get_app_widget("app", "missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn test_package_ref_roundtrip() {

@@ -1,4 +1,8 @@
 {
+	"actionidIsNotDeclaredUnderSettingsEventsPagesCannotBindItSoItNeverReachesAFlow": "",
+	"actionidNotDeclared": "",
+	"declareEvent": "",
+	"pageBackground": "",
 	"pinOptionsAddValue": "",
 	"pinOptionsAllowedValues": "",
 	"pinOptionsAllowedValuesHint": "",
@@ -27,6 +31,8 @@
 	"pinOptionsSensitiveHint": "",
 	"pinOptionsStepNotPositive": "",
 	"pinOptionsValuePlaceholder": "",
+	"showsWhereverNoComponentPaintsItsOwnBackgroundSuchAsBesideAContainerWithAMaxWidth": "",
+	"theseSettingsApplyToTheWholePageNotIndividualComponents": "",
 	"updateAllWidgets": "",
 	"updateAllWidgetsDescription": "",
 	"widgetProjectAlreadyCurrent": "",

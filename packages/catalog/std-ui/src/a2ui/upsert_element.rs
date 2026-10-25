@@ -55,10 +55,60 @@ impl NodeLogic for UpsertElement {
 
         let element_id: String = context.evaluate_pin("element_id").await?;
         let value: Value = context.evaluate_pin("value").await?;
+        ensure_component_payload(&element_id, &value)?;
 
         context.upsert_element(&element_id, value).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+}
+
+/// A `createComponent` without a typed `component` would leave the page an
+/// element it cannot render, so it fails here where the author can see why.
+fn ensure_component_payload(element_id: &str, value: &Value) -> flow_like_types::Result<()> {
+    let Some(update) = value.as_object() else {
+        return Ok(());
+    };
+    if update.get("type").and_then(Value::as_str) != Some("createComponent") {
+        return Ok(());
+    }
+    let typed = update
+        .get("component")
+        .and_then(Value::as_object)
+        .and_then(|component| component.get("type"))
+        .is_some_and(Value::is_string);
+    if typed {
+        return Ok(());
+    }
+    Err(flow_like_types::anyhow!(
+        "Upsert Element '{}': createComponent needs a `component` object with a `type`; to change props of the existing element send {{\"type\":\"setProps\",\"props\":{{...}}}} instead",
+        element_id
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::json::json;
+
+    #[test]
+    fn create_component_requires_a_typed_component() {
+        let partial = json!({ "type": "createComponent", "props": { "src": "/home/u/x.pdf" } });
+        let untyped = json!({ "type": "createComponent", "component": { "src": "x" } });
+        assert!(ensure_component_payload("page/preview", &partial).is_err());
+        assert!(ensure_component_payload("page/preview", &untyped).is_err());
+    }
+
+    #[test]
+    fn other_updates_pass_through() {
+        for value in [
+            json!({ "type": "createComponent", "component": { "type": "filePreview" } }),
+            json!({ "type": "setProps", "props": { "src": "/home/u/x.pdf" } }),
+            json!({ "mode": "setProps", "props": { "src": "/home/u/x.pdf" } }),
+            json!("text"),
+        ] {
+            assert!(ensure_component_payload("page/preview", &value).is_ok());
+        }
     }
 }

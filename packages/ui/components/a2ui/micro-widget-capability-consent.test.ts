@@ -13,6 +13,7 @@ import {
 	evaluateMicroWidgetConsent,
 	grantMicroWidgetConsent,
 	listMicroWidgetConsents,
+	microWidgetConsentDeclinedKey,
 	microWidgetConsentKey,
 	microWidgetConsentRevokedKey,
 	muteMicroWidgetRuntime,
@@ -310,24 +311,76 @@ describe("scopes", () => {
 describe("block and revoke", () => {
 	test("blocking after a grant clears it and keeps the widget blocked", () => {
 		grantMicroWidgetConsent(target, network, "app", storage);
-		blockMicroWidgetConsent(target, storage);
+		blockMicroWidgetConsent(target, network, storage);
 		expect(storage.items.has(microWidgetConsentKey(target))).toBe(false);
 		expect(readMicroWidgetConsent(target, network, storage)).toBe("blocked");
+	});
+
+	test("a decline in a project is remembered across sessions until the widget asks for more", () => {
+		blockMicroWidgetConsent(target, network, storage);
+		expect(storage.items.has(microWidgetConsentDeclinedKey(target))).toBe(true);
 		resetMicroWidgetConsentForTests();
+		expect(readMicroWidgetConsent(target, network, storage)).toBe("blocked");
+		expect(readMicroWidgetConsent(target, { csp: network.csp }, storage)).toBe(
+			"blocked",
+		);
+		expect(
+			readMicroWidgetConsent(target, { ...network, downloads: true }, storage),
+		).toBe("pending");
+		expect(
+			readMicroWidgetConsent({ ...target, appId: "app2" }, network, storage),
+		).toBe("pending");
+	});
+
+	test("outside a project a decline lasts for the session only", () => {
+		const detached = { ...target, appId: undefined };
+		blockMicroWidgetConsent(detached, network, storage);
+		expect(readMicroWidgetConsent(detached, network, storage)).toBe("blocked");
+		expect(
+			[...storage.items.keys()].filter((key) => !key.includes("revoked")),
+		).toEqual([]);
+		resetMicroWidgetConsentForTests();
+		expect(readMicroWidgetConsent(detached, network, storage)).toBe("pending");
+	});
+
+	test("a stored decline from before a revocation or one that cannot be read never blocks", () => {
+		blockMicroWidgetConsent(target, network, storage);
+		resetMicroWidgetConsentForTests();
+		clearMicroWidgetConsents({}, storage);
+		expect(readMicroWidgetConsent(target, network, storage)).toBe("pending");
+		storage.items.set(
+			microWidgetConsentDeclinedKey(target),
+			JSON.stringify({ v: 2, policy: network, at: 1 }),
+		);
+		expect(readMicroWidgetConsent(target, network, storage)).toBe("pending");
+		storage.items.set(microWidgetConsentDeclinedKey(target), "{not json");
 		expect(readMicroWidgetConsent(target, network, storage)).toBe("pending");
 	});
 
 	test("reopening a blocked prompt and allowing again grants", () => {
-		blockMicroWidgetConsent(target, storage);
-		reopenMicroWidgetConsent(target);
+		blockMicroWidgetConsent(target, network, storage);
+		reopenMicroWidgetConsent(target, storage);
+		expect(storage.items.has(microWidgetConsentDeclinedKey(target))).toBe(
+			false,
+		);
 		expect(readMicroWidgetConsent(target, network, storage)).toBe("pending");
 		grantMicroWidgetConsent(target, network, "session", storage);
 		expect(readMicroWidgetConsent(target, network, storage)).toBe("granted");
 	});
 
+	test("any grant drops the stored decline", () => {
+		blockMicroWidgetConsent(target, network, storage);
+		grantMicroWidgetConsent(target, network, "session", storage);
+		expect(storage.items.has(microWidgetConsentDeclinedKey(target))).toBe(
+			false,
+		);
+		resetMicroWidgetConsentForTests();
+		expect(readMicroWidgetConsent(target, network, storage)).toBe("pending");
+	});
+
 	test("revoking forgets the decision and the next mount prompts", () => {
 		grantMicroWidgetConsent(target, network, "app", storage);
-		blockMicroWidgetConsent({ ...target, widgetId: "other" }, storage);
+		blockMicroWidgetConsent({ ...target, widgetId: "other" }, network, storage);
 		revokeMicroWidgetConsent(target, storage);
 		revokeMicroWidgetConsent({ ...target, widgetId: "other" }, storage);
 		expect(readMicroWidgetConsent(target, network, storage)).toBe("pending");
@@ -341,6 +394,11 @@ describe("block and revoke", () => {
 		expect(
 			Number(storage.items.get(microWidgetConsentRevokedKey(target))),
 		).toBeGreaterThan(0);
+		expect(
+			storage.items.has(
+				microWidgetConsentDeclinedKey({ ...target, widgetId: "other" }),
+			),
+		).toBe(false);
 	});
 
 	test("a grant given right after a revocation counts", () => {
@@ -363,8 +421,8 @@ describe("block and revoke", () => {
 
 		other.grantMicroWidgetConsent(target, network, "session", storage);
 		grantMicroWidgetConsent(target, network, "session", storage);
-		other.blockMicroWidgetConsent(target, storage);
-		expect(readMicroWidgetConsent(target, network, storage)).toBe("pending");
+		other.blockMicroWidgetConsent(target, network, storage);
+		expect(readMicroWidgetConsent(target, network, storage)).toBe("blocked");
 		expect(other.readMicroWidgetConsent(target, network, storage)).toBe(
 			"blocked",
 		);
@@ -373,7 +431,7 @@ describe("block and revoke", () => {
 	test("a project grant from another tab lifts this tab's block", async () => {
 		const other = await otherRealm();
 		other.resetMicroWidgetConsentForTests();
-		blockMicroWidgetConsent(target, storage);
+		blockMicroWidgetConsent(target, network, storage);
 		other.grantMicroWidgetConsent(target, network, "app", storage);
 		expect(readMicroWidgetConsent(target, network, storage)).toBe("granted");
 	});
@@ -488,7 +546,11 @@ describe("manage and clear", () => {
 			"app",
 			storage,
 		);
-		blockMicroWidgetConsent({ ...target, widgetId: "blocked" }, storage);
+		blockMicroWidgetConsent(
+			{ ...target, widgetId: "blocked" },
+			network,
+			storage,
+		);
 		storage.items.set(legacyKey, JSON.stringify(["workers"]));
 
 		clearPackageMicroWidgetConsents(target.packageId, storage);

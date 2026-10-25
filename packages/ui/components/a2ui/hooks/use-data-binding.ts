@@ -8,7 +8,9 @@ export function useDataBinding(bound: BoundValue | undefined): unknown {
 	const dataContext = useContext(DataContext);
 
 	return useMemo(() => {
-		if (!bound) return undefined;
+		if (bound === undefined || bound === null) return undefined;
+		// Flow updates can store a raw primitive, which `in` would throw on.
+		if (typeof bound !== "object") return bound;
 
 		if ("literalString" in bound) {
 			return bound.literalString;
@@ -49,7 +51,12 @@ export function useDataBindingSetter(
 	const dataContext = useContext(DataContext);
 
 	return useMemo(() => {
-		if (!bound || !("path" in bound) || !dataContext) {
+		if (
+			!bound ||
+			typeof bound !== "object" ||
+			!("path" in bound) ||
+			!dataContext
+		) {
 			return undefined;
 		}
 

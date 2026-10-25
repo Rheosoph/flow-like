@@ -81,6 +81,7 @@ pub struct TemplateVariable {
 }
 
 pub struct CompiledRunTemplate {
+    pub widget_snapshot: Option<Arc<super::ArtifactWidgetSnapshot>>,
     pub pins: Box<[TemplatePin]>,
     pub nodes: Box<[TemplateNode]>,
     pub node_idx_by_id: AHashMap<Arc<str>, u32>,
@@ -265,6 +266,7 @@ impl CompiledRunTemplate {
         }
 
         Ok(Self {
+            widget_snapshot: None,
             pins: pins.into_boxed_slice(),
             nodes: nodes.into_boxed_slice(),
             node_idx_by_id,

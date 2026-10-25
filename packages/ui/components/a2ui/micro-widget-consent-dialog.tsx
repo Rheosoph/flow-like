@@ -91,12 +91,12 @@ function ConsentBanner({ view }: { view: WidgetConsentView }) {
 		<DialogPrimitive.Description asChild>
 			{broad ? (
 				<div
-					className="flex items-start gap-2 rounded-md border border-destructive/50 px-3 py-2 text-sm text-destructive"
+					className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm"
 					data-widget-consent-banner="broad"
 				>
 					<TriangleAlertIcon
 						aria-hidden="true"
-						className="mt-0.5 size-4 shrink-0"
+						className="mt-0.5 size-4 shrink-0 text-destructive"
 					/>
 					<span>{text}</span>
 				</div>

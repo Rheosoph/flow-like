@@ -594,6 +594,7 @@ pub struct State {
     /// lifecycle-managed `tmp/` is trusted to exist; `None` for immutable
     /// version artifacts.
     pub compiled_artifact_cache: moka::sync::Cache<String, Option<std::time::SystemTime>>,
+    pub(crate) compiled_widget_artifacts: crate::execution::widget_artifacts::WidgetArtifactCache,
     /// Registries compiled artifacts are fingerprinted against, one per
     /// resolved WASM package set and current node metadata: the built-in
     /// catalog extended with the packages' manifest `Node`s. See
@@ -1457,6 +1458,7 @@ impl State {
                 .max_capacity(16_384)
                 .time_to_idle(Duration::from_secs(12 * 60 * 60))
                 .build(),
+            compiled_widget_artifacts: Default::default(),
             artifact_registries: moka::sync::Cache::builder()
                 .max_capacity(256)
                 .time_to_idle(Duration::from_secs(60 * 60))
@@ -2211,8 +2213,20 @@ async fn fetch_jwks(raw_url: &str) -> Result<JwkSet> {
     let client = reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(JWKS_REQUEST_TIMEOUT)
-        .build()?;
+        .timeout(JWKS_REQUEST_TIMEOUT);
+    // The isolated benchmark issuer uses its own CA without changing OS trust.
+    // Native TLS on macOS does not load SSL_CERT_FILE automatically.
+    #[cfg(feature = "benchmark-stack")]
+    let client = if matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")) {
+        if let Some(path) = std::env::var_os("SSL_CERT_FILE") {
+            client.add_root_certificate(reqwest::Certificate::from_pem(&std::fs::read(path)?)?)
+        } else {
+            client
+        }
+    } else {
+        client
+    };
+    let client = client.build()?;
     let mut response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")

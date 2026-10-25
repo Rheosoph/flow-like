@@ -2127,6 +2127,8 @@ fn reconcile_inner(
             &removed_ids,
             &result.commands,
         ));
+        let removals = deleted_function_layer_removals(existing, &deleted, &result.commands);
+        result.commands.extend(removals);
     }
 
     // Layer size is ADVICE, not a gate. A crowded layer is a readability and performance
@@ -3304,10 +3306,104 @@ fn undeclared_function_layers<'a>(
         .collect()
 }
 
-/// A deleted `function` declaration takes the function's body with it but leaves its layer, so a
-/// call the board keeps or the plan adds failed only at run time ("Function 'X' has no node
-/// connected to its exec input"). Kept calls are impure call nodes this edit does not remove,
-/// written in this document or outside its scope.
+/// Removes each deleted Function layer with everything the edit leaves inside it: nested groups,
+/// comments, and nodes the text does not render. Removing the layer alone would re-home that
+/// content to the layer's parent. Items the edit already removes or moves elsewhere are skipped.
+fn deleted_function_layer_removals(
+    existing: &Board,
+    deleted: &[&Layer],
+    commands: &[BoardCommand],
+) -> Vec<BoardCommand> {
+    let mut handled: HashSet<&str> = HashSet::new();
+    for command in commands {
+        match command {
+            BoardCommand::RemoveNode { node_id: id, .. }
+            | BoardCommand::RemoveComment { comment_id: id, .. }
+            | BoardCommand::RemoveLayer { layer_id: id, .. } => {
+                handled.insert(id.as_str());
+            }
+            BoardCommand::MoveToLayer { ids, .. } => handled.extend(ids.iter().map(String::as_str)),
+            _ => {}
+        }
+    }
+    let depth_below = |layer: &Layer, root: &str| {
+        let mut current = layer;
+        for depth in 0..=existing.layers.len() {
+            if current.id == root {
+                return Some(depth);
+            }
+            current = existing.layers.get(current.parent_id.as_deref()?)?;
+        }
+        None
+    };
+
+    let mut removals = Vec::new();
+    for function in deleted {
+        let mut layers: Vec<(usize, &Layer)> = existing
+            .layers
+            .values()
+            .filter_map(|layer| Some((depth_below(layer, &function.id)?, layer)))
+            .collect();
+        layers.sort_by(|(left_depth, left), (right_depth, right)| {
+            right_depth
+                .cmp(left_depth)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let inside: HashSet<&str> = layers.iter().map(|(_, layer)| layer.id.as_str()).collect();
+        let in_function = |layer: Option<&str>| layer.is_some_and(|layer| inside.contains(layer));
+
+        removals.extend(
+            all_board_nodes(existing)
+                .into_iter()
+                .filter(|node| in_function(node.layer.as_deref()))
+                .filter(|node| !handled.contains(node.id.as_str()))
+                .map(|node| BoardCommand::RemoveNode {
+                    node_id: node.id.clone(),
+                    summary: Some(format!(
+                        "Remove {} with deleted function `{}`",
+                        node.friendly_name, function.name
+                    )),
+                }),
+        );
+        let mut comments: Vec<&str> = existing
+            .comments
+            .values()
+            .filter(|comment| in_function(comment.layer.as_deref()))
+            .map(|comment| comment.id.as_str())
+            .filter(|id| !handled.contains(id))
+            .collect();
+        comments.sort_unstable();
+        removals.extend(comments.into_iter().map(|id| BoardCommand::RemoveComment {
+            comment_id: id.to_string(),
+            summary: Some(format!(
+                "Remove comment with deleted function `{}`",
+                function.name
+            )),
+        }));
+        removals.extend(
+            layers
+                .iter()
+                .filter(|(_, layer)| !handled.contains(layer.id.as_str()))
+                .map(|(_, layer)| BoardCommand::RemoveLayer {
+                    layer_id: layer.id.clone(),
+                    summary: Some(if layer.id == function.id {
+                        format!("Remove function `{}`, no longer declared", layer.name)
+                    } else {
+                        format!(
+                            "Remove group `{}` with deleted function `{}`",
+                            layer.name, function.name
+                        )
+                    }),
+                }),
+        );
+    }
+    removals
+}
+
+/// A deleted `function` declaration takes the function's body and layer with it, so a call the
+/// board keeps or the plan adds failed only at run time ("Function 'X' has no node connected to
+/// its exec input"). Kept calls are impure call nodes this edit does not remove, written in this
+/// document or outside its scope.
 fn deleted_function_call_diagnostics(
     existing: &Board,
     board_ast: &BoardAst,
@@ -22891,6 +22987,10 @@ function fooBar() {
             r#"function first() {   //@l:fn-a
     let count: int = 0   //@v:var-a
     variableGet({ varRef: "count" })   //@n:reader-a
+}
+
+function second() {   //@l:fn-b
+    let count: int = 0   //@v:var-b
 }
 "#,
             &catalog,
