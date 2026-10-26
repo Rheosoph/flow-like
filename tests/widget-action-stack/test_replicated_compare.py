@@ -24,7 +24,7 @@ def proxy_status(records, processes):
         for pool in ("api_frontend", "api_callback", "runtime")}}
 
 
-def fixture(directory, *, pairs=2, replicas=2, modes=("warm", "navigation", "action")):
+def fixture(directory, *, pairs=2, replicas=2, modes=("warm", "navigation", "action"), layout_experiment=False):
     suite = {"schemaVersion": 1, "mode": "paired-replicated-process", "status": "passed",
              "configuration": {"trials": pairs, "modes": list(modes), "replicas": replicas, "concurrency": replicas,
                                "warmSamples": replicas * 2, "warmup": 1, "workerThreads": 1, "executorSlots": 1,
@@ -32,6 +32,12 @@ def fixture(directory, *, pairs=2, replicas=2, modes=("warm", "navigation", "act
              "binaries": {"baseline": {"sha256": "a" * 64}, "candidate": {"sha256": "b" * 64}},
              "frontends": {variant: {"sourceSha256": "c" * 64, "buildId": "build"} for variant in ("baseline", "candidate")},
              "trials": []}
+    if layout_experiment:
+        suite["binaries"]["candidate"] = copy.deepcopy(suite["binaries"]["baseline"])
+        suite["fixtureLayoutExperiment"] = {
+            "states": {variant: str(directory / variant) for variant in ("baseline", "candidate")},
+            "fixtures": {},
+        }
     next_pid = 100
     for mode in modes:
         for pair in range(pairs):
@@ -47,6 +53,13 @@ def fixture(directory, *, pairs=2, replicas=2, modes=("warm", "navigation", "act
                     process["name"] = f"{process['pool']}-{process['replica']}"
                 value = bundle()
                 report, manifest = value["report"], value["manifest"]
+                if layout_experiment:
+                    compact = variant == "candidate"
+                    manifest["fixture"]["database"].update(
+                        layout="compact" if compact else "fragmented", fragments=1 if compact else 36,
+                        physical_rows=47 if compact else 58, deletion_files=0 if compact else 3,
+                        records_sha256="d" * 64, schema_sha256="e" * 64)
+                    suite["fixtureLayoutExperiment"]["fixtures"][variant] = copy.deepcopy(manifest["fixture"])
                 sample_count = replicas * (2 if mode == "warm" else 1)
                 report["configuration"].update(samples=sample_count, warmup=1 if mode == "warm" else 0, concurrency=replicas)
                 report["web"]["build"] = {"source": {"sha256": "c" * 64}, "buildId": "build"}
@@ -117,6 +130,8 @@ def fixture(directory, *, pairs=2, replicas=2, modes=("warm", "navigation", "act
                          "accountingBeforeStop": {"status": "confirmed", "runIds": nav_ids + all_ids, "durationMs": 1, "polls": 1},
                          "proxyStatus": proxy_status(records, final),
                          "cleanup": {"status": "ok", "ownedServiceProcessesExited": True, "processInventoryRemoved": True}}
+                if layout_experiment:
+                    trial["fixtureState"] = suite["fixtureLayoutExperiment"]["states"][variant]
                 if mode == "action":
                     trial.update(restartRequestedAfterBootstrap=True,
                                  restart={"processes_before": copy.deepcopy(initial), "processes_after": copy.deepcopy(final), "readyAtUnixMs": 500,
@@ -146,6 +161,67 @@ def fixture(directory, *, pairs=2, replicas=2, modes=("warm", "navigation", "act
 
 
 class ReplicatedComparison(unittest.TestCase):
+    def test_layout_experiment_accepts_only_layout_changes_across_ab_ba_pairs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            suite = fixture(directory, pairs=2, modes=("warm", "action"), layout_experiment=True)
+            result = replicated_compare.analyze(directory)
+            self.assertEqual(result["issues"], [])
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["fixtureLayoutExperiment"], suite["fixtureLayoutExperiment"])
+            self.assertEqual(result["metrics"]["action"]["Click to history DOM: trial median"]["n"], 2)
+            self.assertIn("physical fixture layout", replicated_compare.render(result))
+
+    def test_normal_code_comparisons_reject_changed_physical_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            suite = fixture(directory, pairs=1, modes=("warm",))
+            path = directory / suite["trials"][1]["directory"] / "run-manifest.json"
+            manifest = json.loads(path.read_text())
+            manifest["fixture"]["database"]["fragments"] = 1
+            write_json(path, manifest)
+            result = replicated_compare.analyze(directory)
+            self.assert_withheld(result)
+            self.assertTrue(any("physical storage layout" in issue for issue in result["issues"]))
+
+    def test_layout_experiment_rejects_confounds_and_changed_frozen_evidence(self):
+        for mutation in ("binary", "frontend", "records", "schema", "graph", "trial-layout",
+                         "trial-state", "missing-declaration", "invalid-declaration", "invalid-fixtures",
+                         "missing-hash", "shared-state"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                suite = fixture(directory, pairs=1, modes=("warm",), layout_experiment=True)
+                experiment = suite["fixtureLayoutExperiment"]
+                trial = suite["trials"][1]
+                path = directory / trial["directory"] / "run-manifest.json"
+                manifest = json.loads(path.read_text())
+                if mutation == "binary":
+                    suite["binaries"]["candidate"]["sha256"] = "f" * 64
+                elif mutation == "frontend":
+                    suite["frontends"]["candidate"]["buildId"] = "different"
+                elif mutation in ("records", "schema"):
+                    experiment["fixtures"]["candidate"]["database"][mutation + "_sha256"] = "f" * 64
+                elif mutation == "graph":
+                    experiment["fixtures"]["candidate"]["graph_fixture_sha256"] = "different"
+                elif mutation == "trial-layout":
+                    manifest["fixture"]["database"]["fragments"] = 2
+                elif mutation == "trial-state":
+                    trial["fixtureState"] = experiment["states"]["baseline"]
+                elif mutation == "missing-declaration":
+                    del suite["fixtureLayoutExperiment"]
+                elif mutation == "invalid-declaration":
+                    suite["fixtureLayoutExperiment"] = True
+                elif mutation == "invalid-fixtures":
+                    experiment["fixtures"] = []
+                elif mutation == "missing-hash":
+                    for variant in ("baseline", "candidate"):
+                        del experiment["fixtures"][variant]["database"]["schema_sha256"]
+                elif mutation == "shared-state":
+                    experiment["states"]["candidate"] = experiment["states"]["baseline"]
+                write_json(path, manifest)
+                self.write_trial(directory, suite, 1)
+                self.assert_withheld(replicated_compare.analyze(directory))
+
     def write_trial(self, directory, suite, index=0):
         write_json(directory / suite["trials"][index]["directory"] / "replicated-trial.json", suite["trials"][index])
         write_json(directory / "replicated-results.json", suite)

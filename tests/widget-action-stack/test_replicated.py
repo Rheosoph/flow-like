@@ -1,5 +1,7 @@
 import argparse
+import contextlib
 import copy
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -10,11 +12,77 @@ import cold
 import replicated
 import run
 from replica_services import topology_for
+from test_compare import bundle
 from test_topology import fixture as admission_fixture
 from test_topology import request as admission_request
 
 
 class ReplicatedConfiguration(unittest.TestCase):
+    def test_layout_main_uses_each_prepared_session_in_alternating_trial_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            states = {variant: root / variant for variant in ("baseline", "candidate")}
+            for variant, state in states.items():
+                (state / "fixture").mkdir(parents=True)
+                (state / "storage-state.json").write_text("{}")
+                (state / "fixture/browser-config.json").write_text(json.dumps({
+                    "appUrl": "http://127.0.0.1:3440/use/personen", "storageState": "../storage-state.json"}))
+                imported = bundle()["manifest"]["fixture"]
+                imported["database"].update(records_sha256="d" * 64, schema_sha256="e" * 64,
+                                             layout="compact" if variant == "candidate" else "fragmented",
+                                             fragments=1 if variant == "candidate" else 36)
+                (state / "import-result.json").write_text(json.dumps(imported))
+            binary = root / "binary"
+            binary.write_bytes(b"same binary")
+            output, observed = root / "results", []
+
+            def trial(args, suite, mode, pair, position, variant, config):
+                observed.append((variant, Path(config["storageState"]), pair, position))
+                record = {"status": "passed", "directory": f"{pair}/{variant}"}
+                suite["trials"].append(record)
+                return record
+
+            with patch.object(replicated, "run_trial", side_effect=trial), \
+                    patch.object(replicated.cold, "frontend_identity", return_value={"sourceSha256": "c" * 64, "buildId": "build"}), \
+                    patch.object(replicated.compare, "load", return_value={}), \
+                    patch.object(replicated.fixture_experiment, "pair_mismatches", return_value=[]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                result = replicated.main([
+                    "--baseline", str(binary), "--candidate", str(binary),
+                    "--baseline-state", str(states["baseline"]), "--candidate-state", str(states["candidate"]),
+                    "--fixture-layout-experiment", "--replicas", "2", "--samples", "4", "--warmup", "1",
+                    "--trials", "2", "--modes", "warm", "--output", str(output)])
+            self.assertEqual(result, 0)
+            self.assertEqual(observed, [(variant, states[variant] / "storage-state.json", pair, position)
+                                        for pair, order in enumerate((("baseline", "candidate"), ("candidate", "baseline")))
+                                        for position, variant in enumerate(order)])
+            suite = json.loads((output / "replicated-results.json").read_text())
+            self.assertEqual(suite["status"], "passed")
+            self.assertEqual(suite["fixtureLayoutExperiment"]["states"], {key: str(value) for key, value in states.items()})
+
+    def test_layout_requires_explicit_separate_states_and_variant_sessions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = argparse.Namespace(state=root / "default", baseline_state=root / "fragmented",
+                                      candidate_state=root / "compact", fixture_layout_experiment=True,
+                                      config=None, web_mode="production")
+            selected = replicated.variant_states(args)
+            self.assertEqual(selected, {"baseline": args.baseline_state.resolve(), "candidate": args.candidate_state.resolve()})
+            for field, changed, message in (
+                    ("candidate_state", None, "explicit"),
+                    ("candidate_state", args.baseline_state, "distinct"),
+                    ("fixture_layout_experiment", False, "require --fixture-layout-experiment"),
+                    ("config", root / "shared.json", "baseline-config"),
+                    ("web_mode", "development", "production")):
+                changed_args = copy.copy(args)
+                setattr(changed_args, field, changed)
+                with self.subTest(field=field, changed=changed), self.assertRaisesRegex(ValueError, message):
+                    replicated.variant_states(changed_args)
+            args.candidate_state.mkdir()
+            (args.candidate_state / "processes.json").write_text("{}")
+            with self.assertRaisesRegex(ValueError, "owns processes"):
+                replicated.variant_states(args)
+
     def test_defaults_and_custom_warm_counts_keep_whole_bursts(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "config.json"
@@ -67,11 +135,13 @@ class ReplicatedOrchestration(unittest.TestCase):
         )
         self.suite = {"trials": [], "binaries": {"baseline": {"path": str(binary), "sha256": run.file_hash(binary)}}}
         self.events, self.created = [], []
+        self.service_states, self.accounting_states = [], []
         self.restart_error = None
         self.accounting_error = None
 
     def factory(self, settings):
         test = self
+        self.service_states.append(settings.state)
 
         class FakeServices:
             def __init__(self):
@@ -95,7 +165,7 @@ class ReplicatedOrchestration(unittest.TestCase):
 
             def start(self):
                 test.events.append("start")
-                (test.state / "processes.json").write_text("{}")
+                (settings.state / "processes.json").write_text("{}")
 
             def wait_idle(self):
                 test.events.append("idle")
@@ -116,7 +186,7 @@ class ReplicatedOrchestration(unittest.TestCase):
             def close(self):
                 test.events.append("close")
                 self.closed = True
-                (test.state / "processes.json").unlink(missing_ok=True)
+                (settings.state / "processes.json").unlink(missing_ok=True)
 
         service = FakeServices()
         self.created.append(service)
@@ -151,6 +221,7 @@ class ReplicatedOrchestration(unittest.TestCase):
         }))
 
     def accounting(self, state, directory, timeout):
+        self.accounting_states.append(state)
         identifiers = cold.completed_run_ids(directory)
         self.events.append("accounting-stop" if any(value.startswith("action") for value in identifiers) else "accounting-restart")
         if self.accounting_error:
@@ -182,6 +253,30 @@ class ReplicatedOrchestration(unittest.TestCase):
         self.assertEqual(json.loads((self.directory / "replicated-results.json").read_text())["trials"], [record])
         self.assertTrue(record["cleanup"]["ownedServiceProcessesExited"])
         self.assertFalse((self.state / "processes.json").exists())
+
+    def test_variant_state_drives_services_accounting_and_cleanup(self):
+        selected = self.directory / "selected"
+        selected.mkdir()
+        self.args.baseline_state = selected
+        unrelated = self.state / "processes.json"
+        unrelated.write_text("unrelated inventory")
+        record = self.trial()
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(record["fixtureState"], str(selected))
+        self.assertEqual(self.service_states, [selected])
+        self.assertEqual(self.accounting_states, [selected, selected])
+        self.assertEqual(unrelated.read_text(), "unrelated inventory")
+        self.assertFalse((selected / "processes.json").exists())
+
+    def test_changed_layout_identity_fails_before_starting_services(self):
+        expected = {"database": {"layout": "fragmented"}}
+        self.suite["fixtureLayoutExperiment"] = {
+            "states": {"baseline": str(self.state)}, "fixtures": {"baseline": expected}}
+        (self.state / "import-result.json").write_text(json.dumps({"database": {"layout": "compact"}}))
+        record = self.trial()
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(self.created, [])
+        self.assertTrue(any("frozen layout" in issue for issue in record["issues"]))
 
     def test_failed_restart_keeps_error_and_partial_results_and_closes_services(self):
         self.restart_error = ValueError("one runtime failed readiness")

@@ -293,6 +293,43 @@ impl CallFunctionNode {
         context.function_pin_owner(board, layer_id, pin_id)
     }
 
+    /// The node the function body starts at, or `None` when the function has no execution body
+    /// to run. That is a pure layer, or an execution boundary nothing is wired to: FlowScript
+    /// keeps a layer's boundary pins when its body is edited down to a bare `return`.
+    fn function_entry_node(
+        context: &ExecutionContext,
+        board: &Board,
+        layer: &Layer,
+        layer_id: &str,
+    ) -> flow_like_types::Result<Option<String>> {
+        let Some(exec_in) = layer
+            .pins
+            .values()
+            .find(|pin| pin.pin_type == PinType::Input && pin.data_type == VariableType::Execution)
+        else {
+            return Ok(None);
+        };
+        if let Some(entry) = exec_in
+            .connected_to
+            .iter()
+            .find_map(|pin_id| Self::find_node_id_by_pin(context, board, layer_id, pin_id))
+        {
+            return Ok(Some(entry));
+        }
+        let body_reaches_exit = layer.pins.values().any(|pin| {
+            pin.pin_type == PinType::Output
+                && pin.data_type == VariableType::Execution
+                && !pin.depends_on.is_empty()
+        });
+        if exec_in.connected_to.is_empty() && !body_reaches_exit {
+            return Ok(None);
+        }
+        Err(flow_like_types::anyhow!(
+            "Function '{}' has no node connected to its exec input",
+            layer.name
+        ))
+    }
+
     async fn run_pure_function(
         &self,
         context: &mut ExecutionContext,
@@ -413,16 +450,17 @@ impl NodeLogic for CallFunctionNode {
         }
 
         // Collect input values (non-exec, non-function_layer_id)
-        let input_pins: Vec<_> = {
-            let pins: Vec<_> = context.node.pins.iter().cloned().collect();
-            pins.into_iter()
-                .filter(|p| {
-                    p.pin_type == PinType::Input
-                        && p.data_type != VariableType::Execution
-                        && p.name.as_ref() != "function_layer_id"
-                })
-                .collect()
-        };
+        let input_pins: Vec<_> = context
+            .node
+            .pins
+            .iter()
+            .filter(|p| {
+                p.pin_type == PinType::Input
+                    && p.data_type != VariableType::Execution
+                    && p.name.as_ref() != "function_layer_id"
+            })
+            .cloned()
+            .collect();
 
         let mut input_values = std::collections::HashMap::new();
         for pin in &input_pins {
@@ -490,34 +528,15 @@ impl NodeLogic for CallFunctionNode {
             None => None,
         };
 
-        // Check if the function is impure (has an input execution layer pin)
-        let exec_in_layer_pin = layer
-            .pins
-            .values()
-            .find(|p| p.pin_type == PinType::Input && p.data_type == VariableType::Execution);
+        let output_exec_names: Vec<String> = Self::output_exec_pin_names(context);
+        for name in &output_exec_names {
+            let _ = context.deactivate_exec_pin(name).await;
+        }
 
-        if let Some(exec_pin) = exec_in_layer_pin {
+        if let Some(entry_node_id) =
+            Self::function_entry_node(context, &board, layer, &function_layer_id)?
+        {
             // --- IMPURE function: exec chain inside the function ---
-            // Deactivate all mirrored output exec pins
-            let output_exec_names: Vec<String> = Self::output_exec_pin_names(context);
-            for name in &output_exec_names {
-                let _ = context.deactivate_exec_pin(name).await;
-            }
-
-            // Find entry node via the layer exec_in pin's connections
-            let entry_node_id = exec_pin
-                .connected_to
-                .iter()
-                .find_map(|pin_id| {
-                    Self::find_node_id_by_pin(context, &board, &function_layer_id, pin_id)
-                })
-                .ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "Function '{}' has no node connected to its exec input",
-                        layer.name
-                    )
-                })?;
-
             let entry_node = context
                 .nodes
                 .get(&entry_node_id)
@@ -610,14 +629,14 @@ impl NodeLogic for CallFunctionNode {
             context.push_sub_context(&mut fn_context);
 
             self.read_outputs(context, layer, &overrides).await;
-
-            for name in &output_exec_names {
-                let _ = context.activate_exec_pin(name).await;
-            }
         } else {
             // --- PURE function: evaluate outputs by triggering feeding nodes ---
             self.run_pure_function(context, &board, layer, &function_layer_id, &input_values)
                 .await?;
+        }
+
+        for name in &output_exec_names {
+            let _ = context.activate_exec_pin(name).await;
         }
 
         if let (Some(settings), Some((handle, key))) = (&cache_settings, &cache_lookup) {

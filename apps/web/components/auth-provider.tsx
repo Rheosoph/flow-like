@@ -17,7 +17,7 @@ import { UserManager, type UserManagerSettings } from "oidc-client-ts";
 import { createContext, useContext, useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "react-oidc-context";
 import { accountQueryDeps } from "../lib/account-query";
-import { get } from "../lib/api";
+import { loadWebOidcConfiguration } from "../lib/oidc-configuration";
 import { getWebOidcSettings } from "../lib/oidc-settings";
 import { getPublicApiUrl, getPublicWebConfig } from "../lib/public-config";
 import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
@@ -89,7 +89,7 @@ export function WebAuthProvider({
 				return;
 			}
 			setLoadingProgress(30);
-			const response = await get<any>(defaultProfile(), "auth/openid");
+			const response = await loadWebOidcConfiguration();
 			if (cancelled) return;
 			if (response) {
 				setLoadingProgress(60);
@@ -118,7 +118,9 @@ export function WebAuthProvider({
 				setUserManager(userManagerInstance);
 				setOpenIdAuthConfig(settings);
 			}
-		})();
+		})().catch(() => {
+			if (!cancelled) setConfigurationError(true);
+		});
 		return () => {
 			cancelled = true;
 			manager?.stopSilentRenew();

@@ -213,7 +213,15 @@ pub fn decode_artifact(
         ));
     }
 
-    let decompressed = match header.codec {
+    let board = decode_archive(bytes, &header)?;
+    board.validate()?;
+    Ok(board)
+}
+
+/// Decode the binary archive after its header has been checked. Callers still
+/// validate arena indices before constructing runtime state.
+fn decode_archive(bytes: &[u8], header: &ArtifactHeader) -> Result<CompiledBoard> {
+    let aligned = match header.codec {
         CODEC_ZSTD => {
             let payload = &bytes[HEADER_LEN..];
             if payload.len() < PAYLOAD_LEN_PREFIX {
@@ -225,19 +233,190 @@ pub fn decode_artifact(
                     "compiled board artifact claims an implausible {len}-byte payload"
                 ));
             }
-            zstd::bulk::decompress(&payload[PAYLOAD_LEN_PREFIX..], len)
-                .map_err(|e| anyhow!("failed to decompress compiled board artifact: {e}"))?
+
+            // Decode Zstd directly into the aligned allocation rkyv needs,
+            // avoiding a second archive-sized buffer and copy.
+            let mut aligned = rkyv::util::AlignedVec::<16>::with_capacity(len);
+            aligned.resize(len, 0);
+            let written = zstd::bulk::decompress_to_buffer(
+                &payload[PAYLOAD_LEN_PREFIX..],
+                aligned.as_mut_slice(),
+            )
+            .map_err(|e| anyhow!("failed to decompress compiled board artifact: {e}"))?;
+            aligned.resize(written, 0);
+            aligned
         }
-        _ => lz4_flex::decompress_size_prepended(&bytes[HEADER_LEN..])
-            .map_err(|e| anyhow!("failed to decompress compiled board artifact: {e}"))?,
+        _ => {
+            // Preserve the legacy decoder's length handling, including its
+            // acceptance of payloads larger than the Zstd limit.
+            let decompressed = lz4_flex::decompress_size_prepended(&bytes[HEADER_LEN..])
+                .map_err(|e| anyhow!("failed to decompress compiled board artifact: {e}"))?;
+            let mut aligned = rkyv::util::AlignedVec::<16>::new();
+            aligned.extend_from_slice(&decompressed);
+            aligned
+        }
     };
-    let mut aligned = rkyv::util::AlignedVec::<16>::new();
-    aligned.extend_from_slice(&decompressed);
 
     let archived = rkyv::access::<rkyv::Archived<CompiledBoard>, rkyv::rancor::Error>(&aligned)
         .map_err(|e| anyhow!("compiled board artifact failed validation: {e}"))?;
-    let board = rkyv::deserialize::<CompiledBoard, rkyv::rancor::Error>(archived)
-        .map_err(|e| anyhow!("failed to deserialize compiled board artifact: {e}"))?;
-    board.validate()?;
-    Ok(board)
+    rkyv::deserialize::<CompiledBoard, rkyv::rancor::Error>(archived)
+        .map_err(|e| anyhow!("failed to deserialize compiled board artifact: {e}"))
+}
+
+#[cfg(test)]
+mod artifact_loading_tests {
+    use super::*;
+    use crate::flow::board::Board;
+    use crate::flow::node::Node;
+    use crate::flow::pin::ValueType;
+    use crate::flow::variable::{Variable, VariableType};
+    use crate::state::FlowNodeRegistryInner;
+
+    fn artifact(board: &CompiledBoard, codec: u8) -> Vec<u8> {
+        let current = encode_artifact(board, &[7; 32]).unwrap();
+        if codec == CODEC_ZSTD {
+            return current;
+        }
+        let archive = rkyv::to_bytes::<rkyv::rancor::Error>(board).unwrap();
+        let mut legacy = current[..HEADER_LEN].to_vec();
+        legacy[6] = CODEC_LZ4;
+        legacy.extend_from_slice(&lz4_flex::compress_prepend_size(&archive));
+        legacy
+    }
+
+    #[test]
+    fn both_codecs_keep_the_decoded_length_and_variable_defaults() {
+        let mut board = Board::new_detached(Some("artifact-load".into()), Path::default());
+        let mut variable = Variable::new("default", VariableType::String, ValueType::Normal);
+        variable.set_default_value(serde_json::json!("large default".repeat(16_384)));
+        let variable_id = variable.id.clone();
+        let default = variable.default_value.clone();
+        board.variables.insert(variable_id.clone(), variable);
+        let compiled = compile_board(&board).unwrap();
+        let registry = FlowNodeRegistryInner::new(0);
+
+        for codec in [CODEC_ZSTD, CODEC_LZ4] {
+            let bytes = artifact(&compiled, codec);
+            let len = u32::from_le_bytes(bytes[HEADER_LEN..HEADER_LEN + 4].try_into().unwrap());
+            for capacity in [len, len + 17] {
+                let mut bytes = bytes.clone();
+                bytes[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&capacity.to_le_bytes());
+                assert_eq!(decode_artifact(&bytes, Some(&[7; 32])).unwrap(), compiled);
+                let template =
+                    template_from_bytes(&bytes, &[7; 32], &registry, &Path::default()).unwrap();
+                assert_eq!(
+                    template.board.variables[&variable_id].default_value,
+                    default
+                );
+                assert_eq!(template.variables[0].variable.default_value, default);
+                assert_eq!(
+                    template.variables[0].parsed_default.as_deref(),
+                    Some(&serde_json::json!("large default".repeat(16_384)))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn both_codecs_reject_invalid_payload_lengths() {
+        let board = Board::new_detached(None, Path::default());
+        let compiled = compile_board(&board).unwrap();
+        for codec in [CODEC_ZSTD, CODEC_LZ4] {
+            let bytes = artifact(&compiled, codec);
+            let len = u32::from_le_bytes(bytes[HEADER_LEN..HEADER_LEN + 4].try_into().unwrap());
+            for capacity in [0, len - 1] {
+                let mut malformed = bytes.clone();
+                malformed[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&capacity.to_le_bytes());
+                assert!(decode_artifact(&malformed, None).is_err(), "codec {codec}");
+            }
+            for end in [HEADER_LEN, HEADER_LEN + 3, bytes.len() - 1] {
+                assert!(
+                    decode_artifact(&bytes[..end], None).is_err(),
+                    "codec {codec}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zstd_rejects_payload_lengths_above_its_limit() {
+        let board = Board::new_detached(None, Path::default());
+        let compiled = compile_board(&board).unwrap();
+        let mut bytes = artifact(&compiled, CODEC_ZSTD);
+        bytes[HEADER_LEN..HEADER_LEN + 4]
+            .copy_from_slice(&(MAX_DECOMPRESSED_LEN as u32 + 1).to_le_bytes());
+        assert!(
+            decode_artifact(&bytes, None)
+                .unwrap_err()
+                .to_string()
+                .contains("implausible")
+        );
+    }
+
+    #[test]
+    fn direct_template_loading_still_rejects_invalid_arena_indices() {
+        let mut board = Board::new_detached(None, Path::default());
+        let mut node = Node::new("test-node", "Test", "", "Tests");
+        node.add_input_pin("value", "Value", "", VariableType::String);
+        board.nodes.insert(node.id.clone(), node);
+        let compiled = compile_board(&board).unwrap();
+        let registry = FlowNodeRegistryInner::new(0);
+        for corruption in 0..7 {
+            let mut invalid = compiled.clone();
+            match corruption {
+                0 => invalid.nodes[0].body_layer = 42,
+                1 => invalid.nodes[0].layer = 42,
+                2 => invalid.nodes[0].pins.push(42),
+                3 => invalid.pins[0].owner_node = 42,
+                4 => invalid.pins[0].owner_layer = 42,
+                5 => invalid.pins[0].depends_on.push(42),
+                _ => invalid.pins[0].connected_to.push(42),
+            }
+            for codec in [CODEC_ZSTD, CODEC_LZ4] {
+                let bytes = artifact(&invalid, codec);
+                let decoded_error = decode_artifact(&bytes, None).unwrap_err();
+                let template_error =
+                    template_from_bytes(&bytes, &[7; 32], &registry, &Path::default())
+                        .err()
+                        .expect("arena validation must run before catalog instantiation");
+                assert!(decoded_error.to_string().contains("out-of-range index"));
+                assert!(template_error.to_string().contains("out-of-range index"));
+            }
+        }
+    }
+
+    #[test]
+    fn direct_template_loading_still_validates_geometry_defaults() {
+        use flow_like_types::geometry::{GeometryKind, marker};
+
+        let mut board = Board::new_detached(None, Path::default());
+        board
+            .refs
+            .insert("point".into(), marker(GeometryKind::Point).into());
+        let mut variable = Variable::new("point", VariableType::Geometry, ValueType::Normal);
+        variable.schema = Some("point".into());
+        variable.set_default_value(serde_json::json!({
+            "type": "Point", "coordinates": [13.4, 52.5]
+        }));
+        board.variables.insert(variable.id.clone(), variable);
+        let mut compiled = compile_board(&board).unwrap();
+        let registry = FlowNodeRegistryInner::new(0);
+        let bytes = artifact(&compiled, CODEC_ZSTD);
+        let template = template_from_bytes(&bytes, &[7; 32], &registry, &Path::default()).unwrap();
+        assert_eq!(
+            template.variables[0].variable.schema.as_deref(),
+            Some(marker(GeometryKind::Point))
+        );
+
+        compiled.variables[0].default_value =
+            Some(br#"{"type":"Point","coordinates":["invalid",52.5]}"#.to_vec());
+        for codec in [CODEC_ZSTD, CODEC_LZ4] {
+            let bytes = artifact(&compiled, codec);
+            assert!(
+                decode_artifact(&bytes, None).is_ok(),
+                "the archive itself is valid"
+            );
+            assert!(template_from_bytes(&bytes, &[7; 32], &registry, &Path::default()).is_err());
+        }
+    }
 }

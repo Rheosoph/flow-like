@@ -200,6 +200,7 @@ const report = {
 	network: [],
 	summaries: [],
 	browserErrorCount: 0,
+	browserErrors: [],
 };
 const save = () => {
 	const measured = report.samples.filter((sample) => !sample.warmup);
@@ -255,8 +256,14 @@ async function createWorker(id) {
 	const page = await browser.newPage();
 	worker.page = page;
 	await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 });
-	page.on("pageerror", () => {
+	page.on("pageerror", (error) => {
 		report.browserErrorCount++;
+		if (report.browserErrors.length < 100)
+			report.browserErrors.push({
+				worker: id,
+				name: error.name,
+				message: error.message.slice(0, 4000),
+			});
 	});
 	if (config.storageState) {
 		const statePath = resolve(dirname(configPath), config.storageState);

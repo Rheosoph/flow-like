@@ -11,6 +11,7 @@ import sys
 
 import cold_compare
 import compare
+import fixture_experiment
 import topology
 
 
@@ -274,6 +275,8 @@ def validate_trial(directory, trial, suite, seen_processes):
     bundle = compare.load(directory)
     report, manifest = bundle["report"], bundle["manifest"]
     issues.extend(compare.assessment(bundle)["issues"])
+    issues.extend(fixture_experiment.trial_issues(
+        suite, trial["variant"], manifest.get("fixture"), trial.get("fixtureState")))
     if json.loads((directory / "replicated-trial.json").read_text()) != trial:
         issues.append("saved trial evidence differs from suite record")
     arrangement = topology.normalize_topology(manifest)
@@ -456,7 +459,7 @@ def analyze(directory):
             or not topology.positive_integer(config.get("warmSamples")) or config["warmSamples"] % replicas
             or type(config.get("warmup")) is not int or config["warmup"] < 0):
         raise ValueError("invalid trial, replica, mode or warm workload configuration")
-    issues = []
+    issues = fixture_experiment.identity_issues(suite)
     if suite.get("schemaVersion") != 1 or suite.get("mode") != "paired-replicated-process":
         issues.append("unknown replicated suite format")
     if suite.get("status") != "passed":
@@ -497,7 +500,8 @@ def analyze(directory):
             continue
         issues.extend(f"{label}: {issue}" for issue in trial_issues)
         reference = references.setdefault(mode, bundle)
-        issues.extend(f"{label}: {issue}" for issue in compare.mismatches(reference, bundle))
+        issues.extend(f"{label}: {issue}" for issue in fixture_experiment.pair_mismatches(
+            reference, bundle, layout_experiment=suite.get("fixtureLayoutExperiment") is not None))
         bundles[key] = bundle
         try:
             admissions[label] = admission_summaries(trial, admission, bundle["report"])
@@ -545,7 +549,8 @@ def analyze(directory):
     warnings = ([f"{anomalies} synthetic CDP preflight timing anomalies retained and excluded from latency metrics; matching proxy responses completed successfully."]
                 if anomalies else [])
     return {"schemaVersion": 1, "status": "invalid" if issues else "passed", "issues": issues, "warnings": warnings,
-            "configuration": config, "metrics": metrics, "admissions": admissions, "bursts": bursts, "processReadiness": readiness,
+            "configuration": config, "fixtureLayoutExperiment": suite.get("fixtureLayoutExperiment"),
+            "metrics": metrics, "admissions": admissions, "bursts": bursts, "processReadiness": readiness,
             "actionLatencyDescriptive": {"/".join(key): compare.summary(values) for key, values in descriptive.items()},
             "requestCounts": {"/".join(key): dict(value) for key, value in requests.items()},
             "repeatedRoutesWithinWorkerPhase": repeated,
@@ -561,6 +566,8 @@ def analyze(directory):
 
 def render(result):
     lines = [f"Replicated local comparison: {result['status']}"]
+    if result.get("fixtureLayoutExperiment"):
+        lines.append("Experiment: physical fixture layout; backend and frontend held fixed")
     lines.extend("  " + issue for issue in result["issues"])
     lines.extend("  Warning: " + warning for warning in result.get("warnings", []))
     for mode, measurements in result["metrics"].items():

@@ -138,7 +138,7 @@ export function GroupConsole({
 				className="w-full sm:max-w-3xl p-0 flex flex-col gap-0"
 			>
 				<SheetHeader className="border-b">
-					<div className="flex items-start gap-3">
+					<div className="flex items-start gap-3 pr-6">
 						<Avatar className="h-12 w-12 rounded-xl">
 							{current.icon ? <AvatarImage src={current.icon} alt="" /> : null}
 							<AvatarFallback
@@ -184,8 +184,11 @@ export function GroupConsole({
 							{t("dangerZone", "Danger zone")}
 						</TabsTrigger>
 					</TabsList>
-					<ScrollArea className="flex-1 min-h-0">
-						<div className="p-4 pb-10">
+					<ScrollArea
+						className="flex-1 min-h-0 min-w-0"
+						viewportClassName="[&>div]:!block [&>div]:w-full [&>div]:min-w-0"
+					>
+						<div className="min-w-0 p-4 pb-10">
 							<TabsContent value="branding" className="mt-0">
 								<BrandingTab
 									appId={appId}
@@ -434,7 +437,7 @@ function BrandingTab({
 				);
 			}
 		},
-		[appId, backend.teamState, group.id, onSaved],
+		[appId, backend.teamState, group.id, onSaved, t],
 	);
 
 	const save = async () => {
@@ -1151,7 +1154,9 @@ function VisibilityTab({
 
 			{isAnchor && isStoreVisible(visibility) && (
 				<InfoNote>
-					{`Member apps that are not published themselves stay in the suite but are hidden from the store listing.`}
+					{
+						"Member apps that are not published themselves stay in the suite but are hidden from the store listing."
+					}
 				</InfoNote>
 			)}
 
@@ -1190,7 +1195,9 @@ function DangerTab({
 	if (!isAnchor) {
 		return (
 			<InfoNote>
-				{`Only the anchor app can archive or delete this suite. Your app can leave it from the Apps tab at any time.`}
+				{
+					"Only the anchor app can archive or delete this suite. Your app can leave it from the Apps tab at any time."
+				}
 			</InfoNote>
 		);
 	}
@@ -1258,7 +1265,7 @@ function DangerTab({
 				</Select>
 				<p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
 					<Archive className="w-3 h-3" />
-					{`Archived suites disappear from the store but stay recoverable.`}
+					{"Archived suites disappear from the store but stay recoverable."}
 				</p>
 			</div>
 

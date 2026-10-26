@@ -752,17 +752,41 @@ export function applyA2UIMessage(
 	}
 }
 
+/**
+ * Split an element ref into the scope it names and the component id within it.
+ * `surfaceId/instanceId/childId` keeps the instance as the scope, so the surface
+ * prefix never widens an update to every instance of the same widget.
+ */
+function splitElementId(
+	surface: Surface,
+	elementId: string,
+): { scopeId: string; componentId: string } {
+	const separatorIndex = elementId.indexOf("/");
+	if (separatorIndex < 0)
+		return { scopeId: surface.id, componentId: elementId };
+	const scopeId = elementId.slice(0, separatorIndex);
+	const componentId = elementId.slice(separatorIndex + 1);
+	if (scopeId !== surface.id) return { scopeId, componentId };
+
+	const instanceSeparator = componentId.indexOf("/");
+	const instanceId =
+		instanceSeparator > 0 ? componentId.slice(0, instanceSeparator) : "";
+	if (instanceId && surfaceOwnsScope(surface, instanceId)) {
+		return {
+			scopeId: instanceId,
+			componentId: componentId.slice(instanceSeparator + 1),
+		};
+	}
+	return { scopeId, componentId };
+}
+
 function applyUpsertElement(
 	surface: Surface,
 	message: Extract<A2UIServerMessage, { type: "upsertElement" }>,
 ): Surface {
 	const { element_id, value } = message;
 	if (!element_id) return surface;
-	const separatorIndex = element_id.indexOf("/");
-	const scopeId =
-		separatorIndex >= 0 ? element_id.slice(0, separatorIndex) : surface.id;
-	const componentId =
-		separatorIndex >= 0 ? element_id.slice(separatorIndex + 1) : element_id;
+	const { scopeId, componentId } = splitElementId(surface, element_id);
 	if (!componentId) return surface;
 
 	// An entry without component data takes down every reader of the surface,

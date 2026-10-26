@@ -38,6 +38,10 @@ failures, configuration, and machine details. Use at least 100 samples per
 scenario for tail-latency comparisons and repeat runs under the same background
 load.
 
+Uncaught browser errors invalidate a run even when the expected rows appear.
+Reports retain up to 100 error messages, each limited to 4,000 characters, to help
+diagnose hydration and other application failures.
+
 The application fixture returns through its overview control between person
 clicks. The reset UI, handler, and successful terminal event must arrive before
 the next measured action. Reports retain reset timings separately from the
@@ -94,16 +98,9 @@ shape: 47 live rows, 58 physical rows, 36 fragments, and three deletion files.
 Arrow types, nullability, and primary-key metadata also match. Entity counts and
 relationships are synthetic; the hosted table's customer records are not copied.
 This preserves the cost of opening many small fragments that a compact fixture
-would miss. For a controlled comparison with the same logical records in one
-fragment, rerun preparation with the same export:
-
-```bash
-python3 tests/widget-action-stack/run.py prepare \
-  --metadata-export /tmp/widget-app-export --fixture-layout compact
-```
-
-Stop the services before changing layouts and restart them afterward so cached
-table handles cannot retain the previous dataset.
+would miss. Preparation also accepts `--fixture-layout compact` to put the same
+logical records in one fragment. Use the separate states described under
+[Storage layout comparisons](#storage-layout-comparisons) to retain both fixtures.
 
 State, private service logs, fixture hashes, startup timings, and browser
 results live in `/tmp/flow-widget-stack` by default. The generated
@@ -182,6 +179,24 @@ nodes need those catalog features added before they can be benchmarked.
 
 Use fresh API and executor processes to measure startup separately from warmed
 actions. Build both revisions first and keep their binaries at distinct paths.
+
+To isolate compiled board preparation, pass the same `.flcb` artifact to each
+benchmark binary:
+
+```bash
+/tmp/widget-baseline/release-fast/widget_action_stack \
+  template-benchmark /tmp/widget-board.flcb 100
+/tmp/widget-candidate/release-fast/widget_action_stack \
+  template-benchmark /tmp/widget-board.flcb 100
+```
+
+This command reports each template load after three warmups. It includes archive
+decompression, validation, board reconstruction, catalog resolution, and lookup
+construction. It reads the file once before timing and reports catalog registry
+initialization separately. Each sample creates a fresh template; disposal happens
+outside the timer. Storage fetches, process startup, workflow execution, and browser
+rendering are outside this measurement. Use the application trials below to check
+whether a faster loader improves navigation or the first history click.
 
 Use separate source and Cargo target directories for each revision. Copying a
 revision over an existing checkout while preserving file timestamps can cause
@@ -299,6 +314,46 @@ mimalloc and a different bootstrap. Local timers keep running between requests.
 Lambda scheduling, DSQL latency, and the API Lambda compute-attempt wrapper remain
 outside this test. Confirm hosted latency with AWS traces after identifying an
 improvement locally.
+
+### Storage layout comparisons
+
+Compare fragmentation separately from code changes. Keep the existing fragmented
+state and prepare a second state from the same metadata export, using different
+infrastructure ports:
+
+```bash
+python3 tests/widget-action-stack/stack.py --state /tmp/widget-compact prepare \
+  --postgres-port 55450 --redis-port 56450 --s3-port 9054
+python3 tests/widget-action-stack/run.py --state /tmp/widget-compact prepare \
+  --metadata-export /tmp/widget-app-export --fixture-layout compact
+```
+
+Both infrastructure stacks must be running and both prepared browser sessions
+must be valid. Keep the frontend API and web origins identical. Pass the same
+backend binary and production frontend stage for both variants:
+
+```bash
+python3 tests/widget-action-stack/replicated.py --fixture-layout-experiment \
+  --baseline-state /tmp/flow-widget-stack --candidate-state /tmp/widget-compact \
+  --baseline /tmp/widget-candidate/release-fast/widget_action_stack \
+  --candidate /tmp/widget-candidate/release-fast/widget_action_stack \
+  --baseline-web-state /tmp/flow-widget-stack \
+  --candidate-web-state /tmp/flow-widget-stack \
+  --replicas 8 --samples 104 --warmup 3 --trials 4 \
+  --modes warm navigation action --output /tmp/widget-layout-comparison
+```
+
+Omitting `--config` selects each state's prepared browser session. Use
+`--baseline-config` and `--candidate-config` for explicit per-state overrides.
+Copied frontend sources also need the matching source-root options described
+above. The runner alternates states between trials; it does not compact,
+reimport, or rewrite either fixture during measurement.
+
+The comparison requires identical record and schema hashes, graph identity,
+backend binary, and frontend build. It permits different fragment and deletion
+file layouts only in this explicit experiment. Ordinary code comparisons reject
+physical layout differences. This measures the benefit of an already compact
+dataset; it does not measure maintenance cost or justify compaction on each write.
 
 ### Diagnostic workload
 

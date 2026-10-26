@@ -397,6 +397,35 @@ describe("applyA2UIMessage widget instance routing", () => {
 		expect(childText(updated, "host-b")).toBe("Updated");
 	});
 
+	test("routes surfaceId/instanceId/childId to only the matching widget host", () => {
+		const updated = applyA2UIMessage(surface(), {
+			type: "upsertElement",
+			element_id: "page-1/instance-b/shared-child",
+			value: { type: "setText", text: "Updated" },
+		});
+
+		expect(childText(updated, "host-a")).toBe("First");
+		expect(childText(updated, "host-b")).toBe("Updated");
+	});
+
+	test("keeps surfaceId/ path segments that name no widget instance", () => {
+		const original = surface();
+		original.components["section/root"] = {
+			id: "section/root",
+			component: { type: "text", text: "Nested root" },
+		} as unknown as SurfaceComponent;
+
+		const updated = applyA2UIMessage(original, {
+			type: "upsertElement",
+			element_id: "page-1/section/root",
+			value: { type: "setText", text: "Updated nested root" },
+		});
+
+		const nested = updated.components["section/root"]
+			.component as unknown as Record<string, unknown>;
+		expect(nested.text).toBe("Updated nested root");
+	});
+
 	test("preserves slashes inside the widget child id", () => {
 		const original = surface();
 		const host = original.components["host-b"].component as unknown as Record<

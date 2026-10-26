@@ -1269,6 +1269,10 @@ impl FlowScriptApplyPlanner {
         commands: &[BoardCommand],
     ) -> flow_like_types::Result<Vec<GenericCommand>> {
         let mut generic_commands = Vec::new();
+        // An UpsertLayer replaces the whole layer, variables included, with a copy staged before
+        // this batch ran. Variable upserts therefore run after every layer upsert, or a signature,
+        // cache or rename edit to a function would erase the locals this batch gave it.
+        let mut variable_commands = Vec::new();
         // Reconciliation assigns stable explicit refs before it reorders setup commands (for
         // example, moving the Event entry to the end). Reserve every explicit ref up front so an
         // order-derived positional alias can never shadow it, even when that explicit command is
@@ -1571,7 +1575,7 @@ impl FlowScriptApplyPlanner {
                     let mut command = UpsertVariableCommand::new(variable);
                     command.layer_id =
                         self.resolve_optional_layer(board, target_layer.as_deref())?;
-                    generic_commands.push(GenericCommand::UpsertVariable(command));
+                    variable_commands.push(GenericCommand::UpsertVariable(command));
                 }
                 BoardCommand::UpdateVariable {
                     variable_id,
@@ -1639,7 +1643,7 @@ impl FlowScriptApplyPlanner {
                     }
                     let mut command = UpsertVariableCommand::new(variable);
                     command.layer_id = layer_id;
-                    generic_commands.push(GenericCommand::UpsertVariable(command));
+                    variable_commands.push(GenericCommand::UpsertVariable(command));
                 }
                 BoardCommand::UpdateNodePin {
                     node_id,
@@ -1741,6 +1745,7 @@ impl FlowScriptApplyPlanner {
             }
         }
 
+        generic_commands.extend(variable_commands);
         Ok(generic_commands)
     }
 
@@ -5554,6 +5559,105 @@ eventsSimple() {
         assert!(body_exec_in.depends_on.contains(&layer_exec_in.id));
         assert!(body_exec_out.connected_to.contains(&layer_exec_out.id));
         assert!(layer_exec_out.depends_on.contains(&body_exec_out.id));
+    }
+
+    #[tokio::test]
+    async fn signature_change_keeps_function_locals_created_in_the_same_apply() {
+        let catalog = vec![
+            log_catalog_node(),
+            TestVariableGetLogic.get_node(),
+            TestVariableSetLogic.get_node(),
+        ];
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        {
+            let registry = state.node_registry();
+            let mut registry = registry.write().await;
+            registry.push_node(Arc::new(TestVariableGetLogic));
+            registry.push_node(Arc::new(TestVariableSetLogic));
+        }
+
+        let mut board = empty_board();
+        let created = apply_flowscript_to_board(
+            &mut board,
+            r#"function greet(name: string) {
+    logInfo({ message: name })
+}
+"#,
+            &catalog,
+            state.clone(),
+            None,
+            false,
+        )
+        .await
+        .expect("initial function applies");
+        assert!(created.diagnostics.is_empty(), "{:?}", created.diagnostics);
+
+        let anchored = flow_like_ast::RenderOptions {
+            anchors: true,
+            ..Default::default()
+        };
+        let rendered = super::super::board_to_flowscript(&board, &anchored);
+        let anchor = |marker: &str| {
+            rendered
+                .lines()
+                .find_map(|line| line.split(marker).nth(1))
+                .expect("rendered anchor")
+                .trim()
+                .to_string()
+        };
+        let layer_anchor = anchor("//@l:");
+        let log_anchor = anchor("//@n:");
+        let edited = format!(
+            r#"function greet(name: string, greeting: string) {{   //@l:{layer_anchor}
+    let note: string = "hello"
+    note = greeting
+    debug::logInfo(name)   //@n:{log_anchor}
+    debug::logInfo(note)
+}}
+"#
+        );
+        let applied = apply_flowscript_to_board(&mut board, &edited, &catalog, state, None, false)
+            .await
+            .expect("signature change with a new function local applies");
+        assert!(
+            applied.diagnostics.is_empty(),
+            "{:?}\n{edited}",
+            applied.diagnostics
+        );
+
+        let layer = &board.layers[&layer_anchor];
+        let mut boundary = layer
+            .pins
+            .values()
+            .filter(|pin| pin.data_type != VariableType::Execution)
+            .map(|pin| pin.name.as_str())
+            .collect::<Vec<_>>();
+        boundary.sort_unstable();
+        assert_eq!(boundary, ["greeting", "name"]);
+        assert!(
+            layer
+                .variables
+                .values()
+                .any(|variable| variable.name == "note"),
+            "the signature upsert must not drop the local created in the same batch: {:?}",
+            applied.board_commands
+        );
+        let variable_nodes = board
+            .nodes
+            .values()
+            .filter(|node| node.name == "variable_set" || node.name == "variable_get")
+            .collect::<Vec<_>>();
+        assert!(!variable_nodes.is_empty());
+        for node in variable_nodes {
+            assert!(
+                test_referenced_variable(node, &board).is_some(),
+                "`{}` references a variable the board no longer holds",
+                node.id
+            );
+        }
     }
 
     #[tokio::test]

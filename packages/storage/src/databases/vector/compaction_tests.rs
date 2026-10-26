@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flow_like_types::{Result, Value, json::json, reqwest::Url};
 use futures::stream::BoxStream;
+use lance::dataset::CommitBuilder;
+use lance::dataset::transaction::{Operation, Transaction, UpdateMap};
 use lance::session::Session;
 use lance_io::object_store::{
     ObjectStore as LanceStore, ObjectStoreParams, ObjectStoreProvider, ObjectStoreRegistry,
@@ -15,10 +17,7 @@ use object_store::{
 };
 
 use super::super::VectorStore;
-use super::{
-    AUTO_COMPACTION_FRAGMENTS, DatabaseSelector, LEGACY_AUTO_CLEANUP, LanceDBVectorStore,
-    connect_lance,
-};
+use super::{DatabaseSelector, LanceDBVectorStore, connect_lance};
 
 const ROOT: &str = "countsim://bucket/db";
 const TABLE: &str = "items";
@@ -195,40 +194,85 @@ async fn fragment_ids(store: &LanceDBVectorStore) -> Result<Vec<u64>> {
         .collect())
 }
 
-/// Appends through LanceDB directly, like writes made before automatic compaction.
-async fn append_without_compaction(store: &LanceDBVectorStore, items: Vec<Value>) -> Result<()> {
-    let table = store.raw().await?;
-    let fields = table.schema().await?.fields().iter().cloned().collect();
-    let reader = crate::arrow_utils::value_to_batch_reader_with_fields(items, Some(fields))?;
-    table.add(reader).execute().await?;
-    Ok(())
+async fn historical_row_counts(store: &LanceDBVectorStore, latest: u64) -> Result<Vec<usize>> {
+    let mut counts = Vec::new();
+    for version in 1..=latest {
+        let historical = store
+            .checkout(DatabaseSelector {
+                version: Some(version),
+                read_only: true,
+                ..Default::default()
+            })
+            .await?;
+        counts.push(historical.count(None).await?);
+    }
+    Ok(counts)
 }
 
-async fn set_config(store: &LanceDBVectorStore, entries: [(&str, &str); 2]) -> Result<()> {
-    let table = store.raw().await?;
-    let wrapper = table.dataset().unwrap();
-    let mut dataset = wrapper.get().await?.as_ref().clone();
-    dataset.update_config(entries).await?;
-    wrapper.update(dataset);
+#[tokio::test]
+async fn ordinary_writes_do_not_compact_or_add_maintenance_commits() -> Result<()> {
+    let bucket = CountingBucket::new()?;
+    let mut store = bucket.open().await?;
+    store.upsert(rows(0..1, 0), "id".into()).await?;
+    // Initialize the upsert key before checking each operation's commit count.
+    store.upsert(rows(1..2, 0), "id".into()).await?;
+    for id in 2..40 {
+        let before = store.raw().await?.version().await?;
+        match id % 3 {
+            0 => store.insert(rows(id..id + 1, 0)).await?,
+            1 => store.upsert(rows(id..id + 1, 0), "id".into()).await?,
+            _ => {
+                let table = store.raw().await?;
+                let fields = table.schema().await?.fields().iter().cloned().collect();
+                let mut reader = crate::arrow_utils::value_to_batch_reader_with_fields(
+                    rows(id..id + 1, 0),
+                    Some(fields),
+                )?;
+                store.insert_record_batch(reader.next().unwrap()?).await?;
+            }
+        }
+        assert_eq!(store.raw().await?.version().await?, before + 1);
+        assert_eq!(fragment_ids(&store).await?.len(), id + 1);
+    }
+    let before = store.raw().await?.version().await?;
+    store
+        .update(
+            "id = 'item-0'",
+            std::collections::HashMap::from([("state".to_string(), json!("archived"))]),
+        )
+        .await?;
+    assert_eq!(store.raw().await?.version().await?, before + 1);
+    assert_eq!(fragment_ids(&store).await?.len(), 40);
+    assert_eq!(store.count(None).await?, 40);
+    assert_eq!(store.count(Some("state = 'archived'".into())).await?, 1);
     Ok(())
 }
 
 #[tokio::test]
-async fn small_writes_are_compacted_without_pruning_versions() -> Result<()> {
+async fn explicit_compaction_reduces_reads_and_retains_historical_versions() -> Result<()> {
     let bucket = CountingBucket::new()?;
     let mut store = bucket.open().await?;
     for round in 0..40 {
-        let items = rows(round..round + 1, round);
-        if round.is_multiple_of(2) {
-            store.insert(items).await?;
-        } else {
-            store.upsert(items, "id".into()).await?;
-        }
+        store.insert(rows(round * 5..round * 5 + 5, round)).await?;
     }
+    assert_eq!(fragment_ids(&store).await?.len(), 40);
+    let read = bucket.open().await?;
+    bucket.take_gets();
+    assert_eq!(read.count(Some("state = 'new'".into())).await?, 133);
+    assert_eq!(read.filter("seen > 30", None, 100, 0).await?.len(), 45);
+    let fragmented_gets = bucket.take_gets();
 
-    assert!(fragment_ids(&store).await?.len() < AUTO_COMPACTION_FRAGMENTS);
-    assert_eq!(store.count(None).await?, 40);
-    assert_eq!(store.count(Some("id = 'item-27'".into())).await?, 1);
+    store.optimize(true).await?;
+    assert_eq!(fragment_ids(&store).await?.len(), 1);
+    let read = bucket.open().await?;
+    bucket.take_gets();
+    assert_eq!(read.count(Some("state = 'new'".into())).await?, 133);
+    assert_eq!(read.filter("seen > 30", None, 100, 0).await?.len(), 45);
+    let compacted_gets = bucket.take_gets();
+    assert!(
+        compacted_gets * 2 < fragmented_gets,
+        "compaction must reduce object reads: {compacted_gets} vs {fragmented_gets}"
+    );
     let first = store
         .checkout(DatabaseSelector {
             version: Some(1),
@@ -236,104 +280,19 @@ async fn small_writes_are_compacted_without_pruning_versions() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(
-        first.count(None).await?,
-        1,
-        "the first version must stay readable"
-    );
+    assert_eq!(first.count(None).await?, 5);
     Ok(())
 }
 
 #[tokio::test]
-async fn compaction_cuts_the_requests_of_the_next_run() -> Result<()> {
-    let compacted = CountingBucket::new()?;
-    let mut store = compacted.open().await?;
-    for round in 0..40 {
-        store.insert(rows(round * 5..round * 5 + 5, round)).await?;
-    }
-    let fragmented = CountingBucket::new()?;
-    let mut store = fragmented.open().await?;
-    store.insert(rows(0..5, 0)).await?;
-    for round in 1..40 {
-        append_without_compaction(&store, rows(round * 5..round * 5 + 5, round)).await?;
-    }
-
-    let mut gets = Vec::new();
-    for bucket in [&compacted, &fragmented] {
-        let store = bucket.open().await?;
-        bucket.take_gets();
-        assert_eq!(store.count(Some("state = 'new'".into())).await?, 133);
-        assert_eq!(store.filter("seen > 30", None, 100, 0).await?.len(), 45);
-        gets.push(bucket.take_gets());
-    }
-    assert!(
-        gets[0] * 2 < gets[1],
-        "a run reading compacted data must send far fewer requests: {gets:?}"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn compaction_leaves_indexed_fragments_and_their_index() -> Result<()> {
-    let bucket = CountingBucket::new()?;
-    let mut store = bucket.open().await?;
-    store.insert(rows(0..300, 0)).await?;
-    store.index("seen", Some("BTREE")).await?;
-    let indexed = fragment_ids(&store).await?;
-    insert_one_by_one(&mut store, 300..300 + AUTO_COMPACTION_FRAGMENTS, 1).await?;
-
-    let after = fragment_ids(&store).await?;
-    assert_eq!(
-        after.first(),
-        indexed.first(),
-        "the indexed fragment was rewritten"
-    );
-    assert_eq!(
-        after.len(),
-        2,
-        "unindexed small writes must merge: {after:?}"
-    );
-    assert_eq!(store.list_indices().await?.len(), 1);
-    assert_eq!(store.count(Some("seen = 0".into())).await?, 300);
-    assert_eq!(
-        store.count(Some("seen = 1".into())).await?,
-        AUTO_COMPACTION_FRAGMENTS
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn compaction_leaves_a_large_leading_fragment() -> Result<()> {
-    let bucket = CountingBucket::new()?;
-    let mut store = bucket.open().await?;
-    store.insert(rows(0..10_000, 0)).await?;
-    let large = fragment_ids(&store).await?;
-    insert_one_by_one(&mut store, 10_000..10_000 + AUTO_COMPACTION_FRAGMENTS, 1).await?;
-
-    let after = fragment_ids(&store).await?;
-    assert_eq!(
-        after.first(),
-        large.first(),
-        "the large fragment was rewritten"
-    );
-    assert_eq!(
-        after.len(),
-        2,
-        "small writes behind it must merge: {after:?}"
-    );
-    assert_eq!(store.count(None).await?, 10_000 + AUTO_COMPACTION_FRAGMENTS);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_stale_writer_commits_after_another_run_compacts() -> Result<()> {
+async fn a_stale_writer_commits_after_explicit_compaction() -> Result<()> {
     let bucket = CountingBucket::new()?;
     let mut compacting = bucket.open().await?;
     compacting.insert(rows(0..1, 0)).await?;
     let stale = bucket.open().await?;
-    insert_one_by_one(&mut compacting, 1..AUTO_COMPACTION_FRAGMENTS, 0).await?;
+    insert_one_by_one(&mut compacting, 1..20, 0).await?;
+    compacting.optimize(true).await?;
     assert_eq!(fragment_ids(&compacting).await?.len(), 1);
-
     stale
         .update(
             "id = 'item-0'",
@@ -341,40 +300,184 @@ async fn a_stale_writer_commits_after_another_run_compacts() -> Result<()> {
         )
         .await?;
     stale.delete("id = 'item-3'").await?;
-
     let reader = bucket.open().await?;
-    assert_eq!(reader.count(None).await?, AUTO_COMPACTION_FRAGMENTS - 1);
+    assert_eq!(reader.count(None).await?, 19);
     assert_eq!(reader.count(Some("state = 'archived'".into())).await?, 1);
     assert_eq!(reader.count(Some("id = 'item-3'".into())).await?, 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn pruning_optimize_drops_only_lances_legacy_auto_cleanup() -> Result<()> {
-    let custom = [
-        ("lance.auto_cleanup.interval", "5"),
-        ("lance.auto_cleanup.older_than", "14days"),
-    ];
-    for (config, keep_versions, kept) in [
-        (LEGACY_AUTO_CLEANUP, false, false),
-        (LEGACY_AUTO_CLEANUP, true, true),
-        (custom, false, true),
-    ] {
+async fn explicit_optimize_does_not_rewrite_retention_policy() -> Result<()> {
+    for keep_versions in [true, false] {
         let bucket = CountingBucket::new()?;
         let mut store = bucket.open().await?;
         store.insert(rows(0..3, 0)).await?;
-        set_config(&store, config).await?;
-        store.optimize(keep_versions).await?;
-
+        let stale = bucket.open().await?;
+        let table = store.raw().await?;
+        let wrapper = table.dataset().unwrap();
+        let mut dataset = wrapper.get().await?.as_ref().clone();
+        let configured = [
+            ("lance.auto_cleanup.interval", "20"),
+            ("lance.auto_cleanup.older_than", "14days"),
+            ("lance.auto_cleanup.retain_versions", "3"),
+        ];
+        dataset.update_config(configured).await?;
+        wrapper.update(dataset);
+        let before = table.version().await?;
+        if keep_versions {
+            let error = stale
+                .optimize(true)
+                .await
+                .expect_err("a stale handle must refresh and refuse configured automatic cleanup");
+            assert!(
+                error
+                    .to_string()
+                    .contains("automatic cleanup is configured")
+            );
+            assert_eq!(stale.raw().await?.version().await?, before);
+        } else {
+            store.optimize(false).await?;
+        }
         let table = bucket.open().await?.raw().await?;
         let dataset = table.dataset().unwrap().get().await?;
+        for (key, expected) in configured {
+            assert_eq!(
+                dataset.config().get(key).map(String::as_str),
+                Some(expected)
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn retaining_optimize_does_not_unpin_a_shared_raw_handle() -> Result<()> {
+    let bucket = CountingBucket::new()?;
+    let mut store = bucket.open().await?;
+    insert_one_by_one(&mut store, 0..3, 0).await?;
+    let table = store.raw().await?;
+    table.checkout(1).await?;
+
+    store
+        .optimize(true)
+        .await
+        .expect_err("maintenance must refuse a pinned raw handle");
+    assert_eq!(table.version().await?, 1);
+    assert_eq!(store.raw().await?.version().await?, 1);
+    assert_eq!(store.count(None).await?, 1);
+    let latest = bucket.open().await?;
+    assert_eq!(latest.raw().await?.version().await?, 3);
+    assert_eq!(fragment_ids(&latest).await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn retaining_optimize_rejects_auto_cleanup_before_any_maintenance_commit() -> Result<()> {
+    for interval in [0, 1] {
+        let bucket = CountingBucket::new()?;
+        let mut store = bucket.open().await?;
+        insert_one_by_one(&mut store, 0..3, 0).await?;
+        let table = store.raw().await?;
+        let wrapper = table.dataset().unwrap();
+        let dataset = wrapper.get().await?;
+        let transaction = Transaction::new(
+            dataset.manifest().version,
+            Operation::UpdateConfig {
+                config_updates: Some(UpdateMap {
+                    update_entries: vec![
+                        (
+                            "lance.auto_cleanup.interval".to_string(),
+                            interval.to_string(),
+                        )
+                            .into(),
+                        ("lance.auto_cleanup.older_than", "0s").into(),
+                    ],
+                    replace: false,
+                }),
+                table_metadata_updates: None,
+                schema_metadata_updates: None,
+                field_metadata_updates: Default::default(),
+            },
+            None,
+        );
+        // Suppress cleanup on this setup commit itself. LanceDB's add path does
+        // not forward WriteParams.skip_auto_cleanup to its final CommitBuilder.
+        let dataset = CommitBuilder::new(dataset)
+            .with_skip_auto_cleanup(true)
+            .execute(transaction)
+            .await?;
+        wrapper.update(dataset);
+        let before = table.version().await?;
+        assert_eq!(before, 4);
+        let fragments = fragment_ids(&store).await?;
+        assert_eq!(fragments.len(), 3);
+        let historical_counts = historical_row_counts(&store, before).await?;
+        assert_eq!(historical_counts, vec![1, 2, 3, 3]);
+        let policy = wrapper.get().await?.config().clone();
         assert_eq!(
-            config
-                .iter()
-                .all(|(key, value)| dataset.config().get(*key).map(String::as_str) == Some(*value)),
-            kept,
-            "config {config:?} after optimize(keep_versions: {keep_versions})"
+            policy.get("lance.auto_cleanup.interval"),
+            Some(&interval.to_string())
+        );
+        assert_eq!(
+            policy
+                .get("lance.auto_cleanup.older_than")
+                .map(String::as_str),
+            Some("0s")
+        );
+
+        let error = store
+            .optimize(true)
+            .await
+            .expect_err("keeping versions must reject even a per-commit cleanup policy");
+        assert!(error.to_string().contains("keep_versions=true"));
+        let reader = bucket.open().await?;
+        assert_eq!(reader.raw().await?.version().await?, before);
+        assert_eq!(fragment_ids(&reader).await?, fragments);
+        assert_eq!(reader.count(None).await?, 3);
+        assert_eq!(
+            historical_row_counts(&reader, before).await?,
+            historical_counts
+        );
+        assert_eq!(
+            reader.raw().await?.dataset().unwrap().get().await?.config(),
+            &policy
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_settings_without_an_interval_do_not_block_retaining_optimize() -> Result<()> {
+    let bucket = CountingBucket::new()?;
+    let mut store = bucket.open().await?;
+    insert_one_by_one(&mut store, 0..3, 0).await?;
+    let table = store.raw().await?;
+    let wrapper = table.dataset().unwrap();
+    let mut dataset = wrapper.get().await?.as_ref().clone();
+    dataset
+        .update_config([("lance.auto_cleanup.older_than", "0s")])
+        .await?;
+    wrapper.update(dataset);
+
+    store.optimize(true).await?;
+    assert_eq!(fragment_ids(&store).await?.len(), 1);
+    let first = store
+        .checkout(DatabaseSelector {
+            version: Some(1),
+            read_only: true,
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(first.count(None).await?, 1);
+    assert_eq!(
+        wrapper
+            .get()
+            .await?
+            .config()
+            .get("lance.auto_cleanup.older_than")
+            .map(String::as_str),
+        Some("0s")
+    );
     Ok(())
 }

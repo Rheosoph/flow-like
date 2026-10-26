@@ -257,12 +257,25 @@ impl CompiledRunTemplate {
         }
 
         let layer_ids: Vec<&str> = compiled.layers.iter().map(|l| l.id.as_str()).collect();
+        // Nodes in the same layer share their nearest Function ancestor.
+        // Resolve it once per layer instead of allocating a traversal per node.
+        let function_layers: Vec<Option<Arc<str>>> = (0..compiled.layers.len())
+            .map(|idx| {
+                owning_function_layer_idx(compiled, idx as u32)
+                    .map(|owner| Arc::from(compiled.layers[owner as usize].id.as_str()))
+            })
+            .collect();
 
         let mut nodes = Vec::with_capacity(compiled.nodes.len());
         let mut node_idx_by_id: AHashMap<Arc<str>, u32> =
             AHashMap::with_capacity(compiled.nodes.len());
         for (i, cn) in compiled.nodes.iter().enumerate() {
-            let function_layer_idx = owning_function_layer_idx(compiled, cn);
+            let layer_idx = if cn.body_layer != NONE_IDX {
+                cn.body_layer
+            } else {
+                cn.layer
+            };
+            let function_layer_id = function_layers.get(layer_idx as usize).cloned().flatten();
             let source = if cn.body_layer == NONE_IDX {
                 view.nodes.get(&cn.id)
             } else {
@@ -283,7 +296,10 @@ impl CompiledRunTemplate {
             let logic = registry.instantiate(&node)?;
             let only_offline = registry.get_node_ref(&node.name)?.only_offline;
 
-            let mut lookup = NodePinLookup::default();
+            let mut lookup = NodePinLookup {
+                by_id: AHashMap::with_capacity(cn.pins.len()),
+                by_name: AHashMap::with_capacity(cn.pins.len()),
+            };
             for (offset, &arena_idx) in cn.pins.iter().enumerate() {
                 let pin = &pins[arena_idx as usize];
                 lookup.by_id.insert(pin.id.to_string(), offset as u16);
@@ -311,9 +327,8 @@ impl CompiledRunTemplate {
                 // Preserve that path, while `start` additionally admits legacy
                 // nodes stored inside Layer.nodes for governed Page events.
                 can_seed_run: cn.body_layer == NONE_IDX || cn.start,
-                seeds_function_scope: cn.start && function_layer_idx.is_some(),
-                function_layer_id: function_layer_idx
-                    .map(|idx| Arc::from(compiled.layers[idx as usize].id.as_str())),
+                seeds_function_scope: cn.start && function_layer_id.is_some(),
+                function_layer_id,
             });
         }
 
@@ -341,7 +356,7 @@ impl CompiledRunTemplate {
                     .as_ref()
                     .and_then(|bytes| flow_like_types::json::from_slice::<Value>(bytes).ok())
                     .map(Arc::new),
-                variable: variable.clone(),
+                variable,
             });
         }
 
@@ -365,15 +380,8 @@ impl CompiledRunTemplate {
     }
 }
 
-fn owning_function_layer_idx(
-    compiled: &CompiledBoard,
-    node: &super::format::CompiledNode,
-) -> Option<u32> {
-    let mut current = match (node.body_layer, node.layer) {
-        (body_layer, _) if body_layer != NONE_IDX => Some(body_layer),
-        (_, layer) if layer != NONE_IDX => Some(layer),
-        _ => None,
-    };
+fn owning_function_layer_idx(compiled: &CompiledBoard, layer_idx: u32) -> Option<u32> {
+    let mut current = Some(layer_idx);
     let mut seen = AHashSet::with_capacity(4);
 
     while let Some(idx) = current {
@@ -396,6 +404,7 @@ fn owning_function_layer_idx(
 #[cfg(test)]
 mod catalog_policy_tests {
     use super::*;
+    use crate::flow::board::Layer;
     use crate::flow::compiled::compile::compile_board;
     use crate::flow::execution::context::ExecutionContext;
     use flow_like_types::async_trait;
@@ -414,6 +423,78 @@ mod catalog_policy_tests {
     }
 
     #[test]
+    fn function_ownership_keeps_nested_layers_cycles_and_legacy_bodies() {
+        let mut board = Board::new_detached(None, Path::default());
+        for (id, kind, parent) in [
+            ("outer", LayerType::Function, None),
+            ("child", LayerType::Collapsed, Some("outer")),
+            ("inner", LayerType::Function, Some("child")),
+            ("grandchild", LayerType::Collapsed, Some("inner")),
+            ("orphan", LayerType::Collapsed, None),
+            ("cycle-a", LayerType::Collapsed, Some("cycle-b")),
+            ("cycle-b", LayerType::Collapsed, Some("cycle-a")),
+        ] {
+            let mut layer = Layer::new(id.into(), id.into(), kind);
+            layer.parent_id = parent.map(str::to_string);
+            board.layers.insert(layer.id.clone(), layer);
+        }
+        let tagged = [
+            ("root", None, true, None),
+            ("in-child", Some("child"), true, Some("outer")),
+            ("in-inner", Some("inner"), true, Some("inner")),
+            ("in-grandchild", Some("grandchild"), true, Some("inner")),
+            ("internal", Some("grandchild"), false, Some("inner")),
+            ("in-orphan", Some("orphan"), true, None),
+            ("in-cycle", Some("cycle-a"), true, None),
+        ];
+        for (id, layer, start, _) in tagged {
+            let mut node = CatalogLogic.get_node();
+            node.id = id.into();
+            node.layer = layer.map(str::to_string);
+            node.set_start(start);
+            board.nodes.insert(node.id.clone(), node);
+        }
+        for (id, start) in [("legacy-entry", true), ("legacy-internal", false)] {
+            let mut node = CatalogLogic.get_node();
+            node.id = id.into();
+            node.layer = Some("inner".into());
+            node.set_start(start);
+            board
+                .layers
+                .get_mut("outer")
+                .unwrap()
+                .nodes
+                .insert(node.id.clone(), node);
+        }
+        let mut registry = FlowNodeRegistryInner::new(1);
+        registry.insert(CatalogLogic.get_node(), Arc::new(CatalogLogic));
+        let compiled = compile_board(&board).unwrap();
+        let bytes = super::super::encode_artifact(&compiled, &registry.fingerprint()).unwrap();
+        let template = super::super::template_from_bytes(
+            &bytes,
+            &registry.fingerprint(),
+            &registry,
+            &Path::default(),
+        )
+        .unwrap();
+        for (id, _, start, owner) in tagged {
+            let node = &template.nodes[template.node_idx_by_id[id] as usize];
+            assert_eq!(node.function_layer_id.as_deref(), owner, "{id}");
+            assert_eq!(node.seeds_function_scope, start && owner.is_some(), "{id}");
+            assert!(
+                node.can_seed_run,
+                "top-level node {id} retains direct execution"
+            );
+        }
+        for (id, start) in [("legacy-entry", true), ("legacy-internal", false)] {
+            let node = &template.nodes[template.node_idx_by_id[id] as usize];
+            assert_eq!(node.function_layer_id.as_deref(), Some("outer"));
+            assert_eq!(node.seeds_function_scope, start);
+            assert_eq!(node.can_seed_run, start);
+        }
+    }
+
+    #[test]
     fn borrowed_catalog_policy_overrides_forged_artifact_flags_in_both_directions() {
         for only_offline in [false, true] {
             let mut catalog_node = CatalogLogic.get_node();
@@ -427,22 +508,33 @@ mod catalog_policy_tests {
 
             let mut registry = FlowNodeRegistryInner::new(1);
             registry.insert(catalog_node, Arc::new(CatalogLogic));
-            let template =
-                CompiledRunTemplate::from_compiled(&compiled, &registry, Path::default()).unwrap();
-            assert_eq!(template.nodes[0].only_offline, only_offline);
-            assert_eq!(
-                template
-                    .ensure_execution_environment(ExecutionEnvironment::Server)
-                    .is_err(),
-                only_offline,
+            let direct = Arc::new(
+                CompiledRunTemplate::from_compiled(&compiled, &registry, Path::default()).unwrap(),
             );
-            for environment in [
-                ExecutionEnvironment::Local,
-                ExecutionEnvironment::Desktop,
-                ExecutionEnvironment::Mobile,
-                ExecutionEnvironment::BrowserSandbox,
-            ] {
-                template.ensure_execution_environment(environment).unwrap();
+            let bytes = super::super::encode_artifact(&compiled, &registry.fingerprint()).unwrap();
+            let artifact = super::super::template_from_bytes(
+                &bytes,
+                &registry.fingerprint(),
+                &registry,
+                &Path::default(),
+            )
+            .unwrap();
+            for template in [direct, artifact] {
+                assert_eq!(template.nodes[0].only_offline, only_offline);
+                assert_eq!(
+                    template
+                        .ensure_execution_environment(ExecutionEnvironment::Server)
+                        .is_err(),
+                    only_offline,
+                );
+                for environment in [
+                    ExecutionEnvironment::Local,
+                    ExecutionEnvironment::Desktop,
+                    ExecutionEnvironment::Mobile,
+                    ExecutionEnvironment::BrowserSandbox,
+                ] {
+                    template.ensure_execution_environment(environment).unwrap();
+                }
             }
         }
     }

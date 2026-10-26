@@ -11,8 +11,8 @@ import { act, useEffect } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import type { AuthContextProps } from "react-oidc-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { reportUnauthorized } from "../lib/auth-session";
 import { accountQueryDeps } from "../lib/account-query";
+import { reportUnauthorized } from "../lib/auth-session";
 
 const harness = vi.hoisted(() => {
 	let state = {} as AuthContextProps;
@@ -52,6 +52,9 @@ const harness = vi.hoisted(() => {
 		useRealOidc: false,
 		getUser: vi.fn(),
 		signinCallback: vi.fn(),
+		loadConfiguration: vi.fn(),
+		createUserManager: vi.fn(),
+		stopSilentRenew: vi.fn(),
 		auth: {
 			get: () => state,
 			set(next: Partial<AuthContextProps>) {
@@ -98,8 +101,9 @@ vi.mock("oidc-client-ts", () => ({
 		signinCallback = harness.signinCallback;
 		constructor(settings: unknown) {
 			this.settings = settings;
+			harness.createUserManager(settings);
 		}
-		stopSilentRenew() {}
+		stopSilentRenew = harness.stopSilentRenew;
 	},
 }));
 vi.mock(
@@ -127,11 +131,8 @@ vi.mock("react-oidc-context", async (importOriginal) => {
 		},
 	};
 });
-vi.mock("../lib/api", () => ({
-	get: async () => ({
-		client_id: "web-client",
-		authority: "https://login.test",
-	}),
+vi.mock("../lib/oidc-configuration", () => ({
+	loadWebOidcConfiguration: harness.loadConfiguration,
 }));
 vi.mock("../lib/oidc-settings", () => ({
 	getWebOidcSettings: (settings: unknown) => settings,
@@ -243,6 +244,12 @@ beforeEach(() => {
 	harness.useRealOidc = false;
 	harness.getUser.mockReset().mockResolvedValue(user());
 	harness.signinCallback.mockReset().mockResolvedValue(user());
+	harness.loadConfiguration.mockReset().mockResolvedValue({
+		client_id: "web-client",
+		authority: "https://login.test",
+	});
+	harness.createUserManager.mockReset();
+	harness.stopSilentRenew.mockReset();
 	window.history.replaceState(null, "", harness.path);
 	localStorage.clear();
 	sessionStorage.clear();
@@ -274,6 +281,40 @@ afterEach(async () => {
 });
 
 describe("WebAuthProvider", () => {
+	it("does not initialize an OIDC session after its waiting provider unmounts", async () => {
+		let finish!: (config: unknown) => void;
+		harness.loadConfiguration.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finish = resolve;
+			}),
+		);
+		await renderProvider();
+		expect(container.textContent).toBe("Loading");
+		await act(async () => root.render(null));
+		await act(async () => finish({ client_id: "late-client" }));
+		expect(harness.createUserManager).not.toHaveBeenCalled();
+		expect(harness.childMounts).toBe(0);
+	});
+
+	it("stops the initialized manager on unmount", async () => {
+		await renderProvider();
+		expect(harness.createUserManager).toHaveBeenCalledOnce();
+		await act(async () => root.render(null));
+		expect(harness.stopSilentRenew).toHaveBeenCalledOnce();
+	});
+
+	it("reports a failed configuration request without initializing an OIDC session", async () => {
+		harness.loadConfiguration.mockRejectedValueOnce(
+			new Error("Network unavailable"),
+		);
+		await renderProvider();
+		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+			"Web configuration is unavailable",
+		);
+		expect(harness.createUserManager).not.toHaveBeenCalled();
+		expect(harness.childMounts).toBe(0);
+	});
+
 	it.each(["/thirdparty/callback", "/thirdparty/callback/"])(
 		"restores the Hub user without consuming third-party state on %s",
 		async (path) => {
@@ -410,7 +451,7 @@ describe("WebAuthProvider", () => {
 			const queryKey = [name, ...deps];
 			expect(queryClient.getQueryData(queryKey)).toBeDefined();
 			expect(queryClient.getQueryDefaults(queryKey).persister).toBeUndefined();
-			await queryClient.fetchQuery({
+			await queryClient.fetchQuery<unknown>({
 				queryKey,
 				queryFn: () => harness.backend.userState[name](),
 			});

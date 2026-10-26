@@ -19,6 +19,9 @@ fn main() -> Result<()> {
     let service = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow!("usage: widget_action_stack api|runtime"))?;
+    if service == "template-benchmark" {
+        return benchmark_template();
+    }
     if service != "api" && service != "runtime" {
         return Err(anyhow!("service must be api or runtime"));
     }
@@ -48,6 +51,54 @@ fn main() -> Result<()> {
         }
     };
     builder.enable_all().build()?.block_on(serve(&service))
+}
+
+fn benchmark_template() -> Result<()> {
+    use std::time::Instant;
+
+    let file = std::env::args().nth(2).ok_or_else(|| {
+        anyhow!("usage: widget_action_stack template-benchmark ARTIFACT [SAMPLES]")
+    })?;
+    let samples = std::env::args()
+        .nth(3)
+        .unwrap_or_else(|| "50".into())
+        .parse::<usize>()?;
+    if !(1..=10_000).contains(&samples) {
+        return Err(anyhow!("samples must be between 1 and 10000"));
+    }
+    let bytes = std::fs::read(file)?;
+    let started = Instant::now();
+    let registry = flow_like_catalog::get_catalog_registry();
+    let fingerprint = registry.fingerprint();
+    let registry_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let mut elapsed = Vec::with_capacity(samples);
+    let mut nodes = 0;
+    let mut pins = 0;
+    for index in 0..samples + 3 {
+        let started = Instant::now();
+        let template = flow_like::flow::compiled::template_from_bytes(
+            &bytes,
+            &fingerprint,
+            &registry,
+            &flow_like_storage::Path::default(),
+        )?;
+        let duration = started.elapsed().as_secs_f64() * 1000.0;
+        nodes = template.nodes.len();
+        pins = template.pins.len();
+        if index >= 3 {
+            elapsed.push(duration);
+        }
+        // Disposal is outside the load timer; each iteration still builds a fresh template.
+        drop(template);
+    }
+    println!(
+        "{}",
+        flow_like_types::json::to_string(&flow_like_types::json::json!({
+            "artifactBytes": bytes.len(), "nodes": nodes, "pins": pins,
+            "registryMs": registry_ms, "warmup": 3, "templateLoadMs": elapsed,
+        }))?
+    );
+    Ok(())
 }
 
 async fn serve(service: &str) -> Result<()> {

@@ -12,6 +12,7 @@ import sys
 
 import cold
 import compare
+import fixture_experiment
 import run
 import stack
 import topology
@@ -45,6 +46,26 @@ def trial_config(source, mode, replicas, samples=None, warmup=None):
 def create_services(settings):
     from replica_services import ReplicaServices
     return ReplicaServices(settings)
+
+
+def variant_states(args):
+    selected = {variant: (getattr(args, variant + "_state", None) or args.state).resolve()
+                for variant in fixture_experiment.VARIANTS}
+    if args.fixture_layout_experiment:
+        if any(getattr(args, variant + "_state", None) is None for variant in selected):
+            raise ValueError("Layout experiments require explicit --baseline-state and --candidate-state")
+        if selected["baseline"] == selected["candidate"]:
+            raise ValueError("Layout experiments require distinct fixture state directories")
+        if args.config is not None:
+            raise ValueError("Use each fixture's default config or --baseline-config/--candidate-config for layout experiments")
+        if args.web_mode != "production":
+            raise ValueError("Layout experiments require a production frontend")
+    elif any(getattr(args, variant + "_state", None) is not None for variant in selected):
+        raise ValueError("Variant fixture states require --fixture-layout-experiment")
+    for state in set(selected.values()):
+        if (state / "processes.json").exists():
+            raise ValueError("A fixture owns processes; stop them before running a replicated suite")
+    return selected
 
 
 def browser_evidence(directory, mode, replicas):
@@ -152,9 +173,11 @@ def run_trial(args, suite, mode, pair, position, variant, config):
     relative = Path(mode) / f"pair-{pair + 1:03d}-{variant}"
     directory = args.output / relative
     directory.mkdir(mode=0o700, parents=True)
+    state = getattr(args, variant + "_state", None) or args.state
     record = {
         "mode": mode, "pair": pair, "position": position, "variant": variant,
         "directory": str(relative), "status": "running", "startedAt": cold.timestamp(),
+        "fixtureState": str(state),
         "wrapperExitCode": None, "issues": [], "initialStartup": None, "restart": None,
         "restartRequestedAfterBootstrap": False, "cleanup": {"status": "pending"},
     }
@@ -166,6 +189,7 @@ def run_trial(args, suite, mode, pair, position, variant, config):
 
     persist()
     settings = argparse.Namespace(**vars(args))
+    settings.state = state
     settings.binary = Path(suite["binaries"][variant]["path"])
     settings.web_state = getattr(args, variant + "_web_state", None)
     settings.web_source_root = getattr(args, variant + "_web_source_root", None)
@@ -176,8 +200,13 @@ def run_trial(args, suite, mode, pair, position, variant, config):
         with (directory / "driver.log").open("w") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             if run.file_hash(settings.binary) != suite["binaries"][variant]["sha256"]:
                 raise ValueError(f"{variant} binary changed after suite initialization")
-            if suite.get("frontends") and cold.frontend_identity(settings.web_state or args.state) != suite["frontends"][variant]:
+            if suite.get("frontends") and cold.frontend_identity(settings.web_state or state) != suite["frontends"][variant]:
                 raise ValueError(f"{variant} frontend changed after suite initialization")
+            if suite.get("fixtureLayoutExperiment") is not None:
+                fixture = json.loads((state / "import-result.json").read_text())
+                issues = fixture_experiment.trial_issues(suite, variant, fixture, str(state))
+                if issues:
+                    raise ValueError("; ".join(issues))
             services = create_services(settings)
             services.start()
             record["topology"] = copy.deepcopy(services.topology)
@@ -191,7 +220,7 @@ def run_trial(args, suite, mode, pair, position, variant, config):
             def restart():
                 record["restartRequestedAfterBootstrap"] = True
                 persist()
-                record["accountingBeforeRestart"] = cold.wait_for_accounting(args.state, directory, args.timeout)
+                record["accountingBeforeRestart"] = cold.wait_for_accounting(state, directory, args.timeout)
                 record["idleBeforeRestart"] = services.wait_idle()
                 record["restart"] = services.restart_backend()
                 record["readyAtUnixMs"] = services.ready_at_unix_ms
@@ -202,6 +231,8 @@ def run_trial(args, suite, mode, pair, position, variant, config):
             bundle, evidence, issues = browser_evidence(directory, mode, args.replicas)
             record.update(evidence)
             record["issues"].extend(issues)
+            record["issues"].extend(fixture_experiment.trial_issues(
+                suite, variant, bundle["manifest"].get("fixture"), str(state)))
             if suite.get("frontends"):
                 build = bundle["report"]["web"]["build"]
                 if {"sourceSha256": build["source"]["sha256"], "buildId": build["buildId"]} != suite["frontends"][variant]:
@@ -209,7 +240,7 @@ def run_trial(args, suite, mode, pair, position, variant, config):
             if bundle["manifest"].get("binary_sha256") != suite["binaries"][variant]["sha256"]:
                 record["issues"].append("Served binary differs from the selected build")
             if not record["issues"]:
-                record["accountingBeforeStop"] = cold.wait_for_accounting(args.state, directory, args.timeout)
+                record["accountingBeforeStop"] = cold.wait_for_accounting(state, directory, args.timeout)
                 record["proxyStatus"] = services.wait_idle()
     except BaseException as error:
         record["wrapperExitCode"] = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
@@ -221,7 +252,7 @@ def run_trial(args, suite, mode, pair, position, variant, config):
             try:
                 services.close()
                 exited = all(process.poll() is not None for process in services.processes)
-                inventory_removed = not (args.state / "processes.json").exists()
+                inventory_removed = not (state / "processes.json").exists()
                 record["cleanup"] = {"status": "ok" if exited and inventory_removed else "failed",
                                      "ownedServiceProcessesExited": exited, "processInventoryRemoved": inventory_removed}
                 if not exited or not inventory_removed:
@@ -249,7 +280,7 @@ def run_trial(args, suite, mode, pair, position, variant, config):
                     interrupted = error
         else:
             record["cleanup"] = {"status": "ok", "ownedServiceProcessesExited": True,
-                                 "processInventoryRemoved": not (args.state / "processes.json").exists()}
+                                 "processInventoryRemoved": not (state / "processes.json").exists()}
         record["status"] = "failed" if record["issues"] else "passed"
         record["finishedAt"] = cold.timestamp()
         if record["issues"] and record["wrapperExitCode"] == 0:
@@ -266,9 +297,13 @@ def parser():
     command.add_argument("--baseline", type=Path, required=True)
     command.add_argument("--candidate", type=Path, required=True)
     for variant in ("baseline", "candidate"):
+        command.add_argument(f"--{variant}-state", type=Path, help="Prepared fixture state, only for layout experiments")
+        command.add_argument(f"--{variant}-config", type=Path, help="Browser config and session for this variant")
         command.add_argument(f"--{variant}-web-state", type=Path)
         command.add_argument(f"--{variant}-web-source-root", type=Path)
     command.add_argument("--config", type=Path)
+    command.add_argument("--fixture-layout-experiment", action="store_true",
+                         help="Compare two prepared layouts with identical records, schema, binary and frontend")
     command.add_argument("--trials", type=int, default=4, help="Paired trials per mode in alternating AB/BA order")
     command.add_argument("--modes", choices=("warm", "navigation", "action"), nargs="+", default=["warm", "navigation", "action"])
     command.add_argument("--replicas", type=int, default=8, help="Processes per API frontend, callback and executor pool")
@@ -297,31 +332,36 @@ def main(argv=None):
         raise ValueError("Each mode may appear only once")
     args.state, args.output = args.state.resolve(), args.output.resolve()
     for variant in ("baseline", "candidate"):
-        for option in ("web_state", "web_source_root"):
+        for option in ("state", "config", "web_state", "web_source_root"):
             name = f"{variant}_{option}"
             if getattr(args, name) is not None:
                 setattr(args, name, getattr(args, name).resolve())
-    if (args.state / "processes.json").exists():
-        raise ValueError("The fixture owns processes; stop them before running a replicated suite")
+    states = variant_states(args)
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("Use a new or empty output directory to preserve previous trials")
-    args.config = (args.config or run.default_browser_config(args.state)).resolve()
-    configs = {mode: trial_config(args.config, mode, args.replicas, args.samples, args.warmup)
-               for mode in set(args.modes) | {"warm"}}
+    configs = {}
+    for variant, state in states.items():
+        source = (getattr(args, variant + "_config") or args.config or run.default_browser_config(state)).resolve()
+        configs[variant] = {mode: trial_config(source, mode, args.replicas, args.samples, args.warmup)
+                            for mode in set(args.modes) | {"warm"}}
+        if args.fixture_layout_experiment:
+            session = configs[variant]["warm"].get("storageState")
+            if not session or not Path(session).is_file():
+                raise ValueError(f"{variant} requires its prepared browser storageState session")
     binaries = {}
     for variant in ("baseline", "candidate"):
         binary = getattr(args, variant).resolve()
         if not binary.is_file():
             raise ValueError(f"{variant} binary does not exist: {binary}")
         binaries[variant] = {"path": str(binary), "sha256": run.file_hash(binary)}
-    frontends = {variant: cold.frontend_identity(getattr(args, variant + "_web_state") or args.state)
+    frontends = {variant: cold.frontend_identity(getattr(args, variant + "_web_state") or states[variant])
                  for variant in ("baseline", "candidate")} if args.web_mode == "production" else None
     args.output.mkdir(mode=0o700, parents=True, exist_ok=True)
     suite = {
         "schemaVersion": 1, "mode": "paired-replicated-process", "status": "running", "startedAt": cold.timestamp(),
         "configuration": {"trials": args.trials, "modes": args.modes, "order": "alternating-ab-ba",
                           "replicas": args.replicas, "concurrency": args.replicas, "navigations": 1,
-                          "warmSamples": configs["warm"]["samples"], "warmup": configs["warm"]["warmup"],
+                          "warmSamples": configs["baseline"]["warm"]["samples"], "warmup": configs["baseline"]["warm"]["warmup"],
                           "workerThreads": args.workers, "executorSlots": args.executor_slots,
                           "threadStackMb": args.thread_stack_mb, "readinessPollMs": args.readiness_poll_ms, "trace": args.trace},
         "binaries": binaries, "frontends": frontends,
@@ -334,6 +374,15 @@ def main(argv=None):
             "accounting": "All verified operations must commit quota and compute completion before restart and shutdown; excluded from UI clocks",
         }, "trials": [],
     }
+    if args.fixture_layout_experiment:
+        suite["fixtureLayoutExperiment"] = {
+            "states": {variant: str(state) for variant, state in states.items()},
+            "fixtures": {variant: json.loads((state / "import-result.json").read_text())
+                         for variant, state in states.items()},
+        }
+        issues = fixture_experiment.identity_issues(suite)
+        if issues:
+            raise ValueError("; ".join(issues))
     cold.write_json(args.output / "replicated-results.json", suite)
     try:
         for mode in args.modes:
@@ -341,15 +390,14 @@ def main(argv=None):
                 records = []
                 for position, variant in enumerate(cold.trial_order(pair)):
                     print(f"{mode} pair {pair + 1}/{args.trials}: {variant}", flush=True)
-                    record = run_trial(args, suite, mode, pair, position, variant, configs[mode])
+                    record = run_trial(args, suite, mode, pair, position, variant, configs[variant][mode])
                     records.append(record)
                     print(f"  {record['status']}: {record['directory']}", flush=True)
                     if record["status"] != "passed":
                         raise ValueError(f"Replicated trial failed; inspect {args.output / record['directory'] / 'replicated-trial.json'}")
                 bundles = [compare.load(args.output / item["directory"]) for item in records]
-                mismatch = compare.mismatches(*bundles)
-                if bundles[0]["manifest"]["fixture"]["database"] != bundles[1]["manifest"]["fixture"]["database"]:
-                    mismatch.append("Paired trials changed physical storage layout")
+                mismatch = fixture_experiment.pair_mismatches(
+                    *bundles, layout_experiment=args.fixture_layout_experiment)
                 if mismatch:
                     raise ValueError("Paired trial configuration differs: " + "; ".join(mismatch))
         suite["status"] = "passed"
