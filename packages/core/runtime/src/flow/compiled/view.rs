@@ -59,9 +59,18 @@ pub fn reconstruct_board(
 ) -> Result<Board> {
     compiled.validate()?;
     let pin_ids: Vec<&str> = compiled.pins.iter().map(|p| p.id.as_str()).collect();
+    let mut root_node_count = 0;
+    let mut layer_node_counts = vec![0; compiled.layers.len()];
+    for node in &compiled.nodes {
+        if node.body_layer == NONE_IDX {
+            root_node_count += 1;
+        } else {
+            layer_node_counts[node.body_layer as usize] += 1;
+        }
+    }
 
     let mut layers: HashMap<String, Layer> = HashMap::with_capacity(compiled.layers.len());
-    for cl in &compiled.layers {
+    for (idx, cl) in compiled.layers.iter().enumerate() {
         let mut layer = Layer::new(
             cl.id.clone(),
             cl.name.clone(),
@@ -81,6 +90,9 @@ pub fn reconstruct_board(
                 })
             })
             .transpose()?;
+        layer.nodes.reserve(layer_node_counts[idx]);
+        layer.variables.reserve(cl.variables.len());
+        layer.pins.reserve(cl.pins.len());
         for variable in &cl.variables {
             let v = reconstruct_variable(variable)?;
             layer.variables.insert(v.id.clone(), v);
@@ -98,7 +110,7 @@ pub fn reconstruct_board(
         layers.insert(cl.id.clone(), layer);
     }
 
-    let mut nodes: HashMap<String, Node> = HashMap::new();
+    let mut nodes: HashMap<String, Node> = HashMap::with_capacity(root_node_count);
     for cn in &compiled.nodes {
         let node = reconstruct_node(cn, compiled, &pin_ids, catalog)?;
         if cn.body_layer == NONE_IDX {

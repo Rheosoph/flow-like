@@ -1,6 +1,7 @@
 use super::{
     EventTrigger, ExecutionEnvironment, ExecutionMode, InternalNode, LogLevel, Run, RunPayload,
     byte_store::{self, BYTE_STORE_RESOURCE, ByteScope, ByteStore, INLINE_BYTES_MAX},
+    function_lookup::{FUNCTION_LOOKUP_RESOURCE, RunFunctionLookup},
     internal_pin::InternalPin,
     log::LogMessage,
     trace::Trace,
@@ -10,7 +11,7 @@ use crate::models::llm::ModelUsageContext;
 use crate::{
     credentials::SharedCredentials,
     flow::{
-        board::ExecutionStage,
+        board::{Board, ExecutionStage},
         node::{Node, NodeState},
         oauth::OAuthToken,
         pin::{PinType, ValueType},
@@ -395,6 +396,7 @@ pub struct ExecutionContext {
     execution_mode: ExecutionMode,
     state: NodeState,
     callback: InterComCallback,
+    function_lookup: Option<Arc<RunFunctionLookup>>,
 }
 
 impl ExecutionContext {
@@ -513,6 +515,7 @@ impl ExecutionContext {
             id,
             run_id,
             elements,
+            function_lookup: resources.get(FUNCTION_LOOKUP_RESOURCE),
             resources,
             execution_environment: state.execution_environment,
             execution_mode: ExecutionMode::Sync,
@@ -632,6 +635,7 @@ impl ExecutionContext {
             run_id: run_meta.run_id.clone(),
             elements: run_meta.elements.clone(),
             resources: run_meta.resources.clone(),
+            function_lookup: run_meta.resources.get(FUNCTION_LOOKUP_RESOURCE),
             execution_environment: run_meta.environment,
             execution_mode: run_meta.execution_mode,
             started_by: None,
@@ -675,6 +679,55 @@ impl ExecutionContext {
     #[inline]
     pub fn started_by_first(&self) -> Option<Arc<InternalPin>> {
         self.started_by.as_ref().and_then(|v| v.first().cloned())
+    }
+
+    /// Resolve node pins against shared compiled topology while reading this
+    /// run's live pin instances. Detached contexts retain node-scan semantics.
+    pub fn runtime_pin_by_id(&self, id: &str) -> Option<Arc<InternalPin>> {
+        if let Some(lookup) = &self.function_lookup
+            && lookup.matches_nodes(&self.nodes)
+        {
+            match lookup.topology.runtime_pins.get(id) {
+                Some(Some(index)) => return lookup.pins.get(*index as usize).cloned(),
+                None => return None,
+                // Duplicate IDs at different arena positions must preserve the
+                // first matching node in this run's map iteration order.
+                Some(None) => {}
+            }
+        }
+        self.nodes
+            .values()
+            .find_map(|node| node.get_pin_by_id(id).ok())
+    }
+
+    /// Find the definition owning a function pin, preferring layer-local nodes.
+    pub fn function_pin_owner(
+        &self,
+        board: &Board,
+        layer_id: &str,
+        pin_id: &str,
+    ) -> Option<String> {
+        if let Some(lookup) = &self.function_lookup
+            && std::ptr::eq(board, lookup.topology.board.as_ref())
+        {
+            return lookup
+                .topology
+                .definition_owners
+                .get(layer_id)?
+                .get(pin_id)
+                .map(|owner| owner.to_string());
+        }
+        let layer = board.layers.get(layer_id)?;
+        layer
+            .nodes
+            .values()
+            .find(|node| node.pins.contains_key(pin_id))
+            .or_else(|| {
+                board.nodes.values().find(|node| {
+                    node.layer.as_deref() == Some(layer_id) && node.pins.contains_key(pin_id)
+                })
+            })
+            .map(|node| node.id.clone())
     }
 
     pub fn set_result(&mut self, value: Value) {
@@ -792,6 +845,15 @@ impl ExecutionContext {
     }
 
     pub async fn create_sub_context(&self, node: &Arc<InternalNode>) -> ExecutionContext {
+        self.create_sub_context_with_pin_overrides(node, self.context_pin_overrides.clone())
+            .await
+    }
+
+    async fn create_sub_context_with_pin_overrides(
+        &self,
+        node: &Arc<InternalNode>,
+        context_pin_overrides: Option<BTreeMap<String, Arc<Value>>>,
+    ) -> ExecutionContext {
         let id = node.shared_node_id();
         let execution_cache = self
             .execution_cache
@@ -808,6 +870,7 @@ impl ExecutionContext {
             run: self.run.clone(),
             elements: self.elements.clone(),
             resources: self.resources.clone(),
+            function_lookup: self.function_lookup.clone(),
             nodes: self.nodes.clone(),
             profile: self.profile.clone(),
             node: node.clone(),
@@ -827,7 +890,7 @@ impl ExecutionContext {
             credentials: self.credentials.clone(),
             delegated: false,
             context_state: BTreeMap::new(),
-            context_pin_overrides: self.context_pin_overrides.clone(),
+            context_pin_overrides,
             result: None,
             oauth_tokens: self.oauth_tokens.clone(),
             channel: self.channel.clone(),
@@ -856,10 +919,11 @@ impl ExecutionContext {
         node: &Arc<InternalNode>,
         function_variables: &std::collections::HashMap<String, Variable>,
     ) -> ExecutionContext {
-        let mut context = self.create_sub_context(node).await;
+        let mut context = self
+            .create_sub_context_with_pin_overrides(node, Some(BTreeMap::new()))
+            .await;
 
         context.local_variables = Some(fresh_local_variable_scope(function_variables));
-        context.context_pin_overrides = Some(BTreeMap::new());
 
         context
     }
@@ -2298,6 +2362,69 @@ mod tests {
 
     fn photo(len: usize) -> Vec<u8> {
         (0..len).map(|index| (index % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn function_contexts_isolate_overrides_and_reset_local_variables() {
+        let mut parent = byte_context(None).await;
+        parent.override_pin_value("outer", json!("parent"));
+        let mut variable = Variable::new("counter", VariableType::Integer, ValueType::Normal);
+        variable.default_value = Some(flow_like_types::json::to_vec(&json!(7)).unwrap());
+        *variable.value.lock().await = json!(99);
+        let variable_id = variable.id.clone();
+        let definition_value = variable.value.clone();
+        parent.local_variables = Some(Arc::new(Mutex::new(AHashMap::from_iter([(
+            variable_id.clone(),
+            variable.clone(),
+        )]))));
+        let function_variables = std::collections::HashMap::from([(variable_id.clone(), variable)]);
+
+        let ordinary_child = parent.create_sub_context(&parent.node).await;
+        assert_eq!(
+            ordinary_child.context_pin_overrides,
+            parent.context_pin_overrides
+        );
+        let (mut first, second) = tokio::join!(
+            parent.create_function_context(&parent.node, &function_variables),
+            parent.create_function_context(&parent.node, &function_variables),
+        );
+        assert_eq!(first.context_pin_overrides, Some(BTreeMap::new()));
+        assert_eq!(second.context_pin_overrides, Some(BTreeMap::new()));
+
+        let first_value = first.get_variable(&variable_id).await.unwrap().value;
+        let second_value = second.get_variable(&variable_id).await.unwrap().value;
+        assert_eq!(*first_value.lock().await, json!(7));
+        *first_value.lock().await = json!(8);
+        assert_eq!(*second_value.lock().await, json!(7));
+        assert_eq!(*definition_value.lock().await, json!(99));
+        assert_eq!(
+            *parent
+                .get_variable(&variable_id)
+                .await
+                .unwrap()
+                .value
+                .lock()
+                .await,
+            json!(99)
+        );
+
+        first.override_pin_value("outer", json!("first"));
+        let mut nested = first.create_sub_context(&first.node).await;
+        assert_eq!(nested.context_pin_overrides, first.context_pin_overrides);
+        nested.override_pin_value("result", json!(42));
+        first.push_sub_context(&mut nested);
+        assert_eq!(
+            first.context_pin_overrides.as_ref().unwrap()["result"].as_ref(),
+            &json!(42)
+        );
+        assert_eq!(second.context_pin_overrides, Some(BTreeMap::new()));
+        assert_eq!(
+            parent.context_pin_overrides,
+            Some(BTreeMap::from([(
+                "outer".to_string(),
+                Arc::new(json!("parent"))
+            )]))
+        );
     }
 
     #[tokio::test]

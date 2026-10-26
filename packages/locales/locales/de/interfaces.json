@@ -142,6 +142,7 @@
 	"eventId": "Ereignis-ID",
 	"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction": "Ereignistypen ohne Benutzeroberfläche verarbeiten Daten automatisch und benötigen keine Benutzerinteraktion.",
 	"exampleMessages": "Beispielnachrichten",
+	"exampleMessagesHelp": "",
 	"exampleRequest": "Beispielanfrage",
 	"executionTarget": "Ausführungsziel",
 	"exposeThisEndpointPublicly": "Diesen Endpunkt öffentlich bereitstellen",

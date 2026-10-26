@@ -146,6 +146,7 @@
 	"eventId": "",
 	"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction": "",
 	"exampleMessages": "",
+	"exampleMessagesHelp": "",
 	"exampleRequest": "",
 	"executionTarget": "",
 	"exposeThisEndpointPublicly": "",

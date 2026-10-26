@@ -142,6 +142,7 @@
 	"eventId": "事件 ID",
 	"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction": "不支持界面的事件类型会自动处理数据，无需用户交互。",
 	"exampleMessages": "示例消息",
+	"exampleMessagesHelp": "",
 	"exampleRequest": "请求示例",
 	"executionTarget": "执行目标",
 	"exposeThisEndpointPublicly": "公开此端点",

@@ -967,10 +967,14 @@ impl Board {
         // being updated can change, and refreshing its entries on write-back keeps the index exact.
         self.pin_index = Some(self.build_pin_index());
 
-        match dirty.and_then(|touched| self.dirty_queue(touched)) {
-            Some((index, queue)) => self.settle_dirty_nodes(&registry, &index, queue).await,
-            None => self.settle_every_node(&registry).await,
-        }
+        crate::a2ui::micro_widget::BoardWidgetScope::new(self)
+            .run(async {
+                match dirty.and_then(|touched| self.dirty_queue(touched)) {
+                    Some((index, queue)) => self.settle_dirty_nodes(&registry, &index, queue).await,
+                    None => self.settle_every_node(&registry).await,
+                }
+            })
+            .await;
 
         self.pin_index = None;
 

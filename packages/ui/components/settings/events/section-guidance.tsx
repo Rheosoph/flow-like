@@ -69,8 +69,8 @@ export function SectionGuidance({
 	}
 
 	return (
-		<div className="mb-5 flex items-start gap-3 rounded-md border border-primary/25 bg-primary/5 px-4 py-3">
-			<InfoIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+		<div className="mb-5 flex items-start gap-3 rounded-md border border-info-line bg-info-bg px-4 py-3">
+			<InfoIcon className="mt-0.5 h-4 w-4 shrink-0 text-info" />
 			<div className="min-w-0 flex-1">
 				{showWhat && (
 					<p className="text-[12.5px] font-medium">{guidance.what}</p>

@@ -2,7 +2,7 @@ import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
 import { act } from "react";
-import { type Root, createRoot } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import {
 	ICommandType,
 	type IGenericCommand,
@@ -54,6 +54,9 @@ Object.assign(globalThis, {
 	},
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
+
+// react-dom decides at load whether `input` events reach onChange, so it must see the window.
+const { createRoot } = await import("react-dom/client");
 
 type DomElement = NonNullable<ReturnType<typeof window.document.querySelector>>;
 interface HandlerAction {
@@ -294,8 +297,13 @@ mock.module("./WidgetBuilder", () => ({
 				initialComponents={props.initialComponents}
 				initialWidgetRefs={props.initialWidgetRefs}
 				onChange={props.onChange}
+				initialCanvasSettings={props.initialCanvasSettings}
+				onCanvasSettingsChange={props.onCanvasSettingsChange}
 				actionContext={props.actionContext}
 			>
+				{props.handleRef && (
+					<widgetBuilder.BuilderHandleBridge handleRef={props.handleRef} />
+				)}
 				<BuilderReader />
 				<Inspector />
 			</BuilderProvider>
@@ -448,6 +456,24 @@ const press = (target: DomElement, key: string) =>
 		}) as unknown as Event,
 	);
 
+async function typeInto(target: DomElement, value: string) {
+	const valueSetter = Object.getOwnPropertyDescriptor(
+		window.HTMLInputElement.prototype,
+		"value",
+	)?.set;
+	if (!valueSetter) throw new Error("Input value setter is unavailable");
+	await act(async () => {
+		valueSetter.call(target, value);
+		target.dispatchEvent(
+			new window.InputEvent("input", {
+				bubbles: true,
+				data: value,
+				inputType: "insertText",
+			}) as never,
+		);
+	});
+}
+
 async function openActionsFor(componentId: string) {
 	await act(async () => builder?.setSelection({ componentIds: [componentId] }));
 	await mouseDown(find('[role="tab"]', "Actions"));
@@ -591,6 +617,32 @@ test("metadata changes and unmount keep component edits waiting for autosave", a
 	expect(savedPages.at(-1)?.canvasSettings?.customCss).toBe(
 		".page { color: red; }",
 	);
+});
+
+test("a page background set in page settings reaches the open builder and survives its next edit", async () => {
+	await mount();
+	await click(find("button", "Settings"));
+	await mouseDown(find('[role="tab"]', "Layout"));
+	await typeInto(
+		find('input[placeholder="#ffffff or bg-background"]'),
+		"#123456",
+	);
+	expect(builder?.canvasSettings.backgroundColor).toBe("#123456");
+	expect(
+		(find('input[placeholder="#ffffff"]') as unknown as HTMLInputElement).value,
+	).toBe("#123456");
+
+	await act(async () => builder?.setCanvasSettings({ padding: "8px" }));
+	await act(async () => {
+		root?.unmount();
+		root = undefined;
+	});
+	await settle(() => savedPages.length > 0);
+
+	expect(savedPages.at(-1)?.canvasSettings).toMatchObject({
+		backgroundColor: "#123456",
+		padding: "8px",
+	});
 });
 
 test("undo during a pending project save is saved after the updated snapshot", async () => {

@@ -10,10 +10,26 @@ describe("post-login return URLs", () => {
 			"/a?app=app-1&route=%2Fcontact&ref=site#form",
 			"/a/app-1/dashboard?returnTo=https%3A%2F%2Fexample.com",
 			"/store?q=%5C%0A%2F%2Fevil.example",
+			"/thirdparty/callback?code=connection-code&state=connection-state",
+			"/a/app-1/callback",
+			"/callback-help",
 		]) {
 			expect(sanitizeReturnUrl(path)).toBe(path);
 		}
 		expect(sanitizeReturnUrl("/")).toBeNull();
+	});
+
+	it("rejects the login callback as a return destination to prevent replay loops", () => {
+		for (const path of [
+			"/callback",
+			"/callback/",
+			"/callback?code=consumed-code&state=old-state",
+			"/callback/?code=consumed-code&state=old-state#result",
+			"/account/../callback?code=consumed-code",
+			"/%2e/callback",
+		]) {
+			expect(sanitizeReturnUrl(path)).toBeNull();
+		}
 	});
 
 	it("rejects off-origin targets and URL parser whitespace or backslash tricks", () => {

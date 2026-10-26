@@ -65,6 +65,7 @@ import {
 } from "./frontend-state";
 import { useElementStorage } from "./hooks/use-element-storage";
 import {
+	isUndeclaredWidgetAction,
 	resolveWidgetInstanceEventRoute,
 	useWidgetInstance,
 } from "./layout/A2UIWidgetInstance";
@@ -1839,12 +1840,36 @@ export function useExecuteAction() {
 							break;
 						}
 
-						// Leaving a widget action unbound is a valid authoring choice, so it is a no-op.
+						// Leaving a declared widget action unbound is a valid authoring choice, so it is a
+						// no-op. An undeclared one can never be bound, which is always an authoring error.
 						if (route.kind === "unbound") {
+							const undeclared = isUndeclaredWidgetAction(
+								widgetInstance,
+								actionId,
+							);
 							if (options.requireSuccess)
 								throw new Error(
-									"The widget event has no configured workflow action.",
+									undeclared
+										? `The widget event "${actionId}" is not declared by its widget.`
+										: "The widget event has no configured workflow action.",
 								);
+							if (undeclared) {
+								console.warn(
+									`[A2UI] widget_event "${actionId}" is not declared under the widget's Settings → Events, so no page can bind it`,
+									{
+										widgetId: widgetInstance?.widgetId,
+										declaredActionIds: widgetInstance?.declaredActionIds,
+									},
+								);
+								toast.warning(
+									i18next.t(
+										"widgetEventActionidIsNotDeclaredByItsWidgetSoItCannotRunAFlow",
+										"Widget event “{{actionId}}” isn't declared by its widget, so it can't run a flow.",
+										{ actionId },
+									),
+								);
+								break;
+							}
 							console.debug("[A2UI] widget_event has no binding", {
 								actionId,
 								boundActionIds: Object.keys(

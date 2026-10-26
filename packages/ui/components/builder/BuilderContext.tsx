@@ -86,6 +86,8 @@ export interface ActionContext {
 	) => Promise<WorkflowEventInfo>;
 	/** Widget-level actions that can be triggered by components inside the widget */
 	widgetActions?: { id: string; label: string; description?: string }[];
+	/** Adds `actionId` to the widget's declared events; absent while the widget is read-only. */
+	declareWidgetAction?: (actionId: string) => void;
 	eventId?: string;
 	/** Page behavior hooks for preview mode */
 	pageId?: string;
@@ -363,6 +365,9 @@ export function BuilderProvider({
 		padding: initialCanvasSettings?.padding ?? "16px",
 		customCss: initialCanvasSettings?.customCss,
 	});
+	// The host is notified outside the state updater: updating its state there is a setState
+	// during this provider's render.
+	const canvasSettingsRef = useRef(canvasSettings);
 
 	// Global drag state to prevent text selection during drag
 	const [isDraggingGlobal, setIsDraggingGlobal] = useState(false);
@@ -451,7 +456,11 @@ export function BuilderProvider({
 
 				// Update canvas settings if present - use setCanvasSettings to trigger onCanvasSettingsChange
 				if (data.canvasSettings && typeof data.canvasSettings === "object") {
-					const newSettings = { ...canvasSettings, ...data.canvasSettings };
+					const newSettings = {
+						...canvasSettingsRef.current,
+						...data.canvasSettings,
+					};
+					canvasSettingsRef.current = newSettings;
 					setCanvasSettingsState(newSettings);
 					onCanvasSettingsChange?.(newSettings);
 				}
@@ -463,16 +472,15 @@ export function BuilderProvider({
 				return false;
 			}
 		},
-		[pushHistory, canvasSettings, onCanvasSettingsChange],
+		[pushHistory, onCanvasSettingsChange],
 	);
 
 	const setCanvasSettings = useCallback(
 		(settings: Partial<CanvasSettings>) => {
-			setCanvasSettingsState((prev) => {
-				const newSettings = { ...prev, ...settings };
-				onCanvasSettingsChange?.(newSettings);
-				return newSettings;
-			});
+			const newSettings = { ...canvasSettingsRef.current, ...settings };
+			canvasSettingsRef.current = newSettings;
+			setCanvasSettingsState(newSettings);
+			onCanvasSettingsChange?.(newSettings);
 		},
 		[onCanvasSettingsChange],
 	);

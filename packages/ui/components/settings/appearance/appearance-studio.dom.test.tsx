@@ -155,6 +155,10 @@ beforeAll(() => installDomGlobals());
 const roots: ReturnType<typeof createRoot>[] = [];
 
 async function render(): Promise<HTMLElement> {
+	// A studio left mounted keeps its unload guard on the shared window.
+	act(() => {
+		for (const root of roots.splice(0)) root.unmount();
+	});
 	const container = window.document.createElement(
 		"div",
 	) as unknown as HTMLElement;
@@ -192,6 +196,16 @@ afterAll(async () => {
 
 const sheetOf = (container: HTMLElement) =>
 	(container.querySelector("[data-testid=sheet]") as HTMLTextAreaElement).value;
+
+function showsUnsaved(container: HTMLElement) {
+	return container.querySelector('[title="Unsaved changes"]') !== null;
+}
+
+function unloadIsBlocked(): boolean {
+	const unload = new window.Event("beforeunload", { cancelable: true });
+	window.dispatchEvent(unload);
+	return unload.defaultPrevented;
+}
 
 describe("AppearanceStudio", () => {
 	test("seeds a managed sheet and previews it on the app surfaces", async () => {
@@ -236,5 +250,28 @@ describe("AppearanceStudio", () => {
 		expect(sheet.indexOf(".mine")).toBeGreaterThan(
 			sheet.indexOf(APPEARANCE_END),
 		);
+	});
+
+	test.each([
+		["an empty sheet", ""],
+		["a sheet without markers", ".mine {\n  color: red;\n}"],
+	])("seeding the block into %s is not an unsaved edit", async (_, stored) => {
+		storedSheet = stored;
+		const container = await render();
+
+		expect(sheetOf(container)).toContain(APPEARANCE_START);
+		expect(showsUnsaved(container)).toBe(false);
+		expect(unloadIsBlocked()).toBe(false);
+	});
+
+	test("a control change marks the sheet unsaved and guards unload", async () => {
+		storedSheet = "";
+		const container = await render();
+		act(() => {
+			(container.querySelector("#appearance-fx-aurora") as HTMLElement).click();
+		});
+
+		expect(showsUnsaved(container)).toBe(true);
+		expect(unloadIsBlocked()).toBe(true);
 	});
 });

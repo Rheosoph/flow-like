@@ -215,12 +215,24 @@ pub async fn from_compressed_json<T>(
 where
     T: Serialize + DeserializeOwned,
 {
+    Ok(from_compressed_json_with_meta(store, file_path).await?.0)
+}
+
+/// Read JSON and the revision of the same storage response for revision-keyed caches.
+pub async fn from_compressed_json_with_meta<T>(
+    store: Arc<dyn ObjectStore>,
+    file_path: Path,
+) -> flow_like_types::Result<(T, ObjectMeta)>
+where
+    T: Serialize + DeserializeOwned,
+{
     let reader = store.get(&file_path).await?;
+    let meta = reader.meta.clone();
     let bytes = reader.bytes().await?;
     let data = decompress_size_prepended(&bytes)?;
 
     let data: T = flow_like_types::json::from_slice(&data)?;
-    Ok(data)
+    Ok((data, meta))
 }
 
 #[cfg(test)]

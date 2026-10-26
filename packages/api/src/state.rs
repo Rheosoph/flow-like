@@ -140,11 +140,25 @@ pub struct CachedBoard {
     verification_started_at: parking_lot::Mutex<Option<Instant>>,
     /// Pages of a pinned version, as immutable as the version that owns them.
     version_pages: parking_lot::Mutex<HashMap<String, Arc<flow_like::a2ui::Page>>>,
+    prerun_derivation: parking_lot::Mutex<Option<CachedPrerunDerivation>>,
     /// Exact-ETag `.board` snapshot of a draft (`ensure_draft_board_snapshot`).
     pub draft_snapshot: TrustedUntil,
     /// Board-only prerun authority of a draft (`ensure_draft_prerun_manifest`).
     pub draft_authority: TrustedUntil,
 }
+
+struct CachedPrerunDerivation {
+    source: flow_like::flow::compiled::prerun::PageExecutionRevisionSource,
+    pages: HashMap<
+        String,
+        (
+            flow_like::flow::compiled::prerun::PrerunPageExecution,
+            String,
+        ),
+    >,
+}
+
+const CACHED_PAGE_REVISIONS_PER_BOARD: usize = 64;
 
 /// A pinned version's content never changes; revalidating it only bounds how long a deleted
 /// board keeps resolving on this instance.
@@ -158,6 +172,7 @@ impl CachedBoard {
             verified_at: parking_lot::Mutex::new(Instant::now()),
             verification_started_at: parking_lot::Mutex::new(None),
             version_pages: parking_lot::Mutex::new(HashMap::new()),
+            prerun_derivation: parking_lot::Mutex::new(None),
             draft_snapshot: TrustedUntil::default(),
             draft_authority: TrustedUntil::default(),
         }
@@ -191,6 +206,52 @@ impl CachedBoard {
         self.version_pages
             .lock()
             .insert(page.id.clone(), Arc::new(page.clone()));
+    }
+
+    fn with_prerun_derivation<T>(&self, apply: impl FnOnce(&mut CachedPrerunDerivation) -> T) -> T {
+        let mut cached = self.prerun_derivation.lock();
+        if cached
+            .as_ref()
+            .is_none_or(|cached| !cached.source.matches(&self.board))
+        {
+            *cached = Some(CachedPrerunDerivation {
+                source: flow_like::flow::compiled::prerun::PageExecutionRevisionSource::new(
+                    &self.board,
+                ),
+                pages: HashMap::new(),
+            });
+        }
+        apply(cached.as_mut().expect("prerun derivation was initialized"))
+    }
+
+    pub(crate) fn prerun_manifest(&self) -> Arc<flow_like::flow::compiled::PrerunManifest> {
+        self.with_prerun_derivation(|cached| cached.source.manifest())
+    }
+
+    /// Memoize only derived data. Callers still revalidate storage, Event
+    /// permissions and the separately saved draft Page before reaching here.
+    pub(crate) fn page_execution_revision(
+        &self,
+        execution: &flow_like::flow::compiled::prerun::PrerunPageExecution,
+    ) -> flow_like_types::Result<String> {
+        self.with_prerun_derivation(|cached| {
+            if let Some((previous, revision)) = cached.pages.get(&execution.page_id)
+                && previous == execution
+            {
+                return Ok(revision.clone());
+            }
+            let revision = cached.source.revision(&self.board, execution)?;
+            if cached.pages.len() >= CACHED_PAGE_REVISIONS_PER_BOARD
+                && !cached.pages.contains_key(&execution.page_id)
+            {
+                cached.pages.clear();
+            }
+            cached.pages.insert(
+                execution.page_id.clone(),
+                (execution.clone(), revision.clone()),
+            );
+            Ok(revision)
+        })
     }
 }
 
@@ -594,6 +655,7 @@ pub struct State {
     /// lifecycle-managed `tmp/` is trusted to exist; `None` for immutable
     /// version artifacts.
     pub compiled_artifact_cache: moka::sync::Cache<String, Option<std::time::SystemTime>>,
+    pub(crate) compiled_widget_artifacts: crate::execution::widget_artifacts::WidgetArtifactCache,
     /// Registries compiled artifacts are fingerprinted against, one per
     /// resolved WASM package set and current node metadata: the built-in
     /// catalog extended with the packages' manifest `Node`s. See
@@ -1457,6 +1519,7 @@ impl State {
                 .max_capacity(16_384)
                 .time_to_idle(Duration::from_secs(12 * 60 * 60))
                 .build(),
+            compiled_widget_artifacts: Default::default(),
             artifact_registries: moka::sync::Cache::builder()
                 .max_capacity(256)
                 .time_to_idle(Duration::from_secs(60 * 60))
@@ -2211,8 +2274,20 @@ async fn fetch_jwks(raw_url: &str) -> Result<JwkSet> {
     let client = reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(JWKS_REQUEST_TIMEOUT)
-        .build()?;
+        .timeout(JWKS_REQUEST_TIMEOUT);
+    // The isolated benchmark issuer uses its own CA without changing OS trust.
+    // Native TLS on macOS does not load SSL_CERT_FILE automatically.
+    #[cfg(feature = "benchmark-stack")]
+    let client = if matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")) {
+        if let Some(path) = std::env::var_os("SSL_CERT_FILE") {
+            client.add_root_certificate(reqwest::Certificate::from_pem(&std::fs::read(path)?)?)
+        } else {
+            client
+        }
+    } else {
+        client
+    };
+    let client = client.build()?;
     let mut response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -2547,6 +2622,138 @@ mod tests {
                 flow_like::flow_like_storage::Path::from("apps").join("app-1"),
             ),
         ))
+    }
+
+    #[test]
+    fn cached_page_revisions_reuse_board_metadata_and_follow_page_changes() {
+        use flow_like::flow::compiled::prerun::{
+            PrerunPageEventTarget, PrerunPageExecution, page_execution_revision,
+        };
+        use std::sync::Arc;
+
+        let mut cached = Arc::try_unwrap(cached_board()).ok().unwrap();
+        let board = Arc::get_mut(&mut cached.board).unwrap();
+        let mut node = flow_like::flow::node::Node::new("events_simple", "Entry", "", "Events");
+        node.id = "entry-1".into();
+        node.set_start(true);
+        board.nodes.insert(node.id.clone(), node);
+        let mut execution = PrerunPageExecution {
+            page_id: "page-1".into(),
+            ..Default::default()
+        };
+        let manifest = cached.prerun_manifest();
+        let initial = cached.page_execution_revision(&execution).unwrap();
+        assert_eq!(
+            initial,
+            page_execution_revision(&cached.board, &execution).unwrap()
+        );
+        assert_eq!(initial, cached.page_execution_revision(&execution).unwrap());
+
+        execution.special_events.load = Some(PrerunPageEventTarget {
+            node_id: "entry-1".into(),
+        });
+        let changed = cached.page_execution_revision(&execution).unwrap();
+        assert_ne!(initial, changed);
+        assert_eq!(
+            changed,
+            page_execution_revision(&cached.board, &execution).unwrap()
+        );
+        assert!(Arc::ptr_eq(&manifest, &cached.prerun_manifest()));
+        assert_eq!(
+            cached
+                .prerun_derivation
+                .lock()
+                .as_ref()
+                .unwrap()
+                .pages
+                .len(),
+            1
+        );
+
+        execution.special_events.load.as_mut().unwrap().node_id = "missing".into();
+        assert!(cached.page_execution_revision(&execution).is_err());
+    }
+
+    #[test]
+    fn cached_page_revisions_invalidate_after_board_mutation_or_replacement() {
+        use flow_like::flow::compiled::prerun::{PrerunPageExecution, page_execution_revision};
+        use std::sync::Arc;
+
+        let mut cached = Arc::try_unwrap(cached_board()).ok().unwrap();
+        let execution = PrerunPageExecution {
+            page_id: "page-1".into(),
+            ..Default::default()
+        };
+        let first = cached.page_execution_revision(&execution).unwrap();
+        Arc::make_mut(&mut cached.board).name.push_str(" changed");
+        let second = cached.page_execution_revision(&execution).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            second,
+            page_execution_revision(&cached.board, &execution).unwrap()
+        );
+
+        let mut replacement = (*cached.board).clone();
+        replacement.version = (2, 3, 4);
+        cached.board = Arc::new(replacement);
+        let third = cached.page_execution_revision(&execution).unwrap();
+        assert_ne!(second, third);
+        assert_eq!(
+            third,
+            page_execution_revision(&cached.board, &execution).unwrap()
+        );
+    }
+
+    #[test]
+    fn cached_page_revisions_are_bounded_and_shared_by_concurrent_readers() {
+        use flow_like::flow::compiled::prerun::PrerunPageExecution;
+        use std::sync::Arc;
+
+        let cached = cached_board();
+        for index in 0..=super::CACHED_PAGE_REVISIONS_PER_BOARD {
+            cached
+                .page_execution_revision(&PrerunPageExecution {
+                    page_id: format!("page-{index}"),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        assert!(
+            cached
+                .prerun_derivation
+                .lock()
+                .as_ref()
+                .unwrap()
+                .pages
+                .len()
+                <= super::CACHED_PAGE_REVISIONS_PER_BOARD
+        );
+        let readers = (0..8)
+            .map(|_| {
+                let cached = cached.clone();
+                std::thread::spawn(move || {
+                    let revision = cached
+                        .page_execution_revision(&PrerunPageExecution {
+                            page_id: "page-current".into(),
+                            ..Default::default()
+                        })
+                        .unwrap();
+                    (revision, cached.prerun_manifest())
+                })
+            })
+            .collect::<Vec<_>>();
+        let expected = cached
+            .page_execution_revision(&PrerunPageExecution {
+                page_id: "page-current".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let manifest = cached.prerun_manifest();
+        for reader in readers {
+            let (revision, shared_manifest) = reader.join().unwrap();
+            assert_eq!(revision, expected);
+            assert!(Arc::ptr_eq(&manifest, &shared_manifest));
+        }
     }
 
     #[test]

@@ -73,7 +73,6 @@ const FILE_DOCUMENT_EVENTS = [
 
 /** Static interaction contracts implemented by the built-in renderers. */
 export const COMPONENT_EVENT_MANIFEST = {
-	forecastChart: [],
 	excalidraw: [
 		[
 			"load",

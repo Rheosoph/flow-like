@@ -808,7 +808,12 @@ function Host() {
 export default function HostFixture() {
 	const rendererReady = useFixtureRendererReady();
 	const [query] = useState(
-		() => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+		// The apps' freshness window: with staleTime 0 every board view mounting
+		// after a read would refetch the board, which no real host does.
+		() =>
+			new QueryClient({
+				defaultOptions: { queries: { retry: false, staleTime: 30 * 1000 } },
+			}),
 	);
 	return (
 		<QueryClientProvider client={query}>

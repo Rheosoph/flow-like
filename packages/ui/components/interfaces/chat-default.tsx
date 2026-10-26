@@ -567,6 +567,18 @@ async function handleStreamCompletion({
 	}
 }
 
+function ConversationLoading() {
+	const { t } = useTranslation("interfaces");
+	return (
+		<div className="flex h-full flex-col items-center justify-center gap-3">
+			<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
+			<p className="text-sm text-muted-foreground">
+				{t("loadingConversation", "Loading conversation...")}
+			</p>
+		</div>
+	);
+}
+
 /**
  * Periodic checkpoint of the streaming message, written to `drafts` so the session's message query
  * stays quiet until the turn settles. Recovery only: the live bubble renders from React state, and
@@ -1792,14 +1804,14 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	return (
 		<>
-			<ChatAppearance appId={appId} eventId={event.id} config={config}>
+			<ChatAppearance
+				appId={appId}
+				eventId={event.id}
+				config={config}
+				fallback={<ConversationLoading />}
+			>
 				{!messagesLoaded ? (
-					<div className="flex h-full flex-col items-center justify-center gap-3">
-						<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
-						<p className="text-sm text-muted-foreground">
-							{t("loadingConversation", "Loading conversation...")}
-						</p>
-					</div>
+					<ConversationLoading />
 				) : showWelcome ? (
 					<ChatWelcome
 						onSendMessage={handleSendMessage}

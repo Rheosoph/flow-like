@@ -33,6 +33,24 @@ pub type BatchedCallback = Arc<
         + Sync,
 >;
 
+struct InterComBuffer {
+    events: Mutex<Vec<InterComEvent>>,
+}
+
+impl Drop for InterComBuffer {
+    fn drop(&mut self) {
+        // Handler clones and in-flight callbacks share this buffer. Only its last
+        // owner can discard events, so temporary handles must not report a loss.
+        let pending = self.events.get_mut().len();
+        if pending != 0 {
+            tracing::warn!(
+                pending,
+                "BufferedInterComHandler dropped with unflushed events; call flush() before dropping"
+            );
+        }
+    }
+}
+
 /// A buffered handler for inter-component communication events.
 /// Collects events in enqueue order and periodically sends contiguous, same-type
 /// batches to the provided callback.
@@ -47,7 +65,7 @@ pub struct BufferedInterComHandler {
     callback: BatchedCallback,
     interval_ms: u64,
     capacity: u64,
-    buffer: Arc<Mutex<Vec<InterComEvent>>>,
+    buffer: Arc<InterComBuffer>,
     flush_lock: Arc<Mutex<()>>,
     last_tick_ms: Arc<AtomicU64>,
 }
@@ -75,7 +93,9 @@ impl BufferedInterComHandler {
         let last_tick_ms = Arc::new(AtomicU64::new(0));
 
         let handler = Self {
-            buffer: Arc::new(Mutex::new(Vec::with_capacity(capacity as usize))),
+            buffer: Arc::new(InterComBuffer {
+                events: Mutex::new(Vec::with_capacity(capacity as usize)),
+            }),
             flush_lock: Arc::new(Mutex::new(())),
             callback,
             interval_ms,
@@ -96,16 +116,10 @@ impl BufferedInterComHandler {
     /// # Returns
     /// An InterComCallback that buffers events through this handler
     pub fn into_callback(&self) -> InterComCallback {
-        let buffered_sender = self.clone();
+        let buffered_sender = Arc::new(self.clone());
         Some(Arc::new(move |response| {
-            let buffered_handler = buffered_sender.clone();
-            Box::pin({
-                async move {
-                    let handler = buffered_handler.clone();
-                    handler.send(response).await?;
-                    Ok(())
-                }
-            })
+            let handler = Arc::clone(&buffered_sender);
+            Box::pin(async move { handler.send(response).await })
         }))
     }
 
@@ -119,7 +133,7 @@ impl BufferedInterComHandler {
                 if let Some(handler) = handler.upgrade() {
                     let now = Self::now_as_millis();
                     let last_event = handler.last_tick_ms.load(Ordering::Relaxed);
-                    let has_buffered_events = !handler.buffer.lock().await.is_empty();
+                    let has_buffered_events = !handler.buffer.events.lock().await.is_empty();
 
                     if has_buffered_events && now.saturating_sub(last_event) >= 2 * interval_ms {
                         let _ = handler.flush().await;
@@ -154,7 +168,7 @@ impl BufferedInterComHandler {
         let last = self.last_tick_ms.load(Ordering::Relaxed);
         let now = Self::now_as_millis();
         let buffered_events = {
-            let mut buffer = self.buffer.lock().await;
+            let mut buffer = self.buffer.events.lock().await;
             buffer.push(event);
             buffer.len()
         };
@@ -187,7 +201,7 @@ impl BufferedInterComHandler {
         // enqueueing while this batch is being delivered; the next serialized
         // flush will pick those events up without reordering either batch.
         let events_to_process = {
-            let mut buffer = self.buffer.lock().await;
+            let mut buffer = self.buffer.events.lock().await;
             if buffer.is_empty() {
                 return Ok(());
             }
@@ -219,22 +233,6 @@ impl BufferedInterComHandler {
         self.last_tick_ms
             .store(Self::now_as_millis(), std::sync::atomic::Ordering::Relaxed);
         Ok(())
-    }
-}
-
-impl Drop for BufferedInterComHandler {
-    fn drop(&mut self) {
-        // `flush()` is async and cannot run here — dropping the future would
-        // be a silent no-op. Callers must flush explicitly; surface a missed
-        // one instead of losing the tail of the stream quietly.
-        if let Ok(buffer) = self.buffer.try_lock()
-            && !buffer.is_empty()
-        {
-            tracing::warn!(
-                pending = buffer.len(),
-                "BufferedInterComHandler dropped with unflushed events — call flush() before dropping"
-            );
-        }
     }
 }
 
@@ -276,13 +274,109 @@ mod tests {
     use super::{BatchedCallback, BufferedInterComHandler, InterComEvent};
     use serde_json::json;
     use std::sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
     };
     use tokio::sync::{Barrier, Mutex};
 
+    #[derive(Clone, Default)]
+    struct PendingWarnings(Arc<StdMutex<Vec<u64>>>);
+
+    impl tracing::Subscriber for PendingWarnings {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+        }
+
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Pending(Option<u64>);
+            impl tracing::field::Visit for Pending {
+                fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+
+                fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                    if field.name() == "pending" {
+                        self.0 = Some(value);
+                    }
+                }
+            }
+            let mut pending = Pending(None);
+            event.record(&mut pending);
+            if let Some(pending) = pending.0 {
+                self.0.lock().unwrap().push(pending);
+            }
+        }
+    }
+
     fn sequenced_event(event_type: &str, sequence: u64) -> InterComEvent {
         InterComEvent::with_type(event_type, json!({ "sequence": sequence }))
+    }
+
+    #[tokio::test]
+    async fn only_the_last_buffer_owner_warns_about_pending_events() {
+        let warnings = PendingWarnings::default();
+        let _subscriber = tracing::subscriber::set_default(warnings.clone());
+        let handler = BufferedInterComHandler::new(
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+            Some(60_000),
+            Some(100),
+            Some(false),
+        );
+        handler
+            .last_tick_ms
+            .store(BufferedInterComHandler::now_as_millis(), Ordering::Relaxed);
+        let peer = handler.as_ref().clone();
+        let callback = handler.into_callback().unwrap();
+
+        callback(sequenced_event("a2ui", 1)).await.unwrap();
+        drop(handler);
+        drop(peer);
+        callback(sequenced_event("a2ui", 2)).await.unwrap();
+        assert!(warnings.0.lock().unwrap().is_empty());
+
+        drop(callback);
+        assert_eq!(*warnings.0.lock().unwrap(), vec![2]);
+    }
+
+    #[tokio::test]
+    async fn callback_outlives_its_original_handler_and_keeps_event_order() {
+        let warnings = PendingWarnings::default();
+        let _subscriber = tracing::subscriber::set_default(warnings.clone());
+        let delivered = Arc::new(Mutex::new(Vec::<InterComEvent>::new()));
+        let sink = delivered.clone();
+        let handler = BufferedInterComHandler::new(
+            Arc::new(move |events| {
+                let sink = sink.clone();
+                Box::pin(async move {
+                    sink.lock().await.extend(events);
+                    Ok(())
+                })
+            }),
+            Some(60_000),
+            Some(1),
+            Some(false),
+        );
+        let callback = handler.into_callback().unwrap();
+        drop(handler);
+        let expected = vec![
+            sequenced_event("a2ui", 1),
+            sequenced_event("completed", 2),
+            sequenced_event("a2ui", 3),
+        ];
+        for event in &expected {
+            callback(event.clone()).await.unwrap();
+        }
+        drop(callback);
+
+        assert_eq!(*delivered.lock().await, expected);
+        assert!(warnings.0.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

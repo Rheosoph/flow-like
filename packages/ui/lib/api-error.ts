@@ -146,6 +146,17 @@ export function isMissingResourceError(
 }
 
 /**
+ * True when the server has no such route: an uncoded 404 (nothing matched the
+ * path) or a 405 (the path exists for another verb). A hub that predates a
+ * route answers this way, so callers can fall back to an older endpoint.
+ */
+export function isMissingRouteError(error: unknown): error is ApiResponseError {
+	if (typeof error !== "object" || error === null) return false;
+	const { status, code } = error as Partial<ApiResponseError>;
+	return status === 405 || (status === 404 && !code);
+}
+
+/**
  * The server's own explanation when it sent one, otherwise the caller's generic
  * copy. Backends that distinguish failure cases (already a member vs. already
  * invited) are only useful if the UI shows what they said.

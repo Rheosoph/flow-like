@@ -11,6 +11,7 @@ const [
 	{ A2UIRenderer },
 	{ registerComponent },
 	{ useData },
+	{ useDataBinding },
 	{ A2UIColumn },
 	{ appGlobalState, pageLocalState },
 	uiState,
@@ -20,6 +21,7 @@ const [
 	import("./A2UIRenderer"),
 	import("./ComponentRegistry"),
 	import("./DataContext"),
+	import("./hooks/use-data-binding"),
 	import("./layout/Column"),
 	import("../../lib/idb-storage"),
 	import("../../db/ui-state-db"),
@@ -51,10 +53,25 @@ function CountingColumn(props: ComponentProps) {
 	return <A2UIColumn {...(props as Parameters<typeof A2UIColumn>[0])} />;
 }
 
+function Fragile({ component, componentId, elementRef }: ComponentProps) {
+	const { broken } = component as unknown as { broken?: boolean };
+	if (broken) throw new Error(`${componentId} cannot render`);
+	return <span ref={elementRef} data-probe={componentId} />;
+}
+
+function Binding({ component, componentId }: ComponentProps) {
+	const value = useDataBinding(
+		(component as unknown as { flag: BoundValue }).flag,
+	);
+	return <span data-probe={componentId}>{String(value)}</span>;
+}
+
 // Test-only types; the real column renderer is reused so child resolution
 // (explicit lists, templates, scopes) is the production code path.
 registerComponent("testProbe", Probe);
 registerComponent("testColumn", CountingColumn);
+registerComponent("testFragile", Fragile);
+registerComponent("testBinding", Binding);
 
 const probe = (
 	id: string,
@@ -400,5 +417,61 @@ describe("A2UIRenderer pending Page actions", () => {
 		);
 		await render(surface);
 		expect(isPending("cached")).toBe(false);
+	});
+});
+
+describe("A2UIRenderer element failures", () => {
+	const fragile = (id: string, broken: boolean): SurfaceComponent => ({
+		id,
+		component: {
+			type: "testFragile",
+			broken,
+		} as unknown as SurfaceComponent["component"],
+	});
+	const failure = () => host?.querySelector('[role="alert"]') ?? null;
+
+	test("a throwing element fails alone and retries on its next update", async () => {
+		const consoleError = spyOn(console, "error").mockImplementation(() => {});
+		cleanup.push(() => consoleError.mockRestore());
+		let surface = surfaceOf([
+			column("root", { explicitList: ["fragile", "sibling"] }),
+			fragile("fragile", true),
+			probe("sibling", "still here"),
+		]);
+		await mount(surface);
+
+		expect(probeText("sibling")).toBe("still here");
+		expect(failure()?.getAttribute("data-a2ui-element-ref")).toBe("s1/fragile");
+
+		surface = withComponent(surface, fragile("fragile", false));
+		await render(surface);
+
+		expect(failure()).toBeNull();
+		expect(probeText("fragile")).toBe("");
+		expect(probeText("sibling")).toBe("still here");
+	});
+
+	test("useDataBinding reads a raw primitive a flow stored", async () => {
+		await mount(
+			surfaceOf([
+				column("root", { explicitList: ["on", "off"] }),
+				{
+					id: "on",
+					component: {
+						type: "testBinding",
+						flag: true,
+					} as unknown as SurfaceComponent["component"],
+				},
+				{
+					id: "off",
+					component: {
+						type: "testBinding",
+						flag: false,
+					} as unknown as SurfaceComponent["component"],
+				},
+			]),
+		);
+		expect(probeText("on")).toBe("true");
+		expect(probeText("off")).toBe("false");
 	});
 });

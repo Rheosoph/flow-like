@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { type CSSProperties, type ReactNode, useId } from "react";
+import { type CSSProperties, type ReactNode, useId, useState } from "react";
 import { useAssetSource } from "../../../hooks/use-asset-source";
 import { isStorageAssetPath } from "../../../lib/asset-url-cache";
 import {
@@ -9,15 +9,20 @@ import {
 	escapeCssAttributeValue,
 	resolveChatColorScheme,
 } from "../../../lib/chat-appearance";
+import { createSanitizedStyleProps } from "../../../lib/css-utils";
 import type { IEventPayloadChat } from "../../../lib/schema/flow/event-payload-chat";
+import { useScopedCss } from "../../../lib/use-scoped-css";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
-import { ScopedCustomCss } from "../../scoped-custom-css";
+
+const CUSTOM_CSS_OPTIONS = { scopeRoot: true } as const;
 
 interface ChatAppearanceProps {
 	appId?: string;
 	eventId: string;
 	config?: Partial<IEventPayloadChat>;
+	/** Shown in place of the chat until the event's custom stylesheet is attached. */
+	fallback?: ReactNode;
 	children: ReactNode;
 }
 
@@ -25,6 +30,7 @@ export function ChatAppearance({
 	appId,
 	eventId,
 	config = {},
+	fallback = null,
 	children,
 }: Readonly<ChatAppearanceProps>) {
 	const { t } = useTranslation("chat");
@@ -46,6 +52,17 @@ export function ChatAppearance({
 		: resolvedBackground;
 	const backgroundImage = createChatBackgroundImage(resolvedBackgroundImage);
 	const customCssScope = `[data-fl-chat-root="${escapeCssAttributeValue(scopeKey)}"]`;
+	const { css: customCss, pending: customCssPending } = useScopedCss(
+		config.custom_css,
+		customCssScope,
+		CUSTOM_CSS_OPTIONS,
+	);
+	// Only the first paint waits for the stylesheet. A later edit swaps the sheet
+	// under the live conversation rather than unmounting it.
+	const [stylesheetAttached, setStylesheetAttached] = useState(
+		!customCssPending,
+	);
+	if (!customCssPending && !stylesheetAttached) setStylesheetAttached(true);
 
 	const style: CSSProperties = {
 		backgroundImage,
@@ -68,12 +85,8 @@ export function ChatAppearance({
 			data-fl-chat-has-background={backgroundImage ? "true" : undefined}
 			style={style}
 		>
-			<ScopedCustomCss
-				css={config.custom_css}
-				scopeSelector={customCssScope}
-				options={{ scopeRoot: true }}
-			/>
-			{children}
+			{customCss ? <style {...createSanitizedStyleProps(customCss)} /> : null}
+			{stylesheetAttached ? children : fallback}
 		</div>
 	);
 }

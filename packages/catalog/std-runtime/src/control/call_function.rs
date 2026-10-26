@@ -9,7 +9,7 @@ use flow_like::flow::{
     },
     node::{Node, NodeLogic},
     pin::{Pin, PinType},
-    utils::evaluate_pin_value,
+    utils::evaluate_pin_value_borrowed,
     variable::VariableType,
 };
 use flow_like_catalog_data_support::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
@@ -76,11 +76,7 @@ impl CallFunctionNode {
         layer: &Layer,
         overrides: &BTreeMap<String, Arc<Value>>,
     ) {
-        let overrides_opt = if overrides.is_empty() {
-            None
-        } else {
-            Some(overrides.clone())
-        };
+        let overrides_opt = (!overrides.is_empty()).then_some(overrides);
         // Resolved by direction: an input may share an output's name, and a by-name lookup
         // would write the return value into that input.
         let output_pins = Self::output_data_pins(context);
@@ -99,22 +95,13 @@ impl CallFunctionNode {
             };
 
             for dep_pin_id in &layer_pin.depends_on {
-                // Find the InternalPin for this dependency
-                let mut found_pin = None;
-                for node in context.nodes.values() {
-                    if let Ok(pin) = node.get_pin_by_id(dep_pin_id) {
-                        found_pin = Some(pin);
-                        break;
-                    }
-                }
-                let Some(pin) = found_pin else {
+                let Some(pin) = context.runtime_pin_by_id(dep_pin_id) else {
                     continue;
                 };
 
-                // Use evaluate_pin_value to follow the full dependency chain
-                // while checking overrides at each step. This correctly handles
-                // bridge pins, relay pins, and prevents stale shared pin reads.
-                if let Ok(value) = evaluate_pin_value(pin, &overrides_opt).await {
+                // Follow the full dependency chain and check overrides at each step
+                // so bridge and relay pins do not read stale shared values.
+                if let Ok(value) = evaluate_pin_value_borrowed(pin, overrides_opt).await {
                     let _ = context.set_pin_ref_value(output_pin, value).await;
                     break;
                 }
@@ -298,22 +285,49 @@ impl CallFunctionNode {
     }
 
     fn find_node_id_by_pin(
+        context: &ExecutionContext,
         board: &Board,
-        layer: &Layer,
         layer_id: &str,
         pin_id: &str,
     ) -> Option<String> {
-        layer
-            .nodes
+        context.function_pin_owner(board, layer_id, pin_id)
+    }
+
+    /// The node the function body starts at, or `None` when the function has no execution body
+    /// to run. That is a pure layer, or an execution boundary nothing is wired to: FlowScript
+    /// keeps a layer's boundary pins when its body is edited down to a bare `return`.
+    fn function_entry_node(
+        context: &ExecutionContext,
+        board: &Board,
+        layer: &Layer,
+        layer_id: &str,
+    ) -> flow_like_types::Result<Option<String>> {
+        let Some(exec_in) = layer
+            .pins
             .values()
-            .find(|n| n.pins.contains_key(pin_id))
-            .or_else(|| {
-                board
-                    .nodes
-                    .values()
-                    .find(|n| n.layer.as_deref() == Some(layer_id) && n.pins.contains_key(pin_id))
-            })
-            .map(|n| n.id.clone())
+            .find(|pin| pin.pin_type == PinType::Input && pin.data_type == VariableType::Execution)
+        else {
+            return Ok(None);
+        };
+        if let Some(entry) = exec_in
+            .connected_to
+            .iter()
+            .find_map(|pin_id| Self::find_node_id_by_pin(context, board, layer_id, pin_id))
+        {
+            return Ok(Some(entry));
+        }
+        let body_reaches_exit = layer.pins.values().any(|pin| {
+            pin.pin_type == PinType::Output
+                && pin.data_type == VariableType::Execution
+                && !pin.depends_on.is_empty()
+        });
+        if exec_in.connected_to.is_empty() && !body_reaches_exit {
+            return Ok(None);
+        }
+        Err(flow_like_types::anyhow!(
+            "Function '{}' has no node connected to its exec input",
+            layer.name
+        ))
     }
 
     async fn run_pure_function(
@@ -343,7 +357,8 @@ impl CallFunctionNode {
         for layer_pin in &output_layer_pins {
             for dep_pin_id in &layer_pin.depends_on {
                 // Find the node owning this pin
-                let feeding_node_id = Self::find_node_id_by_pin(board, layer, layer_id, dep_pin_id);
+                let feeding_node_id =
+                    Self::find_node_id_by_pin(context, board, layer_id, dep_pin_id);
 
                 let Some(node_id) = feeding_node_id else {
                     continue;
@@ -435,16 +450,17 @@ impl NodeLogic for CallFunctionNode {
         }
 
         // Collect input values (non-exec, non-function_layer_id)
-        let input_pins: Vec<_> = {
-            let pins: Vec<_> = context.node.pins.iter().cloned().collect();
-            pins.into_iter()
-                .filter(|p| {
-                    p.pin_type == PinType::Input
-                        && p.data_type != VariableType::Execution
-                        && p.name.as_ref() != "function_layer_id"
-                })
-                .collect()
-        };
+        let input_pins: Vec<_> = context
+            .node
+            .pins
+            .iter()
+            .filter(|p| {
+                p.pin_type == PinType::Input
+                    && p.data_type != VariableType::Execution
+                    && p.name.as_ref() != "function_layer_id"
+            })
+            .cloned()
+            .collect();
 
         let mut input_values = std::collections::HashMap::new();
         for pin in &input_pins {
@@ -512,34 +528,15 @@ impl NodeLogic for CallFunctionNode {
             None => None,
         };
 
-        // Check if the function is impure (has an input execution layer pin)
-        let exec_in_layer_pin = layer
-            .pins
-            .values()
-            .find(|p| p.pin_type == PinType::Input && p.data_type == VariableType::Execution);
+        let output_exec_names: Vec<String> = Self::output_exec_pin_names(context);
+        for name in &output_exec_names {
+            let _ = context.deactivate_exec_pin(name).await;
+        }
 
-        if let Some(exec_pin) = exec_in_layer_pin {
+        if let Some(entry_node_id) =
+            Self::function_entry_node(context, &board, layer, &function_layer_id)?
+        {
             // --- IMPURE function: exec chain inside the function ---
-            // Deactivate all mirrored output exec pins
-            let output_exec_names: Vec<String> = Self::output_exec_pin_names(context);
-            for name in &output_exec_names {
-                let _ = context.deactivate_exec_pin(name).await;
-            }
-
-            // Find entry node via the layer exec_in pin's connections
-            let entry_node_id = exec_pin
-                .connected_to
-                .iter()
-                .find_map(|pin_id| {
-                    Self::find_node_id_by_pin(&board, layer, &function_layer_id, pin_id)
-                })
-                .ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "Function '{}' has no node connected to its exec input",
-                        layer.name
-                    )
-                })?;
-
             let entry_node = context
                 .nodes
                 .get(&entry_node_id)
@@ -588,7 +585,7 @@ impl NodeLogic for CallFunctionNode {
                 }
                 for dep_pin_id in &layer_pin.depends_on {
                     let feeding_node_id =
-                        Self::find_node_id_by_pin(&board, layer, &function_layer_id, dep_pin_id);
+                        Self::find_node_id_by_pin(context, &board, &function_layer_id, dep_pin_id);
                     let Some(node_id) = feeding_node_id else {
                         continue;
                     };
@@ -632,14 +629,14 @@ impl NodeLogic for CallFunctionNode {
             context.push_sub_context(&mut fn_context);
 
             self.read_outputs(context, layer, &overrides).await;
-
-            for name in &output_exec_names {
-                let _ = context.activate_exec_pin(name).await;
-            }
         } else {
             // --- PURE function: evaluate outputs by triggering feeding nodes ---
             self.run_pure_function(context, &board, layer, &function_layer_id, &input_values)
                 .await?;
+        }
+
+        for name in &output_exec_names {
+            let _ = context.activate_exec_pin(name).await;
         }
 
         if let (Some(settings), Some((handle, key))) = (&cache_settings, &cache_lookup) {
@@ -774,7 +771,10 @@ mod tests {
     use super::*;
     use ahash::AHashMap;
     use flow_like::{
-        flow::{board::ExecutionStage, execution::Run, pin::ValueType, variable::Variable},
+        flow::{
+            board::ExecutionStage, execution::Run, pin::ValueType, utils::evaluate_pin_value,
+            variable::Variable,
+        },
         profile::Profile,
         state::{FlowLikeConfig, FlowLikeState},
         utils::http::HTTPClient,
@@ -938,6 +938,123 @@ mod tests {
         .await
     }
 
+    fn node_with_output(id: &str, pin_id: &str, layer: Option<&str>) -> Node {
+        let mut node = Node::new("test_producer", "Producer", "", "Tests");
+        node.id = id.to_owned();
+        node.layer = layer.map(str::to_owned);
+        let mut output = pin("value", PinType::Output, VariableType::Integer, 0);
+        output.id = pin_id.to_owned();
+        node.pins.insert(pin_id.to_owned(), output);
+        node
+    }
+
+    #[tokio::test]
+    async fn definition_owners_preserve_layer_precedence_and_legacy_fallback() {
+        let mut layer = Layer::new("function".into(), "Function".into(), LayerType::Function);
+        for id in ["local-first", "local-second"] {
+            let node = node_with_output(id, "shared", Some("function"));
+            layer.nodes.insert(node.id.clone(), node);
+        }
+        let expected_local = layer
+            .nodes
+            .values()
+            .find(|node| node.pins.contains_key("shared"))
+            .unwrap()
+            .id
+            .clone();
+        let mut board = board_with_layer(layer);
+        for node in [
+            node_with_output("board-duplicate", "shared", Some("function")),
+            node_with_output("board-only", "legacy", Some("function")),
+            node_with_output("different-function", "outside", Some("other")),
+            node_with_output("top-level", "root", None),
+        ] {
+            board.nodes.insert(node.id.clone(), node);
+        }
+        let node = internal_node(node_with_output("context", "context-pin", None));
+        let context = context_for(&node, vec![]).await;
+        assert_eq!(
+            context
+                .function_pin_owner(&board, "function", "shared")
+                .as_deref(),
+            Some(expected_local.as_str())
+        );
+        assert_eq!(
+            context
+                .function_pin_owner(&board, "function", "legacy")
+                .as_deref(),
+            Some("board-only")
+        );
+        assert_eq!(
+            context.function_pin_owner(&board, "function", "outside"),
+            None
+        );
+        assert_eq!(context.function_pin_owner(&board, "function", "root"), None);
+        assert_eq!(
+            context.function_pin_owner(&board, "function", "missing"),
+            None
+        );
+        assert_eq!(context.function_pin_owner(&board, "absent", "shared"), None);
+    }
+
+    #[tokio::test]
+    async fn runtime_pins_keep_first_match_and_live_values() {
+        let first = internal_node(node_with_output("first", "shared", None));
+        let second = internal_node(node_with_output("second", "shared", None));
+        let context = context_for(&first, vec![second]).await;
+        let expected = context
+            .nodes
+            .values()
+            .find_map(|node| node.get_pin_by_id("shared").ok())
+            .unwrap();
+        let found = context.runtime_pin_by_id("shared").unwrap();
+        assert!(Arc::ptr_eq(&found, &expected));
+        assert!(context.runtime_pin_by_id("missing").is_none());
+        for value in [41, 42] {
+            expected.set_value(json!(value)).await;
+            assert_eq!(
+                context
+                    .runtime_pin_by_id("shared")
+                    .unwrap()
+                    .get_raw_value()
+                    .await,
+                Some(json!(value))
+            );
+        }
+        let sub = context.create_sub_context(&first).await;
+        assert!(Arc::ptr_eq(
+            &found,
+            &sub.runtime_pin_by_id("shared").unwrap()
+        ));
+        for value in [100, 200] {
+            let overrides = Some(BTreeMap::from([(
+                "shared".to_string(),
+                Arc::new(json!(value)),
+            )]));
+            assert_eq!(
+                evaluate_pin_value(found.clone(), &overrides).await.unwrap(),
+                json!(value)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_pin_lookup_keeps_detached_contexts_isolated() {
+        let first = internal_node(node_with_output("same-node", "same-pin", None));
+        let second = internal_node(node_with_output("same-node", "same-pin", None));
+        let first_context = context_for(&first, vec![]).await;
+        let second_context = context_for(&second, vec![]).await;
+        assert!(!Arc::ptr_eq(
+            &first_context.runtime_pin_by_id("same-pin").unwrap(),
+            &second_context.runtime_pin_by_id("same-pin").unwrap()
+        ));
+        assert!(first_context.resources.is_closed());
+        assert!(Arc::ptr_eq(
+            &first_context.runtime_pin_by_id("same-pin").unwrap(),
+            &first.get_pin_by_id("same-pin").unwrap()
+        ));
+    }
+
     #[tokio::test]
     async fn read_outputs_writes_the_output_pin_when_an_input_shares_its_name() {
         let mut producer = Node::new("test_producer", "Producer", "", "Tests");
@@ -961,7 +1078,8 @@ mod tests {
         payload_in.id = "payload_in_id".to_string();
         let mut payload_out = pin("payload", PinType::Output, VariableType::Integer, 3);
         payload_out.id = "payload_out_id".to_string();
-        payload_out.depends_on.insert(producer_pin_id);
+        payload_out.depends_on.insert("!missing-pin".to_string());
+        payload_out.depends_on.insert(producer_pin_id.clone());
         // Outputs ahead of it push the mirrored output behind the input in the name lookup.
         let first = pin("first", PinType::Output, VariableType::Integer, 1);
         let second = pin("second", PinType::Output, VariableType::Integer, 2);
@@ -978,7 +1096,7 @@ mod tests {
         logic.on_update(&mut node, &board).await;
 
         let call = internal_node(node);
-        let mut context = context_for(&call, vec![producer]).await;
+        let mut context = context_for(&call, vec![producer.clone()]).await;
         assert_eq!(
             context.get_pin_by_name("payload").await.unwrap().pin_type,
             PinType::Input
@@ -1002,6 +1120,21 @@ mod tests {
         assert_eq!(
             payload(PinType::Output).get_raw_value().await,
             Some(json!(42))
+        );
+        assert_eq!(payload(PinType::Input).get_raw_value().await, None);
+
+        // A later invocation reuses only the topology; its scoped result wins
+        // over both the old shared value and the preceding return value.
+        logic
+            .read_outputs(
+                &mut context,
+                board.layers.get("function-layer").unwrap(),
+                &BTreeMap::from([(producer_pin_id, Arc::new(json!(77)))]),
+            )
+            .await;
+        assert_eq!(
+            payload(PinType::Output).get_raw_value().await,
+            Some(json!(77))
         );
         assert_eq!(payload(PinType::Input).get_raw_value().await, None);
     }

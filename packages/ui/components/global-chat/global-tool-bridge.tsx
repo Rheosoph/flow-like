@@ -75,6 +75,7 @@ import {
 import type { IChannelHandle } from "../../lib/schema/channel";
 import type { BoardEditJob, FlowIrCommitToken } from "../../lib/schema/copilot";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
+import { findUndeclaredWidgetActions } from "../../lib/widget-actions";
 import type {
 	IApplyFlowIrCommitResponse,
 	IBoardState,
@@ -7210,6 +7211,17 @@ Completion contract: build complete helper logic first and add the Event entry l
 												iw.inlineDef.actions;
 										widget.updatedAt = new Date().toISOString();
 										await backend.widgetState.updateWidget(targetAppId, widget);
+										for (const {
+											actionId,
+											componentIds,
+										} of findUndeclaredWidgetActions(
+											widget.components,
+											widget.actions,
+										)) {
+											warnings.push(
+												`Widget "${widgetName}": ${componentIds.join(", ")} fire widget_event "${actionId}", but inlineWidgetDef.actions does not declare it. Pages cannot bind an undeclared widget event, so it never reaches a flow — add {"id": "${actionId}", "label": …} to inlineWidgetDef.actions.`,
+											);
+										}
 									}
 									realIdByCopilotId.set(iw.copilotWidgetId, realId);
 									widgetByRealId.set(realId, widget);

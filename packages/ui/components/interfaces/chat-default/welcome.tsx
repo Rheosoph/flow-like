@@ -92,8 +92,10 @@ export function ChatWelcome({
 
 	// Filter examples based on current message and show max 5
 	const filteredExamples = useMemo(() => {
-		const examples = (config?.example_messages ?? []).filter((example) =>
-			example.trim(),
+		const configured: unknown = config?.example_messages;
+		const examples = (Array.isArray(configured) ? configured : []).filter(
+			(example): example is string =>
+				typeof example === "string" && example.trim() !== "",
 		);
 		if (!currentMessage.trim()) {
 			return examples.slice(0, 4);

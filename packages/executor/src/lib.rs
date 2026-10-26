@@ -35,6 +35,9 @@
 
 extern crate flow_like_runtime as flow_like;
 
+#[cfg(feature = "benchmarks")]
+pub mod benchmark;
+
 pub mod channel;
 pub mod config;
 pub mod error;

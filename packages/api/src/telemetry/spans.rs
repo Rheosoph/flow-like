@@ -504,6 +504,29 @@ impl TelemetrySpanExporter {
         let count = spans.len();
 
         if log_only {
+            #[cfg(feature = "benchmark-stack")]
+            if std::env::var("FLOW_LIKE_BENCHMARK_TRACE").as_deref() == Ok("1") {
+                for span in &spans {
+                    // The fixture redirects stdout to a private log. Reuse the real
+                    // sampled spans and their allowlisted attributes for diagnosis.
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "benchmark_span",
+                            "source": self.config.source,
+                            "trace_id": span.trace_id,
+                            "span_id": span.span_id,
+                            "parent_span_id": span.parent_span_id,
+                            "name": span.name,
+                            "kind": span.kind,
+                            "started_at": span.started_at,
+                            "duration_ms": span.duration_ms,
+                            "status": span.status,
+                            "attributes": span.attributes,
+                        })
+                    );
+                }
+            }
             tracing::info!(
                 source = %self.config.source,
                 spans = count,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import { parseAppRouteTarget } from "../../lib/app-route-url";
@@ -24,6 +24,32 @@ function querySignature(search: string): string {
 	const params = new URLSearchParams(search);
 	params.sort();
 	return JSON.stringify([...params]);
+}
+
+function useMatchingNativeWidgetPages(
+	scope: string,
+	appId: string,
+	path: string | undefined,
+	search: string,
+) {
+	const [revision, setRevision] = useState(0);
+	useEffect(() => {
+		const changed = () => setRevision((value) => value + 1);
+		window.addEventListener(NATIVE_WIDGETS_CHANGED, changed);
+		document.addEventListener("visibilitychange", changed);
+		// A layout effect may have configured a widget after render, before we subscribed.
+		changed();
+		return () => {
+			window.removeEventListener(NATIVE_WIDGETS_CHANGED, changed);
+			document.removeEventListener("visibilitychange", changed);
+		};
+	}, []);
+	// Definition storage changes without changing the page's route or identity.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: revision tracks storage changes.
+	return useMemo(
+		() => matchingNativeWidgetPages(scope, appId, path, search),
+		[scope, appId, path, search, revision],
+	);
 }
 
 export function matchingNativeWidgetPages(
@@ -74,20 +100,7 @@ export function NativeWidgetPageCapture({
 	ready: boolean;
 }) {
 	const { data } = useData();
-	const [definitions, setDefinitions] = useState<NativeWidgetPageDefinition[]>(
-		[],
-	);
-	useEffect(() => {
-		const changed = () =>
-			setDefinitions(matchingNativeWidgetPages(scope, appId, path, search));
-		changed();
-		window.addEventListener(NATIVE_WIDGETS_CHANGED, changed);
-		document.addEventListener("visibilitychange", changed);
-		return () => {
-			window.removeEventListener(NATIVE_WIDGETS_CHANGED, changed);
-			document.removeEventListener("visibilitychange", changed);
-		};
-	}, [scope, appId, path, search]);
+	const definitions = useMatchingNativeWidgetPages(scope, appId, path, search);
 
 	useEffect(() => {
 		if (!ready || document.visibilityState === "hidden") return;
@@ -132,11 +145,17 @@ export function NativeWidgetPageCaptureBridge(props: CaptureBridgeProps) {
 	const backendScope = nativeWidgetScope(backend, viewerId);
 	// A mounted page can still hold the previous workspace's surface after a profile switch.
 	const ownerScope = useRef(backendScope);
+	const definitions = useMatchingNativeWidgetPages(
+		backendScope,
+		props.appId,
+		props.path,
+		props.search,
+	);
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
 		[],
-		backendReady && !auth.isLoading,
+		backendReady && !auth.isLoading && definitions.length > 0,
 		[],
 		0,
 	);

@@ -1,15 +1,405 @@
 ---
 title: Benchmarks
-description: Reproduce and interpret Flow-Like workflow-runtime benchmarks
+description: Measure widget action round trips and workflow-runtime performance
 sidebar:
   order: 50
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Flow-Like includes Criterion benchmarks for single-execution latency,
-concurrent throughput, and allocator behavior. Use them to compare commits or
-deployment choices on the same machine.
+Use the widget action suite to investigate the time between a person-card click
+and the resulting rental-history panel. The Criterion benchmarks further down
+this page measure workflow execution and allocator behavior in isolation.
+
+## Widget action measurements
+
+The suite has two workloads. The application workload runs an exported app
+through the web frontend, production API and executor routers, Postgres, Redis,
+and a local S3-compatible object store. Its fixture keeps the workflow topology
+and replaces database records with synthetic contacts and rental relationships.
+The diagnostic workload runs a small database-filter, widget-instantiation, and
+container-update graph with configurable transport delays.
+
+Keep these boundaries separate when comparing results:
+
+| Measurement | Boundary |
+| --- | --- |
+| Process readiness | Starting a local service until its readiness check succeeds |
+| Page bootstrap | Document navigation until the configured person actions are available |
+| History DOM | Click until the panel contains the selected person's expected history |
+| Frame opportunity | Two animation frames after the verified DOM update; physical display paint is not measured |
+| Action handler settled | The frontend handler returns, including work after the first UI update; this timing alone does not establish workflow success |
+
+The browser alternates between people with distinct history markers and checks
+the expected row count when configured. A stale table cannot satisfy the next
+sample. Visibility checks cover CSS display and visibility; they do not establish
+that every row is inside the viewport. Reports retain individual samples,
+failures, configuration, and machine details. Use at least 100 samples per
+scenario for tail-latency comparisons and repeat runs under the same background
+load.
+
+Uncaught browser errors invalidate a run even when the expected rows appear.
+Reports retain up to 100 error messages, each limited to 4,000 characters, to help
+diagnose hydration and other application failures.
+
+The application fixture returns through its overview control between person
+clicks. The reset UI, handler, and successful terminal event must arrive before
+the next measured action. Reports retain reset timings separately from the
+rental-history round trip.
+The optional browser `reset` configuration selects this control. Reset workflows
+add load outside the timed history-click interval. Accounting callbacks after the
+terminal event can still occupy an executor slot, as they do during normal use.
+
+The application driver also verifies a successful terminal event in the invoke
+stream. Matching rows followed by a failed workflow count as a failure.
+Bootstrap must finish successfully before the first action; its earlier cards
+DOM and frame timestamps remain separate from completion verification.
+`requireTerminalSuccess: false` is an explicit mode for unverified browser probes.
+Chrome DevTools Protocol stream observation, DOM observation, polling, and browser
+automation add overhead; keep the same instrumentation when comparing revisions.
+
+### Application workload
+
+You need Docker Compose, Node.js, Bun, the installed workspace dependencies,
+Rust, Python 3.11 or later, `uv`, `protoc`, OpenSSL, AWS CLI, and an authorized
+metadata export of the investigation app. Keep exports outside the repository.
+The fixture builder recognizes that app's existing page, event, widget, and
+board identifiers.
+It removes credentials, external destinations, saved widget data, and comments
+before importing source objects into the local stack.
+
+The read-only exporter supports S3 directory buckets and downloads only current
+source objects. It checks each object's ETag and writes a hash inventory:
+
+```bash
+python3 tests/widget-action-stack/export.py \
+  --bucket "$WIDGET_BENCH_META_BUCKET" --app-id "$WIDGET_BENCH_APP_ID" \
+  --region eu-west-1 --output /tmp/widget-app-export
+```
+
+Then prepare and run the local stack:
+
+```bash
+python3 tests/widget-action-stack/run.py prepare \
+  --metadata-export /tmp/widget-app-export
+python3 tests/widget-action-stack/run.py build
+python3 tests/widget-action-stack/run.py benchmark
+```
+
+Preparation creates a separate Docker Compose project, local credentials, a
+signed test session, and a synthetic Lance dataset. The build uses optimized
+Rust and the real frontend's production static export. Web build products are
+isolated from `apps/web/.next` and `apps/web/out`. The benchmark starts the
+services, waits for readiness, navigates the actual Personen page, clicks the
+configured person actions, then stops the processes it started.
+
+The default database profile reproduces the inspected manifest's physical
+shape: 47 live rows, 58 physical rows, 36 fragments, and three deletion files.
+Arrow types, nullability, and primary-key metadata also match. Entity counts and
+relationships are synthetic; the hosted table's customer records are not copied.
+This preserves the cost of opening many small fragments that a compact fixture
+would miss. Preparation also accepts `--fixture-layout compact` to put the same
+logical records in one fragment. Use the separate states described under
+[Storage layout comparisons](#storage-layout-comparisons) to retain both fixtures.
+
+State, private service logs, fixture hashes, startup timings, and browser
+results live in `/tmp/flow-widget-stack` by default. The generated
+`fixture/browser-config.json` controls sample count, warmups, navigations,
+concurrency, and semantic expectations. Use `concurrency: 1` for the isolated
+reference, then repeat with `concurrency: 8` to send synchronized bursts from
+independent headless browsers. Each browser performs the normal page bootstrap.
+Start the service with `--executor-slots 8` to admit eight concurrent runs, or
+keep fewer slots when measuring admission failures under overload.
+These bursts share one local API process and one executor process. They measure
+contention within that pair of processes. `--workers` changes their thread count;
+it does not add replicas. Lambda can assign concurrent invocations to separate
+execution environments, so this workload does not establish a Lambda scaling
+bottleneck. Use the independent-process runner below to test one active invocation
+per environment, with separate warm and cold-cache scenarios.
+`samples` is the planned action count per navigation across all workers. The
+runner stops after a failed burst and retains partial results and failure counts,
+including executor admission rejections. Initial and repeat navigation labels
+describe document loads; neither label establishes that backend caches were cold.
+
+To keep the services available for inspection:
+
+```bash
+python3 tests/widget-action-stack/run.py serve
+# In another terminal:
+python3 tests/widget-action-stack/run.py benchmark --existing \
+  --output /tmp/widget-app-candidate
+```
+
+Compare two application runs with:
+
+```bash
+python3 tests/widget-action-stack/compare.py \
+  /tmp/widget-app-baseline /tmp/widget-app-candidate
+```
+
+The comparison checks graph and record hashes, build profiles, browser versions,
+concurrency, and instrumentation settings before calculating changes. Failed or
+unverified actions remain failures. Changing the fragment layout is allowed when
+the logical records match. `--allow-mismatch` shows incompatible runs side by side
+without calculating a percentage improvement.
+
+Use `serve --trace` for a separate diagnostic run with every API span sampled
+and written to private service logs. Trace mode has extra overhead, so compare
+it with another trace run. The run manifest records the instrumentation settings.
+`--workers`, `--executor-slots`, and `--thread-stack-mb` control local runtime
+capacity. The default 32 MiB thread stack accommodates the large graph in debug
+builds; keep that setting fixed across comparisons.
+
+Press Ctrl+C in the service terminal to stop its processes. To stop the isolated
+infrastructure while retaining its data:
+
+```bash
+python3 tests/widget-action-stack/stack.py down
+```
+
+This path exercises the production authentication, authorization, page
+bootstrap, prerun, quota, compilation, widget snapshot, HTTP dispatch, executor,
+database, streaming, and browser rendering code. The local adapter supplies
+the compute-accounting context normally supplied by Lambda. Its 2 GB accounting
+metadata does not impose a memory limit on the process.
+A pre-authenticated local OpenID Connect session exercises token verification;
+interactive sign-in and an external identity provider are outside the measurement.
+
+Local Postgres and RustFS do not reproduce DSQL network latency, Lambda
+scheduling, or CDN behavior. Process readiness excludes periodic API
+housekeeping workers. Use the same fixture and configuration across revisions,
+and confirm the resulting change against hosted traces before claiming a hosted
+latency target. The source export's hash and version also matter: a later draft
+may execute a different graph from an earlier production trace.
+The benchmark binary includes the standard and data node implementations used
+by the entire Personen board. Other pages that require image, document, or AI
+nodes need those catalog features added before they can be benchmarked.
+
+### Process-cold comparisons
+
+Use fresh API and executor processes to measure startup separately from warmed
+actions. Build both revisions first and keep their binaries at distinct paths.
+
+To isolate compiled board preparation, pass the same `.flcb` artifact to each
+benchmark binary:
+
+```bash
+/tmp/widget-baseline/release-fast/widget_action_stack \
+  template-benchmark /tmp/widget-board.flcb 100
+/tmp/widget-candidate/release-fast/widget_action_stack \
+  template-benchmark /tmp/widget-board.flcb 100
+```
+
+This command reports each template load after three warmups. It includes archive
+decompression, validation, board reconstruction, catalog resolution, and lookup
+construction. It reads the file once before timing and reports catalog registry
+initialization separately. Each sample creates a fresh template; disposal happens
+outside the timer. Storage fetches, process startup, workflow execution, and browser
+rendering are outside this measurement. Use the application trials below to check
+whether a faster loader improves navigation or the first history click.
+
+Use separate source and Cargo target directories for each revision. Copying a
+revision over an existing checkout while preserving file timestamps can cause
+Cargo to reuse artifacts from the previous revision. If you reuse a target
+directory, force the affected crates to rebuild and retain the build log with
+each binary.
+
+```bash
+python3 tests/widget-action-stack/cold.py \
+  --baseline /tmp/widget-baseline/release-fast/widget_action_stack \
+  --candidate /tmp/widget-candidate/release-fast/widget_action_stack \
+  --config /tmp/flow-widget-stack/fixture/browser-config.json \
+  --trials 12 --modes navigation action --output /tmp/widget-cold-comparison
+python3 tests/widget-action-stack/cold_compare.py /tmp/widget-cold-comparison \
+  --json-output /tmp/widget-cold-comparison/comparison.json
+```
+
+Each pair runs both binaries, alternating their order between pairs. Every trial
+owns a fresh browser and performs one measured action without warmups.
+
+Frontend changes can use separate production stages. Build each with
+`node tests/widget-action-stack/web.mjs build --state STATE --source-root SOURCE_COPY`,
+then pass `--baseline-web-state` and `--candidate-web-state` to the cold runner.
+For copied sources, also pass the matching `--baseline-web-source-root` and
+`--candidate-web-source-root`. Keep source copies inside the workspace so
+Turbopack can resolve dependencies. Keep the snapshots and installed workspace
+dependencies fixed during each build. The runner verifies the selected frontend's
+source hash and build ID throughout the suite. Ordinary `run.py` runs accept
+`--web-state` and `--web-source-root` for the same purpose.
+
+| Mode | Cold boundary | Main measurement |
+| --- | --- | --- |
+| `navigation` | API and executor start before document navigation | Navigation until the person cards appear, including bootstrap and page `onLoad` |
+| `action` | After successful page `onLoad`, API and executor restart while the browser document stays open | Click until the expected rental-history rows appear |
+
+The action mode rejects background API requests between the restart boundary
+and the click because they could warm the backend. The runner checks persisted
+quota and compute completion before restarting or stopping the processes.
+These checks and process readiness are outside the navigation and click clocks.
+Readiness uses 20 ms polling by default and remains a separate measurement.
+
+Storage objects, Postgres, Redis, and operating-system caches remain available.
+These trials measure fresh local processes, not the AWS container, scheduling,
+or network envelope. Use `--trace` only in a separate diagnostic suite.
+
+The comparison requires successful execution, fresh process identities, matching
+workloads, and completed cleanup. It reports paired median differences with
+bootstrap confidence intervals. Twelve pairs are exploratory; small effects and
+tail estimates need more repetitions. Request records also contain a hash of the
+HTTP method and path, excluding queries and credentials. Repeated hashes identify
+endpoints to inspect; requests with different parameters can still be necessary.
+
+### Independent API and executor processes
+
+Use the replicated runner to avoid putting eight concurrent actions on one local
+executor. With `--replicas 8`, it starts eight frontend API processes, eight
+executor processes, and eight additional API processes for callbacks and execution
+resources. Each process uses a current-thread Tokio runtime. A local proxy admits
+one request per process and keeps the slot occupied until the upstream HTTP
+response ends, including accounting after the terminal execution event.
+
+The callback pool lets executors finish while frontend API requests wait for
+their streams. It also serves browser messages to execution channels. All
+processes use the same fixture database and object storage.
+API database pools use the AWS connection budget of four connections maximum,
+with no minimum. The benchmark records process identities, runtime models,
+binary hashes, admissions, queue time, and full response lifetimes.
+The runner uses the standard fixture ports and reserves ports 8442 and 8443,
+plus backend ports starting at 18440, 18540, and 18640. It refuses to adopt
+existing listeners. `--thread-stack-mb` applies to spawned Rust threads;
+it does not resize the current-thread runtime's main stack.
+
+Build both revisions with the current benchmark adapter, then run:
+
+```bash
+python3 tests/widget-action-stack/replicated.py \
+  --baseline /tmp/widget-baseline/release-fast/widget_action_stack \
+  --candidate /tmp/widget-candidate/release-fast/widget_action_stack \
+  --config /tmp/flow-widget-stack/fixture/browser-config.json \
+  --replicas 8 --samples 104 --warmup 3 --trials 4 \
+  --modes warm navigation action --output /tmp/widget-replicated
+python3 tests/widget-action-stack/replicated_compare.py /tmp/widget-replicated \
+  --json-output /tmp/widget-replicated/comparison.json
+```
+
+The runner alternates baseline and candidate order. Passing the same binary
+twice provides an A/A check of measurement variation. Frontend stage options are
+the same as for `cold.py`. Use `--replicas 1` in a separate suite for a sequential
+reference. Comparisons across different process topologies are descriptive and
+cannot establish a code speedup.
+
+Warm trials require completed work on every replica before measured clicks.
+Navigation trials start fresh pools before loading the pages. Action trials
+verify all page loads and their accounting, drain outstanding requests, then
+replace every backend process while preserving each browser document.
+Unexpected requests before a worker's click invalidate that cold boundary.
+The comparison checks the complete admission ledger and persisted accounting;
+failed or partially observed trials cannot produce improvement claims. Concurrent
+actions are correlated, so uncertainty is calculated across paired trials rather
+than treating eight actions in one burst as eight independent experiments.
+
+The browser intentionally cancels invoke streams after successful terminal
+events. Such cancellations are accepted only when the matching request has
+verified execution success, persisted accounting, and a fully drained upstream
+response. Older API revisions may return 404 for the optional telemetry sampling
+configuration. The manifest declares this single exception; the browser must
+observe it during bootstrap, and it never counts as successful warmup work.
+
+These processes still share the host's CPU and memory. The proxy, browsers,
+Postgres, Redis, and object store also run locally. No CPU or memory quota is
+enforced. Fresh processes leave storage and OS caches warm, and process readiness
+is measured separately from navigation and clicks. The native adapter uses the
+default allocator and its local API initialization path; AWS binaries use
+mimalloc and a different bootstrap. Local timers keep running between requests.
+Lambda scheduling, DSQL latency, and the API Lambda compute-attempt wrapper remain
+outside this test. Confirm hosted latency with AWS traces after identifying an
+improvement locally.
+
+### Storage layout comparisons
+
+Compare fragmentation separately from code changes. Keep the existing fragmented
+state and prepare a second state from the same metadata export, using different
+infrastructure ports:
+
+```bash
+python3 tests/widget-action-stack/stack.py --state /tmp/widget-compact prepare \
+  --postgres-port 55450 --redis-port 56450 --s3-port 9054
+python3 tests/widget-action-stack/run.py --state /tmp/widget-compact prepare \
+  --metadata-export /tmp/widget-app-export --fixture-layout compact
+```
+
+Both infrastructure stacks must be running and both prepared browser sessions
+must be valid. Keep the frontend API and web origins identical. Pass the same
+backend binary and production frontend stage for both variants:
+
+```bash
+python3 tests/widget-action-stack/replicated.py --fixture-layout-experiment \
+  --baseline-state /tmp/flow-widget-stack --candidate-state /tmp/widget-compact \
+  --baseline /tmp/widget-candidate/release-fast/widget_action_stack \
+  --candidate /tmp/widget-candidate/release-fast/widget_action_stack \
+  --baseline-web-state /tmp/flow-widget-stack \
+  --candidate-web-state /tmp/flow-widget-stack \
+  --replicas 8 --samples 104 --warmup 3 --trials 4 \
+  --modes warm navigation action --output /tmp/widget-layout-comparison
+```
+
+Omitting `--config` selects each state's prepared browser session. Use
+`--baseline-config` and `--candidate-config` for explicit per-state overrides.
+Copied frontend sources also need the matching source-root options described
+above. The runner alternates states between trials; it does not compact,
+reimport, or rewrite either fixture during measurement.
+
+The comparison requires identical record and schema hashes, graph identity,
+backend binary, and frontend build. It permits different fragment and deletion
+file layouts only in this explicit experiment. Ordinary code comparisons reject
+physical layout differences. This measures the benefit of an already compact
+dataset; it does not measure maintenance cost or justify compaction on each write.
+
+### Diagnostic workload
+
+Install the workspace dependencies, then start the optimized diagnostic server:
+
+```bash
+mise run bench:widgets:serve -- --profile local
+```
+
+In another terminal, run warm-cache, fresh-template-cache, and concurrent-burst
+scenarios:
+
+```bash
+mise run bench:widgets -- --samples 100 --concurrency 8 \
+  --output /tmp/widget-baseline.json
+```
+
+The four variants isolate serial accounting, overlapping accounting, bundled
+widgets, and both changes together. The real executor template loader, accounting
+client, widget source, LanceDB filter, and UI nodes execute in every variant.
+The loopback hub supplies the accounting and widget endpoints. It does not run
+the API's authentication, quota database, dispatch, or snapshot producer.
+
+`--profile calibrated` on the server injects illustrative stage delays informed
+by observed hosted requests. Those delays are inputs to the experiment, not a
+measurement of AWS performance. Individual stages can be overridden with the
+server's `--*-ms` options. The default `local` profile injects no delay.
+
+The diagnostic `cold` scenario uses a new executor template-cache key. It leaves
+the process, database connection, and OS page cache warm. Its dormant board nodes
+exercise preparation cost; they do not reproduce the application's executed loops.
+
+To compare a subsequent run and enforce a server-patch budget:
+
+```bash
+mise run bench:widgets -- --samples 100 --concurrency 8 \
+  --compare /tmp/widget-baseline.json --output /tmp/widget-candidate.json \
+  --budget-ms 500
+```
+
+This budget applies to receipt of the semantic history patch. Use the application
+browser workload to evaluate the user-visible 500 ms target. Debug Rust builds
+and a development frontend are useful for verifying the fixture, but their
+latencies should not be presented as optimized application performance.
+
+## In-process runtime benchmarks
 
 <Aside type="caution" title="Benchmark numbers are not a service guarantee">
   The reference results below are a historical internal snapshot. They record

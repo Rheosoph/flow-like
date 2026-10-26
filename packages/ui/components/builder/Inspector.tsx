@@ -14,6 +14,7 @@ import {
 	Package,
 	Plus,
 	Trash2,
+	TriangleAlert,
 	Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -31,6 +32,7 @@ import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../hooks";
 import { cn } from "../../lib";
 import { asArray } from "../../lib/response-shape";
+import { resolveWidgetEventTarget } from "../../lib/widget-actions";
 import {
 	createContractInputValue,
 	updateWidgetContractProps,
@@ -103,6 +105,7 @@ import { WidgetSchemaListEditor } from "../widget-contract/WidgetSchemaListEdito
 import { AssetPicker, type AssetPickerProps } from "./AssetPicker";
 import { useBuilder } from "./BuilderContext";
 import { MicroWidgetReloadNotice } from "./MicroWidgetReloadNotice";
+import { colorInputValue } from "./color-input";
 import { getDefaultProps } from "./componentDefaults";
 import { getComponentSchema } from "./componentSchema";
 import {
@@ -240,7 +243,14 @@ function getComponentType(sc: SurfaceComponent): string {
 
 export function Inspector({ className }: InspectorProps) {
 	const { t } = useTranslation("flow");
-	const { selection, components, updateComponent, getComponent } = useBuilder();
+	const {
+		selection,
+		components,
+		updateComponent,
+		getComponent,
+		actionContext,
+	} = useBuilder();
+	const isPage = !!actionContext?.pageId;
 
 	const selectedComponents = useMemo(
 		() =>
@@ -252,6 +262,27 @@ export function Inspector({ className }: InspectorProps) {
 
 	const singleSelected =
 		selectedComponents.length === 1 ? selectedComponents[0] : null;
+
+	if (selectedComponents.length === 0 && isPage) {
+		return (
+			<div
+				className={cn(
+					"flex flex-col h-full min-w-0 bg-background border-l",
+					className,
+				)}
+			>
+				<div className="p-4 border-b">
+					<h3 className="font-medium text-sm">{t("page", "Page")}</h3>
+					<p className="text-xs text-muted-foreground mt-0.5">
+						{t("selectAComponentToEdit", "Select a component to edit")}
+					</p>
+				</div>
+				<div className="p-4">
+					<PageBackgroundField label={t("pageBackground", "Page background")} />
+				</div>
+			</div>
+		);
+	}
 
 	if (selectedComponents.length === 0) {
 		return (
@@ -335,7 +366,7 @@ export function Inspector({ className }: InspectorProps) {
 						value="canvas"
 						className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary px-3 text-xs"
 					>
-						{t("canvas", "Canvas")}
+						{isPage ? t("page", "Page") : t("canvas", "Canvas")}
 					</TabsTrigger>
 					<TabsTrigger
 						value="actions"
@@ -4281,6 +4312,8 @@ interface StyleEditorProps {
 
 function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 	const { t } = useTranslation("flow");
+	const { actionContext } = useBuilder();
+	const isPage = !!actionContext?.pageId;
 	const style = component.style || {};
 	const [responsiveBreakpoint, setResponsiveBreakpoint] =
 		useState<keyof ResponsiveOverrides>("md");
@@ -4984,6 +5017,13 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							className="h-8 text-sm"
 						/>
 					</div>
+					{isPage && (
+						<div className="border-t pt-3">
+							<PageBackgroundField
+								label={t("pageBackground", "Page background")}
+							/>
+						</div>
+					)}
 				</CollapsibleContent>
 			</Collapsible>
 
@@ -5459,45 +5499,73 @@ function PageCssMigration({ appId }: Readonly<{ appId: string }>) {
 	);
 }
 
+function PageBackgroundField({ label }: Readonly<{ label: string }>) {
+	const { t } = useTranslation("flow");
+	const { canvasSettings, setCanvasSettings, actionContext } = useBuilder();
+	const value = canvasSettings.backgroundColor || "";
+
+	return (
+		<div className="space-y-2">
+			<Label className="text-xs">{label}</Label>
+			<div className="flex gap-2">
+				<Input
+					type="color"
+					aria-label={label}
+					value={colorInputValue(value)}
+					onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+						setCanvasSettings({ backgroundColor: e.target.value })
+					}
+					className="h-8 w-12 p-1"
+				/>
+				<Input
+					value={value}
+					onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+						setCanvasSettings({ backgroundColor: e.target.value })
+					}
+					placeholder="#ffffff"
+					className="h-8 text-sm flex-1"
+				/>
+			</div>
+			{actionContext?.pageId && (
+				<p className="text-xs text-muted-foreground">
+					{t(
+						"showsWhereverNoComponentPaintsItsOwnBackgroundSuchAsBesideAContainerWithAMaxWidth",
+						"Shows wherever no component paints its own background, such as beside a container with a max width.",
+					)}
+				</p>
+			)}
+		</div>
+	);
+}
+
 // Canvas settings editor - global canvas settings
 function CanvasSettingsEditor() {
 	const { t } = useTranslation("flow");
 	const { canvasSettings, setCanvasSettings, actionContext } = useBuilder();
 	const appId = actionContext?.appId;
+	const isPage = !!actionContext?.pageId;
 
 	return (
 		<div className="space-y-4">
 			<p className="text-xs text-muted-foreground mb-4">
-				{t(
-					"theseSettingsApplyToTheEntireCanvasBackgroundNotIndividualComponents",
-					"These settings apply to the entire canvas background, not individual components.",
-				)}
+				{isPage
+					? t(
+							"theseSettingsApplyToTheWholePageNotIndividualComponents",
+							"These settings apply to the whole page, not individual components.",
+						)
+					: t(
+							"theseSettingsApplyToTheEntireCanvasBackgroundNotIndividualComponents",
+							"These settings apply to the entire canvas background, not individual components.",
+						)}
 			</p>
 
-			{/* Canvas Background Color */}
-			<div className="space-y-2">
-				<Label className="text-xs">
-					{t("canvasBackground", "Canvas Background")}
-				</Label>
-				<div className="flex gap-2">
-					<Input
-						type="color"
-						value={canvasSettings.backgroundColor || "#ffffff"}
-						onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-							setCanvasSettings({ backgroundColor: e.target.value })
-						}
-						className="h-8 w-12 p-1"
-					/>
-					<Input
-						value={canvasSettings.backgroundColor || ""}
-						onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-							setCanvasSettings({ backgroundColor: e.target.value })
-						}
-						placeholder="#ffffff"
-						className="h-8 text-sm flex-1"
-					/>
-				</div>
-			</div>
+			<PageBackgroundField
+				label={
+					isPage
+						? t("pageBackground", "Page background")
+						: t("canvasBackground", "Canvas Background")
+				}
+			/>
 
 			{/* Canvas Background Image */}
 			<div className="space-y-2">
@@ -5787,6 +5855,44 @@ function OrderedActionsEditor({
 	);
 }
 
+function UndeclaredWidgetEventNotice({
+	actionId,
+	onDeclare,
+}: {
+	actionId: string;
+	onDeclare?: (actionId: string) => void;
+}) {
+	const { t } = useTranslation("flow");
+	return (
+		<div
+			role="alert"
+			className="space-y-2 rounded-md border border-warning-line bg-warning-bg px-2.5 py-2 text-xs text-warning"
+		>
+			<p className="flex items-start gap-1.5 text-xs">
+				<TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+				<span className="min-w-0 wrap-anywhere">
+					{t(
+						"actionidIsNotDeclaredUnderSettingsEventsPagesCannotBindItSoItNeverReachesAFlow",
+						"“{{actionId}}” isn't declared under Settings → Events. Pages can't bind it, so it never reaches a flow.",
+						{ actionId },
+					)}
+				</span>
+			</p>
+			{onDeclare && (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					className="h-7 w-full text-xs"
+					onClick={() => onDeclare(actionId)}
+				>
+					{t("declareEvent", "Declare event")}
+				</Button>
+			)}
+		</div>
+	);
+}
+
 function ActionValueEditor({
 	action,
 	eventName,
@@ -5814,6 +5920,11 @@ function ActionValueEditor({
 	const context = action.context ?? {};
 	const widgetActions = actionContext?.widgetActions;
 	const isWidgetMode = widgetActions !== undefined;
+	const {
+		actionId: widgetActionId,
+		declaration: selectedWidgetAction,
+		undeclared: undeclaredActionId,
+	} = resolveWidgetEventTarget(action, widgetActions);
 	const knownActionTypes: string[] = [
 		"navigate_page",
 		"external_link",
@@ -5846,11 +5957,7 @@ function ActionValueEditor({
 						</p>
 					) : (
 						<Select
-							value={
-								currentType === "widget_event"
-									? (context.actionId as string) || "none"
-									: "none"
-							}
+							value={widgetActionId || "none"}
 							onValueChange={(value) => {
 								if (value === "none") {
 									onChange(null);
@@ -5867,6 +5974,13 @@ function ActionValueEditor({
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value="none">{t("noEvent", "No event")}</SelectItem>
+								{undeclaredActionId && (
+									<SelectItem value={undeclaredActionId}>
+										{t("actionidNotDeclared", "{{actionId}} (not declared)", {
+											actionId: undeclaredActionId,
+										})}
+									</SelectItem>
+								)}
 								{widgetActions.map((widgetAction) => (
 									<SelectItem key={widgetAction.id} value={widgetAction.id}>
 										{widgetAction.label}
@@ -5912,28 +6026,27 @@ function ActionValueEditor({
 				)}
 			</div>
 
-			{currentType === "widget_event" && (
-				<div className="space-y-1 border-l-2 border-muted pl-2">
-					{widgetActions?.find(
-						(widgetAction) => widgetAction.id === (context.actionId as string),
-					)?.description && (
-						<p className="text-xs text-muted-foreground">
-							{
-								widgetActions.find(
-									(widgetAction) =>
-										widgetAction.id === (context.actionId as string),
-								)?.description
-							}
-						</p>
-					)}
-					<p className="text-xs text-muted-foreground">
-						{t(
-							"thisEventWillBeAvailableForBindingWhenTheWidgetIsInstantiated",
-							"This event will be available for binding when the widget is instantiated.",
+			{currentType === "widget_event" &&
+				(undeclaredActionId ? (
+					<UndeclaredWidgetEventNotice
+						actionId={undeclaredActionId}
+						onDeclare={actionContext?.declareWidgetAction}
+					/>
+				) : (
+					<div className="space-y-1 border-l-2 border-muted pl-2">
+						{selectedWidgetAction?.description && (
+							<p className="text-xs text-muted-foreground">
+								{selectedWidgetAction.description}
+							</p>
 						)}
-					</p>
-				</div>
-			)}
+						<p className="text-xs text-muted-foreground">
+							{t(
+								"thisEventWillBeAvailableForBindingWhenTheWidgetIsInstantiated",
+								"This event will be available for binding when the widget is instantiated.",
+							)}
+						</p>
+					</div>
+				))}
 
 			{currentType === "navigate_page" && (
 				<div className="space-y-2 border-l-2 border-muted pl-2">

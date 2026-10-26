@@ -38,7 +38,7 @@ import {
 	ZapIcon,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { ComponentType } from "react";
+import type { ComponentType, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
@@ -193,6 +193,24 @@ const ROW_GRID = cn(
 );
 const FROM_600 = "hidden @min-[600px]/events:block";
 const FROM_900 = "hidden @min-[900px]/events:block";
+
+const ROW_CONTROL =
+	"a,button,input,select,textarea,label,[role=button],[role=menuitem],[contenteditable=true]";
+
+/**
+ * A click on the row's bare surface, not on one of its controls. Clicks inside a
+ * portaled menu or popover bubble through React to the row as well, so the
+ * target must also sit in the row's own DOM. A drag that selected text is no click.
+ */
+function isRowSurfaceClick(click: MouseEvent<HTMLElement>): boolean {
+	const { target, currentTarget } = click;
+	return (
+		target instanceof Element &&
+		currentTarget.contains(target) &&
+		!target.closest(ROW_CONTROL) &&
+		!window.getSelection()?.toString()
+	);
+}
 
 const eventRowId = (eventId: string) => `event-row-${eventId}`;
 
@@ -1505,12 +1523,16 @@ function EventRow({ row, busy, handlers }: Readonly<RowActionProps>) {
 	const runsFailed = row.health?.failed ?? 0;
 
 	return (
+		// biome-ignore lint/a11y/useKeyWithClickEvents: the name button inside is the keyboard way in; the row is a pointer shortcut
 		<div
 			id={eventRowId(event.id)}
 			data-event-target={run.targeted || undefined}
+			onClick={(click) => {
+				if (isRowSurfaceClick(click)) handlers.onEdit(event);
+			}}
 			className={cn(
 				ROW_GRID,
-				"group min-h-12.5 items-start gap-y-0.5 border-b py-2.5 last:border-b-0",
+				"group min-h-12.5 cursor-pointer items-start gap-y-0.5 border-b py-2.5 last:border-b-0",
 				"transition-colors hover:bg-muted/50",
 				run.targeted && "bg-row-selected",
 			)}

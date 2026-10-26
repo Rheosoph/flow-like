@@ -264,7 +264,7 @@ pub fn draft_prerun_manifest_for_cached_board(
         return hit;
     }
 
-    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+    let manifest = cached.prerun_manifest();
     if let Some(cache_key) = cache_key {
         state
             .prerun_manifest_cache
@@ -282,7 +282,7 @@ async fn load_etag_prerun_manifest(
     app_id: &str,
     board_id: &str,
     e_tag: &str,
-) -> Result<Option<Arc<PrerunManifest>>, ApiError> {
+) -> Result<Option<(Arc<PrerunManifest>, SystemTime)>, ApiError> {
     let e_tag = e_tag.trim();
     if e_tag.is_empty() {
         return Ok(None);
@@ -291,13 +291,13 @@ async fn load_etag_prerun_manifest(
     let path = draft_manifest_path(app_id, board_id, e_tag);
     if let Some(hit) = cache.get(&cache_key) {
         if hit.page_events.is_empty() {
-            ensure_cached_manifest_shared(meta_store, &path, &hit).await?;
-            return Ok(Some(hit));
+            let written = ensure_cached_manifest_shared(meta_store, &path, &hit).await?;
+            return Ok(Some((hit, written)));
         }
         cache.invalidate(&cache_key);
     }
 
-    let Some(stored) = read_persisted_manifest(meta_store, &path).await else {
+    let Some((stored, written)) = read_persisted_manifest(meta_store, &path).await else {
         return Ok(None);
     };
     if !stored.page_events.is_empty() {
@@ -306,7 +306,7 @@ async fn load_etag_prerun_manifest(
     }
     let stored = Arc::new(stored);
     cache.insert(cache_key, stored.clone());
-    Ok(Some(stored))
+    Ok(Some((stored, written)))
 }
 
 /// The draft authority this instance already knows to be shared for the exact
@@ -366,6 +366,23 @@ pub async fn ensure_draft_prerun_manifest(
     board_id: &str,
     cached: &crate::state::CachedBoard,
 ) -> Result<Arc<PrerunManifest>, ApiError> {
+    ensure_cached_board_draft_manifest(
+        &state.prerun_manifest_cache,
+        state.meta_bucket.as_generic().as_ref(),
+        app_id,
+        board_id,
+        cached,
+    )
+    .await
+}
+
+async fn ensure_cached_board_draft_manifest(
+    cache: &moka::sync::Cache<String, Arc<PrerunManifest>>,
+    meta_store: &dyn ObjectStore,
+    app_id: &str,
+    board_id: &str,
+    cached: &crate::state::CachedBoard,
+) -> Result<Arc<PrerunManifest>, ApiError> {
     let e_tag = cached.e_tag.trim();
     if e_tag.is_empty() {
         return Err(ApiError::internal_error(flow_like_types::anyhow!(
@@ -374,41 +391,36 @@ pub async fn ensure_draft_prerun_manifest(
     }
     let cache_key = draft_manifest_cache_key(app_id, board_id, e_tag);
     let path = draft_manifest_path(app_id, board_id, e_tag);
-    let meta_store = state.meta_bucket.as_generic();
-    if let Some(hit) = state
-        .prerun_manifest_cache
+    if let Some(hit) = cache
         .get(&cache_key)
         .filter(|hit| hit.page_events.is_empty())
     {
         if !cached.draft_authority.holds() {
-            let written = ensure_cached_manifest_shared(meta_store.as_ref(), &path, &hit).await?;
+            let written = ensure_cached_manifest_shared(meta_store, &path, &hit).await?;
             cached
                 .draft_authority
                 .extend(draft_object_trusted_until(written));
         }
         return Ok(hit);
     }
-    if let Some(stored) = load_etag_prerun_manifest(
-        &state.prerun_manifest_cache,
-        meta_store.as_ref(),
-        app_id,
-        board_id,
-        e_tag,
-    )
-    .await?
+    if let Some((stored, written)) =
+        load_etag_prerun_manifest(cache, meta_store, app_id, board_id, e_tag).await?
     {
+        // GET already returned the object's age. Preserve its retention deadline
+        // instead of starting a new window when this instance reads it.
+        cached
+            .draft_authority
+            .extend(draft_object_trusted_until(written));
         return Ok(stored);
     }
 
-    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+    let manifest = cached.prerun_manifest();
     let written = SystemTime::now();
-    persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
+    persist_prerun_manifest_required(meta_store, &path, &manifest).await?;
     cached
         .draft_authority
         .extend(draft_object_trusted_until(written));
-    state
-        .prerun_manifest_cache
-        .insert(cache_key, manifest.clone());
+    cache.insert(cache_key, manifest.clone());
     Ok(manifest)
 }
 
@@ -478,9 +490,12 @@ async fn load_or_build_page_manifest(
         }
         cache.invalidate(&cache_key);
     }
-    if let Some(stored) = read_persisted_manifest(meta_store, path)
-        .await
-        .filter(|stored| page_manifest_matches_board_authority(stored, board_authority, &page.id))
+    if let Some((stored, _)) =
+        read_persisted_manifest(meta_store, path)
+            .await
+            .filter(|(stored, _)| {
+                page_manifest_matches_board_authority(stored, board_authority, &page.id)
+            })
     {
         let stored = Arc::new(stored);
         cache.insert(cache_key, stored.clone());
@@ -635,7 +650,7 @@ pub async fn load_exact_prerun_manifest(
                 return Ok(hit);
             }
             let meta_store = state.meta_bucket.as_generic();
-            if let Some(hit) = load_etag_prerun_manifest(
+            if let Some((hit, _)) = load_etag_prerun_manifest(
                 &state.prerun_manifest_cache,
                 meta_store.as_ref(),
                 app_id,
@@ -783,12 +798,12 @@ pub async fn draft_page_prerun_manifest_for_cached_board(
 mod draft_manifest_cache_tests {
     use super::{
         PersistedVersionManifest, draft_manifest_cache_key, draft_manifest_path,
-        draft_page_manifest_cache_key, draft_source_path, ensure_cached_manifest_shared,
-        exact_board_source_read_error, hash_canonical_json, legacy_manifest_path,
-        load_cached_version_manifest, load_etag_prerun_manifest, load_or_build_page_manifest,
-        manifest_path, page_manifest_matches_board_authority, page_payload_revision,
-        persist_prerun_manifest, read_persisted_manifest, read_version_manifest,
-        rebuild_etag_manifest_from_snapshot, version_manifest_cache_key,
+        draft_page_manifest_cache_key, draft_source_path, ensure_cached_board_draft_manifest,
+        ensure_cached_manifest_shared, exact_board_source_read_error, hash_canonical_json,
+        legacy_manifest_path, load_cached_version_manifest, load_etag_prerun_manifest,
+        load_or_build_page_manifest, manifest_path, page_manifest_matches_board_authority,
+        page_payload_revision, persist_prerun_manifest, read_persisted_manifest,
+        read_version_manifest, rebuild_etag_manifest_from_snapshot, version_manifest_cache_key,
         version_page_manifest_cache_key, version_page_manifest_path,
     };
     use flow_like::a2ui::Page;
@@ -804,6 +819,257 @@ mod draft_manifest_cache_tests {
         let mut hasher = blake3::Hasher::new();
         hash_canonical_json(&mut hasher, &value);
         hasher.finalize().to_hex().to_string()
+    }
+
+    #[derive(Debug, Default)]
+    struct ManifestStore {
+        inner: InMemory,
+        written: Option<chrono::DateTime<chrono::Utc>>,
+        gets: std::sync::atomic::AtomicUsize,
+        heads: std::sync::atomic::AtomicUsize,
+        fail_get: std::sync::atomic::AtomicBool,
+        fail_body: std::sync::atomic::AtomicBool,
+        fail_head: std::sync::atomic::AtomicBool,
+        fail_put: std::sync::atomic::AtomicBool,
+    }
+
+    impl std::fmt::Display for ManifestStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "manifest-test-store")
+        }
+    }
+
+    fn manifest_store_error() -> StoreError {
+        StoreError::Generic {
+            store: "manifest-test-store",
+            source: "injected storage failure".into(),
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for ManifestStore {
+        async fn put_opts(
+            &self,
+            path: &Path,
+            payload: flow_like_storage::object_store::PutPayload,
+            opts: flow_like_storage::object_store::PutOptions,
+        ) -> flow_like_storage::object_store::Result<flow_like_storage::object_store::PutResult>
+        {
+            if self.fail_put.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(manifest_store_error());
+            }
+            self.inner.put_opts(path, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            path: &Path,
+            opts: flow_like_storage::object_store::PutMultipartOptions,
+        ) -> flow_like_storage::object_store::Result<
+            Box<dyn flow_like_storage::object_store::MultipartUpload>,
+        > {
+            self.inner.put_multipart_opts(path, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            path: &Path,
+            opts: flow_like_storage::object_store::GetOptions,
+        ) -> flow_like_storage::object_store::Result<flow_like_storage::object_store::GetResult>
+        {
+            use std::sync::atomic::Ordering;
+
+            let head = opts.head;
+            if head {
+                self.heads.fetch_add(1, Ordering::SeqCst);
+                if self.fail_head.load(Ordering::SeqCst) {
+                    return Err(manifest_store_error());
+                }
+            } else {
+                self.gets.fetch_add(1, Ordering::SeqCst);
+                if self.fail_get.load(Ordering::SeqCst) {
+                    return Err(manifest_store_error());
+                }
+            }
+            let mut result = self.inner.get_opts(path, opts).await?;
+            if let Some(written) = self.written {
+                result.meta.last_modified = written;
+            }
+            if !head && self.fail_body.load(Ordering::SeqCst) {
+                result.payload = flow_like_storage::object_store::GetResultPayload::Stream(
+                    Box::pin(futures::stream::once(async { Err(manifest_store_error()) })),
+                );
+            }
+            Ok(result)
+        }
+
+        fn delete_stream(
+            &self,
+            paths: futures::stream::BoxStream<
+                'static,
+                flow_like_storage::object_store::Result<Path>,
+            >,
+        ) -> futures::stream::BoxStream<'static, flow_like_storage::object_store::Result<Path>>
+        {
+            self.inner.delete_stream(paths)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> futures::stream::BoxStream<
+            'static,
+            flow_like_storage::object_store::Result<flow_like_storage::object_store::ObjectMeta>,
+        > {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> flow_like_storage::object_store::Result<flow_like_storage::object_store::ListResult>
+        {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            opts: flow_like_storage::object_store::CopyOptions,
+        ) -> flow_like_storage::object_store::Result<()> {
+            self.inner.copy_opts(from, to, opts).await
+        }
+    }
+
+    #[tokio::test]
+    async fn draft_manifest_get_seeds_trust_without_another_storage_call() {
+        use std::sync::atomic::Ordering;
+
+        let written = chrono::Utc::now() - chrono::Duration::hours(1);
+        let store = ManifestStore {
+            written: Some(written),
+            ..Default::default()
+        };
+        let board = Board::new_detached(Some("board-1".into()), Path::from("apps/app-1"));
+        let mut persisted_board = board.clone();
+        persisted_board.execution_mode = flow_like::flow::board::ExecutionMode::Local;
+        let persisted = PrerunManifest::from_board(&persisted_board);
+        let cached = crate::state::CachedBoard::new("etag-1".into(), board);
+        let path = draft_manifest_path("app-1", "board-1", "etag-1");
+        assert!(persist_prerun_manifest(&store, &path, &persisted).await);
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+
+        for _ in 0..2 {
+            let loaded =
+                ensure_cached_board_draft_manifest(&cache, &store, "app-1", "board-1", &cached)
+                    .await
+                    .unwrap();
+            assert_eq!(loaded.as_ref(), &persisted);
+            assert!(cached.draft_authority.holds());
+        }
+        assert_eq!(store.gets.load(Ordering::SeqCst), 1);
+        assert_eq!(store.heads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn draft_manifest_get_keeps_expired_retention_untrusted() {
+        use std::sync::atomic::Ordering;
+
+        let written = chrono::Utc::now() - chrono::Duration::days(2);
+        let store = ManifestStore {
+            written: Some(written),
+            ..Default::default()
+        };
+        let board = Board::new_detached(Some("board-1".into()), Path::from("apps/app-1"));
+        let persisted = PrerunManifest::from_board(&board);
+        let cached = crate::state::CachedBoard::new("etag-1".into(), board);
+        let path = draft_manifest_path("app-1", "board-1", "etag-1");
+        assert!(persist_prerun_manifest(&store, &path, &persisted).await);
+        let cache = moka::sync::Cache::builder().max_capacity(4).build();
+
+        for expected_heads in 0..2 {
+            let loaded =
+                ensure_cached_board_draft_manifest(&cache, &store, "app-1", "board-1", &cached)
+                    .await
+                    .unwrap();
+            assert_eq!(loaded.as_ref(), &persisted);
+            assert!(!cached.draft_authority.holds());
+            assert_eq!(store.heads.load(Ordering::SeqCst), expected_heads);
+        }
+
+        store.fail_head.store(true, Ordering::SeqCst);
+        assert!(
+            ensure_cached_board_draft_manifest(&cache, &store, "app-1", "board-1", &cached)
+                .await
+                .is_err()
+        );
+        assert!(!cached.draft_authority.holds());
+        assert_eq!(store.heads.load(Ordering::SeqCst), 2);
+
+        // Only a successful new write may establish a new retention window.
+        store.fail_head.store(false, Ordering::SeqCst);
+        store.inner.delete(&path).await.unwrap();
+        let repaired =
+            ensure_cached_board_draft_manifest(&cache, &store, "app-1", "board-1", &cached)
+                .await
+                .unwrap();
+        assert_eq!(repaired.as_ref(), &persisted);
+        assert!(cached.draft_authority.holds());
+        assert_eq!(store.gets.load(Ordering::SeqCst), 1);
+        assert_eq!(store.heads.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn draft_manifest_failed_reads_do_not_establish_trust() {
+        use std::sync::atomic::Ordering;
+
+        for failure in ["missing", "get", "body", "invalid", "format", "page"] {
+            let store = ManifestStore::default();
+            let board = Board::new_detached(Some("board-1".into()), Path::from("apps/app-1"));
+            let manifest = if failure == "page" {
+                PrerunManifest::from_board_and_page(&board, &Page::new("page-1", "Page", "/"))
+                    .unwrap()
+            } else {
+                PrerunManifest::from_board(&board)
+            };
+            let cached = crate::state::CachedBoard::new("etag-1".into(), board);
+            let path = draft_manifest_path("app-1", "board-1", "etag-1");
+            let mut bytes = super::encode_manifest(&manifest).unwrap();
+            if failure == "invalid" {
+                bytes = b"unreadable manifest".to_vec();
+            } else if failure == "format" {
+                bytes[4..6].copy_from_slice(&u16::MAX.to_le_bytes());
+            }
+            if failure != "missing" {
+                store.inner.put(&path, bytes.into()).await.unwrap();
+            }
+            store.fail_get.store(failure == "get", Ordering::SeqCst);
+            store.fail_body.store(failure == "body", Ordering::SeqCst);
+            store.fail_put.store(true, Ordering::SeqCst);
+            let cache = moka::sync::Cache::builder().max_capacity(4).build();
+
+            assert!(
+                ensure_cached_board_draft_manifest(&cache, &store, "app-1", "board-1", &cached)
+                    .await
+                    .is_err(),
+                "{failure} must not use metadata from an unvalidated read"
+            );
+            assert!(!cached.draft_authority.holds(), "{failure}");
+            assert!(
+                cache
+                    .get(&draft_manifest_cache_key("app-1", "board-1", "etag-1"))
+                    .is_none()
+            );
+
+            store.fail_put.store(false, Ordering::SeqCst);
+            let repaired =
+                ensure_cached_board_draft_manifest(&cache, &store, "app-1", "board-1", &cached)
+                    .await
+                    .unwrap();
+            assert_eq!(repaired.as_ref(), cached.prerun_manifest().as_ref());
+            assert!(cached.draft_authority.holds(), "{failure}");
+        }
     }
 
     #[tokio::test]
@@ -1054,7 +1320,7 @@ mod draft_manifest_cache_tests {
 
         // This cache represents a different cold Lambda from the writer.
         let fresh_cache = moka::sync::Cache::builder().max_capacity(4).build();
-        let loaded =
+        let (loaded, _) =
             load_etag_prerun_manifest(&fresh_cache, store.as_ref(), "app-1", "board-1", "etag-1")
                 .await
                 .unwrap()
@@ -1073,7 +1339,7 @@ mod draft_manifest_cache_tests {
         );
 
         store.delete(&path).await.unwrap();
-        let warm =
+        let (warm, _) =
             load_etag_prerun_manifest(&fresh_cache, store.as_ref(), "app-1", "board-1", "etag-1")
                 .await
                 .unwrap()
@@ -1081,7 +1347,7 @@ mod draft_manifest_cache_tests {
         assert_eq!(warm.as_ref(), &persisted);
 
         let next_cold_cache = moka::sync::Cache::builder().max_capacity(4).build();
-        let next_cold = load_etag_prerun_manifest(
+        let (next_cold, _) = load_etag_prerun_manifest(
             &next_cold_cache,
             store.as_ref(),
             "app-1",
@@ -1133,7 +1399,7 @@ mod draft_manifest_cache_tests {
 
         // The rebuild is persisted, so the next cold loader reads it directly.
         let fresh_cache = moka::sync::Cache::builder().max_capacity(4).build();
-        let reloaded =
+        let (reloaded, _) =
             load_etag_prerun_manifest(&fresh_cache, store.as_ref(), "app-1", "board-1", "etag-1")
                 .await
                 .unwrap()
@@ -1225,7 +1491,9 @@ mod draft_manifest_cache_tests {
                 >= before_repair
         );
         assert_eq!(
-            read_persisted_manifest(store.as_ref(), &path).await,
+            read_persisted_manifest(store.as_ref(), &path)
+                .await
+                .map(|(manifest, _)| manifest),
             Some(cached)
         );
     }
@@ -1376,15 +1644,19 @@ mod draft_manifest_cache_tests {
         );
         assert!(write_1 && write_2);
         assert_eq!(
-            read_persisted_manifest(store.as_ref(), &path_1).await,
+            read_persisted_manifest(store.as_ref(), &path_1)
+                .await
+                .map(|(manifest, _)| manifest),
             Some(manifest_1)
         );
         assert_eq!(
-            read_persisted_manifest(store.as_ref(), &path_2).await,
+            read_persisted_manifest(store.as_ref(), &path_2)
+                .await
+                .map(|(manifest, _)| manifest),
             Some(manifest_2)
         );
 
-        let callback_authority = read_persisted_manifest(store.as_ref(), &authority_path)
+        let (callback_authority, _) = read_persisted_manifest(store.as_ref(), &authority_path)
             .await
             .expect("board authority should remain readable after both Page writes");
         assert!(callback_authority.page_events.is_empty());
@@ -1544,9 +1816,11 @@ async fn load_cached_board_prerun_manifest(
             load_cached_version_manifest(manifest_cache, meta_store, app_id, board_id, version)
                 .await
         }
-        None => {
-            load_etag_prerun_manifest(manifest_cache, meta_store, app_id, board_id, e_tag).await
-        }
+        None => Ok(
+            load_etag_prerun_manifest(manifest_cache, meta_store, app_id, board_id, e_tag)
+                .await?
+                .map(|(manifest, _)| manifest),
+        ),
     }
 }
 
@@ -1594,7 +1868,7 @@ pub async fn load_board_prerun_manifest(
             {
                 Some(manifest) => manifest,
                 None => {
-                    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+                    let manifest = cached.prerun_manifest();
                     let storage_root = Path::from("apps").join(app_id.to_string());
                     let path = manifest_path(&storage_root, board_id, version);
                     persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
@@ -1702,7 +1976,7 @@ pub async fn load_prerun_manifest(
     let cached = state
         .master_board_shared(app_id, board_id, state, Some(version))
         .await?;
-    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+    let manifest = cached.prerun_manifest();
     let path = manifest_path(&storage_root, board_id, version);
     persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
     state.prerun_manifest_cache.insert(
@@ -1738,7 +2012,7 @@ async fn load_draft_prerun_manifest(
         if let Some(hit) = trusted_draft_authority(state, app_id, board_id, e_tag) {
             return Ok(hit);
         }
-        if let Some(hit) = load_etag_prerun_manifest(
+        if let Some((hit, _)) = load_etag_prerun_manifest(
             &state.prerun_manifest_cache,
             meta_store.as_ref(),
             app_id,
@@ -1778,7 +2052,7 @@ async fn read_version_manifest(
     current_path: &Path,
     legacy_path: &Path,
 ) -> Option<PersistedVersionManifest> {
-    if let Some(manifest) = read_persisted_manifest(meta_store, current_path).await {
+    if let Some((manifest, _)) = read_persisted_manifest(meta_store, current_path).await {
         if manifest.page_events.is_empty() {
             return Some(PersistedVersionManifest::Current(manifest));
         }
@@ -1798,23 +2072,25 @@ async fn read_version_manifest(
 async fn read_persisted_manifest(
     meta_store: &dyn ObjectStore,
     path: &Path,
-) -> Option<PrerunManifest> {
-    let bytes = match meta_store.get(path).await {
-        Ok(result) => match result.bytes().await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::debug!(path = %path, error = %e, "Prerun manifest read failed");
-                return None;
-            }
-        },
+) -> Option<(PrerunManifest, SystemTime)> {
+    let result = match meta_store.get(path).await {
+        Ok(result) => result,
         Err(StoreError::NotFound { .. }) => return None,
         Err(e) => {
             tracing::debug!(path = %path, error = %e, "Prerun manifest read failed");
             return None;
         }
     };
+    let written = result.meta.last_modified.into();
+    let bytes = match result.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::debug!(path = %path, error = %e, "Prerun manifest read failed");
+            return None;
+        }
+    };
     match decode_manifest(&bytes) {
-        Ok(manifest) => Some(manifest),
+        Ok(manifest) => Some((manifest, written)),
         Err(e) => {
             tracing::debug!(path = %path, error = %e, "Prerun manifest rejected, recomputing");
             None

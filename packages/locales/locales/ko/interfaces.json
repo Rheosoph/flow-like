@@ -142,6 +142,7 @@
 	"eventId": "이벤트 ID",
 	"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction": "인터페이스를 지원하지 않는 이벤트 유형은 사용자 조작 없이 자동으로 데이터를 처리해요.",
 	"exampleMessages": "예시 메시지",
+	"exampleMessagesHelp": "",
 	"exampleRequest": "요청 예시",
 	"executionTarget": "실행 대상",
 	"exposeThisEndpointPublicly": "이 엔드포인트를 공개적으로 노출",

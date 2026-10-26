@@ -481,6 +481,87 @@ describe("page widget event dispatch", () => {
 		}
 	});
 
+	test("an unbound widget event warns only when its widget does not declare it", async () => {
+		const {
+			ActionProvider,
+			WidgetInstanceProvider,
+			AppRouterContext,
+			PathnameContext,
+			Probe,
+			controls,
+			setBackend,
+		} = await setupPageHarness();
+		const { toast } = await import("sonner");
+		const toastWarning = spyOn(toast, "warning").mockImplementation(() => "");
+		const warn = spyOn(console, "warn").mockImplementation(() => {});
+		const debug = spyOn(console, "debug").mockImplementation(() => {});
+		cleanup.push(() => {
+			toastWarning.mockRestore();
+			warn.mockRestore();
+			debug.mockRestore();
+		});
+		setBackend({
+			boardState: {},
+			eventState: {
+				executeEvent: async () => {
+					throw new Error("An unbound widget event must not start a run.");
+				},
+			},
+		});
+		await act(async () => {
+			root?.render(
+				<AppRouterContext.Provider value={{} as never}>
+					<PathnameContext.Provider value="/use">
+						<ActionProvider
+							appId="app-undeclared-widget-event"
+							surfaceId="page-cards"
+							eventId="page-event"
+							governedPage
+							isPreviewMode
+							components={{}}
+						>
+							<WidgetInstanceProvider
+								instanceId="card"
+								widgetId="card"
+								actionBindings={{}}
+								declaredActionIds={["open"]}
+							>
+								<Probe id="widget" />
+							</WidgetInstanceProvider>
+						</ActionProvider>
+					</PathnameContext.Provider>
+				</AppRouterContext.Provider>,
+			);
+		});
+		const fire = (actionId: string, requireSuccess = false) =>
+			controls.widget.executeAction(
+				{ name: "widget_event", context: { actionId } },
+				"card-button",
+				{},
+				{ requireSuccess },
+			);
+
+		await act(async () => {
+			await fire("open");
+		});
+		expect(toastWarning).not.toHaveBeenCalled();
+
+		await act(async () => {
+			await fire("ghost");
+		});
+		expect(toastWarning).toHaveBeenCalledTimes(1);
+		expect(String(toastWarning.mock.calls[0][0])).toContain("ghost");
+		expect(
+			warn.mock.calls.some(([message]) => String(message).includes('"ghost"')),
+		).toBe(true);
+
+		await act(async () => {
+			await expect(fire("ghost", true)).rejects.toThrow(
+				'The widget event "ghost" is not declared by its widget.',
+			);
+		});
+	});
+
 	test("named handlers and saved bindings carry the event and originating instance to the authorized Page run", async () => {
 		const {
 			ActionProvider,

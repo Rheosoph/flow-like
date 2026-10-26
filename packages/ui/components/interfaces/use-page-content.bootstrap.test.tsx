@@ -258,7 +258,7 @@ const backend = {
 		},
 	},
 	userState: { getAllSettingsProfiles: async () => [] },
-	boardState: { getBoard: async () => ({}) },
+	boardState: { getBoard: mock(async (..._args: unknown[]) => ({})) },
 };
 
 // bun keeps a module mock for every later file in the process, so each module replaced here
@@ -486,6 +486,7 @@ afterEach(async () => {
 	renderedPages.length = 0;
 	bootstrapCalls.length = 0;
 	metadataReads = 0;
+	backend.boardState.getBoard.mockClear();
 	online = true;
 	network = async () => bootstrapAt("B");
 	accessChecks = async () => {
@@ -514,6 +515,37 @@ afterAll(() => {
 });
 
 describe("page bootstrap validation", () => {
+	test("a governed remote Page never downloads its editor board", async () => {
+		network = async () => bootstrapAt("B", { ...EVENT, board_id: "board-1" });
+		await render(await persistedSession());
+		await waitFor(() => mounts.length > 0, "the page to mount");
+		await settle();
+		expect(backend.boardState.getBoard).not.toHaveBeenCalled();
+	});
+
+	test("non-Page events retain their board prefetch", async () => {
+		const event = { ...CHAT_A, board_id: "board-chat" };
+		catalog = async () => [event];
+		network = async () => {
+			throw notFound();
+		};
+		await render(await persistedSession(), {
+			appId: "app-1",
+			eventId: event.id,
+			eventConfig: CHAT_EVENT_CONFIG,
+		});
+		await waitFor(
+			() => backend.boardState.getBoard.mock.calls.length > 0,
+			"the board prefetch",
+		);
+		expect(backend.boardState.getBoard.mock.calls[0]).toEqual([
+			"app-1",
+			"board-chat",
+			undefined,
+			true,
+		]);
+	});
+
 	test("an online cold start renders cached content immediately and executes only the fresh revision", async () => {
 		const response = deferred<IPageBootstrap>();
 		network = () => response.promise;

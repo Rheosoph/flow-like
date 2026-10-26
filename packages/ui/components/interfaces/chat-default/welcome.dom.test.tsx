@@ -101,6 +101,8 @@ describe("chat welcome suggestions", () => {
 		["null messages", { example_messages: null }],
 		["empty messages", { example_messages: [] }],
 		["blank messages", { example_messages: ["", "  ", "\t\n"] }],
+		["non-string messages", { example_messages: [null, 3, { text: "Hi" }] }],
+		["non-array messages", { example_messages: "Explore my persona" }],
 	] as const)(
 		"hides suggestions for %s, including while typing",
 		async (_, config) => {
@@ -119,7 +121,9 @@ describe("chat welcome suggestions", () => {
 			"Plan my next step",
 			"Track my progress",
 		];
-		await render({ example_messages: ["", ...messages, "  "] });
+		await render({
+			example_messages: ["", ...messages, "  ", null, { text: "Hi" }] as never,
+		});
 		expect(suggestions().map((button) => button.textContent)).toEqual(
 			messages.slice(0, 4),
 		);

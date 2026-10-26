@@ -23,6 +23,7 @@ pub mod state;
 pub mod variant;
 pub mod wasm_node_stubs;
 pub mod wasm_resolve;
+pub(crate) mod widget_artifacts;
 
 pub use crate::backend_jwt::TokenType;
 pub use channel_jwt::{

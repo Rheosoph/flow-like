@@ -92,7 +92,9 @@ function RouterFrame({
 	);
 }
 
-async function mountEditor(stored: IEvent) {
+/** `relist` is how the events list reads back a saved event; by default it never does. */
+async function mountEditor(stored: IEvent, relist?: (saved: IEvent) => IEvent) {
+	let listed = stored;
 	const upserts: Array<{ event: IEvent; pat?: string; source?: string }> = [];
 	const pushes: string[] = [];
 	const fake = await createFakeWorkspace();
@@ -132,7 +134,7 @@ async function mountEditor(stored: IEvent) {
 					listRuns: async () => [],
 				},
 				eventState: {
-					getEvents: async () => [stored],
+					getEvents: async () => [listed],
 					getEventAuthoritative: async () => stored,
 					isEventSinkActive: async () => false,
 					upsertEvent: async (
@@ -144,7 +146,15 @@ async function mountEditor(stored: IEvent) {
 						options?: { source?: string },
 					) => {
 						upserts.push({ event, pat, source: options?.source });
-						return event;
+						const saved = {
+							...event,
+							updated_at: {
+								secs_since_epoch: upserts.length,
+								nanos_since_epoch: 0,
+							},
+						};
+						if (relist) listed = relist(saved);
+						return saved;
 					},
 				},
 			} as never,
@@ -208,6 +218,32 @@ describe("the editor of a device-only event", () => {
 		await click(byRole("button", "Activate"));
 		expect(toasts().slice(before)).toEqual([]);
 		expect(view.upserts).toEqual([]);
+	});
+
+	test("saving clears Unsaved changes although the list reads the record back reshaped", async () => {
+		const view = await mountEditor(
+			withDeviceEventSource(baseEvent),
+			(saved) => ({
+				...saved,
+				inputs: [],
+			}),
+		);
+		await click(byRole("button", "Deactivate"));
+		expect(view.container.textContent).toContain("Unsaved changes");
+		await click(byRole("button", /^Save/));
+		await view.settle();
+		expect(view.container.textContent).not.toContain("Unsaved changes");
+		expect(view.container.textContent).toContain("All changes saved");
+	});
+
+	test("a list response older than the save neither reverts the draft nor marks it unsaved", async () => {
+		const stored = withDeviceEventSource(baseEvent);
+		const view = await mountEditor(stored, () => ({ ...stored }));
+		await click(byRole("button", "Deactivate"));
+		await click(byRole("button", /^Save/));
+		await view.settle();
+		expect(byRole("button", "Activate")).toBeTruthy();
+		expect(view.container.textContent).toContain("All changes saved");
 	});
 
 	test("an ordinary sink event asks for a token when saved", async () => {

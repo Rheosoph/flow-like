@@ -513,19 +513,29 @@ describe("mount", () => {
 		expect([...readMicroWidgetRuntimeBlocks(TARGET)]).toEqual([A]);
 	});
 
-	test("Don't allow with a pending declared part blocks the widget", async () => {
+	test("Don't allow with a pending declared part runs the widget at baseline", async () => {
 		const backend = stubBackend();
 		const view = mount(backend, layers(A));
 		await flush();
 		view.controller.actions.dontAllow();
 		await flush();
-		expect(view.grant.state.status).toBe("blocked");
+		expect(view.grant.consent).toBe("blocked");
+		expect(view.grant.prompt).toBeNull();
 		expect(backend.calls.mint).toEqual([]);
-		view.controller.actions.runRestricted();
 		expect(frameOf(view.grant)).toMatchObject({
 			grant: null,
+			policy: {},
 			notice: "baseline",
 		});
+		expect(view.grant.notices[0]).toEqual({
+			kind: "baseline",
+			declined: DECLARED,
+		});
+
+		view.controller.actions.review();
+		await flush();
+		expect(view.grant.state.status).toBe("pending");
+		expect(view.grant.prompt?.mode).toBe("mount");
 	});
 
 	test("covered runtime sources mint without a prompt", async () => {

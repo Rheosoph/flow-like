@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -154,12 +155,14 @@ async function renderHierarchy() {
 	] as SurfaceComponent[];
 	await act(() =>
 		root?.render(
-			<BuilderProvider initialComponents={components}>
-				<BuilderDndProvider setIsDraggingGlobal={() => {}}>
-					<Reader />
-					<HierarchyTree />
-				</BuilderDndProvider>
-			</BuilderProvider>,
+			<QueryClientProvider client={new QueryClient()}>
+				<BuilderProvider initialComponents={components}>
+					<BuilderDndProvider setIsDraggingGlobal={() => {}}>
+						<Reader />
+						<HierarchyTree />
+					</BuilderDndProvider>
+				</BuilderProvider>
+			</QueryClientProvider>,
 		),
 	);
 	await act(() => context().selectComponent("a"));

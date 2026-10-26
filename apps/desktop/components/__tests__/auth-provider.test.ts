@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	configRequests: [] as ConfigRequest[],
 	invalidate: async () => undefined,
 	openUrl: vi.fn().mockResolvedValue(undefined),
+	signInLink: undefined as string | undefined,
 }));
 
 vi.mock("@flow-like/flow-like-ui", () => ({
@@ -46,6 +47,12 @@ vi.mock("../../lib/api", () => ({
 vi.mock("../tauri-provider", () => ({
 	ProfileSyncer: () => null,
 	TauriBackend: class {},
+}));
+vi.mock("../sign-in-link-dialog", () => ({
+	SignInLinkDialog: ({ url }: { url?: string }) => {
+		mocks.signInLink = url;
+		return null;
+	},
 }));
 
 import { DesktopAuthProvider } from "../auth-provider";
@@ -106,6 +113,7 @@ beforeEach(() => {
 	mocks.profile = { hub: "api.flow-like.com", secure: true };
 	mocks.configRequests = [];
 	mocks.openUrl.mockReset().mockResolvedValue(undefined);
+	mocks.signInLink = undefined;
 	probe.mounts = 0;
 	probe.unmounts = 0;
 	probe.mountedWith = [];
@@ -159,15 +167,21 @@ describe("DesktopAuthProvider", () => {
 		expect(probe.auth?.isAuthenticated).toBe(false);
 		expect(probe.auth?.isLoading).toBe(false);
 		expect(probe.auth?.activeNavigator).toBeUndefined();
+		expect(mocks.signInLink).toBeUndefined();
 		await act(async () => probe.auth?.signinRedirect());
 		await flush();
 		expect(mocks.openUrl).toHaveBeenCalledTimes(2);
+		expect(mocks.signInLink).toBe(mocks.openUrl.mock.calls[1][0]);
+		expect(mocks.signInLink).toMatch(
+			/^https:\/\/auth\.flow-like\.test\/authorize\?.*response_type=code/,
+		);
 		expect(probe.auth?.isLoading).toBe(false);
 		expect(probe.auth?.activeNavigator).toBeUndefined();
 		await act(async () => probe.auth?.events.load(storedUser()));
 		await flush();
 		expect(probe.auth?.isAuthenticated).toBe(true);
 		expect(probe.auth?.activeNavigator).toBeUndefined();
+		expect(mocks.signInLink).toBeUndefined();
 	});
 
 	test("surfaces a system-browser failure and clears navigation state", async () => {
@@ -179,6 +193,7 @@ describe("DesktopAuthProvider", () => {
 		expect(probe.auth?.error?.message).toBe("browser unavailable");
 		expect(probe.auth?.isLoading).toBe(false);
 		expect(probe.auth?.activeNavigator).toBeUndefined();
+		expect(mocks.signInLink).toBe(mocks.openUrl.mock.calls[0][0]);
 	});
 
 	test("hides the previous hub's user while the new hub config is pending or unavailable", async () => {

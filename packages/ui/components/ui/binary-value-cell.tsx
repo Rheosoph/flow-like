@@ -176,7 +176,7 @@ export function BinaryCellPreview({
 	);
 }
 
-function copyToClipboard(text: string, message: string) {
+export function copyToClipboard(text: string, message: string) {
 	void navigator.clipboard.writeText(text).then(() => toast.success(message));
 }
 
@@ -202,7 +202,7 @@ function HexDump({
 	);
 }
 
-function DecodedText({ text }: Readonly<{ text: string }>) {
+export function ClippedText({ text }: Readonly<{ text: string }>) {
 	const { t } = useTranslation("common");
 	const clipped = text.length > RENDER_TEXT_LIMIT;
 	return (
@@ -226,20 +226,62 @@ function DecodedText({ text }: Readonly<{ text: string }>) {
 	);
 }
 
+export function JsonShapeSummary({
+	shape,
+	entries,
+}: Readonly<{ shape: "array" | "object"; entries: number }>) {
+	const { t } = useTranslation("common");
+	return shape === "array"
+		? t("jsonArrayItems", {
+				count: entries,
+				defaultValue_one: "JSON array · {{count, number}} item",
+				defaultValue_other: "JSON array · {{count, number}} items",
+			})
+		: t("jsonObjectKeys", {
+				count: entries,
+				defaultValue_one: "JSON object · {{count, number}} key",
+				defaultValue_other: "JSON object · {{count, number}} keys",
+			});
+}
+
+/** Two readings of one value, e.g. decoded and raw; `alternate` selects the second. */
+export function ReadingToggle({
+	alternate,
+	onAlternateChange,
+	primaryLabel,
+	alternateLabel,
+}: Readonly<{
+	alternate: boolean;
+	onAlternateChange: (alternate: boolean) => void;
+	primaryLabel: string;
+	alternateLabel: string;
+}>) {
+	return (
+		<div className="flex rounded-md border p-0.5">
+			<Button
+				variant={alternate ? "ghost" : "secondary"}
+				size="sm"
+				className="h-6 px-2 text-xs"
+				onClick={() => onAlternateChange(false)}
+			>
+				{primaryLabel}
+			</Button>
+			<Button
+				variant={alternate ? "secondary" : "ghost"}
+				size="sm"
+				className="h-6 px-2 text-xs"
+				onClick={() => onAlternateChange(true)}
+			>
+				{alternateLabel}
+			</Button>
+		</div>
+	);
+}
+
 function ReadingSummary({ reading }: Readonly<{ reading: BinaryReading }>) {
 	const { t } = useTranslation("common");
 	if (reading.kind === "json") {
-		return reading.shape === "array"
-			? t("jsonArrayItems", {
-					count: reading.entries,
-					defaultValue_one: "JSON array · {{count, number}} item",
-					defaultValue_other: "JSON array · {{count, number}} items",
-				})
-			: t("jsonObjectKeys", {
-					count: reading.entries,
-					defaultValue_one: "JSON object · {{count, number}} key",
-					defaultValue_other: "JSON object · {{count, number}} keys",
-				});
+		return <JsonShapeSummary shape={reading.shape} entries={reading.entries} />;
 	}
 	if (reading.kind === "text") return t("text", "Text");
 	const format = reading.format
@@ -311,24 +353,12 @@ export function BinaryValueDetail({
 				</span>
 				<div className="ml-auto flex items-center gap-1">
 					{decoded && (
-						<div className="flex rounded-md border p-0.5">
-							<Button
-								variant={showBytes ? "ghost" : "secondary"}
-								size="sm"
-								className="h-6 px-2 text-xs"
-								onClick={() => setShowBytes(false)}
-							>
-								{t("decoded", "Decoded")}
-							</Button>
-							<Button
-								variant={showBytes ? "secondary" : "ghost"}
-								size="sm"
-								className="h-6 px-2 text-xs"
-								onClick={() => setShowBytes(true)}
-							>
-								{t("rawBytes", "Raw bytes")}
-							</Button>
-						</div>
+						<ReadingToggle
+							alternate={showBytes}
+							onAlternateChange={setShowBytes}
+							primaryLabel={t("decoded", "Decoded")}
+							alternateLabel={t("rawBytes", "Raw bytes")}
+						/>
 					)}
 					<Button
 						variant="ghost"
@@ -345,7 +375,7 @@ export function BinaryValueDetail({
 			</div>
 
 			{decoded && !showBytes ? (
-				<DecodedText text={decoded.text} />
+				<ClippedText text={decoded.text} />
 			) : (
 				<>
 					{reading?.kind === "binary" && (

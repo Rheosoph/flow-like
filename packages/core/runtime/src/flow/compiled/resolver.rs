@@ -362,10 +362,17 @@ pub fn template_from_bytes(
             &ours.as_str()[..16]
         ));
     }
-    let compiled_board = super::decode_artifact(bytes, Some(fingerprint))?;
-    let template =
+    // from_compiled validates arena indices before reconstructing the Board.
+    // Public decode_artifact retains that validation for its own callers.
+    let compiled_board = super::decode_archive(bytes, &header)?;
+    let mut template =
         CompiledRunTemplate::from_compiled(&compiled_board, registry, storage_root.clone())
             .map_err(|e| anyhow!("compiled artifact failed template build: {e}"))?;
+    template.widget_snapshot = super::decode_widget_snapshot(bytes)
+        .inspect_err(|error| tracing::warn!(%error, "Ignoring invalid artifact widget snapshot"))
+        .ok()
+        .flatten()
+        .map(Arc::new);
     Ok(Arc::new(template))
 }
 

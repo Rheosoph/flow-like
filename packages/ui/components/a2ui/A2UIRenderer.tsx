@@ -1,7 +1,11 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { TriangleAlert } from "lucide-react";
 import {
+	Component,
+	type ErrorInfo,
+	type ReactNode,
 	createContext,
 	memo,
 	useCallback,
@@ -126,6 +130,64 @@ function renderScopedComponent(
 	);
 }
 
+interface ComponentErrorBoundaryProps {
+	componentId: string;
+	/** The surface entry; the next update to it retries the render. */
+	resetKey: unknown;
+	elementRef: NonNullable<ComponentProps["elementRef"]>;
+	children: ReactNode;
+}
+
+/**
+ * Flows write arbitrary values into component props. A renderer that throws on
+ * one fails its own element only, rather than the route's error page.
+ */
+class ComponentErrorBoundary extends Component<
+	ComponentErrorBoundaryProps,
+	{ failed: boolean }
+> {
+	state = { failed: false };
+
+	static getDerivedStateFromError(): { failed: boolean } {
+		return { failed: true };
+	}
+
+	componentDidCatch(error: Error, info: ErrorInfo): void {
+		console.error(
+			`a2ui component '${this.props.componentId}' failed to render:`,
+			error,
+			info.componentStack,
+		);
+	}
+
+	componentDidUpdate(previous: ComponentErrorBoundaryProps): void {
+		if (this.state.failed && previous.resetKey !== this.props.resetKey) {
+			this.setState({ failed: false });
+		}
+	}
+
+	render(): ReactNode {
+		if (!this.state.failed) return this.props.children;
+		return <ComponentRenderFailure elementRef={this.props.elementRef} />;
+	}
+}
+
+function ComponentRenderFailure({
+	elementRef,
+}: Pick<ComponentErrorBoundaryProps, "elementRef">) {
+	const { t } = useTranslation("common");
+	return (
+		<div
+			ref={elementRef}
+			role="alert"
+			className="flex items-center gap-2 rounded-md border border-dashed border-destructive/40 px-3 py-2 text-xs text-muted-foreground"
+		>
+			<TriangleAlert className="size-3.5 shrink-0 text-destructive" />
+			{t("somethingWentWrong", "Something went wrong")}
+		</div>
+	);
+}
+
 /**
  * Memoized and subscribed to its own component only: a surface update
  * re-renders the nodes whose entries changed, not the whole tree. A node still
@@ -181,7 +243,15 @@ const A2UIComponentNode = memo(function A2UIComponentNode({
 		renderChild,
 	};
 
-	return <Renderer {...props} />;
+	return (
+		<ComponentErrorBoundary
+			componentId={componentId}
+			resetKey={surfaceComponent}
+			elementRef={elementRef}
+		>
+			<Renderer {...props} />
+		</ComponentErrorBoundary>
+	);
 });
 
 export interface A2UIRendererProps {

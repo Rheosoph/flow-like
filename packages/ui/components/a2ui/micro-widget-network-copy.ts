@@ -7,9 +7,12 @@ import {
 	WIDGET_POLICY_SOURCE_LOCAL,
 	type WidgetCspKey,
 	type WidgetNetworkSource,
+	type WidgetPolicy,
 	type WidgetSourceLevel,
 	isRegistryPolicySource,
 	isWidgetSourceAboutKey,
+	policyCapabilities,
+	policyHostCount,
 } from "./micro-widget-policy";
 
 /**
@@ -305,6 +308,32 @@ export const WIDGET_CAPABILITY_COPY: Readonly<
 			),
 	},
 };
+
+/** What the viewer declined, e.g. "Permission declined: File downloads and network access to 2 sites". */
+export function widgetDeclinedPermissions(
+	policy: WidgetPolicy,
+	t: Translate,
+	locale: string | undefined,
+): string {
+	const parts = policyCapabilities(policy).map((name) =>
+		WIDGET_CAPABILITY_COPY[name].label(t),
+	);
+	const hosts = policyHostCount(policy);
+	if (hosts > 0) {
+		parts.push(
+			t(
+				"widgetPermissionDeclinedNetwork",
+				"network access to {{count}} sites",
+				{ count: hosts },
+			),
+		);
+	}
+	return t("widgetPermissionDeclined", "Permission declined: {{permissions}}", {
+		permissions: new Intl.ListFormat(locale, { type: "conjunction" }).format(
+			parts,
+		),
+	});
+}
 
 export type WidgetBannerLead =
 	| { kind: "capabilities" }

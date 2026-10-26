@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import type { DndContextProps, DragEndEvent } from "@dnd-kit/core";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";

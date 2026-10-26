@@ -113,6 +113,15 @@ pub async fn evaluate_pin_value(
     pin: Arc<InternalPin>,
     overrides: &Option<BTreeMap<String, Arc<Value>>>,
 ) -> flow_like_types::Result<Value> {
+    evaluate_pin_value_borrowed(pin, overrides.as_ref()).await
+}
+
+/// Evaluate a pin without copying its function scope's overrides.
+/// An empty active scope still follows dependencies before reading shared values.
+pub async fn evaluate_pin_value_borrowed(
+    pin: Arc<InternalPin>,
+    overrides: Option<&BTreeMap<String, Arc<Value>>>,
+) -> flow_like_types::Result<Value> {
     let mut current_pin = pin;
     let mut geometry_contracts = Vec::new();
     let mut visited_pins = InlineVisitedPins::<16>::new();
@@ -129,7 +138,7 @@ pub async fn evaluate_pin_value(
         }
 
         // Check overrides first — they short-circuit the entire chain
-        if let Some(found_override) = overrides.as_ref().and_then(|map| map.get(current_pin.id())) {
+        if let Some(found_override) = overrides.and_then(|map| map.get(current_pin.id())) {
             return validate_geometry_pin_chain(
                 found_override.as_ref().clone(),
                 &geometry_contracts,
@@ -190,7 +199,10 @@ mod tests {
 
     use flow_like_types::{Value, json::json, tokio};
 
-    use super::{InlineVisitedPins, evaluate_pin_value, evaluate_pin_value_reference};
+    use super::{
+        InlineVisitedPins, evaluate_pin_value, evaluate_pin_value_borrowed,
+        evaluate_pin_value_reference,
+    };
     use crate::flow::{
         execution::internal_pin::InternalPin,
         pin::{Pin, PinType, ValueType},
@@ -272,7 +284,59 @@ mod tests {
             source.id.to_string(),
             Arc::new(Value::Null),
         )]));
-        assert!(evaluate_pin_value(consumer, &overrides).await.is_err());
+        assert!(
+            evaluate_pin_value(consumer.clone(), &overrides)
+                .await
+                .is_err()
+        );
+        assert!(
+            evaluate_pin_value_borrowed(consumer, overrides.as_ref())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn borrowed_overrides_preserve_empty_scopes_and_relay_precedence() {
+        let source = internal_pin(0);
+        let relay = internal_pin(1);
+        let consumer = internal_pin(2);
+        relay.init_depends_on(vec![Arc::downgrade(&source)]);
+        consumer.init_depends_on(vec![Arc::downgrade(&relay)]);
+        source.set_value(json!("source")).await;
+        relay.set_value(json!("stale relay")).await;
+        consumer.set_value(json!("stale consumer")).await;
+
+        let scopes = [
+            (None, json!("stale consumer")),
+            (Some(BTreeMap::new()), json!("source")),
+            (
+                Some(BTreeMap::from([(
+                    source.id().to_string(),
+                    Arc::new(json!("scoped source")),
+                )])),
+                json!("scoped source"),
+            ),
+            (
+                Some(BTreeMap::from([
+                    (source.id().to_string(), Arc::new(json!("scoped source"))),
+                    (relay.id().to_string(), Arc::new(json!("scoped relay"))),
+                ])),
+                json!("scoped relay"),
+            ),
+        ];
+        for (scope, expected) in scopes {
+            assert_eq!(
+                evaluate_pin_value_borrowed(consumer.clone(), scope.as_ref())
+                    .await
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                evaluate_pin_value(consumer.clone(), &scope).await.unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]

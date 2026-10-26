@@ -408,11 +408,13 @@ async fn resolve_page_contract_inner(
             );
             ApiError::bad_request("The Page execution contract is invalid")
         })?;
-    let manifest_revision = page_execution_revision(&board, &page_execution).map_err(|error| {
-        ApiError::internal_error(flow_like_types::anyhow!(
-            "failed to derive Page execution revision: {error}"
-        ))
-    })?;
+    let manifest_revision = cached
+        .page_execution_revision(&page_execution)
+        .map_err(|error| {
+            ApiError::internal_error(flow_like_types::anyhow!(
+                "failed to derive Page execution revision: {error}"
+            ))
+        })?;
     let mut prerun = PrerunPayload::from(&*manifest);
     prerun.signature = manifest_revision.clone();
     let element_demand = ElementDemand {

@@ -2,9 +2,8 @@
 	"schema": "flow-like.doc-screenshot-http-fixture/v1",
 	"strict": true,
 	"blockedOrigins": [
-		"https://a.basemaps.cartocdn.com",
-		"https://b.basemaps.cartocdn.com",
-		"https://c.basemaps.cartocdn.com",
+		"https://basemaps.cartocdn.com",
+		"https://tiles.basemaps.cartocdn.com",
 		"https://img.youtube.com",
 		"https://www.youtube-nocookie.com",
 		"https://open.spotify.com",

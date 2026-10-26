@@ -81,19 +81,25 @@ try {
 	for (const failure of ["board-read-failures", "board-read-invalid"]) {
 		await load(`boardRenderer=egui&board-read-delay=1000&${failure}=1`);
 		await page.getByText("Loading flow…", { exact: true }).waitFor();
-		await page
-			.getByText("The flow could not be loaded.", { exact: true })
-			.waitFor();
+		const failed = page
+			.getByRole("alert")
+			.filter({ hasText: "The flow could not be loaded." });
+		await failed.waitFor();
+		assert.equal(await page.locator("[data-board-renderer]").count(), 0);
 		assert.equal(
-			await page.locator("[data-board-renderer]").getAttribute("aria-busy"),
-			"false",
+			await page.getByRole("button", { name: /^Quality/ }).count(),
+			0,
 		);
-		await page.getByRole("button", { name: "Retry", exact: true }).click();
-		await page.getByText("Loading flow…", { exact: true }).waitFor();
+		await page.screenshot({
+			path: `/tmp/flow-board-load-failed-${failure}.png`,
+		});
+		await failed.getByRole("button", { name: "Retry", exact: true }).click();
+		await failed
+			.getByRole("button", { name: "Retry", exact: true, disabled: true })
+			.waitFor();
+		assert.equal(await page.getByText("Loading flow…").count(), 0);
 		await waitForBoard();
-		await page
-			.getByText("The flow could not be loaded.", { exact: true })
-			.waitFor({ state: "hidden" });
+		await failed.waitFor({ state: "hidden" });
 		assert.equal(
 			await page.evaluate(() => window.__boardHost.snapshot().reads.getBoard),
 			2,

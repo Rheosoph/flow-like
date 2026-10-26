@@ -47,10 +47,6 @@ import {
 	useMicroWidgetConsentQueue,
 } from "../micro-widget-consent-queue";
 import {
-	type WidgetConsentSummary,
-	summarizeWidgetConsent,
-} from "../micro-widget-consent-view";
-import {
 	type FlwEnvelope,
 	MICRO_WIDGET_DEFAULT_HEIGHT,
 	MICRO_WIDGET_EVENT_BURST,
@@ -70,7 +66,6 @@ import {
 	shouldUseHttpSchemeBridge,
 } from "../micro-widget-host";
 import { createMicroWidgetMicrophone } from "../micro-widget-microphone";
-import { policyHostCount } from "../micro-widget-policy";
 import { useMicroWidgetReloader } from "../micro-widget-reload";
 import { MicroWidgetNoticeSlot } from "../micro-widget-runtime-banner";
 import {
@@ -335,7 +330,7 @@ function MicroWidgetErrorCard({
 							{ widgetId },
 						)}
 					</p>
-					<p className="text-muted-foreground break-words">{message}</p>
+					<p className="text-muted-foreground wrap-break-word">{message}</p>
 					{onReload && (
 						<MicroWidgetReloadAction
 							onReload={onReload}
@@ -428,11 +423,6 @@ function MicroWidgetFrame({
 		jumpToFront();
 		reviewGrant();
 	}, [jumpToFront, reviewGrant]);
-	// The blocked card describes the prompt the viewer refused; the grant state only keeps its subject.
-	const refusedSummary = useRef<WidgetConsentSummary | null>(null);
-	useEffect(() => {
-		if (prompt) refusedSummary.current = summarizeWidgetConsent(prompt);
-	}, [prompt]);
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const reviewButtonRef = useRef<HTMLButtonElement>(null);
 	const setContainer = useCallback(
@@ -895,17 +885,8 @@ function MicroWidgetFrame({
 				elementRef={elementRef}
 				reviewRef={reviewButtonRef}
 				widgetId={widgetId}
-				summary={
-					refusedSummary.current ?? {
-						level: null,
-						hostCount: policyHostCount(grantState.subject.policy),
-						includesRuntime: false,
-					}
-				}
+				policy={grantState.subject.policy}
 				onReview={review}
-				onRunBaseline={
-					grantState.canRunBaseline ? grant.runRestricted : undefined
-				}
 			/>
 		);
 	}
@@ -960,7 +941,13 @@ function MicroWidgetFrame({
 					onRestoreFocus={restoreFocus}
 				/>
 			)}
-			{frame && <MicroWidgetNoticeSlot grant={grant} onReview={review} />}
+			{frame && (
+				<MicroWidgetNoticeSlot
+					grant={grant}
+					onReview={review}
+					reviewRef={reviewButtonRef}
+				/>
+			)}
 			{mediaState.state !== "idle" && (
 				<fieldset
 					className="absolute bottom-2 right-2 z-50 m-0 flex min-w-0 items-center gap-2 rounded border-0 bg-background p-2 text-sm shadow"
@@ -1022,8 +1009,8 @@ function MicroWidgetFrame({
  * mirror into the elements payload as `"{instanceId}/values"`. Network sites
  * and browser capabilities come from the backend's descriptor of the widget,
  * never from page JSON. They take effect only through a grant minted after the
- * user approves them; until then no document is loaded, and a blocked widget
- * can still run at baseline.
+ * user approves them; until then no document is loaded. A widget whose
+ * permissions were declined runs at baseline and offers Allow in place.
  */
 export function A2UIMicroWidget({
 	elementRef,
