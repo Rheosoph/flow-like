@@ -95,7 +95,8 @@ export function AppearanceStudio({
 						parsed.tail,
 					);
 			setSheet(next);
-			setSaved(css);
+			// Seeding the managed block is not an edit; it is written with the first real one.
+			setSaved(next);
 		} catch (cause) {
 			console.error("Failed to load the app stylesheet", appId, cause);
 			setError(

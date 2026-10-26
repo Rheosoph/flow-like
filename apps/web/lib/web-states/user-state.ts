@@ -56,6 +56,7 @@ import {
 	apiPatch,
 	apiPost,
 	apiPut,
+	getApiBaseUrl,
 } from "./api-utils";
 
 // The hub serializes the sea-orm model directly: JSON key `type` with values
@@ -151,6 +152,43 @@ function normalizeProfileShortcut(shortcut: IProfileShortcut): IShortcut {
 
 export class WebUserState implements IUserState {
 	constructor(private readonly backend: WebBackendRef) {}
+	private readonly pendingReads = new Map<
+		string,
+		{
+			user: NonNullable<WebBackendRef["auth"]>["user"] | undefined;
+			authenticated: boolean | undefined;
+			origin: string;
+			promise: Promise<unknown>;
+		}
+	>();
+
+	private readShared<T>(path: string): Promise<T> {
+		const auth = this.backend.auth;
+		const origin = getApiBaseUrl();
+		const pending = this.pendingReads.get(path);
+		if (
+			pending &&
+			pending.user === auth?.user &&
+			pending.authenticated === auth?.isAuthenticated &&
+			pending.origin === origin
+		) {
+			return pending.promise as Promise<T>;
+		}
+		// Share synchronous fan-out (such as auth's two profile projections).
+		// Any read after an await starts fresh, even while this response is pending.
+		const promise = apiGet<T>(path, auth);
+		const entry = {
+			user: auth?.user,
+			authenticated: auth?.isAuthenticated,
+			origin,
+			promise,
+		};
+		this.pendingReads.set(path, entry);
+		queueMicrotask(() => {
+			if (this.pendingReads.get(path) === entry) this.pendingReads.delete(path);
+		});
+		return promise;
+	}
 
 	async getHomeDefaults(defaultId?: string): Promise<IHomeDefaults> {
 		const query = defaultId
@@ -481,10 +519,7 @@ export class WebUserState implements IUserState {
 	}
 
 	async getProfile(): Promise<IProfile> {
-		const allApiProfiles = await apiGet<ApiProfile[]>(
-			"profile",
-			this.backend.auth,
-		);
+		const allApiProfiles = await this.readShared<ApiProfile[]>("profile");
 		const apiProfiles = allApiProfiles?.filter((p) => !p.deleted_at) ?? [];
 
 		if ((allApiProfiles?.length ?? 0) > 0 && apiProfiles.length === 0) {
@@ -540,10 +575,7 @@ export class WebUserState implements IUserState {
 	}
 
 	async getProfiles(): Promise<IProfile[]> {
-		const allApiProfiles = await apiGet<ApiProfile[]>(
-			"profile",
-			this.backend.auth,
-		);
+		const allApiProfiles = await this.readShared<ApiProfile[]>("profile");
 		const apiProfiles = allApiProfiles?.filter((p) => !p.deleted_at) ?? [];
 		if (apiProfiles.length === 0) return [];
 		return apiProfiles.map(transformApiProfile);
@@ -551,7 +583,6 @@ export class WebUserState implements IUserState {
 
 	async getAllSettingsProfiles(): Promise<ISettingsProfile[]> {
 		const profiles = await this.getProfiles();
-		console.log("getAllSettingsProfiles - profiles count:", profiles.length);
 		return profiles.map((profile) => ({
 			hub_profile: profile,
 			execution_settings: {
@@ -684,7 +715,7 @@ export class WebUserState implements IUserState {
 	}
 
 	async getInfo(): Promise<IUserInfo> {
-		return apiGet<IUserInfo>("user/info", this.backend.auth);
+		return this.readShared<IUserInfo>("user/info");
 	}
 
 	async createPAT(

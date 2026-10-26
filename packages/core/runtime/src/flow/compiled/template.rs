@@ -281,7 +281,7 @@ impl CompiledRunTemplate {
                 })?
                 .clone();
             let logic = registry.instantiate(&node)?;
-            let only_offline = registry.get_node(&node.name)?.only_offline;
+            let only_offline = registry.get_node_ref(&node.name)?.only_offline;
 
             let mut lookup = NodePinLookup::default();
             for (offset, &arena_idx) in cn.pins.iter().enumerate() {
@@ -391,4 +391,79 @@ fn owning_function_layer_idx(
     }
 
     None
+}
+
+#[cfg(test)]
+mod catalog_policy_tests {
+    use super::*;
+    use crate::flow::compiled::compile::compile_board;
+    use crate::flow::execution::context::ExecutionContext;
+    use flow_like_types::async_trait;
+
+    struct CatalogLogic;
+
+    #[async_trait]
+    impl NodeLogic for CatalogLogic {
+        fn get_node(&self) -> Node {
+            Node::new("catalog_policy", "Policy", "", "Tests")
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn borrowed_catalog_policy_overrides_forged_artifact_flags_in_both_directions() {
+        for only_offline in [false, true] {
+            let mut catalog_node = CatalogLogic.get_node();
+            catalog_node.only_offline = only_offline;
+            let mut placed = catalog_node.clone();
+            placed.only_offline = !only_offline;
+            let mut board = Board::new_detached(None, Path::default());
+            board.nodes.insert(placed.id.clone(), placed);
+            let compiled = compile_board(&board).unwrap();
+            assert_eq!(compiled.nodes[0].only_offline, !only_offline);
+
+            let mut registry = FlowNodeRegistryInner::new(1);
+            registry.insert(catalog_node, Arc::new(CatalogLogic));
+            let template =
+                CompiledRunTemplate::from_compiled(&compiled, &registry, Path::default()).unwrap();
+            assert_eq!(template.nodes[0].only_offline, only_offline);
+            assert_eq!(
+                template
+                    .ensure_execution_environment(ExecutionEnvironment::Server)
+                    .is_err(),
+                only_offline,
+            );
+            for environment in [
+                ExecutionEnvironment::Local,
+                ExecutionEnvironment::Desktop,
+                ExecutionEnvironment::Mobile,
+                ExecutionEnvironment::BrowserSandbox,
+            ] {
+                template.ensure_execution_environment(environment).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn missing_catalog_policy_keeps_the_instantiation_error() {
+        let mut board = Board::new_detached(None, Path::default());
+        let node = CatalogLogic.get_node();
+        let expected = format!(
+            "Node not found - Instancing: '{}' (id: {}, category: {})",
+            node.name, node.id, node.category
+        );
+        board.nodes.insert(node.id.clone(), node);
+        let compiled = compile_board(&board).unwrap();
+        let error = CompiledRunTemplate::from_compiled(
+            &compiled,
+            &FlowNodeRegistryInner::new(0),
+            Path::default(),
+        )
+        .err()
+        .expect("an artifact cannot supply its own missing catalog authority");
+        assert_eq!(error.to_string(), expected);
+    }
 }

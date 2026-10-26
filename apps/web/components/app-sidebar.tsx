@@ -93,6 +93,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { accountQueryDeps } from "../lib/account-query";
 import { fetcher } from "../lib/api";
 import { getPublicApiUrl } from "../lib/public-config";
 import { currentRelativeUrl } from "../lib/return-url";
@@ -350,16 +351,21 @@ function Profiles() {
 	const [createError, setCreateError] = useState<string | null>(null);
 	const createBusy = useRef(false);
 	const pendingProfileId = useRef<string | null>(null);
+	const authQueryDeps = accountQueryDeps(backend.userState, auth);
 	const currentProfile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
 		[],
+		Boolean(auth.isAuthenticated),
+		authQueryDeps,
 	);
 
 	const allProfiles = useInvoke(
 		backend.userState.getAllSettingsProfiles,
 		backend.userState,
 		[],
+		Boolean(auth.isAuthenticated),
+		authQueryDeps,
 	);
 
 	const profiles = allProfiles.data ?? [];
@@ -830,7 +836,14 @@ function NavMain({
 	const pathname = usePathname();
 	const { open } = useSidebar();
 	const { developerMode } = useDeveloperMode();
-	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
+	const auth = useAuth();
+	const info = useInvoke(
+		backend.userState.getInfo,
+		backend.userState,
+		[],
+		Boolean(auth.isAuthenticated),
+		accountQueryDeps(backend.userState, auth),
+	);
 
 	return (
 		<>
@@ -951,7 +964,7 @@ export function NavUser({
 	const backend = useBackend();
 	const { developerMode } = useDeveloperMode();
 	const [isSigningIn, setIsSigningIn] = useState(false);
-	const authQueryDeps = [auth?.user?.profile?.sub, auth?.isAuthenticated];
+	const authQueryDeps = accountQueryDeps(backend.userState, auth);
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,

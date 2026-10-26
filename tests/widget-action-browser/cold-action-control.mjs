@@ -19,6 +19,34 @@ export function assertColdActionConfiguration(config, app, stdin) {
 	);
 }
 
+export function coldBoundaryRequests(
+	network,
+	worker,
+	startedAtUnixMs,
+	throughUnixMs,
+) {
+	const requests = network.filter(
+		(record) =>
+			record.worker === worker &&
+			record.startedAtUnixMs >= startedAtUnixMs &&
+			record.startedAtUnixMs < throughUnixMs,
+	);
+	return {
+		networkRequestCategories: Object.fromEntries(
+			[...new Set(requests.map((record) => record.category))].map(
+				(category) => [
+					category,
+					requests.filter((record) => record.category === category).length,
+				],
+			),
+		),
+		unexpectedApiRequests: requests.length,
+		unexpectedExecutionRequests: requests.filter((record) =>
+			["bootstrap", "prerun", "invoke"].includes(record.category),
+		).length,
+	};
+}
+
 /** A fixed protocol lets the local stack runner restart its owned services. */
 export function waitForColdActionController({
 	input = process.stdin,
@@ -41,6 +69,7 @@ export function waitForColdActionController({
 			clearTimeout(timer);
 			input.off("data", receive);
 			input.off("end", ended);
+			input.off("close", ended);
 			input.off("error", failed);
 			output.off("error", failed);
 			signals.off("SIGINT", interrupted);
@@ -50,11 +79,14 @@ export function waitForColdActionController({
 			else resolve();
 		};
 		const fail = (message) => finish(new Error(message));
-		const ended = () => fail("Cold-action controller closed before confirmation");
+		const ended = () =>
+			fail("Cold-action controller closed before confirmation");
 		const failed = () => fail("Cold-action controller pipe failed");
 		const interrupted = () => fail("Cold-action control was interrupted");
 		const receive = (chunk) => {
-			buffer += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			buffer += decoder.write(
+				Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+			);
 			if (Buffer.byteLength(buffer) > 4096)
 				return fail("Cold-action controller reply exceeded its size limit");
 			const newline = buffer.indexOf("\n");
@@ -68,13 +100,16 @@ export function waitForColdActionController({
 				return fail("Cold-action controller sent an invalid reply");
 			}
 			if (message?.type === "benchmark_cold_action_abort")
-				return fail("Cold-action backend restart was aborted by the controller");
+				return fail(
+					"Cold-action backend restart was aborted by the controller",
+				);
 			if (message?.type !== "benchmark_cold_action_continue")
 				return fail("Cold-action controller sent an unexpected reply");
 			finish();
 		};
 		input.on("data", receive);
 		input.once("end", ended);
+		input.once("close", ended);
 		input.once("error", failed);
 		output.once("error", failed);
 		signals.once("SIGINT", interrupted);

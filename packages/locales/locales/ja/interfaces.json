@@ -142,6 +142,7 @@
 	"eventId": "イベントID",
 	"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction": "インターフェースに対応していないイベントタイプは、ユーザー操作なしで自動的にデータを処理します。",
 	"exampleMessages": "サンプルメッセージ",
+	"exampleMessagesHelp": "",
 	"exampleRequest": "リクエスト例",
 	"executionTarget": "実行先",
 	"exposeThisEndpointPublicly": "このエンドポイントを公開する",

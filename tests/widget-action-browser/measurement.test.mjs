@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { percentile, summarize } from "./measurement.mjs";
+import { percentile, requestRouteKey, summarize } from "./measurement.mjs";
 import { requestCategory } from "./app-measurement.mjs";
 
 test("reports interpolated percentiles without changing raw samples", () => {
@@ -31,6 +31,30 @@ test("network categories discard app IDs, route queries, and credentials", () =>
 		null,
 	);
 	assert.equal(requestCategory("invalid", "GET"), null);
+});
+
+test("route keys group only exact method and pathname while omitting private URL content", () => {
+	const url =
+		"https://person:secret@localhost/api/v1/apps/private-app/runs/run-one?token=secret";
+	const key = requestRouteKey(url, "GET");
+	assert.match(key, /^[a-f0-9]{64}$/);
+	assert.equal(
+		key,
+		requestRouteKey(
+			"http://127.0.0.1/api/v1/apps/private-app/runs/run-one?different=query",
+			"GET",
+		),
+	);
+	assert.notEqual(key, requestRouteKey(url, "POST"));
+	assert.notEqual(
+		key,
+		requestRouteKey(url.replace("run-one", "run-two"), "GET"),
+	);
+	assert.notEqual(
+		key,
+		requestRouteKey(url.replace("private-app", "different-app"), "GET"),
+	);
+	assert.equal(requestRouteKey("invalid", "GET"), null);
 });
 
 test("keeps failed attempts visible without counting their partial timings as successes", () => {

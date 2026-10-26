@@ -21,7 +21,7 @@ use flow_like::hub::retry_after;
 use flow_like::profile::Profile;
 use flow_like::state::{FlowLikeConfig, FlowLikeState, FlowNodeRegistryInner};
 use flow_like::utils::http::HTTPClient;
-use flow_like_catalog::get_catalog;
+use flow_like_catalog::get_catalog_registry;
 use flow_like_storage::Path;
 use flow_like_types::channel::{Channel, ChannelTicket};
 use flow_like_types::create_id;
@@ -37,11 +37,8 @@ use tokio::sync::{mpsc, watch};
 
 /// Cached prepared registry - initialized once on first access.
 /// Contains the static catalog nodes only; WASM nodes are overlaid per-request.
-pub(crate) static PREPARED_REGISTRY: LazyLock<Arc<FlowNodeRegistryInner>> = LazyLock::new(|| {
-    let catalog = get_catalog();
-    let catalog_arc = Arc::new(catalog);
-    Arc::new(FlowNodeRegistryInner::prepare(&catalog_arc))
-});
+pub(crate) static PREPARED_REGISTRY: LazyLock<Arc<FlowNodeRegistryInner>> =
+    LazyLock::new(|| Arc::new(get_catalog_registry()));
 
 /// Prepare only the trusted static catalog. Call after catalog initialization
 /// and before advertising a single-use sandbox as ready. No tenant code loads.

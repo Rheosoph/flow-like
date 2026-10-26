@@ -43,6 +43,7 @@ import type {
 import {
 	apiResponseError,
 	isMissingResourceError,
+	isMissingRouteError,
 } from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	BOARD_FORMAT_HEADER,
@@ -223,6 +224,8 @@ export class WebBoardState implements IBoardState {
 	>();
 	private readonly appIdByBoardId = new Map<string, string>();
 	private readonly boardSync = new BoardSyncClient();
+	/** The hub answered `/sync` as an unknown route; boards load whole from then on. */
+	private boardSyncUnsupported = false;
 	private readonly mediaProjector = new BoardMediaProjector();
 
 	constructor(private readonly backend: WebBackendRef) {}
@@ -344,21 +347,39 @@ export class WebBoardState implements IBoardState {
 		version?: [number, number, number],
 		_forceFresh?: boolean,
 	): Promise<IBoard> {
-		const params = version ? `?version=${version.join("_")}` : "";
-		const board = await this.boardSync.sync(
-			appId,
-			boardId,
-			version,
-			(request: IBoardSyncRequest) =>
-				apiPost<IBoardSyncResponse>(
-					`apps/${appId}/board/${boardId}/sync${params}`,
-					request,
-					this.backend.auth,
-				),
-		);
+		const board = await this.fetchBoard(appId, boardId, version);
 		this.appIdByBoardId.set(boardId, appId);
 
 		return this.currentDisplayBoard(appId, boardId, version, board);
+	}
+
+	private async fetchBoard(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoard> {
+		if (this.boardSyncUnsupported) {
+			return this.getBoardAuthoritative(appId, boardId, version);
+		}
+		const params = version ? `?version=${version.join("_")}` : "";
+		try {
+			return await this.boardSync.sync(
+				appId,
+				boardId,
+				version,
+				(request: IBoardSyncRequest) =>
+					apiPost<IBoardSyncResponse>(
+						`apps/${appId}/board/${boardId}/sync${params}`,
+						request,
+						this.backend.auth,
+					),
+			);
+		} catch (error) {
+			// A hub that predates `/sync` has no such route; a coded 404 is a missing board.
+			if (!isMissingRouteError(error)) throw error;
+			this.boardSyncUnsupported = true;
+			return this.getBoardAuthoritative(appId, boardId, version);
+		}
 	}
 
 	async getBoardAuthoritative(

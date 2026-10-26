@@ -18,6 +18,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, OnceLock, Weak};
 
 use blake3::Hasher;
 use flow_like_storage::Path;
@@ -652,6 +653,61 @@ pub fn page_action_id(page_id: &str, node_id: &str, locator: &PrerunPageActionLo
 /// to be equal.
 pub fn page_execution_revision(board: &Board, execution: &PrerunPageExecution) -> Result<String> {
     let board_manifest = PrerunManifest::from_board(board);
+    validate_page_execution(board, execution)?;
+    Ok(hash_page_execution_revision(
+        board,
+        execution,
+        &board_manifest.signature,
+        board.content_hash(),
+    ))
+}
+
+/// Board-derived inputs shared by Page revisions of one immutable snapshot.
+/// The weak identity makes `Arc::make_mut` detach before a caller can change
+/// the board, and prevents a replacement allocation from reusing these inputs.
+pub struct PageExecutionRevisionSource {
+    board: Weak<Board>,
+    manifest: Arc<PrerunManifest>,
+    content_hash: OnceLock<u64>,
+}
+
+impl PageExecutionRevisionSource {
+    pub fn new(board: &Arc<Board>) -> Self {
+        Self {
+            board: Arc::downgrade(board),
+            manifest: Arc::new(PrerunManifest::from_board(board)),
+            content_hash: OnceLock::new(),
+        }
+    }
+
+    pub fn matches(&self, board: &Arc<Board>) -> bool {
+        self.board.ptr_eq(&Arc::downgrade(board))
+    }
+
+    pub fn manifest(&self) -> Arc<PrerunManifest> {
+        self.manifest.clone()
+    }
+
+    /// Derive the existing public revision only for the snapshot that supplied
+    /// the inputs. Page bindings are validated on every uncached revision.
+    pub fn revision(&self, board: &Arc<Board>, execution: &PrerunPageExecution) -> Result<String> {
+        if !self.matches(board) {
+            return Err(anyhow!(
+                "Page revision source belongs to a different board snapshot"
+            ));
+        }
+        validate_page_execution(board, execution)?;
+        let content_hash = *self.content_hash.get_or_init(|| board.content_hash());
+        Ok(hash_page_execution_revision(
+            board,
+            execution,
+            &self.manifest.signature,
+            content_hash,
+        ))
+    }
+}
+
+fn validate_page_execution(board: &Board, execution: &PrerunPageExecution) -> Result<()> {
     if !board.page_ids.is_empty()
         && !board
             .page_ids
@@ -715,6 +771,15 @@ pub fn page_execution_revision(board: &Board, execution: &PrerunPageExecution) -
         }
     }
 
+    Ok(())
+}
+
+fn hash_page_execution_revision(
+    board: &Board,
+    execution: &PrerunPageExecution,
+    board_manifest_signature: &str,
+    board_content_hash: u64,
+) -> String {
     let mut h = Hasher::new();
     h.update(b"flow-like/page-execution-revision");
     h.update(&[PAGE_EXECUTION_REVISION_VERSION]);
@@ -722,13 +787,10 @@ pub fn page_execution_revision(board: &Board, execution: &PrerunPageExecution) -
     h.update(&board.version.0.to_le_bytes());
     h.update(&board.version.1.to_le_bytes());
     h.update(&board.version.2.to_le_bytes());
-    h.update(&board.content_hash().to_le_bytes());
-    hash_string(&mut h, &board_manifest.signature);
+    h.update(&board_content_hash.to_le_bytes());
+    hash_string(&mut h, board_manifest_signature);
     hash_page_execution(&mut h, execution);
-    Ok(format!(
-        "{PAGE_EXECUTION_REVISION_PREFIX}{}",
-        h.finalize().to_hex()
-    ))
+    format!("{PAGE_EXECUTION_REVISION_PREFIX}{}", h.finalize().to_hex())
 }
 
 fn hash_string(h: &mut Hasher, value: &str) {
@@ -3695,6 +3757,81 @@ mod tests {
         assert_ne!(
             page_execution_revision(&changed_version, &execution).unwrap(),
             revision
+        );
+    }
+
+    #[test]
+    fn shared_page_revision_source_preserves_digest_and_validation() {
+        let board = Arc::new(page_board());
+        let execution = PrerunPageExecution::from_page(&board, &configured_page()).unwrap();
+        let source = PageExecutionRevisionSource::new(&board);
+        assert_eq!(*source.manifest(), PrerunManifest::from_board(&board));
+        assert!(Arc::ptr_eq(&source.manifest(), &source.manifest()));
+        assert!(source.content_hash.get().is_none());
+
+        let revision = source.revision(&board, &execution).unwrap();
+        assert_eq!(
+            revision,
+            page_execution_revision(&board, &execution).unwrap()
+        );
+        // Keep the pre-cache digest recipe independent of the production
+        // helper so both entry points cannot accidentally change together.
+        let mut original = Hasher::new();
+        original.update(b"flow-like/page-execution-revision");
+        original.update(&[2]);
+        hash_string(&mut original, &board.id);
+        original.update(&board.version.0.to_le_bytes());
+        original.update(&board.version.1.to_le_bytes());
+        original.update(&board.version.2.to_le_bytes());
+        original.update(&board.content_hash().to_le_bytes());
+        hash_string(&mut original, &PrerunManifest::from_board(&board).signature);
+        hash_page_execution(&mut original, &execution);
+        assert_eq!(revision, format!("per2_{}", original.finalize().to_hex()));
+        assert_eq!(source.content_hash.get(), Some(&board.content_hash()));
+        let mut reordered = execution.clone();
+        reordered.action_events.reverse();
+        assert_eq!(source.revision(&board, &reordered).unwrap(), revision);
+
+        let mut changed = execution.clone();
+        changed.special_events.load = Some(PrerunPageEventTarget {
+            node_id: "unload".into(),
+        });
+        assert_eq!(
+            source.revision(&board, &changed).unwrap(),
+            page_execution_revision(&board, &changed).unwrap()
+        );
+        assert_ne!(source.revision(&board, &changed).unwrap(), revision);
+
+        let mut invalid = execution.clone();
+        invalid.action_events[0].node_id = "load".into();
+        assert!(source.revision(&board, &invalid).is_err());
+        invalid = execution.clone();
+        invalid.page_id = "foreign-page".into();
+        assert!(source.revision(&board, &invalid).is_err());
+    }
+
+    #[test]
+    fn shared_page_revision_source_rejects_replaced_or_mutated_snapshot() {
+        let mut board = Arc::new(page_board());
+        let execution = PrerunPageExecution::from_page(&board, &configured_page()).unwrap();
+        let source = PageExecutionRevisionSource::new(&board);
+        let original = source.revision(&board, &execution).unwrap();
+        let replacement = Arc::new((*board).clone());
+        assert!(!source.matches(&replacement));
+        assert!(source.revision(&replacement, &execution).is_err());
+
+        Arc::make_mut(&mut board).name.push_str(" changed");
+        assert!(!source.matches(&board));
+        assert!(source.revision(&board, &execution).is_err());
+        assert!(
+            source.board.upgrade().is_none(),
+            "metadata must not retain the old board"
+        );
+        let refreshed = PageExecutionRevisionSource::new(&board);
+        assert_ne!(refreshed.revision(&board, &execution).unwrap(), original);
+        assert_eq!(
+            refreshed.revision(&board, &execution).unwrap(),
+            page_execution_revision(&board, &execution).unwrap()
         );
     }
 

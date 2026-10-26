@@ -264,7 +264,7 @@ pub fn draft_prerun_manifest_for_cached_board(
         return hit;
     }
 
-    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+    let manifest = cached.prerun_manifest();
     if let Some(cache_key) = cache_key {
         state
             .prerun_manifest_cache
@@ -400,7 +400,7 @@ pub async fn ensure_draft_prerun_manifest(
         return Ok(stored);
     }
 
-    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+    let manifest = cached.prerun_manifest();
     let written = SystemTime::now();
     persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
     cached
@@ -1594,7 +1594,7 @@ pub async fn load_board_prerun_manifest(
             {
                 Some(manifest) => manifest,
                 None => {
-                    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+                    let manifest = cached.prerun_manifest();
                     let storage_root = Path::from("apps").join(app_id.to_string());
                     let path = manifest_path(&storage_root, board_id, version);
                     persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
@@ -1702,7 +1702,7 @@ pub async fn load_prerun_manifest(
     let cached = state
         .master_board_shared(app_id, board_id, state, Some(version))
         .await?;
-    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+    let manifest = cached.prerun_manifest();
     let path = manifest_path(&storage_root, board_id, version);
     persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
     state.prerun_manifest_cache.insert(

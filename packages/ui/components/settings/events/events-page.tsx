@@ -88,6 +88,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/runtime-vars-utils";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import {
+	type IPin,
 	IPinType,
 	IVariableType,
 } from "@flow-like/flow-like-ui/lib/schema/flow/pin";
@@ -153,9 +154,8 @@ function caseKeyRowsOf(
 	return Object.entries(mappings ?? {}).map(([key, path]) => ({ key, path }));
 }
 
-function updatedAtMs(event: IEvent): number {
-	return parseDateValue(event.updated_at)?.getTime() ?? 0;
-}
+const updatedAtMs = (event: IEvent) =>
+	parseDateValue(event.updated_at)?.getTime() ?? 0;
 
 function errorMessage(error: unknown): string {
 	if (error instanceof Error) return error.message;
@@ -1390,11 +1390,11 @@ function EventConfiguration({
 
 		const currentPins = Object.values(node.pins ?? {})
 			.filter(
-				(pin) =>
+				(pin: IPin) =>
 					pin.pin_type === targetPinType &&
 					pin.data_type !== IVariableType.Execution,
 			)
-			.sort((a, b) => a.index - b.index);
+			.sort((a: IPin, b: IPin) => a.index - b.index);
 
 		const savedInputs = event.inputs ?? [];
 

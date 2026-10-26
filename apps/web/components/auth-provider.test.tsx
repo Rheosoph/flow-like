@@ -12,6 +12,7 @@ import { type Root, createRoot } from "react-dom/client";
 import type { AuthContextProps } from "react-oidc-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reportUnauthorized } from "../lib/auth-session";
+import { accountQueryDeps } from "../lib/account-query";
 
 const harness = vi.hoisted(() => {
 	let state = {} as AuthContextProps;
@@ -30,6 +31,7 @@ const harness = vi.hoisted(() => {
 				hub_profile: await this.userState.getProfile(),
 				execution_settings: { gpu_mode: false, max_context_size: 8192 },
 			})),
+			getAllSettingsProfiles: vi.fn(async () => []),
 		};
 		appState = {
 			getApps: vi.fn(
@@ -385,6 +387,92 @@ describe("WebAuthProvider", () => {
 		await vi.waitFor(() => expect(container.textContent).toBe("Saved app"));
 		expect(harness.backend.appState.getApps).toHaveBeenCalledTimes(1);
 		expect(harness.backend.userState.getProfile).toHaveBeenCalledTimes(1);
+	});
+
+	it("seeds the account-scoped sidebar reads before mounting the workspace", async () => {
+		await renderProvider();
+		// useDeveloperMode and account dialogs share the legacy getInfo key.
+		await queryClient.fetchQuery({
+			queryKey: ["getInfo"],
+			queryFn: () => harness.backend.userState.getInfo(),
+		});
+		const deps = accountQueryDeps(
+			harness.backend.userState,
+			harness.auth.get(),
+		);
+		const functions = [
+			"getInfo",
+			"getProfile",
+			"getSettingsProfile",
+			"getAllSettingsProfiles",
+		] as const;
+		for (const name of functions) {
+			const queryKey = [name, ...deps];
+			expect(queryClient.getQueryData(queryKey)).toBeDefined();
+			expect(queryClient.getQueryDefaults(queryKey).persister).toBeUndefined();
+			await queryClient.fetchQuery({
+				queryKey,
+				queryFn: () => harness.backend.userState[name](),
+			});
+		}
+		expect(harness.backend.userState.getInfo).toHaveBeenCalledTimes(1);
+		expect(harness.backend.userState.getProfile).toHaveBeenCalledTimes(1);
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledTimes(
+			1,
+		);
+		expect(
+			harness.backend.userState.getAllSettingsProfiles,
+		).toHaveBeenCalledTimes(1);
+		expect(
+			queryClient.getQueryData(["getAllSettingsProfiles", ...deps]),
+		).toEqual([queryClient.getQueryData(["getSettingsProfile", ...deps])]);
+	});
+
+	it("refreshes the same account's seeded reads after signing out and back in", async () => {
+		await renderProvider();
+		const deps = accountQueryDeps(
+			harness.backend.userState,
+			harness.auth.get(),
+		);
+		await act(async () => harness.auth.get().removeUser());
+		expect(container.textContent).toBe("Sign in required");
+		harness.backend.userState.getInfo.mockResolvedValueOnce({
+			id: "updated-user",
+		});
+		await act(async () =>
+			harness.auth.set({ user: user("new-session"), isAuthenticated: true }),
+		);
+		expect(container.textContent).toBe("App content");
+		expect(harness.backend.userState.getInfo).toHaveBeenCalledTimes(2);
+		expect(harness.backend.userState.getSettingsProfile).toHaveBeenCalledTimes(
+			2,
+		);
+		expect(queryClient.getQueryData(["getInfo", ...deps])).toEqual({
+			id: "updated-user",
+		});
+		expect(queryClient.getQueryData(["getInfo"])).toEqual({
+			id: "updated-user",
+		});
+	});
+
+	it("discards a pending pre-login user response before seeding shared UI hooks", async () => {
+		let finishOld!: (info: { id: string }) => void;
+		const observer = new QueryObserver(queryClient, {
+			queryKey: ["getInfo"],
+			queryFn: () =>
+				new Promise<{ id: string }>((resolve) => {
+					finishOld = resolve;
+				}),
+		});
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await renderProvider();
+			await act(async () => finishOld({ id: "previous-account" }));
+			expect(queryClient.getQueryData(["getInfo"])).toEqual({ id: "user-1" });
+			expect(harness.backend.userState.getInfo).toHaveBeenCalledOnce();
+		} finally {
+			unsubscribe();
+		}
 	});
 
 	it("bypasses persisted empty lists even when the first signed-in request retries after mount", async () => {

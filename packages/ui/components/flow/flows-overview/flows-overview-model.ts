@@ -50,9 +50,17 @@ export interface IFlowRow {
 	nodeTotal: number;
 	/** Joined from Events on `board_id` — never a property of the board. */
 	bindings: IEvent[];
-	/** Owned by the board via `page_ids`. */
+	/** Owned by the board via `page_ids`, plus every page one of its bindings serves. */
 	pages: PageListItem[];
+	/** Pages deleted with the board — bound pages owned elsewhere survive it. */
+	ownedPageCount: number;
 	versionLabel: string;
+}
+
+export interface IPageIndex {
+	appId: string;
+	byBoard: Map<string, PageListItem[]>;
+	byId: Map<string, PageListItem>;
 }
 
 const entryPointOf = (node: IBoardEntryNode): IFlowEntryPoint => ({
@@ -72,21 +80,52 @@ export function eventsForBoard(events: IEvent[], boardId: string): IEvent[] {
 		.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function groupPagesByBoard(
-	pages: PageListItem[],
-): Map<string, PageListItem[]> {
-	const grouped = new Map<string, PageListItem[]>();
+const byName = (a: PageListItem, b: PageListItem) =>
+	a.name.localeCompare(b.name);
+
+export function indexPages(appId: string, pages: PageListItem[]): IPageIndex {
+	const byBoard = new Map<string, PageListItem[]>();
+	const byId = new Map<string, PageListItem>();
 	for (const page of pages) {
+		byId.set(page.pageId, page);
 		if (!page.boardId) continue;
-		const bucket = grouped.get(page.boardId);
+		const bucket = byBoard.get(page.boardId);
 		if (bucket) bucket.push(page);
-		else grouped.set(page.boardId, [page]);
+		else byBoard.set(page.boardId, [page]);
 	}
-	for (const bucket of grouped.values()) {
-		bucket.sort((a, b) => a.name.localeCompare(b.name));
-	}
-	return grouped;
+	for (const bucket of byBoard.values()) bucket.sort(byName);
+	return { appId, byBoard, byId };
 }
+
+/**
+ * A page event names its board apart from the board that owns the page, so a route
+ * bound to this board on Events can serve a page another board owns. A bound page the
+ * listing does not carry is still named, as unavailable. `pages` is undefined until
+ * the listing loads, so nothing is flagged unavailable before it can be looked up.
+ */
+export function pagesForBoard(
+	boardId: string,
+	bindings: IEvent[],
+	pages: IPageIndex | undefined,
+): PageListItem[] {
+	if (!pages) return [];
+	const byId = new Map(
+		(pages.byBoard.get(boardId) ?? []).map((page) => [page.pageId, page]),
+	);
+	for (const event of bindings) {
+		const pageId = event.default_page_id;
+		if (pageId && !byId.has(pageId)) byId.set(pageId, boundPage(pages, pageId));
+	}
+	return [...byId.values()].sort(byName);
+}
+
+const boundPage = (pages: IPageIndex, pageId: string): PageListItem =>
+	pages.byId.get(pageId) ?? {
+		appId: pages.appId,
+		pageId,
+		name: pageId,
+		unavailable: true,
+	};
 
 /**
  * A page is only reachable through a route event that names it, so the path
@@ -112,12 +151,13 @@ export function buildRouteByPage(
 export function buildFlowRow(
 	board: IBoardSummary,
 	events: IEvent[],
-	pagesByBoard: Map<string, PageListItem[]>,
+	pages: IPageIndex | undefined,
 ): IFlowRow {
 	const scores = board.scores;
 	const worst = worstScore(scores);
 	const metrics = board.metrics;
 	const scoredNodeCount = board.scoredNodeCount ?? 0;
+	const bindings = eventsForBoard(events, board.id);
 	return {
 		board,
 		scores,
@@ -156,8 +196,9 @@ export function buildFlowRow(
 			total: metrics?.layerCounts?.total ?? board.layerCount,
 		} as ILayerCounts,
 		nodeTotal: metrics?.totalNodeCount ?? board.nodeCount,
-		bindings: eventsForBoard(events, board.id),
-		pages: pagesByBoard.get(board.id) ?? [],
+		bindings,
+		pages: pagesForBoard(board.id, bindings, pages),
+		ownedPageCount: pages?.byBoard.get(board.id)?.length ?? 0,
 		versionLabel: boardVersionLabel(board),
 	};
 }
@@ -165,12 +206,12 @@ export function buildFlowRow(
 export function buildFlowRows(
 	boards: IBoardSummary[],
 	events: IEvent[],
-	pagesByBoard: Map<string, PageListItem[]>,
+	pages: IPageIndex | undefined,
 ): IFlowRow[] {
 	const unique = Array.from(
 		new Map(boards.map((board) => [board.id, board])).values(),
 	);
-	return unique.map((board) => buildFlowRow(board, events, pagesByBoard));
+	return unique.map((board) => buildFlowRow(board, events, pages));
 }
 
 export const BAND_ORDER: IScoreBand[] = [

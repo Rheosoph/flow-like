@@ -65,11 +65,13 @@ function BindingPill({
 }>) {
 	const { t } = useTranslation("flow");
 	const tones: Record<typeof tone, string> = {
-		paused: `border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400`,
-		pinned: `border-border bg-muted text-muted-foreground`,
-		latest: `border-border/70 bg-muted/60 text-muted-foreground`,
-		canary: `border-primary/40 bg-primary/10 text-primary`,
-		public: `border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400`,
+		paused:
+			"border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+		pinned: "border-border bg-muted text-muted-foreground",
+		latest: "border-border/70 bg-muted/60 text-muted-foreground",
+		canary: "border-primary/40 bg-primary/10 text-primary",
+		public:
+			"border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
 	};
 	return <span className={cn(PILL_BASE, tones[tone])}>{children}</span>;
 }

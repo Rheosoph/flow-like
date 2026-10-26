@@ -31,7 +31,7 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const [command = "help", ...arguments_] = process.argv.slice(2);
 if (command === "help" || command === "--help") {
 	console.log(
-		"node tests/widget-action-stack/web.mjs prepare|build|serve|dev [--state /tmp/flow-widget-stack] [--port 3440] [--api-origin http://127.0.0.1:8440]\nBuild and serve the real apps/web in an isolated copy. Production uses its static export; dev is for smoke checks only. Existing source .next/out directories are untouched.",
+		"node tests/widget-action-stack/web.mjs prepare|build|serve|dev [--state /tmp/flow-widget-stack] [--source-root CHECKOUT] [--port 3440] [--api-origin http://127.0.0.1:8440]\nBuild and serve the real apps/web in an isolated copy. Production uses its static export; dev is for smoke checks only. Existing source .next/out directories are untouched.",
 	);
 	process.exit(0);
 }
@@ -43,6 +43,7 @@ const options = {
 	state: "/tmp/flow-widget-stack",
 	port: "3440",
 	"api-origin": "http://127.0.0.1:8440",
+	"source-root": repo,
 };
 for (let index = 0; index < arguments_.length; index++) {
 	const key = arguments_[index].replace(/^--/, "");
@@ -78,7 +79,13 @@ const workspace = join(
 	repo,
 	`tmp/widget-action-stack/web-source${stageSuffix}`,
 );
-const source = join(repo, "apps/web");
+const sourceRoot = await realpath(resolve(options["source-root"]));
+const repositoryRoot = await realpath(repo);
+assert.ok(
+	sourceRoot === repositoryRoot || sourceRoot.startsWith(`${repositoryRoot}${sep}`),
+	"Keep copied frontend sources inside this workspace so Turbopack can resolve installed dependencies",
+);
+const source = join(sourceRoot, "apps/web");
 const stage = join(workspace, "apps/web");
 const marker = join(workspace, "benchmark-stage.json");
 const origin = `http://127.0.0.1:${port}`;
@@ -150,9 +157,9 @@ async function prepare() {
 				),
 	});
 	for (const [name, target] of [
-		["packages", join(repo, "packages")],
-		["node_modules", join(repo, "node_modules")],
-		["apps/desktop", join(repo, "apps/desktop")],
+		["packages", join(sourceRoot, "packages")],
+		["node_modules", join(sourceRoot, "node_modules")],
+		["apps/desktop", join(sourceRoot, "apps/desktop")],
 	]) {
 		const link = join(workspace, name);
 		if (!existsSync(link)) await symlink(target, link, "dir");
@@ -199,6 +206,9 @@ async function sourceIdentity() {
 		"packages/craft-viewers",
 		"packages/device-crypto",
 		"packages/widget-sdk",
+		"packages/core/a2ui-schema/src",
+		"packages/ast/flow.d",
+		"apps/desktop/src-tauri/tauri.conf.json",
 		"package.json",
 		"bun.lock",
 	];
@@ -228,7 +238,7 @@ async function sourceIdentity() {
 				? join(stage, "benchmark-source-config.mjs")
 				: path.startsWith("apps/web/")
 					? join(stage, relative("apps/web", path))
-					: join(repo, path);
+					: join(sourceRoot, path);
 		if (!existsSync(file)) continue;
 		digest
 			.update(path)
@@ -242,7 +252,7 @@ async function sourceIdentity() {
 		.update(await readFile(join(stage, "next.config.mjs")))
 		.update("\0");
 	return {
-		hashVersion: 2,
+		hashVersion: 3,
 		scope:
 			"Git-visible app and shared-package sources, staged Next configuration, package.json, and bun.lock. Environment files, generated next-env declarations, ignored generated assets, installed dependency contents, and build artifacts are excluded.",
 		sha256: digest.digest("hex"),

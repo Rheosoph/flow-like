@@ -16,6 +16,7 @@ import { usePathname } from "next/navigation";
 import { UserManager, type UserManagerSettings } from "oidc-client-ts";
 import { createContext, useContext, useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "react-oidc-context";
+import { accountQueryDeps } from "../lib/account-query";
 import { get } from "../lib/api";
 import { getWebOidcSettings } from "../lib/oidc-settings";
 import { getPublicApiUrl, getPublicWebConfig } from "../lib/public-config";
@@ -269,12 +270,39 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		(async () => {
 			const MAX_RETRIES = 5;
 			const BASE_DELAY = 500;
+			const queryDeps = accountQueryDeps(backend.userState, auth);
+			const scopedKey = (fn: { name: string }) => [
+				fn.name || "backendFn",
+				...queryDeps,
+			];
+			const infoKey = [backend.userState.getInfo.name || "backendFn"];
+			for (const queryKey of [
+				infoKey,
+				...[
+					backend.userState.getInfo,
+					backend.userState.getProfile,
+					backend.userState.getSettingsProfile,
+					backend.userState.getAllSettingsProfiles,
+				].map(scopedKey),
+			]) {
+				queryClient.setQueryDefaults(queryKey, {
+					...queryClient.getQueryDefaults(queryKey),
+					persister: undefined,
+				});
+			}
 
 			for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 				if (cancelled) return;
 
 				try {
-					await backend.userState.getInfo();
+					const info = await backend.userState.getInfo();
+					if (cancelled) return;
+					await queryClient.cancelQueries({ queryKey: infoKey });
+					if (cancelled) return;
+					// Shared UI hooks still observe the legacy key. Seed it from this
+					// session before mounting them, as with the profile projections.
+					queryClient.setQueryData(infoKey, info);
+					queryClient.setQueryData(scopedKey(backend.userState.getInfo), info);
 					break;
 				} catch (error) {
 					if (error instanceof ApiResponseError && error.status === 401) return;
@@ -290,12 +318,18 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 			if (cancelled) return;
 
 			try {
-				const settingsProfile = await backend.userState.getSettingsProfile();
+				const [settingsProfile, allProfiles] = await Promise.all([
+					backend.userState.getSettingsProfile(),
+					backend.userState.getAllSettingsProfiles(),
+				]);
 				if (cancelled) return;
 				if (settingsProfile && backend instanceof WebBackend) {
 					const profileKey = [backend.userState.getProfile.name || "backendFn"];
 					const settingsKey = [
 						backend.userState.getSettingsProfile.name || "backendFn",
+					];
+					const allProfilesKey = [
+						backend.userState.getAllSettingsProfiles.name || "backendFn",
 					];
 					const appsKey = [backend.appState.getApps.name || "backendFn"];
 					const groupsKey = [backend.appState.getMyGroups.name || "backendFn"];
@@ -310,14 +344,27 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 					// Public callback pages can start these reads before auth is ready.
 					// Cancel them so a late signed-out response cannot replace this session.
 					await Promise.all(
-						[profileKey, settingsKey, appsKey, groupsKey].map((queryKey) =>
-							queryClient.cancelQueries({ queryKey }),
+						[profileKey, settingsKey, allProfilesKey, appsKey, groupsKey].map(
+							(queryKey) => queryClient.cancelQueries({ queryKey }),
 						),
 					);
 					if (cancelled) return;
 					backend.pushProfile(settingsProfile.hub_profile);
 					queryClient.setQueryData(profileKey, settingsProfile.hub_profile);
 					queryClient.setQueryData(settingsKey, settingsProfile);
+					queryClient.setQueryData(
+						scopedKey(backend.userState.getProfile),
+						settingsProfile.hub_profile,
+					);
+					queryClient.setQueryData(
+						scopedKey(backend.userState.getSettingsProfile),
+						settingsProfile,
+					);
+					// getProfile may create the first profile while the shared list was empty.
+					queryClient.setQueryData(
+						scopedKey(backend.userState.getAllSettingsProfiles),
+						allProfiles.length ? allProfiles : [settingsProfile],
+					);
 					// Bypass lazy persistence as well as fresh in-memory data for login.
 					// Start before mounting the library; other pages need not wait for apps.
 					void Promise.allSettled([

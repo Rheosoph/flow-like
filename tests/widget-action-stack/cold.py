@@ -6,8 +6,10 @@ import contextlib
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
+import time
 
 import compare
 import run
@@ -34,6 +36,60 @@ def trial_config(source):
 
 def trial_order(pair):
     return ("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline")
+
+
+def frontend_identity(state):
+    stage = json.loads((state / "web-stage.json").read_text())
+    build = json.loads((Path(stage["stage"]).parents[1] / "build.json").read_text())
+    identity = {"sourceSha256": build["source"]["sha256"], "buildId": build["buildId"]}
+    if not all(isinstance(value, str) and value for value in identity.values()):
+        raise ValueError("The production frontend has incomplete build provenance")
+    return identity
+
+
+def completed_run_ids(directory):
+    report = json.loads((directory / "results.json").read_text())
+    identifiers = set()
+    for entry in (*report.get("navigations", []), *report.get("samples", []), *report.get("resets", [])):
+        if entry.get("executionSuccessVerified") is not True:
+            continue
+        for execution in entry.get("execution", []):
+            identifier = execution.get("runId")
+            if execution.get("success") is True and isinstance(identifier, str):
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identifier):
+                    raise ValueError("Unexpected benchmark run identifier")
+                identifiers.add(identifier)
+    if not identifiers:
+        raise ValueError("No verified run identifiers available for accounting drain")
+    return sorted(identifiers)
+
+
+def wait_for_accounting(state, directory, timeout):
+    """Observe committed completion before stopping processes; this is outside UI timing."""
+    identifiers = completed_run_ids(directory)
+    values = ",".join(f"('{identifier}')" for identifier in identifiers)
+    query = f'''SELECT count(*) FROM (VALUES {values}) AS expected(run_id)
+      WHERE EXISTS (SELECT 1 FROM "QuotaOperation" q
+                    WHERE q.id = expected.run_id AND q.status = 'finalized')
+        AND EXISTS (SELECT 1 FROM "ComputeAttempt" c
+                    WHERE c."operationId" = expected.run_id AND c.role = 'executor'
+                      AND c.status = 'completed' AND c."measuredDurationMs" IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM "ComputeAttempt" c
+                        WHERE c."operationId" = expected.run_id AND c.role = 'executor'
+                          AND c.status = 'started');'''
+    started = time.monotonic()
+    deadline = started + min(timeout, 60)
+    polls = 0
+    while time.monotonic() < deadline:
+        result = stack.compose(state, "exec", "-T", "postgres", "psql", "-U", "widget_bench",
+                               "-d", "widget_bench", "-tA", "-v", "ON_ERROR_STOP=1", "-c", query,
+                               capture_output=True, text=True, timeout=min(10, max(.1, deadline - time.monotonic())))
+        polls += 1
+        if result.stdout.strip() == str(len(identifiers)):
+            return {"status": "confirmed", "runIds": identifiers, "polls": polls,
+                    "durationMs": round((time.monotonic() - started) * 1000, 3)}
+        time.sleep(.1)
+    raise ValueError("Successful execution did not finish persisted quota/compute accounting before shutdown")
 
 
 def assess_trial(directory, mode):
@@ -71,6 +127,8 @@ def run_trial(args, suite, mode, pair, position, variant, config):
     write_json(directory / "cold-trial.json", record)
     settings = argparse.Namespace(**vars(args))
     settings.binary = Path(suite["binaries"][variant]["path"])
+    settings.web_state = getattr(args, variant + "_web_state", None)
+    settings.web_source_root = getattr(args, variant + "_web_source_root", None)
     settings.config = directory / "browser-config.json"
     settings.output = directory
     write_json(settings.config, config)
@@ -80,6 +138,8 @@ def run_trial(args, suite, mode, pair, position, variant, config):
         with (directory / "driver.log").open("w") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             if run.file_hash(settings.binary) != suite["binaries"][variant]["sha256"]:
                 raise ValueError(f"{variant} binary changed after the suite began")
+            if suite.get("frontends") and frontend_identity(settings.web_state or args.state) != suite["frontends"][variant]:
+                raise ValueError(f"{variant} frontend changed after the suite began")
             services = run.Services(settings)
             services.log_directory = directory / "logs"
             services.diagnostics["logs_directory"] = str(services.log_directory)
@@ -94,6 +154,7 @@ def run_trial(args, suite, mode, pair, position, variant, config):
             def restart():
                 record["restartRequestedAfterBootstrap"] = True
                 write_json(directory / "cold-trial.json", record)
+                record["accountingBeforeRestart"] = wait_for_accounting(args.state, directory, args.timeout)
                 record["restart"] = services.restart_backend()
                 write_json(directory / "cold-trial.json", record)
 
@@ -101,6 +162,12 @@ def run_trial(args, suite, mode, pair, position, variant, config):
             run.benchmark(settings, phase_handler=restart if mode == "action" else None, driver_output=log)
             record["wrapperExitCode"] = 0
             record["issues"].extend(assess_trial(directory, mode))
+            if suite.get("frontends"):
+                build = json.loads((directory / "results.json").read_text())["web"]["build"]
+                if {"sourceSha256": build["source"]["sha256"], "buildId": build["buildId"]} != suite["frontends"][variant]:
+                    record["issues"].append("Served frontend does not match the selected variant")
+            if not record["issues"]:
+                record["accountingBeforeStop"] = wait_for_accounting(args.state, directory, args.timeout)
     except BaseException as error:
         record["wrapperExitCode"] = error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
         record["issues"].append(f"{type(error).__name__}: {error}")
@@ -143,6 +210,9 @@ def parser():
     command.add_argument("--state", type=Path, default=stack.DEFAULT_STATE)
     command.add_argument("--baseline", type=Path, required=True)
     command.add_argument("--candidate", type=Path, required=True)
+    for variant in ("baseline", "candidate"):
+        command.add_argument(f"--{variant}-web-state", type=Path)
+        command.add_argument(f"--{variant}-web-source-root", type=Path)
     command.add_argument("--config", type=Path)
     command.add_argument("--trials", type=int, default=12, help="Paired cycles per mode, alternating AB and BA")
     command.add_argument("--modes", choices=("navigation", "action"), nargs="+", default=["navigation", "action"])
@@ -166,6 +236,11 @@ def main(argv=None):
     if len(set(args.modes)) != len(args.modes):
         raise ValueError("Each mode may appear only once")
     args.state, args.output = args.state.resolve(), args.output.resolve()
+    for variant in ("baseline", "candidate"):
+        for option in ("web_state", "web_source_root"):
+            name = f"{variant}_{option}"
+            if getattr(args, name) is not None:
+                setattr(args, name, getattr(args, name).resolve())
     if (args.state / "processes.json").exists():
         raise ValueError("The fixture already owns processes; stop them before running cold trials")
     if args.output.exists() and any(args.output.iterdir()):
@@ -178,6 +253,8 @@ def main(argv=None):
         if not binary.is_file():
             raise ValueError(f"{variant} binary does not exist: {binary}")
         binaries[variant] = {"path": str(binary), "sha256": run.file_hash(binary)}
+    frontends = {variant: frontend_identity(getattr(args, variant + "_web_state") or args.state)
+                 for variant in ("baseline", "candidate")} if args.web_mode == "production" else None
     args.output.mkdir(mode=0o700, parents=True, exist_ok=True)
     suite = {
         "schemaVersion": 1, "mode": "paired-process-cold", "status": "running", "startedAt": timestamp(),
@@ -186,6 +263,7 @@ def main(argv=None):
                           "workerThreads": args.workers, "executorSlots": args.executor_slots,
                           "readinessPollMs": args.readiness_poll_ms, "trace": args.trace},
         "binaries": binaries,
+        "frontends": frontends,
         "boundaries": {
             "navigation": "Fresh owned API/runtime before browser navigation; normal bootstrap and onLoad run first",
             "action": "Bootstrap terminal-verified, then owned API/runtime restarted before the first click; browser document retained",
@@ -193,6 +271,7 @@ def main(argv=None):
             "readinessPollingIntervalMs": args.readiness_poll_ms,
             "persistentCaches": "Storage, database, Redis, OS and filesystem caches retained; no disk or database flushing",
             "compute": "Local HTTP production routers with compute accounting; no Lambda process/container/network startup envelope",
+            "accounting": "Read-only local database polling confirms quota finalization and completed compute attempts before backend restart/shutdown; excluded from UI clocks",
         },
         "trials": [],
     }

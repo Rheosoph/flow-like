@@ -1668,6 +1668,7 @@
 		"viewVersions": ""
 	},
 	"logIn": "Anmelden",
+	"loginExpiredPleaseTryAgain": "",
 	"logOut": "Abmelden",
 	"longDescription": "Lange Beschreibung",
 	"longRunning": "Langläufer",
@@ -2746,6 +2747,8 @@
 	"signIn": "Anmelden",
 	"signIn2": "Anmelden",
 	"signInAgainToSeeThisPackage": "Melde dich erneut an, um dieses Paket zu sehen.",
+	"signInCouldNotComplete": "",
+	"signInFailedTryAgain": "",
 	"signingYouIn": "Du wirst angemeldet...",
 	"signInLink": {
 		"copyFailed": "",
@@ -3122,6 +3125,7 @@
 	"typeToSearchNodesLayersPinsVariables": "Tippe, um Nodes, Ebenen, Pins und Variablen zu durchsuchen...",
 	"typeToSearchNodesLayersPinValuesAndComments": "Tippe, um Nodes, Ebenen, Pin-Werte und Kommentare zu durchsuchen...",
 	"udpSockets": "UDP-Sockets",
+	"unableToSignIn": "",
 	"undeclaredEvents": "",
 	"understandWhatStudioKeepsOnThisDeviceAndTakeControlOfIt": "Sieh nach, was Studio auf diesem Gerät speichert, und behalte die Kontrolle darüber.",
 	"unencryptedExport": "Unverschlüsselter Export",

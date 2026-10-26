@@ -144,6 +144,7 @@
 	"eventId": "ID del evento",
 	"eventTypesWithoutInterfaceSupportHandleDataAutomaticallyWithoutRequiringUserInteraction": "Los tipos de evento sin soporte de interfaz gestionan los datos automáticamente sin requerir interacción del usuario.",
 	"exampleMessages": "Mensajes de ejemplo",
+	"exampleMessagesHelp": "",
 	"exampleRequest": "Solicitud de ejemplo",
 	"executionTarget": "Destino de ejecución",
 	"exposeThisEndpointPublicly": "Exponer este endpoint públicamente",

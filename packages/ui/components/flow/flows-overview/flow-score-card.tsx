@@ -321,7 +321,7 @@ function PageRow({
 					key={page.pageId}
 					page={page}
 					route={routeByPage.get(page.pageId)}
-					href={pageHref?.(page.pageId, row.board.id)}
+					href={pageHref?.(page.pageId, page.boardId ?? row.board.id)}
 				/>
 			))}
 			{rest > 0 ? (
@@ -587,7 +587,7 @@ export function FlowScoreCard({
 												"This removes the Flow and the page inside it.",
 											defaultValue_other:
 												"This removes the Flow and the {{count}} pages inside it.",
-											count: row.pages.length,
+											count: row.ownedPageCount,
 										})}{" "}
 										{row.bindings.length > 0
 											? t("countBoundEventsWillStopFiring", {

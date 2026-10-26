@@ -40,6 +40,8 @@ def process_identities(snapshot, label, issues):
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or not started:
             issues.append(f"{label}: missing {name} process identity")
         identities[name] = (name, pid, started)
+    if len(identities) == 2 and len({value[1:] for value in identities.values()}) != 2:
+        issues.append(f"{label}: API/runtime share one process identity")
     if set(identities) != {"api", "runtime"}:
         issues.append(f"{label}: API/runtime process identities required")
     return identities
@@ -90,6 +92,7 @@ def analyze(directory):
     entries, bundles, seen_processes, references = {}, {}, set(), {}
     requests = defaultdict(Counter)
     duplicate_requests = []
+    frontend_versions = {}
     for trial in trials:
         mode, pair, variant = trial.get("mode"), trial.get("pair"), trial.get("variant")
         label = f"{mode}/{pair}/{variant}"
@@ -106,9 +109,10 @@ def analyze(directory):
         if trial.get("status") != "passed" or trial.get("wrapperExitCode") != 0 or trial.get("issues"):
             issues.append(f"{label}: wrapper failed or recorded issues")
         cleanup = trial.get("cleanup", {})
-        if cleanup.get("status") != "ok" or cleanup.get("ownedServiceProcessesExited") is not True:
+        if (cleanup.get("status") != "ok" or cleanup.get("ownedServiceProcessesExited") is not True
+                or cleanup.get("processInventoryRemoved") is not True):
             issues.append(f"{label}: incomplete cleanup")
-        initial = process_identities(trial.get("initialStartup", {}).get("processes"), label, issues)
+        initial = process_identities((trial.get("initialStartup") or {}).get("processes"), label, issues)
         for identity in initial.values():
             if identity in seen_processes:
                 issues.append(f"{label}: reused process identity")
@@ -143,9 +147,45 @@ def analyze(directory):
         for name, expected in (("samples", 1), ("warmup", 0), ("navigations", 1), ("concurrency", 1)):
             if configuration.get(name) != expected:
                 issues.append(f"{label}: {name} must equal {expected}")
+        for field, setting in (("worker_threads", "workerThreads"), ("executor_slots", "executorSlots"),
+                               ("trace_requested", "trace")):
+            if setting not in config or bundle["manifest"].get(field) != config[setting]:
+                issues.append(f"{label}: suite {setting} differs from runtime manifest")
+        for phase, category in (("bootstrap", "bootstrap"), ("bootstrap", "prerun"), ("bootstrap", "invoke"),
+                                ("action", "prerun"), ("action", "invoke")):
+            records = [record for record in bundle["report"].get("network", [])
+                       if record.get("phase") == phase and record.get("category") == category]
+            if not records or any(not compare.finite(record.get("totalMs")) for record in records):
+                issues.append(f"{label}: missing {phase}/{category} HTTP timing evidence")
+        if mode == "navigation" and bundle["report"].get("coldBoundary") is not None:
+            issues.append(f"{label}: navigation report unexpectedly used a cold-action boundary")
+        if bundle["manifest"].get("readiness_poll_ms") != config.get("readinessPollMs"):
+            issues.append(f"{label}: readiness polling configuration mismatch")
+        def run_ids(entries):
+            return {execution.get("runId") for entry in entries for execution in entry.get("execution", [])
+                    if execution.get("success") is True and execution.get("runId")}
+        report = bundle["report"]
+        navigation_ids = run_ids(report.get("navigations", []))
+        all_ids = navigation_ids | run_ids(report.get("samples", [])) | run_ids(report.get("resets", []))
+        drains = [("accountingBeforeStop", all_ids)]
+        if mode == "action":
+            drains.append(("accountingBeforeRestart", navigation_ids))
+        for field, expected_ids in drains:
+            drain = trial.get(field, {})
+            if (not expected_ids or drain.get("status") != "confirmed"
+                    or set(drain.get("runIds", [])) != expected_ids
+                    or not compare.finite(drain.get("durationMs")) or drain.get("polls", 0) < 1):
+                issues.append(f"{label}: unverified {field}")
         expected_hash = suite.get("binaries", {}).get(variant, {}).get("sha256")
         if not expected_hash or bundle["manifest"].get("binary_sha256") != expected_hash:
             issues.append(f"{label}: binary provenance mismatch")
+        build = bundle["report"].get("web", {}).get("build", {})
+        frontend = {"sourceSha256": build.get("source", {}).get("sha256"), "buildId": build.get("buildId")}
+        if suite.get("frontends") and frontend != suite["frontends"].get(variant):
+            issues.append(f"{label}: selected frontend provenance mismatch")
+        if variant in frontend_versions and frontend != frontend_versions[variant]:
+            issues.append(f"{label}: frontend changed within one variant")
+        frontend_versions[variant] = frontend
         if mode == "action":
             boundary = bundle["report"].get("coldBoundary", {})
             if (boundary.get("status") != "confirmed" or boundary.get("mode") != "cold-action"
@@ -153,6 +193,8 @@ def analyze(directory):
                     or boundary.get("controllerRestartConfirmed") is not True
                     or boundary.get("documentPreserved") is not True
                     or boundary.get("unexpectedExecutionRequests") != 0
+                    or boundary.get("unexpectedApiRequests") != 0
+                    or boundary.get("requestsCheckedThroughClick") is not True
                     or trial.get("restartRequestedAfterBootstrap") is not True):
                 issues.append(f"{label}: unverified cold-action boundary")
         if mode in references:
@@ -181,7 +223,7 @@ def analyze(directory):
                 continue
             try:
                 first, second = [trial_metrics(entries[key], bundles[key]) for key in keys]
-                for name in first.keys() | second.keys():
+                for name in dict.fromkeys((*first, *second)):
                     a, b = first.get(name), second.get(name)
                     if not compare.finite(a) or not compare.finite(b):
                         issues.append(f"{mode}/{pair}: missing {name} timing")
@@ -190,6 +232,11 @@ def analyze(directory):
             except (KeyError, IndexError, TypeError) as error:
                 issues.append(f"{mode}/{pair}: invalid metric data: {error}")
         metrics[mode] = {name: paired_summary(values) for name, values in pairs.items()}
+    if issues:
+        for measurements in metrics.values():
+            for metric in measurements.values():
+                metric["pairedMedianDeltaMs"] = None
+                metric["pairedMedianDelta95CiMs"] = None
     return {"schemaVersion": 1, "status": "passed" if not issues else "invalid", "issues": issues,
             "configuration": config, "boundaries": suite.get("boundaries", {}), "metrics": metrics,
             "requestCounts": {"/".join(key): dict(value) for key, value in requests.items()},

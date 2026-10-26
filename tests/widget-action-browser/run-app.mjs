@@ -8,6 +8,7 @@ import puppeteer from "puppeteer";
 import { installAppMeasurement, requestCategory } from "./app-measurement.mjs";
 import {
 	assertColdActionConfiguration,
+	coldBoundaryRequests,
 	waitForColdActionController,
 } from "./cold-action-control.mjs";
 import { observeExecution } from "./execution-evidence.mjs";
@@ -32,7 +33,13 @@ for (let index = 2; index < process.argv.length; index++) {
 		continue;
 	}
 	assert.ok(
-		["config", "app-url", "cdp-url", "output", "cold-action-timeout-ms"].includes(key),
+		[
+			"config",
+			"app-url",
+			"cdp-url",
+			"output",
+			"cold-action-timeout-ms",
+		].includes(key),
 		`Unknown option --${key}`,
 	);
 	args[key] = inline ?? process.argv[++index];
@@ -179,7 +186,9 @@ const report = {
 		"When configured, a read-only reset control returns to the person cards between actions. Reset DOM/frame timing and successful terminal execution are recorded separately; every reset finishes before the next action burst is scheduled.",
 		"CDP also copies invoke response bytes to inspect terminal metadata. The application consumes its original stream unchanged; terminal validation happens after the browser latency clocks have stopped.",
 		...(args.coldActionControl
-			? ["After successful bootstrap, cold-action control waits for the local runner to confirm its API/runtime restart before clicking in the same document. The runner records process identity and readiness evidence separately. Other infrastructure, browser state and storage artifacts remain warm."]
+			? [
+					"After successful bootstrap, cold-action control waits for the local runner to confirm its API/runtime restart before clicking in the same document. The runner records process identity and readiness evidence separately. Other infrastructure, browser state and storage artifacts remain warm.",
+				]
 			: []),
 	],
 	navigations: [],
@@ -596,6 +605,7 @@ async function coldActionBoundary(worker, navigation) {
 		navigation,
 		bootstrapExecutionSuccessVerified: true,
 		startedAt: new Date().toISOString(),
+		startedAtUnixMs: Date.now(),
 		documentTimeOriginMs,
 	};
 	report.coldBoundary = boundary;
@@ -608,23 +618,23 @@ async function coldActionBoundary(worker, navigation) {
 		boundary.documentPreserved =
 			(await worker.page.evaluate(() => performance.timeOrigin)) ===
 			documentTimeOriginMs;
-		assert.ok(boundary.documentPreserved, "The browser navigated during the cold-action boundary");
-		const requests = report.network.filter(
-			(record) => record.worker === worker.id && record.phase === "cold-boundary",
+		assert.ok(
+			boundary.documentPreserved,
+			"The browser navigated during the cold-action boundary",
 		);
-		boundary.networkRequestCategories = Object.fromEntries(
-			[...new Set(requests.map((record) => record.category))].map((category) => [
-				category,
-				requests.filter((record) => record.category === category).length,
-			]),
+		Object.assign(
+			boundary,
+			coldBoundaryRequests(
+				report.network,
+				worker.id,
+				boundary.startedAtUnixMs,
+				Date.now(),
+			),
 		);
-		boundary.unexpectedExecutionRequests = requests.filter((record) =>
-			["bootstrap", "prerun", "invoke"].includes(record.category),
-		).length;
 		assert.equal(
-			boundary.unexpectedExecutionRequests,
+			boundary.unexpectedApiRequests,
 			0,
-			"The app requested workflow preparation or execution during the cold-action boundary",
+			"The app issued an API request during the cold-action boundary",
 		);
 		boundary.status = "confirmed";
 	} catch (error) {
@@ -634,6 +644,32 @@ async function coldActionBoundary(worker, navigation) {
 	} finally {
 		boundary.elapsedMs = performance.now() - started;
 		await save();
+	}
+}
+function validateColdBoundaryThroughClick(sample) {
+	if (!args.coldActionControl || sample.status !== "ok") return;
+	const boundary = report.coldBoundary;
+	if (sample.browserTimeOriginMs !== boundary.documentTimeOriginMs) {
+		boundary.documentPreserved = false;
+		boundary.status = "failed";
+		boundary.error = "The measured cold action ran in a different document";
+		throw new Error(boundary.error);
+	}
+	Object.assign(
+		boundary,
+		coldBoundaryRequests(
+			report.network,
+			boundary.worker,
+			boundary.startedAtUnixMs,
+			sample.browserTimeOriginMs + sample.clickAtNavigationMs,
+		),
+		{ requestsCheckedThroughClick: true },
+	);
+	if (boundary.unexpectedApiRequests !== 0) {
+		boundary.status = "failed";
+		boundary.error =
+			"The app issued an API request before the measured cold-action click";
+		throw new Error(boundary.error);
 	}
 }
 try {
@@ -656,7 +692,8 @@ try {
 			(result) => result.status === "rejected",
 		);
 		if (failedBootstrap) throw failedBootstrap.reason;
-		if (args.coldActionControl) await coldActionBoundary(workers[0], navigation);
+		if (args.coldActionControl)
+			await coldActionBoundary(workers[0], navigation);
 		for (let round = 0; round < config.warmup; round++) {
 			await prepareRound(workers, navigation, round, true, round);
 			const scheduled = Date.now();
@@ -696,6 +733,7 @@ try {
 					),
 				),
 			);
+			if (args.coldActionControl) validateColdBoundaryThroughClick(samples[0]);
 			await save();
 			assert.ok(
 				samples.every((sample) => sample.status === "ok"),

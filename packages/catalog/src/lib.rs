@@ -36,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 pub use flow_like_catalog_core::NodeLogic;
+use flow_like_runtime::{flow::node::Node, state::FlowNodeRegistryInner};
 
 #[cfg(feature = "draft-testing")]
 pub mod draft_test;
@@ -273,6 +274,22 @@ impl std::str::FromStr for CatalogPackage {
 /// Predicate deciding whether an individual node stays in the built catalog.
 pub type NodeFilter = Box<dyn Fn(&dyn NodeLogic) -> bool + Send + Sync>;
 
+enum CatalogNodeFilter {
+    Logic(NodeFilter),
+    #[cfg(any(feature = "runtime-catalog", test))]
+    Definition(fn(name: &str, category: &str) -> bool),
+}
+
+impl CatalogNodeFilter {
+    fn accepts_definition(&self, _name: &str, _category: &str) -> bool {
+        match self {
+            Self::Logic(_) => true,
+            #[cfg(any(feature = "runtime-catalog", test))]
+            Self::Definition(filter) => filter(_name, _category),
+        }
+    }
+}
+
 /// Builder for constructing a customized catalog
 #[derive(Default)]
 pub struct CatalogBuilder {
@@ -281,7 +298,7 @@ pub struct CatalogBuilder {
     excluded_nodes: HashSet<String>,
     included_nodes: Option<HashSet<String>>,
     custom_nodes: Vec<Arc<dyn NodeLogic>>,
-    node_filter: Option<NodeFilter>,
+    node_filter: Option<CatalogNodeFilter>,
 }
 
 impl CatalogBuilder {
@@ -354,14 +371,42 @@ impl CatalogBuilder {
     where
         F: Fn(&dyn NodeLogic) -> bool + Send + Sync + 'static,
     {
-        self.node_filter = Some(Box::new(filter));
+        self.node_filter = Some(CatalogNodeFilter::Logic(Box::new(filter)));
+        self
+    }
+
+    #[cfg(any(feature = "runtime-catalog", test))]
+    fn with_definition_filter(mut self, filter: fn(&str, &str) -> bool) -> Self {
+        self.node_filter = Some(CatalogNodeFilter::Definition(filter));
         self
     }
 
     /// Build the catalog with all configurations applied.
     /// Custom nodes override existing nodes with the same name.
     pub fn build(self) -> Vec<Arc<dyn NodeLogic>> {
-        let mut node_map: HashMap<String, Arc<dyn NodeLogic>> = HashMap::new();
+        self.build_entries(drop)
+            .into_iter()
+            .map(|(_, logic)| logic)
+            .collect()
+    }
+
+    /// Build the registry from the definitions already read during selection.
+    /// Each retained definition moves into the registry; no second metadata
+    /// copy or wrapper around its `NodeLogic` is retained.
+    pub fn build_registry(self) -> FlowNodeRegistryInner {
+        let entries = self.build_entries(std::convert::identity);
+        let mut registry = FlowNodeRegistryInner::new(entries.len());
+        for (definition, logic) in entries {
+            registry.insert(definition, logic);
+        }
+        registry
+    }
+
+    fn build_entries<T>(
+        self,
+        retain_definition: impl Fn(Node) -> T,
+    ) -> Vec<(T, Arc<dyn NodeLogic>)> {
+        let mut node_map: HashMap<String, (T, Arc<dyn NodeLogic>, bool)> = HashMap::new();
 
         let packages_to_include: Vec<CatalogPackage> =
             if let Some(ref included) = self.included_packages {
@@ -389,20 +434,35 @@ impl CatalogBuilder {
                 {
                     continue;
                 }
-                node_map.insert(name, node);
+                let keep = self
+                    .node_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter.accepts_definition(&name, &node_def.category));
+                node_map.insert(name, (retain_definition(node_def), node, keep));
             }
         }
 
         // Custom nodes override existing ones
         for node in self.custom_nodes {
             let node_def = node.get_node();
-            node_map.insert(node_def.name.clone(), node);
+            let keep = self
+                .node_filter
+                .as_ref()
+                .is_none_or(|filter| filter.accepts_definition(&node_def.name, &node_def.category));
+            // A rejected override still replaces an earlier allowed node.
+            node_map.insert(
+                node_def.name.clone(),
+                (retain_definition(node_def), node, keep),
+            );
         }
 
-        let mut catalog: Vec<Arc<dyn NodeLogic>> = node_map.into_values().collect();
+        let mut catalog: Vec<(T, Arc<dyn NodeLogic>)> = node_map
+            .into_values()
+            .filter_map(|(definition, node, keep)| keep.then_some((definition, node)))
+            .collect();
 
-        if let Some(ref filter) = self.node_filter {
-            catalog.retain(|node| filter(node.as_ref()));
+        if let Some(CatalogNodeFilter::Logic(ref filter)) = self.node_filter {
+            catalog.retain(|(_, node)| filter(node.as_ref()));
         }
 
         catalog
@@ -410,10 +470,9 @@ impl CatalogBuilder {
 }
 
 #[cfg(feature = "runtime-catalog")]
-fn runtime_implementation_available(node: &dyn NodeLogic) -> bool {
-    let definition = node.get_node();
+fn runtime_implementation_available(name: &str, category: &str) -> bool {
     if matches!(
-        definition.category.as_str(),
+        category,
         "AI/ML/Lifecycle"
             | "AI/ML/Compute"
             | "AI/ML/Auto Training"
@@ -423,7 +482,7 @@ fn runtime_implementation_available(node: &dyn NodeLogic) -> bool {
     {
         return false;
     }
-    match definition.name.as_str() {
+    match name {
         name if name.starts_with("industrial_ethercat_") => {
             cfg!(any(target_os = "linux", target_os = "macos"))
         }
@@ -520,10 +579,331 @@ fn product_catalog_builder() -> CatalogBuilder {
     let builder = CatalogBuilder::new();
     #[cfg(feature = "runtime-catalog")]
     {
-        return builder.with_filter(runtime_implementation_available);
+        return builder.with_definition_filter(runtime_implementation_available);
     }
     #[cfg(not(feature = "runtime-catalog"))]
     builder
+}
+
+#[cfg(test)]
+mod builder_filter_tests {
+    use super::*;
+    use flow_like::flow::{execution::context::ExecutionContext, node::Node};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingNode {
+        name: String,
+        category: String,
+        only_offline: bool,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for CountingNode {
+        fn get_node(&self) -> Node {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let mut node = Node::new(&self.name, "Test", "", &self.category);
+            node.only_offline = self.only_offline;
+            node
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn counting_node(name: &str, category: &str) -> (Arc<dyn NodeLogic>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        (
+            Arc::new(CountingNode {
+                name: name.to_string(),
+                category: category.to_string(),
+                only_offline: false,
+                calls: calls.clone(),
+            }),
+            calls,
+        )
+    }
+
+    #[test]
+    fn definition_filter_materializes_each_node_once() {
+        let (allowed, allowed_calls) = counting_node("allowed", "keep");
+        let (denied, denied_calls) = counting_node("denied", "drop");
+        let catalog = CatalogBuilder::new()
+            .only_packages(&[])
+            .with_definition_filter(|_, category| category == "keep")
+            .with_custom_nodes(vec![allowed.clone(), denied])
+            .build();
+
+        assert_eq!(catalog.len(), 1);
+        assert!(Arc::ptr_eq(&catalog[0], &allowed));
+        assert_eq!(allowed_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(denied_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn definition_filter_applies_to_the_final_override() {
+        for (first_category, last_category, kept) in
+            [("keep", "drop", false), ("drop", "keep", true)]
+        {
+            let (first, first_calls) = counting_node("same-name", first_category);
+            let (last, last_calls) = counting_node("same-name", last_category);
+            let catalog = CatalogBuilder::new()
+                .only_packages(&[])
+                .with_definition_filter(|_, category| category == "keep")
+                .with_custom_nodes(vec![first, last.clone()])
+                .build();
+            assert_eq!(catalog.len(), usize::from(kept));
+            if kept {
+                assert!(Arc::ptr_eq(&catalog[0], &last));
+            }
+            assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(last_calls.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[test]
+    fn public_filter_keeps_its_logic_callback_and_replacement_semantics() {
+        let (first, first_calls) = counting_node("same-name", "first");
+        let (last, last_calls) = counting_node("same-name", "last");
+        let filter_calls = Arc::new(AtomicUsize::new(0));
+        let observed = filter_calls.clone();
+        let catalog = CatalogBuilder::new()
+            .only_packages(&[])
+            .with_definition_filter(|_, _| false)
+            .with_filter(|_| false)
+            .with_filter(move |logic| {
+                observed.fetch_add(1, Ordering::Relaxed);
+                logic.get_node().category == "last"
+            })
+            .with_custom_nodes(vec![first, last.clone()])
+            .build();
+
+        assert_eq!(catalog.len(), 1);
+        assert!(Arc::ptr_eq(&catalog[0], &last));
+        assert_eq!(filter_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(last_calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn custom_nodes_keep_bypassing_package_node_selection() {
+        let (custom, calls) = counting_node("custom", "keep");
+        let catalog = CatalogBuilder::new()
+            .only_packages(&[])
+            .only_nodes(&["another-node"])
+            .exclude_nodes(&["custom"])
+            .with_definition_filter(|_, category| category == "keep")
+            .with_node(custom.clone())
+            .build();
+
+        assert_eq!(catalog.len(), 1);
+        assert!(Arc::ptr_eq(&catalog[0], &custom));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn direct_registry_consumes_each_definition_once_and_preserves_restrictions() {
+        let (online, online_calls) = counting_node("online", "Test");
+        let offline_calls = Arc::new(AtomicUsize::new(0));
+        let offline: Arc<dyn NodeLogic> = Arc::new(CountingNode {
+            name: "offline".into(),
+            category: "Test".into(),
+            only_offline: true,
+            calls: offline_calls.clone(),
+        });
+        let registry = CatalogBuilder::new()
+            .only_packages(&[])
+            .with_custom_nodes(vec![online.clone(), offline.clone()])
+            .build_registry();
+
+        assert_eq!(registry.registry.len(), 2);
+        let (online_definition, online_logic) = &registry.registry["online"];
+        let (offline_definition, offline_logic) = &registry.registry["offline"];
+        assert!(!online_definition.only_offline);
+        assert!(offline_definition.only_offline);
+        assert!(Arc::ptr_eq(online_logic, &online));
+        assert!(Arc::ptr_eq(offline_logic, &offline));
+        assert!(online_definition.namespace.is_some());
+        assert!(online_definition.alias.is_some());
+        assert_eq!(online_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(offline_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn direct_registry_matches_legacy_selection_and_fingerprint() {
+        let (overridden, _) = counting_node("same-name", "drop");
+        let (replacement, replacement_calls) = counting_node("same-name", "keep");
+        let (denied, _) = counting_node("denied", "drop");
+        let selected = || {
+            CatalogBuilder::new()
+                .only_packages(&[])
+                .only_nodes(&["unrelated-package-node"])
+                .exclude_nodes(&["same-name"])
+                .with_definition_filter(|_, category| category == "keep")
+                .with_custom_nodes(vec![
+                    overridden.clone(),
+                    replacement.clone(),
+                    denied.clone(),
+                ])
+        };
+        let legacy = FlowNodeRegistryInner::prepare(&Arc::new(selected().build()));
+        let direct = selected().build_registry();
+
+        assert_eq!(legacy.registry.len(), 1);
+        assert_eq!(direct.registry.len(), 1);
+        assert_eq!(direct.fingerprint(), legacy.fingerprint());
+        assert!(Arc::ptr_eq(&direct.registry["same-name"].1, &replacement));
+        assert_eq!(replacement_calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn direct_registry_keeps_public_filter_callback_semantics() {
+        let (first, first_calls) = counting_node("same-name", "first");
+        let (last, last_calls) = counting_node("same-name", "last");
+        let filter_calls = Arc::new(AtomicUsize::new(0));
+        let observed = filter_calls.clone();
+        let registry = CatalogBuilder::new()
+            .only_packages(&[])
+            .with_filter(move |logic| {
+                observed.fetch_add(1, Ordering::Relaxed);
+                logic.get_node().category == "last"
+            })
+            .with_custom_nodes(vec![first, last.clone()])
+            .build_registry();
+
+        assert_eq!(registry.registry.len(), 1);
+        assert!(Arc::ptr_eq(&registry.registry["same-name"].1, &last));
+        assert_eq!(filter_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(last_calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn product_registry_fingerprint_matches_legacy_preparation() {
+        let legacy = FlowNodeRegistryInner::prepare(&Arc::new(get_catalog()));
+        let direct = get_catalog_registry();
+        assert_eq!(direct.registry.len(), legacy.registry.len());
+        assert_eq!(direct.fingerprint(), legacy.fingerprint());
+        for (name, (definition, _)) in &legacy.registry {
+            assert_eq!(
+                direct.registry[name].0.only_offline, definition.only_offline,
+                "{name}"
+            );
+        }
+    }
+
+    #[cfg(feature = "package-std")]
+    #[test]
+    fn package_selection_and_exclusions_keep_their_precedence() {
+        let name = CatalogPackage::Std
+            .get_nodes()
+            .first()
+            .unwrap()
+            .get_node()
+            .name;
+        let selected = || {
+            CatalogBuilder::new()
+                .only_packages(&[CatalogPackage::Std])
+                .only_nodes(&[name.as_str()])
+                .with_definition_filter(|_, _| true)
+        };
+        assert_eq!(selected().build().len(), 1);
+        assert!(
+            selected()
+                .exclude_nodes(&[name.as_str()])
+                .build()
+                .is_empty()
+        );
+        assert!(
+            selected()
+                .exclude_packages(&[CatalogPackage::Std])
+                .build()
+                .is_empty()
+        );
+
+        let (override_node, calls) = counting_node(&name, "override");
+        let overridden = selected().with_node(override_node.clone()).build();
+        assert_eq!(overridden.len(), 1);
+        assert!(Arc::ptr_eq(&overridden[0], &override_node));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "runtime-catalog")]
+    #[test]
+    fn product_feature_filters_reuse_the_existing_definition() {
+        let cases = [
+            ("ordinary", "Test", true),
+            (
+                "training",
+                "AI/ML/Compute",
+                cfg!(feature = "training-metadata"),
+            ),
+            (
+                "ml_prompt_sam2",
+                "Test",
+                cfg!(feature = "training-metadata"),
+            ),
+            (
+                "ml_export_student_onnx",
+                "Test",
+                cfg!(feature = "training-onnx-export"),
+            ),
+            (
+                "ml_read_opcua_sensor",
+                "Test",
+                cfg!(feature = "package-industrial"),
+            ),
+            (
+                "ml_capture_genicam_frame",
+                "Test",
+                cfg!(feature = "sensor-genicam"),
+            ),
+            (
+                "ai_audio_local_text_to_speech",
+                "Test",
+                cfg!(feature = "local-tts"),
+            ),
+            (
+                "ai_audio_local_speech_to_text",
+                "Test",
+                cfg!(feature = "local-stt"),
+            ),
+            ("df_register_oracle", "Test", cfg!(feature = "odbc")),
+            ("df_register_athena", "Test", cfg!(feature = "odbc")),
+            (
+                "industrial_ethercat_probe",
+                "Test",
+                cfg!(any(target_os = "linux", target_os = "macos")),
+            ),
+            (
+                "industrial_cifx_probe",
+                "Test",
+                cfg!(any(target_os = "linux", target_os = "windows")),
+            ),
+        ];
+        for (name, category, kept) in cases {
+            let (node, calls) = counting_node(name, category);
+            let catalog = product_catalog_builder()
+                .only_packages(&[])
+                .with_node(node.clone())
+                .build();
+            assert_eq!(catalog.len(), usize::from(kept), "{name}");
+            if kept {
+                assert!(Arc::ptr_eq(&catalog[0], &node));
+            }
+            assert_eq!(calls.load(Ordering::Relaxed), 1, "{name}");
+            let registry = product_catalog_builder()
+                .only_packages(&[])
+                .with_node(node.clone())
+                .build_registry();
+            assert_eq!(registry.registry.len(), usize::from(kept), "{name}");
+            if kept {
+                assert!(Arc::ptr_eq(&registry.registry[name].1, &node));
+            }
+            assert_eq!(calls.load(Ordering::Relaxed), 2, "{name}");
+        }
+    }
 }
 
 /// Static cached product catalog, initialized once on first access.
@@ -533,6 +913,12 @@ static CATALOG: LazyLock<Vec<Arc<dyn NodeLogic>>> =
 /// Get the full catalog from all sub-crates (cached, initialized once)
 pub fn get_catalog() -> Vec<Arc<dyn NodeLogic>> {
     CATALOG.clone()
+}
+
+/// Build the product registry without constructing each node's definition twice.
+/// This does not use a process cache; the host owns the returned registry's lifetime.
+pub fn get_catalog_registry() -> FlowNodeRegistryInner {
+    product_catalog_builder().build_registry()
 }
 
 /// Get catalog from specific packages only (not cached - use sparingly)

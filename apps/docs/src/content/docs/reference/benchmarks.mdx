@@ -172,6 +172,56 @@ The benchmark binary includes the standard and data node implementations used
 by the entire Personen board. Other pages that require image, document, or AI
 nodes need those catalog features added before they can be benchmarked.
 
+### Process-cold comparisons
+
+Use fresh API and executor processes to measure startup separately from warmed
+actions. Build both revisions first and keep their binaries at distinct paths:
+
+```bash
+python3 tests/widget-action-stack/cold.py \
+  --baseline /tmp/widget-baseline/release-fast/widget_action_stack \
+  --candidate /tmp/widget-candidate/release-fast/widget_action_stack \
+  --config /tmp/flow-widget-stack/fixture/browser-config.json \
+  --trials 12 --modes navigation action --output /tmp/widget-cold-comparison
+python3 tests/widget-action-stack/cold_compare.py /tmp/widget-cold-comparison \
+  --json-output /tmp/widget-cold-comparison/comparison.json
+```
+
+Each pair runs both binaries, alternating their order between pairs. Every trial
+owns a fresh browser and performs one measured action without warmups.
+
+Frontend changes can use separate production stages. Build each with
+`node tests/widget-action-stack/web.mjs build --state STATE --source-root SOURCE_COPY`,
+then pass `--baseline-web-state` and `--candidate-web-state` to the cold runner.
+For copied sources, also pass the matching `--baseline-web-source-root` and
+`--candidate-web-source-root`. Keep source copies inside the workspace so
+Turbopack can resolve dependencies. Keep the snapshots and installed workspace
+dependencies fixed during each build. The runner verifies the selected frontend's
+source hash and build ID throughout the suite. Ordinary `run.py` runs accept
+`--web-state` and `--web-source-root` for the same purpose.
+
+| Mode | Cold boundary | Main measurement |
+| --- | --- | --- |
+| `navigation` | API and executor start before document navigation | Navigation until the person cards appear, including bootstrap and page `onLoad` |
+| `action` | After successful page `onLoad`, API and executor restart while the browser document stays open | Click until the expected rental-history rows appear |
+
+The action mode rejects background API requests between the restart boundary
+and the click because they could warm the backend. The runner checks persisted
+quota and compute completion before restarting or stopping the processes.
+These checks and process readiness are outside the navigation and click clocks.
+Readiness uses 20 ms polling by default and remains a separate measurement.
+
+Storage objects, Postgres, Redis, and operating-system caches remain available.
+These trials measure fresh local processes, not the AWS container, scheduling,
+or network envelope. Use `--trace` only in a separate diagnostic suite.
+
+The comparison requires successful execution, fresh process identities, matching
+workloads, and completed cleanup. It reports paired median differences with
+bootstrap confidence intervals. Twelve pairs are exploratory; small effects and
+tail estimates need more repetitions. Request records also contain a hash of the
+HTTP method and path, excluding queries and credentials. Repeated hashes identify
+endpoints to inspect; requests with different parameters can still be necessary.
+
 ### Diagnostic workload
 
 Install the workspace dependencies, then start the optimized diagnostic server:

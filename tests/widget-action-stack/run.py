@@ -302,6 +302,7 @@ class Services:
             **self.diagnostics,
             "startup_boundary": "Process launch to successful HTTP health response",
             "readiness_poll_ms": getattr(self.args, "readiness_poll_ms", 200),
+            "host_load_average_start": list(os.getloadavg()) if hasattr(os, "getloadavg") else None,
             "transport": "Local HTTP API dispatch with production routers and Lambda compute-context accounting",
         }
         imported = self.state / "import-result.json"
@@ -315,8 +316,12 @@ class Services:
         self.launch("runtime", [str(binary.resolve()), "runtime"],
                     self.env["EXECUTOR_URL"] + "/health")
         mode = "dev" if self.args.web_mode == "development" else "serve"
-        self.launch("web", ["node", str(stack.HERE / "web.mjs"), mode, "--state", str(self.state),
-                            "--port", "3440", "--api-origin", self.env["API_URL"]],
+        web_command = ["node", str(stack.HERE / "web.mjs"), mode,
+                       "--state", str(getattr(self.args, "web_state", None) or self.state),
+                       "--port", "3440", "--api-origin", self.env["API_URL"]]
+        if getattr(self.args, "web_source_root", None):
+            web_command.extend(["--source-root", str(self.args.web_source_root)])
+        self.launch("web", web_command,
                     "http://127.0.0.1:3440/__benchmark/health")
 
     def restart_backend(self):
@@ -504,6 +509,8 @@ def main():
         command.add_argument("--profile", choices=("debug", "release-fast", "release"), default="release-fast")
         command.add_argument("--binary", type=Path)
         command.add_argument("--web-mode", choices=("production", "development"), default="production")
+        command.add_argument("--web-state", type=Path, help="Use an independently built frontend stage")
+        command.add_argument("--web-source-root", type=Path, help="Source checkout recorded by that frontend stage")
         command.add_argument("--timeout", type=float, default=180)
         command.add_argument("--workers", type=int, help="Tokio workers per API/runtime process (default 1)")
         command.add_argument("--executor-slots", type=int, help="Actual runtime admission capacity")
@@ -515,6 +522,9 @@ def main():
             command.add_argument("--existing", action="store_true", help="Measure an already running fixture")
     args = parser.parse_args()
     args.state = args.state.resolve()
+    for name in ("web_state", "web_source_root"):
+        if getattr(args, name, None) is not None:
+            setattr(args, name, getattr(args, name).resolve())
     for name in ("workers", "executor_slots", "thread_stack_mb"):
         if getattr(args, name, None) is not None and getattr(args, name) < 1:
             raise ValueError(f"{name} must be positive")

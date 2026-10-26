@@ -317,9 +317,15 @@ impl FlowNodeRegistryInner {
 
     #[inline]
     pub fn get_node(&self, node_id: &str) -> flow_like_types::Result<Node> {
+        self.get_node_ref(node_id).cloned()
+    }
+
+    /// Read trusted catalog metadata without copying the node's pin definitions.
+    #[inline]
+    pub(crate) fn get_node_ref(&self, node_id: &str) -> flow_like_types::Result<&Node> {
         let node = self.registry.get(node_id);
         match node {
-            Some(node) => Ok(node.0.clone()),
+            Some(node) => Ok(&node.0),
             None => Err(flow_like_types::anyhow!(
                 "Node not found - Get Node: '{}'",
                 node_id

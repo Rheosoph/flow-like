@@ -666,7 +666,7 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 			}
 			data-board-exporting={exporting || undefined}
 			aria-busy={
-				props.loadingStatus?.busy ?? (!preferenceReady || nativePending)
+				Boolean(props.loadingStatus) || !preferenceReady || nativePending
 			}
 		>
 			{flowMounted && (
