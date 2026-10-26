@@ -845,6 +845,15 @@ impl ExecutionContext {
     }
 
     pub async fn create_sub_context(&self, node: &Arc<InternalNode>) -> ExecutionContext {
+        self.create_sub_context_with_pin_overrides(node, self.context_pin_overrides.clone())
+            .await
+    }
+
+    async fn create_sub_context_with_pin_overrides(
+        &self,
+        node: &Arc<InternalNode>,
+        context_pin_overrides: Option<BTreeMap<String, Arc<Value>>>,
+    ) -> ExecutionContext {
         let id = node.shared_node_id();
         let execution_cache = self
             .execution_cache
@@ -881,7 +890,7 @@ impl ExecutionContext {
             credentials: self.credentials.clone(),
             delegated: false,
             context_state: BTreeMap::new(),
-            context_pin_overrides: self.context_pin_overrides.clone(),
+            context_pin_overrides,
             result: None,
             oauth_tokens: self.oauth_tokens.clone(),
             channel: self.channel.clone(),
@@ -910,10 +919,11 @@ impl ExecutionContext {
         node: &Arc<InternalNode>,
         function_variables: &std::collections::HashMap<String, Variable>,
     ) -> ExecutionContext {
-        let mut context = self.create_sub_context(node).await;
+        let mut context = self
+            .create_sub_context_with_pin_overrides(node, Some(BTreeMap::new()))
+            .await;
 
         context.local_variables = Some(fresh_local_variable_scope(function_variables));
-        context.context_pin_overrides = Some(BTreeMap::new());
 
         context
     }
@@ -2352,6 +2362,69 @@ mod tests {
 
     fn photo(len: usize) -> Vec<u8> {
         (0..len).map(|index| (index % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn function_contexts_isolate_overrides_and_reset_local_variables() {
+        let mut parent = byte_context(None).await;
+        parent.override_pin_value("outer", json!("parent"));
+        let mut variable = Variable::new("counter", VariableType::Integer, ValueType::Normal);
+        variable.default_value = Some(flow_like_types::json::to_vec(&json!(7)).unwrap());
+        *variable.value.lock().await = json!(99);
+        let variable_id = variable.id.clone();
+        let definition_value = variable.value.clone();
+        parent.local_variables = Some(Arc::new(Mutex::new(AHashMap::from_iter([(
+            variable_id.clone(),
+            variable.clone(),
+        )]))));
+        let function_variables = std::collections::HashMap::from([(variable_id.clone(), variable)]);
+
+        let ordinary_child = parent.create_sub_context(&parent.node).await;
+        assert_eq!(
+            ordinary_child.context_pin_overrides,
+            parent.context_pin_overrides
+        );
+        let (mut first, second) = tokio::join!(
+            parent.create_function_context(&parent.node, &function_variables),
+            parent.create_function_context(&parent.node, &function_variables),
+        );
+        assert_eq!(first.context_pin_overrides, Some(BTreeMap::new()));
+        assert_eq!(second.context_pin_overrides, Some(BTreeMap::new()));
+
+        let first_value = first.get_variable(&variable_id).await.unwrap().value;
+        let second_value = second.get_variable(&variable_id).await.unwrap().value;
+        assert_eq!(*first_value.lock().await, json!(7));
+        *first_value.lock().await = json!(8);
+        assert_eq!(*second_value.lock().await, json!(7));
+        assert_eq!(*definition_value.lock().await, json!(99));
+        assert_eq!(
+            *parent
+                .get_variable(&variable_id)
+                .await
+                .unwrap()
+                .value
+                .lock()
+                .await,
+            json!(99)
+        );
+
+        first.override_pin_value("outer", json!("first"));
+        let mut nested = first.create_sub_context(&first.node).await;
+        assert_eq!(nested.context_pin_overrides, first.context_pin_overrides);
+        nested.override_pin_value("result", json!(42));
+        first.push_sub_context(&mut nested);
+        assert_eq!(
+            first.context_pin_overrides.as_ref().unwrap()["result"].as_ref(),
+            &json!(42)
+        );
+        assert_eq!(second.context_pin_overrides, Some(BTreeMap::new()));
+        assert_eq!(
+            parent.context_pin_overrides,
+            Some(BTreeMap::from([(
+                "outer".to_string(),
+                Arc::new(json!("parent"))
+            )]))
+        );
     }
 
     #[tokio::test]

@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 import sys
 
+import topology
+
 
 MISSING = object()
 
@@ -51,9 +53,22 @@ def mismatches(first, second):
         *("manifest.fixture.database." + name for name in ("data_storage_version", "pylance", "schema_sha256")),
     ]
     issues = []
+    topologies = []
+    for name, bundle in (("A", first), ("B", second)):
+        try:
+            topologies.append(topology.normalize_topology(bundle["manifest"]))
+        except ValueError as error:
+            issues.append(f"{name}: {error}")
+    if len(topologies) == 2 and topologies[0] != topologies[1]:
+        issues.append(f"manifest.execution_topology: A={display(topologies[0])}, B={display(topologies[1])}")
     for field in fields:
         a, b = nested(first, field), nested(second, field)
         if a is MISSING or b is MISSING or a != b:
+            issues.append(f"{field}: A={display(a)}, B={display(b)}")
+    # Legacy reports predate an explicit database pool budget.
+    for field in ("manifest.database_pool", "manifest.allowedOptionalResponses"):
+        a, b = nested(first, field), nested(second, field)
+        if (a is not MISSING or b is not MISSING) and (a is MISSING or b is MISSING or a != b):
             issues.append(f"{field}: A={display(a)}, B={display(b)}")
     a, b = effective_profile(first), effective_profile(second)
     if a is MISSING or b is MISSING or a != b:
@@ -117,6 +132,10 @@ def assessment(bundle):
         "Handler settled (click)": summary([sample.get("clickToSettledMs") for sample in passed]),
     }
     issues = []
+    try:
+        topology.normalize_topology(bundle["manifest"])
+    except ValueError as error:
+        issues.append(str(error))
     if report.get("status") != "passed":
         issues.append("driver did not finish with passed status")
     cleanup = report.get("cleanup")
@@ -181,6 +200,15 @@ def render(first, second, mismatch):
                      f"warmup failures {result['warmup_failed']}; resets {result['resets']}/{result['planned_resets']} "
                      f"({result['reset_failed']} failed); bootstrap HTTP failures {result['bootstrap_failed']}")
         manifest = bundle["manifest"]
+        try:
+            arrangement = topology.normalize_topology(manifest)
+            legacy = " (legacy report)" if "execution_topology" not in manifest else ""
+            lines.append(f"{name}: topology={arrangement['kind']}{legacy}, "
+                         f"frontend API={arrangement['apiFrontendReplicas']}, "
+                         f"callback API={arrangement['apiCallbackReplicas']}, "
+                         f"executors={arrangement['executorReplicas']}")
+        except ValueError:
+            lines.append(f"{name}: topology=invalid")
         lines.append(f"{name}: telemetry={manifest.get('telemetry_enabled', 'unknown')}, "
                      f"sink={manifest.get('telemetry_sink', 'unknown')}, "
                      f"sampling={manifest.get('backend_trace_sample_rate', 'unknown')}, "

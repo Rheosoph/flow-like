@@ -20,6 +20,7 @@ import urllib.request
 from urllib.parse import urlencode, urlsplit
 
 import stack
+from topology import shared_topology
 
 
 def script(name, *args):
@@ -297,6 +298,8 @@ class Services:
             "web_mode": self.args.web_mode,
             "worker_threads": int(self.env.get("BENCH_WORKER_THREADS", "1")),
             "executor_slots": int(self.env["MAX_CONCURRENT_EXECUTIONS"]),
+            "execution_topology": shared_topology(int(self.env.get("BENCH_WORKER_THREADS", "1")),
+                                                  int(self.env["MAX_CONCURRENT_EXECUTIONS"])),
             "thread_stack_mb": self.args.thread_stack_mb,
             "compute_accounting_memory_mb": 2048, "enforced_memory_limit_mb": None,
             **self.diagnostics,
@@ -356,7 +359,8 @@ class Services:
                 "processes_before": before, "processes_after": after}
 
     def close(self):
-        if self.args.trace and any(record["name"] == "api" for record in self.records):
+        if self.args.trace and any(record["name"] == "api" or record.get("pool") in
+                                   ("api_frontend", "api_callback") for record in self.records):
             # The production span exporter flushes every five seconds. Drain after
             # browser measurements finish so the last action's spans reach its log.
             time.sleep(5.1)
@@ -381,7 +385,18 @@ def default_browser_config(state):
     return state / "fixture/browser-config.json"
 
 
-def controlled_browser(command, env, phase_handler, timeout):
+def validate_cold_marker(message, concurrency):
+    if type(concurrency) is not int or concurrency < 1:
+        raise ValueError("Cold controller concurrency must be positive")
+    workers = message.get("workers", [message.get("worker")])
+    if (message.get("navigation") != 0 or type(message.get("navigation")) is not int
+            or not isinstance(workers, list) or any(type(worker) is not int for worker in workers)
+            or sorted(workers) != list(range(concurrency))
+            or ("workers" in message and "worker" in message)):
+        raise ValueError("Unexpected cold-action worker boundary")
+
+
+def controlled_browser(command, env, phase_handler, timeout, concurrency=1):
     """Accept one fixed phase marker from our driver, without running config-supplied commands."""
     process = subprocess.Popen(command, cwd=stack.REPO, env=env, stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -412,8 +427,9 @@ def controlled_browser(command, env, phase_handler, timeout):
                             continue
                         if not isinstance(message, dict) or message.get("type") != "benchmark_cold_action_ready":
                             continue
-                        if marker_seen or message.get("worker") != 0 or message.get("navigation") != 0:
+                        if marker_seen:
                             raise ValueError("Unexpected or repeated cold-action phase marker")
+                        validate_cold_marker(message, concurrency)
                         marker_seen = True
                         phase_handler()
                         process.stdin.write(b'{"type":"benchmark_cold_action_continue"}\n')
@@ -484,7 +500,8 @@ def benchmark(args, phase_handler=None, driver_output=None):
         else:
             configuration = json.loads(config.read_text())
             controlled_browser(command, stack.environment(args.state), phase_handler,
-                               configuration.get("timeoutMs", 30000) / 1000 * 3 + args.timeout * 2)
+                               configuration.get("timeoutMs", 30000) / 1000 * 3 + args.timeout * 2,
+                               configuration.get("concurrency", 1))
     finally:
         output.mkdir(parents=True, exist_ok=True)
         for filename, contents in provenance.items():

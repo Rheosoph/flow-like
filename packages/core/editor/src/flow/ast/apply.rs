@@ -1593,23 +1593,7 @@ impl FlowScriptApplyPlanner {
                     value,
                     ..
                 } => {
-                    let scoped_variable = board
-                        .variables
-                        .get(variable_id)
-                        .map(|variable| (None, variable))
-                        .or_else(|| {
-                            board.layers.iter().find_map(|(layer_id, layer)| {
-                                layer
-                                    .variables
-                                    .get(variable_id)
-                                    .map(|variable| (Some(layer_id.clone()), variable))
-                            })
-                        });
-                    let Some((layer_id, existing_variable)) = scoped_variable else {
-                        return Err(flow_like_types::anyhow!(
-                            "Variable `{variable_id}` not found"
-                        ));
-                    };
+                    let (layer_id, existing_variable) = scoped_variable(board, variable_id)?;
                     let mut variable = existing_variable.clone();
                     if let Some(name) = name {
                         variable.name = name.clone();
@@ -1941,14 +1925,10 @@ impl FlowScriptApplyPlanner {
                     )));
                 }
                 BoardCommand::RemoveVariable { variable_id, .. } => {
-                    let Some(variable) = board.variables.get(variable_id) else {
-                        return Err(flow_like_types::anyhow!(
-                            "Variable `{variable_id}` not found"
-                        ));
-                    };
-                    generic_commands.push(GenericCommand::RemoveVariable(
-                        RemoveVariableCommand::new(variable.clone()),
-                    ));
+                    let (layer_id, variable) = scoped_variable(board, variable_id)?;
+                    let mut command = RemoveVariableCommand::new(variable.clone());
+                    command.layer_id = layer_id;
+                    generic_commands.push(GenericCommand::RemoveVariable(command));
                 }
                 BoardCommand::AddComment {
                     content,
@@ -3155,6 +3135,26 @@ fn pin_lookup_keys(value: &str) -> HashSet<String> {
     ]
     .into_iter()
     .collect()
+}
+
+/// The variable `variable_id` names, with the layer that owns it (`None` for a Board variable).
+fn scoped_variable<'a>(
+    board: &'a Board,
+    variable_id: &str,
+) -> flow_like_types::Result<(Option<String>, &'a Variable)> {
+    board
+        .variables
+        .get(variable_id)
+        .map(|variable| (None, variable))
+        .or_else(|| {
+            board.layers.iter().find_map(|(layer_id, layer)| {
+                layer
+                    .variables
+                    .get(variable_id)
+                    .map(|variable| (Some(layer_id.clone()), variable))
+            })
+        })
+        .ok_or_else(|| flow_like_types::anyhow!("Variable `{variable_id}` not found"))
 }
 
 fn variable_type_from_str(value: &str) -> flow_like_types::Result<VariableType> {

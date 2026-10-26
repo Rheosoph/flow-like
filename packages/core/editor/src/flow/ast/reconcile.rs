@@ -22,13 +22,14 @@
 //! diagnostics instead of destructive commands.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
 use super::lower::{
-    FlowScriptFile, WHILE_LOOP, is_trigger_entry, loop_node_keyword, module_path, owning_module,
-    sugared_loop_head_pin, sugared_loop_node_type,
+    FlowScriptFile, RenderableCodeNames, WHILE_LOOP, is_trigger_entry, loop_node_keyword,
+    module_path, owning_module, sugared_loop_head_pin, sugared_loop_node_type,
 };
 use super::template::{STRING_FORMAT_NODE_TYPE, template_format_call};
 use groups::GroupPlan;
@@ -1606,7 +1607,8 @@ fn reconcile_inner(
     let migrated_board = migrations.planning_board(existing);
     let existing = migrated_board.as_ref().unwrap_or(existing);
 
-    let mut board_ast = super::lower_to_ast(existing);
+    let (mut board_ast, existing_code_names) = super::lower::lower_board_with_code_names(existing);
+    let existing_code_names = Arc::new(existing_code_names);
     let execution_baseline = catalog.map(|catalog| {
         // A scoped edit needs only its original sections and any statements moved into them.
         // Replanning unrelated sections makes small edits pay the cost of the entire board.
@@ -1633,9 +1635,9 @@ fn reconcile_inner(
         });
         let doc = FlatDocument::new(scoped_ast.as_ref().unwrap_or(&board_ast), None);
         let modules = resolve_modules(existing, &doc, None);
-        StructuralPlanner::new(existing, catalog, enricher)
-            .plan_with_execution(&doc, &modules)
-            .1
+        let mut baseline = StructuralPlanner::new(existing, catalog, enricher);
+        baseline.rendered_code_names = Some(existing_code_names.clone());
+        baseline.plan_with_execution(&doc, &modules).1
     });
     flatten_board_sections(&mut board_ast);
     let variable_refs = VariableRefLookup::from_board_and_ast(existing, &normalized);
@@ -1651,6 +1653,11 @@ fn reconcile_inner(
     );
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
+    if mode == ReconcileMode::Replace {
+        result.commands.extend(undeclared_local_variable_removals(
+            existing, &board_ast, scope, &submitted, &modules,
+        ));
+    }
 
     // Function cache decorators are layer metadata rather than graph nodes/pins, so reconcile
     // them on both the conservative and catalog-aware paths. This also makes removing a decorator
@@ -2012,6 +2019,9 @@ fn reconcile_inner(
     let mut execution_terminals = HashSet::new();
     if let Some(catalog) = catalog {
         let mut planner = StructuralPlanner::new(planning, catalog, enricher);
+        if moved_board.is_none() {
+            planner.rendered_code_names = Some(existing_code_names.clone());
+        }
         planner.execution_baseline = execution_baseline.clone();
         planner.node_moves = (!node_moves.is_empty()).then_some(&node_moves);
         planner.removed_node_ids = removed_ids.clone();
@@ -2120,15 +2130,22 @@ fn reconcile_inner(
 
     if mode == ReconcileMode::Replace {
         let deleted = undeclared_function_layers(existing, &board_ast, scope, &submitted, &modules);
-        result.diagnostics.extend(deleted_function_call_diagnostics(
-            existing,
-            &board_ast,
-            &deleted,
-            &removed_ids,
-            &result.commands,
-        ));
-        let removals = deleted_function_layer_removals(existing, &deleted, &result.commands);
-        result.commands.extend(removals);
+        if !deleted.is_empty() {
+            // Gathered once: each pass below visits the whole board for every deleted function.
+            let nodes = all_board_nodes(existing);
+            result.diagnostics.extend(deleted_function_call_diagnostics(
+                &nodes,
+                &board_ast,
+                &deleted,
+                &removed_ids,
+                &result.commands,
+            ));
+            let removals =
+                deleted_function_layer_removals(existing, &nodes, &deleted, &result.commands);
+            result.commands.extend(removals);
+            let unwired = unwired_call_removals(&nodes, &deleted, &result.commands);
+            result.commands.extend(unwired);
+        }
     }
 
     // Layer size is ADVICE, not a gate. A crowded layer is a readability and performance
@@ -3259,9 +3276,57 @@ fn self_connection_diagnostics(existing: &Board, commands: &[BoardCommand]) -> V
         .collect()
 }
 
-/// Function layers this document renders (in scope) but no longer declares. A declaration claims
-/// its layer by anchor, else by name in its own module, as `reconcile_function_caches` does; an
+/// The `function` declarations of `doc` that claim each Function layer. A declaration claims its
+/// layer by anchor, else by name in its own module, as `reconcile_function_caches` does; an
 /// unanchored name that matches several layers claims all of them.
+fn function_declarations_by_layer<'a, 'd>(
+    existing: &'a Board,
+    doc: &'d FlatDocument,
+    modules: &ModuleResolution,
+) -> HashMap<&'a str, Vec<&'d FnDecl>> {
+    let is_function = |layer: &&Layer| matches!(layer.r#type, LayerType::Function);
+    let mut declared: HashMap<&'a str, Vec<&'d FnDecl>> = HashMap::new();
+    for (index, func) in doc.ast.functions.iter().enumerate() {
+        let claimed: Vec<&'a Layer> = match func.anchor.as_deref() {
+            Some(anchor) => existing.layers.get(anchor).into_iter().collect(),
+            None => {
+                let Some(module) = modules.board_module(&doc.function_scopes[index]) else {
+                    continue;
+                };
+                let name = to_camel_case(&func.name);
+                existing
+                    .layers
+                    .values()
+                    .filter(is_function)
+                    .filter(|layer| {
+                        to_camel_case(&layer.name) == name
+                            && owning_module(existing, layer.parent_id.as_deref()) == module
+                    })
+                    .collect()
+            }
+        };
+        for layer in claimed {
+            declared.entry(layer.id.as_str()).or_default().push(func);
+        }
+    }
+    declared
+}
+
+/// The Function layer of every in-scope function `board_ast` renders, with its rendering.
+fn rendered_function_layers<'a, 'b>(
+    existing: &'a Board,
+    board_ast: &'b BoardAst,
+    scope: Option<&HashSet<&str>>,
+) -> impl Iterator<Item = (&'a Layer, &'b FnDecl)> {
+    board_ast
+        .functions
+        .iter()
+        .filter(move |func| section_in_scope(scope, func.anchor.as_deref()))
+        .filter_map(|func| Some((existing.layers.get(func.anchor.as_deref()?)?, func)))
+        .filter(|(layer, _)| matches!(layer.r#type, LayerType::Function))
+}
+
+/// Function layers this document renders (in scope) but no longer declares.
 fn undeclared_function_layers<'a>(
     existing: &'a Board,
     board_ast: &BoardAst,
@@ -3269,51 +3334,115 @@ fn undeclared_function_layers<'a>(
     doc: &FlatDocument,
     modules: &ModuleResolution,
 ) -> Vec<&'a Layer> {
-    let is_function = |layer: &&Layer| matches!(layer.r#type, LayerType::Function);
-    let mut declared: HashSet<&str> = doc
-        .ast
-        .functions
-        .iter()
-        .filter_map(|func| func.anchor.as_deref())
-        .collect();
-    for (index, func) in doc.ast.functions.iter().enumerate() {
-        if func.anchor.is_some() {
-            continue;
-        }
-        let Some(module) = modules.board_module(&doc.function_scopes[index]) else {
-            continue;
-        };
-        let name = to_camel_case(&func.name);
-        declared.extend(
-            existing
-                .layers
-                .values()
-                .filter(is_function)
-                .filter(|layer| {
-                    to_camel_case(&layer.name) == name
-                        && owning_module(existing, layer.parent_id.as_deref()) == module
-                })
-                .map(|layer| layer.id.as_str()),
-        );
-    }
-    board_ast
-        .functions
-        .iter()
-        .filter(|func| section_in_scope(scope, func.anchor.as_deref()))
-        .filter_map(|func| existing.layers.get(func.anchor.as_deref()?))
-        .filter(is_function)
-        .filter(|layer| !declared.contains(layer.id.as_str()))
+    let declared = function_declarations_by_layer(existing, doc, modules);
+    rendered_function_layers(existing, board_ast, scope)
+        .map(|(layer, _)| layer)
+        .filter(|layer| !declared.contains_key(layer.id.as_str()))
         .collect()
 }
 
-/// Removes each deleted Function layer with everything the edit leaves inside it: nested groups,
-/// comments, and nodes the text does not render. Removing the layer alone would re-home that
-/// content to the layer's parent. Items the edit already removes or moves elsewhere are skipped.
-fn deleted_function_layer_removals(
+/// A function-local variable renders as a `let` in its function, so a still-declared function
+/// whose body neither declares nor names it has deleted it. Its unread getters then go through
+/// `remove_orphans`. A deleted function's variables go with its layer instead.
+fn undeclared_local_variable_removals(
     existing: &Board,
-    deleted: &[&Layer],
-    commands: &[BoardCommand],
+    board_ast: &BoardAst,
+    scope: Option<&HashSet<&str>>,
+    doc: &FlatDocument,
+    modules: &ModuleResolution,
 ) -> Vec<BoardCommand> {
+    let declared = function_declarations_by_layer(existing, doc, modules);
+    let mut removals = Vec::new();
+    for (layer, rendered) in rendered_function_layers(existing, board_ast, scope) {
+        let Some(written) = declared.get(layer.id.as_str()) else {
+            continue;
+        };
+        let written_locals: Vec<&VarDecl> = written
+            .iter()
+            .flat_map(|func| block_local_decls(&func.body))
+            .collect();
+        for var in block_local_decls(&rendered.body) {
+            let Some(variable_id) = var
+                .anchor
+                .as_deref()
+                .filter(|id| layer.variables.contains_key(*id))
+            else {
+                continue;
+            };
+            let name = to_camel_case(&var.name);
+            let still_declared = written_locals.iter().any(|local| match &local.anchor {
+                Some(anchor) => anchor == variable_id,
+                None => to_camel_case(&local.name) == name,
+            });
+            let still_named = written
+                .iter()
+                .any(|func| super::lower::block_mentions_name(&func.body, &var.name));
+            if !still_declared && !still_named {
+                removals.push(BoardCommand::RemoveVariable {
+                    variable_id: variable_id.to_string(),
+                    summary: Some(format!(
+                        "Remove local variable {} of function `{}`",
+                        var.name, layer.name
+                    )),
+                });
+            }
+        }
+    }
+    removals
+}
+
+/// Every `let` declaration in `block`, nested blocks included.
+fn block_local_decls(block: &Block) -> Vec<&VarDecl> {
+    let mut locals = Vec::new();
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Local(var) => locals.push(var),
+            Stmt::Branch { arms, .. } => {
+                locals.extend(arms.iter().flat_map(|arm| block_local_decls(&arm.body)))
+            }
+            Stmt::Loop { body, .. } => locals.extend(block_local_decls(body)),
+            Stmt::Handler(event) => locals.extend(block_local_decls(&event.body)),
+            Stmt::Collapse(group) => locals.extend(block_local_decls(&group.body)),
+            Stmt::Let { .. }
+            | Stmt::Destructure { .. }
+            | Stmt::Call { .. }
+            | Stmt::Assign { .. }
+            | Stmt::FieldAssign { .. }
+            | Stmt::LocalAlias { .. }
+            | Stmt::Return { .. }
+            | Stmt::Comment(_) => {}
+        }
+    }
+    locals
+}
+
+/// The impure call nodes among `nodes` that target Function layer `layer_id`.
+fn function_calls<'a>(nodes: &[&'a Node], layer_id: &str) -> impl Iterator<Item = &'a Node> {
+    nodes.iter().copied().filter(move |node| {
+        node.name == CALL_FUNCTION_NODE_TYPE
+            && exec_input_pin(node).is_some()
+            && node_pin_literal_string(node, FUNCTION_LAYER_ID_PIN).as_deref() == Some(layer_id)
+    })
+}
+
+/// Whether an execution wire drives `call` or the plan wires it. Nothing ever runs a call the
+/// board leaves unwired and the plan does not touch, such as a `detached { helper() }` leftover.
+fn call_is_wired(call: &Node, commands: &[BoardCommand]) -> bool {
+    call.pins
+        .values()
+        .any(|pin| pin.pin_type == PinType::Input && is_exec_pin(pin) && !pin.depends_on.is_empty())
+        || commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, to_node, .. }
+                    | BoardCommand::DisconnectPins { from_node, to_node, .. }
+                    if *from_node == call.id || *to_node == call.id
+            )
+        })
+}
+
+/// The ids of every node, comment and layer the plan removes or moves.
+fn removed_or_moved_ids(commands: &[BoardCommand]) -> HashSet<&str> {
     let mut handled: HashSet<&str> = HashSet::new();
     for command in commands {
         match command {
@@ -3326,7 +3455,12 @@ fn deleted_function_layer_removals(
             _ => {}
         }
     }
-    let depth_below = |layer: &Layer, root: &str| {
+    handled
+}
+
+/// Layer `root` and every layer nested in it, deepest first.
+fn layers_within<'a>(existing: &'a Board, root: &'a str) -> Vec<&'a Layer> {
+    let depth_below = |layer: &Layer| {
         let mut current = layer;
         for depth in 0..=existing.layers.len() {
             if current.id == root {
@@ -3336,25 +3470,38 @@ fn deleted_function_layer_removals(
         }
         None
     };
+    let mut layers: Vec<(usize, &Layer)> = existing
+        .layers
+        .values()
+        .filter_map(|layer| Some((depth_below(layer)?, layer)))
+        .collect();
+    layers.sort_by(|(left_depth, left), (right_depth, right)| {
+        right_depth
+            .cmp(left_depth)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    layers.into_iter().map(|(_, layer)| layer).collect()
+}
 
+/// Removes each deleted Function layer with everything the edit leaves inside it: nested groups,
+/// comments, and nodes the text does not render. Removing the layer alone would re-home that
+/// content to the layer's parent. Items the edit already removes or moves elsewhere are skipped.
+fn deleted_function_layer_removals(
+    existing: &Board,
+    nodes: &[&Node],
+    deleted: &[&Layer],
+    commands: &[BoardCommand],
+) -> Vec<BoardCommand> {
+    let handled = removed_or_moved_ids(commands);
     let mut removals = Vec::new();
     for function in deleted {
-        let mut layers: Vec<(usize, &Layer)> = existing
-            .layers
-            .values()
-            .filter_map(|layer| Some((depth_below(layer, &function.id)?, layer)))
-            .collect();
-        layers.sort_by(|(left_depth, left), (right_depth, right)| {
-            right_depth
-                .cmp(left_depth)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        let inside: HashSet<&str> = layers.iter().map(|(_, layer)| layer.id.as_str()).collect();
+        let layers = layers_within(existing, &function.id);
+        let inside: HashSet<&str> = layers.iter().map(|layer| layer.id.as_str()).collect();
         let in_function = |layer: Option<&str>| layer.is_some_and(|layer| inside.contains(layer));
 
         removals.extend(
-            all_board_nodes(existing)
-                .into_iter()
+            nodes
+                .iter()
                 .filter(|node| in_function(node.layer.as_deref()))
                 .filter(|node| !handled.contains(node.id.as_str()))
                 .map(|node| BoardCommand::RemoveNode {
@@ -3383,29 +3530,60 @@ fn deleted_function_layer_removals(
         removals.extend(
             layers
                 .iter()
-                .filter(|(_, layer)| !handled.contains(layer.id.as_str()))
-                .map(|(_, layer)| BoardCommand::RemoveLayer {
-                    layer_id: layer.id.clone(),
-                    summary: Some(if layer.id == function.id {
-                        format!("Remove function `{}`, no longer declared", layer.name)
-                    } else {
-                        format!(
-                            "Remove group `{}` with deleted function `{}`",
-                            layer.name, function.name
-                        )
-                    }),
-                }),
+                .filter(|layer| !handled.contains(layer.id.as_str()))
+                .map(|layer| deleted_function_layer_removal(layer, function)),
         );
     }
     removals
 }
 
+/// Removes `layer`, the deleted Function `function` itself or a group nested in it.
+fn deleted_function_layer_removal(layer: &Layer, function: &Layer) -> BoardCommand {
+    BoardCommand::RemoveLayer {
+        layer_id: layer.id.clone(),
+        summary: Some(if layer.id == function.id {
+            format!("Remove function `{}`, no longer declared", layer.name)
+        } else {
+            format!(
+                "Remove group `{}` with deleted function `{}`",
+                layer.name, function.name
+            )
+        }),
+    }
+}
+
+/// A deleted function's calls that nothing wires could only ever point at a missing layer, so
+/// they go with it. Calls the plan already removes or moves are skipped.
+fn unwired_call_removals(
+    nodes: &[&Node],
+    deleted: &[&Layer],
+    commands: &[BoardCommand],
+) -> Vec<BoardCommand> {
+    let handled = removed_or_moved_ids(commands);
+    deleted
+        .iter()
+        .flat_map(|function| {
+            function_calls(nodes, &function.id)
+                .filter(|call| {
+                    !handled.contains(call.id.as_str()) && !call_is_wired(call, commands)
+                })
+                .map(|call| BoardCommand::RemoveNode {
+                    node_id: call.id.clone(),
+                    summary: Some(format!(
+                        "Remove unwired call to deleted function `{}`",
+                        function.name
+                    )),
+                })
+        })
+        .collect()
+}
+
 /// A deleted `function` declaration takes the function's body and layer with it, so a call the
 /// board keeps or the plan adds failed only at run time ("Function 'X' has no node connected to
-/// its exec input"). Kept calls are impure call nodes this edit does not remove, written in this
-/// document or outside its scope.
+/// its exec input"). Kept calls are wired impure call nodes this edit does not remove, written in
+/// this document or outside its scope; unwired ones go with the function.
 fn deleted_function_call_diagnostics(
-    existing: &Board,
+    nodes: &[&Node],
     board_ast: &BoardAst,
     deleted: &[&Layer],
     removed: &HashSet<String>,
@@ -3418,56 +3596,15 @@ fn deleted_function_call_diagnostics(
     deleted
         .iter()
         .filter_map(|layer| {
-            let mut sites: Vec<String> = all_board_nodes(existing)
-                .into_iter()
-                .filter(|node| {
-                    node.name == CALL_FUNCTION_NODE_TYPE
-                        && !removed.contains(&node.id)
-                        && exec_input_pin(node).is_some()
-                        && node_pin_literal_string(node, FUNCTION_LAYER_ID_PIN).as_deref()
-                            == Some(layer.id.as_str())
-                })
+            let mut sites: Vec<String> = function_calls(nodes, &layer.id)
+                .filter(|node| !removed.contains(&node.id) && call_is_wired(node, commands))
                 .map(|node| match sections.get(&node.id) {
                     Some(section) => format!("`{}` (`{}`) in {section}", node.friendly_name, node.id),
                     None => format!("`{}` (`{}`)", node.friendly_name, node.id),
                 })
                 .collect();
             sites.sort();
-            let new_calls = commands
-                .iter()
-                .filter(|command| {
-                    matches!(
-                        command,
-                        BoardCommand::UpdateNodePin {
-                            node_id,
-                            pin_id,
-                            value: flow_like_types::Value::String(target),
-                            ..
-                        } if node_id.starts_with('$')
-                            && pin_id == FUNCTION_LAYER_ID_PIN
-                            && *target == layer.id
-                    )
-                })
-                .count();
-            if new_calls > 0 {
-                sites.push(format!("{new_calls} new call(s) written in this document"));
-            }
-            let name = to_camel_case(&layer.name);
-            let references = commands
-                .iter()
-                .filter(|command| {
-                    matches!(
-                        command,
-                        BoardCommand::SetNodeFunctionRefs { fn_refs, .. }
-                            if fn_refs.iter().any(|reference| to_camel_case(reference) == name)
-                    )
-                })
-                .count();
-            if references > 0 {
-                sites.push(format!(
-                    "{references} `fnRefs`/`tools` list(s) written in this document"
-                ));
-            }
+            sites.extend(planned_call_sites(layer, commands));
             (!sites.is_empty()).then(|| {
                 format!(
                     "function `{}` is no longer declared, but it is still called by {}; without the declaration its body is deleted and those calls fail at run time. Remove the calls too, or keep `function {}`",
@@ -3478,6 +3615,46 @@ fn deleted_function_call_diagnostics(
             })
         })
         .collect()
+}
+
+/// The calls to Function `layer` this document adds: new call nodes, and `fnRefs`/`tools` lists
+/// that name it.
+fn planned_call_sites(layer: &Layer, commands: &[BoardCommand]) -> Vec<String> {
+    let name = to_camel_case(&layer.name);
+    let new_calls = commands
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin {
+                    node_id,
+                    pin_id,
+                    value: flow_like_types::Value::String(target),
+                    ..
+                } if node_id.starts_with('$')
+                    && pin_id == FUNCTION_LAYER_ID_PIN
+                    && *target == layer.id
+            )
+        })
+        .count();
+    let references = commands
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                BoardCommand::SetNodeFunctionRefs { fn_refs, .. }
+                    if fn_refs.iter().any(|reference| to_camel_case(reference) == name)
+            )
+        })
+        .count();
+    [
+        (new_calls, "new call(s)"),
+        (references, "`fnRefs`/`tools` list(s)"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, sites)| format!("{count} {sites} written in this document"))
+    .collect()
 }
 
 /// Every statement anchor of a lowered board, mapped to the section that renders it.
@@ -8742,8 +8919,9 @@ struct StructuralPlanner<'a> {
     nested_handler_depth: usize,
     /// node ref -> the FlowScript names the text gives that node's values, to store on it.
     code_names: BTreeMap<String, BTreeMap<String, String>>,
-    /// (node id, `code_names` key) -> the names the existing board renders; lowered on first use.
-    rendered_code_names: Option<HashMap<(String, String), HashSet<String>>>,
+    /// (node id, `code_names` key) -> the names the existing board renders; lowered on first use
+    /// unless the caller already lowered this same board.
+    rendered_code_names: Option<Arc<RenderableCodeNames>>,
     /// Outer bindings a branch arm reassigned: name -> (declaring scope index, id of the Branch
     /// statement whose arm wrote it). The arm shadows the binding; reading the declaration after
     /// that statement is the error. Sibling arms read it while the statement is still planning.
@@ -16691,9 +16869,9 @@ impl<'a> StructuralPlanner<'a> {
         match entity {
             NodeEntity::New { .. } => {}
             NodeEntity::Existing(node_id) => {
-                let rendered = self
-                    .rendered_code_names
-                    .get_or_insert_with(|| super::lower::renderable_code_names(self.existing));
+                let rendered = self.rendered_code_names.get_or_insert_with(|| {
+                    Arc::new(super::lower::renderable_code_names(self.existing))
+                });
                 if rendered
                     .get(&(node_id.clone(), key.to_string()))
                     .is_some_and(|names| names.contains(name))

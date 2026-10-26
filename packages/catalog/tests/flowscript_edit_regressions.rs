@@ -2242,6 +2242,122 @@ module lea {
     apply_module_file_edit(&mut board, &module_id, "\"lea\"", "\"lea2\"").await;
 }
 
+/// Cut the execution wire into the only `helper()` call, which then renders as a `detached` block.
+async fn unwire_helper_call(board: &mut Board) -> String {
+    let nodes = all_nodes(board);
+    let call = nodes
+        .iter()
+        .find(|node| node.name == "control_call_function")
+        .expect("helper is called");
+    let entry = nodes
+        .iter()
+        .find(|node| node.name == "events_simple")
+        .expect("the caller event exists");
+    let command = BoardCommand::DisconnectPins {
+        from_node: entry.id.clone(),
+        from_pin: exec_pin(entry, PinType::Output).id.clone(),
+        to_node: call.id.clone(),
+        to_pin: exec_pin(call, PinType::Input).id.clone(),
+        summary: None,
+    };
+    let call_id = call.id.clone();
+    apply_commands(board, vec![command]).await;
+    call_id
+}
+
+/// "function `X` is no longer declared, but it is still called by 94 calls": calls whose execution
+/// input nothing drives can never run, yet they blocked deleting the function they target.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_function_removes_its_unwired_calls() {
+    let mut board = board_from(HELPER_AND_CALLER).await;
+    unwire_helper_call(&mut board).await;
+    let text = anchored(&board);
+    assert!(text.contains("detached {\n    helper()"), "{text}");
+
+    apply_edit(&mut board, &without_block(&text, "function helper()")).await;
+    assert!(board.layers.is_empty(), "{:?}", board.layers.keys());
+    assert!(!node_types_on(&board).contains(&"control_call_function"));
+    info(&board, "after");
+    assert_round_trips(&board);
+
+    let mut board = board_from(HELPER_AND_CALLER).await;
+    let unwired = unwire_helper_call(&mut board).await;
+    let text = format!(
+        "{}\neventsSimple other() {{\n    helper()\n}}\n",
+        anchored(&board)
+    );
+    apply_edit(&mut board, &text).await;
+    let diagnostics = reconcile_diagnostics(
+        &board,
+        &without_block(&anchored(&board), "function helper()"),
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function `helper` is no longer declared")
+                && diagnostic.contains("in event `other`")
+                && !diagnostic.contains(&unwired)
+        }),
+        "{diagnostics:?}"
+    );
+}
+
+const HELPER_WITH_LOCAL: &str = r#"function helper() {
+    let note: string = "x"
+    note = "y"
+    log::info({ message: note, toast: false })
+    log::info({ message: "inside", toast: false })
+}
+
+eventsSimple run() {
+    helper()
+}
+"#;
+
+fn helper_locals(board: &Board) -> Vec<&str> {
+    board
+        .layers
+        .values()
+        .find(|layer| layer.name == "helper")
+        .expect("function `helper` exists")
+        .variables
+        .values()
+        .map(|variable| variable.name.as_str())
+        .collect()
+}
+
+/// A function-local `let` deleted with every line that used it stayed on the layer and rendered
+/// back on the next pass, with its getter still on the canvas.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_local_let_removes_its_variable() {
+    let mut board = board_from(HELPER_WITH_LOCAL).await;
+    let text = anchored(&board);
+    assert!(text.contains("let note: string"), "{text}");
+    let deleted = without_line(
+        &without_line(&without_line(&text, "let note"), "note = "),
+        "info(note",
+    );
+    apply_edit(&mut board, &deleted).await;
+    assert!(
+        helper_locals(&board).is_empty(),
+        "{:?}",
+        helper_locals(&board)
+    );
+    let node_types = node_types_on(&board);
+    assert!(
+        !node_types.contains(&"variable_get") && !node_types.contains(&"variable_set"),
+        "{node_types:?}"
+    );
+    assert!(!anchored(&board).contains("note"), "{}", anchored(&board));
+    assert_round_trips(&board);
+
+    let mut board = board_from(HELPER_WITH_LOCAL).await;
+    let still_read = without_line(&without_line(&anchored(&board), "let note"), "note = ");
+    apply_edit(&mut board, &still_read).await;
+    assert_eq!(helper_locals(&board), ["note"]);
+    assert!(node_types_on(&board).contains(&"variable_get"));
+    assert_round_trips(&board);
+}
+
 const ROBOT_SHOWROOM: &str = r#"use log::*
 
 eventsGeneric robotChat(payload: Struct, message: string) {

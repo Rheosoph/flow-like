@@ -62,6 +62,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/channel";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
+	applyFlowScriptFromResponse,
 	flowScriptFromResponse,
 	scopedFlowScriptFromResponse,
 } from "@flow-like/flow-like-ui/lib/flowscript/response";
@@ -1059,7 +1060,7 @@ export class WebBoardState implements IBoardState {
 		scopeAnchors?: string[],
 		module?: string,
 	): Promise<IApplyFlowScriptResponse> {
-		return apiPost<IApplyFlowScriptResponse>(
+		const response = await apiPost<unknown>(
 			`apps/${appId}/board/${boardId}/flowscript/apply`,
 			{
 				flowscript,
@@ -1073,6 +1074,7 @@ export class WebBoardState implements IBoardState {
 			},
 			this.backend.auth,
 		);
+		return applyFlowScriptFromResponse(response, boardId);
 	}
 
 	async flowIrCommitDisposition(

@@ -113,6 +113,12 @@ reference, then repeat with `concurrency: 8` to send synchronized bursts from
 independent headless browsers. Each browser performs the normal page bootstrap.
 Start the service with `--executor-slots 8` to admit eight concurrent runs, or
 keep fewer slots when measuring admission failures under overload.
+These bursts share one local API process and one executor process. They measure
+contention within that pair of processes. `--workers` changes their thread count;
+it does not add replicas. Lambda can assign concurrent invocations to separate
+execution environments, so this workload does not establish a Lambda scaling
+bottleneck. Use the independent-process runner below to test one active invocation
+per environment, with separate warm and cold-cache scenarios.
 `samples` is the planned action count per navigation across all workers. The
 runner stops after a failed burst and retains partial results and failure counts,
 including executor admission rejections. Initial and repeat navigation labels
@@ -175,7 +181,13 @@ nodes need those catalog features added before they can be benchmarked.
 ### Process-cold comparisons
 
 Use fresh API and executor processes to measure startup separately from warmed
-actions. Build both revisions first and keep their binaries at distinct paths:
+actions. Build both revisions first and keep their binaries at distinct paths.
+
+Use separate source and Cargo target directories for each revision. Copying a
+revision over an existing checkout while preserving file timestamps can cause
+Cargo to reuse artifacts from the previous revision. If you reuse a target
+directory, force the affected crates to rebuild and retain the build log with
+each binary.
 
 ```bash
 python3 tests/widget-action-stack/cold.py \
@@ -221,6 +233,72 @@ bootstrap confidence intervals. Twelve pairs are exploratory; small effects and
 tail estimates need more repetitions. Request records also contain a hash of the
 HTTP method and path, excluding queries and credentials. Repeated hashes identify
 endpoints to inspect; requests with different parameters can still be necessary.
+
+### Independent API and executor processes
+
+Use the replicated runner to avoid putting eight concurrent actions on one local
+executor. With `--replicas 8`, it starts eight frontend API processes, eight
+executor processes, and eight additional API processes for callbacks and execution
+resources. Each process uses a current-thread Tokio runtime. A local proxy admits
+one request per process and keeps the slot occupied until the upstream HTTP
+response ends, including accounting after the terminal execution event.
+
+The callback pool lets executors finish while frontend API requests wait for
+their streams. It also serves browser messages to execution channels. All
+processes use the same fixture database and object storage.
+API database pools use the AWS connection budget of four connections maximum,
+with no minimum. The benchmark records process identities, runtime models,
+binary hashes, admissions, queue time, and full response lifetimes.
+The runner uses the standard fixture ports and reserves ports 8442 and 8443,
+plus backend ports starting at 18440, 18540, and 18640. It refuses to adopt
+existing listeners. `--thread-stack-mb` applies to spawned Rust threads;
+it does not resize the current-thread runtime's main stack.
+
+Build both revisions with the current benchmark adapter, then run:
+
+```bash
+python3 tests/widget-action-stack/replicated.py \
+  --baseline /tmp/widget-baseline/release-fast/widget_action_stack \
+  --candidate /tmp/widget-candidate/release-fast/widget_action_stack \
+  --config /tmp/flow-widget-stack/fixture/browser-config.json \
+  --replicas 8 --samples 104 --warmup 3 --trials 4 \
+  --modes warm navigation action --output /tmp/widget-replicated
+python3 tests/widget-action-stack/replicated_compare.py /tmp/widget-replicated \
+  --json-output /tmp/widget-replicated/comparison.json
+```
+
+The runner alternates baseline and candidate order. Passing the same binary
+twice provides an A/A check of measurement variation. Frontend stage options are
+the same as for `cold.py`. Use `--replicas 1` in a separate suite for a sequential
+reference. Comparisons across different process topologies are descriptive and
+cannot establish a code speedup.
+
+Warm trials require completed work on every replica before measured clicks.
+Navigation trials start fresh pools before loading the pages. Action trials
+verify all page loads and their accounting, drain outstanding requests, then
+replace every backend process while preserving each browser document.
+Unexpected requests before a worker's click invalidate that cold boundary.
+The comparison checks the complete admission ledger and persisted accounting;
+failed or partially observed trials cannot produce improvement claims. Concurrent
+actions are correlated, so uncertainty is calculated across paired trials rather
+than treating eight actions in one burst as eight independent experiments.
+
+The browser intentionally cancels invoke streams after successful terminal
+events. Such cancellations are accepted only when the matching request has
+verified execution success, persisted accounting, and a fully drained upstream
+response. Older API revisions may return 404 for the optional telemetry sampling
+configuration. The manifest declares this single exception; the browser must
+observe it during bootstrap, and it never counts as successful warmup work.
+
+These processes still share the host's CPU and memory. The proxy, browsers,
+Postgres, Redis, and object store also run locally. No CPU or memory quota is
+enforced. Fresh processes leave storage and OS caches warm, and process readiness
+is measured separately from navigation and clicks. The native adapter uses the
+default allocator and its local API initialization path; AWS binaries use
+mimalloc and a different bootstrap. Local timers keep running between requests.
+Lambda scheduling, DSQL latency, and the API Lambda compute-attempt wrapper remain
+outside this test. Confirm hosted latency with AWS traces after identifying an
+improvement locally.
 
 ### Diagnostic workload
 

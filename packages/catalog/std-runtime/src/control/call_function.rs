@@ -9,7 +9,7 @@ use flow_like::flow::{
     },
     node::{Node, NodeLogic},
     pin::{Pin, PinType},
-    utils::evaluate_pin_value,
+    utils::evaluate_pin_value_borrowed,
     variable::VariableType,
 };
 use flow_like_catalog_data_support::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
@@ -76,11 +76,7 @@ impl CallFunctionNode {
         layer: &Layer,
         overrides: &BTreeMap<String, Arc<Value>>,
     ) {
-        let overrides_opt = if overrides.is_empty() {
-            None
-        } else {
-            Some(overrides.clone())
-        };
+        let overrides_opt = (!overrides.is_empty()).then_some(overrides);
         // Resolved by direction: an input may share an output's name, and a by-name lookup
         // would write the return value into that input.
         let output_pins = Self::output_data_pins(context);
@@ -103,10 +99,9 @@ impl CallFunctionNode {
                     continue;
                 };
 
-                // Use evaluate_pin_value to follow the full dependency chain
-                // while checking overrides at each step. This correctly handles
-                // bridge pins, relay pins, and prevents stale shared pin reads.
-                if let Ok(value) = evaluate_pin_value(pin, &overrides_opt).await {
+                // Follow the full dependency chain and check overrides at each step
+                // so bridge and relay pins do not read stale shared values.
+                if let Ok(value) = evaluate_pin_value_borrowed(pin, overrides_opt).await {
                     let _ = context.set_pin_ref_value(output_pin, value).await;
                     break;
                 }
@@ -757,7 +752,10 @@ mod tests {
     use super::*;
     use ahash::AHashMap;
     use flow_like::{
-        flow::{board::ExecutionStage, execution::Run, pin::ValueType, variable::Variable},
+        flow::{
+            board::ExecutionStage, execution::Run, pin::ValueType, utils::evaluate_pin_value,
+            variable::Variable,
+        },
         profile::Profile,
         state::{FlowLikeConfig, FlowLikeState},
         utils::http::HTTPClient,

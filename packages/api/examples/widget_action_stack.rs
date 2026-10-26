@@ -33,11 +33,21 @@ fn main() -> Result<()> {
     if workers == 0 {
         return Err(anyhow!("BENCH_WORKER_THREADS must be positive"));
     }
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(workers)
-        .enable_all()
-        .build()?
-        .block_on(serve(&service))
+    let model = std::env::var("BENCH_RUNTIME_MODEL").unwrap_or_else(|_| "multi-thread".to_owned());
+    let mut builder = match model.as_str() {
+        "multi-thread" => {
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(workers);
+            builder
+        }
+        "current-thread" if workers == 1 => tokio::runtime::Builder::new_current_thread(),
+        _ => {
+            return Err(anyhow!(
+                "BENCH_RUNTIME_MODEL must be multi-thread or current-thread (one worker)"
+            ));
+        }
+    };
+    builder.enable_all().build()?.block_on(serve(&service))
 }
 
 async fn serve(service: &str) -> Result<()> {
@@ -77,6 +87,7 @@ async fn serve(service: &str) -> Result<()> {
             std::env::var("RUNTIME_PORT").unwrap_or_else(|_| "8441".to_owned()),
         )
     };
+    let router = router.route("/__benchmark/runtime", axum::routing::get(runtime_info));
     let listener =
         tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port.parse::<u16>()?)).await?;
     tracing::info!(service, address = %listener.local_addr()?, "Widget benchmark service ready");
@@ -86,6 +97,15 @@ async fn serve(service: &str) -> Result<()> {
         })
         .await?;
     Ok(())
+}
+
+async fn runtime_info() -> axum::Json<flow_like_types::Value> {
+    let model = match tokio::runtime::Handle::current().runtime_flavor() {
+        tokio::runtime::RuntimeFlavor::CurrentThread => "current-thread",
+        tokio::runtime::RuntimeFlavor::MultiThread => "multi-thread",
+        _ => "unknown",
+    };
+    axum::Json(flow_like_types::json::json!({"runtimeModel": model}))
 }
 
 async fn compute_context(

@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import compare
 import run
+import topology
+from test_topology import replicated
 
 
 def bundle():
@@ -45,6 +47,48 @@ def bundle():
 
 
 class ReportComparison(unittest.TestCase):
+    def test_legacy_and_explicit_shared_topology_remain_comparable(self):
+        first, second = bundle(), bundle()
+        second["manifest"]["execution_topology"] = topology.shared_topology(1, 4)
+        self.assertEqual(compare.mismatches(first, second), [])
+        output, invalid = compare.render(first, second, [])
+        self.assertFalse(invalid)
+        self.assertIn("shared-process (legacy report)", output)
+
+    def test_shared_and_replicated_topologies_cannot_claim_a_code_speedup(self):
+        first, second = bundle(), bundle()
+        for value in (first, second):
+            value["manifest"]["executor_slots"] = 1
+        second["manifest"]["execution_topology"] = replicated(8)
+        mismatch = compare.mismatches(first, second)
+        self.assertTrue(any("execution_topology" in issue for issue in mismatch))
+        output, _ = compare.render(first, second, mismatch)
+        self.assertIn("Percent changes withheld", output)
+
+    def test_replica_counts_and_invalid_topologies_are_never_equal_evidence(self):
+        first, second = bundle(), bundle()
+        for value in (first, second):
+            value["manifest"]["executor_slots"] = 1
+            value["manifest"]["execution_topology"] = replicated(8)
+        self.assertEqual(compare.mismatches(first, second), [])
+        second["manifest"]["execution_topology"] = replicated(4)
+        self.assertTrue(compare.mismatches(first, second))
+        for malformed in (None, {}, {**replicated(8), "leaseBoundary": "response-headers"}):
+            for value in (first, second):
+                value["manifest"]["execution_topology"] = malformed
+            with self.subTest(topology=malformed):
+                self.assertTrue(compare.mismatches(first, second))
+                self.assertTrue(compare.assessment(first)["issues"])
+
+    def test_database_pool_budget_must_match_when_recorded(self):
+        first, second = bundle(), bundle()
+        second["manifest"]["database_pool"] = {"maxConnections": 4, "minConnections": 0}
+        self.assertTrue(compare.mismatches(first, second))
+        first["manifest"]["database_pool"] = dict(second["manifest"]["database_pool"])
+        self.assertEqual(compare.mismatches(first, second), [])
+        second["manifest"]["database_pool"]["maxConnections"] = 8
+        self.assertTrue(compare.mismatches(first, second))
+
     def test_layout_and_implementation_changes_keep_identical_workload(self):
         first = bundle()
         second = copy.deepcopy(first)

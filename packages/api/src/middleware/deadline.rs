@@ -335,6 +335,18 @@ const RULES: &[Rule] = &[
         "/api/v1/apps/{app_id}/board/{board_id}/runs/{run_id}/logs",
         Data,
     ),
+    // A 9,394-node board renders in up to 13.4 s and reconciles in up to 59.2 s
+    // (2026-10-26). A cut apply would drop the board save after the reconcile.
+    rule(
+        GET_HEAD,
+        "/api/v1/apps/{app_id}/board/{board_id}/flowscript",
+        Data,
+    ),
+    rule(
+        M::POST,
+        "/api/v1/apps/{app_id}/board/{board_id}/flowscript/apply",
+        Data,
+    ),
     // Observed max 4.5 s on a small app; inline forks copy up to 64 MiB.
     rule(M::POST, "/api/v1/apps/{app_id}/fork", Data),
     rule(M::POST, "/api/v1/apps/fork/online/begin", Data),
@@ -453,25 +465,37 @@ async fn enforce(
     deadline: Instant,
     expiry: Expiry,
 ) -> Response {
-    match timeout_at(deadline, handler).await {
-        Ok(response) => {
-            let (parts, body) = response.into_parts();
-            Response::from_parts(parts, Body::new(DeadlineBody::new(body, deadline, expiry)))
-        }
-        Err(_) => {
-            let budget = expiry.class.budget().as_secs();
+    let Ok(response) = timeout_at(deadline, handler).await else {
+        return deadline_exceeded(expiry);
+    };
+    // A handler that blocks the thread (CPU-bound work on the current-thread Lambda runtime)
+    // can return after its deadline because the timer never got to fire. A buffered body is
+    // the finished result, and any write behind it is committed, so it is sent whole rather
+    // than emptied into a 200 with no body.
+    let overran = Instant::now() >= deadline;
+    if response.body().size_hint().exact().is_some() {
+        if overran {
             expiry.exceeded(Phase::Handler);
-            ApiError::request_deadline_exceeded(format!(
-                "The request exceeded its {budget} s deadline"
-            ))
-            .into_response()
         }
+        return response;
     }
+    if overran {
+        return deadline_exceeded(expiry);
+    }
+    let (parts, body) = response.into_parts();
+    Response::from_parts(parts, Body::new(DeadlineBody::new(body, deadline, expiry)))
+}
+
+fn deadline_exceeded(expiry: Expiry) -> Response {
+    let budget = expiry.class.budget().as_secs();
+    expiry.exceeded(Phase::Handler);
+    ApiError::request_deadline_exceeded(format!("The request exceeded its {budget} s deadline"))
+        .into_response()
 }
 
 pin_project! {
-    /// Ends the response body at the request's absolute deadline. Headers are
-    /// already sent by then, so the stream closes cleanly and the request is
+    /// Ends a streamed response body at the request's absolute deadline. Headers
+    /// are already sent by then, so the stream closes cleanly and the request is
     /// flagged as failed for the request metrics.
     struct DeadlineBody {
         body: Body,
@@ -919,6 +943,24 @@ mod tests {
             None,
         ),
         (
+            "GET",
+            "/api/v1/apps/{app_id}/board/{board_id}/flowscript",
+            Data,
+            Some(13.422),
+        ),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/board/{board_id}/flowscript/apply",
+            Data,
+            Some(59.239),
+        ),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/board/{board_id}/flowscript/render",
+            Write,
+            None,
+        ),
+        (
             "POST",
             "/api/v1/apps/{app_id}/board/{board_id}",
             Write,
@@ -1177,7 +1219,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_at_deadline(started, Write);
+        assert_at_deadline(started, Data);
         assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(
             response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
@@ -1188,8 +1230,54 @@ mod tests {
         assert_eq!(body["error"]["code"], "GATEWAY_TIMEOUT");
         assert_eq!(
             body["error"]["message"],
-            "The request exceeded its 30 s deadline"
+            "The request exceeded its 120 s deadline"
         );
+    }
+
+    fn read_expiry(fault: &ResponseFault) -> Expiry {
+        Expiry {
+            method: Method::GET,
+            route: None,
+            class: Read,
+            fault: Some(fault.clone()),
+        }
+    }
+
+    /// `timeout_at` polls the handler before its timer, so a handler that is ready on its
+    /// first poll past the deadline stands in for one that blocked the thread until then.
+    async fn past_deadline() -> Instant {
+        let deadline = Instant::now();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        deadline
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_buffered_body_finished_past_the_deadline_is_sent_whole() {
+        let fault = ResponseFault::default();
+        let response = enforce(
+            async { axum::Json(serde_json::json!({ "flowscript": "main {}" })).into_response() },
+            past_deadline().await,
+            read_expiry(&fault),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["flowscript"], "main {}");
+        assert!(fault.is_marked(), "the overrun still counts as an error");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stream_returned_past_the_deadline_gets_the_api_504() {
+        let fault = ResponseFault::default();
+        let response = enforce(
+            async { Response::new(ticking_stream(Duration::from_secs(1))) },
+            past_deadline().await,
+            read_expiry(&fault),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert!(fault.is_marked());
     }
 
     #[tokio::test(start_paused = true)]

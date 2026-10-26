@@ -31,7 +31,7 @@ class ColdOrchestration(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "incomplete build provenance"):
                 cold.frontend_identity(state)
 
-    def controlled(self, program, handler):
+    def controlled(self, program, handler, concurrency=1):
         children = []
         popen = subprocess.Popen
 
@@ -44,7 +44,7 @@ class ColdOrchestration(unittest.TestCase):
             with patch.object(run.subprocess, "Popen", side_effect=launch), \
                     patch.object(run, "process_started", return_value="owned-test-child"), \
                     contextlib.redirect_stdout(io.StringIO()):
-                run.controlled_browser([sys.executable, "-c", program], dict(os.environ), handler, 5)
+                run.controlled_browser([sys.executable, "-c", program], dict(os.environ), handler, 5, concurrency)
         finally:
             for child in children:
                 # Assert before emergency cleanup so a leaked child fails the test.
@@ -73,6 +73,25 @@ class ColdOrchestration(unittest.TestCase):
             ])
             self.controlled(program, restart)
             self.assertEqual(calls, ["restarted"])
+
+    def test_multiworker_boundary_waits_for_the_complete_worker_set(self):
+        handler = Mock()
+        program = "\n".join([
+            "import json, sys",
+            "print(json.dumps({'type':'benchmark_cold_action_ready','workers':[0,1,2,3,4,5,6,7],'navigation':0}), flush=True)",
+            "assert json.loads(sys.stdin.readline()) == {'type':'benchmark_cold_action_continue'}",
+        ])
+        self.controlled(program, handler, concurrency=8)
+        handler.assert_called_once_with()
+
+    def test_malformed_worker_sets_cannot_restart_backends(self):
+        for workers in ([0], [0, 0], [False, 1], [0, 1, 2], None, "01"):
+            with self.subTest(workers=workers), self.assertRaisesRegex(ValueError, "worker boundary"):
+                run.validate_cold_marker({"navigation": 0, "workers": workers}, 2)
+        for message in ({"navigation": False, "worker": 0},
+                        {"navigation": 0, "worker": 0, "workers": [0]}):
+            with self.assertRaisesRegex(ValueError, "worker boundary"):
+                run.validate_cold_marker(message, 1)
 
     def test_restart_failure_sends_abort_and_preserves_original_error(self):
         with tempfile.TemporaryDirectory() as temporary:
