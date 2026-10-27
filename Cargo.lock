@@ -5291,7 +5291,7 @@ checksum = "ff6669899e23cb87b43daf7996f0ea3b9c07d0fb933d745bb7b815b052515ae3"
 dependencies = [
  "proc-macro2",
  "quote",
- "serde_derive_internals 0.29.1",
+ "serde_derive_internals",
  "syn 2.0.117",
 ]
 
@@ -5430,7 +5430,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -7494,7 +7494,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -7845,7 +7845,7 @@ dependencies = [
 [[package]]
 name = "datafusion-federation"
 version = "0.5.5"
-source = "git+https://github.com/Rheosoph/datafusion-federation.git?rev=110329bd183b25e10aa8c97942aa0ae5afecb078#110329bd183b25e10aa8c97942aa0ae5afecb078"
+source = "git+https://github.com/Rheosoph/datafusion-federation.git?rev=343534290bf298f24adf11d756eafeab2a70906c#343534290bf298f24adf11d756eafeab2a70906c"
 dependencies = [
  "arrow-json",
  "async-stream",
@@ -12849,16 +12849,15 @@ dependencies = [
 
 [[package]]
 name = "fontdb"
-version = "0.22.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3a6f9af55fb97ad673fb7a69533eb2f967648a06fa21f8c9bb2cd6d33975716"
+checksum = "2660c5e9157bf76d2db1294e4a9feba604ef610819a3b591088d0d8392a3290f"
 dependencies = [
  "fontconfig-parser",
  "log",
  "memmap2",
  "slotmap",
  "tinyvec",
- "ttf-parser 0.24.1",
 ]
 
 [[package]]
@@ -14096,16 +14095,6 @@ dependencies = [
 
 [[package]]
 name = "gif"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
-dependencies = [
- "color_quant",
- "weezl 0.1.12",
-]
-
-[[package]]
-name = "gif"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
@@ -14392,19 +14381,6 @@ dependencies = [
  "futures-core",
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "gloo-utils"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "037fcb07216cb3a30f7292bd0176b050b7b9a052ba830ef7d5d65f6dc64ba58e"
-dependencies = [
- "js-sys",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -14914,6 +14890,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "harfrust"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c03d949a14aa089bbb282f7dd76a498a7f684428e4257202efc119ec010376f9"
+dependencies = [
+ "bitflags 2.13.2",
+ "bytemuck",
+ "read-fonts 0.41.0",
+ "smallvec",
+]
+
+[[package]]
 name = "hart-link"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15092,7 +15080,7 @@ dependencies = [
  "fearless_simd 1.1.0",
  "hayro-interpret",
  "image",
- "kurbo 0.13.1",
+ "kurbo",
  "pic-scale",
  "rustc-hash 2.1.3",
  "vello_cpu",
@@ -15123,7 +15111,7 @@ dependencies = [
  "bitflags 2.13.2",
  "hayro-cmap",
  "hayro-syntax",
- "kurbo 0.13.1",
+ "kurbo",
  "moxcms",
  "phf 0.13.1",
  "rustc-hash 2.1.3",
@@ -15171,7 +15159,7 @@ dependencies = [
  "memchr",
  "rustc-hash 2.1.3",
  "smallvec",
- "zune-jpeg 0.5.15",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -16310,8 +16298,8 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "exr",
- "gif 0.14.2",
- "image-webp 0.2.4",
+ "gif",
+ "image-webp",
  "moxcms",
  "num-traits 0.2.19",
  "png 0.18.1",
@@ -16320,18 +16308,8 @@ dependencies = [
  "rayon",
  "rgb",
  "tiff",
- "zune-core 0.5.1",
- "zune-jpeg 0.5.15",
-]
-
-[[package]]
-name = "image-webp"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f79afb8cbee2ef20f59ccd477a218c12a93943d075b492015ecb1bb81f8ee904"
-dependencies = [
- "byteorder-lite",
- "quick-error 2.0.1",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -16364,15 +16342,15 @@ dependencies = [
 
 [[package]]
 name = "imagesize"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
-
-[[package]]
-name = "imagesize"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
+
+[[package]]
+name = "imagesize"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65b27460c2c92b037f3f94c538ed9a3342f3fdf923606781629ccb35f82d042a"
 
 [[package]]
 name = "imap-proto"
@@ -17756,17 +17734,6 @@ dependencies = [
  "html5ever 0.29.1",
  "indexmap 2.14.0",
  "selectors 0.24.0",
-]
-
-[[package]]
-name = "kurbo"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
-dependencies = [
- "arrayvec",
- "euclid",
- "smallvec",
 ]
 
 [[package]]
@@ -19732,7 +19699,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 [[package]]
 name = "liteparse"
 version = "2.16.0"
-source = "git+https://github.com/Rheosoph/liteparse-hayro?branch=main#26810274786b76d5b9f53f61ebc9430bc3d4b408"
+source = "git+https://github.com/Rheosoph/liteparse-hayro?rev=02640b4b1c6ae5920ef8691f942e88eeb3a84ec0#02640b4b1c6ae5920ef8691f942e88eeb3a84ec0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -20162,7 +20129,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 [[package]]
 name = "markitdown"
 version = "0.2.0"
-source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=450c9714e3be639feaf8c5a1a6206f01f7f05eda#450c9714e3be639feaf8c5a1a6206f01f7f05eda"
+source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=5f4f80883230e58ec8218c51a9349d3ad53515d8#5f4f80883230e58ec8218c51a9349d3ad53515d8"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -22045,7 +22012,7 @@ dependencies = [
  "oasgen-core",
  "proc-macro2",
  "quote",
- "serde_derive_internals 0.29.1",
+ "serde_derive_internals",
  "structmeta",
  "syn 2.0.117",
 ]
@@ -23728,7 +23695,7 @@ version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
- "ttf-parser 0.25.1",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -24051,7 +24018,7 @@ checksum = "839c8299360d2e998bdb106dc0a6cd71dcc5f4df51df1b620361bf50e283cca6"
 dependencies = [
  "bytemuck",
  "color",
- "kurbo 0.13.1",
+ "kurbo",
  "linebender_resource_handle",
  "smallvec",
 ]
@@ -25204,7 +25171,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -26746,19 +26713,20 @@ checksum = "1e061d1b48cb8d38042de4ae0a7a6401009d6143dc80d2e2d6f31f0bdd6470c7"
 
 [[package]]
 name = "resvg"
-version = "0.44.0"
+version = "0.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a325d5e8d1cebddd070b13f44cec8071594ab67d1012797c121f27a669b7958"
+checksum = "1572844b6727a1bf842190e9947641a68ac44bed83f50afb4bd1407a2564bee8"
 dependencies = [
- "gif 0.13.3",
- "image-webp 0.1.3",
+ "bytemuck",
+ "gif",
+ "image-webp",
  "log",
  "pico-args",
  "rgb",
  "svgtypes",
  "tiny-skia",
  "usvg",
- "zune-jpeg 0.4.21",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -27378,13 +27346,11 @@ dependencies = [
 
 [[package]]
 name = "rtf-parser"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b37b8463a5beedce6c01d05e7f76da154c078fd713555fdeed11a62f297b1708"
+checksum = "8c3147b4eb521eae5e29b781bdc30ab98bbaed784bfcb8376cda60ba4b2e0e3d"
 dependencies = [
  "serde",
- "tsify",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -27858,24 +27824,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustybuzz"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c85d1ccd519e61834798eb52c4e886e8c2d7d698dd3d6ce0b1b47eb8557f1181"
-dependencies = [
- "bitflags 2.13.2",
- "bytemuck",
- "core_maths",
- "log",
- "smallvec",
- "ttf-parser 0.24.1",
- "unicode-bidi-mirroring",
- "unicode-ccc",
- "unicode-properties",
- "unicode-script",
-]
-
-[[package]]
 name = "rxing"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -28111,7 +28059,7 @@ checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
 dependencies = [
  "proc-macro2",
  "quote",
- "serde_derive_internals 0.29.1",
+ "serde_derive_internals",
  "syn 2.0.117",
 ]
 
@@ -28123,7 +28071,7 @@ checksum = "7d115b50f4aaeea07e79c1912f645c7513d81715d0420f8bc77a18c6260b307f"
 dependencies = [
  "proc-macro2",
  "quote",
- "serde_derive_internals 0.29.1",
+ "serde_derive_internals",
  "syn 2.0.117",
 ]
 
@@ -28619,17 +28567,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "serde_derive_internals"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e578a843d40b4189a4d66bba51d7684f57da5bd7c304c64e14bd63efbef49509"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -30486,11 +30423,11 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "svgtypes"
-version = "0.15.3"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68c7541fff44b35860c1a7a47a7cadf3e4a304c457b58f9870d9706ece028afc"
+checksum = "695b5790b3131dafa99b3bbfd25a216edb3d216dad9ca208d4657bfb8f2abc3d"
 dependencies = [
- "kurbo 0.11.3",
+ "kurbo",
  "siphasher 1.0.2",
 ]
 
@@ -31798,7 +31735,7 @@ dependencies = [
  "half",
  "quick-error 2.0.1",
  "weezl 0.1.12",
- "zune-jpeg 0.5.15",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -31885,24 +31822,24 @@ dependencies = [
 
 [[package]]
 name = "tiny-skia"
-version = "0.11.4"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83d13394d44dae3207b52a326c0c85a8bf87f1541f23b0d143811088497b09ab"
+checksum = "47ffee5eaaf5527f630fb0e356b90ebdec84d5d18d937c5e440350f88c5a91ea"
 dependencies = [
  "arrayref",
  "arrayvec",
  "bytemuck",
  "cfg-if 1.0.4",
  "log",
- "png 0.17.16",
+ "png 0.18.1",
  "tiny-skia-path",
 ]
 
 [[package]]
 name = "tiny-skia-path"
-version = "0.11.4"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c9e7fc0c2e86a30b117d0462aa261b72b7a99b7ebd7deb3a14ceda95c5bdc93"
+checksum = "edca365c3faccca67d06593c5980fa6c57687de727a03131735bb85f01fdeeb9"
 dependencies = [
  "arrayref",
  "bytemuck",
@@ -33017,40 +32954,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tsify"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6b26cf145f2f3b9ff84e182c448eaf05468e247f148cf3d2a7d67d78ff023a0"
-dependencies = [
- "gloo-utils",
- "serde",
- "serde_json",
- "tsify-macros",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "tsify-macros"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a94b0f0954b3e59bfc2c246b4c8574390d94a4ad4ad246aaf2fb07d7dfd3b47"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde_derive_internals 0.28.0",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "ttf-parser"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be21190ff5d38e8b4a2d3b6a3ae57f612cc39c96e83cedeaf7abc338a8bac4a"
-dependencies = [
- "core_maths",
-]
-
-[[package]]
 name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -33724,12 +33627,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b12e05d9e06373163a9bb6bb8c263c261b396643a99445fe6b9811fd376581b"
 
 [[package]]
-name = "unicode-ccc"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "260bc6647b3893a9a90668360803a15f96b85a5257b1c3a0c3daf6ae2496de42"
-
-[[package]]
 name = "unicode-id-start"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -33967,22 +33864,23 @@ dependencies = [
 
 [[package]]
 name = "usvg"
-version = "0.44.0"
+version = "0.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7447e703d7223b067607655e625e0dbca80822880248937da65966194c4864e6"
+checksum = "d09b73ee83641d390ad7ffd9000f347b16eb128e437675b6ff277ea5c7fcf22c"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "data-url",
  "flate2",
  "fontdb",
- "imagesize 0.13.0",
- "kurbo 0.11.3",
+ "harfrust",
+ "imagesize 0.15.0",
+ "kurbo",
  "log",
  "pico-args",
- "roxmltree 0.20.0",
- "rustybuzz",
+ "roxmltree 0.21.1",
  "simplecss",
  "siphasher 1.0.2",
+ "skrifa 0.44.0",
  "strict-num",
  "svgtypes",
  "tiny-skia-path",
@@ -34312,7 +34210,7 @@ dependencies = [
  "fast_image_resize",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
- "gif 0.14.2",
+ "gif",
  "h264-reader",
  "hound",
  "image",
@@ -37888,12 +37786,6 @@ dependencies = [
 
 [[package]]
 name = "zune-core"
-version = "0.4.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
-
-[[package]]
-name = "zune-core"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb8a0807f7c01457d0379ba880ba6322660448ddebc890ce29bb64da71fb40f9"
@@ -37909,20 +37801,11 @@ dependencies = [
 
 [[package]]
 name = "zune-jpeg"
-version = "0.4.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713"
-dependencies = [
- "zune-core 0.4.12",
-]
-
-[[package]]
-name = "zune-jpeg"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
- "zune-core 0.5.1",
+ "zune-core",
 ]
 
 [[package]]

@@ -316,7 +316,7 @@ thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
 lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
-markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "450c9714e3be639feaf8c5a1a6206f01f7f05eda", default-features = false, features = ["rustls-tls", "static-liblzma"] }
+markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "5f4f80883230e58ec8218c51a9349d3ad53515d8", default-features = false, features = ["rustls-tls", "static-liblzma"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 percent-encoding = "2.3.2"
@@ -364,9 +364,10 @@ matchgen = { path = "packages/vendor/matchgen" }
 num_threads = { path = "packages/vendor/num_threads" }
 # swift-rs requires SwiftPM's native build engine for iOS targets and artifact paths.
 swift-rs = { path = "packages/vendor/swift-rs" }
-# Federation 0.5.5 is the last release on DataFusion 54. The fork keeps the
-# providers and our SQL layer on one federation source.
-datafusion-federation = { git = "https://github.com/Rheosoph/datafusion-federation.git", rev = "110329bd183b25e10aa8c97942aa0ae5afecb078" }
+# Federation 0.5.5 is the last release on DataFusion 54. The fork adds upstream's
+# fix for filters dropped above federated scans (#187, only released on DataFusion
+# 55) and keeps the providers and our SQL layer on one federation source.
+datafusion-federation = { git = "https://github.com/Rheosoph/datafusion-federation.git", rev = "343534290bf298f24adf11d756eafeab2a70906c" }
 # Pin the complete Lance workspace to the create-only commit fix. Its crates
 # must share a source because their public types cross crate boundaries.
 lance = { git = "https://github.com/Rheosoph/lance.git", rev = "d36d49446dd061cc5c80c357e122fbabfadfef05" }

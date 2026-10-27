@@ -3315,9 +3315,10 @@ async fn hosted_lance_cache_does_not_require_offline_configuration() {
         )
         .await
         .unwrap();
-    // Lance 13 can wrap the provider's store for I/O tracking.
+    // Lance 13 wraps the provider's store for I/O tracking and tracing, and
+    // those wrappers print their target in Debug form.
     let inner = store.inner.to_string();
-    assert!(inner.contains("CachedLanceStore("), "{inner}");
+    assert!(inner.contains("CachedLanceStore"), "{inner}");
     assert!(directory.path().join(".lance-read-cache").is_dir());
     assert!(matches!(
         live.to_store_type(StoreType::Content).await.unwrap(),
