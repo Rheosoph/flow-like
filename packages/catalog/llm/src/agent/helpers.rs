@@ -2996,6 +2996,7 @@ async fn run_memory_compress(
 
     // Insert summary first, then delete old observations (safer ordering)
     cached_db.insert_from(context, vec![summary_record]).await?;
+    let db: RwLockReadGuard<'_, MemoryDB> = cached_db.flushed_read().await?;
 
     if !obs_ids.is_empty() {
         let ids_filter = obs_ids
@@ -3004,10 +3005,9 @@ async fn run_memory_compress(
             .collect::<Vec<_>>()
             .join(", ");
         let filter = format!("id IN ({})", ids_filter);
-        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.flushed_read().await?;
         db.delete(&filter).await?;
-        drop(db);
     }
+    drop(db);
 
     let compressed_count = observations.len();
     context.log_message(

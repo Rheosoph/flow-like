@@ -57,13 +57,18 @@ const page: IPage = {
 		{
 			id: "root",
 			component: {
+				id: "root",
 				type: "column",
 				children: { explicitList: ["title"] },
 			},
 		},
 		{
 			id: "title",
-			component: { type: "text", content: { literalString: "Original title" } },
+			component: {
+				id: "title",
+				type: "text",
+				content: { literalString: "Original title" },
+			},
 		},
 	],
 	canvasSettings: { backgroundColor: "#ffffff", padding: "16px" },
@@ -77,7 +82,11 @@ const widgetRef: IWidgetRef = {
 	components: [
 		{
 			id: "widget-root",
-			component: { type: "text", content: { literalString: "Widget title" } },
+			component: {
+				id: "widget-root",
+				type: "text",
+				content: { literalString: "Widget title" },
+			},
 		},
 	],
 	tags: [],
@@ -405,7 +414,7 @@ test("opening runtime queries after a JSON save reads the new layout without rel
 
 	for (const { key, data } of otherAppEntries) {
 		expect(client?.getQueryState(key)?.isInvalidated).toBe(false);
-		expect(client?.getQueryData(key)).toEqual(data);
+		expect<unknown>(client?.getQueryData(key)).toEqual(data);
 	}
 	expect(reads.filter((read) => read.endsWith(":other-app"))).toEqual([]);
 });
@@ -485,6 +494,22 @@ test("invalid JSON stays editable and leaves the canvas and saved page untouched
 	expect(writes).toHaveLength(0);
 });
 
+test("raw string spacing in applied JSON renders instead of crashing the canvas", async () => {
+	await mount();
+	const data = await draft("Spaced title");
+	data.components.find(
+		(component: SurfaceComponent) => component.id === "title",
+	).style = { padding: "0px", margin: "4px 8px" };
+	await apply(data);
+
+	const canvas = find("[data-canvas-id]");
+	expect(canvas.textContent).toContain("Spaced title");
+	expect(canvas.innerHTML).toContain("padding: 0px");
+	expect(canvas.innerHTML).toContain("margin: 4px 8px");
+	await settle(() => completedWrites.length === 1);
+	expect(writes[0].components).toEqual(data.components);
+});
+
 test("canvas-only JSON changes are persisted before either autosave debounce", async () => {
 	await mount();
 	const data = await draft("Original title");
@@ -531,7 +556,7 @@ test("a rejected JSON save leaves the applied canvas marked unsaved", async () =
 	expect(hasStatus("Saved")).toBe(false);
 	for (const { key, data } of entries) {
 		expect(client?.getQueryState(key)?.isInvalidated).toBe(false);
-		expect(client?.getQueryData(key)).toEqual(data);
+		expect<unknown>(client?.getQueryData(key)).toEqual(data);
 	}
 });
 
@@ -592,6 +617,7 @@ test("edits made while JSON is saving remain dirty after that save finishes", as
 	await act(async () => {
 		builder?.updateComponent("title", {
 			component: {
+				id: "title",
 				type: "text",
 				content: { literalString: "Later canvas edit" },
 			},

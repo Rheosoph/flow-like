@@ -3393,7 +3393,17 @@ mod tests {
             )?)
             .await?;
             db.index("event_date", Some("ZONEMAP")).await?;
-            db.optimize(true).await?;
+            // lancedb 0.27.2 persisted Lance's then-default cleanup policy on every new table.
+            let refused = db
+                .optimize(true)
+                .await
+                .expect_err("retaining optimization must refuse the persisted cleanup policy");
+            assert!(
+                refused
+                    .to_string()
+                    .contains("automatic cleanup is configured")
+            );
+            db.optimize(false).await?;
             let reopened = LanceDBVectorStore::new(path.clone(), "legacy".into()).await?;
             assert_eq!(reopened.schema().await?, *schema);
             assert_eq!(reopened.count(None).await?, 5);

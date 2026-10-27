@@ -238,15 +238,14 @@ async fn ensure_action_board_published(
         let guard = board.snapshot();
         if existing.contains(&pinned) {
             if publish_draft {
-                let unchanged =
-                    guard
-                        .snapshot_matches_persisted_draft(pinned, None)
-                        .await
-                        .map_err(|error| {
-                            ApiError::internal(format!(
-                                "Could not compare the action's board snapshot: {error}"
-                            ))
-                        })?;
+                let unchanged = guard
+                    .snapshot_matches_persisted_draft(pinned, None)
+                    .await
+                    .map_err(|error| {
+                        ApiError::internal(format!(
+                            "Could not compare the action's board snapshot: {error}"
+                        ))
+                    })?;
                 if !unchanged {
                     let snapshot = guard
                         .prepare_snapshot_recovering_from_races(None)

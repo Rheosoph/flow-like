@@ -77,13 +77,29 @@ def check_inference_bundles(target, offline):
         assert "inference" in catalog_ml and "training" not in catalog_ml, f"{feature}: catalog-ml must infer without training"
 
 
+def check_cpu_forecasting(feature, packages):
+    # Headless bundles forecast through flow-like-ml-forecast on Burn CPU, without the
+    # ML engine, autodiff or published-model inference.
+    assert packages["burn"] == {"flex", "std"}, f"{feature}: Burn features {sorted(packages['burn'])}, expected only flex and std"
+    assert not packages["flow-like-ml-burn"], f"{feature}: enables the ML engine"
+    assert "flow-like-ml-platform" not in packages, f"{feature}: links the automatic GPU platform"
+    catalog_ml = packages["flow-like-catalog-ml"]
+    assert "forecasting" in catalog_ml and not catalog_ml & {"inference", "training"}, f"{feature}: catalog-ml must only forecast"
+
+
 def check_bundles_without_inference(target, offline):
     bundles = ["portable-metadata", "all-metadata", "mobile", "mobile-apple", "server", "executor", "local-runtime", "local-ml"]
+    forecasting = {"server", "executor", "local-runtime"}
     for feature in bundles:
         packages = cargo_features("flow-like-catalog", target, [feature], offline)
         enabled = packages["flow-like-catalog"]
         assert "training-auto" not in enabled, f"{feature}: unexpectedly enables automatic training"
-        assert "ml-inference" not in enabled and "burn" not in packages, f"{feature}: unexpectedly links ML inference"
+        assert "ml-inference" not in enabled, f"{feature}: unexpectedly enables ML inference"
+        assert ("forecasting" in enabled) == (feature in forecasting), f"{feature}: unexpected CPU forecasting selection"
+        if feature in forecasting:
+            check_cpu_forecasting(feature, packages)
+        else:
+            assert "burn" not in packages, f"{feature}: unexpectedly links Burn"
 
 
 def check_training_products(target, offline):

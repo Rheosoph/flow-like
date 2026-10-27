@@ -33,4 +33,4 @@ flow-like-catalog-build-helper.workspace = true
 [dev-dependencies]
 ahash.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-lopdf = "0.39.0"
+lopdf = "0.45.0"

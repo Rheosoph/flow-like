@@ -182,8 +182,7 @@ impl CachedDB {
 
     pub async fn flushed_read(
         &self,
-    ) -> flow_like_types::Result<RwLockReadGuard<'_, BufferedVectorStore<LanceDBVectorStore>>>
-    {
+    ) -> flow_like_types::Result<RwLockReadGuard<'_, BufferedVectorStore<LanceDBVectorStore>>> {
         Ok(self.flushed_write().await?.downgrade())
     }
 

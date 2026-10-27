@@ -71,6 +71,33 @@ describe("A2UI style resolution", () => {
 		});
 	});
 
+	test("renders raw string spacing from hand-edited JSON without throwing", () => {
+		const style = {
+			padding: "0px",
+			margin: "4px 8px",
+			responsiveOverrides: { md: { padding: "1rem 2rem" } },
+		} as unknown as Style;
+
+		expect(resolveInlineStyle(style)).toMatchObject({
+			padding: "0px",
+			margin: "4px 8px",
+			"--a2ui-md-padding": "1rem 2rem",
+		});
+	});
+
+	test("ignores non-object spacing values instead of throwing", () => {
+		const style = {
+			padding: 8,
+			margin: ["4px"],
+			responsiveOverrides: { md: { margin: true } },
+		} as unknown as Style;
+
+		const resolved = resolveInlineStyle(style);
+		expect(resolved).not.toHaveProperty("padding");
+		expect(resolved).not.toHaveProperty("margin");
+		expect(resolved).not.toHaveProperty("--a2ui-md-margin");
+	});
+
 	test("renders canonical position, shadow, transform, and responsive styles", () => {
 		const style: Style = {
 			position: { type: "absolute", top: "1rem", left: "2rem" },

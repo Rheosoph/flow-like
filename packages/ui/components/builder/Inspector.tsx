@@ -39,6 +39,7 @@ import {
 } from "../../lib/widget-contract-form";
 import { homogeneousArrayItemSchema } from "../../lib/widget-schema-form";
 import { useBackend } from "../../state/backend-state";
+import { asSpacing } from "../a2ui/StyleResolver";
 import type { ComponentEventDefinition } from "../a2ui/component-event-manifest";
 import {
 	NIVO_CHART_DEFAULTS,
@@ -71,8 +72,8 @@ import type {
 	SurfaceComponent,
 	TableColumn,
 } from "../a2ui/types";
-import { WidgetConsentStatus } from "../store/widget-permissions";
 import { SavedForecastPicker } from "../settings/data-studio/forecasting/saved-forecast-picker";
+import { WidgetConsentStatus } from "../store/widget-permissions";
 import { Button } from "../ui/button";
 import {
 	Collapsible,
@@ -169,9 +170,10 @@ function getStyleValue(value: StyleValue | undefined): string {
 	return typeof value === "string" ? value : value.value;
 }
 
-function getSpacingValue(spacing: Spacing | undefined): string {
+function getSpacingValue(raw: unknown): string {
+	const spacing = asSpacing(raw);
 	if (!spacing) return "";
-	if ("value" in spacing) return spacing.value ?? "";
+	if (typeof spacing.value === "string") return spacing.value;
 	if (!spacing.top && !spacing.right && !spacing.bottom && !spacing.left) {
 		return "";
 	}
@@ -180,15 +182,16 @@ function getSpacingValue(spacing: Spacing | undefined): string {
 		.join(" ");
 }
 
-function getSpacingEdges(spacing: Spacing | undefined): {
+function getSpacingEdges(raw: unknown): {
 	top?: string;
 	right?: string;
 	bottom?: string;
 	left?: string;
 } {
+	const spacing = asSpacing(raw);
 	if (!spacing) return {};
-	if (!("value" in spacing)) return spacing;
-	const parts = (spacing.value ?? "").trim().split(/\s+/).filter(Boolean);
+	if (typeof spacing.value !== "string") return spacing;
+	const parts = spacing.value.trim().split(/\s+/).filter(Boolean);
 	if (parts.length === 0) return {};
 	const [top, right = top, bottom = top, left = right] = parts;
 	return { top, right, bottom, left };

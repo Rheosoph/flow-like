@@ -32,6 +32,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    env:
+      # Unoptimised test executables are mostly symbol table, and CI never
+      # symbolises backtraces. Stripping keeps the ~300 linked workspace
+      # targets within the runner's disk.
+      CARGO_PROFILE_CI_STRIP: symbols
     services:
       postgres:
         image: postgres:16
@@ -53,16 +58,28 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           cache-key: tests-ci
 
+      # The runner has been shut down while the API and desktop test crates
+      # compile side by side; swap absorbs that memory peak.
+      - name: Add memory headroom for the workspace test build
+        run: |
+          swapfile="$RUNNER_TEMP/flow-like-build.swap"
+          sudo fallocate -l 8G "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile"
+          sudo swapon "$swapfile"
+          free -h
+          df -h "$GITHUB_WORKSPACE"
+
       - name: Warm Rust test dependencies
         if: github.event_name == 'push'
         # Build the same test targets without requiring external test services.
-        run: cargo test --locked --workspace --profile ci --no-run
+        run: bash .github/scripts/run-with-resource-log.sh cargo test --locked --workspace --profile ci --no-run
 
       - name: Run Rust tests
         if: github.event_name == 'pull_request'
         # Preserve the pre-default-members CI coverage while keeping everyday
         # bare Cargo commands focused on the shared editing surface.
-        run: cargo test --locked --workspace --profile ci
+        run: bash .github/scripts/run-with-resource-log.sh cargo test --locked --workspace --profile ci
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}

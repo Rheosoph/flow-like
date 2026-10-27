@@ -141,7 +141,9 @@ const translate = (
 	fallback.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
 		String(values[name] ?? ""),
 	);
+const actualLocales = { ...(await import("@flow-like/locales")) };
 mock.module("@flow-like/locales", () => ({
+	...actualLocales,
 	useTranslation: () => ({ t: translate }),
 }));
 mock.module("../../state/backend-state", () => ({ useBackend: () => backend }));

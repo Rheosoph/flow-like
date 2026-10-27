@@ -89,10 +89,7 @@ impl NodeLogic for PdfExtractTextNode {
 
 #[cfg(feature = "execute")]
 fn extract_page_text(doc: &Document, page_id: lopdf::ObjectId) -> String {
-    let content_data = match doc.get_page_content(page_id) {
-        Ok(data) => data,
-        Err(_) => return String::new(),
-    };
+    let content_data = doc.get_page_content(page_id);
 
     let operations = match lopdf::content::Content::decode(&content_data) {
         Ok(content) => content.operations,

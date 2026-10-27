@@ -328,7 +328,7 @@ sourcemap = "9.3"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "=48.0.3", default-features = false, features = [
+wasmtime = { version = "=48.0.7", default-features = false, features = [
     "anyhow",
     "async",
     "component-model",
@@ -343,8 +343,8 @@ wasmtime = { version = "=48.0.3", default-features = false, features = [
     "threads",
     "wit-parser",
 ] }
-wasmtime-wasi = "=48.0.3"
-wasmtime-wasi-http = "=48.0.3"
+wasmtime-wasi = "=48.0.7"
+wasmtime-wasi-http = "=48.0.7"
 
 [patch.crates-io]
 # Fix DDS request cancellation, XTypes matching, and participant disposal.
