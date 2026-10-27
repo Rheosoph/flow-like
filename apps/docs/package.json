@@ -22,7 +22,7 @@
 		"@tailwindcss/vite": "^4.1.12",
 		"@flow-like/flow-like-ui": "workspace:*",
 		"@types/lodash-es": "^4.17.12",
-		"astro": "7.2.8",
+		"astro": "7.3.3",
 		"cookie": "^2.0.1",
 		"lodash-es": "^4.17.21",
 		"sharp": "^0.35.3",

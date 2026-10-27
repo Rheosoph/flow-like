@@ -1587,9 +1587,14 @@ async fn unavailable_store_names_the_table_in_its_error() {
     assert_eq!(tables.text(&project), texts::database_unavailable(false));
     assert_eq!(tables.text(&user), texts::database_unavailable(true));
 
+    use flow_like::flow_like_storage::lance_object_store::{
+        ObjectStoreExt as _, path::Path as LancePath,
+    };
     let store = UnavailableStore::new(Arc::new(tables));
     let error = store
-        .get(&key(&format!("{project}/customers.lance/_latest.manifest")))
+        .get(&LancePath::from(format!(
+            "{project}/customers.lance/_latest.manifest"
+        )))
         .await
         .unwrap_err();
     assert!(
@@ -1597,7 +1602,7 @@ async fn unavailable_store_names_the_table_in_its_error() {
         "{error}"
     );
     let error = store
-        .put(&key(&format!("{project}/orders.lance/x")), "x".into())
+        .put(&LancePath::from(format!("{project}/orders.lance/x")), "x".into())
         .await
         .unwrap_err();
     assert!(
@@ -3310,7 +3315,9 @@ async fn hosted_lance_cache_does_not_require_offline_configuration() {
         )
         .await
         .unwrap();
-    assert!(store.inner.to_string().starts_with("CachedLanceStore("));
+    // Lance 13 can wrap the provider's store for I/O tracking.
+    let inner = store.inner.to_string();
+    assert!(inner.contains("CachedLanceStore("), "{inner}");
     assert!(directory.path().join(".lance-read-cache").is_dir());
     assert!(matches!(
         live.to_store_type(StoreType::Content).await.unwrap(),

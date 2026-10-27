@@ -27,7 +27,6 @@
 //! - EXPLAIN invokes `delete_from`/`update` at plan time, so the mutation runs
 //!   inside [`LanceDmlExec::execute`], never in the plan constructors.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow_array::{RecordBatch, UInt64Array};
@@ -218,7 +217,7 @@ fn render_expr(expr: &Expr, schema: &SchemaRef) -> DataFusionResult<String> {
             let inner = render_expr(&cast.expr, schema)?;
             Ok(format!(
                 "CAST({inner} AS {})",
-                cast_type_name(&cast.data_type)?
+                cast_type_name(cast.field.data_type())?
             ))
         }
         other => plan_err(format!(
@@ -450,10 +449,6 @@ impl DisplayAs for LanceDmlExec {
 impl ExecutionPlan for LanceDmlExec {
     fn name(&self) -> &str {
         "LanceDmlExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

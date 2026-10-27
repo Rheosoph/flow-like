@@ -91,7 +91,7 @@ const cursor = managementId.nullable();
  * dropped, never fatal, wherever the client only shows it. A list leaves out
  * the entries it can't read; a failure reason reads as "unknown".
  */
-function lenientArray<T extends z.ZodTypeAny>(element: T, max: number) {
+function lenientArray<T extends z.ZodType>(element: T, max: number) {
 	return z
 		.array(z.unknown())
 		.max(max)
@@ -479,7 +479,7 @@ const consumerSchema = z.discriminatedUnion("kind", [
 ]);
 
 function statsSchema(points: number) {
-	const column = <T extends z.ZodTypeAny>(value: T) =>
+	const column = <T extends z.ZodType>(value: T) =>
 		z.array(value).length(points);
 	return z.object({
 		model_id: managementId.nullable(),

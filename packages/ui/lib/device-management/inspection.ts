@@ -116,7 +116,7 @@ const liveSchedule = scheduleEntry
 	})
 	.refine(oneForm);
 /** An entry with a state, hold or result this client does not know is dropped, not the row. */
-const entries = <T extends z.ZodTypeAny>(entry: T) =>
+const entries = <T extends z.ZodType>(entry: T) =>
 	z
 		.array(z.unknown())
 		.max(64)
@@ -200,7 +200,7 @@ const PLACEMENT_FACTS = {
 	actions: entries(liveAction),
 	actions_truncated: z.boolean(),
 } satisfies Partial<
-	Record<keyof PlacementStatusPlus, z.ZodType<unknown, z.ZodTypeDef, unknown>>
+	Record<keyof PlacementStatusPlus, z.ZodType<unknown, unknown>>
 >;
 
 const REPLICA_FACTS = {
@@ -209,7 +209,7 @@ const REPLICA_FACTS = {
 	has_error: PLACEMENT_FACTS.has_error,
 	restarts,
 } satisfies Partial<
-	Record<keyof ReplicaStatusPlus, z.ZodType<unknown, z.ZodTypeDef, unknown>>
+	Record<keyof ReplicaStatusPlus, z.ZodType<unknown, unknown>>
 >;
 
 /** BG15 host operation, shared with the `HostOperation` command reader (DM/agent-reads.ts). */
@@ -275,7 +275,7 @@ const DEVICE_FACTS = {
 	}),
 };
 
-type Facts = Record<string, z.ZodType<unknown, z.ZodTypeDef, unknown>>;
+type Facts = Record<string, z.ZodType<unknown, unknown>>;
 
 /** The fact keys present on `source` whose values are valid. */
 function validFacts(source: unknown, facts: Facts): Record<string, unknown> {
@@ -364,7 +364,7 @@ const SNAPSHOT_DEVICE_FACTS = {
 	host: DEVICE_FACTS.host,
 	tasks: DEVICE_FACTS.tasks,
 	host_operation: DEVICE_FACTS.host_operation,
-	features: z.record(z.unknown()).transform((flags) => agentFeatures(flags)),
+	features: z.record(z.string(), z.unknown()).transform((flags) => agentFeatures(flags)),
 };
 
 /**

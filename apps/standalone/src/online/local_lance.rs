@@ -1,14 +1,14 @@
-use super::{ObjectPath, ObjectStore, ProjectStore};
+use super::lance_stores::ProjectStore;
 use flow_like_runtime::state::FlowLikeConfig;
 use flow_like_storage::{
-    files::store::local_store::LocalObjectStore,
     lance::{Error, Result},
     lance_io::object_store::{
         ObjectStore as LanceStore, ObjectStoreParams, ObjectStoreProvider, ObjectStoreRegistry,
     },
-    object_store::{
-        self, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, PutMode,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, UploadPart,
+    lance_object_store::{
+        self as object_store, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload,
+        ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        RenameOptions, UploadPart, local::LocalFileSystem, path::Path as ObjectPath,
     },
 };
 use futures_util::stream::BoxStream;
@@ -217,8 +217,9 @@ pub(super) fn configure(
     runtime: &mut FlowLikeConfig,
     registry: &Arc<ObjectStoreRegistry>,
 ) -> anyhow::Result<()> {
+    std::fs::create_dir_all(local_data)?;
     let store: Arc<dyn ObjectStore> = Arc::new(ConditionalManifests(Arc::new(
-        LocalObjectStore::new(local_data.to_path_buf())?,
+        LocalFileSystem::new_with_prefix(local_data)?.with_automatic_cleanup(true),
     )));
     let provider = LocalProvider {
         store: Arc::new(ProjectStore {
@@ -241,7 +242,7 @@ pub(super) fn configure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_storage::object_store::ObjectStoreExt;
+    use flow_like_storage::lance_object_store::ObjectStoreExt;
 
     #[tokio::test]
     async fn local_runtime_databases_use_scoped_store_without_local_file_bypass() {

@@ -3640,13 +3640,12 @@ mod tests {
             .open_table("people")
             .execute()
             .await?
-            .add_columns(
-                NewColumnTransform::SqlExpressions(vec![(
-                    "secret".to_string(),
-                    "'added later'".to_string(),
-                )]),
-                None,
-            )
+            .add_columns()
+            .transform(NewColumnTransform::SqlExpressions(vec![(
+                "secret".to_string(),
+                "'added later'".to_string(),
+            )]))
+            .execute()
             .await?;
         let explored = load_overlay_objects(
             &connection,
@@ -3846,8 +3845,8 @@ mod tests {
         let id = "nppvjlghzrlto3iefrk9bx36";
         assert_eq!(
             count(&table, &format!("\"id\" IN ('{id}')")).await,
-            0,
-            "double-quoted identifier is a string literal to LanceDB — matches nothing"
+            1,
+            "LanceDB 0.40 reads a double-quoted name as a column, like standard SQL"
         );
         assert_eq!(
             count(&table, &format!("{} IN ('{id}')", filter_identifier("id"))).await,

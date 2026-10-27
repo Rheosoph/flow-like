@@ -136,14 +136,21 @@ pub fn s3_storage_options(config: Option<&BucketConfig>) -> Vec<(String, String)
     options
 }
 
-pub(crate) fn s3_copy_if_not_exists(config: Option<&BucketConfig>) -> S3CopyIfNotExists {
-    let is_r2 = config
+/// R2 rejects conditional multipart copies; it guards copies with this header instead.
+pub(crate) const R2_COPY_IF_NOT_EXISTS: (&str, &str) = ("cf-copy-destination-if-none-match", "*");
+
+pub(crate) fn is_r2(config: Option<&BucketConfig>) -> bool {
+    config
         .and_then(|config| config.endpoint.as_deref())
         .and_then(|endpoint| url::Url::parse(endpoint).ok())
         .and_then(|endpoint| endpoint.host_str().map(str::to_owned))
-        .is_some_and(|host| host.ends_with(".r2.cloudflarestorage.com"));
-    if is_r2 {
-        S3CopyIfNotExists::Header("cf-copy-destination-if-none-match".into(), "*".into())
+        .is_some_and(|host| host.ends_with(".r2.cloudflarestorage.com"))
+}
+
+pub(crate) fn s3_copy_if_not_exists(config: Option<&BucketConfig>) -> S3CopyIfNotExists {
+    if is_r2(config) {
+        let (header, value) = R2_COPY_IF_NOT_EXISTS;
+        S3CopyIfNotExists::Header(header.into(), value.into())
     } else {
         S3CopyIfNotExists::Multipart
     }

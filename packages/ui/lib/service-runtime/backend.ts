@@ -68,7 +68,7 @@ const eventSchema = z
 			.array(z.number().int().min(0).max(255))
 			.max(MAX_REQUEST_BYTES)
 			.optional(),
-		inputs: z.array(z.record(z.unknown())).max(1024).optional(),
+		inputs: z.array(z.record(z.string(), z.unknown())).max(1024).optional(),
 	})
 	.passthrough()
 	.transform((event) =>

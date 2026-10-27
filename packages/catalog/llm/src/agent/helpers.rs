@@ -1300,8 +1300,16 @@ pub async fn execute_agent_streaming(
                             continue;
                         }
                     };
-                let transport =
-                    rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
+                let transport = match crate::agent::mcp_http::transport(transport_config) {
+                    Ok(transport) => transport,
+                    Err(error) => {
+                        context.log_message(
+                            &format!("Failed to configure MCP server {}: {}", server_label, error),
+                            LogLevel::Error,
+                        );
+                        continue;
+                    }
+                };
                 tokio::time::timeout(MCP_CONNECT_TIMEOUT, client_info.clone().serve(transport))
                     .await
             }

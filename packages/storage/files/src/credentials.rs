@@ -7,10 +7,7 @@ use std::{
 use async_trait::async_trait;
 use flow_like_types_contracts::authorization::AuthorizationError;
 use object_store::{
-    CredentialProvider,
-    aws::{AwsCredential, AwsCredentialProvider},
-    azure::{AzureCredential, AzureCredentialProvider},
-    gcp::{GcpCredential, GcpCredentialProvider},
+    aws::AwsCredentialProvider, azure::AzureCredentialProvider, gcp::GcpCredentialProvider,
 };
 
 /// Storage leases are temporary. The broker can impose a shorter resource TTL.
@@ -170,13 +167,13 @@ impl RenewableCredentials {
     }
 
     pub fn aws(&self) -> AwsCredentialProvider {
-        Arc::new(AwsProvider(self.clone()))
+        files::aws(self)
     }
     pub fn azure(&self) -> AzureCredentialProvider {
-        Arc::new(AzureProvider(self.clone()))
+        files::azure(self)
     }
     pub fn gcp(&self) -> GcpCredentialProvider {
-        Arc::new(GcpProvider(self.clone()))
+        files::gcp(self)
     }
 
     pub fn aws_store(
@@ -184,10 +181,7 @@ impl RenewableCredentials {
         builder: object_store::aws::AmazonS3Builder,
     ) -> object_store::Result<crate::store::FlowLikeStore> {
         Ok(crate::store::FlowLikeStore::AWS(Arc::new(
-            builder
-                .with_skip_signature(false)
-                .with_credentials(self.aws())
-                .build()?,
+            files::aws_store(self, builder)?,
         )))
     }
 
@@ -196,12 +190,7 @@ impl RenewableCredentials {
         builder: object_store::azure::MicrosoftAzureBuilder,
     ) -> object_store::Result<crate::store::FlowLikeStore> {
         Ok(crate::store::FlowLikeStore::Azure(Arc::new(
-            builder
-                // The emulator branch bypasses the configured provider entirely.
-                .with_use_emulator(false)
-                .with_skip_signature(false)
-                .with_credentials(self.azure())
-                .build()?,
+            files::azure_store(self, builder)?,
         )))
     }
 
@@ -212,75 +201,203 @@ impl RenewableCredentials {
         // GCS exposes a separate ambient signer without a public override hook.
         // A generic store permits scoped reads/writes and refuses local presigning.
         Ok(crate::store::FlowLikeStore::Other(Arc::new(
-            builder
-                .with_skip_signature(false)
-                .with_credentials(self.gcp())
-                .build()?,
+            files::gcp_store(self, builder)?,
         )))
     }
 }
 
-fn store_error(error: AuthorizationError) -> object_store::Error {
-    object_store::Error::Generic {
-        store: "FlowLikeRenewableCredentials",
-        source: Box::new(error),
-    }
+fn azure_sas_pairs(sas: &str) -> Result<Vec<(String, String)>, AuthorizationError> {
+    let url = reqwest::Url::parse(&format!(
+        "https://storage.invalid/?{}",
+        sas.trim_start_matches('?')
+    ))
+    .map_err(|_| AuthorizationError::InvalidResponse)?;
+    Ok(url.query_pairs().into_owned().collect())
 }
 
-#[derive(Debug)]
-struct AwsProvider(RenewableCredentials);
-#[async_trait]
-impl CredentialProvider for AwsProvider {
-    type Credential = AwsCredential;
-    async fn get_credential(&self) -> object_store::Result<Arc<AwsCredential>> {
-        match self.0.credential().await.map_err(store_error)?.credential {
-            StorageCredential::AwsSession {
-                access_key_id,
-                secret_access_key,
-                session_token,
-            } => Ok(Arc::new(AwsCredential {
-                key_id: access_key_id,
-                secret_key: secret_access_key,
-                token: Some(session_token),
-            })),
-            _ => Err(store_error(AuthorizationError::InvalidResponse)),
-        }
-    }
-}
+/// Credential providers and hardened store builders for one object_store release.
+/// The file layer and DataFusion link 0.13; Lance links 0.14.
+macro_rules! renewable_stores {
+    ($object_store:ident) => {
+        use std::sync::Arc;
 
-#[derive(Debug)]
-struct AzureProvider(RenewableCredentials);
-#[async_trait]
-impl CredentialProvider for AzureProvider {
-    type Credential = AzureCredential;
-    async fn get_credential(&self) -> object_store::Result<Arc<AzureCredential>> {
-        match self.0.credential().await.map_err(store_error)?.credential {
-            StorageCredential::AzureSas(sas) => {
-                let url = reqwest::Url::parse(&format!(
-                    "https://storage.invalid/?{}",
-                    sas.trim_start_matches('?')
-                ))
-                .map_err(|_| store_error(AuthorizationError::InvalidResponse))?;
-                Ok(Arc::new(AzureCredential::SASToken(
-                    url.query_pairs().into_owned().collect(),
-                )))
+        use super::{AuthorizationError, RenewableCredentials, StorageCredential, azure_sas_pairs};
+
+        fn store_error(error: AuthorizationError) -> $object_store::Error {
+            $object_store::Error::Generic {
+                store: "FlowLikeRenewableCredentials",
+                source: Box::new(error),
             }
-            _ => Err(store_error(AuthorizationError::InvalidResponse)),
         }
-    }
+
+        #[derive(Debug)]
+        struct AwsProvider(RenewableCredentials);
+        #[async_trait::async_trait]
+        impl $object_store::CredentialProvider for AwsProvider {
+            type Credential = $object_store::aws::AwsCredential;
+            async fn get_credential(&self) -> $object_store::Result<Arc<Self::Credential>> {
+                match self.0.credential().await.map_err(store_error)?.credential {
+                    StorageCredential::AwsSession {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    } => Ok(Arc::new($object_store::aws::AwsCredential {
+                        key_id: access_key_id,
+                        secret_key: secret_access_key,
+                        token: Some(session_token),
+                    })),
+                    _ => Err(store_error(AuthorizationError::InvalidResponse)),
+                }
+            }
+        }
+
+        #[derive(Debug)]
+        struct AzureProvider(RenewableCredentials);
+        #[async_trait::async_trait]
+        impl $object_store::CredentialProvider for AzureProvider {
+            type Credential = $object_store::azure::AzureCredential;
+            async fn get_credential(&self) -> $object_store::Result<Arc<Self::Credential>> {
+                match self.0.credential().await.map_err(store_error)?.credential {
+                    StorageCredential::AzureSas(sas) => {
+                        Ok(Arc::new($object_store::azure::AzureCredential::SASToken(
+                            azure_sas_pairs(&sas).map_err(store_error)?,
+                        )))
+                    }
+                    _ => Err(store_error(AuthorizationError::InvalidResponse)),
+                }
+            }
+        }
+
+        #[derive(Debug)]
+        struct GcpProvider(RenewableCredentials);
+        #[async_trait::async_trait]
+        impl $object_store::CredentialProvider for GcpProvider {
+            type Credential = $object_store::gcp::GcpCredential;
+            async fn get_credential(&self) -> $object_store::Result<Arc<Self::Credential>> {
+                match self.0.credential().await.map_err(store_error)?.credential {
+                    StorageCredential::GcpBearer(bearer) => {
+                        Ok(Arc::new($object_store::gcp::GcpCredential { bearer }))
+                    }
+                    _ => Err(store_error(AuthorizationError::InvalidResponse)),
+                }
+            }
+        }
+
+        pub fn aws(
+            credentials: &RenewableCredentials,
+        ) -> $object_store::aws::AwsCredentialProvider {
+            Arc::new(AwsProvider(credentials.clone()))
+        }
+
+        pub fn azure(
+            credentials: &RenewableCredentials,
+        ) -> $object_store::azure::AzureCredentialProvider {
+            Arc::new(AzureProvider(credentials.clone()))
+        }
+
+        pub fn gcp(
+            credentials: &RenewableCredentials,
+        ) -> $object_store::gcp::GcpCredentialProvider {
+            Arc::new(GcpProvider(credentials.clone()))
+        }
+
+        pub fn aws_store(
+            credentials: &RenewableCredentials,
+            builder: $object_store::aws::AmazonS3Builder,
+        ) -> $object_store::Result<$object_store::aws::AmazonS3> {
+            builder
+                .with_skip_signature(false)
+                .with_credentials(aws(credentials))
+                .build()
+        }
+
+        pub fn azure_store(
+            credentials: &RenewableCredentials,
+            builder: $object_store::azure::MicrosoftAzureBuilder,
+        ) -> $object_store::Result<$object_store::azure::MicrosoftAzure> {
+            builder
+                // The emulator branch bypasses the configured provider entirely.
+                .with_use_emulator(false)
+                .with_skip_signature(false)
+                .with_credentials(azure(credentials))
+                .build()
+        }
+
+        pub fn gcp_store(
+            credentials: &RenewableCredentials,
+            builder: $object_store::gcp::GoogleCloudStorageBuilder,
+        ) -> $object_store::Result<$object_store::gcp::GoogleCloudStorage> {
+            builder
+                .with_skip_signature(false)
+                .with_credentials(gcp(credentials))
+                .build()
+        }
+
+        /// Lets several builders share one caller-supplied connector.
+        #[derive(Clone, Debug)]
+        pub struct SharedConnector(pub Arc<dyn $object_store::client::HttpConnector>);
+
+        impl $object_store::client::HttpConnector for SharedConnector {
+            fn connect(
+                &self,
+                options: &$object_store::ClientOptions,
+            ) -> $object_store::Result<$object_store::client::HttpClient> {
+                self.0.connect(options)
+            }
+        }
+
+        /// The store at `root` (`s3://`, `az://` or `gs://`), routed by `options` and
+        /// authenticated only through `credentials`.
+        pub fn scoped_store(
+            credentials: &RenewableCredentials,
+            root: &str,
+            options: &std::collections::HashMap<String, String>,
+            connector: Option<&SharedConnector>,
+        ) -> $object_store::Result<Arc<dyn $object_store::ObjectStore>> {
+            macro_rules! configured {
+                ($builder:expr) => {{
+                    let mut builder = $builder.with_url(root);
+                    for (key, value) in options {
+                        builder = builder.with_config(key.parse()?, value);
+                    }
+                    if let Some(connector) = connector {
+                        builder = builder.with_http_connector(connector.clone());
+                    }
+                    builder
+                }};
+            }
+            Ok(match root.split_once("://").map(|(scheme, _)| scheme) {
+                Some("s3") => Arc::new(aws_store(
+                    credentials,
+                    configured!($object_store::aws::AmazonS3Builder::new()),
+                )?),
+                Some("az") => Arc::new(azure_store(
+                    credentials,
+                    configured!($object_store::azure::MicrosoftAzureBuilder::new()),
+                )?),
+                Some("gs") => Arc::new(gcp_store(
+                    credentials,
+                    configured!($object_store::gcp::GoogleCloudStorageBuilder::new()),
+                )?),
+                _ => {
+                    return Err($object_store::Error::NotSupported {
+                        source: format!("Unsupported scoped cloud provider in '{root}'").into(),
+                    });
+                }
+            })
+        }
+    };
 }
 
-#[derive(Debug)]
-struct GcpProvider(RenewableCredentials);
-#[async_trait]
-impl CredentialProvider for GcpProvider {
-    type Credential = GcpCredential;
-    async fn get_credential(&self) -> object_store::Result<Arc<GcpCredential>> {
-        match self.0.credential().await.map_err(store_error)?.credential {
-            StorageCredential::GcpBearer(bearer) => Ok(Arc::new(GcpCredential { bearer })),
-            _ => Err(store_error(AuthorizationError::InvalidResponse)),
-        }
-    }
+/// Providers and builders on the file layer's object_store release.
+pub mod files {
+    renewable_stores!(object_store);
+}
+
+/// The same renewable providers and builders for Lance stores.
+#[cfg(feature = "lance")]
+pub mod lance {
+    renewable_stores!(lance_object_store);
 }
 
 #[cfg(test)]

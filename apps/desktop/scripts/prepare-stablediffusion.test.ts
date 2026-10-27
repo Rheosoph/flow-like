@@ -128,9 +128,12 @@ describe("stable-diffusion.cpp runtime archive extraction", () => {
 		zip.addFile("bin/sd-server", Buffer.from("first"));
 		zip.addFile("other/sd-server", Buffer.from("second")).entryName =
 			"bin/sd-server";
+		const contents = zip.toBuffer();
+		const destination = temporaryDirectory();
 		expect(() =>
-			extractRuntime(zip.toBuffer(), temporaryDirectory(), "sd-server"),
-		).toThrow("Duplicate runtime file in archive: sd-server");
+			extractRuntime(contents, destination, "sd-server"),
+		).toThrow('ADM-ZIP: Duplicate entry name "bin/sd-server"');
+		expect(fs.readdirSync(destination)).toEqual([]);
 	});
 
 	test("accepts Windows ZIP paths without UNIX file attributes", () => {

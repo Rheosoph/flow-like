@@ -5,7 +5,7 @@ use crate::credentials::RenewableCredentials;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::{StreamExt, stream::BoxStream};
-use object_store::{
+use lance_object_store::{
     Attributes, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
     path::Path,
@@ -385,12 +385,12 @@ impl CachedLanceStore {
         }
     }
 
-    async fn authorize(&self) -> object_store::Result<()> {
+    async fn authorize(&self) -> lance_object_store::Result<()> {
         self.credentials
             .credential()
             .await
             .map(|_| ())
-            .map_err(|error| object_store::Error::Generic {
+            .map_err(|error| lance_object_store::Error::Generic {
                 store: "LanceReadCache",
                 source: Box::new(error),
             })
@@ -423,20 +423,24 @@ impl CachedLanceStore {
         !reads.disabled && !reads.written.contains(path)
     }
 
-    async fn uncached(&self, path: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+    async fn uncached(
+        &self,
+        path: &Path,
+        options: GetOptions,
+    ) -> lance_object_store::Result<GetResult> {
         self.cache.counters.bypasses.fetch_add(1, Ordering::Relaxed);
         self.inner.get_opts(path, options).await
     }
 
-    fn changed(&self, path: &Path) -> object_store::Error {
+    fn changed(&self, path: &Path) -> lance_object_store::Error {
         self.reads.lock().unwrap().metadata.remove(path);
-        object_store::Error::Precondition {
+        lance_object_store::Error::Precondition {
             path: path.to_string(),
             source: "The Lance object changed while its blocks were being read".into(),
         }
     }
 
-    async fn check_read(&self, path: &Path) -> object_store::Result<()> {
+    async fn check_read(&self, path: &Path) -> lance_object_store::Result<()> {
         self.authorize().await?;
         if !self.can_cache(path) {
             return Err(self.changed(path));
@@ -468,7 +472,7 @@ impl CachedLanceStore {
         path: &Path,
         metadata: &ReadMetadata,
         requested: Range<u64>,
-    ) -> object_store::Result<Bytes> {
+    ) -> lance_object_store::Result<Bytes> {
         self.check_read(path).await?;
         if requested.is_empty() {
             return Ok(Bytes::new());
@@ -513,7 +517,7 @@ impl CachedLanceStore {
             }
             let missing = ranges[first].start..ranges[index - 1].end;
             let _permit = self.cache.downloads.acquire().await.map_err(|error| {
-                object_store::Error::Generic {
+                lance_object_store::Error::Generic {
                     store: "LanceReadCache",
                     source: Box::new(error),
                 }
@@ -531,7 +535,7 @@ impl CachedLanceStore {
                 )
                 .await
                 .map_err(|error| {
-                    if matches!(error, object_store::Error::Precondition { .. }) {
+                    if matches!(error, lance_object_store::Error::Precondition { .. }) {
                         self.reads.lock().unwrap().metadata.remove(path);
                     }
                     error
@@ -601,8 +605,8 @@ impl CachedLanceStore {
     }
 }
 
-fn invalid_response(path: &Path, message: &str) -> object_store::Error {
-    object_store::Error::Generic {
+fn invalid_response(path: &Path, message: &str) -> lance_object_store::Error {
+    lance_object_store::Error::Generic {
         store: "LanceReadCache",
         source: format!("{message}: {path}").into(),
     }
@@ -622,7 +626,11 @@ impl std::fmt::Display for CachedLanceStore {
 
 #[async_trait]
 impl ObjectStore for CachedLanceStore {
-    async fn get_opts(&self, path: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+    async fn get_opts(
+        &self,
+        path: &Path,
+        options: GetOptions,
+    ) -> lance_object_store::Result<GetResult> {
         if !immutable_file(path)
             || options.version.is_some()
             || options.if_match.is_some()
@@ -640,7 +648,7 @@ impl ObjectStore for CachedLanceStore {
         let metadata = cell
             .get_or_try_init(|| async {
                 let _permit = self.cache.downloads.acquire().await.map_err(|error| {
-                    object_store::Error::Generic {
+                    lance_object_store::Error::Generic {
                         store: "LanceReadCache",
                         source: Box::new(error),
                     }
@@ -656,7 +664,7 @@ impl ObjectStore for CachedLanceStore {
                         },
                     )
                     .await?;
-                Ok::<_, object_store::Error>(ReadMetadata {
+                Ok::<_, lance_object_store::Error>(ReadMetadata {
                     meta: result.meta,
                     attributes: result.attributes,
                 })
@@ -691,6 +699,7 @@ impl ObjectStore for CachedLanceStore {
                 meta: metadata.meta,
                 range: 0..0,
                 attributes: metadata.attributes,
+                extensions: Default::default(),
             });
         }
         // Resolve the first group before returning metadata. A changed ETag can still
@@ -702,7 +711,7 @@ impl ObjectStore for CachedLanceStore {
             .await
         {
             Ok(bytes) => bytes,
-            Err(object_store::Error::Precondition { .. }) => {
+            Err(lance_object_store::Error::Precondition { .. }) => {
                 return self.uncached(path, options).await;
             }
             Err(error) => return Err(error),
@@ -772,6 +781,7 @@ impl ObjectStore for CachedLanceStore {
             meta: metadata.meta,
             range,
             attributes: metadata.attributes,
+            extensions: Default::default(),
         })
     }
 
@@ -780,7 +790,7 @@ impl ObjectStore for CachedLanceStore {
         path: &Path,
         payload: PutPayload,
         options: PutOptions,
-    ) -> object_store::Result<PutResult> {
+    ) -> lance_object_store::Result<PutResult> {
         self.writing(path);
         self.inner.put_opts(path, payload, options).await
     }
@@ -789,15 +799,15 @@ impl ObjectStore for CachedLanceStore {
         &self,
         path: &Path,
         options: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+    ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
         self.writing(path);
         self.inner.put_multipart_opts(path, options).await
     }
 
     fn delete_stream(
         &self,
-        paths: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
+        paths: BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<Path>> {
         let this = self.clone();
         self.inner.delete_stream(
             paths
@@ -811,17 +821,23 @@ impl ObjectStore for CachedLanceStore {
         )
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> lance_object_store::Result<ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
     async fn copy_opts(
@@ -829,7 +845,7 @@ impl ObjectStore for CachedLanceStore {
         from: &Path,
         to: &Path,
         options: CopyOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         self.writing(to);
         self.inner.copy_opts(from, to, options).await
     }
@@ -838,7 +854,7 @@ impl ObjectStore for CachedLanceStore {
         from: &Path,
         to: &Path,
         options: RenameOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         self.writing(from);
         self.writing(to);
         self.inner.rename_opts(from, to, options).await
@@ -853,7 +869,7 @@ mod tests {
         StorageCredentialScope,
     };
     use flow_like_types_contracts::authorization::AuthorizationError;
-    use object_store::{ObjectStoreExt, memory::InMemory};
+    use lance_object_store::{ObjectStoreExt, memory::InMemory};
     use std::{
         sync::atomic::{AtomicBool, AtomicUsize, Ordering},
         time::{Duration, SystemTime},
@@ -904,7 +920,11 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for Cloud {
-        async fn get_opts(&self, path: &Path, opts: GetOptions) -> object_store::Result<GetResult> {
+        async fn get_opts(
+            &self,
+            path: &Path,
+            opts: GetOptions,
+        ) -> lance_object_store::Result<GetResult> {
             let head = opts.head;
             let pause = if head {
                 self.heads.fetch_add(1, Ordering::SeqCst);
@@ -951,6 +971,7 @@ mod tests {
                     meta,
                     range,
                     attributes,
+                    extensions: Default::default(),
                     payload: GetResultPayload::Stream(
                         futures::stream::once(async move { Ok(bytes) }).boxed(),
                     ),
@@ -967,32 +988,32 @@ mod tests {
             path: &Path,
             value: PutPayload,
             opts: PutOptions,
-        ) -> object_store::Result<PutResult> {
+        ) -> lance_object_store::Result<PutResult> {
             self.store.put_opts(path, value, opts).await
         }
         async fn put_multipart_opts(
             &self,
             path: &Path,
             opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
             self.store.put_multipart_opts(path, opts).await
         }
         fn delete_stream(
             &self,
-            paths: BoxStream<'static, object_store::Result<Path>>,
-        ) -> BoxStream<'static, object_store::Result<Path>> {
+            paths: BoxStream<'static, lance_object_store::Result<Path>>,
+        ) -> BoxStream<'static, lance_object_store::Result<Path>> {
             self.store.delete_stream(paths)
         }
         fn list(
             &self,
             prefix: Option<&Path>,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
             self.store.list(prefix)
         }
         async fn list_with_delimiter(
             &self,
             prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
+        ) -> lance_object_store::Result<ListResult> {
             self.store.list_with_delimiter(prefix).await
         }
         async fn copy_opts(
@@ -1000,7 +1021,7 @@ mod tests {
             from: &Path,
             to: &Path,
             opts: CopyOptions,
-        ) -> object_store::Result<()> {
+        ) -> lance_object_store::Result<()> {
             self.store.copy_opts(from, to, opts).await
         }
     }
@@ -1366,7 +1387,7 @@ mod tests {
         let size = data.len() as u64;
         let mut attributes = Attributes::new();
         attributes.insert(
-            object_store::Attribute::ContentType,
+            lance_object_store::Attribute::ContentType,
             "application/octet-stream".into(),
         );
         cloud
@@ -1381,14 +1402,14 @@ mod tests {
             .await
             .unwrap();
         let ranges = [
-            object_store::GetRange::Bounded(0..1),
-            object_store::GetRange::Bounded(BLOCK_BYTES - 1..BLOCK_BYTES + 1),
-            object_store::GetRange::Bounded(GROUP_BYTES - 3..GROUP_BYTES + BLOCK_BYTES + 4),
-            object_store::GetRange::Bounded(size - 3..size + 99),
-            object_store::GetRange::Offset(size - 17),
-            object_store::GetRange::Suffix(21),
-            object_store::GetRange::Suffix(size + 99),
-            object_store::GetRange::Suffix(0),
+            lance_object_store::GetRange::Bounded(0..1),
+            lance_object_store::GetRange::Bounded(BLOCK_BYTES - 1..BLOCK_BYTES + 1),
+            lance_object_store::GetRange::Bounded(GROUP_BYTES - 3..GROUP_BYTES + BLOCK_BYTES + 4),
+            lance_object_store::GetRange::Bounded(size - 3..size + 99),
+            lance_object_store::GetRange::Offset(size - 17),
+            lance_object_store::GetRange::Suffix(21),
+            lance_object_store::GetRange::Suffix(size + 99),
+            lance_object_store::GetRange::Suffix(0),
         ];
         for range in ranges {
             let options = GetOptions {
@@ -1406,11 +1427,11 @@ mod tests {
             );
         }
         for range in [
-            object_store::GetRange::Bounded(0..0),
-            object_store::GetRange::Bounded(11..10),
-            object_store::GetRange::Bounded(size..size + 1),
-            object_store::GetRange::Offset(size),
-            object_store::GetRange::Offset(size + 1),
+            lance_object_store::GetRange::Bounded(0..0),
+            lance_object_store::GetRange::Bounded(11..10),
+            lance_object_store::GetRange::Bounded(size..size + 1),
+            lance_object_store::GetRange::Offset(size),
+            lance_object_store::GetRange::Offset(size + 1),
         ] {
             let options = GetOptions {
                 range: Some(range),
@@ -1427,7 +1448,7 @@ mod tests {
         let (_directory, cloud, _provider, store) = setup();
         let path = Path::from(FILE);
         cloud.put(&path, Bytes::new().into()).await.unwrap();
-        for range in [None, Some(object_store::GetRange::Suffix(0))] {
+        for range in [None, Some(lance_object_store::GetRange::Suffix(0))] {
             let result = store
                 .get_opts(
                     &path,
@@ -1520,7 +1541,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             stream.next().await.unwrap(),
-            Err(object_store::Error::Precondition { .. })
+            Err(lance_object_store::Error::Precondition { .. })
         ));
         assert!(stream.next().await.is_none());
         assert_eq!(

@@ -391,9 +391,6 @@ struct OrderedRelation {
 }
 
 impl datafusion::logical_expr::ScalarUDFImpl for OrderedRelation {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn name(&self) -> &str {
         self.relation.name()
     }
@@ -439,9 +436,6 @@ impl Default for Wgs84FromText {
     }
 }
 impl datafusion::logical_expr::ScalarUDFImpl for Wgs84FromText {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn name(&self) -> &str {
         "flow_geomfromtext"
     }

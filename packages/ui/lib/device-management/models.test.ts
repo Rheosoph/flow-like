@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import type { AgentFeatures } from "./model/types";
 import {
 	MODEL_STATS_MAX_POINTS,
+	MODELS_PAGE_MAX,
 	hostedModelSchema,
 	modelAssetSummarySchema,
 	modelInstalledSchema,
 	modelsCommand,
+	modelsOverviewSchema,
 	probeModelSystem,
 	readHostedModels,
 	readModelJobs,
@@ -62,6 +64,26 @@ async function data<T>(
 }
 
 describe("models replies", () => {
+	test("rejects oversized model lists before inspecting their entries", () => {
+		const models = new Array(MODELS_PAGE_MAX + 1);
+		let inspected = 0;
+		Object.defineProperty(models, 0, {
+			get() {
+				inspected++;
+				return fixture.overview.models[0];
+			},
+		});
+		const parsed = modelsOverviewSchema.safeParse({
+			...fixture.overview,
+			models,
+		});
+		expect(parsed.success).toBe(false);
+		expect(parsed.error?.issues).toContainEqual(
+			expect.objectContaining({ code: "too_big", path: ["models"] }),
+		);
+		expect(inspected).toBe(0);
+	});
+
 	test("the shared protocol fixture parses with flat states", async () => {
 		const { call, sent } = recorder(() => completed(fixture.overview));
 		const overview = await data(readModelsOverview(call, HOST));

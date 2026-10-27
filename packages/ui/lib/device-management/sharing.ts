@@ -999,7 +999,7 @@ const STORAGE_PREFIX = "flow-like/devices/access/";
 const MAX_REQUESTS = 64;
 const MAX_CHANGES = 48;
 
-const scopeSchema: z.ZodType<InventoryScope, z.ZodTypeDef, unknown> = z.union([
+const scopeSchema: z.ZodType<InventoryScope, unknown> = z.union([
 	z.object({ kind: z.literal("device") }),
 	z.object({ kind: z.literal("project"), project_id: z.string() }),
 	z.object({

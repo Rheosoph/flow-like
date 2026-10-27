@@ -13,6 +13,8 @@ pub mod from_model;
 pub mod helpers;
 pub mod invoke;
 pub mod lazy_register_tools;
+#[cfg(feature = "execute")]
+mod mcp_http;
 pub mod memory;
 pub mod register_editor_mcp_tools;
 pub mod register_mcp_tools;
@@ -161,10 +163,10 @@ pub(crate) async fn mcp_transport_config_for_execution(
     }
 }
 
-/// rmcp brings its own HTTP client (reqwest 0.13, which follows redirects and
-/// resolves again per connection), so a flow-supplied MCP server URI is vetted
-/// against the egress policy before any transport connects to it. A redirect or
-/// DNS rebinding after this check is outside the in-process guard. rmcp drops
+/// A flow-supplied MCP server URI is vetted against the egress policy before any
+/// transport connects to it. The transport refuses redirects so credentials
+/// cannot move to another origin. DNS rebinding after this check remains outside
+/// the in-process guard. rmcp drops
 /// successful replies that are not JSON or SSE, which covers metadata
 /// credentials; the OS-level egress boundary is what closes the rest.
 #[cfg(feature = "execute")]

@@ -13,6 +13,7 @@ runtime = [
     "dep:bytes",
     "dep:futures-util",
     "dep:reqwest",
+    "dep:lance_reqwest",
     "dep:sha2",
     "dep:tokio",
     "dep:tracing",
@@ -38,6 +39,8 @@ base64 = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+# The HTTP client inside object_store 0.14, which Lance's stores report errors from.
+lance_reqwest = { package = "reqwest", version = "0.13", default-features = false, optional = true }
 sha2 = { version = "0.10", optional = true }
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"], optional = true }
 tracing = { workspace = true, optional = true }
@@ -54,4 +57,4 @@ rusqlite = { version = "0.32.1", features = ["bundled", "extra_check"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 # Cloud shallow clones and legacy index manifests in the lazy mirror tests.
-lance-table = "=8.0.0"
+lance-table = "=13.0.0"

@@ -19,7 +19,6 @@
 //! DataFusion's NotImplemented error while `INSERT INTO` still forwards to
 //! the adapter.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow_array::{RecordBatch, RecordBatchOptions};
@@ -105,11 +104,10 @@ pub(crate) fn with_full_text_query(
     provider: &Arc<dyn TableProvider>,
     query: lancedb::index::scalar::FullTextSearchQuery,
 ) -> Option<Arc<dyn TableProvider>> {
-    let provider = provider.as_any().downcast_ref::<ZeroColumnSafeProvider>()?;
+    let provider = provider.downcast_ref::<ZeroColumnSafeProvider>()?;
     provider.scan_table.as_ref()?;
     let adapter = provider
         .inner
-        .as_any()
         .downcast_ref::<lancedb::table::datafusion::BaseTableAdapter>()?;
     Some(zero_column_safe(Arc::new(adapter.with_fts_query(query))))
 }
@@ -212,10 +210,6 @@ impl ZeroColumnSafeProvider {
 
 #[async_trait]
 impl TableProvider for ZeroColumnSafeProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.inner.schema()
     }
@@ -420,10 +414,6 @@ impl ExecutionPlan for RowCountOnlyExec {
         "RowCountOnlyExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -464,13 +454,13 @@ impl ExecutionPlan for RowCountOnlyExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> DataFusionResult<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> DataFusionResult<Arc<Statistics>> {
         let statistics = self.input.partition_statistics(partition)?;
-        Ok(Statistics {
+        Ok(Arc::new(Statistics {
             num_rows: statistics.num_rows,
             total_byte_size: Precision::Absent,
             column_statistics: vec![],
-        })
+        }))
     }
 
     fn supports_limit_pushdown(&self) -> bool {

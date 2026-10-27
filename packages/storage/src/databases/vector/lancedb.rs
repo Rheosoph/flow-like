@@ -1058,8 +1058,11 @@ impl LanceDBVectorStore {
                 }
             }
         }
-        let result = table.add_columns(transform, read_columns).await?;
-        Ok(result)
+        let mut builder = table.add_columns().transform(transform);
+        if let Some(read_columns) = read_columns {
+            builder = builder.read_columns(read_columns);
+        }
+        Ok(builder.execute().await?)
     }
 
     pub async fn drop_columns(&self, column_names: &[&str]) -> Result<()> {
@@ -1576,7 +1579,7 @@ pub(crate) fn full_text_table_provider(
     query: FullTextSearchQuery,
 ) -> Option<Arc<dyn TableProvider>> {
     let (inner, mutation_adapter) =
-        if let Some(read_only) = provider.as_any().downcast_ref::<ReadOnlyDatabaseProvider>() {
+        if let Some(read_only) = provider.downcast_ref::<ReadOnlyDatabaseProvider>() {
             (
                 crate::databases::df_provider::with_full_text_query(&read_only.inner, query)?,
                 read_only.mutation_adapter.clone(),
@@ -1605,10 +1608,6 @@ impl std::fmt::Debug for ReadOnlyDatabaseProvider {
 
 #[async_trait]
 impl TableProvider for ReadOnlyDatabaseProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.inner.schema()
     }
@@ -1695,7 +1694,10 @@ pub fn is_write_contention(error: &flow_like_types::Error) -> bool {
 pub fn is_batch_wide_failure(error: &flow_like_types::Error) -> bool {
     is_write_contention(error)
         || error.chain().any(|cause| {
-            if cause.is::<object_store::Error>() || cause.is::<std::io::Error>() {
+            if cause.is::<lance_object_store::Error>()
+                || cause.is::<object_store::Error>()
+                || cause.is::<std::io::Error>()
+            {
                 return true;
             }
             if let Some(error) = cause.downcast_ref::<lancedb::Error>() {
@@ -2546,6 +2548,14 @@ impl VectorStore for LanceDBVectorStore {
         self.ensure_unmanaged("index changes")?;
         self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        // Lance 13 adds an index of another kind next to the column's existing one.
+        // Reusing its name replaces it, so a column keeps one index.
+        let existing = table
+            .list_indices()
+            .await?
+            .into_iter()
+            .find(|index| index.columns == [column])
+            .map(|index| index.name);
         if let Some(kind) = native_scalar_index(index_type) {
             let wrapper = table.dataset().ok_or_else(|| {
                 anyhow!(
@@ -2565,10 +2575,14 @@ impl VectorStore for LanceDBVectorStore {
                 validate_rtree_column(&arrow_schema::Field::from(field))?;
             }
             let params = ScalarIndexParams::for_builtin(kind);
-            dataset
-                .create_index_builder(&[column], lance_index::IndexType::Scalar, &params)
-                .replace(true)
-                .await?;
+            let columns = [column];
+            let mut builder = dataset
+                .create_index_builder(&columns, lance_index::IndexType::Scalar, &params)
+                .replace(true);
+            if let Some(name) = existing {
+                builder = builder.name(name);
+            }
+            builder.await?;
             wrapper.update(dataset);
             return Ok(());
         }
@@ -2583,7 +2597,11 @@ impl VectorStore for LanceDBVectorStore {
         };
         let index = fit_pq_to_row_count(&table, column, index_type, index).await?;
 
-        table.create_index(&[column], index).execute().await?;
+        let mut builder = table.create_index(&[column], index).replace(true);
+        if let Some(name) = existing {
+            builder = builder.name(name);
+        }
+        builder.execute().await?;
         Ok(())
     }
 
@@ -3413,7 +3431,8 @@ mod tests {
                     .await?,
                 3
             );
-            assert_eq!(reopened.list_indices().await?.len(), 3);
+            let indices = reopened.list_indices().await?;
+            assert_eq!(indices.len(), 3, "{indices:?}");
             std::fs::remove_dir_all(path)?;
         }
         Ok(())

@@ -17,8 +17,8 @@ use flow_like_storage::{
         },
         offline_replay,
     },
+    lance_object_store::{self, ObjectStore},
     lancedb::Table,
-    object_store::{self, ObjectStore},
 };
 use serde_json::Value;
 use std::{
@@ -265,18 +265,20 @@ impl Lazy {
 
 /// Offline-class errors of mirror cloud calls: timeouts are TimedOut, everything else that
 /// `is_offline_error` accepts is ConnectFailed.
-fn classify(error: &object_store::Error) -> Option<MirrorFetch> {
+fn classify(error: &lance_object_store::Error) -> Option<MirrorFetch> {
     if !fs::is_offline_error(error, &|_| false) {
         return None;
     }
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(error) = source {
         let timed_out = error
-            .downcast_ref::<object_store::client::HttpError>()
-            .is_some_and(|error| error.kind() == object_store::client::HttpErrorKind::Timeout)
+            .downcast_ref::<lance_object_store::client::HttpError>()
+            .is_some_and(|error| {
+                error.kind() == lance_object_store::client::HttpErrorKind::Timeout
+            })
             || error
-                .downcast_ref::<reqwest::Error>()
-                .is_some_and(reqwest::Error::is_timeout)
+                .downcast_ref::<lance_reqwest::Error>()
+                .is_some_and(lance_reqwest::Error::is_timeout)
             || error
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut);
@@ -924,7 +926,7 @@ impl MirrorHost for WriteManager {
         self.host.remote_objects().await
     }
 
-    fn classify(&self, error: &object_store::Error) -> Option<MirrorFetch> {
+    fn classify(&self, error: &lance_object_store::Error) -> Option<MirrorFetch> {
         classify(error)
     }
 

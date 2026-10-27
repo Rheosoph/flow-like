@@ -12,7 +12,7 @@ const identifier = z
 const expiry = integer.max(253402300799);
 const status = z.enum(["active", "revoked"]);
 /** Hub additions (BG32/33/36) that older hubs omit; a malformed value reads as absent. */
-const optional = <T extends z.ZodTypeAny>(schema: T) =>
+const optional = <T extends z.ZodType>(schema: T) =>
 	schema.optional().catch(undefined);
 const approvalAudit = {
 	approved_by_user_id: optional(z.string().min(1)),
