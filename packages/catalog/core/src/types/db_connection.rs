@@ -10,7 +10,11 @@ use flow_like_storage::databases::vector::{
     lancedb::LanceDBVectorStore,
 };
 #[cfg(feature = "execute")]
-use flow_like_types::{Cacheable, Value, anyhow, async_trait, sync::RwLock};
+use flow_like_types::{
+    Cacheable, Value, anyhow, async_trait,
+    sync::RwLock,
+    tokio::sync::{RwLockReadGuard, RwLockWriteGuard},
+};
 use flow_like_types::{
     JsonSchema,
     json::{Deserialize, Serialize},
@@ -159,7 +163,13 @@ impl CachedDB {
         Ok(db.inner().last_write_receipt())
     }
 
-    pub async fn ensure_flushed(&self) -> flow_like_types::Result<()> {
+    /// Flushes buffered writes and keeps the lock. Parallel branches share the
+    /// store, so releasing it before the caller's operation would let another
+    /// branch queue a write in between.
+    pub async fn flushed_write(
+        &self,
+    ) -> flow_like_types::Result<RwLockWriteGuard<'_, BufferedVectorStore<LanceDBVectorStore>>>
+    {
         let mut db = self.db.write().await;
         if db.is_dirty() {
             db.flush().await?;
@@ -167,7 +177,20 @@ impl CachedDB {
         if let Some(report) = db.write_failure_report() {
             return Err(anyhow!(report));
         }
-        Ok(())
+        Ok(db)
+    }
+
+    pub async fn flushed_read(
+        &self,
+    ) -> flow_like_types::Result<RwLockReadGuard<'_, BufferedVectorStore<LanceDBVectorStore>>>
+    {
+        Ok(self.flushed_write().await?.downgrade())
+    }
+
+    /// Only for callers that do not touch the store afterwards; everything
+    /// else must hold the guard from `flushed_read` or `flushed_write`.
+    pub async fn ensure_flushed(&self) -> flow_like_types::Result<()> {
+        self.flushed_write().await.map(drop)
     }
 
     pub async fn has_buffered_writes(&self) -> bool {

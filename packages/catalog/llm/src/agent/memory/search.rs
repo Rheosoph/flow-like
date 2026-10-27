@@ -125,8 +125,7 @@ impl NodeLogic for SearchMemoryNode {
         let top_k = config.recall_top_k as usize;
 
         let cached_db = config.database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let db = cached_db.db.read().await;
+        let db = cached_db.flushed_read().await?;
 
         let mut results: Vec<Value> = match config.recall_strategy {
             RecallStrategy::RecentFirst => {

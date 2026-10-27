@@ -380,9 +380,15 @@ impl EventBusEvent {
         flow_like_state.register_run(&run_id, run_data.clone());
         started.store(true, Ordering::Relaxed);
 
-        let meta = tokio::select! {
-            result = internal_run.execute(execution_state.clone()) => result,
-            _ = cancellation_token.cancelled() => {
+        let meta = {
+            let mut execution = Box::pin(internal_run.execute(execution_state.clone()));
+            let finished = tokio::select! {
+                result = &mut execution => Some(result),
+                _ = cancellation_token.cancelled() => None,
+            };
+            if let Some(result) = finished {
+                result
+            } else {
                 let elapsed_ms = run_data.elapsed().as_millis() as u64;
                 #[cfg(debug_assertions)]
                 println!(
@@ -408,21 +414,36 @@ impl EventBusEvent {
                     elapsed_ms,
                     "Board execution cancelled"
                 );
-                match tokio::time::timeout(Duration::from_secs(30), internal_run.flush_logs_cancelled()).await {
-                    Ok(Ok(Some(meta))) => {
-                        Some(meta)
-                    },
-                    Ok(Ok(None)) => {
-                        println!("No meta flushing early");
-                        None
-                    },
-                    Ok(Err(e)) => {
-                        println!("Error flushing logs early for run: {}, {:?}", run_id, e);
-                        None
-                    },
+                // The run stops on the same token. Letting it finish runs its
+                // completion hooks, which persist buffered database writes.
+                match tokio::time::timeout(Duration::from_secs(30), &mut execution).await {
+                    Ok(meta) => meta,
                     Err(_) => {
-                        println!("Timeout while flushing logs early for run: {}", run_id);
-                        None
+                        println!(
+                            "Timeout while waiting for cancelled run to stop: {}",
+                            run_id
+                        );
+                        drop(execution);
+                        match tokio::time::timeout(
+                            Duration::from_secs(30),
+                            internal_run.flush_logs_cancelled(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(Some(meta))) => Some(meta),
+                            Ok(Ok(None)) => {
+                                println!("No meta flushing early");
+                                None
+                            }
+                            Ok(Err(e)) => {
+                                println!("Error flushing logs early for run: {}, {:?}", run_id, e);
+                                None
+                            }
+                            Err(_) => {
+                                println!("Timeout while flushing logs early for run: {}", run_id);
+                                None
+                            }
+                        }
                     }
                 }
             }

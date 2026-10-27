@@ -45,8 +45,7 @@ impl DeferredMount for LanceTableMount {
         context: &mut ExecutionContext,
     ) -> flow_like_types::Result<()> {
         let (cached_db, generation) = self.database.load_with_generation(context).await?;
-        cached_db.ensure_flushed().await?;
-        let db_guard = cached_db.db.read().await;
+        let db_guard = cached_db.flushed_read().await?;
         let inner = db_guard.inner();
 
         let table_name = if self.table_name.is_empty() {

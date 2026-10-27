@@ -130,6 +130,47 @@ pub(crate) fn unknown_columns(
     ))
 }
 
+/// Columns a Lance search adds to its results. A row read back from a search
+/// and written again carries them, so they are dropped rather than rejected.
+const LANCE_RESULT_COLUMNS: [&str; 5] = [
+    "_rowid",
+    "_rowaddr",
+    "_distance",
+    "_score",
+    "_relevance_score",
+];
+
+/// The converter skips keys the table has no column for, which loses that value
+/// without a trace, so writes to an existing table reject them instead.
+pub(crate) fn reject_unknown_columns(
+    records: &mut [Value],
+    schema: &arrow_schema::Schema,
+    table: &str,
+) -> Result<()> {
+    let columns: HashSet<&str> = schema
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect();
+    let mut unknown = std::collections::BTreeSet::new();
+    for record in records.iter_mut().filter_map(Value::as_object_mut) {
+        record.retain(|name, _| {
+            columns.contains(name.as_str()) || !LANCE_RESULT_COLUMNS.contains(&name.as_str())
+        });
+        unknown.extend(
+            record
+                .keys()
+                .filter(|name| !columns.contains(name.as_str()))
+                .cloned(),
+        );
+    }
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let unknown: Vec<&str> = unknown.iter().map(String::as_str).collect();
+    Err(unknown_columns(table, &unknown, schema).into())
+}
+
 fn quoted_list<'a>(names: impl Iterator<Item = &'a str>) -> String {
     names
         .map(|name| format!("'{name}'"))

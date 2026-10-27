@@ -2605,9 +2605,7 @@ async fn handle_memory_tool_call(
             let filter_opt: Option<&str> = filter_expr.as_deref();
             let top_k = memory.recall_top_k as usize;
 
-            cached_db.ensure_flushed().await?;
-
-            let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+            let db: RwLockReadGuard<'_, MemoryDB> = cached_db.flushed_read().await?;
 
             let mut results: Vec<Value> = match memory.recall_strategy {
                 crate::generative::agent::memory::config::RecallStrategy::RecentFirst => {
@@ -2690,8 +2688,7 @@ async fn handle_memory_tool_call(
             let content_hash = format!("{:x}", hasher.finish());
 
             {
-                cached_db.ensure_flushed().await?;
-                let db = cached_db.db.read().await;
+                let db = cached_db.flushed_read().await?;
                 let existing = db
                     .filter(
                         &format!("content_hash = '{}'", content_hash),
@@ -2723,10 +2720,8 @@ async fn handle_memory_tool_call(
 
             cached_db.insert_from(context, vec![record]).await?;
 
-            cached_db.ensure_flushed().await?;
-
             let count = {
-                let db = cached_db.db.read().await;
+                let db = cached_db.flushed_read().await?;
                 db.count(Some("role != 'summary'".to_string()))
                     .await
                     .unwrap_or(0)
@@ -2889,10 +2884,8 @@ async fn run_memory_compress(
 
     type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
 
-    cached_db.ensure_flushed().await?;
-
     let count = {
-        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.flushed_read().await?;
         db.count(Some("role != 'summary'".to_string()))
             .await
             .unwrap_or(0)
@@ -2908,7 +2901,7 @@ async fn run_memory_compress(
     }
 
     let observations: Vec<Value> = {
-        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.flushed_read().await?;
         db.filter(
             "role != 'summary'",
             Some(vec![
@@ -3004,8 +2997,6 @@ async fn run_memory_compress(
     // Insert summary first, then delete old observations (safer ordering)
     cached_db.insert_from(context, vec![summary_record]).await?;
 
-    cached_db.ensure_flushed().await?;
-
     if !obs_ids.is_empty() {
         let ids_filter = obs_ids
             .iter()
@@ -3013,7 +3004,7 @@ async fn run_memory_compress(
             .collect::<Vec<_>>()
             .join(", ");
         let filter = format!("id IN ({})", ids_filter);
-        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.db.read().await;
+        let db: RwLockReadGuard<'_, MemoryDB> = cached_db.flushed_read().await?;
         db.delete(&filter).await?;
         drop(db);
     }

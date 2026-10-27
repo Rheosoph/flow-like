@@ -88,8 +88,7 @@ impl NodeLogic for DeleteLocalDatabaseNode {
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.write().await;
+        let database = cached_db.flushed_write().await?;
         if super::skip_missing_table(context, &database, "delete").await? {
             super::publish_write_receipt(context, None, "applied").await?;
             context.set_pin_value("deleted_values", json!([])).await?;

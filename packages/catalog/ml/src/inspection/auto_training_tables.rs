@@ -1468,8 +1468,7 @@ mod table_io {
         source: &NodeDBConnection,
     ) -> Result<PinnedTableSource> {
         let cached = source.load(context).await?;
-        cached.ensure_flushed().await?;
-        let store = cached.db.read().await.inner().clone();
+        let store = cached.flushed_read().await?.inner().clone();
         let scope = context
             .execution_cache
             .as_ref()
@@ -2240,8 +2239,7 @@ mod table_io {
                 anyhow!("Existing table writes require its expected durable reference")
             })?;
             let cached = destination.load(context).await?;
-            cached.ensure_flushed().await?;
-            let guard = cached.db.write().await;
+            let guard = cached.flushed_write().await?;
             let store = guard.inner();
             store.ensure_writable()?;
             let actual = store.reference().await?;

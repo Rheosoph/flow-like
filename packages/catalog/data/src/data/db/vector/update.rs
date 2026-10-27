@@ -66,7 +66,6 @@ impl NodeLogic for UpdateLocalDatabaseNode {
         super::publish_write_receipt(context, None, "").await?;
         let connection: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = connection.load(context).await?;
-        database.ensure_flushed().await?;
         let filter: String = context.evaluate_pin("filter").await?;
         let filter = params::bind_lance_filter(context, &filter).await?;
         if filter.trim().is_empty() {
@@ -81,7 +80,7 @@ impl NodeLogic for UpdateLocalDatabaseNode {
                 "Provide at least one column to update"
             ));
         }
-        let guard = database.db.write().await;
+        let guard = database.flushed_write().await?;
         guard.inner().update(&filter, updates).await?;
         let receipt = guard.inner().last_write_receipt();
         drop(guard);

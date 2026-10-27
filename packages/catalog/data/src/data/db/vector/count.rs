@@ -79,8 +79,7 @@ impl NodeLogic for CountLocalDatabaseNode {
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
         let filter: String = context.evaluate_pin("filter").await?;
         let filter = params::bind_lance_filter(context, &filter).await?;
         let filter: Option<String> = if filter.is_empty() {

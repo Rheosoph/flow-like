@@ -165,10 +165,8 @@ impl NodeLogic for StoreMemoryNode {
         let cached_db = config.database.load(context).await?;
         cached_db.insert_from(context, vec![record]).await?;
 
-        cached_db.ensure_flushed().await?;
-
         let count = {
-            let db = cached_db.db.read().await;
+            let db = cached_db.flushed_read().await?;
             db.count(None).await.unwrap_or(0)
         };
 
