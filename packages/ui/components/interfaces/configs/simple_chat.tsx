@@ -21,6 +21,7 @@ import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type { IRouteMapping } from "../../../state/backend-state/route-state";
 import { AssetPicker } from "../../builder/AssetPicker";
+import { chatThinkingLevel } from "../../thinking/thinking-options";
 import {
 	Checkbox,
 	Input,
@@ -568,6 +569,44 @@ export function SimpleChatConfig({
 								"Attach images of embedded widgets to the model's context so vision-capable models can react to the rendered UI",
 							)}
 						</p>
+					</div>
+
+					<div className="space-y-4">
+						<div className="flex items-center space-x-2">
+							<Switch
+								disabled={!isEditing}
+								id="allow_thinking_selection"
+								checked={config?.allow_thinking_selection ?? true}
+								onCheckedChange={(checked) => {
+									setValue("allow_thinking_selection", checked);
+								}}
+							/>
+							<Label htmlFor="allow_thinking_selection">
+								{t("thinkingPicker", "Thinking Picker")}
+							</Label>
+						</div>
+						<p className="text-sm text-muted-foreground">
+							{t(
+								"letUsersChooseHowMuchTheModelThinksBeforeItAnswers",
+								"Let users choose how much the model thinks before it answers. The Chat Event passes the level on in its History.",
+							)}
+						</p>
+						<div className="space-y-2">
+							<Label htmlFor="default_thinking">
+								{t("defaultThinking", "Default Thinking")}
+							</Label>
+							{renderVoiceSelect(
+								"default_thinking",
+								chatThinkingLevel(config?.default_thinking),
+								(value) => setValue("default_thinking", value),
+								[
+									{ value: "off", label: t("thinkingLevelOff", "Off") },
+									{ value: "low", label: t("thinkingLevelLow", "Low") },
+									{ value: "mid", label: t("thinkingLevelMid", "Mid") },
+									{ value: "high", label: t("thinkingLevelHigh", "High") },
+								],
+							)}
+						</div>
 					</div>
 				</>
 			)}

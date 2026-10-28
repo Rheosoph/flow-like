@@ -80,7 +80,7 @@
 			}
 		},
 		"custom_bits": {
-			"description": "User-owned private bits, hydrated per trust boundary: with decrypted\nprovider secrets only server-side per request/run and on the owner's\ndesktop; never in the browser client or the server profile row.\nSchema-wise these are plain `Bit`s (the wrapper is serde-transparent);\n`schemars(with)` keeps the generated schema referencing `Bit` instead\nof minting a duplicate inline type, which would cascade renames through\nthe quicktype-generated TS.",
+			"description": "User-owned private bits. Only the owner's desktop and the hub hold their\nprovider secrets. Server runs carry secret-free views (provider and\nmodel, no key or endpoint) and call them through the hub's model relay;\nthe browser client and the server profile row never see a secret.\nSchema-wise these are plain `Bit`s (the wrapper is serde-transparent);\n`schemars(with)` keeps the generated schema referencing `Bit` instead\nof minting a duplicate inline type, which would cascade renames through\nthe quicktype-generated TS.",
 			"type": "array",
 			"items": {
 				"$ref": "#/$defs/Bit"

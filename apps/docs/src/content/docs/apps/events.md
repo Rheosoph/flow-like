@@ -97,6 +97,52 @@ REST and MCP Events can additionally be **Public** or **Internal**. An
 Internal endpoint is callable by connected Apps through the App-connection
 proxy and does not expose a public endpoint.
 
+A run that a person triggers acts as that person: their role in the App, their
+profile and their private models. That covers chats, forms, quick actions and
+pages in the App, API and MCP calls with their login, hosted pages they open
+while signed in, calls another App passes them through, and location crossings
+on their device. Their own OAuth sign-ins are used when they provide them;
+otherwise the Event's saved sign-ins are used.
+
+A run that nobody triggers, such as a schedule, a webhook, a bot message, an
+inbound email, an anonymous visit to a hosted page or a public API call, runs
+as the Event's run-as person, with that person's role in the App, and needs no
+personal access token. Whoever saves, restores, edits or switches the Event on
+or off becomes its run-as person. Editing the Flow an Event runs at its latest
+version, or publishing the exact version an Event is pinned to, does the same.
+When the person changes, the Event's OAuth sign-ins and saved profile are
+cleared, so the new person grants their own. Only someone whose role may
+trigger Events can switch an Event on, or save or restore it while it is on.
+
+Such runs use the current settings of the profile that the run-as person used
+when saving the Event, or, once that profile is gone, their profile for this App
+or else their first profile. Runs reach private models through the hub, which
+never hands their keys to a run. Subscription models such as Claude Code, Codex,
+GitHub Copilot and Microsoft 365 Copilot run only on their owner's desktop, so a
+Remote Event cannot use them. An older Event saved before it had a person to
+run as keeps the profile saved with it, without private models.
+
+When the run-as person leaves the App, loses the right to trigger Events or no
+longer has an active account, or when the personal access token of an older
+Event stops working, the Event pauses for the runs that nobody triggers and the
+App's owners and admins are notified. It shows **Paused: the person it ran as
+can no longer run it**; switching it on again makes you its run-as person. Runs
+that a person triggers keep working. Switching an Event off stops every run.
+Events of an App that is not active do not fire, and fire again once the App is
+active.
+
+A Local Event of an online App runs on this computer and signs in to the hub
+with a personal access token of the account signed in to the desktop app. The
+first time this computer runs an Event, the desktop app asks you to allow it
+and to choose a token; a token of another account is refused. An Event saved
+before tokens were checked shows **Needs a token** and does not fire until you
+choose one with **Add token** in its settings. A Local Event fires only while
+the account its token belongs to is signed in to the same hub on this computer:
+after you sign out, switch accounts or point the profile at another hub, it
+shows **Needs a token** and does not fire, and its token is never sent to
+another hub. A token needs **Read & Write** access. Events of offline Apps need
+no token.
+
 ### Publish a hosted chat, form or page
 
 An App's chats, forms and pages can open from one link in the existing Flow-Like
@@ -138,6 +184,25 @@ Disabling hosting, removing the route, deactivating the Event or changing it to
 Local or Internal removes hosted access for that route. Disabling hosting also clears the anonymous choice in
 the editor, so enabling it again starts with sign-in required. Save the Event
 to apply these changes.
+
+A signed-in visitor's run acts as the visitor: their own role in the App, their
+profile and their private models. A member keeps their role (never Owner or
+Admin rights); a visitor who is not a member gets only what triggering Events
+allows: the App cache, notifications to the App's members and connected Apps.
+When the flow needs OAuth sign-ins, the page asks the visitor to connect their
+own accounts; a visitor who skips uses the Event's saved sign-ins. Calls the run
+makes to connected Apps pass the visitor through as themselves.
+
+An anonymous visitor's run uses the Event's run-as person instead: their profile
+and models, and never more access than that person, limited to what triggering
+Events allows. Before each anonymous visit, Flow-Like checks that the run-as
+person can still run the Event; if not, the visitor sees an error, no run starts
+and the Event pauses for runs nobody triggers. A connected App treats an
+anonymous visitor's run as anonymous: it records no user for it, loads no
+profile and keeps each run's files apart.
+
+Flow-Like checks these rights on every request a run makes, so a change also
+applies to runs in progress. A hosted run can notify only members of the App.
 
 Self-hosted installations use their existing web deployment and login callback.
 See [Host chat, form and page frontends](/self-hosting/containers/#host-chat-form-and-page-frontends)
@@ -194,8 +259,22 @@ every other request.
 Add a **Location Event** node to a Flow, then create a **Location Region** Event
 from it. Choose a Geometry Point center in longitude-latitude order, a radius
 in meters, and entering, leaving, or both transitions. Save and activate the
-Event to register the region on this device. For a Remote Event, this device
-sends the configured center, radius, and transition to the server workflow.
+Event to register the region on this device.
+
+A Remote Event is watched on this device too. Each crossing goes to the hub,
+which runs the server workflow as the account signed in on this device, with
+its role, profile and private models, and passes it the configured center,
+radius and transition. The device's OAuth sign-ins for the Event are used when
+it has them; otherwise the Event's saved sign-ins are used. This device signs
+in with a personal access token of that account; the token needs
+**Read & Write**, and the account must be allowed to trigger Events. A
+crossing sent again, for example after a lost answer, gets the run of its first
+delivery instead of starting another one; this device retries a crossing for at
+most 14 minutes, within the hub's 15-minute window. While the App is not
+active, the hub asks the device to retry and the region stays registered. When
+the Event is paused or switched off, or the hub refuses a crossing for another
+reason, this device stops watching the region. When the hub no longer accepts
+the token, the Event shows **Needs a token**.
 
 **While the app is open** stops monitoring when Flow-Like leaves the
 foreground. **Also in the background** opts into native region monitoring.

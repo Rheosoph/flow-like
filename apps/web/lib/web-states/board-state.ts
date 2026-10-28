@@ -1,5 +1,3 @@
-import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
-import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type FlowIrCommitDisposition,
 	type FlowIrCommitDispositionResult,
@@ -40,6 +38,7 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	apiResponseError,
 	isMissingResourceError,
@@ -60,6 +59,7 @@ import {
 	cancelChannel,
 	isChannelHandle,
 } from "@flow-like/flow-like-ui/lib/channel";
+import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
 	applyFlowScriptFromResponse,
@@ -81,6 +81,7 @@ import {
 	normalizeBoardVersion,
 } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
+import type { IOAuthRequiredError } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
 import { runGlobalChatTool } from "@flow-like/flow-like-ui/state/global-chat/global-chat-tool-registry";
@@ -442,9 +443,9 @@ export class WebBoardState implements IBoardState {
 				this.backend.auth,
 			);
 			const byPrefix = new Map(
-				results
-					.filter((result) => result.url)
-					.map((result) => [result.prefix, result.url!]),
+				results.flatMap((result) =>
+					result.url ? [[result.prefix, result.url] as const] : [],
+				),
 			);
 			const urls = new Map<string, string>();
 			for (const file of files) {
@@ -607,21 +608,29 @@ export class WebBoardState implements IBoardState {
 			}
 
 			if (providersNeedingConsent.length > 0) {
-				const error = new Error(
-					`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+				const error: IOAuthRequiredError = Object.assign(
+					new Error(
+						`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+					),
+					{
+						missingProviders: providersNeedingConsent,
+						isOAuthError: true as const,
+					},
 				);
-				(error as any).missingProviders = providersNeedingConsent;
-				(error as any).isOAuthError = true;
 				throw error;
 			}
 		} else {
 			// Still need to check for missing tokens even if skipping consent
 			if (oauthResult.missingProviders.length > 0) {
-				const error = new Error(
-					`Missing OAuth tokens for: ${oauthResult.missingProviders.map((p) => p.name).join(", ")}`,
+				const error: IOAuthRequiredError = Object.assign(
+					new Error(
+						`Missing OAuth tokens for: ${oauthResult.missingProviders.map((p) => p.name).join(", ")}`,
+					),
+					{
+						missingProviders: oauthResult.missingProviders,
+						isOAuthError: true as const,
+					},
 				);
-				(error as any).missingProviders = oauthResult.missingProviders;
-				(error as any).isOAuthError = true;
 				throw error;
 			}
 		}
@@ -702,8 +711,7 @@ export class WebBoardState implements IBoardState {
 			[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
 		};
 		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
 		}
 
 		console.log("[OAuth] Sending execution with tokens:", {
@@ -721,7 +729,6 @@ export class WebBoardState implements IBoardState {
 					version: payload.version,
 					payload: payload.payload,
 					stream_state: streamState ?? true,
-					token: this.backend.auth?.user?.access_token,
 					oauth_tokens: oauthTokens,
 					runtime_variables: payload.runtime_variables,
 					profile_id: this.backend.profile?.id,
@@ -762,8 +769,6 @@ export class WebBoardState implements IBoardState {
 								eventName = line.slice(6).trim();
 							} else if (line.startsWith("data:")) {
 								dataLines.push(line.slice(5).trim());
-							} else if (line.startsWith(":")) {
-								continue;
 							}
 						}
 
@@ -1312,8 +1317,7 @@ export class WebBoardState implements IBoardState {
 			headers.Accept = "text/event-stream";
 		}
 		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
 		}
 
 		const wantsStream = Boolean(onToken);

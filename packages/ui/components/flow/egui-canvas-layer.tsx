@@ -38,14 +38,30 @@ import {
 	resolvePinStart,
 } from "../../lib/board-canvas/pin-start";
 import { pinchViewport } from "../../lib/board-canvas/pinch";
-import type { Overlay, Palette, Scene } from "../../lib/board-canvas/scene";
+import type {
+	Overlay,
+	Palette,
+	Scene,
+	SceneEndpoint,
+} from "../../lib/board-canvas/scene";
 import { waitForCanvasPaint } from "../../lib/board-canvas/startup";
 import {
 	type NodeStatus,
 	collectRunActivity,
 } from "../../lib/board-canvas/status";
+import {
+	type BoardTrace,
+	NO_TRACE,
+	type TraceAnchor,
+	WireIndex,
+	type WireTrace,
+	sameAnchor,
+	sameEndpoint,
+} from "../../lib/board-canvas/trace";
+import type { WritableSignalStore } from "../../lib/realtime/presence-signals-store";
 import { useBoardRuntime, useReactFlow, useStoreApi } from "./board-runtime";
 import type { FlowCanvasProps } from "./flow-board";
+import { NATIVE_NODE_PLANE_Z } from "./standalone-board-host";
 
 export interface EguiCanvasLayerProps {
 	scene: Scene;
@@ -59,6 +75,8 @@ export interface EguiCanvasLayerProps {
 	status?: Readonly<Record<string, NodeStatus>>;
 	/** Live runs, for the "last activity" clock on running nodes. */
 	runs?: ReadonlyMap<string, { lastNodeUpdateMs: number }>;
+	/** Pin traces both planes paint; the interactive plane writes them. */
+	trace?: WritableSignalStore<BoardTrace>;
 	onHoverNode?(id?: string): void;
 	onError(error: Error): void;
 	onReady(): void;
@@ -75,7 +93,6 @@ interface PointerDrag {
 	viewport: Viewport;
 	nodes: Node[];
 	started: boolean;
-	secondClick?: boolean;
 	appliedWorld?: Point;
 	appliedModifiers?: string;
 	positions?: Map<string, Point>;
@@ -85,7 +102,26 @@ interface PointerDrag {
 	toggleNode?: string;
 	primaryId?: string;
 	pane?: boolean;
+	/** The pin under a press that cannot start a connection; a click on it focuses its trace. */
+	tracePin?: SceneEndpoint;
+	/** The wire under a press; a click on it focuses the path it lies on. */
+	traceEdge?: string;
 }
+
+/** A preview card's pin and its `[x, y, width, height]` on the canvas. */
+interface PreviewHit {
+	endpoint: SceneEndpoint;
+	rect: [number, number, number, number];
+}
+
+const rewireStroke = (color: string, width: number) =>
+	`<g stroke='${color}' stroke-width='${width}'><circle cx='9' cy='9' r='4'/><path d='M13.5 9C20.5 9 23 12.5 23 20.5'/><path d='M19.5 17.5L23 21.5L26.5 17.5'/></g>`;
+/** Over a wire end a drag moves to another pin: the grabbed pin with an arrow leading away. */
+const REWIRE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+	`<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><g fill='none' stroke-linecap='round' stroke-linejoin='round'>${rewireStroke("white", 4)}${rewireStroke("black", 2)}</g><circle cx='9' cy='9' r='1.75'/></svg>`,
+)}") 9 9, grab`;
+const pinCursor = (candidate: PinStart) =>
+	candidate.reconnect ? REWIRE_CURSOR : "crosshair";
 
 const asMouse = (event: MouseEvent | KeyboardEvent) =>
 	event as unknown as ReactMouseEvent;
@@ -162,6 +198,19 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			console.error(updateError("the run activity", error));
 		}
 	};
+	const sendTrace = useRef(() => {});
+	sendTrace.current = () => {
+		const handle = handleRef.current;
+		if (!handle?.set_trace) return;
+		try {
+			handle.set_trace(
+				JSON.stringify(latest.current.trace?.getSnapshot() ?? NO_TRACE),
+			);
+		} catch (error) {
+			console.error(updateError("the wire trace", error));
+		}
+	};
+	const retraceRef = useRef(() => {});
 	const syncIcons = useRef(() => {});
 	syncIcons.current = () => {
 		const handle = handleRef.current;
@@ -226,6 +275,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		try {
 			handleRef.current?.set_scene(JSON.stringify(props.scene));
 			syncIcons.current();
+			retraceRef.current();
 			repaintRef.current();
 		} catch (error) {
 			props.onError(updateError("the scene", error));
@@ -254,6 +304,11 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			statusFrame.current = 0;
 		};
 	}, []);
+	useEffect(() => {
+		const resend = () => sendTrace.current();
+		resend();
+		return props.trace?.subscribe(resend);
+	}, [props.trace]);
 	useEffect(() => {
 		const tick = () => sendActivity.current();
 		tick();
@@ -346,16 +401,40 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			textOverflow: "ellipsis",
 		});
 		pinHint.append(pinRing, pinLabel);
+		const previewHint = document.createElement("div");
+		previewHint.dataset.boardPreviewHint = "";
+		previewHint.style.cssText = pinLabel.style.cssText;
+		Object.assign(previewHint.style, {
+			pointerEvents: "none",
+			zIndex: "100000",
+			display: "none",
+		});
 		if (interactive)
-			(runtime?.store.getState().overlayElement ?? root).append(pinHint);
-		let pinCursor:
+			(runtime?.store.getState().overlayElement ?? root).append(
+				pinHint,
+				previewHint,
+			);
+		const pinName = (pin: PinStart["pin"]) =>
+			pin.label ||
+			(pin.kind === "reference"
+				? translate.current("pinHintReference", "Function reference")
+				: pin.kind === "execution"
+					? translate.current("pinHintExecution", "Execution")
+					: pin.id);
+		let claimedCursor:
 			| { element: HTMLElement | SVGElement; previous: string }
 			| undefined;
 		const clearPinFeedback = () => {
 			const visible = pinHint.style.display !== "none";
-			if (pinCursor) pinCursor.element.style.cursor = pinCursor.previous;
-			pinCursor = undefined;
-			if (visible && pane.style.cursor === "crosshair") pane.style.cursor = "";
+			if (claimedCursor)
+				claimedCursor.element.style.cursor = claimedCursor.previous;
+			claimedCursor = undefined;
+			if (
+				visible &&
+				(pane.style.cursor === "crosshair" ||
+					pane.style.cursor.startsWith("url("))
+			)
+				pane.style.cursor = "";
 			pinHint.style.display = "none";
 			delete pinHint.dataset.nodeId;
 			delete pinHint.dataset.pinId;
@@ -367,11 +446,11 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				target instanceof HTMLElement || target instanceof SVGElement
 					? target
 					: pane;
-			if (pinCursor?.element !== element) {
+			if (claimedCursor?.element !== element) {
 				clearPinFeedback();
-				pinCursor = { element, previous: element.style.cursor };
+				claimedCursor = { element, previous: element.style.cursor };
 			}
-			element.style.cursor = "crosshair";
+			element.style.cursor = pinCursor(candidate);
 			const [x, y, zoom] = store.getState().transform;
 			const px = x + pin.x * zoom;
 			const py = y + pin.y * zoom;
@@ -383,13 +462,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				pin.direction === "input"
 					? translate.current("pinHintInput", "input")
 					: translate.current("pinHintOutput", "output");
-			const name =
-				pin.label ||
-				(pin.kind === "reference"
-					? translate.current("pinHintReference", "Function reference")
-					: pin.kind === "execution"
-						? translate.current("pinHintExecution", "Execution")
-						: pin.id);
+			const name = pinName(pin);
 			pinLabel.textContent = candidate.reconnect
 				? translate.current(
 						"pinHintReconnect",
@@ -422,7 +495,6 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			  }
 			| undefined;
 		let connection: ConnectionGesture | undefined;
-		let waitingForClick = false;
 		let space = false;
 		let suppressClick = false;
 		let frame: (() => void) | undefined;
@@ -444,6 +516,12 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		const currentProps = () => latest.current.boardProps;
 		let hoveredNode: string | undefined;
 		let hoverPaused = false;
+		let wires: { scene: Scene; index: WireIndex } | undefined;
+		let hoverOrigin: SceneEndpoint | undefined;
+		let focusAnchor: TraceAnchor | undefined;
+		let hoverTrace: WireTrace | undefined;
+		let focusTrace: WireTrace | undefined;
+		let traceSize = "";
 		const hoverNode = (id?: string) => {
 			if (hoveredNode === id && !hoverPaused) return;
 			hoverPaused = false;
@@ -453,6 +531,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		const clearHover = (event: PointerEvent) => {
 			if (event.target !== root || drag || pinch || event.buttons) return;
 			clearPinFeedback();
+			hoverPreview();
+			traceHover();
 			setOverlay({});
 			hoverNode();
 			if (!connection) {
@@ -562,11 +642,123 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				report(updateError("the interaction overlay", error));
 			}
 		};
+		const wireIndex = () => {
+			const scene = latest.current.scene;
+			if (wires?.scene !== scene)
+				wires = { scene, index: new WireIndex(scene) };
+			return wires.index;
+		};
+		/** Board chrome over the canvas, which the previews keep clear of. */
+		const chromeRects = () => {
+			const bounds = canvas.getBoundingClientRect();
+			return [
+				...root.querySelectorAll<HTMLElement>(
+					"[data-board-canvas-controls], .react-flow__panel",
+				),
+			].flatMap((element): [number, number, number, number][] => {
+				const rect = element.getBoundingClientRect();
+				return rect.width && rect.height
+					? [
+							[
+								rect.left - bounds.left,
+								rect.top - bounds.top,
+								rect.width,
+								rect.height,
+							],
+						]
+					: [];
+			});
+		};
+		const publishTrace = () =>
+			latest.current.trace?.set(
+				hoverTrace || focusTrace
+					? { hover: hoverTrace, focus: focusTrace, avoid: chromeRects() }
+					: NO_TRACE,
+			);
+		/** The hovered pin's wires, unless they are the focused ones. */
+		const hoveredTrace = (index: WireIndex, endpoint?: SceneEndpoint) =>
+			endpoint && !sameAnchor({ pin: endpoint }, focusAnchor)
+				? index.fromPin(endpoint)
+				: undefined;
+		const traceHover = (endpoint?: SceneEndpoint) => {
+			if (sameEndpoint(endpoint, hoverOrigin)) return;
+			hoverOrigin = endpoint;
+			const next = hoveredTrace(wireIndex(), endpoint);
+			if (!next && !hoverTrace) return;
+			hoverTrace = next;
+			publishTrace();
+		};
+		/** Highlights a clicked pin's or wire's whole path until another click or Escape. */
+		const traceFocus = (anchor?: TraceAnchor) => {
+			const next = anchor && wireIndex().trace(anchor);
+			if (!next && !focusTrace) return undefined;
+			focusAnchor = next ? anchor : undefined;
+			focusTrace = next;
+			hoverOrigin = undefined;
+			hoverTrace = undefined;
+			hoverPreview();
+			publishTrace();
+			return next;
+		};
+		retraceRef.current = () => {
+			if (!hoverOrigin && !focusAnchor) return;
+			const index = wireIndex();
+			focusTrace = focusAnchor && index.trace(focusAnchor);
+			if (!focusTrace) focusAnchor = undefined;
+			hoverTrace = hoveredTrace(index, hoverOrigin);
+			publishTrace();
+		};
+		let hoveredPreview = "";
+		let hintPlace = "";
+		/** The card under the pointer: lifted on the canvas, one pointer target, its label beside it. */
+		const hoverPreview = (preview?: PreviewHit) => {
+			const key = preview ? JSON.stringify(preview.endpoint) : "";
+			if (key !== hoveredPreview) {
+				hoveredPreview = key;
+				try {
+					handleRef.current?.set_preview_hover?.(key);
+				} catch (error) {
+					report(updateError("the preview hover", error));
+				}
+			}
+			if (!preview) {
+				delete root.dataset.boardPreviewHover;
+				previewHint.style.display = "none";
+				hintPlace = "";
+				return;
+			}
+			root.dataset.boardPreviewHover = "";
+			const { endpoint, rect } = preview;
+			const place = `${key}@${rect.join()}`;
+			if (place === hintPlace) return;
+			hintPlace = place;
+			const pin = hitRef.current.pin(endpoint);
+			previewHint.textContent = translate.current(
+				"wireTracePreviewHint",
+				"Go to {{node}} · {{pin}}",
+				{
+					node: hitRef.current.nodes.get(endpoint.nodeId)?.label ?? "",
+					pin: pin ? pinName(pin) : endpoint.pinId,
+				},
+			);
+			previewHint.style.display = "block";
+			// Beside the card, never over the board it previews: above it, or below near the top.
+			const canvasBounds = canvas.getBoundingClientRect();
+			const rootBounds = root.getBoundingClientRect();
+			const x = rect[0] + canvasBounds.left - rootBounds.left;
+			const y = rect[1] + canvasBounds.top - rootBounds.top;
+			const width = previewHint.offsetWidth;
+			const height = previewHint.offsetHeight;
+			const above = y - height - 8;
+			previewHint.style.left = `${Math.max(4, Math.min(x + (rect[2] - width) / 2, rootBounds.width - width - 4))}px`;
+			previewHint.style.top = `${above >= 4 ? above : y + rect[3] + 8}px`;
+		};
 
 		const paintOverlay = () => {
 			if (!ready || !pointer || pinch) return;
 			if (scope !== currentProps().scopeKey) {
 				cancel(false);
+				traceFocus();
 				scope = currentProps().scopeKey;
 				return;
 			}
@@ -582,6 +774,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			const zoom = flow.getViewport().zoom;
 			if (connection) {
 				clearPinFeedback();
+				traceHover();
+				hoverPreview();
 				if (
 					!currentProps().nodesInteractive ||
 					!store.getState().nodesConnectable ||
@@ -643,6 +837,15 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				);
 			} else if (!drag && !lastPointerEvent?.buttons) {
 				const top = document.elementFromPoint(pointer.x, pointer.y);
+				const preview = previewAt(pointer, top);
+				hoverPreview(preview);
+				if (preview) {
+					hoverNode();
+					clearPinFeedback();
+					traceHover();
+					setOverlay({});
+					return;
+				}
 				const covered = nativeAboveElement(point, top);
 				const wrapperId =
 					top?.closest<HTMLElement>(".react-flow__node")?.dataset.id;
@@ -656,8 +859,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				const candidate = pinStart(point, zoom, top);
 				if (candidate) showPinFeedback(candidate, top);
 				else clearPinFeedback();
+				traceHover(tracePinAt(point, zoom, top));
 				pane.style.cursor = candidate
-					? "crosshair"
+					? pinCursor(candidate)
 					: hitRef.current.nodeAt(point)
 						? "pointer"
 						: "grab";
@@ -679,6 +883,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 		function cancel(restore: boolean, preserveTouches = false) {
 			clearCameraHover();
 			clearPinFeedback();
+			hoverPreview();
+			traceHover();
 			clearLongPress();
 			hoverNode();
 			if (
@@ -706,7 +912,6 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			const captured = drag?.id;
 			drag = undefined;
 			connection = undefined;
-			waitingForClick = false;
 			lassoRef.current?.setAttribute("points", "");
 			if (
 				!preserveTouches &&
@@ -926,9 +1131,18 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			!!target.closest(
 				".react-flow__panel, .react-flow__node-toolbar, [data-board-canvas-controls], [data-board-dom-control], button, input, textarea, select, a, [contenteditable='true'], [role='dialog'], [role='button'], [role='slider'], [role='combobox'], [role='menuitem']",
 			);
-		const pinStart = (point: Point, zoom: number, target: Element | null) => {
+		/** A pin under the pointer: one that can start a connection, or any pin to trace. */
+		const resolvePin = (
+			point: Point,
+			zoom: number,
+			target: Element | null,
+			connecting: boolean,
+		) => {
 			const state = store.getState();
-			if (busy || !currentProps().nodesInteractive || !state.nodesConnectable)
+			if (
+				connecting &&
+				(busy || !currentProps().nodesInteractive || !state.nodesConnectable)
+			)
 				return;
 			const above = nativeAboveElement(point, target);
 			const wrapperId =
@@ -941,12 +1155,15 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					!above &&
 					(isDomControl(target) ||
 						(!!wrapperId && !hitRef.current.nodes.has(wrapperId)) ||
-						(!!handle && !handle.classList.contains("connectablestart"))),
+						(connecting &&
+							!!handle &&
+							!handle.classList.contains("connectablestart"))),
 				explicit:
 					handle?.dataset.nodeid && handle.dataset.handleid
 						? { nodeId: handle.dataset.nodeid, pinId: handle.dataset.handleid }
 						: undefined,
 				explicitEdgeId:
+					connecting &&
 					!above &&
 					target?.closest(
 						".react-flow__edge-path, .react-flow__edge-interaction",
@@ -954,21 +1171,84 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 						? target.closest<SVGElement>(".react-flow__edge")?.dataset.id
 						: undefined,
 				nodeId: above?.id ?? wrapperId ?? hitRef.current.nodeAt(point)?.id,
-				canConnect: (pin) => {
-					const node = state.nodeLookup.get(pin.nodeId);
-					return !!node && !node.hidden && node.connectable !== false;
-				},
-				canReconnect: (edge, end) => {
-					const original = originalEdgesRef.current.get(edge.id);
-					return (
-						!!original &&
-						!original.hidden &&
-						(original.reconnectable === undefined ||
-							original.reconnectable === true ||
-							original.reconnectable === end)
-					);
-				},
+				canConnect: connecting
+					? (pin) => {
+							const node = state.nodeLookup.get(pin.nodeId);
+							return !!node && !node.hidden && node.connectable !== false;
+						}
+					: () => true,
+				canReconnect: connecting
+					? (edge, end) => {
+							const original = originalEdgesRef.current.get(edge.id);
+							return (
+								!!original &&
+								!original.hidden &&
+								(original.reconnectable === undefined ||
+									original.reconnectable === true ||
+									original.reconnectable === end)
+							);
+						}
+					: () => false,
 			});
+		};
+		const pinStart = (point: Point, zoom: number, target: Element | null) =>
+			resolvePin(point, zoom, target, true);
+		const tracePinAt = (
+			point: Point,
+			zoom: number,
+			target: Element | null,
+		): SceneEndpoint | undefined => {
+			const pin = resolvePin(point, zoom, target, false)?.pin;
+			return pin && { nodeId: pin.nodeId, pinId: pin.id };
+		};
+		/** A DOM node stacked above the native node plane covers the previews under it. */
+		const domAbovePlane = (target: Element | null) => {
+			const wrapper = target?.closest<HTMLElement>(".react-flow__node");
+			if (!wrapper) return false;
+			const z =
+				flow.getInternalNode(wrapper.dataset.id ?? "")?.internals.z ??
+				Number(getComputedStyle(wrapper).zIndex);
+			return z > NATIVE_NODE_PLANE_Z;
+		};
+		const previewAt = (
+			client: Point,
+			target: EventTarget | null,
+		): PreviewHit | undefined => {
+			const handle = handleRef.current;
+			const element = target instanceof Element ? target : null;
+			if (
+				!focusAnchor ||
+				!handle?.preview_at ||
+				isDomControl(element) ||
+				domAbovePlane(element)
+			)
+				return undefined;
+			const bounds = canvas.getBoundingClientRect();
+			const hit = handle.preview_at(
+				client.x - bounds.left,
+				client.y - bounds.top,
+			);
+			if (!hit) return undefined;
+			const { rect, ...endpoint } = JSON.parse(hit) as SceneEndpoint & {
+				rect: PreviewHit["rect"];
+			};
+			return { endpoint, rect };
+		};
+		/** Flies the camera to a previewed pin. */
+		const flyTo = (endpoint: SceneEndpoint) => {
+			const pin = hitRef.current.pin(endpoint);
+			if (!pin) return;
+			const view = flow.getViewport();
+			void flow.setCenter(pin.x, pin.y, {
+				zoom: Math.min(store.getState().maxZoom, Math.max(view.zoom, 0.8)),
+				duration: window.matchMedia(REDUCED_MOTION).matches ? 0 : 420,
+			});
+			setAnnouncement(
+				translate.current("wireTraceMoved", "Showing {{node}} · {{pin}}", {
+					node: hitRef.current.nodes.get(endpoint.nodeId)?.label ?? "",
+					pin: pinName(pin),
+				}),
+			);
 		};
 		const isControl = (target: EventTarget | null) =>
 			isDomControl(target) ||
@@ -1075,6 +1355,17 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				(applePlatform && event.button === 0 && event.ctrlKey)
 			)
 				return;
+			const preview =
+				event.button === 0 && !event.shiftKey && !pinch
+					? previewAt({ x: event.clientX, y: event.clientY }, event.target)
+					: undefined;
+			if (preview) {
+				consume(event);
+				suppressClick = true;
+				hoverPreview();
+				flyTo(preview.endpoint);
+				return;
+			}
 			const selectionGroup =
 				event.target instanceof Element &&
 				!!event.target.closest(".react-flow__nodesselection-rect") &&
@@ -1087,13 +1378,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				store.getState().elementsSelectable &&
 				!isControl(event.target) &&
 				!(event.target instanceof Element && event.target.closest(".nokey"));
-			if (
-				!selection &&
-				!selectionGroup &&
-				!nativeSurface(event) &&
-				!(connection && waitingForClick && !isControl(event.target))
-			)
-				return;
+			if (!selection && !selectionGroup && !nativeSurface(event)) return;
 			if (busy) {
 				consume(event);
 				return;
@@ -1124,9 +1409,6 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				base.mode = "selection";
 				base.selectionMode = bp.selectionMode ?? "box";
 				base.lasso = [point];
-			} else if (connection && waitingForClick) {
-				base.mode = "connection";
-				base.secondClick = true;
 			} else if (
 				selectionGroup &&
 				event.button === 0 &&
@@ -1166,6 +1448,11 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					});
 					base.mode = "connection";
 				} else {
+					base.tracePin = tracePinAt(
+						point,
+						zoom,
+						event.target instanceof Element ? event.target : null,
+					);
 					const node = underPointer;
 					const edgeId =
 						event.target instanceof Element
@@ -1177,6 +1464,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 						: ((edgeId ? hitRef.current.edges.get(edgeId) : undefined) ??
 							hitRef.current.edgeAt(point, zoom));
 					base.pane = !node && !edge;
+					if (edge && !additive) base.traceEdge = edge.id;
 					if (node) {
 						base.primaryId = node.id;
 						const current = bp.nodes?.find((n) => n.id === node.id);
@@ -1217,7 +1505,6 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			drag = base;
 			hoverPaused = true;
 			lastPointerEvent = event;
-			waitingForClick = false;
 			suppressClick = true;
 			const focusNode =
 				base.mode === "node"
@@ -1304,7 +1591,6 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				validate,
 			);
 			connection = undefined;
-			waitingForClick = false;
 			setOverlay({});
 			const bp = currentProps();
 			const commitScope = bp.scopeKey;
@@ -1427,17 +1713,23 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				currentProps().onNodesChange?.([
 					{ id: completed.toggleNode, type: "select", selected: false },
 				]);
+			const clicked =
+				!completed.started &&
+				Math.hypot(
+					event.clientX - completed.start.x,
+					event.clientY - completed.start.y,
+				) < 4;
+			let inspected: TraceAnchor | undefined;
 			if (completed.mode === "connection") {
-				if (
-					!connection?.reconnect &&
-					!completed.secondClick &&
-					Math.hypot(
-						event.clientX - completed.start.x,
-						event.clientY - completed.start.y,
-					) < 4
-				) {
-					waitingForClick = true;
-					setAnnouncement("Choose a compatible pin. Escape cancels.");
+				if (clicked && connection) {
+					// Only a drag connects. A click on a wire's end selects that wire.
+					const { anchor, reconnect } = connection;
+					connection = undefined;
+					setOverlay({});
+					if (reconnect) selected(new Set(), false, reconnect.edgeId);
+					inspected = reconnect
+						? { edgeId: reconnect.edgeId }
+						: { pin: anchor };
 				} else void commitConnection(event);
 			} else if (completed.mode === "node" && completed.started) {
 				const moved = completed.nodes.map((node) => {
@@ -1499,6 +1791,18 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				completed.pane
 			)
 				currentProps().onPaneClick?.(asMouse(event));
+			inspected ??= completed.tracePin
+				? { pin: completed.tracePin }
+				: completed.traceEdge
+					? { edgeId: completed.traceEdge }
+					: undefined;
+			if (clicked && completed.mode !== "selection" && traceFocus(inspected))
+				setAnnouncement(
+					translate.current(
+						"wireTraceFocused",
+						"Connections highlighted. Escape clears.",
+					),
+				);
 			viewportChanged();
 			paintOverlay();
 		};
@@ -1584,6 +1888,10 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			}
 			if (event.key === "Escape" && (drag || connection || pinch)) {
 				cancelled();
+				traceFocus();
+				consume(event);
+			} else if (event.key === "Escape" && focusAnchor) {
+				traceFocus();
 				consume(event);
 			}
 			if (event.code === "Space") {
@@ -1618,6 +1926,11 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				wasInteractive = editable;
 				cancel(true);
 			} else wasInteractive = editable;
+			const size = `${state.width}x${state.height}`;
+			if (interactive && (focusTrace || hoverTrace) && size !== traceSize) {
+				traceSize = size;
+				publishTrace();
+			}
 			if (state.transform !== previousTransform) {
 				previousTransform = state.transform;
 				try {
@@ -1626,6 +1939,8 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 					if (interactive) {
 						if (connection || drag || pinch) paintOverlay();
 						else if (pointer) {
+							hoverPreview();
+							traceHover();
 							if (clearPinFeedback()) setOverlay({});
 							// Idle hover reads DOM hit targets. Reading after each camera write
 							// forces layout; refresh once the stationary-pointer zoom settles.
@@ -1695,6 +2010,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				syncIcons.current();
 				sendStatus.current();
 				sendActivity.current();
+				sendTrace.current();
 				const renderedFrames = () => {
 					const value = handle.stats();
 					const stats = typeof value === "string" ? JSON.parse(value) : value;
@@ -1733,6 +2049,9 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			ready = false;
 			cancel(true);
 			pinHint.remove();
+			previewHint.remove();
+			if (interactive) latest.current.trace?.set(NO_TRACE);
+			retraceRef.current = () => {};
 			frame?.();
 			unsubscribe();
 			root.removeEventListener("pointerdown", down, true);

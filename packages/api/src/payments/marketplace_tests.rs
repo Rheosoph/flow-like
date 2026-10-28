@@ -576,6 +576,7 @@ async fn settlement_refund_and_access_invariants_hold_in_real_transactions() {
         1
     );
     assert_eq!(count(&db,r#"SELECT COUNT(*) FROM "AccessGrant" WHERE "sourceId"='order_sale' AND status='REVOKED'"#).await,1);
+    assert_eq!(count(&db,r#"SELECT COUNT(*) FROM "PaymentOutbox" WHERE effect='marketplace_membership_revoked' AND "sourceId"='order_sale'"#).await,0,"a buyer who keeps the membership keeps their sinks");
     deliver(&db, &sale).await.unwrap();
     assert_eq!(count(&db,r#"SELECT COUNT(*) FROM "AccessGrant" WHERE "sourceId"='order_sale' AND status='ACTIVE'"#).await,0);
     observe(&db, &racing.1.id, "re_racing", 700, "FAILED").await;
@@ -666,6 +667,7 @@ async fn settlement_refund_and_access_invariants_hold_in_real_transactions() {
         0
     );
     assert_eq!(count(&db,r#"SELECT COUNT(*) FROM "PaymentOutbox" WHERE "sourceId"='attempt_fx' AND effect='payment_dispute_review'"#).await,1);
+    assert_eq!(count(&db,r#"SELECT COUNT(*) FROM "PaymentOutbox" WHERE effect='marketplace_membership_revoked' AND "sourceType"='MARKETPLACE' AND "sourceId"='order_fx' AND payload->>'appId'='fx-app' AND payload->>'userId'='fx-buyer'"#).await,1,"the revoked buyer's sinks are released");
     observe_fx_dispute(&db, &fx.1.id, "needs_response").await;
     deliver(&db, &fx).await.unwrap();
     assert_eq!(

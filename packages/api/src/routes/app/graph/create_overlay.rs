@@ -223,6 +223,7 @@ pub async fn create_overlay(
     if let Some(sub) = action_owner_sub.as_ref() {
         match super::actions::materialize_action_events(
             &state,
+            &user,
             sub,
             &app_id,
             &overlay_id,

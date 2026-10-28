@@ -151,7 +151,7 @@ impl Aura<'_> {
     }
 
     /// A glow fading out from the node's outline, like a blurred box-shadow ring.
-    fn glow(&self, rect: Rect, radius: f32, width: f32, tint: Rgba, strength: f32) {
+    pub(crate) fn glow(&self, rect: Rect, radius: f32, width: f32, tint: Rgba, strength: f32) {
         if width <= 0.0 || strength <= 0.0 {
             return;
         }

@@ -1,9 +1,19 @@
 """Invoke events and manage their published definitions."""
 from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator
+import warnings
 from typing import Any
 from ._http import HTTPClient, segment
 from ._types import AsyncInvokeResult, SSEEvent
+
+
+def _ignore_token(token: str | None) -> None:
+    if token is not None:
+        warnings.warn(
+            "token is ignored: server runs authenticate with their own execution token",
+            DeprecationWarning,
+            stacklevel=3,
+        )
 
 
 class EventsMixin(HTTPClient):
@@ -22,8 +32,9 @@ class EventsMixin(HTTPClient):
 
         The payload is nested in the invocation envelope. Use params for route options.
         """
+        _ignore_token(token)
         body = {key: value for key, value in {
-            "payload": payload, "version": version, "token": token,
+            "payload": payload, "version": version,
             "runtime_variables": runtime_variables, "oauth_tokens": oauth_tokens,
             "profile_id": profile_id, "correlation": correlation, "page_trigger": page_trigger,
         }.items() if value is not None}
@@ -48,8 +59,9 @@ class EventsMixin(HTTPClient):
 
         The payload is nested in the invocation envelope. Use params for route options.
         """
+        _ignore_token(token)
         body = {key: value for key, value in {
-            "payload": payload, "version": version, "token": token,
+            "payload": payload, "version": version,
             "runtime_variables": runtime_variables, "oauth_tokens": oauth_tokens,
             "profile_id": profile_id, "correlation": correlation, "page_trigger": page_trigger,
         }.items() if value is not None}
@@ -75,8 +87,9 @@ class EventsMixin(HTTPClient):
 
         The payload is nested in the invocation envelope. Use params for route options.
         """
+        _ignore_token(token)
         body = {key: value for key, value in {
-            "payload": payload, "version": version, "token": token,
+            "payload": payload, "version": version,
             "runtime_variables": runtime_variables, "oauth_tokens": oauth_tokens,
             "profile_id": profile_id, "correlation": correlation, "page_trigger": page_trigger,
         }.items() if value is not None}
@@ -101,8 +114,9 @@ class EventsMixin(HTTPClient):
 
         The payload is nested in the invocation envelope. Use params for route options.
         """
+        _ignore_token(token)
         body = {key: value for key, value in {
-            "payload": payload, "version": version, "token": token,
+            "payload": payload, "version": version,
             "runtime_variables": runtime_variables, "oauth_tokens": oauth_tokens,
             "profile_id": profile_id, "correlation": correlation, "page_trigger": page_trigger,
         }.items() if value is not None}

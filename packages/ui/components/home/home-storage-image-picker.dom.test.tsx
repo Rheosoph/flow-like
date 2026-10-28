@@ -1,7 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	type Mock,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import type { IStorageItem } from "../../lib/schema/storage/storage-item";
 import { HomeStorageImagePicker } from "./home-storage-image-picker";
 
@@ -36,7 +44,7 @@ const item = (location: string, is_dir = false): IStorageItem => ({
 let client: QueryClient;
 let root: Root;
 let container: HTMLDivElement;
-let onChange: ReturnType<typeof vi.fn>;
+let onChange: Mock<(path: string) => void>;
 
 beforeEach(() => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -45,7 +53,7 @@ beforeEach(() => {
 	fixture.ready = true;
 	fixture.listStorageItems.mockReset();
 	fixture.listStorageItems.mockResolvedValue([]);
-	onChange = vi.fn();
+	onChange = vi.fn<(path: string) => void>();
 	client = new QueryClient({
 		defaultOptions: {
 			queries: {

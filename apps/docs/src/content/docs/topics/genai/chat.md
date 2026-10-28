@@ -13,7 +13,7 @@ Flow-Like chat boards begin with a **Chat Event** and return responses through c
 
 | Output | Purpose |
 |--------|---------|
-| History | Current model-compatible chat history |
+| History | Current model-compatible chat history, including the user's thinking level |
 | Local Session | State scoped to this chat |
 | Global Session | State scoped to the user |
 | Tools | Tools requested through the chat surface |
@@ -22,6 +22,8 @@ Flow-Like chat boards begin with a **Chat Event** and return responses through c
 | User | Current user information |
 
 Read only the outputs the workflow needs. Treat user text, attachments, and restored session values as untrusted input.
+
+The chat composer has a thinking picker (an atom icon) unless the chat's settings turn it off; **Default Thinking** sets the level a new chat starts with. The Chat Event writes the level into History's `thinking` field (`off`, `low`, `mid` or `high`; `low` when the chat sent none), which model and agent nodes read from there. If a model rejects the setting, the request is sent again without it. To pin a level regardless of the user's choice, put [Set History Thinking](/nodes/ai/generative/history/ai-generative-set-history-thinking/) after the event.
 
 ## Minimal model response
 

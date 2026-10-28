@@ -27133,7 +27133,7 @@
         }
       ],
       "impure": true,
-      "doc": "Loops over an Array",
+      "doc": "Loops over an array and stops on the first unhandled iteration error.",
       "namespace": "control",
       "alias": "forEach"
     },
@@ -118426,8 +118426,8 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "The user record returned by /api/v1/user/info",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CurrentUserInfo\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"stripe_id\":{\"type\":[\"string\",\"null\"]},\"tracking_id\":{\"type\":[\"string\",\"null\"]},\"email\":{\"type\":[\"string\",\"null\"]},\"username\":{\"type\":[\"string\",\"null\"]},\"preferred_username\":{\"type\":[\"string\",\"null\"]},\"name\":{\"type\":[\"string\",\"null\"]},\"description\":{\"type\":[\"string\",\"null\"]},\"avatar\":{\"type\":[\"string\",\"null\"]},\"additional_information\":true,\"permission\":{\"type\":\"integer\",\"format\":\"int64\"},\"accepted_terms_version\":{\"type\":[\"string\",\"null\"]},\"tutorial_completed\":{\"type\":\"boolean\"},\"status\":true,\"tier\":true,\"total_size\":{\"type\":\"integer\",\"format\":\"int64\"},\"total_llm_price\":{\"type\":\"integer\",\"format\":\"int64\"},\"total_embedding_price\":{\"type\":\"integer\",\"format\":\"int64\"},\"llm_price_tracking_month\":{\"type\":[\"string\",\"null\"]},\"created_at\":{\"type\":\"string\"},\"updated_at\":{\"type\":\"string\"}},\"required\":[\"id\",\"permission\",\"tutorial_completed\",\"status\",\"tier\",\"total_size\",\"total_llm_price\",\"total_embedding_price\",\"created_at\",\"updated_at\"]}"
+          "doc": "Profile of the user this run acts as",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CurrentUserInfo\",\"description\":\"The profile fields of a user. Account, billing and permission data never\\nreach a board, whichever hub route answered.\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"email\":{\"type\":[\"string\",\"null\"]},\"username\":{\"type\":[\"string\",\"null\"]},\"preferred_username\":{\"type\":[\"string\",\"null\"]},\"name\":{\"type\":[\"string\",\"null\"]},\"description\":{\"type\":[\"string\",\"null\"]},\"avatar\":{\"type\":[\"string\",\"null\"]},\"additional_information\":true,\"created_at\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\"]}"
         },
         {
           "name": "success",
@@ -118458,7 +118458,7 @@
         }
       ],
       "impure": false,
-      "doc": "Fetches the current user's persisted user information from the configured FlowLike hub's /api/v1/user/info endpoint when an execution token is available.",
+      "doc": "Gets the profile of the user this run acts as. Server runs see only the fields the hub shares in user lookups.",
       "namespace": "user",
       "alias": "getCurrentInfo"
     },

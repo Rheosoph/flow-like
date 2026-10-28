@@ -175,6 +175,7 @@ use tokio::sync::{Mutex, Semaphore};
 mod backend_telemetry;
 mod board_edit_jobs;
 mod candidate_regression;
+mod effort_fallback;
 mod cli_discovery;
 mod declaration_preflight;
 mod declaration_repair;

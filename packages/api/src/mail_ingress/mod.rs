@@ -11,7 +11,9 @@ use crate::{
     error::ApiError,
     execution::state::RunStatus,
     routes::sink::trigger::{
-        SinkTriggerClaims, TriggerEventInput, trigger_event_with_run_id, validate_sink_trigger_jwt,
+        SinkRunAs, SinkTriggerClaims, TriggerEventInput, is_run_as_refusal,
+        resolve_sink_run_as_for_run, sink_dispatch_error, sink_run_as_authority,
+        trigger_event_with_run_id, validate_sink_trigger_jwt,
     },
     state::AppState,
 };
@@ -153,16 +155,17 @@ pub(crate) async fn live_target(
         .map(|e| (sink, e)))
 }
 
-/// The user whose stored token runs this sink, when the sink has one.
+/// The user this sink runs as, when it has one. It records and pauses nothing: the fire
+/// itself was authorized by `resolve_sink_run_as` before any of its work started.
 pub(crate) async fn sink_owner(
     state: &AppState,
     sink: &event_sink::Model,
 ) -> Result<Option<String>, ApiError> {
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|s| crate::routes::app::events::db::decrypt_token(s, &state.encryption_key));
-    crate::routes::sink::trigger::resolve_sink_pat_user_id(state, sink, token.as_deref()).await
+    match sink_run_as_authority(state, sink).await? {
+        SinkRunAs::Allowed(user_id) => Ok(user_id),
+        SinkRunAs::Denied { denial, .. } => Err(ApiError::forbidden(denial.reason())),
+        SinkRunAs::Transient { reason, .. } => Err(ApiError::service_unavailable(reason)),
+    }
 }
 
 fn failed(verdict: Option<&InboundEmailVerdict>) -> bool {
@@ -183,11 +186,27 @@ pub(crate) fn failed_verdict(
     .find_map(|(name, verdict)| failed(verdict).then_some(name))
 }
 
+/// Who a sink runs as, kept with an event saved for a later delivery: its run-as user, else
+/// `sink:{id}`. A legacy token's owner only changes through a rebind, which sets the run-as
+/// user.
+pub(crate) fn run_as_binding(sink: &event_sink::Model) -> String {
+    sink.run_as_user_id
+        .clone()
+        .unwrap_or_else(|| format!("sink:{}", sink.id))
+}
+
+/// An active event that a recipient address reaches, and who its sink runs as.
+struct Target {
+    address: address::Address,
+    event: Event,
+    run_as: String,
+}
+
 async fn resolve(
     state: &AppState,
     claims: &SinkTriggerClaims,
     raw: &str,
-) -> Result<Option<(address::Address, Event)>, ApiError> {
+) -> Result<Option<Target>, ApiError> {
     let Some(domain) = address::domain(state) else {
         return Ok(None);
     };
@@ -210,10 +229,14 @@ async fn resolve(
     if !allowed(claims, &address.app_id) {
         return Ok(None);
     }
-    let Some((_, event)) = live_target(state, &address.app_id, &address.event_id).await? else {
+    let Some((sink, event)) = live_target(state, &address.app_id, &address.event_id).await? else {
         return Ok(None);
     };
-    Ok(Some((address, event)))
+    Ok(Some(Target {
+        run_as: run_as_binding(&sink),
+        address,
+        event,
+    }))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -282,6 +305,10 @@ struct Envelope {
     authentication: Option<InboundEmailAuthentication>,
     #[serde(default)]
     event_snapshot: Option<Event>,
+    /// Who the sink ran as when `event_snapshot` was saved, from [`run_as_binding`]; `None`
+    /// in envelopes sealed before it was kept.
+    #[serde(default)]
+    snapshot_run_as: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -473,7 +500,7 @@ fn log_reserved(state: &AppState, input: &IngestRequest) {
     }
 }
 
-type Targets = std::collections::BTreeMap<(String, String), (address::Address, Event)>;
+type Targets = std::collections::BTreeMap<(String, String), Target>;
 
 /// A virus verdict never reaches storage or a flow; the row keeps the SES object for cleanup.
 async fn reject(
@@ -483,7 +510,7 @@ async fn reject(
     targets: Targets,
 ) -> Result<(), ApiError> {
     let timestamp = now();
-    for ((app, event), (address, _)) in targets {
+    for ((app, event), Target { address, .. }) in targets {
         let id = digest(&[&input.source, &input.delivery_id, &app, &event]);
         let envelope = Envelope {
             source: input.source.clone(),
@@ -494,6 +521,7 @@ async fn reject(
             raw_object: None,
             authentication: input.authentication.clone(),
             event_snapshot: None,
+            snapshot_run_as: None,
         };
         insert_delivery(
             state,
@@ -547,10 +575,12 @@ pub(crate) async fn ingest(
     log_reserved(&state, &input);
     let mut targets = Targets::new();
     for recipient in &input.recipients {
-        if let Some((address, event)) = resolve(&state, &claims, recipient).await? {
-            targets
-                .entry((address.app_id.clone(), address.event_id.clone()))
-                .or_insert((address, event));
+        if let Some(target) = resolve(&state, &claims, recipient).await? {
+            let key = (
+                target.address.app_id.clone(),
+                target.address.event_id.clone(),
+            );
+            targets.entry(key).or_insert(target);
         }
     }
     // SES accepts the domain as a whole. Unknown or disabled recipients are discarded here.
@@ -583,7 +613,7 @@ pub(crate) async fn ingest(
         .raw_mime_base64
         .as_ref()
         .map(|raw| crate::utils::crypto::encrypt_secret(raw, &state.encryption_key));
-    for ((app, event), (address, event_snapshot)) in targets {
+    for ((app, event), target) in targets {
         let timestamp = now();
         let id = digest(&[&input.source, &input.delivery_id, &app, &event]);
         // Each delivery owns its raw bytes; expiry of another recipient cannot remove them.
@@ -592,11 +622,12 @@ pub(crate) async fn ingest(
             source: input.source.clone(),
             delivery_id: input.delivery_id.clone(),
             envelope_from: input.envelope_from.clone(),
-            recipient: address.address,
+            recipient: target.address.address,
             s3: input.s3.clone(),
             raw_object: raw_object.clone(),
             authentication: input.authentication.clone(),
-            event_snapshot: Some(event_snapshot),
+            event_snapshot: Some(target.event),
+            snapshot_run_as: Some(target.run_as),
         };
         let lease = flow_like_types::create_id();
         let receiving = raw_object.is_some();
@@ -705,6 +736,18 @@ fn envelope(state: &AppState, delivery: &Delivery) -> Result<Envelope, ApiError>
     Ok(serde_json::from_str(&raw)?)
 }
 
+/// The event saved with the mail while its sink still runs as whoever it was saved under, so
+/// a rebind never delivers the previous person's target or variants as someone else. An
+/// envelope sealed before that was kept delivers its saved event.
+fn saved_event<'a>(envelope: &'a Envelope, binding: &str) -> Option<&'a Event> {
+    envelope.event_snapshot.as_ref().filter(|_| {
+        envelope
+            .snapshot_run_as
+            .as_deref()
+            .is_none_or(|saved_as| saved_as == binding)
+    })
+}
+
 async fn deliver(
     state: &AppState,
     row: &Delivery,
@@ -714,11 +757,26 @@ async fn deliver(
     let Some((sink, event)) = live_target(state, &row.app_id, &row.event_id).await? else {
         return Ok(false);
     };
+    // A refusal disables the delivery before the mail is read or any file is written.
+    let run_as = resolve_sink_run_as_for_run(state, &sink, Some(&row.run_id)).await;
+    if unless_refused(run_as)?.is_none() {
+        return Ok(false);
+    }
     let mut envelope = envelope(state, row)?;
-    let event = if let Some(snapshot) = &envelope.event_snapshot {
+    let binding = run_as_binding(&sink);
+    let event = if let Some(snapshot) = saved_event(&envelope, &binding) {
         snapshot.clone()
     } else {
+        if envelope.event_snapshot.is_some() {
+            tracing::info!(
+                delivery_id = %row.id,
+                app_id = %row.app_id,
+                event_id = %row.event_id,
+                "The event saved with this mail was accepted as another user; delivering the current event"
+            );
+        }
         envelope.event_snapshot = Some(event.clone());
+        envelope.snapshot_run_as = Some(binding);
         let frozen = state
             .db
             .execute_raw(statement(
@@ -754,7 +812,7 @@ async fn deliver(
     if still_owned.rows_affected() != 1 {
         return Err(ApiError::conflict("Mail dispatch lease expired"));
     }
-    let result = trigger_event_with_run_id(
+    let triggered = trigger_event_with_run_id(
         state,
         sink,
         event,
@@ -762,10 +820,16 @@ async fn deliver(
             event_id: row.event_id.clone(),
             payload: Some(serde_json::json!({"email":email})),
             idempotency_key: Some(row.id.clone()),
+            actor: None,
+            oauth_tokens: None,
         },
         row.run_id.clone(),
     )
-    .await?;
+    .await
+    .map_err(sink_dispatch_error);
+    let Some(result) = unless_refused(triggered)? else {
+        return Ok(false);
+    };
     if !result.triggered {
         return Err(ApiError::internal(format!(
             "Mail execution dispatch failed for delivery {}",
@@ -773,6 +837,16 @@ async fn deliver(
         )));
     }
     Ok(true)
+}
+
+/// `None` when the user the sink runs as may no longer run it: the delivery is disabled
+/// instead of retried. Any other error, a failed check included, is retried.
+fn unless_refused<T>(result: Result<T, ApiError>) -> Result<Option<T>, ApiError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if is_run_as_refusal(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn merge_paths<'a>(
@@ -1196,6 +1270,7 @@ mod tests {
             raw_object: Some(path),
             authentication: None,
             event_snapshot: None,
+            snapshot_run_as: None,
         }
     }
 
@@ -1435,5 +1510,171 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn body<'a>(source: &'a str, signature: &'a str) -> &'a str {
+        let body = source
+            .split_once(signature)
+            .unwrap_or_else(|| panic!("{signature} exists"))
+            .1;
+        body.split_once("\n}\n").map_or(body, |(body, _)| body)
+    }
+
+    /// A refused delivery is disabled before the mail is read, a file is written or a run
+    /// starts, and the storage-prefix lookup neither records nor pauses anything.
+    #[test]
+    fn a_delivery_is_refused_before_its_mail_is_read() {
+        let source = include_str!("mod.rs");
+        let deliver = body(source, "\nasync fn deliver(");
+        let check = deliver
+            .find("resolve_sink_run_as_for_run(state, &sink, Some(&row.run_id))")
+            .expect("the run-as check");
+        let refused = &deliver[check..];
+        let refused = &refused[..refused.find("let mut envelope").expect("the envelope")];
+        assert!(refused.contains("if unless_refused(run_as)?.is_none() {"));
+        assert!(refused.contains("return Ok(false);"));
+        for later in [
+            "payload::read(",
+            "payload::prepare(",
+            ".put(",
+            "trigger_event_with_run_id(",
+        ] {
+            assert!(check < deliver.find(later).expect(later), "{later}");
+        }
+        assert!(deliver.contains("unless_refused(triggered)?"));
+        let owner = body(source, "\npub(crate) async fn sink_owner(");
+        assert!(owner.contains("sink_run_as_authority("));
+        assert!(!owner.contains("resolve_sink_run_as"));
+    }
+
+    /// A refusal settles the delivery as disabled; a check that failed on the server, or any
+    /// other error, keeps it for a retry.
+    #[test]
+    fn only_a_refusal_disables_a_delivery() {
+        use crate::routes::sink::trigger::{SINK_RUN_AS_REFUSED, SINK_RUN_AS_UNAVAILABLE};
+        use axum::http::StatusCode;
+        assert_eq!(unless_refused(Ok::<_, ApiError>(1)).unwrap(), Some(1));
+        let refused = ApiError::coded(StatusCode::FORBIDDEN, SINK_RUN_AS_REFUSED, "paused");
+        assert_eq!(unless_refused::<()>(Err(refused)).unwrap(), None);
+        for retried in [
+            ApiError::coded(
+                StatusCode::SERVICE_UNAVAILABLE,
+                SINK_RUN_AS_UNAVAILABLE,
+                "later",
+            ),
+            ApiError::forbidden("Mail ingress is disabled"),
+            ApiError::internal("boom"),
+        ] {
+            assert!(unless_refused::<()>(Err(retried)).is_err());
+        }
+    }
+
+    fn sink(run_as: Option<&str>) -> event_sink::Model {
+        let now = chrono::Utc::now().fixed_offset();
+        event_sink::Model {
+            id: "sink-1".into(),
+            event_id: "event-1".into(),
+            app_id: "app-1".into(),
+            sink_type: "inbound_email".into(),
+            active: true,
+            path: None,
+            auth_token: None,
+            webhook_secret: None,
+            cron_expression: None,
+            cron_timezone: None,
+            pat_encrypted: None,
+            oauth_tokens_encrypted: None,
+            profile_json: None,
+            created_at: now,
+            updated_at: now,
+            method: None,
+            run_as_user_id: run_as.map(str::to_owned),
+            run_as_released_at: None,
+        }
+    }
+
+    fn saved(board_id: &str, run_as: Option<&str>) -> Envelope {
+        use flow_like_types::FromProto;
+        let mut event = Event::from_proto(flow_like_types::proto::Event::default());
+        event.board_id = board_id.into();
+        let mut envelope = receipt("raw".into());
+        envelope.event_snapshot = Some(event);
+        envelope.snapshot_run_as = run_as.map(str::to_owned);
+        envelope
+    }
+
+    fn saved_board<'a>(envelope: &'a Envelope, sink: &event_sink::Model) -> Option<&'a str> {
+        saved_event(envelope, &run_as_binding(sink)).map(|event| event.board_id.as_str())
+    }
+
+    /// Mail keeps the event saved with it only while the sink runs as whoever saved it. After
+    /// a rebind the delivery takes the current event, as the person who changed what runs.
+    #[test]
+    fn a_saved_event_is_delivered_only_as_whoever_accepted_it() {
+        assert_eq!(run_as_binding(&sink(Some("user-1"))), "user-1");
+        assert_eq!(run_as_binding(&sink(None)), "sink:sink-1");
+        assert_eq!(
+            saved_board(&receipt("raw".into()), &sink(Some("user-1"))),
+            None
+        );
+        let member = saved("board-member", Some("user-1"));
+        assert_eq!(
+            saved_board(&member, &sink(Some("user-1"))),
+            Some("board-member")
+        );
+        assert_eq!(saved_board(&member, &sink(Some("admin-1"))), None);
+        assert_eq!(saved_board(&member, &sink(None)), None);
+        let legacy_sink = saved("board-legacy", Some("sink:sink-1"));
+        assert_eq!(saved_board(&legacy_sink, &sink(None)), Some("board-legacy"));
+        assert_eq!(saved_board(&legacy_sink, &sink(Some("admin-1"))), None);
+    }
+
+    /// An envelope sealed before the identity was kept delivers its saved event as before.
+    #[test]
+    fn envelopes_sealed_without_an_identity_keep_their_saved_event() {
+        let mut sealed = serde_json::to_value(saved("board-sealed", Some("user-1"))).unwrap();
+        sealed
+            .as_object_mut()
+            .unwrap()
+            .remove("snapshot_run_as")
+            .expect("the identity is sealed with the event");
+        let sealed: Envelope = serde_json::from_value(sealed).unwrap();
+        assert_eq!(sealed.snapshot_run_as, None);
+        for run_as in [Some("user-1"), Some("admin-1"), None] {
+            assert_eq!(saved_board(&sealed, &sink(run_as)), Some("board-sealed"));
+        }
+    }
+
+    /// No Flow-Like person sends inbound mail, so its run fires without an actor and is signed
+    /// unattended: the apps it calls through connections act for nobody.
+    #[test]
+    fn a_delivery_fires_unattended() {
+        let deliver = body(include_str!("mod.rs"), "\nasync fn deliver(");
+        let fire = &deliver[deliver
+            .find("trigger_event_with_run_id(")
+            .expect("the fire")..];
+        assert!(fire.contains("actor: None,"));
+    }
+
+    /// Ingest seals the identity with the event, and a delivery that cannot keep the saved
+    /// event freezes the current one with the identity it now runs as, before reading mail.
+    #[test]
+    fn the_saved_event_is_sealed_with_its_identity() {
+        let source = include_str!("mod.rs");
+        let ingest = body(source, "\npub(crate) async fn ingest(");
+        assert!(ingest.contains("event_snapshot: Some(target.event),"));
+        assert!(ingest.contains("snapshot_run_as: Some(target.run_as),"));
+        let deliver = body(source, "\nasync fn deliver(");
+        let positions = [
+            "let binding = run_as_binding(&sink);",
+            "saved_event(&envelope, &binding)",
+            "envelope.event_snapshot = Some(event.clone());",
+            "envelope.snapshot_run_as = Some(binding);",
+            "seal(state, &envelope)?",
+            "payload::read(",
+            "trigger_event_with_run_id(",
+        ]
+        .map(|needle| deliver.find(needle).unwrap_or_else(|| panic!("{needle}")));
+        assert!(positions.is_sorted(), "{positions:?}");
     }
 }

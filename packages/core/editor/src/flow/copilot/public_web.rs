@@ -15,7 +15,7 @@ use std::{
 };
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use flow_like_types::{reqwest, tokio};
+use flow_like_types::{egress, reqwest, tokio};
 use htmd::HtmlToMarkdownBuilder;
 use serde_json::{Value, json};
 use url::{Host, Url};
@@ -2201,36 +2201,27 @@ fn ensure_public_ip(address: IpAddr) -> Result<(), FetchFailure> {
     }
 }
 
+/// The shared public-address rule, narrowed to global unicast: page fetches also refuse
+/// addresses that reach their target through translation or a relay (NAT64, 6to4, Teredo and
+/// the 6to4 relay anycast range) and the `3fff::/20` documentation block.
 fn is_public_ip(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => is_public_ipv4(address),
-        IpAddr::V6(address) => is_public_ipv6(address),
-    }
-}
-
-fn is_public_ipv4(address: Ipv4Addr) -> bool {
-    let value = u32::from(address);
-    ![
-        ("0.0.0.0", 8),
-        ("10.0.0.0", 8),
-        ("100.64.0.0", 10),
-        ("127.0.0.0", 8),
-        // Azure's host virtual IP is reachable from guests despite living outside RFC1918.
-        ("168.63.129.16", 32),
-        ("169.254.0.0", 16),
-        ("172.16.0.0", 12),
-        ("192.0.0.0", 24),
-        ("192.0.2.0", 24),
-        ("192.88.99.0", 24),
-        ("192.168.0.0", 16),
-        ("198.18.0.0", 15),
-        ("198.51.100.0", 24),
-        ("203.0.113.0", 24),
-        ("224.0.0.0", 4),
-        ("240.0.0.0", 4),
-    ]
-    .into_iter()
-    .any(|(network, prefix)| ipv4_in_cidr(value, network.parse().unwrap(), prefix))
+    let address = match address {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(address, IpAddr::V4),
+        IpAddr::V4(_) => address,
+    };
+    egress::is_public_ip(address)
+        && match address {
+            IpAddr::V4(v4) => !ipv4_in_cidr(u32::from(v4), Ipv4Addr::new(192, 88, 99, 0), 24),
+            IpAddr::V6(v6) => {
+                let value = u128::from(v6);
+                ipv6_in_cidr(value, "2000::".parse().unwrap(), 3)
+                    && ![("2001::", 23), ("2002::", 16), ("3fff::", 20)]
+                        .into_iter()
+                        .any(|(network, prefix)| {
+                            ipv6_in_cidr(value, network.parse().unwrap(), prefix)
+                        })
+            }
+        }
 }
 
 fn ipv4_in_cidr(value: u32, network: Ipv4Addr, prefix: u32) -> bool {
@@ -2240,23 +2231,6 @@ fn ipv4_in_cidr(value: u32, network: Ipv4Addr, prefix: u32) -> bool {
         u32::MAX << (32 - prefix)
     };
     value & mask == u32::from(network) & mask
-}
-
-fn is_public_ipv6(address: Ipv6Addr) -> bool {
-    if let Some(mapped) = address.to_ipv4_mapped() {
-        return is_public_ipv4(mapped);
-    }
-    let value = u128::from(address);
-    // Start with globally routable unicast space, then remove special allocations inside it.
-    ipv6_in_cidr(value, "2000::".parse().unwrap(), 3)
-        && ![
-            ("2001::", 23),
-            ("2001:db8::", 32),
-            ("2002::", 16),
-            ("3fff::", 20),
-        ]
-        .into_iter()
-        .any(|(network, prefix)| ipv6_in_cidr(value, network.parse().unwrap(), prefix))
 }
 
 fn ipv6_in_cidr(value: u128, network: Ipv6Addr, prefix: u32) -> bool {
@@ -2670,13 +2644,26 @@ mod tests {
             "198.18.0.1",
             "203.0.113.5",
             "224.0.0.1",
+            "192.88.99.1",
         ] {
             assert!(!is_public_ip(IpAddr::V4(raw.parse().unwrap())), "{raw}");
         }
-        for raw in ["::1", "fe80::1", "fc00::1", "2001:db8::1", "2002::1"] {
+        for raw in [
+            "::1",
+            "fe80::1",
+            "fc00::1",
+            "2001:db8::1",
+            "2002::1",
+            "2001::1",
+            "3fff::1",
+            "64:ff9b::101:101",
+            "::ffff:192.88.99.1",
+            "::808:808",
+        ] {
             assert!(!is_public_ip(IpAddr::V6(raw.parse().unwrap())), "{raw}");
         }
         assert!(is_public_ip("8.8.8.8".parse().unwrap()));
+        assert!(is_public_ip("::ffff:8.8.8.8".parse().unwrap()));
         assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
 
         let mixed = vec![

@@ -99,11 +99,6 @@ pub async fn invoke_mcp_operation(
         user_id,
         technical_user_id: permission.technical_user_id().map(ToOwned::to_owned),
         profile_id: body.profile_id,
-        token: match &user {
-            AppUser::OpenID(user) => Some(user.access_token.clone()),
-            AppUser::PAT(user) => Some(user.pat.clone()),
-            _ => None,
-        },
     };
     dispatch_member_mcp_operation(
         &state,

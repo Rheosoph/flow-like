@@ -20,6 +20,7 @@ vi.mock(
 );
 
 import type * as MicroWidgetGrant from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
+import { TauriBackend } from "../../components/tauri-provider";
 import { RegistryState } from "../../components/tauri-provider/registry-state";
 import { ApiResponseError } from "../api-error";
 import {
@@ -184,7 +185,6 @@ function bundleFollowsFetches() {
 }
 
 async function bootstrappingBackend(localOnly = false) {
-	const { TauriBackend } = await import("../../components/tauri-provider");
 	const host = new TauriBackend(() => undefined);
 	vi.spyOn(host, "isLocalOnly").mockResolvedValue(localOnly);
 	host.appState.listPackages = vi

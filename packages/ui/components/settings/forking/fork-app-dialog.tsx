@@ -565,12 +565,12 @@ export function ForkAppDialog({
 										length: replaceableSites.length,
 									})}{" "}
 									{t(
-										"sitesHttpAuth_tokenPatOauthBindingsCantBeSubstitutedWithATokenYoullNeedToReauthOnTheFork",
+										"sitesHttpAuth_tokenOauthBindingsCantBeSubstitutedWithATokenYoullNeedToReauthOnTheFork",
 										{
 											defaultValue_one:
-												"site (HTTP auth_token, PAT). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.",
+												"site (HTTP auth_token). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.",
 											defaultValue_other:
-												"sites (HTTP auth_token, PAT). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.",
+												"sites (HTTP auth_token). OAuth bindings can't be substituted with a token; you'll need to re-auth on the fork.",
 											count: replaceableSites.length,
 										},
 									)}
@@ -728,7 +728,10 @@ export function ForkAppDialog({
 					setShowPatSelector(false);
 				}}
 				title={t("selectOrCreateForkToken", "Select or Create Fork Token")}
-				description="Choose an existing token or create a new one. It will replace HTTP auth tokens and PATs at remote-event sites in your fork."
+				description={t(
+					"chooseAnExistingTokenOrCreateANewOneItWillReplaceHttpAuthTokensAtRemoteeventSitesInYourFork",
+					"Choose an existing token or create a new one. It will replace HTTP auth tokens at remote-event sites in your fork.",
+				)}
 			/>
 		</Dialog>
 	);

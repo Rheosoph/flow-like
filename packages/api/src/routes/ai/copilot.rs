@@ -1,7 +1,7 @@
 use crate::{
     ensure_permission,
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppUser, ExecutorUse},
     permission::role_permission::RolePermissions,
     routes::app::board::flow_ir_commit::persist_pending_flow_ir_commit,
     state::{AppState, flow_ir_draft_store_key},
@@ -16,7 +16,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use flow_like::a2ui::SurfaceComponent;
 use flow_like::copilot::{
     ChatImage, CopilotScope, RunContext, UIActionContext, UnifiedChatMessage,
-    UnifiedCopilotResponse,
+    UnifiedCopilotResponse, flowpilot_thinking,
 };
 use flow_like::flow::ast::apply_board_commands_to_board;
 use flow_like::flow::board::Board;
@@ -134,6 +134,11 @@ pub struct CopilotChatRequest {
     /// Optional model ID to use
     #[serde(default)]
     pub model_id: Option<String>,
+
+    /// Thinking level for the model: `off`, `low`, `mid` or `high`. Omit for `low`. A level the
+    /// model rejects is left out of the run.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 
     /// Run context for log queries (board mode)
     #[serde(default)]
@@ -734,7 +739,8 @@ pub(crate) async fn run_copilot(
     )?;
     let usage_context = match attribution_app_id.as_deref() {
         Some(app_id) => {
-            user.execution_app_permission(app_id, &state).await?;
+            user.execution_app_permission(app_id, &state, ExecutorUse::Read)
+                .await?;
             Some(ModelUsageContext {
                 app_id: Some(app_id.to_string()),
                 run_id: payload
@@ -886,7 +892,10 @@ pub(crate) async fn run_copilot(
         retained_app_id.as_deref().or(attribution_app_id.as_deref()),
     )
     .await?
-    .with_request_identity_prompt(Some(request_identity_prompt));
+    .with_request_identity_prompt(Some(request_identity_prompt))
+    .with_thinking(Some(flowpilot_thinking(
+        payload.reasoning_effort.as_deref(),
+    )));
 
     if !payload.stream {
         let remaining = (usage.deadline - chrono::Utc::now())
@@ -1157,6 +1166,7 @@ async fn specialist_chat(
     };
 
     let context = specialist_host_context(payload.app_id.as_deref(), payload.overlay_id.as_deref());
+    let thinking = Some(flowpilot_thinking(payload.reasoning_effort.as_deref()));
     let scope = payload.scope;
     let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
     let channel_for_task = channel.clone();
@@ -1178,6 +1188,7 @@ async fn specialist_chat(
                             profile,
                             payload.user_prompt,
                             payload.model_id,
+                            thinking,
                             token,
                             bridge,
                             Some(on_token),
@@ -1196,6 +1207,7 @@ async fn specialist_chat(
                         context,
                         payload.user_prompt,
                         payload.model_id,
+                        thinking,
                         token,
                         bridge,
                         Some(on_token),

@@ -1,6 +1,8 @@
+pub(crate) mod compatibility;
 mod guest_output;
 pub mod instance;
 pub mod linker;
+mod storage_ops;
 
 use crate::abi::WasmNodeDefinition;
 use crate::engine::WasmEngine;

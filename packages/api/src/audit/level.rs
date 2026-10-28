@@ -296,6 +296,7 @@ mod tests {
         ("route.delete", AuditLevel::Minimal),
         ("route.reassign", AuditLevel::Standard),
         ("route.update", AuditLevel::Standard),
+        ("sink.release", AuditLevel::Minimal),
         ("sink.toggle", AuditLevel::Minimal),
         ("solution.deposit.paid", AuditLevel::Standard),
         ("storage.files.offline_replay", AuditLevel::Verbose),

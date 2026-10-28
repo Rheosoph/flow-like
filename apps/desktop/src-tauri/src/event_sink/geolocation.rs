@@ -1,6 +1,7 @@
 use super::{
     EventConfig, EventRegistration, EventSink,
-    manager::{DbConnection, EventSinkManager},
+    manager::{DbConnection, EventSinkManager, Refusal},
+    trigger_token::TokenRefused,
 };
 use anyhow::{Result, anyhow, ensure};
 use flow_like_types::{tokio, tokio_util::sync::CancellationToken};
@@ -21,6 +22,116 @@ static WAKE: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static WORKER: Mutex<Option<CancellationToken>> = Mutex::new(None);
 static ACTIVE: Mutex<Option<(String, CancellationToken)>> = Mutex::new(None);
+
+const NOT_CLEARED: &str =
+    "This location trigger was not cleared with the hub before registering; save the event again";
+const CHANGED_WHILE_CLEARED: &str = "The location trigger or the signed-in account changed while the hub cleared it; save the event again";
+
+/// What authorizing a location trigger depended on: the account, app, event
+/// and region it watches (all bound into the region id), where its crossings
+/// run, and the token it signs in with.
+#[derive(Clone, PartialEq, Eq)]
+struct ClearedTrigger {
+    region_id: String,
+    remote: bool,
+    personal_access_token: Option<String>,
+    pat_owner_sub: Option<String>,
+    hub_origin: Option<String>,
+}
+
+impl ClearedTrigger {
+    fn of(config: &GeoLocationSink, registration: &EventRegistration, scope: &str) -> Self {
+        Self {
+            region_id: config
+                .registration(scope, &registration.app_id, &registration.event_id)
+                .id,
+            remote: registration.remote,
+            personal_access_token: registration.personal_access_token.clone(),
+            pat_owner_sub: registration.pat_owner_sub.clone(),
+            hub_origin: registration.hub_origin.clone(),
+        }
+    }
+}
+
+/// Why a location trigger was not cleared. Registering fails with the same
+/// error, so a refused token is dropped and the refusal recorded as when the
+/// hub refuses it at registration.
+#[derive(Debug, Clone)]
+enum Denial {
+    Refused(Refusal),
+    Failed(String),
+}
+
+impl Denial {
+    fn of(error: &anyhow::Error) -> Self {
+        dispatch::refusal(error).map_or_else(|| Self::Failed(format!("{error:#}")), Self::Refused)
+    }
+
+    fn error(&self) -> anyhow::Error {
+        match self {
+            Self::Refused(Refusal {
+                reason,
+                token_refused: true,
+            }) => TokenRefused(reason.clone()).into(),
+            Self::Refused(Refusal { reason, .. }) => dispatch::Rejected(reason.clone()).into(),
+            Self::Failed(reason) => anyhow!(reason.clone()),
+        }
+    }
+}
+
+/// The answer to whether a location trigger may watch its region, resolved
+/// before a save locks the sink manager: authorizing asks the hub, and the
+/// fire paths only try that lock. Registering asks the hub nothing and only
+/// checks that the clearance is for the same trigger and account.
+#[derive(Clone)]
+pub struct GeofenceClearance {
+    trigger: Option<ClearedTrigger>,
+    denial: Option<Denial>,
+}
+
+impl GeofenceClearance {
+    /// Authorizes `registration` for the signed-in account. A refusal is kept
+    /// and returned when the trigger registers.
+    pub async fn resolve(app: &AppHandle, registration: &EventRegistration) -> Self {
+        let scope = match dispatch::current_scope(app).await {
+            Ok(scope) => scope,
+            Err(error) => {
+                return Self {
+                    trigger: None,
+                    denial: Some(Denial::of(&error)),
+                };
+            }
+        };
+        let trigger = match &registration.config {
+            EventConfig::GeoLocation(config) => {
+                Some(ClearedTrigger::of(config, registration, &scope.raw))
+            }
+            _ => None,
+        };
+        let denial = dispatch::authorize(app, registration, &scope)
+            .await
+            .err()
+            .map(|error| Denial::of(&error));
+        Self { trigger, denial }
+    }
+
+    /// Whether `registration` of the region `config` may register in `scope`:
+    /// it is the trigger this clearance was resolved for, and was allowed.
+    fn admit(
+        &self,
+        config: &GeoLocationSink,
+        registration: &EventRegistration,
+        scope: &str,
+    ) -> Result<()> {
+        ensure!(
+            self.trigger.as_ref() == Some(&ClearedTrigger::of(config, registration, scope)),
+            CHANGED_WHILE_CLEARED
+        );
+        self.denial
+            .as_ref()
+            .map_or(Ok(()), |denial| Err(denial.error()))
+    }
+}
 
 pub(crate) fn notify() {
     WAKE.notify_one();
@@ -92,6 +203,111 @@ fn still_registered(db: &DbConnection, scope: &Scope, transition: &model::Transi
             == Some(&transition.registration_id)
 }
 
+/// Declines a registration the hub refused, keeping the reason for the
+/// event's status. When the manager cannot, only the binding is removed.
+async fn decline_refused(
+    app: &AppHandle,
+    db: &DbConnection,
+    row: &EventRegistration,
+    refusal: &Refusal,
+) -> Result<()> {
+    let declined = match crate::state::TauriEventSinkManagerState::construct(app).await {
+        Ok(manager) => {
+            manager
+                .lock()
+                .await
+                .reject_registration(app, &row.app_id, &row.event_id, refusal)
+                .await
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = declined {
+        tracing::warn!(event_id=%row.event_id, error=%error, "Could not decline a refused geofence, removing its binding only");
+        inbox::remove(&db.lock().unwrap(), &row.event_id)?;
+    }
+    Ok(())
+}
+
+/// What is left to do with a crossing whose delivery failed.
+#[derive(Debug, PartialEq, Eq)]
+enum Undelivered {
+    /// The hub refused the trigger, so its region is declined.
+    Decline(Refusal),
+    /// Its region is no longer watched, or it is too old to be sent again.
+    Complete,
+    Retry,
+}
+
+/// What a delivery that failed with `error` leaves to do, given whether the
+/// crossing's region is still `registered` and the crossing still
+/// `deliverable` (see [`model::Transition::deliverable`]). Anything but a
+/// refusal keeps the region, such as a project that is not active right now.
+fn undelivered(error: &anyhow::Error, registered: bool, deliverable: bool) -> Undelivered {
+    match dispatch::refusal(error) {
+        Some(refusal) if registered => Undelivered::Decline(refusal),
+        _ if registered && deliverable => Undelivered::Retry,
+        _ => Undelivered::Complete,
+    }
+}
+
+impl GeoLocationSink {
+    /// Watches the region of `registration` on this device. Runs while the
+    /// sink manager is locked, so it asks the hub nothing: `clearance`, which
+    /// the save resolved beforehand, must be for this trigger and account.
+    pub(crate) async fn register_cleared(
+        &self,
+        app: &AppHandle,
+        registration: &EventRegistration,
+        db: DbConnection,
+        clearance: Option<&GeofenceClearance>,
+    ) -> Result<()> {
+        self.validate()?;
+        let scope = dispatch::current_scope(app).await?;
+        clearance
+            .ok_or_else(|| anyhow!(NOT_CLEARED))?
+            .admit(self, registration, &scope.raw)?;
+        let _lock = SYNC.lock().await;
+        ensure!(
+            native::scope()? == scope.raw,
+            "Geofence account changed during registration"
+        );
+        self.watch(app, registration, &db, &scope).await
+    }
+
+    /// Binds the region of `registration` in `scope` and syncs the native
+    /// geofences; a failed sync removes the binding again.
+    async fn watch(
+        &self,
+        app: &AppHandle,
+        registration: &EventRegistration,
+        db: &DbConnection,
+        scope: &Scope,
+    ) -> Result<()> {
+        let region = self.registration(&scope.raw, &registration.app_id, &registration.event_id);
+        let others = registrations(db, scope)?
+            .iter()
+            .filter(|watched| watched.event_id != registration.event_id)
+            .count();
+        ensure!(
+            others < 20,
+            "Apple supports at most 20 monitored geofences per app"
+        );
+        inbox::bind(
+            &db.lock().unwrap(),
+            &registration.event_id,
+            &scope.raw,
+            &region.id,
+        )?;
+        if let Err(error) = sync_native(app, db).await {
+            inbox::remove(&db.lock().unwrap(), &registration.event_id)?;
+            let _ = sync_native(app, db).await;
+            return Err(error);
+        }
+        notify();
+        Ok(())
+    }
+}
+
 async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
     let scope = {
         let _lock = SYNC.lock().await;
@@ -135,6 +351,7 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
                 &config.registration(&scope.raw, &row.app_id, &row.event_id),
                 now_ms(),
             )
+            || !transition.deliverable(row.remote, now_ms())
         {
             inbox::complete(&db.lock().unwrap(), &transition.id)?;
             continue;
@@ -143,7 +360,7 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
             continue;
         }
         let remaining = native::remaining();
-        if remaining >= 0.0 && remaining <= 1.0 {
+        if (0.0..=1.0).contains(&remaining) {
             break;
         }
         let budget = if remaining < 0.0 {
@@ -166,7 +383,7 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
                         let remaining = native::remaining();
                         if native::scope().ok().as_deref() != Some(&scope.raw)
                             || (!config.background && !native::foreground())
-                            || (remaining >= 0.0 && remaining <= 1.0)
+                            || (0.0..=1.0).contains(&remaining)
                             || !still_registered(db,&scope,&transition) { break; }
                     }
                 } => Err(anyhow!("Geofence execution stopped because its registration or foreground session changed")),
@@ -177,13 +394,17 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
             Ok(()) => inbox::complete(&db.lock().unwrap(), &transition.id)?,
             Err(error) => {
                 tracing::warn!(event_id=%row.event_id, transition_id=%transition.id, error=%error, "Geofence Event dispatch failed");
-                if error.is::<dispatch::Rejected>() && still_registered(db, &scope, &transition) {
-                    inbox::remove(&db.lock().unwrap(), &row.event_id)?;
-                    notify();
-                } else if !still_registered(db, &scope, &transition) {
-                    inbox::complete(&db.lock().unwrap(), &transition.id)?;
-                } else {
-                    inbox::retry(&db.lock().unwrap(), &transition.id, now_ms())?;
+                let registered = still_registered(db, &scope, &transition);
+                let deliverable = transition.deliverable(row.remote, now_ms());
+                match undelivered(&error, registered, deliverable) {
+                    Undelivered::Decline(refusal) => {
+                        decline_refused(app, db, &row, &refusal).await?;
+                        notify();
+                    }
+                    Undelivered::Complete => inbox::complete(&db.lock().unwrap(), &transition.id)?,
+                    Undelivered::Retry => {
+                        inbox::retry(&db.lock().unwrap(), &transition.id, now_ms())?
+                    }
                 }
             }
         }
@@ -243,43 +464,15 @@ impl EventSink for GeoLocationSink {
         Ok(())
     }
 
+    /// A region registers only with the clearance a save resolved before
+    /// locking the sink manager, see [`GeoLocationSink::register_cleared`].
     async fn on_register(
         &self,
         app: &AppHandle,
         registration: &EventRegistration,
         db: DbConnection,
     ) -> Result<()> {
-        self.validate()?;
-        let scope = dispatch::current_scope(app).await?;
-        dispatch::authorize(app, registration, &scope).await?;
-        let _lock = SYNC.lock().await;
-        ensure!(
-            native::scope()? == scope.raw,
-            "Geofence account changed during registration"
-        );
-        let region = self.registration(&scope.raw, &registration.app_id, &registration.event_id);
-        let existing = registrations(&db, &scope)?;
-        ensure!(
-            existing
-                .iter()
-                .filter(|r| r.event_id != registration.event_id)
-                .count()
-                < 20,
-            "Apple supports at most 20 monitored geofences per app"
-        );
-        inbox::bind(
-            &db.lock().unwrap(),
-            &registration.event_id,
-            &scope.raw,
-            &region.id,
-        )?;
-        if let Err(error) = sync_native(app, &db).await {
-            inbox::remove(&db.lock().unwrap(), &registration.event_id)?;
-            let _ = sync_native(app, &db).await;
-            return Err(error);
-        }
-        notify();
-        Ok(())
+        self.register_cleared(app, registration, db, None).await
     }
 
     async fn on_unregister(
@@ -298,5 +491,171 @@ impl EventSink for GeoLocationSink {
         }
         notify();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::oauth::OAuthToken;
+    use std::collections::HashMap;
+
+    const SCOPE: &str = "scope-of-user-1";
+
+    fn region(radius: f64) -> GeoLocationSink {
+        GeoLocationSink {
+            latitude: 52.5,
+            longitude: 13.4,
+            radius,
+            ..GeoLocationSink::default()
+        }
+    }
+
+    /// A Remote location trigger of `config` signing in with `pat`, verified
+    /// for user-1.
+    fn trigger(config: &GeoLocationSink, pat: &str) -> EventRegistration {
+        let now = std::time::SystemTime::now();
+        EventRegistration {
+            event_id: "event".to_string(),
+            name: "Region".to_string(),
+            r#type: "geolocation".to_string(),
+            updated_at: now,
+            created_at: now,
+            config: EventConfig::GeoLocation(config.clone()),
+            offline: false,
+            app_id: "app".to_string(),
+            default_payload: None,
+            personal_access_token: Some(pat.to_string()),
+            pat_owner_sub: Some("user-1".to_string()),
+            hub_origin: Some("https://hub.example".to_string()),
+            remote: true,
+            oauth_tokens: HashMap::new(),
+        }
+    }
+
+    fn cleared(
+        config: &GeoLocationSink,
+        registration: &EventRegistration,
+        denial: Option<Denial>,
+    ) -> GeofenceClearance {
+        GeofenceClearance {
+            trigger: Some(ClearedTrigger::of(config, registration, SCOPE)),
+            denial,
+        }
+    }
+
+    fn changed(admitted: Result<()>) -> bool {
+        admitted.is_err_and(|error| error.to_string() == CHANGED_WHILE_CLEARED)
+    }
+
+    #[test]
+    fn a_clearance_admits_only_the_trigger_and_account_it_was_resolved_for() {
+        let config = region(200.0);
+        let registration = trigger(&config, "pat_1");
+        let clearance = cleared(&config, &registration, None);
+        assert!(clearance.admit(&config, &registration, SCOPE).is_ok());
+
+        let renamed_with_grants = EventRegistration {
+            name: "Renamed".to_string(),
+            oauth_tokens: HashMap::from([(
+                "github".to_string(),
+                OAuthToken::new("access".to_string()),
+            )]),
+            ..registration.clone()
+        };
+        assert!(
+            clearance
+                .admit(&config, &renamed_with_grants, SCOPE)
+                .is_ok()
+        );
+
+        let other_token = trigger(&config, "pat_2");
+        assert!(changed(clearance.admit(&config, &other_token, SCOPE)));
+        let unverified = EventRegistration {
+            pat_owner_sub: None,
+            ..registration.clone()
+        };
+        assert!(changed(clearance.admit(&config, &unverified, SCOPE)));
+        let runs_here = EventRegistration {
+            remote: false,
+            ..registration.clone()
+        };
+        assert!(changed(clearance.admit(&config, &runs_here, SCOPE)));
+        let wider = region(500.0);
+        assert!(changed(clearance.admit(
+            &wider,
+            &trigger(&wider, "pat_1"),
+            SCOPE
+        )));
+        assert!(changed(clearance.admit(
+            &config,
+            &registration,
+            "scope-of-user-2"
+        )));
+    }
+
+    #[test]
+    fn a_refused_clearance_fails_the_registration_with_the_same_error() {
+        let config = region(200.0);
+        let registration = trigger(&config, "pat_1");
+        let registering = |error: anyhow::Error| {
+            cleared(&config, &registration, Some(Denial::of(&error)))
+                .admit(&config, &registration, SCOPE)
+                .unwrap_err()
+        };
+
+        assert!(registering(TokenRefused("revoked".into()).into()).is::<TokenRefused>());
+        let paused = registering(dispatch::Rejected("paused".into()).into());
+        assert!(paused.is::<dispatch::Rejected>());
+        assert_eq!(paused.to_string(), "paused");
+        let unreachable = registering(anyhow!("hub unreachable"));
+        assert_eq!(unreachable.to_string(), "hub unreachable");
+        assert_eq!(dispatch::refusal(&unreachable), None);
+
+        let unscoped = GeofenceClearance {
+            trigger: None,
+            denial: Some(Denial::of(&anyhow!("no account scope"))),
+        };
+        assert!(changed(unscoped.admit(&config, &registration, SCOPE)));
+    }
+
+    #[test]
+    fn only_a_refusal_declines_and_a_crossing_past_its_window_is_not_sent_again() {
+        let paused = || anyhow::Error::from(dispatch::Rejected("paused".into()));
+        let project_inactive =
+            || anyhow!("The hub could not take the geofence crossing yet (409 PROJECT_INACTIVE)");
+        let declined = |reason: &str, token_refused| {
+            Undelivered::Decline(Refusal {
+                reason: reason.into(),
+                token_refused,
+            })
+        };
+        let cases = [
+            (paused(), true, true, declined("paused", false)),
+            (paused(), true, false, declined("paused", false)),
+            (paused(), false, true, Undelivered::Complete),
+            (
+                TokenRefused("revoked".into()).into(),
+                true,
+                true,
+                declined("revoked", true),
+            ),
+            (project_inactive(), true, true, Undelivered::Retry),
+            (
+                anyhow!("Geofence app app-1 is inactive"),
+                true,
+                true,
+                Undelivered::Retry,
+            ),
+            (project_inactive(), true, false, Undelivered::Complete),
+            (project_inactive(), false, true, Undelivered::Complete),
+        ];
+        for (error, registered, deliverable, expected) in cases {
+            assert_eq!(
+                undelivered(&error, registered, deliverable),
+                expected,
+                "{error:#} registered={registered} deliverable={deliverable}"
+            );
+        }
     }
 }

@@ -46,6 +46,11 @@ const MAIL_RETRY: HubRetry = HubRetry {
     max_wait: Duration::from_secs(60),
 };
 
+/// Carries the code a regression suite reads to grade a replay that failed
+/// only on refused side effects as skipped instead of regressed.
+const SEND_MAIL_REFUSED: &str =
+    "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot send platform mail";
+
 fn mail_url(
     hub: &str,
     secure: bool,
@@ -262,7 +267,7 @@ pub(super) async fn submit(
         .as_ref()
         .ok_or_else(|| anyhow!("Platform email requires an app execution"))?;
     if cache.shadow {
-        return Err(anyhow!("Shadow runs cannot send email"));
+        return Err(anyhow!(SEND_MAIL_REFUSED));
     }
     validate_session(session, &cache.app_id)?;
     let (url, bearer) = mail_endpoint(context, &cache.app_id, action)?;
@@ -391,6 +396,18 @@ impl NodeLogic for PlatformSendMailNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::{
+        flow::{
+            board::ExecutionStage,
+            execution::{LogLevel, context::ExecutionContextCache, internal_node::InternalNode},
+        },
+        flow_like_storage::Path,
+        profile::Profile,
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_types::sync::{Mutex, RwLock};
+    use std::sync::{Arc, Weak};
 
     #[test]
     fn executor_runs_use_the_execution_route_and_users_the_app_route() {
@@ -506,6 +523,68 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    async fn replay_context() -> ExecutionContext {
+        let logic: Arc<dyn NodeLogic> = Arc::new(PlatformSendMailNode);
+        let node = Arc::new(InternalNode::new(
+            logic.get_node(),
+            Default::default(),
+            logic,
+            Default::default(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut context = ExecutionContext::new(
+            Arc::new(Default::default()),
+            &Weak::new(),
+            &state,
+            &node,
+            &Arc::new(Mutex::new(Default::default())),
+            &Arc::new(RwLock::new(Default::default())),
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            Some("executor-jwt".into()),
+            Arc::new(Default::default()),
+            None,
+        )
+        .await;
+        context.execution_cache = Some(ExecutionContextCache {
+            stores: state.config.read().await.stores.clone(),
+            app_id: "app-1".into(),
+            model_usage_app_id: Some("app-1".into()),
+            board_dir: Path::from("apps/app-1"),
+            board_id: "board".into(),
+            node_id: "node".into(),
+            sub: "alice".into(),
+            shadow: true,
+        });
+        context
+    }
+
+    #[tokio::test]
+    async fn replays_are_refused_with_the_graded_refusal() {
+        let context = replay_context().await;
+        let session = MailSession {
+            app_id: "app-1".into(),
+            event_id: "event-1".into(),
+        };
+        for action in ["send", "reply"] {
+            let error = submit(&context, &session, action, json!({}))
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.to_string(),
+                "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot send platform mail"
+            );
+        }
     }
 
     #[test]

@@ -2,10 +2,11 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { type ReactNode, useMemo } from "react";
 import { withDeviceEventSource } from "../../../lib/event-source";
 import type { IEvent } from "../../../lib/schema/flow/event";
+import type { IEventSinkStatus } from "../../../state/backend-state/event-state";
 import {
+	advance,
 	byRole,
 	click,
-	inPortal,
 	installDom,
 	queryByRole,
 } from "../devices/testing/dom-harness";
@@ -93,9 +94,14 @@ function RouterFrame({
 }
 
 /** `relist` is how the events list reads back a saved event; by default it never does. */
-async function mountEditor(stored: IEvent, relist?: (saved: IEvent) => IEvent) {
+async function mountEditor(
+	stored: IEvent,
+	relist?: (saved: IEvent) => IEvent,
+	sinkStatus: IEventSinkStatus = { active: false },
+) {
 	let listed = stored;
 	const upserts: Array<{ event: IEvent; pat?: string; source?: string }> = [];
+	const repairs: Array<{ appId: string; eventId: string }> = [];
 	const pushes: string[] = [];
 	const fake = await createFakeWorkspace();
 	const view = await mountDevices(
@@ -120,6 +126,8 @@ async function mountEditor(stored: IEvent, relist?: (saved: IEvent) => IEvent) {
 					getInfo: async () => ({ id: fake.hub.me, dev_mode: false }),
 					updateUser: async () => undefined,
 					getPATs: async () => [],
+					lookupUsers: async (ids: string[]) =>
+						ids.map((id) => ({ id, name: `Person ${id}` })),
 				},
 				boardState: {
 					getBoardSummaries: async () => [],
@@ -136,7 +144,12 @@ async function mountEditor(stored: IEvent, relist?: (saved: IEvent) => IEvent) {
 				eventState: {
 					getEvents: async () => [listed],
 					getEventAuthoritative: async () => stored,
-					isEventSinkActive: async () => false,
+					isEventSinkActive: async () => sinkStatus.active,
+					getEventSinkStatus: async () => sinkStatus,
+					repairLocalTrigger: async (appId: string, event: IEvent) => {
+						repairs.push({ appId, eventId: event.id });
+						return { active: true };
+					},
 					upsertEvent: async (
 						_app: string,
 						event: IEvent,
@@ -162,7 +175,7 @@ async function mountEditor(stored: IEvent, relist?: (saved: IEvent) => IEvent) {
 	);
 	await view.settle();
 	await view.settle();
-	return { ...view, upserts, pushes };
+	return { ...view, upserts, repairs, pushes };
 }
 
 const toasts = () =>
@@ -246,12 +259,159 @@ describe("the editor of a device-only event", () => {
 		expect(view.container.textContent).toContain("All changes saved");
 	});
 
-	test("an ordinary sink event asks for a token when saved", async () => {
+	test("activating a trigger on this computer saves through the host, which asks for any token", async () => {
+		const view = await mountEditor({ ...baseEvent, active: false });
+		await click(byRole("button", "Activate"));
+		await click(byRole("button", /^Save/));
+		await view.settle();
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].event.active).toBe(true);
+		expect(view.upserts[0].pat).toBeUndefined();
+	});
+
+	test("pausing a trigger on this computer saves without a token", async () => {
 		const view = await mountEditor(baseEvent);
 		await click(byRole("button", "Deactivate"));
 		await click(byRole("button", /^Save/));
 		await view.settle();
-		expect(inPortal("dialog").textContent).toContain("Personal Access Token");
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].pat).toBeUndefined();
+	});
+
+	test("activating a hub trigger saves without a token, as it runs as the user who saved it", async () => {
+		const view = await mountEditor({
+			...baseEvent,
+			active: false,
+			execution_mode: "Remote",
+		} as IEvent);
+		await click(byRole("button", "Activate"));
+		await click(byRole("button", /^Save/));
+		await view.settle();
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].pat).toBeUndefined();
+	});
+});
+
+describe("the editor of a hub trigger and the user it runs as", () => {
+	const hubEvent = { ...baseEvent, execution_mode: "Remote" } as IEvent;
+	const PAUSED = "Paused: the person it ran as can no longer run it";
+
+	test("says it is paused and turns it on as you from the warning", async () => {
+		const view = await mountEditor(hubEvent, undefined, {
+			active: false,
+			run_as_user_id: null,
+		});
+		expect(view.container.textContent).toContain(PAUSED);
+		expect(view.container.textContent).not.toContain("left");
+		await click(byRole("button", "Turn on"));
+		await view.settle();
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].event.active).toBe(true);
+		expect(view.upserts[0].pat).toBeUndefined();
+		expect(toasts()).toContain("Nightly digest now runs as you.");
+	});
+
+	test("a trigger without a user only notes that saving runs it as you", async () => {
+		const view = await mountEditor(hubEvent, undefined, {
+			active: true,
+			run_as_user_id: null,
+		});
+		expect(view.container.textContent).toContain("Runs without a user");
+		expect(view.container.textContent).toContain(
+			"Saving it or turning it on again runs it as you.",
+		);
+		expect(view.container.textContent).not.toContain(PAUSED);
+	});
+
+	test("a legacy trigger says it runs with its saved token until someone saves or turns it on", async () => {
+		const view = await mountEditor(hubEvent, undefined, {
+			active: true,
+			run_as_user_id: null,
+			legacy_token: true,
+		});
+		expect(view.container.textContent).toContain(
+			"Runs with a saved token until someone saves or turns it on",
+		);
+		expect(view.container.textContent).not.toContain("Runs without a user");
+		expect(view.container.textContent).not.toContain(PAUSED);
+	});
+
+	test("a trigger with its user names that user by display name", async () => {
+		const view = await mountEditor(hubEvent, undefined, {
+			active: true,
+			run_as_user_id: "user_ada",
+		});
+		await advance(30);
+		await view.settle();
+		expect(
+			view.container.querySelector("[data-run-as='bound']")?.textContent,
+		).toBe("Runs as Person user_ada");
+	});
+
+	test("a Local trigger whose sink is on the hub names whom it runs as too", async () => {
+		const view = await mountEditor(baseEvent, undefined, {
+			active: true,
+			run_as_user_id: "user_ada",
+		});
+		await advance(30);
+		await view.settle();
+		expect(
+			view.container.querySelector("[data-run-as='bound']")?.textContent,
+		).toBe("Runs as Person user_ada");
+	});
+});
+
+describe("the editor of a trigger on this computer without a token", () => {
+	test("says it doesn't run here, and Add token repairs only this computer", async () => {
+		const before = toasts().length;
+		const view = await mountEditor(baseEvent, undefined, {
+			active: false,
+			needs_token: true,
+		});
+		expect(view.container.textContent).toContain(
+			"Doesn't run on this computer",
+		);
+		expect(view.container.textContent).toContain(
+			"Its trigger runs on this computer but has no personal access token to sign in to the hub, so it never fires.",
+		);
+		await click(byRole("button", "Add token"));
+		await view.settle();
+		expect(view.repairs).toEqual([{ appId: APP, eventId: "evt_dev" }]);
 		expect(view.upserts).toEqual([]);
+		expect(queryByRole("dialog")).toBeNull();
+		expect(toasts().slice(before)).toEqual([
+			"Nightly digest now runs on this computer.",
+		]);
+	});
+
+	test("a dismissed token prompt stays silent; any other failure says so", async () => {
+		const dismissed = Object.assign(new Error("cancelled"), {
+			isLocalSinkConsentDismissed: true,
+		});
+		const failures = [dismissed, new Error("hub unavailable")];
+		const before = toasts().length;
+		const view = await mountEditor(baseEvent, undefined, {
+			active: false,
+			needs_token: true,
+		});
+		const { useBackendStore } = await import("../../../state/backend-state");
+		const eventState = useBackendStore.getState().backend?.eventState as {
+			repairLocalTrigger?: unknown;
+		};
+		eventState.repairLocalTrigger = async () => {
+			throw failures.shift();
+		};
+		await click(byRole("button", "Add token"));
+		await view.settle();
+		expect(toasts().slice(before)).toEqual([]);
+		await click(byRole("button", "Add token"));
+		await view.settle();
+		expect(toasts().slice(before)).toEqual([
+			"Could not add a token to Nightly digest.",
+		]);
 	});
 });

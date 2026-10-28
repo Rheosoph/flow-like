@@ -7,8 +7,8 @@ use crate::host_functions::HostState;
 use crate::limits::WasmCapabilities;
 use crate::llm_message::sdk_message_content;
 use crate::memory::WasmAllocator;
-use flow_like_storage::object_store::path::Path;
 use flow_like_storage::object_store::ObjectStoreExt;
+use flow_like_storage::object_store::path::Path;
 use std::sync::Arc;
 use wasmtime::{Caller, Linker, Memory, Ref, Val};
 
@@ -43,6 +43,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> WasmResult<()>
     register_cache_functions(linker)?;
     register_metadata_functions(linker)?;
     register_storage_functions(linker)?;
+    register_storage_ops_functions(linker)?;
     register_http_functions(linker)?;
     register_websocket_functions(linker)?;
     register_streaming_functions(linker)?;
@@ -876,6 +877,81 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             WasmError::Initialization(format!("Failed to register storage.read_request: {}", e))
         })?;
 
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "copy_request",
+            |caller: Caller<'_, StoreData>,
+             (source_ptr, source_len, destination_ptr, destination_len): (u32, u32, u32, u32)| {
+                Box::new(async move {
+                    let host = &caller.data().host_state;
+                    if !host.has_capability(
+                        WasmCapabilities::STORAGE_READ | WasmCapabilities::STORAGE_WRITE,
+                    ) {
+                        return -1i32;
+                    }
+                    let (Ok(source), Ok(destination)) = (
+                        read_string_from_caller(&caller, source_ptr, source_len),
+                        read_string_from_caller(&caller, destination_ptr, destination_len),
+                    ) else {
+                        return -1;
+                    };
+                    let (Ok(source), Ok(destination)) = (
+                        serde_json::from_str::<StorageFlowPath>(&source),
+                        serde_json::from_str::<StorageFlowPath>(&destination),
+                    ) else {
+                        return -1;
+                    };
+                    let Some(context) = &host.storage_context else {
+                        return -1;
+                    };
+                    if crate::host_functions::storage::copy_flow_path(context, &source, &destination)
+                        .await
+                    {
+                        0
+                    } else {
+                        -1
+                    }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register storage.copy_request: {e}"))
+        })?;
+
+    linker
+        .func_wrap_async(
+            "flowlike_storage",
+            "file_url_request",
+            |caller: Caller<'_, StoreData>, (path_ptr, path_len): (u32, u32)| {
+                Box::new(async move {
+                    let host = &caller.data().host_state;
+                    if !host.has_capability(WasmCapabilities::STORAGE_READ) {
+                        return 0u64;
+                    }
+                    let Ok(path) = read_string_from_caller(&caller, path_ptr, path_len) else {
+                        return 0;
+                    };
+                    let Ok(path) = serde_json::from_str::<StorageFlowPath>(&path) else {
+                        return 0;
+                    };
+                    let Some(context) = &host.storage_context else {
+                        return 0;
+                    };
+                    match crate::host_functions::storage::flow_path_url(context, &path).await {
+                        Some(url) => {
+                            let (ptr, len) = host.store_result(url.as_bytes());
+                            pack_ptr_len(ptr, len)
+                        }
+                        None => 0,
+                    }
+                })
+            },
+        )
+        .map_err(|e| {
+            WasmError::Initialization(format!("Failed to register storage.file_url_request: {e}"))
+        })?;
+
     // write_request — writes bytes to a FlowPath (async)
     linker
         .func_wrap_async(
@@ -955,21 +1031,21 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         Ok(s) => s,
                         Err(_) => return 0,
                     };
-                    let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
-                        Ok(p) => p,
-                        Err(_) => return 0,
-                    };
-                    let write_id = crate::host_functions::storage::start_write(
-                        &mut caller.data().host_state.pending_writes.write(),
-                        flow_path,
-                        total_size,
-                    );
+                    let write_id = crate::host_functions::storage_api::write_start(
+                        &caller.data().host_state,
+                        &flow_path_json,
+                        Some(total_size),
+                    )
+                    .await;
                     match write_id {
-                        Some(id) => {
+                        Ok(id) => {
                             let (ptr, len) = caller.data().host_state.store_result(id.as_bytes());
                             pack_ptr_len(ptr, len)
                         }
-                        None => 0,
+                        Err(error) => {
+                            tracing::warn!(%error, "[wasm write-start-request] failed");
+                            0
+                        }
                     }
                 })
             },
@@ -1004,16 +1080,16 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         Ok(d) => d,
                         Err(_) => return -1,
                     };
-                    let ok = crate::host_functions::storage::append_chunk(
-                        &mut caller.data().host_state.pending_writes.write(),
+                    let result = crate::host_functions::storage_api::write_chunk(
+                        &caller.data().host_state,
                         &write_id,
-                        &data,
-                    );
-                    if ok {
-                        0
-                    } else {
-                        -1
+                        data,
+                    )
+                    .await;
+                    if let Err(error) = &result {
+                        tracing::warn!(%error, "[wasm write-chunk-request] failed");
                     }
+                    if result.is_ok() { 0 } else { -1 }
                 })
             },
         )
@@ -1024,7 +1100,7 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             ))
         })?;
 
-    // write_finish_request — flush accumulated chunks to object store
+    // write_finish_request: publish a complete streaming upload
     linker
         .func_wrap_async(
             "flowlike_storage",
@@ -1042,31 +1118,15 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         Ok(s) => s,
                         Err(_) => return -1,
                     };
-                    let pw = caller
-                        .data()
-                        .host_state
-                        .pending_writes
-                        .write()
-                        .remove(&write_id);
-                    let Some(pw) = pw else {
-                        return -1;
-                    };
-                    let ctx = match &caller.data().host_state.storage_context {
-                        Some(c) => c,
-                        None => return -1,
-                    };
-                    if crate::host_functions::storage::put_flow_path(
-                        ctx,
-                        &pw.flow_path,
-                        pw.buffer,
-                        "wasm write-finish-request",
+                    let result = crate::host_functions::storage_api::write_finish(
+                        &caller.data().host_state,
+                        &write_id,
                     )
-                    .await
-                    {
-                        0
-                    } else {
-                        -1
+                    .await;
+                    if let Err(error) = &result {
+                        tracing::warn!(%error, "[wasm write-finish-request] failed");
                     }
+                    if result.is_ok() { 0 } else { -1 }
                 })
             },
         )
@@ -1098,10 +1158,12 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         Err(_) => return 0,
                     };
 
-                    let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
-                        Ok(p) => p,
-                        Err(_) => return 0,
-                    };
+                    let request: crate::host_functions::storage::StorageListRequest =
+                        match serde_json::from_str(&flow_path_json) {
+                            Ok(request) => request,
+                            Err(_) => return 0,
+                        };
+                    let flow_path = request.flow_path;
 
                     let ctx = match &caller.data().host_state.storage_context {
                         Some(c) => c,
@@ -1116,18 +1178,38 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
 
                     use futures::StreamExt;
                     let prefix = path;
-                    let entries: Vec<_> = store
-                        .as_generic()
-                        .list(Some(&prefix))
-                        .filter_map(|r| async { r.ok() })
-                        .map(|meta| StorageFlowPath {
-                            path: meta.location.as_ref().to_string(),
-                            store_ref: flow_path.store_ref.clone(),
-                            cache_store_ref: flow_path.cache_store_ref.clone(),
-                        })
-                        .collect()
-                        .await;
-
+                    let backend = store.as_generic();
+                    let mut listing = crate::host_functions::storage::list_files_excluding(
+                        backend,
+                        prefix.clone(),
+                        request.exclude_directories.clone(),
+                    );
+                    let mut entries = Vec::new();
+                    while let Some(result) = listing.next().await {
+                        let meta = match result {
+                            Ok(meta) => meta,
+                            Err(error) => {
+                                tracing::warn!(%error, "[wasm list-files] failed");
+                                caller.data().host_state.log(
+                                    crate::host_functions::logging::LogLevel::Error as u8,
+                                    format!("Unable to list '{}': {error}", flow_path.path),
+                                    None,
+                                );
+                                return 0;
+                            }
+                        };
+                        if crate::host_functions::storage::include_listed_file(
+                            &meta.location,
+                            &prefix,
+                            &request.exclude_directories,
+                        ) {
+                            entries.push(
+                                crate::host_functions::storage::StorageFileEntry::from_metadata(
+                                    &flow_path, meta,
+                                ),
+                            );
+                        }
+                    }
                     match serde_json::to_vec(&entries) {
                         Ok(json) => {
                             let (ptr, len) = caller.data().host_state.store_result(&json);
@@ -1142,6 +1224,88 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             WasmError::Initialization(format!("Failed to register storage.list_request: {}", e))
         })?;
 
+    Ok(())
+}
+
+/// Core guests use an explicit result envelope instead of ambiguous zero handles.
+fn register_storage_ops_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
+    linker
+        .func_wrap_async(
+            "flowlike_storage_ops",
+            "request",
+            |caller: Caller<'_, StoreData>, (ptr, len): (u32, u32)| {
+                Box::new(async move {
+                    use crate::host_functions::{storage_api, storage_ops::StorageError};
+                    let result = async {
+                        // Enough for a 10 MiB base64 chunk and bounded metadata.
+                        if len > 14 * 1024 * 1024 {
+                            return Err(StorageError::resource_limit(
+                                "Storage requests must be at most 14 MiB.",
+                            ));
+                        }
+                        let request = read_string_from_caller(&caller, ptr, len).map_err(|_| {
+                            StorageError::invalid_argument(
+                                "Invalid storage request memory or UTF-8.",
+                            )
+                        })?;
+                        let request = serde_json::from_str(&request).map_err(|error| {
+                            StorageError::invalid_argument(format!(
+                                "Invalid storage request JSON: {error}"
+                            ))
+                        })?;
+                        storage_api::request(&caller.data().host_state, &request).await
+                    }
+                    .await;
+                    let bytes = storage_api::envelope(result);
+                    let length = bytes.len() as u32;
+                    *caller.data().host_state.storage_response.write() = bytes;
+                    pack_ptr_len(0, length)
+                })
+            },
+        )
+        .map_err(|error| {
+            WasmError::Initialization(format!("Failed to register storage-ops.request: {error}"))
+        })?;
+    linker
+        .func_wrap(
+            "flowlike_storage_ops",
+            "read_response",
+            |mut caller: Caller<'_, StoreData>,
+             offset: u32,
+             destination: u32,
+             length: u32|
+             -> i32 {
+                let Some(memory) = caller.data().memory else {
+                    return -1;
+                };
+                let Some(end) = (offset as usize).checked_add(length as usize) else {
+                    return -1;
+                };
+                let Some(destination_end) = (destination as usize).checked_add(length as usize)
+                else {
+                    return -1;
+                };
+                let Ok(copied) = i32::try_from(length) else {
+                    return -1;
+                };
+                let (memory, data) = memory.data_and_store_mut(&mut caller);
+                let response = data.host_state.storage_response.read();
+                let Some(source) = response.get(offset as usize..end) else {
+                    return -1;
+                };
+                let Some(destination) = memory.get_mut(destination as usize..destination_end)
+                else {
+                    return -1;
+                };
+                destination.copy_from_slice(source);
+                copied
+            },
+        )
+        .map_err(|error| {
+            WasmError::Initialization(format!(
+                "Failed to register storage-ops.read_response: {error}"
+            ))
+        })?;
     Ok(())
 }
 
@@ -2985,6 +3149,67 @@ fn register_emscripten_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
 }
 
 #[cfg(test)]
+mod storage_ops_tests {
+    use super::*;
+    use wasmtime::{Engine, Module, Store};
+
+    #[tokio::test]
+    async fn core_guest_consumes_storage_responses_in_linear_memory() {
+        let engine = Engine::default();
+        let module = Module::new(&engine, wat::parse_str(r#"
+            (module
+                (import "flowlike_storage_ops" "request" (func $request (param i32 i32) (result i64)))
+                (import "flowlike_storage_ops" "read_response" (func $read (param i32 i32 i32) (result i32)))
+                (memory (export "memory") 1)
+                (export "read_response" (func $read))
+                (func (export "run") (param i32 i32) (result i32) (local $packed i64)
+                    local.get 0 local.get 1 call $request local.set $packed
+                    local.get $packed i64.const 32 i64.shr_u i32.wrap_i64
+                    i32.const 4096
+                    local.get $packed i32.wrap_i64
+                    call $read))
+        "#).unwrap()).unwrap();
+        let mut linker = Linker::new(&engine);
+        register_storage_ops_functions(&mut linker).unwrap();
+        let mut store = Store::new(&engine, StoreData::new(WasmCapabilities::empty()));
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let memory = instance.get_memory(&mut store, "memory").unwrap();
+        store.data_mut().memory = Some(memory);
+        let run = instance
+            .get_typed_func::<(u32, u32), i32>(&mut store, "run")
+            .unwrap();
+        let request = br#"{"op":"stat_file","path":{"path":"secret","store_ref":"forged"}}"#;
+        memory.write(&mut store, 0, request).unwrap();
+        for _ in 0..3 {
+            let length = run
+                .call_async(&mut store, (0, request.len() as u32))
+                .await
+                .unwrap();
+            assert!(length > 0);
+            let response: serde_json::Value =
+                serde_json::from_slice(&memory.data(&store)[4096..4096 + length as usize]).unwrap();
+            assert_eq!(response["ok"], false);
+            assert_eq!(response["error"]["code"], "permission_denied");
+            assert_eq!(
+                store.data().host_state.storage_response.read().len(),
+                length as usize
+            );
+            assert!(store.data().host_state.result_buffer.read().is_empty());
+        }
+        let read = instance
+            .get_typed_func::<(u32, u32, u32), i32>(&mut store, "read_response")
+            .unwrap();
+        for args in [(u32::MAX, 0, 1), (0, u32::MAX, 1), (0, 0, u32::MAX)] {
+            assert_eq!(read.call_async(&mut store, args).await.unwrap(), -1);
+        }
+        let length = run.call_async(&mut store, (u32::MAX, 1)).await.unwrap();
+        let response: serde_json::Value =
+            serde_json::from_slice(&memory.data(&store)[4096..4096 + length as usize]).unwrap();
+        assert_eq!(response["error"]["code"], "invalid_argument");
+    }
+}
+
+#[cfg(test)]
 mod resource_handle_tests {
     use super::*;
     use wasmtime::{Engine, Module, Store};
@@ -3347,11 +3572,13 @@ mod websocket_tests {
             .await
             .unwrap();
         assert!(offset >= 0);
-        assert!(String::from_utf8(
-            store.data().host_state.result_buffer.read()[offset as usize..].to_vec()
-        )
-        .unwrap()
-        .contains("reply"));
+        assert!(
+            String::from_utf8(
+                store.data().host_state.result_buffer.read()[offset as usize..].to_vec()
+            )
+            .unwrap()
+            .contains("reply")
+        );
         assert_eq!(close.call_async(&mut store, handle).await.unwrap(), 0);
         assert_eq!(
             send.call_async(&mut store, (handle, 256, 6, 0))

@@ -74,6 +74,8 @@ For a hosted webhook, Flow-Like checks the active event sink, validates Telegram
 
 The endpoint acknowledges a valid update immediately and dispatches the workflow asynchronously. A successful acknowledgement includes whether a run was triggered and its run ID.
 
+An event without a stored secret answers every update with `401`. Restoring an older version keeps the event's current secret, and a secret never carries over when an event changes type. When the person the event runs as can no longer run it, the update is acknowledged with `triggered: false`, no run starts, and the event pauses.
+
 ## Workflow payloads
 
 Webhook delivery forwards Telegram's update JSON. A message update commonly contains `update_id`, `message`, `message.chat`, `message.from`, and `message.text`, but Telegram can send other update types.

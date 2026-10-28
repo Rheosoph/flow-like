@@ -1363,6 +1363,17 @@ pub struct SuiteRunDetailResponse {
     pub cases: Vec<SuiteCaseResultView>,
 }
 
+/// Replays act as the account that starts them and may spend its private Bits. The subject
+/// an app connection passes through is attribution only, never an account it may act as.
+fn deny_connected_app_suite_run(user: &AppUser) -> Result<(), ApiError> {
+    if user.is_connected_app() {
+        return Err(ApiError::forbidden(
+            "Connected apps cannot start regression-suite runs",
+        ));
+    }
+    Ok(())
+}
+
 /// Start a suite run against a candidate board version.
 ///
 /// On deployments whose detached tasks die with the request — the AWS
@@ -1383,7 +1394,7 @@ pub struct SuiteRunDetailResponse {
         (status = 202, description = "Suite run started", body = RunRegressionSuiteAccepted),
         (status = 400, description = "Bad request"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
+        (status = 403, description = "Forbidden: the role lacks ExecuteEvents or ReadLogs, or the caller is a connected app"),
         (status = 404, description = "Not found"),
         (status = 409, description = "The suite has not acknowledged live side effects")
     ),
@@ -1403,6 +1414,7 @@ pub async fn run_regression_suite(
     Path((app_id, event_id)): Path<(String, String)>,
     Json(body): Json<RunRegressionSuiteRequest>,
 ) -> Result<Response, ApiError> {
+    deny_connected_app_suite_run(&user)?;
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     if !permission.has_permission(RolePermissions::ReadLogs) {
         // Grading reads the board's run logs; without ReadLogs the runner
@@ -1412,6 +1424,7 @@ pub async fn run_regression_suite(
     let sub = permission.effective_user_id().map_err(|_| {
         ApiError::forbidden("Running a suite requires a caller that is linked to a user account")
     })?;
+    let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
     let user_context = permission.to_user_context();
 
     if !is_safe_id(&event_id) {
@@ -1447,6 +1460,7 @@ pub async fn run_regression_suite(
         SuiteRunTrigger::Manual,
         SuiteRunActor {
             sub: Some(sub),
+            technical_user_id,
             user_context: Some(user_context),
         },
     )
@@ -1613,5 +1627,43 @@ mod tests {
         assert!(is_rejected_summary(100, 100, 0));
         assert!(!is_rejected_summary(100, 200, 0));
         assert!(!is_rejected_summary(100, 100, 1));
+    }
+
+    #[test]
+    fn connected_apps_cannot_start_suite_runs_as_their_passed_through_subject() {
+        use crate::middleware::jwt::{ApiKey, ConnectedAppUser, OpenIDUser, PATUser};
+        let connected = AppUser::ConnectedApp(ConnectedAppUser {
+            sub: Some("member-of-both".to_string()),
+            origin_app_id: "source".to_string(),
+            target_app_id: "target".to_string(),
+            app_chain: vec!["source".to_string()],
+            technical_user_id: None,
+            run_id: Some("source-run".to_string()),
+            correlation: None,
+        });
+        assert_eq!(
+            deny_connected_app_suite_run(&connected)
+                .unwrap_err()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        for caller in [
+            AppUser::OpenID(OpenIDUser {
+                sub: "user".to_string(),
+                access_token: "token".to_string(),
+            }),
+            AppUser::PAT(PATUser {
+                pat: "pat".to_string(),
+                sub: "user".to_string(),
+            }),
+            AppUser::APIKey(ApiKey {
+                key_id: "key".to_string(),
+                api_key: "secret".to_string(),
+                app_id: "target".to_string(),
+                creator_user_id: Some("user".to_string()),
+            }),
+        ] {
+            assert!(deny_connected_app_suite_run(&caller).is_ok(), "{caller:?}");
+        }
     }
 }

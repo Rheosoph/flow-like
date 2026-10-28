@@ -1,8 +1,6 @@
 use anyhow::Result;
-use flow_like::flow::oauth::OAuthToken;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -10,7 +8,8 @@ use std::sync::{
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use super::manager::DbConnection;
+use super::manager::{DbConnection, EventSinkManager};
+use super::trigger_token::TriggerAccount;
 use super::{EventRegistration, EventSink};
 use crate::state::TauriEventBusState;
 
@@ -91,109 +90,106 @@ impl RSSSink {
         Ok(())
     }
 
-    async fn process_feeds(db: &DbConnection, _app_handle: &AppHandle) -> Result<()> {
+    async fn process_feeds(db: &DbConnection, app_handle: &AppHandle) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
 
-        let feeds = {
-            let conn = db.lock().unwrap();
-            let mut stmt = conn.prepare(
-                "SELECT event_id, feed_url, poll_interval, last_checked, last_item_guid
-                 FROM rss_feeds
-                 WHERE last_checked IS NULL OR last_checked + poll_interval <= ?1",
-            )?;
-
-            stmt.query_map(params![now], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-        };
-
-        for (event_id, _feed_url, _poll_interval, _last_checked, _last_guid) in feeds {
+        let due = Self::due_feeds(db, now)?;
+        if due.is_empty() {
+            return Ok(());
+        }
+        let account = TriggerAccount::current(app_handle).await;
+        for event_id in due {
             tracing::info!("Checking RSS feed for event {}", event_id);
 
             // TODO: Fetch and parse RSS feed
             // TODO: Compare with last_item_guid
             // For now, we'll trigger an event on each check
-
-            // Get app_id, offline flag, token, and oauth_tokens from registration
-            let registration_info = {
-                let conn = db.lock().unwrap();
-                let mut stmt = conn.prepare(
-                    "SELECT app_id, offline, personal_access_token, oauth_tokens FROM event_registrations WHERE event_id = ?1",
-                )?;
-                stmt.query_row(params![event_id], |row| {
-                    let oauth_tokens_json: Option<String> = row.get(3)?;
-                    let oauth_tokens: HashMap<String, OAuthToken> = oauth_tokens_json
-                        .map(|json| serde_json::from_str(&json))
-                        .transpose()
-                        .map_err(|e| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                3,
-                                rusqlite::types::Type::Text,
-                                Box::new(e),
-                            )
-                        })?
-                        .unwrap_or_default();
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, bool>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        oauth_tokens,
-                    ))
-                })
-                .ok()
-            };
-
-            if let Some((app_id, offline, personal_access_token, oauth_tokens)) = registration_info
+            let registration = EventSinkManager::read_registration(db.clone(), &event_id);
+            if let Some(registration) =
+                Self::firing_registration(&event_id, registration, account.as_ref())
             {
-                if let Some(event_bus_state) = _app_handle.try_state::<TauriEventBusState>() {
-                    let event_bus = &event_bus_state.0;
-
-                    let oauth_tokens_opt = if oauth_tokens.is_empty() {
-                        None
-                    } else {
-                        Some(oauth_tokens)
-                    };
-
-                    if let Err(e) = event_bus.push_event_with_token(
-                        None,
-                        app_id,
-                        event_id.clone(),
-                        offline,
-                        personal_access_token,
-                        None,
-                        oauth_tokens_opt,
-                    ) {
-                        tracing::error!("Failed to push RSS event to EventBus: {}", e);
-                    } else {
-                        tracing::info!(
-                            "RSS event {} triggered successfully (offline: {})",
-                            event_id,
-                            offline
-                        );
-                    }
-                } else {
-                    tracing::error!("EventBus state not available for RSS feed {}", event_id);
-                }
-            } else {
-                tracing::error!("Could not find registration info for RSS feed {}", event_id);
+                Self::push(app_handle, registration);
             }
-
-            let conn = db.lock().unwrap();
-            conn.execute(
-                "UPDATE rss_feeds SET last_checked = ?1 WHERE event_id = ?2",
-                params![now, event_id],
-            )?;
+            Self::mark_checked(db, &event_id, now)?;
         }
 
+        Ok(())
+    }
+
+    /// The event ids of the feeds due for a check at `now`.
+    fn due_feeds(db: &DbConnection, now: i64) -> Result<Vec<String>> {
+        let conn = db.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT event_id FROM rss_feeds
+             WHERE last_checked IS NULL OR last_checked + poll_interval <= ?1",
+        )?;
+        let event_ids = stmt
+            .query_map(params![now], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(event_ids)
+    }
+
+    /// The registration a due feed of `event_id` fires with: none when it is
+    /// missing or unreadable, or cannot start a run while `account` is signed
+    /// in, like an online trigger whose personal access token was verified
+    /// for another account or hub, or never.
+    fn firing_registration(
+        event_id: &str,
+        registration: Result<Option<EventRegistration>>,
+        account: Option<&TriggerAccount>,
+    ) -> Option<EventRegistration> {
+        match registration {
+            Ok(Some(registration)) if registration.can_fire(account) => Some(registration),
+            Ok(Some(_)) => {
+                tracing::warn!(
+                    event_id = %event_id,
+                    "Skipping an RSS feed whose online trigger holds no personal access token verified for the account signed in on the current profile's hub; add one in the event's settings"
+                );
+                None
+            }
+            Ok(None) => {
+                tracing::error!("Could not find registration info for RSS feed {}", event_id);
+                None
+            }
+            Err(error) => {
+                tracing::error!(
+                    event_id = %event_id,
+                    error = %error,
+                    "Could not read the registration of an RSS feed"
+                );
+                None
+            }
+        }
+    }
+
+    fn push(app_handle: &AppHandle, registration: EventRegistration) {
+        let event_id = registration.event_id.clone();
+        let Some(event_bus_state) = app_handle.try_state::<TauriEventBusState>() else {
+            tracing::error!("EventBus state not available for RSS feed {}", event_id);
+            return;
+        };
+        let offline = registration.offline;
+        match event_bus_state
+            .0
+            .push_registration(registration, None, None, None)
+        {
+            Ok(()) => tracing::info!(
+                "RSS event {} triggered successfully (offline: {})",
+                event_id,
+                offline
+            ),
+            Err(e) => tracing::error!("Failed to push RSS event to EventBus: {}", e),
+        }
+    }
+
+    fn mark_checked(db: &DbConnection, event_id: &str, now: i64) -> Result<()> {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "UPDATE rss_feeds SET last_checked = ?1 WHERE event_id = ?2",
+            params![now, event_id],
+        )?;
         Ok(())
     }
 }
@@ -251,5 +247,92 @@ impl EventSink for RSSSink {
         Self::remove_feed(&db, &registration.event_id)?;
         tracing::info!("Unregistered RSS feed: {}", registration.event_id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event_sink::EventConfig;
+    use std::collections::HashMap;
+
+    /// A feed registration whose PAT, when `owner` is set, was verified for
+    /// that subject.
+    fn feed(offline: bool, pat: Option<&str>, owner: Option<&str>) -> EventRegistration {
+        let now = std::time::SystemTime::now();
+        EventRegistration {
+            event_id: "event".to_string(),
+            name: "Feed".to_string(),
+            r#type: "rss".to_string(),
+            updated_at: now,
+            created_at: now,
+            config: EventConfig::Rss(RSSSink {
+                feed_url: "https://example.com/feed.xml".to_string(),
+                poll_interval: 300,
+                headers: None,
+                filter_keywords: None,
+            }),
+            offline,
+            app_id: "app".to_string(),
+            default_payload: None,
+            personal_access_token: pat.map(str::to_string),
+            pat_owner_sub: owner.map(str::to_string),
+            hub_origin: owner.map(|_| "https://hub.example".to_string()),
+            remote: false,
+            oauth_tokens: HashMap::new(),
+        }
+    }
+
+    fn signed_in(sub: &str, hub_origin: &str) -> TriggerAccount {
+        TriggerAccount {
+            sub: sub.to_string(),
+            hub_origin: hub_origin.to_string(),
+        }
+    }
+
+    fn fires(
+        registration: Result<Option<EventRegistration>>,
+        account: Option<&TriggerAccount>,
+    ) -> bool {
+        RSSSink::firing_registration("event", registration, account).is_some()
+    }
+
+    #[test]
+    fn a_due_feed_skips_a_registration_that_cannot_fire() {
+        let owner = signed_in("user-1", "https://hub.example");
+        let owner = Some(&owner);
+        assert!(fires(Ok(Some(feed(true, None, None))), owner));
+        assert!(fires(
+            Ok(Some(feed(false, Some("pat_1"), Some("user-1")))),
+            owner
+        ));
+        assert!(!fires(
+            Ok(Some(feed(false, Some("pat_legacy"), None))),
+            owner
+        ));
+        assert!(!fires(
+            Ok(Some(feed(false, Some("  "), Some("user-1")))),
+            owner
+        ));
+        assert!(!fires(Ok(Some(feed(false, None, None))), owner));
+        assert!(!fires(Ok(None), owner));
+        assert!(!fires(
+            Err(anyhow::anyhow!("unreadable registration")),
+            owner
+        ));
+    }
+
+    #[test]
+    fn an_online_feed_fires_only_while_its_token_owner_is_signed_in_on_its_hub() {
+        let online = || Ok(Some(feed(false, Some("pat_1"), Some("user-1"))));
+        let other_account = signed_in("user-2", "https://hub.example");
+        let other_hub = signed_in("user-1", "https://other-hub.example");
+        assert!(!fires(online(), Some(&other_account)));
+        assert!(!fires(online(), Some(&other_hub)));
+        assert!(!fires(online(), None));
+
+        let offline = || Ok(Some(feed(true, None, None)));
+        assert!(fires(offline(), None));
+        assert!(fires(offline(), Some(&other_account)));
     }
 }

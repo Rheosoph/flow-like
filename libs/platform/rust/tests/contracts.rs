@@ -234,6 +234,25 @@ async fn pat_headers_empty_success_and_structured_errors_match_contract() {
     assert!(error.to_string().contains("denied"));
 }
 
+#[test]
+#[allow(deprecated)]
+fn invoke_requests_never_serialize_a_user_token() {
+    let event = InvokeEventRequest {
+        token: Some("pat_x.y".into()),
+        ..Default::default()
+    };
+    let board = InvokeBoardRequest {
+        node_id: "node".into(),
+        token: Some("pat_x.y".into()),
+        ..Default::default()
+    };
+    assert_eq!(serde_json::to_value(&event).unwrap(), json!({}));
+    assert_eq!(
+        serde_json::to_value(&board).unwrap(),
+        json!({"node_id": "node"})
+    );
+}
+
 fn poll(status: &str, sequences: std::ops::Range<i32>) -> Value {
     json!({"run_id":"r","status":status,"progress":100,"current_step":null,"error":if status == "FAILED" {Some("broken")}else{None},"started_at":null,"completed_at":null,
         "events":sequences.map(|sequence|json!({"sequence":sequence,"event_type":"output","payload":{"value":sequence},"created_at":"now"})).collect::<Vec<_>>()})

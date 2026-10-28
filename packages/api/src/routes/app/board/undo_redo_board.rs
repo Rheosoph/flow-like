@@ -4,7 +4,10 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::{
-        board::{scoring::save_board_and_refresh_summary, sync_board::seed_board_revision},
+        board::{
+            scoring::save_board_and_refresh_summary, sink_rebind::rebind_latest_sinks,
+            sync_board::seed_board_revision,
+        },
         wasm_catalog::{
             app_wasm_nodes_cached, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
         },
@@ -78,8 +81,14 @@ pub async fn undo_board(
     let command_count = params.commands.len();
     board.undo(params.commands, flow_state.clone()).await?;
 
+    if command_count > 0 {
+        rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    }
     mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+    if command_count > 0 {
+        rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    }
     drop(mutation_guard);
     seed_board_revision(&state, &app_id, &board_id, board, &put).await;
 
@@ -150,8 +159,14 @@ pub async fn redo_board(
     let command_count = params.commands.len();
     board.redo(params.commands, flow_state.clone()).await?;
 
+    if command_count > 0 {
+        rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    }
     mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
+    if command_count > 0 {
+        rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    }
     drop(mutation_guard);
     seed_board_revision(&state, &app_id, &board_id, board, &put).await;
 

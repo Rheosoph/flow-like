@@ -82,10 +82,10 @@ async fn shadow_context_cannot_write_app_storage_while_a_normal_one_can() {
             .await
             .expect_err(&format!("a shadow run must not write {name}"));
         assert!(
-            error
-                .to_string()
-                .contains("shadow runs cannot write app storage"),
-            "{name} write must fail with the shadow message, got: {error}"
+            error.to_string().contains(
+                "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot write app storage"
+            ),
+            "{name} write must fail with the shadow refusal, got: {error}"
         );
     }
     assert!(shadow.shadow, "the context carries the flag for bypasses");

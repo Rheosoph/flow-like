@@ -238,6 +238,11 @@ export interface IMessage {
 	debug_report?: IAgentDebugReport;
 	/** How this assistant turn was executed. Global chat only; see {@link IChatRunContext}. */
 	run_context?: IChatRunContext;
+	/**
+	 * Thinking level a user turn was sent with: `off`/`low`/`mid`/`high`, or an agent backend's
+	 * native effort id. Absent when the provider chose (FlowPilot "Auto") or for older messages.
+	 */
+	thinking?: string;
 	/** a2ui widgets embedded in this message (from the Push Widget node). */
 	widgets?: IChatWidget[];
 	/**

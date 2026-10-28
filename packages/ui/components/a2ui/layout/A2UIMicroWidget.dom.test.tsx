@@ -30,6 +30,7 @@ let host: HTMLElement;
 let client: import("@tanstack/react-query").QueryClient | undefined;
 let registryState: Record<string, unknown> | undefined;
 let helperState: Record<string, unknown> | undefined;
+let storageState: Record<string, unknown> | undefined;
 let restoreFrameSrc: () => void;
 let restoreGlobals: () => void;
 let restoreTimers: () => void;
@@ -60,6 +61,7 @@ beforeEach(async () => {
 	client = undefined;
 	registryState = undefined;
 	helperState = undefined;
+	storageState = undefined;
 	restoreBackend = undefined;
 	readyTimeout = undefined;
 	armedTimers.length = 0;
@@ -101,7 +103,10 @@ beforeEach(async () => {
 		timerSpy.mockRestore();
 		clearSpy.mockRestore();
 	};
-	window = new Window({ url: "https://local/use" });
+	window = new Window({
+		url: "https://local/use",
+		settings: { enableIframePageLoading: true },
+	});
 	const globals = {
 		document: window.document,
 		HTMLElement: window.HTMLElement,
@@ -286,6 +291,7 @@ async function renderWidget(
 			boardState: {},
 			registryState,
 			helperState,
+			storageState,
 		} as never);
 	}
 	const list = Array.isArray(widgets) ? widgets : [widgets];
@@ -378,7 +384,7 @@ async function openFrameChannel() {
 		.map(([envelope]) => envelope as FlwEnvelope)
 		.find((envelope) => envelope.type === "init");
 	if (!init) throw new Error("The host did not send init to the iframe");
-	return (type: "event" | "ready" | "file:upload", payload: unknown) =>
+	return (type: FlwEnvelope["type"], payload: unknown) =>
 		fromFrame(
 			createEnvelope(type, payload as never, init.nonce, "sales-chart"),
 		);
@@ -451,6 +457,88 @@ const dialogTitle = () =>
 const activeText = () => window.document.activeElement?.textContent ?? "";
 const isPrimary = (text: string) =>
 	findButton(text)?.className.includes("bg-primary") ?? false;
+
+test("stored resources are granted by host props and host query arguments", async () => {
+	stubRegistry();
+	const reference = (path: string) => ({
+		path,
+		store_ref: "store",
+		cache_store_ref: null,
+	});
+	const initial = reference("apps/a/upload/image.png");
+	const next = reference("apps/a/upload/next.png");
+	const file = (storage: typeof initial) => ({
+		encoding: "reference",
+		content: "",
+		storage,
+		url: "asset://localhost/%2Fetc%2Fpasswd",
+	});
+	const storageCalls: string[] = [];
+	storageState = {
+		downloadStorageItems: async (_app: string, paths: string[]) => {
+			storageCalls.push(...paths);
+			return paths.map((prefix) => ({
+				prefix,
+				url: `https://storage.example/${prefix}`,
+			}));
+		},
+	};
+	const fetcher = spyOn(globalThis, "fetch").mockImplementation(
+		async () =>
+			new Response(new Uint8Array([0, 255, 128]), {
+				headers: { "content-type": "image/png" },
+			}),
+	);
+	cleanup.push(() => fetcher.mockRestore());
+	const context = { router: {}, appId: "a" };
+	await renderWidget(
+		component({ props: { artifact: { files: { image: file(initial) } } } }),
+		context,
+	);
+	const say = await openFrameChannel();
+	await say("ready", { contractVersion: 1 });
+	await say("resource:request", { requestId: "props", reference: initial });
+	expect(fetcher).toHaveBeenCalledTimes(1);
+	await say("resource:request", {
+		requestId: "invented",
+		reference: reference("apps/a/upload/private.png"),
+	});
+	expect(fetcher).toHaveBeenCalledTimes(1);
+	const { microWidgetQuery } = await import("../micro-widget-host");
+	const pending = microWidgetQuery("sales-chart", "applyBuild", {
+		artifact: { files: { image: file(next) } },
+	});
+	const frameWindow = frame()?.contentWindow;
+	if (!frameWindow) throw new Error("The widget frame is missing");
+	const post = frameWindow.postMessage as unknown as {
+		mock: { calls: [FlwEnvelope][] };
+	};
+	const query = post.mock.calls
+		.map(([value]) => value)
+		.findLast((value) => value.type === "query");
+	if (!query) throw new Error("The host query was not posted");
+	await say("resource:request", { requestId: "query", reference: next });
+	expect(fetcher).toHaveBeenCalledTimes(2);
+	await say("query:result", {
+		queryId: (query.payload as { queryId: string }).queryId,
+		ok: true,
+		value: { applied: true },
+	});
+	expect(await pending).toEqual({ applied: true });
+	await renderWidget(component({ props: {} }), context);
+	await say("resource:request", {
+		requestId: "removed-prop",
+		reference: initial,
+	});
+	expect(fetcher).toHaveBeenCalledTimes(2);
+	expect(storageCalls).toEqual([initial.path, next.path]);
+	const results = post.mock.calls
+		.map(([value]) => value)
+		.filter((value) => value.type === "resource:result");
+	expect(results.map((value) => (value.payload as { ok: boolean }).ok)).toEqual(
+		[true, false, true, false],
+	);
+});
 
 function installLocalStorage(): Map<string, string> {
 	const items = new Map<string, string>();

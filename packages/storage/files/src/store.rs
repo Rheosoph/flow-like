@@ -19,6 +19,9 @@ mod helper;
 pub mod local_store;
 mod path_info;
 pub mod read_only_store;
+mod secure_local;
+#[cfg(test)]
+mod local_security_tests;
 #[cfg(feature = "smb")]
 pub mod smb_store;
 
@@ -281,6 +284,25 @@ impl FlowLikeStore {
             .await
     }
 
+    /// Returns a fetchable reference without reading or inlining the object's bytes.
+    pub async fn sign_reference(
+        &self,
+        method: &str,
+        path: &Path,
+        expires_after: Duration,
+    ) -> Result<Option<Url>> {
+        match self {
+            Self::Memory(_) | Self::Other(_) => Ok(None),
+            Self::Local(_) if !cfg!(feature = "tauri") && std::env::var("TAURI_ENV").is_err() => {
+                Ok(None)
+            }
+            _ => self
+                .sign_cached(method, path, expires_after)
+                .await
+                .map(Some),
+        }
+    }
+
     /// Like [`FlowLikeStore::sign`], but lets the caller choose how a
     /// [`FlowLikeStore::Local`] object is addressed. Every other backend ignores
     /// `mode` and signs exactly as [`FlowLikeStore::sign`] does.
@@ -429,6 +451,36 @@ mod tests {
     use super::*;
 
     const TTL: Duration = Duration::from_secs(86_400);
+
+    #[tokio::test]
+    async fn sign_reference_does_not_read_memory_objects() {
+        let store = FlowLikeStore::Memory(Arc::new(object_store::memory::InMemory::new()));
+        assert!(
+            store
+                .sign_reference("GET", &Path::from("missing.bin"), TTL)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_reference_never_inlines_local_objects() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = FlowLikeStore::Local(Arc::new(
+            LocalObjectStore::new(directory.path().to_path_buf()).unwrap(),
+        ));
+        let url = store
+            .sign_reference("GET", &Path::from("missing.bin"), TTL)
+            .await
+            .unwrap();
+        if cfg!(feature = "tauri") || std::env::var("TAURI_ENV").is_ok() {
+            let url = url.expect("desktop asset reference");
+            assert!(matches!(url.scheme(), "asset" | "http"));
+        } else {
+            assert!(url.is_none());
+        }
+    }
 
     #[test]
     fn relative_to_strips_the_app_base_and_keeps_nested_paths() {

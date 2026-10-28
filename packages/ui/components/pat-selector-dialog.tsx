@@ -24,6 +24,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { cn } from "@flow-like/flow-like-ui/lib/utils";
 import { useTranslation } from "@flow-like/locales";
 import {
@@ -33,7 +34,8 @@ import {
 	KeyRoundIcon,
 	PlusIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { AuthContext } from "react-oidc-context";
 import { toast } from "sonner";
 
 interface PAT {
@@ -46,10 +48,50 @@ interface PAT {
 
 const STORAGE_KEY = "flow-like-selected-pat";
 
-// Helper to clear PAT from storage (should be called on logout)
-export function clearStoredPat() {
-	if (typeof window !== "undefined") {
+/** A stored token is offered only on the hub it was made on, to the account that made it. */
+export function storedPatKey(hubOrigin: string, account: string): string {
+	return `${STORAGE_KEY}:${hubOrigin}:${account}`;
+}
+
+function readStoredPat(key: string | null): string | null {
+	if (!key || typeof window === "undefined") return null;
+	try {
+		return localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+
+/** A token stored before tokens were scoped may belong to anyone, so it is never offered. */
+function forgetUnscopedPat() {
+	if (typeof window === "undefined") return;
+	try {
 		localStorage.removeItem(STORAGE_KEY);
+	} catch (error) {
+		console.warn("Could not remove the unscoped personal access token:", error);
+	}
+}
+
+function writeStoredPat(key: string | null, pat: string) {
+	if (!key || typeof window === "undefined") return;
+	try {
+		localStorage.setItem(key, pat);
+	} catch (error) {
+		console.warn("Could not store the personal access token:", error);
+	}
+}
+
+/** Forgets every stored token, of every hub and account; call it on sign-out. */
+export function clearStoredPat() {
+	if (typeof window === "undefined") return;
+	try {
+		for (let index = localStorage.length - 1; index >= 0; index--) {
+			const key = localStorage.key(index);
+			if (key === STORAGE_KEY || key?.startsWith(`${STORAGE_KEY}:`))
+				localStorage.removeItem(key);
+		}
+	} catch (error) {
+		console.warn("Could not clear stored personal access tokens:", error);
 	}
 }
 
@@ -101,6 +143,11 @@ export function PatSelectorDialog({
 		},
 	];
 	const backend = useBackend();
+	const account = useContext(AuthContext)?.user?.profile.sub;
+	const storageKey = account
+		? storedPatKey(getApiOrigin(backend.profile), account)
+		: null;
+	const storedPat = open ? readStoredPat(storageKey) : null;
 	const pats = useInvoke(
 		backend.userState.getPATs,
 		backend.userState,
@@ -121,22 +168,19 @@ export function PatSelectorDialog({
 	);
 	const [selectedPermission, setSelectedPermission] = useState<number>(2);
 
+	useEffect(() => {
+		forgetUnscopedPat();
+	}, []);
+
 	// Check if we have a stored PAT when dialog opens
 	useEffect(() => {
-		if (open && typeof window !== "undefined") {
-			const savedPat = localStorage.getItem(STORAGE_KEY);
-			if (savedPat) {
-				// We have a stored PAT, switch to create mode to inform user
-				setMode("create");
-			}
+		if (open && readStoredPat(storageKey)) {
+			// We have a stored PAT, switch to create mode to inform user
+			setMode("create");
 		}
-	}, [open]);
+	}, [open, storageKey]);
 
 	const handleSelectExisting = async () => {
-		// Check if we have a stored PAT
-		const storedPat =
-			typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-
 		if (storedPat) {
 			const token = pats.data?.find((pat) =>
 				storedPat.startsWith(`pat_${pat.id}.`),
@@ -210,11 +254,7 @@ export function PatSelectorDialog({
 	};
 
 	const handleUseNewToken = () => {
-		// Save the PAT to localStorage for future use
-		if (typeof window !== "undefined") {
-			localStorage.setItem(STORAGE_KEY, newToken);
-		}
-
+		writeStoredPat(storageKey, newToken);
 		onPatSelected(newToken);
 		setShowTokenDialog(false);
 		onOpenChange(false);
@@ -252,25 +292,24 @@ export function PatSelectorDialog({
 					</DialogHeader>
 
 					<div className="space-y-6">
-						{typeof window !== "undefined" &&
-							localStorage.getItem(STORAGE_KEY) && (
-								<div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-									<div className="flex items-start gap-2">
-										<CheckIcon className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5" />
-										<div className="flex-1">
-											<p className="text-sm font-medium text-green-900 dark:text-green-100">
-												{t("storedTokenAvailable", "Stored Token Available")}
-											</p>
-											<p className="text-xs text-green-700 dark:text-green-300 mt-1">
-												{t(
-													"youHaveAPreviouslyCreatedTokenStoredYouCanUseItOrCreateANewOne",
-													"You have a previously created token stored. You can use it or create a new one.",
-												)}
-											</p>
-										</div>
+						{storedPat && (
+							<div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+								<div className="flex items-start gap-2">
+									<CheckIcon className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5" />
+									<div className="flex-1">
+										<p className="text-sm font-medium text-green-900 dark:text-green-100">
+											{t("storedTokenAvailable", "Stored Token Available")}
+										</p>
+										<p className="text-xs text-green-700 dark:text-green-300 mt-1">
+											{t(
+												"youHaveAPreviouslyCreatedTokenStoredYouCanUseItOrCreateANewOne",
+												"You have a previously created token stored. You can use it or create a new one.",
+											)}
+										</p>
 									</div>
 								</div>
-							)}
+							</div>
+						)}
 
 						<RadioGroup
 							value={mode}
@@ -294,8 +333,7 @@ export function PatSelectorDialog({
 
 						{mode === "select" ? (
 							<div className="space-y-4">
-								{typeof window !== "undefined" &&
-								!localStorage.getItem(STORAGE_KEY) ? (
+								{!storedPat ? (
 									<div className="text-center py-8">
 										<KeyRoundIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
 										<p className="text-muted-foreground mb-4">

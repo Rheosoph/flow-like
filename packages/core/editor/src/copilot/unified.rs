@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use flow_like_model_provider::history::HistoryThinking;
 use flow_like_types::Result;
 
 use crate::a2ui::SurfaceComponent;
@@ -73,6 +74,14 @@ impl Drop for CombinedScopeFlowIrClaim {
     }
 }
 
+/// The thinking level a native (Bits) FlowPilot run requests: the frontend's `off`, `low`, `mid`
+/// or `high`, and `low` when it sends nothing or a level this backend does not know.
+pub fn flowpilot_thinking(reasoning_effort: Option<&str>) -> HistoryThinking {
+    reasoning_effort
+        .and_then(|effort| effort.parse().ok())
+        .unwrap_or(HistoryThinking::Low)
+}
+
 /// The unified copilot that delegates to appropriate implementations
 pub struct UnifiedCopilot {
     state: Arc<FlowLikeState>,
@@ -88,6 +97,7 @@ pub struct UnifiedCopilot {
     read_only: bool,
     workflow_session_snapshot_sink: Option<WorkflowSessionSnapshotSink>,
     flow_ir_draft_mutation_hook: Option<FlowIrDraftMutationHook>,
+    thinking: Option<HistoryThinking>,
 }
 
 impl UnifiedCopilot {
@@ -113,6 +123,7 @@ impl UnifiedCopilot {
             read_only: false,
             workflow_session_snapshot_sink: None,
             flow_ir_draft_mutation_hook: None,
+            thinking: None,
         })
     }
 
@@ -138,6 +149,12 @@ impl UnifiedCopilot {
 
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    /// Thinking level for the board and UI models. A model that rejects it runs without it.
+    pub fn with_thinking(mut self, thinking: Option<HistoryThinking>) -> Self {
+        self.thinking = thinking;
         self
     }
 
@@ -406,6 +423,7 @@ impl UnifiedCopilot {
         copilot = copilot.with_request_identity_prompt(self.request_identity_prompt.clone());
         copilot = copilot.with_board_context_augmentation(self.board_context_augmentation.clone());
         copilot = copilot.with_read_only(self.read_only);
+        copilot = copilot.with_thinking(self.thinking);
         if let Some(sink) = self.workflow_session_snapshot_sink.as_ref() {
             copilot = copilot.with_workflow_session_snapshot_sink(sink.clone());
         }
@@ -481,7 +499,8 @@ impl UnifiedCopilot {
             self.profile.clone(),
             self.usage_context.clone(),
         )
-        .await?;
+        .await?
+        .with_thinking(self.thinking);
 
         // Convert history
         let ui_history = history

@@ -5,21 +5,24 @@ pub mod mlx_pack;
 use super::{
     device::{self, ModelEndpoint},
     factory_cache::{FactoryCache, MODEL_IDLE_TTL},
-    media::{MediaReader, RemoteMediaModel},
+    media::{MediaReader, OwnStorage, RemoteMediaModel, runs_on_users_machine},
 };
 use crate::{
     bit::Bit,
+    flow::execution::ExecutionEnvironment,
     state::{CompletionModelCapabilities, FlowLikeState},
     utils::execute::RuntimeLocator,
 };
+use flow_like_model_provider::egress::ProviderEgress;
+use flow_like_model_provider::llm::custom::{self, AmbientCredentials};
+use flow_like_model_provider::llm::external::{self, ExternalProvider};
 use flow_like_model_provider::llm::{
-    ModelLogic, anthropic::AnthropicModel, bedrock::BedrockModel, cohere::CohereModel,
-    deepseek::DeepseekModel, galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel,
-    huggingface::HuggingfaceModel, hyperbolic::HyperbolicModel, llamacpp::LlamaCppModel,
-    lmstudio::LMStudioModel, mira::MiraModel, mistral::MistralModel, moonshot::MoonshotModel,
-    mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
-    perplexity::PerplexityModel, together::TogetherModel, vertex::VertexModel,
-    voyageai::VoyageAIModel, xai::XAIModel,
+    ModelLogic, anthropic::AnthropicModel, cohere::CohereModel, deepseek::DeepseekModel,
+    galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel, huggingface::HuggingfaceModel,
+    hyperbolic::HyperbolicModel, llamacpp::LlamaCppModel, lmstudio::LMStudioModel, mira::MiraModel,
+    mistral::MistralModel, moonshot::MoonshotModel, ollama::OllamaModel, openai::OpenAIModel,
+    openrouter::OpenRouterModel, perplexity::PerplexityModel, together::TogetherModel,
+    vertex::VertexModel, voyageai::VoyageAIModel, xai::XAIModel,
 };
 use flow_like_model_provider::provider::{ModelApiSurface, ModelProvider, is_hosted_provider_name};
 use flow_like_types::{
@@ -79,45 +82,79 @@ pub struct ModelUsageContext {
     pub api_base_url: Option<String>,
 }
 
-/// `custom:vertex` falls back to Google application-default credentials when
-/// the Bit carries neither a service-account key nor an access token — i.e. to
-/// the host process's own identity. Refuse that in a server-side state.
-fn ensure_no_ambient_model_credentials(
+/// A server-side state never lends the host process's own cloud identity to a Bit.
+fn ambient_credentials(app_state: &FlowLikeState) -> AmbientCredentials {
+    if app_state.execution_environment == ExecutionEnvironment::Server {
+        AmbientCredentials::Forbidden
+    } else {
+        AmbientCredentials::Allowed
+    }
+}
+
+/// The stores that hold the files a run's media links name: the app's, the user's and the
+/// temporary one.
+async fn file_stores(
     app_state: &FlowLikeState,
-    provider: &str,
-    model_provider: &flow_like_model_provider::provider::ModelProvider,
-) -> Result<()> {
-    if provider != "custom:vertex" {
-        return Ok(());
+) -> Vec<flow_like_storage::files::store::FlowLikeStore> {
+    let config = app_state.config.read().await;
+    let stores = &config.stores;
+    [
+        &stores.app_storage_store,
+        &stores.user_store,
+        &stores.temporary_store,
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .collect()
+}
+
+/// The app's storage on the user's own machine, the only files whose desktop asset links a model
+/// call reads.
+async fn local_storage_roots(app_state: &FlowLikeState) -> Vec<std::path::PathBuf> {
+    if !runs_on_users_machine(app_state.execution_environment) {
+        return Vec::new();
     }
-    let has_explicit = model_provider.params.as_ref().is_some_and(|params| {
-        [
-            "service_account_json",
-            "service_account_key",
-            "access_token",
-        ]
+    file_stores(app_state)
+        .await
         .iter()
-        .any(|key| {
-            params
-                .get(*key)
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty())
+        .filter_map(|store| match store {
+            flow_like_storage::files::store::FlowLikeStore::Local(store) => store
+                .directory_to_filesystem(&flow_like_storage::Path::from(""))
+                .ok(),
+            _ => None,
         })
-    });
-    if has_explicit {
-        return Ok(());
+        .collect()
+}
+
+/// The object store of a server run's storage credentials, whose links a model call fetches
+/// even when the store is internal or serves plain HTTP.
+async fn own_storage(app_state: &FlowLikeState) -> OwnStorage {
+    if app_state.execution_environment != ExecutionEnvironment::Server {
+        return OwnStorage::default();
     }
-    #[cfg(feature = "flow-metadata")]
-    {
-        app_state
-            .execution_environment
-            .ensure_no_ambient_credentials(provider, "application_default")
-    }
-    #[cfg(not(feature = "flow-metadata"))]
-    {
-        let _ = app_state;
-        Ok(())
-    }
+    OwnStorage::signed_by(file_stores(app_state).await).await
+}
+
+/// The secret-free view of a private Bit that a server run receives: at most its model id.
+fn holds_only_model_id(provider: &ModelProvider) -> bool {
+    provider
+        .params
+        .as_ref()
+        .is_none_or(|params| params.keys().all(|key| key == "model_id"))
+}
+
+/// A rotated key takes effect at once, a client confined to one egress mode never serves
+/// another, and a Bit that copies another's id and revision never receives its client.
+fn custom_model_key(bit: &Bit, egress: ProviderEgress) -> String {
+    let parameters = json::to_vec(&bit.parameters).unwrap_or_default();
+    let parameters = blake3::hash(&parameters).to_hex();
+    format!(
+        "{}@{}#{egress:?}#{}",
+        bit.id,
+        bit.updated,
+        &parameters[..32]
+    )
 }
 
 fn insert_usage_headers(
@@ -295,7 +332,9 @@ impl ModelFactory {
             "openrouter" => Arc::new(OpenRouterModel::new(model_provider, provider_config).await?),
             "voyageai" => Arc::new(VoyageAIModel::new(model_provider, provider_config).await?),
             "ollama" => Arc::new(OllamaModel::new(model_provider, provider_config).await?),
-            "lmstudio" => Arc::new(LMStudioModel::from_provider(model_provider).await?),
+            "lmstudio" => {
+                Arc::new(LMStudioModel::from_provider(model_provider, ProviderEgress::Open).await?)
+            }
             "llama.cpp" | "llamacpp" => {
                 Arc::new(LlamaCppModel::from_provider(model_provider).await?)
             }
@@ -315,61 +354,60 @@ impl ModelFactory {
         Ok(model)
     }
 
+    /// The ambient check runs before the cache lookup, so a client built where the
+    /// host's identity was allowed is never handed to a state that forbids it.
     async fn build_custom_model(
         &self,
         bit: &Bit,
         provider: &str,
         model_provider: &ModelProvider,
+        ambient: AmbientCredentials,
+        egress: ProviderEgress,
     ) -> Result<Arc<dyn ModelLogic>> {
+        custom::ensure_no_ambient_credentials(provider, model_provider, ambient)?;
         self.models
-            .get_or_build(&bit.id, || Self::custom_model(provider, model_provider))
+            .get_or_build(&custom_model_key(bit, egress), || {
+                custom::build(provider, model_provider, egress, ambient)
+            })
             .await
     }
 
-    #[allow(clippy::cognitive_complexity)]
-    async fn custom_model(
+    /// A `custom:*` Bit. A server run reaches the private Bits of its profile only through the
+    /// relay, subscriptions sign in on the owner's desktop, and any other Bit carries its key.
+    async fn build_private_model(
+        &self,
+        bit: &Bit,
         provider: &str,
         model_provider: &ModelProvider,
+        app_state: &Arc<FlowLikeState>,
     ) -> Result<Arc<dyn ModelLogic>> {
-        let model: Arc<dyn ModelLogic> = match provider {
-            "custom:openai" => Arc::new(
-                OpenAIModel::from_provider_with_surface(
-                    model_provider,
-                    direct_openai_surface(model_provider),
-                )
-                .await?,
-            ),
-            "custom:bedrock" => Arc::new(BedrockModel::from_provider(model_provider).await?),
-            "custom:anthropic" => Arc::new(AnthropicModel::from_provider(model_provider).await?),
-            "custom:gemini" => Arc::new(GeminiModel::from_provider(model_provider).await?),
-            "custom:groq" => Arc::new(GroqModel::from_provider(model_provider).await?),
-            "custom:cohere" => Arc::new(CohereModel::from_provider(model_provider).await?),
-            "custom:perplexity" => Arc::new(PerplexityModel::from_provider(model_provider).await?),
-            "custom:xai" => Arc::new(XAIModel::from_provider(model_provider).await?),
-            "custom:deepseek" => Arc::new(DeepseekModel::from_provider(model_provider).await?),
-            "custom:mistral" => Arc::new(MistralModel::from_provider(model_provider).await?),
-            "custom:ollama" => Arc::new(OllamaModel::from_provider(model_provider).await?),
-            "custom:huggingface" => {
-                Arc::new(HuggingfaceModel::from_provider(model_provider).await?)
-            }
-            "custom:together" => Arc::new(TogetherModel::from_provider(model_provider).await?),
-            "custom:openrouter" => Arc::new(OpenRouterModel::from_provider(model_provider).await?),
-            "custom:voyageai" => Arc::new(VoyageAIModel::from_provider(model_provider).await?),
-            "custom:hyperbolic" => Arc::new(HyperbolicModel::from_provider(model_provider).await?),
-            "custom:moonshot" => Arc::new(MoonshotModel::from_provider(model_provider).await?),
-            "custom:galadriel" => Arc::new(GaladrielModel::from_provider(model_provider).await?),
-            "custom:mira" => Arc::new(MiraModel::from_provider(model_provider).await?),
-            "custom:mozilla" => Arc::new(MozillaModel::from_provider(model_provider).await?),
-            "custom:lmstudio" => Arc::new(LMStudioModel::from_provider(model_provider).await?),
-            "custom:vertex" => Arc::new(VertexModel::from_provider(model_provider).await?),
-            _ => {
+        if let Some(relay) = app_state
+            .custom_bit_relay
+            .as_ref()
+            .filter(|relay| relay.serves(bit))
+        {
+            return relay.chat_model(bit);
+        }
+        if let Some(kind) = ExternalProvider::from_provider_name(provider) {
+            if app_state.execution_environment == ExecutionEnvironment::Server
+                && holds_only_model_id(model_provider)
+            {
                 return Err(flow_like_types::anyhow!(
-                    "Unsupported custom provider: {}",
-                    provider
+                    "{} runs on desktop only",
+                    kind.label()
                 ));
             }
-        };
-        Ok(model)
+            let capabilities = FlowLikeState::completion_model_capabilities(app_state).await;
+            return external::build(model_provider, capabilities.local_credentials).await;
+        }
+        self.build_custom_model(
+            bit,
+            provider,
+            model_provider,
+            ambient_credentials(app_state),
+            app_state.model_egress,
+        )
+        .await
     }
 
     /// MLX and Local GGUF Bits run in a runtime this host starts: the MLX bridge or a
@@ -444,7 +482,11 @@ impl ModelFactory {
     }
 
     /// Wraps every model except MLX in [`RemoteMediaModel`], outside the cache, so fetches use
-    /// the caller's execution environment and inline only media the provider's client reads.
+    /// the caller's execution environment and `invoke` and agents alike send media the way the
+    /// provider's client, API surface and endpoint read it. A server run also fetches the links
+    /// into the object store of its storage credentials.
+    /// A private Bit behind the relay downloads nothing here: its hop carries links as the run
+    /// holds them, and the API resolves them for the provider.
     /// MLX hands out its cached runtime itself, whose identity `mlx_e2e` asserts.
     pub async fn build(
         &self,
@@ -462,19 +504,26 @@ impl ModelFactory {
                 "SystemOne Bits answer typed questions. Use the Invoke SystemOne node instead of chat."
             ));
         }
-        let environment = app_state.execution_environment;
+        let relayed = app_state
+            .custom_bit_relay
+            .as_ref()
+            .is_some_and(|relay| relay.serves(bit));
         let model = self
-            .build_inner(bit, app_state, access_token, usage_context)
+            .build_inner(bit, app_state.clone(), access_token, usage_context)
             .await?;
-        if bit.is_mlx_model() {
+        if relayed || bit.is_mlx_model() {
             return Ok(model);
         }
-        let reader = bit
-            .try_to_provider()
-            .map_or(MediaReader::TextOnly, |provider| {
-                MediaReader::for_provider(&provider.provider_name)
-            });
-        Ok(Arc::new(RemoteMediaModel::new(model, environment, reader)))
+        let Some(provider) = bit.try_to_provider() else {
+            return Ok(model);
+        };
+        Ok(Arc::new(RemoteMediaModel::direct(
+            model,
+            app_state.execution_environment,
+            MediaReader::for_provider(&provider),
+            local_storage_roots(&app_state).await,
+            own_storage(&app_state).await,
+        )))
     }
 
     #[allow(clippy::cognitive_complexity)]
@@ -504,21 +553,8 @@ impl ModelFactory {
         }
 
         if provider.starts_with("custom:") {
-            if flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
-                &provider,
-            )
-            .is_some()
-            {
-                let capabilities = FlowLikeState::completion_model_capabilities(&app_state).await;
-                return flow_like_model_provider::llm::external::build(
-                    &model_provider,
-                    capabilities.local_credentials,
-                )
-                .await;
-            }
-            ensure_no_ambient_model_credentials(&app_state, &provider, &model_provider)?;
             return self
-                .build_custom_model(bit, &provider, &model_provider)
+                .build_private_model(bit, &provider, &model_provider, &app_state)
                 .await;
         }
 
@@ -722,11 +758,10 @@ pub async fn start_gc(state: Arc<ModelFactory>) {
 
 #[cfg(test)]
 mod tests {
-    use std::str;
-
     use super::*;
     use crate::{
         bit::{BitModelClassification, BitTypes, LLMParameters},
+        models::test_http::{CapturedRequest, capture_one_http_request},
         state::FlowLikeConfig,
     };
     use flow_like_model_provider::history::{History, HistoryMessage, Role};
@@ -736,77 +771,7 @@ mod tests {
     };
     use flow_like_storage::files::store::FlowLikeStore;
     use std::time::SystemTime;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-
-    struct CapturedRequest {
-        request_line: String,
-        headers: String,
-        body: flow_like_types::Value,
-    }
-
-    async fn capture_one_http_request(listener: TcpListener) -> CapturedRequest {
-        let (mut stream, _) = listener.accept().await.expect("accept proxy request");
-        let mut bytes = Vec::new();
-        let mut buffer = [0_u8; 4096];
-
-        let (header_end, content_length) = loop {
-            let read = stream.read(&mut buffer).await.expect("read proxy request");
-            assert!(read > 0, "connection closed before request headers");
-            bytes.extend_from_slice(&buffer[..read]);
-
-            let Some(header_end) = bytes
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .map(|position| position + 4)
-            else {
-                continue;
-            };
-            let headers = str::from_utf8(&bytes[..header_end]).expect("UTF-8 request headers");
-            let content_length = headers
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length").then(|| {
-                        value
-                            .trim()
-                            .parse::<usize>()
-                            .expect("numeric content length")
-                    })
-                })
-                .unwrap_or_default();
-            break (header_end, content_length);
-        };
-
-        while bytes.len() < header_end + content_length {
-            let read = stream.read(&mut buffer).await.expect("read request body");
-            assert!(read > 0, "connection closed before request body");
-            bytes.extend_from_slice(&buffer[..read]);
-        }
-
-        let headers = str::from_utf8(&bytes[..header_end])
-            .expect("UTF-8 request headers")
-            .to_string();
-        let request_line = headers.lines().next().expect("request line").to_string();
-        let body =
-            flow_like_types::json::from_slice(&bytes[header_end..header_end + content_length])
-                .expect("JSON request body");
-
-        stream
-            .write_all(
-                b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nstop",
-            )
-            .await
-            .expect("write mock response");
-
-        CapturedRequest {
-            request_line,
-            headers,
-            body,
-        }
-    }
+    use tokio::net::TcpListener;
 
     fn completion_bit(id: &str, provider_name: &str) -> Bit {
         completion_bit_with_surface(id, provider_name, None)
@@ -1678,6 +1643,452 @@ mod tests {
             .expect("one build waiting on its device must not block another");
 
             assert!(first.is_ok() && second.is_ok());
+        }
+    }
+
+    mod private_bits {
+        use super::*;
+        use crate::models::custom_bit_relay::CustomBitRelay;
+        use flow_like_model_provider::history::{
+            Content, ContentType, HistoryThinking, MessageContent,
+        };
+        use flow_like_types::json::json;
+
+        const WAV: &str = "data:audio/wav;base64,UklGRiQAAABXQVZF";
+        const OWNER_KEY: &str = "sk-owner-secret";
+
+        fn memory_state() -> FlowLikeState {
+            let store = FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ));
+            FlowLikeState::new(
+                FlowLikeConfig::with_default_store(store),
+                crate::utils::http::HTTPClient::new_without_refetch(),
+            )
+        }
+
+        fn relay(callback: &str, ids: &[&str]) -> Option<Arc<CustomBitRelay>> {
+            Some(Arc::new(CustomBitRelay::new(
+                callback,
+                "app-1",
+                "exec-jwt",
+                ids.iter().map(|id| id.to_string()),
+            )))
+        }
+
+        fn private_bit(id: &str, provider_name: &str, endpoint: &str) -> Bit {
+            Bit {
+                id: id.to_string(),
+                bit_type: BitTypes::Llm,
+                updated: "2026-10-01T00:00:00Z".to_string(),
+                parameters: flow_like_types::json::to_value(LLMParameters {
+                    context_length: 200_000,
+                    model_classification: BitModelClassification::default(),
+                    provider: ModelProvider {
+                        api_surface: Some(ModelApiSurface::ChatCompletions),
+                        provider_name: provider_name.to_string(),
+                        model_id: Some("upstream-model".to_string()),
+                        version: None,
+                        params: Some(HashMap::from([
+                            ("api_key".to_string(), json!(OWNER_KEY)),
+                            ("endpoint".to_string(), json!(endpoint)),
+                            ("model_id".to_string(), json!("upstream-model")),
+                        ])),
+                    },
+                })
+                .unwrap(),
+                ..Bit::default()
+            }
+        }
+
+        /// A user's question `text` about `media`.
+        fn question(text: &str, media: Vec<Content>) -> History {
+            let text = Content::Text {
+                content_type: ContentType::Text,
+                text: text.to_string(),
+            };
+            History::new(
+                "ignored".to_string(),
+                vec![HistoryMessage {
+                    role: Role::User,
+                    content: MessageContent::Contents(std::iter::once(text).chain(media).collect()),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    annotations: None,
+                }],
+            )
+        }
+
+        fn question_with_wav() -> History {
+            let mut history = question(
+                "What is said here?",
+                vec![Content::Audio {
+                    content_type: ContentType::AudioUrl,
+                    audio_url: WAV.to_string(),
+                    media_type: None,
+                    additional_params: None,
+                }],
+            );
+            history.thinking = Some(HistoryThinking::High);
+            history
+        }
+
+        async fn captured_call(
+            state: FlowLikeState,
+            bit: &Bit,
+            listener: TcpListener,
+        ) -> CapturedRequest {
+            captured_call_with(state, bit, listener, &question_with_wav()).await
+        }
+
+        async fn captured_call_with(
+            state: FlowLikeState,
+            bit: &Bit,
+            listener: TcpListener,
+            history: &History,
+        ) -> CapturedRequest {
+            let capture = tokio::spawn(capture_one_http_request(listener));
+            let model = ModelFactory::new()
+                .build(bit, Arc::new(state), None, None)
+                .await
+                .expect("the model builds without reaching the network");
+            assert!(
+                model.invoke(history, None).await.is_err(),
+                "the mock answers HTTP 400"
+            );
+            tokio::time::timeout(Duration::from_secs(10), capture)
+                .await
+                .expect("the request arrives")
+                .expect("capture task")
+        }
+
+        fn sent_parts(request: &CapturedRequest) -> Vec<flow_like_types::Value> {
+            request.body["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .filter_map(|message| message["content"].as_array())
+                .flatten()
+                .cloned()
+                .collect()
+        }
+
+        /// Accepts https connections on loopback without answering them, and counts them.
+        async fn media_host() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let base = format!("https://{}", listener.local_addr().unwrap());
+            let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = hits.clone();
+            tokio::spawn(async move {
+                while let Ok((socket, _)) = listener.accept().await {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    drop(socket);
+                }
+            });
+            (base, hits)
+        }
+
+        /// A question about a PDF and a video the run holds as links.
+        fn question_with_links(base: &str) -> History {
+            question(
+                "Summarise these.",
+                vec![
+                    Content::Document {
+                        content_type: ContentType::DocumentUrl,
+                        document_url: format!("{base}/report.pdf?X-Amz-Signature=secret"),
+                        media_type: Some("application/pdf".to_string()),
+                        additional_params: None,
+                    },
+                    Content::Video {
+                        content_type: ContentType::VideoUrl,
+                        video_url: format!("{base}/clip.mp4"),
+                        media_type: Some("video/mp4".to_string()),
+                        additional_params: None,
+                    },
+                ],
+            )
+        }
+
+        #[tokio::test]
+        async fn a_relayed_bit_sends_links_unchanged_and_the_run_downloads_nothing() {
+            let (media, hits) = media_host().await;
+            let question = question_with_links(&media);
+
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let callback = format!("http://{}", listener.local_addr().unwrap());
+            let mut state = memory_state();
+            state.custom_bit_relay = relay(&callback, &["my-claude"]);
+            let bit = private_bit("my-claude", "custom:anthropic", "https://llm.owner.example");
+
+            let request = captured_call_with(state, &bit, listener, &question).await;
+
+            assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+            let parts = sent_parts(&request);
+            assert!(
+                parts.iter().any(|part| part["document_url"]
+                    == format!("{media}/report.pdf?X-Amz-Signature=secret")),
+                "{parts:?}"
+            );
+            assert!(
+                parts
+                    .iter()
+                    .any(|part| part["video_url"] == format!("{media}/clip.mp4")),
+                "{parts:?}"
+            );
+            let body = request.body.to_string();
+            assert!(!body.contains("attachment omitted"), "{body}");
+            assert!(!body.contains("data:"), "{body}");
+
+            let direct = private_bit("my-claude", "custom:anthropic", "https://llm.owner.example");
+            let model = ModelFactory::new()
+                .build(&direct, Arc::new(memory_state()), None, None)
+                .await
+                .expect("the model builds without reaching the network");
+            let error = model
+                .invoke(&question, None)
+                .await
+                .expect_err("the PDF its provider needs inline cannot be fetched")
+                .to_string();
+            assert!(
+                hits.load(std::sync::atomic::Ordering::SeqCst) > 0,
+                "a direct call fetches the PDF its provider needs inline"
+            );
+            assert!(
+                error.contains("document (application/pdf) at host '127.0.0.1'"),
+                "{error}"
+            );
+            assert!(!error.contains("X-Amz-Signature"), "{error}");
+        }
+
+        #[tokio::test]
+        async fn agents_of_a_direct_bit_fetch_the_media_their_provider_needs_inline() {
+            let (media, hits) = media_host().await;
+            let question = question_with_links(&media);
+            let (prompt, mut messages) = question
+                .extract_prompt_and_history()
+                .expect("convert history into rig messages");
+            messages.push(prompt);
+            let request = rig::completion::CompletionRequest {
+                model: None,
+                preamble: None,
+                chat_history: rig::OneOrMany::many(messages).expect("a prompt"),
+                documents: Vec::new(),
+                tools: Vec::new(),
+                temperature: None,
+                max_tokens: None,
+                tool_choice: None,
+                additional_params: None,
+                output_schema: None,
+            };
+            let direct = private_bit("my-claude", "custom:anthropic", "https://llm.owner.example");
+            let model = ModelFactory::new()
+                .build(&direct, Arc::new(memory_state()), None, None)
+                .await
+                .expect("the model builds without reaching the network");
+
+            let error = model
+                .provider()
+                .await
+                .expect("the provider's client")
+                .into_client()
+                .completion_model("upstream-model")
+                .completion(request)
+                .await
+                .expect_err("the PDF its provider needs inline cannot be fetched")
+                .to_string();
+
+            assert!(
+                hits.load(std::sync::atomic::Ordering::SeqCst) > 0,
+                "an agent's request fetches the PDF like invoke does"
+            );
+            assert!(
+                error.contains("document (application/pdf) at host '127.0.0.1'"),
+                "{error}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_relayed_bit_calls_the_run_relay_with_the_run_token_and_no_owner_secret() {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let callback = format!("http://{}", listener.local_addr().unwrap());
+            let mut state = memory_state();
+            state.execution_environment = ExecutionEnvironment::Server;
+            state.custom_bit_relay = relay(&callback, &["my-claude"]);
+            let bit = private_bit("my-claude", "custom:anthropic", "https://llm.owner.example");
+
+            let request = captured_call(state, &bit, listener).await;
+
+            assert_eq!(
+                request.request_line,
+                "POST /api/v1/execution/apps/app-1/models/chat/completions HTTP/1.1"
+            );
+            let headers = request.headers.to_ascii_lowercase();
+            assert!(
+                headers.contains("authorization: bearer exec-jwt\r\n"),
+                "{headers}"
+            );
+            assert_eq!(request.body["model"], "my-claude");
+            assert_eq!(request.body["thinking"], "high");
+            let sent = format!("{headers}{}", request.body);
+            assert!(!sent.contains(OWNER_KEY), "{sent}");
+            assert!(!sent.contains("llm.owner.example"), "{sent}");
+            let audio = sent_parts(&request)
+                .into_iter()
+                .find(|part| part.get("audio_url").is_some())
+                .expect("the wav part travels to the relay");
+            assert_eq!(audio["type"], "audio_url");
+            assert_eq!(audio["audio_url"], WAV);
+            assert_eq!(audio["media_type"], "audio/wav");
+        }
+
+        #[tokio::test]
+        async fn board_built_bits_and_runs_without_a_relay_call_their_provider_directly() {
+            for relayed in [false, true] {
+                let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+                let base = format!("http://{}", listener.local_addr().unwrap());
+                let mut state = memory_state();
+                let id = if relayed {
+                    state.custom_bit_relay = relay(&base, &["my-openai"]);
+                    "b3-board-built-openai"
+                } else {
+                    "my-openai"
+                };
+                let bit = private_bit(id, "custom:openai", &format!("{base}/v1"));
+
+                let request = captured_call(state, &bit, listener).await;
+
+                assert_eq!(
+                    request.request_line, "POST /v1/chat/completions HTTP/1.1",
+                    "relay registered: {relayed}"
+                );
+                assert!(
+                    request
+                        .headers
+                        .to_ascii_lowercase()
+                        .contains(&format!("authorization: bearer {OWNER_KEY}\r\n")),
+                    "relay registered: {relayed}"
+                );
+                assert_eq!(request.body["model"], "upstream-model");
+            }
+        }
+
+        #[tokio::test]
+        async fn subscription_bits_are_never_relayed_and_run_on_desktop_only() {
+            for (provider, label) in [
+                ("custom:codex", "Codex (ChatGPT)"),
+                ("custom:github-copilot", "GitHub Copilot"),
+                ("custom:microsoft-copilot", "Microsoft 365 Copilot"),
+                ("custom:claude-code", "Claude Code"),
+            ] {
+                let mut state = memory_state();
+                state.execution_environment = ExecutionEnvironment::Server;
+                state.custom_bit_relay = relay("http://127.0.0.1:9", &["my-subscription"]);
+                let mut dispatched =
+                    private_bit("my-subscription", provider, "https://subscription.example");
+                dispatched.parameters["provider"]["params"] = json!({"model_id": "upstream-model"});
+                assert!(
+                    !state.custom_bit_relay.as_ref().unwrap().serves(&dispatched),
+                    "{provider}"
+                );
+
+                let error = match ModelFactory::new()
+                    .build(&dispatched, Arc::new(state), None, None)
+                    .await
+                {
+                    Ok(_) => panic!("{provider}: a server run cannot sign in to a subscription"),
+                    Err(error) => error.to_string(),
+                };
+
+                assert_eq!(error, format!("{label} runs on desktop only"));
+            }
+        }
+
+        #[tokio::test]
+        async fn a_server_state_still_builds_a_subscription_bit_that_carries_its_token() {
+            let mut state = memory_state();
+            state.execution_environment = ExecutionEnvironment::Server;
+            let copilot = private_bit(
+                "my-copilot",
+                "custom:github-copilot",
+                "https://subscription.example",
+            );
+
+            let built = ModelFactory::new()
+                .build(&copilot, Arc::new(state), None, None)
+                .await;
+
+            assert!(built.is_ok(), "{:?}", built.err());
+        }
+
+        #[tokio::test]
+        async fn custom_clients_are_cached_per_revision_egress_and_parameters() {
+            let factory = ModelFactory::new();
+            let open = Arc::new(memory_state());
+            let bit = private_bit("my-openai", "custom:openai", "https://llm.example/v1");
+            let build = |bit: Bit, state: Arc<FlowLikeState>| {
+                let factory = &factory;
+                async move { factory.build_inner(&bit, state, None, None).await.unwrap() }
+            };
+
+            let first = build(bit.clone(), open.clone()).await;
+            assert!(Arc::ptr_eq(&first, &build(bit.clone(), open.clone()).await));
+
+            let rotated = Bit {
+                updated: "2026-10-02T00:00:00Z".to_string(),
+                ..bit.clone()
+            };
+            assert!(!Arc::ptr_eq(&first, &build(rotated, open.clone()).await));
+
+            let mut forged = bit.clone();
+            forged.parameters["provider"]["params"]["endpoint"] =
+                json!("https://attacker.example/v1");
+            assert!(!Arc::ptr_eq(&first, &build(forged, open.clone()).await));
+
+            let mut guarded = memory_state();
+            guarded.model_egress = ProviderEgress::Public;
+            assert!(!Arc::ptr_eq(&first, &build(bit, Arc::new(guarded)).await));
+        }
+
+        #[tokio::test]
+        async fn a_server_run_sends_media_from_its_internal_store_inline() {
+            use crate::models::media::tests::{PNG, Reply, s3_store, serve};
+            use flow_like_model_provider::history::ImageUrl;
+            use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+
+            let store = serve(vec![("/content/tmp/user/me/photo.png", Reply::ok(PNG))]).await;
+            let mut state = FlowLikeState::new(
+                FlowLikeConfig::with_default_store(s3_store(&store.base)),
+                crate::utils::http::HTTPClient::new_without_refetch(),
+            );
+            state.execution_environment = ExecutionEnvironment::Server;
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+            let bit = private_bit("my-openai", "custom:openai", &endpoint);
+            let photo = question(
+                "What does the photo show?",
+                vec![Content::Image {
+                    content_type: ContentType::ImageUrl,
+                    image_url: ImageUrl {
+                        url: store.url("/content/tmp/user/me/photo.png?X-Amz-Signature=secret"),
+                        detail: None,
+                        media_type: None,
+                        additional_params: None,
+                    },
+                }],
+            );
+
+            let request = captured_call_with(state, &bit, listener, &photo).await;
+
+            assert_eq!(store.hits(), 1);
+            let image = sent_parts(&request)
+                .into_iter()
+                .find(|part| part.get("image_url").is_some())
+                .expect("the photo travels to the provider");
+            assert_eq!(
+                image["image_url"]["url"],
+                format!("data:image/png;base64,{}", STANDARD.encode(PNG))
+            );
         }
     }
 }

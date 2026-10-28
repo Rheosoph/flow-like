@@ -9,7 +9,8 @@ use crate::entity::llm_usage_tracking;
 use crate::{
     entity::bit,
     error::ApiError,
-    middleware::jwt::AppUser,
+    execution::subject::account_user_id,
+    middleware::jwt::{AppUser, ExecutorUse},
     state::AppState,
     usage_accounting::{
         HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
@@ -384,9 +385,9 @@ fn surface_route(surface: ModelApiSurface) -> &'static str {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct UsageRequestContext {
-    pub(super) app_id: Option<String>,
-    pub(super) user_id: String,
-    pub(super) technical_user_id: Option<String>,
+    pub(crate) app_id: Option<String>,
+    pub(crate) user_id: String,
+    pub(crate) technical_user_id: Option<String>,
 }
 
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -412,7 +413,7 @@ async fn resolve_usage_context(
     }
 
     if let AppUser::APIKey(api_key) = user {
-        user.execution_app_permission(&api_key.app_id, state)
+        user.execution_app_permission(&api_key.app_id, state, ExecutorUse::Read)
             .await?;
         return Ok(UsageRequestContext {
             app_id: Some(api_key.app_id.clone()),
@@ -423,7 +424,8 @@ async fn resolve_usage_context(
 
     let app_id = header_string(headers, APP_ID_HEADER);
     if let Some(app_id) = app_id.as_deref() {
-        user.execution_app_permission(app_id, state).await?;
+        user.execution_app_permission(app_id, state, ExecutorUse::Read)
+            .await?;
     }
 
     Ok(UsageRequestContext {
@@ -1488,7 +1490,7 @@ pub(super) fn extract_usage_from_body(body: &[u8]) -> Option<ProviderUsageSnapsh
     None
 }
 
-async fn track_llm_usage(
+pub(crate) async fn track_llm_usage(
     state: &AppState,
     user_sub: &str,
     model: &str,
@@ -1505,29 +1507,21 @@ async fn track_llm_usage(
     raw_usage: Option<JsonValue>,
     settlement_status: &'static str,
 ) -> Result<(), flow_like_types::Error> {
-    use chrono::Utc;
-    use llm_usage_tracking::ActiveModel;
-    let now = Utc::now().fixed_offset();
-    let record = ActiveModel {
-        id: Set(invocation_id
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(create_id)),
-        model_id: Set(model.to_string()),
-        provider: Set(provider.map(ToOwned::to_owned)),
-        endpoint: Set(endpoint.map(ToOwned::to_owned)),
-        invocation_id: Set(invocation_id.map(ToOwned::to_owned)),
-        provider_request_id: Set(provider_request_id.map(ToOwned::to_owned)),
-        raw_usage: Set(raw_usage.clone()),
-        token_in: Set(token_in),
-        token_out: Set(token_out),
-        latency: Set(Some(latency_ms)),
-        user_id: Set(Some(user_sub.to_string())),
-        technical_user_id: Set(technical_user_id.map(ToOwned::to_owned)),
-        app_id: Set(app_id.map(ToOwned::to_owned)),
-        price: Set(price),
-        created_at: Set(now),
-        updated_at: Set(now),
-    };
+    let record = usage_row(
+        user_sub,
+        model,
+        token_in,
+        token_out,
+        price,
+        latency_ms,
+        app_id,
+        technical_user_id,
+        provider,
+        endpoint,
+        invocation_id,
+        provider_request_id,
+        raw_usage.clone(),
+    );
     settle_hosted_usage_invocation(
         state,
         invocation_id,
@@ -1554,6 +1548,45 @@ async fn track_llm_usage(
         .await?;
 
     Ok(())
+}
+
+/// A run's placeholder or pseudonymous subject is recorded without a user.
+fn usage_row(
+    user_sub: &str,
+    model: &str,
+    token_in: i64,
+    token_out: i64,
+    price: i64,
+    latency_ms: f64,
+    app_id: Option<&str>,
+    technical_user_id: Option<&str>,
+    provider: Option<&str>,
+    endpoint: Option<&str>,
+    invocation_id: Option<&str>,
+    provider_request_id: Option<&str>,
+    raw_usage: Option<JsonValue>,
+) -> llm_usage_tracking::ActiveModel {
+    let now = chrono::Utc::now().fixed_offset();
+    llm_usage_tracking::ActiveModel {
+        id: Set(invocation_id
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(create_id)),
+        model_id: Set(model.to_string()),
+        provider: Set(provider.map(ToOwned::to_owned)),
+        endpoint: Set(endpoint.map(ToOwned::to_owned)),
+        invocation_id: Set(invocation_id.map(ToOwned::to_owned)),
+        provider_request_id: Set(provider_request_id.map(ToOwned::to_owned)),
+        raw_usage: Set(raw_usage),
+        token_in: Set(token_in),
+        token_out: Set(token_out),
+        latency: Set(Some(latency_ms)),
+        user_id: Set(account_user_id(user_sub).map(ToOwned::to_owned)),
+        technical_user_id: Set(technical_user_id.map(ToOwned::to_owned)),
+        app_id: Set(app_id.map(ToOwned::to_owned)),
+        price: Set(price),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
 }
 
 // Turn a stream of Bytes into a Body verbatim.
@@ -2137,5 +2170,37 @@ mod tests {
     fn test_estimate_payload_tokens_uses_max_output_tokens() {
         let body = serde_json::json!({"input": "hello", "max_output_tokens": 256});
         assert!(estimate_payload_tokens(&body) > 256);
+    }
+
+    #[test]
+    fn usage_rows_name_a_user_only_for_account_subjects() {
+        for (subject, user) in [
+            ("user-1", Some("user-1")),
+            ("frontend:event-1:run-run-1", None),
+            ("frontend:event-1:anonymous-session", None),
+            ("sink:sink-1", None),
+            ("inbound:event-1", None),
+            ("regression:suite-1", None),
+            ("", None),
+        ] {
+            let row = usage_row(
+                subject,
+                "model",
+                10,
+                5,
+                0,
+                12.5,
+                Some("app-1"),
+                None,
+                Some("custom:openai"),
+                Some("models.example.com"),
+                None,
+                None,
+                None,
+            );
+            assert_eq!(row.user_id, Set(user.map(ToOwned::to_owned)), "{subject:?}");
+            assert_eq!(row.endpoint, Set(Some("models.example.com".to_owned())));
+            assert_eq!(row.price, Set(0));
+        }
     }
 }

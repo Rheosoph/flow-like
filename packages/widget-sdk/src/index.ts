@@ -39,6 +39,7 @@ export * from "./mount";
 export * from "./protocol";
 export * from "./microphone";
 export * from "./upload";
+export * from "./resource";
 export * from "./theme";
 export * from "./validate";
 

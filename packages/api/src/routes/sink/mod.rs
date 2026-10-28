@@ -5,6 +5,7 @@
 //! - HTTP sink triggers (/sink/trigger/http/{app_id}/{path})
 //! - Telegram webhook triggers (/sink/trigger/telegram/{event_id})
 //! - Discord interactions webhook triggers (/sink/trigger/discord/{event_id})
+//! - Geofence crossings reported by devices (/sink/trigger/geofence/{event_id})
 //! - Service-to-service triggers (/sink/trigger/async) - for cron, discord bot, telegram bot
 //! - Listing all active sinks for user's apps
 //!
@@ -14,9 +15,11 @@
 use crate::state::AppState;
 use axum::{
     Router,
-    routing::{delete, get, head, options, patch, post, put},
+    routing::{get, patch, post},
 };
 
+pub mod authority;
+pub mod geofence;
 pub mod management;
 pub mod service;
 pub mod trigger;
@@ -48,27 +51,15 @@ pub fn routes(mail_max_bytes: usize) -> Router<AppState> {
         // List sink configs by type (for discord/telegram bots to sync)
         .route("/configs", get(trigger::get_sink_configs))
         // HTTP sink trigger - matches any method and path after app_id
-        .route("/trigger/http/{app_id}/{*path}", get(trigger::trigger_http))
         .route(
             "/trigger/http/{app_id}/{*path}",
-            post(trigger::trigger_http),
-        )
-        .route("/trigger/http/{app_id}/{*path}", put(trigger::trigger_http))
-        .route(
-            "/trigger/http/{app_id}/{*path}",
-            patch(trigger::trigger_http),
-        )
-        .route(
-            "/trigger/http/{app_id}/{*path}",
-            delete(trigger::trigger_http),
-        )
-        .route(
-            "/trigger/http/{app_id}/{*path}",
-            head(trigger::trigger_http),
-        )
-        .route(
-            "/trigger/http/{app_id}/{*path}",
-            options(trigger::trigger_http),
+            get(trigger::trigger_http)
+                .post(trigger::trigger_http)
+                .put(trigger::trigger_http)
+                .patch(trigger::trigger_http)
+                .delete(trigger::trigger_http)
+                .head(trigger::trigger_http)
+                .options(trigger::trigger_http),
         )
         // Telegram webhook trigger - async execution with secret token verification
         .route(
@@ -79,5 +70,10 @@ pub fn routes(mail_max_bytes: usize) -> Router<AppState> {
         .route(
             "/trigger/discord/{event_id}",
             post(trigger::trigger_discord),
+        )
+        // Geofence crossings of Remote location events, reported by the device that monitors them
+        .route(
+            "/trigger/geofence/{event_id}",
+            post(geofence::trigger_geofence),
         )
 }

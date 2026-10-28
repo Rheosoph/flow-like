@@ -449,7 +449,7 @@ pub fn widget_document_csp(
         ),
         directive(
             "font-src",
-            &join_sources(&[&["data:"], &bundle, &granted(CspDirective::FontSrc)]),
+            &join_sources(&[&LOCAL_SOURCES, &bundle, &granted(CspDirective::FontSrc)]),
         ),
         directive(
             "connect-src",
@@ -558,7 +558,8 @@ root.append(style,frame);\
 const child=frame.contentWindow;\
 addEventListener('message',e=>{{\
 const bytes=e.data&&e.data.payload&&e.data.payload.bytes;\
-const transfer=bytes instanceof ArrayBuffer?[bytes]:[];\
+const data=e.data&&e.data.payload&&e.data.payload.data;\
+const transfer=[...new Set([bytes,data].filter(value=>value instanceof ArrayBuffer))];\
 if(e.source===parent)child.postMessage(e.data,'*',transfer);\
 else if(e.source===child)parent.postMessage(e.data,'*',transfer);\
 }});\
@@ -862,7 +863,7 @@ mod tests {
         assert_eq!(
             csp,
             format!(
-                "default-src 'none'; script-src 'unsafe-inline' {bundle}; style-src 'unsafe-inline' {bundle}; img-src data: blob: {bundle}; font-src data: {bundle}; connect-src data: blob:; worker-src 'none'; media-src data: blob:; frame-src 'none'; child-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts"
+                "default-src 'none'; script-src 'unsafe-inline' {bundle}; style-src 'unsafe-inline' {bundle}; img-src data: blob: {bundle}; font-src data: blob: {bundle}; connect-src data: blob:; worker-src 'none'; media-src data: blob:; frame-src 'none'; child-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts"
             )
         );
         assert_well_formed(&csp, Some(&WidgetPolicy::default()));
@@ -1062,7 +1063,7 @@ mod tests {
             ..WidgetPolicy::default()
         };
         let csp = widget_document_csp(&duplicated, &workers, true, false);
-        assert_eq!(sources_of(&csp, "font-src").len(), 1 + accepted.len());
+        assert_eq!(sources_of(&csp, "font-src").len(), 2 + accepted.len());
         assert_eq!(sources_of(&csp, "connect-src").len(), 2 + accepted.len());
         assert_eq!(sources_of(&csp, "worker-src").len(), 1 + accepted.len());
         assert_eq!(sources_of(&csp, "media-src").len(), 2 + accepted.len());
@@ -1136,7 +1137,8 @@ mod tests {
         assert!(
             document.contains("else if(e.source===child)parent.postMessage(e.data,'*',transfer);")
         );
-        assert!(document.contains("bytes instanceof ArrayBuffer?[bytes]:[]"));
+        assert!(document.contains("const data=e.data&&e.data.payload&&e.data.payload.data;"));
+        assert!(document.contains("[...new Set([bytes,data].filter(value=>value instanceof ArrayBuffer))]"));
         assert!(!document.contains("fetch("));
         assert!(!document.contains("frames"));
 

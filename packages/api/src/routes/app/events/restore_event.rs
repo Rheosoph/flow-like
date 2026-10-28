@@ -59,9 +59,11 @@ pub struct RestoreEventResponse {
     #[schema(value_type = Option<Object>)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event: Option<Event>,
-    /// Outcome of the non-fatal REST/MCP re-setup after a non-dry run. A
-    /// failure here does not roll the restore back — inbound traffic keeps
-    /// serving the previous registration set until a setup succeeds.
+    /// Outcome of the non-fatal REST/MCP re-setup after a non-dry run that
+    /// leaves the event on. A failure here does not roll the restore back —
+    /// inbound traffic keeps serving the previous registration set until a
+    /// setup succeeds, or answers 404 when that set was built against another
+    /// board than the restored one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setup_status: Option<String>,
 }
@@ -152,8 +154,9 @@ async fn push_api_issues(
         (status = 200, description = "Restore plan, plus the persisted event after a non-dry run", body = RestoreEventResponse),
         (status = 400, description = "Bad request, or the restore is blocked by plan issues"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
-        (status = 404, description = "Event or archived version not found")
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the restored event is on and the caller may not trigger events"),
+        (status = 404, description = "Event or archived version not found"),
+        (status = 503, description = "The caller's permission to trigger events or the cron schedule cannot be checked right now")
     ),
     security(
         ("bearer_auth" = []),
@@ -281,6 +284,8 @@ pub async fn restore_event(
             )),
         })?;
 
+    super::db::ensure_saver_may_arm(&state, &app_id, &sub, &restored).await?;
+
     let event = app
         .upsert_event(
             restored,
@@ -290,7 +295,7 @@ pub async fn restore_event(
         .await?;
     app.save().await?;
 
-    sync_event_with_sink_tokens(&state.db, &state, &app_id, &event, None, None, None).await?;
+    sync_event_with_sink_tokens(&state.db, &state, &app_id, &event, Some(&sub), None, None).await?;
 
     audit_branch!(
         state,
@@ -303,23 +308,17 @@ pub async fn restore_event(
     );
 
     // Forward-only: a failed re-setup never rolls the restore back — inbound
-    // keeps serving the previous registration set until a setup succeeds.
-    let setup_source =
-        !event.is_device_source() && matches!(event.event_type.as_str(), "rest" | "mcp");
-    let setup_status = if setup_source {
+    // keeps serving the previous registration set until a setup succeeds,
+    // unless that set was built against another board than the restored
+    // primary. A restore that leaves the event off runs no setup.
+    let setup_status = if super::setup_event::save_runs_stable_setup(&event) {
         Some(
-            match super::setup_event::run_event_setup(
-                state.clone(),
-                sub.clone(),
-                app_id.clone(),
-                event.id.clone(),
-                super::setup_event::SetupEventRequest {
-                    payload: None,
-                    profile_id: None,
-                    timeout_seconds: None,
-                    force: false,
-                    variant: None,
-                },
+            match super::setup_event::run_armed_stable_setup(
+                &state,
+                &sub,
+                &app_id,
+                &event.id,
+                None,
                 user_context,
             )
             .await

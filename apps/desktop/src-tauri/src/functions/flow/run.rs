@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
 use crate::{
+    event_sink::{ensure_signed_in_owner, manager::app_is_offline, trigger_token::TriggerAccount},
     functions::TauriFunctionError,
     local_page_actions::{
         LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX, LocalPageActionScope, LocalPageActionSealingContext,
@@ -1131,32 +1132,39 @@ async fn execute_prepared(
     Ok(meta)
 }
 
+/// Starts one run of the daemon of `event_id`, on every start and restart.
+/// An online app's run signs in with `token` only while `token_owner`, whom
+/// it was verified for, is signed in on the current profile's hub, and then
+/// stays on that hub.
 pub(crate) async fn execute_daemon_event(
     app_handle: AppHandle,
     app_id: String,
     event_id: String,
     payload: Option<flow_like_types::Value>,
     cancellation_token: CancellationToken,
-    offline: bool,
     token: Option<String>,
+    token_owner: Option<TriggerAccount>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     log_flush_interval: Duration,
     log_batch_size: usize,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
-    if !offline && token.is_none() {
-        return Err(TauriFunctionError::new(
-            "No token registered, cannot run online daemon event",
-        ));
-    }
-
+    let offline = app_is_offline(&app_handle, &app_id).await;
+    let mut execution_hub = None;
     let (credentials, run_sub_override) = if offline {
         (None, None)
     } else {
         'credentials: {
+            let profile = TauriSettingsState::current_profile(&app_handle).await?;
+            let account = TriggerAccount::signed_in_to(&app_handle, &profile.hub_profile).await;
+            ensure_signed_in_owner(
+                &event_id,
+                token.as_deref(),
+                token_owner.as_ref(),
+                account.as_ref(),
+            )?;
             let token = token.as_deref().ok_or_else(|| {
                 TauriFunctionError::new("No token registered, cannot run online daemon event")
             })?;
-            let profile = TauriSettingsState::current_profile(&app_handle).await?;
             let hub_url = profile.hub_profile.hub;
 
             if hub_url.is_empty() {
@@ -1164,6 +1172,7 @@ pub(crate) async fn execute_daemon_event(
                     "No hub URL configured, cannot get daemon credentials",
                 ));
             }
+            execution_hub = Some(hub_url.clone());
 
             tracing::info!(
                 app_id = %app_id,
@@ -1246,7 +1255,7 @@ pub(crate) async fn execute_daemon_event(
             log_flush_interval: Some(log_flush_interval),
             log_batch_size: Some(log_batch_size),
             run_sub_override,
-            execution_hub: None,
+            execution_hub,
             execution_session_id: None,
             execution_webview: None,
         },

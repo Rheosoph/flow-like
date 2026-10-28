@@ -55,6 +55,7 @@ import {
 	SidebarProvider,
 	SidebarRail,
 	Textarea,
+	clearStoredPat,
 	useBackend,
 	useDeveloperMode,
 	useInvalidateInvoke,
@@ -1079,6 +1080,7 @@ export function NavUser({
 			}
 			onSignOut={async () => {
 				await clearPageSurfaceCache();
+				clearStoredPat();
 				await auth?.signoutRedirect();
 			}}
 			onSignIn={handleSignIn}

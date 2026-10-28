@@ -2237,7 +2237,7 @@ pub(crate) async fn materialize_meta(
         src_sink_rows,
         &shipped_event_id_map,
         remote_event_token,
-        &state.encryption_key,
+        user_sub,
         &new_app_id,
         now,
     );
@@ -3819,22 +3819,19 @@ fn rewrite_auth_token_in_config(
 }
 
 /// Builds destination `EventSink` rows from the source sinks, with
-/// translated `event_id`, re-encrypted PAT (when the caller supplied a
-/// token), cleared OAuth tokens, and the destination app id. Returns a
-/// list of sinks ready to insert and a list of `SkippedItem`s describing
-/// what couldn't be carried as-is (PATs without a replacement token,
-/// OAuth bindings that need re-auth).
+/// translated `event_id`, the forking user as run-as identity, cleared
+/// OAuth tokens, and the destination app id. Returns a list of sinks
+/// ready to insert and a list of `SkippedItem`s describing what couldn't
+/// be carried as-is (OAuth bindings that need re-auth).
 fn prepare_dst_sinks(
     seed: &str,
     src_sinks: &[event_sink::Model],
     event_id_map: &HashMap<String, String>,
     remote_event_token: Option<&str>,
-    encryption_key: &[u8; 32],
+    run_as_user_id: &str,
     new_app_id: &str,
     now: chrono::DateTime<chrono::FixedOffset>,
 ) -> (Vec<event_sink::ActiveModel>, Vec<SkippedItem>) {
-    use crate::routes::app::events::db::encrypt_token;
-
     let mut to_insert = Vec::with_capacity(src_sinks.len());
     let mut skipped = Vec::new();
     for src in src_sinks {
@@ -3853,22 +3850,6 @@ fn prepare_dst_sinks(
                 });
                 continue;
             }
-        };
-
-        let new_pat = match (&src.pat_encrypted, remote_event_token) {
-            (Some(_), Some(token)) => Some(encrypt_token(token, encryption_key)),
-            (Some(_), None) => {
-                skipped.push(SkippedItem {
-                    kind: SkippedKind::RemoteEvent,
-                    source_id: src.event_id.clone(),
-                    reason: format!(
-                        "PAT cleared on sink for event {} — supply a remote_event_token at fork time or re-bind in the fork's event settings",
-                        src.event_id
-                    ),
-                });
-                None
-            }
-            _ => None,
         };
 
         let new_auth_token = match (&src.auth_token, remote_event_token) {
@@ -3901,13 +3882,15 @@ fn prepare_dst_sinks(
             path: Set(src.path.clone()),
             auth_token: Set(new_auth_token),
             // Webhook secrets are also bearer-style secrets — clear and
-            // let the user reset post-fork. Same rationale as PAT: don't
-            // carry source's secret into a fork that may live in a
-            // different security boundary.
+            // let the user reset post-fork. Don't carry the source's
+            // secret into a fork that may live in a different security
+            // boundary.
             webhook_secret: Set(None),
             cron_expression: Set(src.cron_expression.clone()),
             cron_timezone: Set(src.cron_timezone.clone()),
-            pat_encrypted: Set(new_pat),
+            pat_encrypted: Set(None),
+            run_as_user_id: Set(Some(run_as_user_id.to_string())),
+            run_as_released_at: Set(None),
             oauth_tokens_encrypted: Set(None),
             profile_json: Set(None),
             created_at: Set(now),

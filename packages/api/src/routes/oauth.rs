@@ -12,7 +12,7 @@ use flow_like_secrets::{ExposeSecret, SecretRef, SecretStore};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::middleware::jwt::AppUser;
+use crate::middleware::jwt::{AppUser, SHADOW_SIDE_EFFECT_REFUSED};
 use crate::runtime_config::OAuthProviderConfig;
 use crate::state::AppState;
 
@@ -46,6 +46,93 @@ mod runtime_config_tests {
     fn provider_rejection_does_not_invalidate_the_hub_session() {
         assert_eq!(provider_status(401), StatusCode::BAD_REQUEST);
         assert_eq!(connections::reconnect().status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn replays_cannot_refresh_oauth_handles() {
+        let executor = |shadow| {
+            AppUser::Executor(crate::middleware::jwt::ExecutorUser {
+                sub: "user-1".into(),
+                app_id: "app-1".into(),
+                run_id: "run-1".into(),
+                technical_user_id: None,
+                app_chain: None,
+                correlation: None,
+                shadow,
+                hosted_frontend: false,
+                event_id: None,
+                custom_bits_owner: None,
+                unattended: false,
+            })
+        };
+        let refusal = refuse_shadow_refresh(&executor(true)).unwrap_err();
+        assert_eq!(refusal.status, StatusCode::FORBIDDEN);
+        assert_eq!(refusal.code, SHADOW_SIDE_EFFECT_REFUSED);
+        assert_eq!(
+            refusal.message,
+            "Shadow and regression runs cannot refresh OAuth tokens"
+        );
+        assert!(refuse_shadow_refresh(&executor(false)).is_ok());
+
+        let tokens = |refresh: serde_json::Value| {
+            HashMap::from([(
+                "provider".to_string(),
+                serde_json::json!({"access_token": "access", "refresh_token": refresh}),
+            )])
+        };
+        let handle = tokens(format!("{}connection", connections::HANDLE_PREFIX).into());
+        let refusal = incoming_token_owner(&executor(true), &handle).unwrap_err();
+        assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
+        assert_eq!(refusal.public_code(), SHADOW_SIDE_EFFECT_REFUSED);
+        assert_eq!(
+            refusal.public_message(),
+            Some("Shadow and regression runs cannot refresh OAuth tokens")
+        );
+        assert_eq!(
+            incoming_token_owner(&executor(false), &handle).unwrap(),
+            None
+        );
+        let access_only = tokens(serde_json::Value::Null);
+        assert_eq!(
+            incoming_token_owner(&executor(true), &access_only).unwrap(),
+            None
+        );
+        let raw = tokens("provider-refresh-token".into());
+        for shadow in [true, false] {
+            let refusal = incoming_token_owner(&executor(shadow), &raw).unwrap_err();
+            assert_eq!(
+                refusal.status(),
+                StatusCode::BAD_REQUEST,
+                "shadow = {shadow}"
+            );
+        }
+    }
+
+    #[test]
+    fn replays_are_refused_before_any_oauth_handle_resolves() {
+        let source = include_str!("oauth.rs");
+        let handler = |signature: &str| {
+            let body = source
+                .split_once(signature)
+                .unwrap_or_else(|| panic!("{signature} exists"))
+                .1;
+            body.split_once("\n}\n").map_or(body, |(body, _)| body)
+        };
+        let position = |body: &str, step: &str| {
+            body.find(step)
+                .unwrap_or_else(|| panic!("the handler calls {step}"))
+        };
+
+        let incoming = handler("\npub(crate) async fn authorize_incoming_oauth_tokens(");
+        assert!(
+            position(incoming, "incoming_token_owner(user, tokens)?")
+                < position(incoming, "resolve_oauth_token(")
+        );
+        let refresh = handler("\npub async fn token_refresh(");
+        let refused = position(refresh, "refuse_shadow_refresh(&user)?");
+        for step in ["resolve_connection_config(", ".adopt(", ".resolve_scoped("] {
+            assert!(refused < position(refresh, step), "{step}");
+        }
     }
 
     #[test]
@@ -487,6 +574,19 @@ fn build_oauth_client() -> Result<flow_like_types::reqwest::Client, OAuthProxyEr
         .map_err(|e| OAuthProxyError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
+const REFRESH_OAUTH_TOKENS: &str = "refresh OAuth tokens";
+
+fn refuse_shadow_refresh(user: &AppUser) -> Result<(), OAuthProxyError> {
+    user.deny_shadow_execution(REFRESH_OAUTH_TOKENS)
+        .map_err(|refusal| {
+            OAuthProxyError::coded(
+                refusal.status(),
+                SHADOW_SIDE_EFFECT_REFUSED,
+                refusal.public_message().unwrap_or_default(),
+            )
+        })
+}
+
 fn require_owner(user: &AppUser) -> Result<String, OAuthProxyError> {
     user.sub().map_err(|_| {
         OAuthProxyError::new(
@@ -709,19 +809,8 @@ pub(crate) async fn authorize_incoming_oauth_tokens(
     let Some(tokens) = tokens.as_mut().filter(|tokens| !tokens.is_empty()) else {
         return Ok(());
     };
-    let owner = match user {
-        AppUser::Executor(_) | AppUser::ConnectedApp(_) => None,
-        _ => Some(require_owner(user).map_err(|error| oauth_api_error("connection", error))?),
-    };
+    let owner = incoming_token_owner(user, tokens)?;
     for (provider, token) in tokens.iter_mut() {
-        if owner.is_none()
-            && token
-                .get("refresh_token")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|refresh| !refresh.starts_with(connections::HANDLE_PREFIX))
-        {
-            return Err(oauth_api_error(provider, connections::reconnect()));
-        }
         *token = resolve_oauth_token(state, provider, token, owner.as_deref())
             .await
             .map_err(|error| oauth_api_error(provider, error))?;
@@ -729,12 +818,50 @@ pub(crate) async fn authorize_incoming_oauth_tokens(
     Ok(())
 }
 
+/// The account the incoming tokens resolve under. Executors and connected apps
+/// have none, so every refresh token they pass must be an `fl_oauth_` handle,
+/// and a replay may not refresh even those. All tokens are checked before any
+/// is resolved.
+fn incoming_token_owner(
+    user: &AppUser,
+    tokens: &HashMap<String, serde_json::Value>,
+) -> Result<Option<String>, crate::error::ApiError> {
+    if !matches!(user, AppUser::Executor(_) | AppUser::ConnectedApp(_)) {
+        return require_owner(user)
+            .map(Some)
+            .map_err(|error| oauth_api_error("connection", error));
+    }
+    let mut carries_handle = false;
+    for (provider, token) in tokens {
+        match token
+            .get("refresh_token")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(refresh) if refresh.starts_with(connections::HANDLE_PREFIX) => {
+                carries_handle = true;
+            }
+            Some(_) => return Err(oauth_api_error(provider, connections::reconnect())),
+            None => {}
+        }
+    }
+    if carries_handle {
+        user.deny_shadow_execution(REFRESH_OAUTH_TOKENS)?;
+    }
+    Ok(None)
+}
+
+/// Resolves a sink's stored grant as its run-as user's. A sink without one has no grants
+/// to use, so it is told to reconnect.
 pub(crate) async fn resolve_sink_oauth_token(
     state: &crate::state::State,
     provider_id: &str,
     value: &serde_json::Value,
+    run_as: Option<&str>,
 ) -> Result<serde_json::Value, crate::error::ApiError> {
-    resolve_oauth_token(state, provider_id, value, None)
+    let Some(owner) = run_as else {
+        return Err(oauth_api_error(provider_id, connections::reconnect()));
+    };
+    resolve_oauth_token(state, provider_id, value, Some(owner))
         .await
         .map_err(|error| oauth_api_error(provider_id, error))
 }
@@ -1054,6 +1181,7 @@ pub async fn token_exchange(
         (status = 200, description = "Token refresh successful", body = TokenResponse),
         (status = 400, description = "Provider rejected the request or requires reconnection", body = ErrorResponse),
         (status = 401, description = "Hub sign-in required", body = ErrorResponse),
+        (status = 403, description = "Forbidden: the caller is not a user account, or the run is a regression replay", body = ErrorResponse),
         (status = 404, description = "Provider not found", body = ErrorResponse),
         (status = 500, description = "Internal error", body = ErrorResponse)
     ),
@@ -1074,6 +1202,7 @@ pub async fn token_refresh(
                 .refresh_token
                 .starts_with(connections::HANDLE_PREFIX) =>
         {
+            refuse_shadow_refresh(&user)?;
             None
         }
         _ => Some(require_owner(&user)?),

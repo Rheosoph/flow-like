@@ -13,6 +13,7 @@ import {
 	handleElementsRequestMessage,
 	parseElementsRequestMessage,
 } from "./elements-request-handler";
+import type { WidgetElementScope } from "./workflow-elements";
 
 const channel: IChannelHandle = {
 	channel_id: "run-1",
@@ -121,7 +122,11 @@ describe("parseElementsRequestMessage", () => {
 describe("handleElementsRequestMessage", () => {
 	const reply = mock(async (_channel: IChannelHandle, _value: unknown) => {});
 	const materialize = mock(
-		(_source: ElementSource, _selectors: readonly string[]) => materialized,
+		(
+			_source: ElementSource,
+			_selectors: readonly string[],
+			_widgetScope?: WidgetElementScope,
+		) => materialized,
 	);
 	const warn = spyOn(console, "warn");
 	const options = { materialize, reply };

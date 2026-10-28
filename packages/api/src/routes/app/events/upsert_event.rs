@@ -18,9 +18,6 @@ pub struct EventUpsertBody {
     event: Event,
     #[schema(value_type = Option<String>)]
     version_type: Option<VersionType>,
-    /// Optional PAT to store with the sink (enables model/file access in triggered flows)
-    #[serde(default)]
-    pat: Option<String>,
     /// Optional OAuth tokens to store with the sink (provider-specific access)
     #[serde(default)]
     oauth_tokens: Option<HashMap<String, serde_json::Value>>,
@@ -39,7 +36,7 @@ pub struct EventUpsertBody {
     put,
     path = "/apps/{app_id}/events/{event_id}",
     tag = "events",
-    description = "Create or update an event.",
+    description = "Create or update an event. The saver becomes the user its hub trigger runs as.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("event_id" = String, Path, description = "Event ID")
@@ -49,7 +46,8 @@ pub struct EventUpsertBody {
         (status = 200, description = "Event saved", body = String, content_type = "application/json"),
         (status = 400, description = "Bad request"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the event stays on and the saver may not trigger events"),
+        (status = 503, description = "The saver's permission to trigger events or the cron schedule cannot be checked right now")
     ),
     security(
         ("bearer_auth" = []),
@@ -112,8 +110,8 @@ pub async fn upsert_event(
     // For rest/mcp events we need to know whether this upsert is a fresh
     // create (in which case a failed setup should roll back the whole
     // thing, leaving no half-broken event behind) or an update to an
-    // already-working event (in which case inbound traffic keeps
-    // routing to the prior `last_setup_version`).
+    // already-working event (in which case inbound keeps serving the prior
+    // setup while it was built against the saved primary target).
     let existed_before =
         matches!(event.event_type.as_str(), "rest" | "mcp") && saved_event.is_some();
 
@@ -129,34 +127,32 @@ pub async fn upsert_event(
             )),
         })?;
 
+    super::db::ensure_saver_may_arm(&state, &app_id, &sub, &event).await?;
+
     let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
 
     // Upsert to bucket (handles versioning)
     let event = app
         .upsert_event(event, params.version_type, preserve_id)
         .await?;
-    let register_source = !event.is_device_source();
     app.save().await?;
 
     // Fetch the updater's profile for the sink (so triggers can use their bits/hubs)
-    // Persisted in the sink row — never embed decrypted custom-bit secrets.
     let profile_json = crate::execution::fetch_profile_for_dispatch(
         &state,
         &sub,
         params.profile_id.as_deref(),
         &app_id,
-        false,
     )
     .await;
 
     // Sync to database for fast lookups (also creates/updates sink and external scheduler)
-    // Pass optional PAT and OAuth tokens for sink storage
     sync_event_with_sink_tokens(
         &state.db,
         &state,
         &app_id,
         &event,
-        params.pat.as_deref(),
+        Some(&sub),
         params.oauth_tokens.as_ref(),
         profile_json,
     )
@@ -164,26 +160,20 @@ pub async fn upsert_event(
 
     audit_branch!(state, user, app_id, "event.upsert", "Event", event_id);
 
-    // Run remote setup synchronously for event types that publish
+    // Run remote setup synchronously for armed event types that publish
     // registrations (REST endpoints, MCP servers). The user-facing
     // contract is "if the upsert returns 200, the event is live", so we
-    // can't defer this. On failure for a fresh create we roll back the
-    // whole event so we don't leave a dead /r/{slug} behind.
-    if register_source && matches!(event.event_type.as_str(), "rest" | "mcp") {
-        let setup_result = super::setup_event::run_event_setup(
-            state.clone(),
-            sub.clone(),
-            app_id.clone(),
-            event.id.clone(),
-            super::setup_event::SetupEventRequest {
-                payload: None,
-                profile_id: params.profile_id.clone(),
-                timeout_seconds: None,
-                force: false,
-                // Auto-setup always (re)builds the stable surface; a variant
-                // setup is only ever an explicit POST /setup.
-                variant: None,
-            },
+    // can't defer this. An event saved off or device-only keeps its current
+    // registrations: only an armed save may move the stable serving pointer.
+    // On failure for a fresh create we roll back the whole event so we don't
+    // leave a dead /r/{slug} behind.
+    if super::setup_event::save_runs_stable_setup(&event) {
+        let setup_result = super::setup_event::run_armed_stable_setup(
+            &state,
+            &sub,
+            &app_id,
+            &event.id,
+            params.profile_id.clone(),
             user_context,
         )
         .await;
@@ -356,7 +346,8 @@ pub(super) async fn prune_archived_versions(
 
 /// Best-effort rollback when remote setup fails for a fresh rest/mcp
 /// event. For an update we keep the event in place because inbound
-/// traffic still routes to the prior `last_setup_version`; the failed
+/// traffic still routes to the prior setup, unless that setup named another
+/// board than the saved primary target and was withdrawn; the failed
 /// setup is recorded on the row (`setup_status = "error"`) and the
 /// caller already sees the error in the API response.
 async fn rollback_failed_setup(

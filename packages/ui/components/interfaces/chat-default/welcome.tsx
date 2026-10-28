@@ -7,7 +7,12 @@ import { createComposerActivity } from "../../../lib/composer-activity";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import { ChatPlaceholder } from "./chat-placeholder";
-import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
+import {
+	ChatBox,
+	type ChatBoxRef,
+	type ChatBoxThinking,
+	type ISendMessageFunction,
+} from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
 interface ChatWelcomeProps {
@@ -17,6 +22,7 @@ interface ChatWelcomeProps {
 	isSending?: boolean;
 	/** Needed to resolve a storage-backed placeholder image. */
 	appId?: string;
+	thinking?: ChatBoxThinking;
 }
 
 export function ChatWelcome({
@@ -25,6 +31,7 @@ export function ChatWelcome({
 	config = {},
 	isSending = false,
 	appId,
+	thinking,
 }: Readonly<ChatWelcomeProps>) {
 	const { t } = useTranslation("chat");
 	const [currentMessage, setCurrentMessage] = useState("");
@@ -295,6 +302,7 @@ export function ChatWelcome({
 							availableTools={config?.tools ?? []}
 							defaultActiveTools={config?.default_tools ?? []}
 							onSendMessage={onSendMessage}
+							thinking={thinking}
 							onContentChange={(content) => {
 								setCurrentMessage(content);
 								activity.report(content);

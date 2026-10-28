@@ -7,6 +7,12 @@ import {
 } from "@xyflow/react";
 import { memo, useMemo } from "react";
 import { isWebkitLite } from "../../lib/platform";
+import {
+	WireTraceFlow,
+	WireTraceGlow,
+	isLit,
+	useWireEmphasis,
+} from "./wire-trace";
 
 export const FlowDataEdge = memo(function FlowDataEdge(props: EdgeProps) {
 	const {
@@ -63,7 +69,8 @@ export const FlowDataEdge = memo(function FlowDataEdge(props: EdgeProps) {
 	]);
 
 	const baseColor = style.stroke || "var(--foreground)";
-	const isSelected = selected ?? false;
+	const emphasis = useWireEmphasis(id);
+	const isSelected = (selected ?? false) || isLit(emphasis);
 
 	// Particle configurations for flowing data packets
 	const particleConfigs = useMemo(
@@ -77,8 +84,14 @@ export const FlowDataEdge = memo(function FlowDataEdge(props: EdgeProps) {
 	);
 
 	return (
-		<>
-			{/* Dotted base line - round dots */}
+		<g opacity={emphasis === "dim" ? 0.25 : undefined}>
+			<WireTraceGlow
+				id={id}
+				path={edgePath}
+				color={baseColor}
+				emphasis={emphasis}
+			/>
+			{/* Dotted base line, solid once selected or traced */}
 			<BaseEdge
 				id={`${id}-base`}
 				path={edgePath}
@@ -87,7 +100,7 @@ export const FlowDataEdge = memo(function FlowDataEdge(props: EdgeProps) {
 					stroke: baseColor,
 					strokeWidth: isSelected ? 2.5 : 1.5,
 					opacity: isSelected ? 0.5 : 0.35,
-					strokeDasharray: "1.5,4",
+					strokeDasharray: isSelected ? undefined : "1.5,4",
 					strokeLinecap: "round",
 					strokeLinejoin: "round",
 					transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
@@ -105,13 +118,19 @@ export const FlowDataEdge = memo(function FlowDataEdge(props: EdgeProps) {
 						stroke: `color-mix(in oklch, ${baseColor} 70%, white 30%)`,
 						strokeWidth: isSelected ? 1.5 : 1,
 						opacity: isSelected ? 0.8 : 0.5,
-						strokeDasharray: "1.5,4",
+						strokeDasharray: isSelected ? undefined : "1.5,4",
 						strokeLinecap: "round",
 						strokeLinejoin: "round",
 						transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
 					}}
 				/>
 			)}
-		</>
+			<WireTraceFlow
+				id={id}
+				path={edgePath}
+				color={baseColor}
+				emphasis={emphasis}
+			/>
+		</g>
 	);
 });

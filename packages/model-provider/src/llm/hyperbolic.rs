@@ -1,8 +1,14 @@
 use std::any::Any;
 
-use super::ModelLogic;
+use super::{
+    ModelLogic,
+    media::{self, MediaDialect},
+    output_budget_as_body_param, user_media,
+};
 use crate::provider::random_provider;
 use crate::{
+    authorization::AuthorizedHttpClient,
+    egress::ProviderEgress,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
@@ -11,7 +17,7 @@ use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
 
 pub struct HyperbolicModel {
-    client: rig::providers::hyperbolic::Client,
+    client: rig::providers::hyperbolic::Client<AuthorizedHttpClient>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -25,7 +31,9 @@ impl HyperbolicModel {
         let api_key = hyperbolic_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
 
-        let mut builder = rig::providers::hyperbolic::Client::builder().api_key(&api_key);
+        let mut builder = rig::providers::hyperbolic::Client::builder()
+            .api_key(&api_key)
+            .http_client(AuthorizedHttpClient::default());
 
         if let Some(endpoint) = hyperbolic_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
@@ -40,7 +48,10 @@ impl HyperbolicModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -49,7 +60,9 @@ impl HyperbolicModel {
             .cloned()
             .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        let mut builder = rig::providers::hyperbolic::Client::builder().api_key(api_key);
+        let mut builder = rig::providers::hyperbolic::Client::builder()
+            .api_key(api_key)
+            .http_client(AuthorizedHttpClient::for_egress(egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -78,8 +91,15 @@ impl Cacheable for HyperbolicModel {
 impl ModelLogic for HyperbolicModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor::with_max_tokens_body_param(
+        Ok(user_media::constructor(
             self.client.clone(),
+            |model, request| {
+                media::retain_supported(
+                    MediaDialect::Hyperbolic,
+                    model,
+                    output_budget_as_body_param(request, "max_tokens"),
+                )
+            },
         ))
     }
 

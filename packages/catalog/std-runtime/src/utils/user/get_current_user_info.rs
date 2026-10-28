@@ -1,3 +1,4 @@
+use super::{project_users::api_base_url, run_user_route};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -7,32 +8,23 @@ use flow_like::flow::{
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
 
+/// The profile fields of a user. Account, billing and permission data never
+/// reach a board, whichever hub route answered.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CurrentUserInfo {
     pub id: String,
-    pub stripe_id: Option<String>,
-    pub tracking_id: Option<String>,
     pub email: Option<String>,
     pub username: Option<String>,
     pub preferred_username: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
+    #[serde(alias = "avatar_url")]
     pub avatar: Option<String>,
     pub additional_information: Option<Value>,
-    pub permission: i64,
-    pub accepted_terms_version: Option<String>,
-    pub tutorial_completed: bool,
-    pub status: Value,
-    pub tier: Value,
-    pub total_size: i64,
-    pub total_llm_price: i64,
-    pub total_embedding_price: i64,
-    pub llm_price_tracking_month: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: Option<String>,
 }
 
-/// Fetch the current user's persisted user record from the FlowLike hub.
+/// Fetch the profile of the user a run acts as from the FlowLike hub.
 #[crate::register_node]
 #[derive(Default)]
 pub struct GetCurrentUserInfoNode {}
@@ -49,16 +41,17 @@ impl NodeLogic for GetCurrentUserInfoNode {
         let mut node = Node::new(
             "utils_user_get_current_user_info",
             "Get Current User Info",
-            "Fetches the current user's persisted user information from the configured FlowLike hub's /api/v1/user/info endpoint when an execution token is available.",
+            "Gets the profile of the user this run acts as. Server runs see only the fields the hub shares in user lookups.",
             "Utils/User",
         );
         node.set_flowscript_name("user", "getCurrentInfo");
         node.add_icon("/flow/icons/user.svg");
+        node.set_version(2);
 
         node.add_output_pin(
             "user_info",
             "User Info",
-            "The user record returned by /api/v1/user/info",
+            "Profile of the user this run acts as",
             VariableType::Struct,
         )
         .set_schema::<CurrentUserInfo>()
@@ -107,69 +100,73 @@ impl NodeLogic for GetCurrentUserInfoNode {
             .filter(|token| !token.is_empty())
         {
             Some(token) => token,
-            None => {
-                set_failure(context, 0, "No execution token available").await?;
-                return Ok(());
-            }
+            None => return set_failure(context, 0, "No execution token available").await,
         };
 
-        let url = match user_info_url(&context.profile.hub, context.profile.secure) {
-            Some(url) => url,
-            None => {
-                set_failure(context, 0, "No hub URL configured on the execution profile").await?;
-                return Ok(());
-            }
+        let route = run_user_route(context);
+        let Some(url) = user_url(&context.profile.hub, context.profile.secure, &route) else {
+            return set_failure(context, 0, "No hub URL configured on the execution profile").await;
         };
 
-        let response = match reqwest::Client::new()
-            .get(&url)
-            .bearer_auth(token)
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                let message = format!("Failed to call /api/v1/user/info: {err}");
+        match fetch_profile(&url, token, &route).await {
+            Ok((user_info, status_code)) => set_profile(context, &user_info, status_code).await,
+            Err((status_code, message)) => {
                 context.log_message(&message, LogLevel::Warn);
-                set_failure(context, 0, &message).await?;
-                return Ok(());
+                set_failure(context, status_code, &message).await
             }
-        };
-
-        let status = response.status();
-        let status_code = status.as_u16() as i64;
-
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            let message = format!(
-                "/api/v1/user/info returned {}: {}",
-                status,
-                truncate_error_body(&body)
-            );
-            context.log_message(&message, LogLevel::Warn);
-            set_failure(context, status_code, &message).await?;
-            return Ok(());
         }
-
-        let user_info = match response.json::<Value>().await {
-            Ok(user_info) => user_info,
-            Err(err) => {
-                let message = format!("Failed to parse /api/v1/user/info response: {err}");
-                context.log_message(&message, LogLevel::Warn);
-                set_failure(context, status_code, &message).await?;
-                return Ok(());
-            }
-        };
-
-        context.set_pin_value("user_info", user_info).await?;
-        context.set_pin_value("success", json!(true)).await?;
-        context
-            .set_pin_value("status_code", json!(status_code))
-            .await?;
-        context.set_pin_value("error", json!("")).await?;
-
-        Ok(())
     }
+}
+
+async fn set_profile(
+    context: &mut ExecutionContext,
+    user_info: &CurrentUserInfo,
+    status_code: i64,
+) -> flow_like_types::Result<()> {
+    context.set_pin_value("user_info", json!(user_info)).await?;
+    context.set_pin_value("success", json!(true)).await?;
+    context
+        .set_pin_value("status_code", json!(status_code))
+        .await?;
+    context.set_pin_value("error", json!("")).await?;
+    Ok(())
+}
+
+/// The profile `url` answers with and its status code, or the status code and
+/// message of the failure.
+async fn fetch_profile(
+    url: &str,
+    token: &str,
+    route: &str,
+) -> Result<(CurrentUserInfo, i64), (i64, String)> {
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|err| (0, format!("Failed to call /api/v1/{route}: {err}")))?;
+
+    let status = response.status();
+    let status_code = status.as_u16() as i64;
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let message = format!(
+            "/api/v1/{route} returned {status}: {}",
+            truncate_error_body(&body)
+        );
+        return Err((status_code, message));
+    }
+
+    response
+        .json::<CurrentUserInfo>()
+        .await
+        .map(|user_info| (user_info, status_code))
+        .map_err(|err| {
+            (
+                status_code,
+                format!("Failed to parse /api/v1/{route} response: {err}"),
+            )
+        })
 }
 
 async fn set_failure(
@@ -186,24 +183,8 @@ async fn set_failure(
     Ok(())
 }
 
-fn user_info_url(hub: &str, secure: bool) -> Option<String> {
-    let hub = hub.trim().trim_end_matches('/');
-    if hub.is_empty() {
-        return None;
-    }
-
-    let origin = if hub.starts_with("http://") || hub.starts_with("https://") {
-        hub.to_string()
-    } else {
-        let protocol = if secure { "https" } else { "http" };
-        format!("{protocol}://{hub}")
-    };
-
-    if origin.ends_with("/api/v1") {
-        return Some(format!("{origin}/user/info"));
-    }
-
-    Some(format!("{origin}/api/v1/user/info"))
+fn user_url(hub: &str, secure: bool, route: &str) -> Option<String> {
+    api_base_url(hub, secure).map(|base| format!("{base}/{route}"))
 }
 
 fn truncate_error_body(body: &str) -> String {
@@ -220,23 +201,119 @@ fn truncate_error_body(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{truncate_error_body, user_info_url};
+    use super::{CurrentUserInfo, truncate_error_body, user_url};
+    use flow_like_types::json::{self, json};
+
+    fn reserialized(row: flow_like_types::Value) -> json::Map<String, flow_like_types::Value> {
+        let info: CurrentUserInfo = json::from_value(row).unwrap();
+        match json::to_value(info).unwrap() {
+            flow_like_types::Value::Object(fields) => fields,
+            other => panic!("a profile is an object, got {other}"),
+        }
+    }
 
     #[test]
-    fn builds_user_info_url() {
+    fn account_rows_keep_only_profile_fields() {
+        let profile = reserialized(json!({
+            "id": "user-1",
+            "stripe_id": "cus_1",
+            "subscription_id": "sub_1",
+            "tracking_id": "tracking-1",
+            "email": "person@example.com",
+            "username": "person",
+            "preferred_username": "person-handle",
+            "name": "Person",
+            "description": "About",
+            "avatar": "https://signed.example/avatar",
+            "additional_information": { "team": "ops" },
+            "permission": 7,
+            "accepted_terms_version": "v1",
+            "tutorial_completed": true,
+            "status": "ACTIVE",
+            "tier": "PRO",
+            "total_size": 1,
+            "total_llm_price": 2,
+            "total_embedding_price": 3,
+            "llm_price_tracking_month": "2026-10",
+            "dev_mode": true,
+            "created_at": "2026-10-10T12:00:00+00:00",
+            "updated_at": "2026-10-11T12:00:00+00:00"
+        }));
+
+        let mut keys = profile.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
         assert_eq!(
-            user_info_url("https://hub.flow-like.com/", true).as_deref(),
-            Some("https://hub.flow-like.com/api/v1/user/info")
+            keys,
+            [
+                "additional_information",
+                "avatar",
+                "created_at",
+                "description",
+                "email",
+                "id",
+                "name",
+                "preferred_username",
+                "username"
+            ]
         );
-        assert_eq!(
-            user_info_url("https://hub.flow-like.com/api/v1", true).as_deref(),
-            Some("https://hub.flow-like.com/api/v1/user/info")
+        assert_eq!(profile["email"], "person@example.com");
+        assert_eq!(profile["avatar"], "https://signed.example/avatar");
+        assert_eq!(profile["created_at"], "2026-10-10T12:00:00+00:00");
+    }
+
+    #[test]
+    fn directory_rows_map_avatar_url() {
+        let profile = reserialized(json!({
+            "id": "user-1",
+            "email": null,
+            "username": null,
+            "preferred_username": "person-handle",
+            "name": "Person",
+            "avatar_url": "https://signed.example/avatar",
+            "additional_information": null,
+            "description": null,
+            "created_at": null
+        }));
+
+        assert_eq!(profile["avatar"], "https://signed.example/avatar");
+        assert_eq!(profile["created_at"], flow_like_types::Value::Null);
+        assert_eq!(profile["email"], flow_like_types::Value::Null);
+        assert!(!profile.contains_key("avatar_url"));
+    }
+
+    #[test]
+    fn a_row_without_an_id_is_not_a_profile() {
+        assert!(
+            json::from_value::<CurrentUserInfo>(json!({ "name": "Person", "email": null }))
+                .is_err()
         );
-        assert_eq!(
-            user_info_url("localhost:8080", false).as_deref(),
-            Some("http://localhost:8080/api/v1/user/info")
-        );
-        assert_eq!(user_info_url("  ", true).as_deref(), None);
+    }
+
+    #[test]
+    fn builds_the_run_user_url() {
+        for (hub, secure, route, expected) in [
+            (
+                "https://hub.flow-like.com/",
+                true,
+                "execution/apps/app-1/user",
+                "https://hub.flow-like.com/api/v1/execution/apps/app-1/user",
+            ),
+            (
+                "https://hub.flow-like.com/api/v1",
+                true,
+                "user/info",
+                "https://hub.flow-like.com/api/v1/user/info",
+            ),
+            (
+                "localhost:8080",
+                false,
+                "user/info",
+                "http://localhost:8080/api/v1/user/info",
+            ),
+        ] {
+            assert_eq!(user_url(hub, secure, route).as_deref(), Some(expected));
+        }
+        assert_eq!(user_url("  ", true, "user/info"), None);
     }
 
     #[test]

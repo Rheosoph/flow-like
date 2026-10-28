@@ -1,5 +1,6 @@
 import type { FlowPath } from "./host";
 import { type HostBridge, getHost } from "./host";
+import { StorageError, type StorageOps } from "./storage-ops";
 import { ExecutionInput, ExecutionResult, LogLevel } from "./types";
 
 const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB, safely under host 10 MiB limit
@@ -24,6 +25,16 @@ export class Context {
 	}
 
 	// Metadata getters
+	get storageOps(): StorageOps {
+		if (!this._host.storageOps) {
+			throw new StorageError(
+				"unsupported",
+				"This host bridge does not provide storage-ops",
+			);
+		}
+		return this._host.storageOps;
+	}
+
 	get nodeId(): string {
 		return this._input.nodeId;
 	}

@@ -134,7 +134,7 @@ describe("widget imports", () => {
 		source.rootComponentId = "card";
 		source.dataModel = [
 			{
-				key: "input",
+				path: "input",
 				value: {
 					text: "input",
 					path: "/input",
@@ -248,7 +248,7 @@ describe("widget imports", () => {
 		});
 		expect(imported.dataModel).toEqual([
 			{
-				key: "input",
+				path: "input",
 				value: {
 					text: "input",
 					path: "/input",

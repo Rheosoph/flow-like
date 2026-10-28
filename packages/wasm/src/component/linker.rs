@@ -3,7 +3,7 @@ use crate::error::{WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::llm_message::sdk_message_content;
-use crate::wasi::{isolated_wasi_ctx_builder, IsolatedWasiCtxBuilder};
+use crate::wasi::{IsolatedWasiCtxBuilder, isolated_wasi_ctx_builder};
 use flow_like_storage::object_store::ObjectStoreExt;
 use serde_json::Value;
 use std::future::Future;
@@ -172,8 +172,8 @@ impl ComponentStoreData {
 
     /// Move guest stdout and stderr written since the last drain into the
     /// current invocation's log.
-    pub(crate) fn drain_guest_output(&self) {
-        self.guest_output.drain_into(&self.host_state);
+    pub(crate) fn drain_guest_output(&self) -> String {
+        self.guest_output.drain_into(&self.host_state)
     }
 
     /// Store data around an already-populated host state (child stores such
@@ -247,6 +247,7 @@ pub fn register_component_host_functions(
     register_streaming(linker)?;
     register_metadata(linker)?;
     register_storage(linker)?;
+    super::storage_ops::register(linker)?;
     register_models(linker)?;
     register_schema(linker)?;
     register_image(linker)?;
@@ -708,6 +709,59 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
 
     storage
         .func_wrap_async(
+            "copy-file",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (source_json, destination_json): (String, String)| {
+                Box::new(async move {
+                    let host = &store.data().host_state;
+                    if !host.has_capability(
+                        WasmCapabilities::STORAGE_READ | WasmCapabilities::STORAGE_WRITE,
+                    ) {
+                        return Ok((false,));
+                    }
+                    let (Ok(source), Ok(destination)) = (
+                        serde_json::from_str::<StorageFlowPath>(&source_json),
+                        serde_json::from_str::<StorageFlowPath>(&destination_json),
+                    ) else {
+                        return Ok((false,));
+                    };
+                    let Some(context) = &host.storage_context else {
+                        return Ok((false,));
+                    };
+                    Ok((crate::host_functions::storage::copy_flow_path(
+                        context,
+                        &source,
+                        &destination,
+                    )
+                    .await,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    storage
+        .func_wrap_async(
+            "file-url",
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (path_json,): (String,)| {
+                Box::new(async move {
+                    let host = &store.data().host_state;
+                    if !host.has_capability(WasmCapabilities::STORAGE_READ) {
+                        return Ok((None::<String>,));
+                    }
+                    let Ok(path) = serde_json::from_str::<StorageFlowPath>(&path_json) else {
+                        return Ok((None,));
+                    };
+                    let Some(context) = &host.storage_context else {
+                        return Ok((None,));
+                    };
+                    Ok((crate::host_functions::storage::flow_path_url(context, &path).await,))
+                })
+            },
+        )
+        .map_err(map_err)?;
+
+    storage
+        .func_wrap_async(
             "write-file",
             |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
              (flow_path_json, data): (String, Vec<u8>)| {
@@ -758,34 +812,19 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
     storage
         .func_wrap_async(
             "write-file-start",
-            |mut store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
-             (flow_path_json, total_size): (String, u64)| {
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+             (path, total_size): (String, u64)| {
                 Box::new(async move {
-                    if !store
-                        .data()
-                        .host_state
-                        .has_capability(WasmCapabilities::STORAGE_WRITE)
-                    {
-                        tracing::warn!(
-                            "[wasm write-file-start] rejected: no STORAGE_WRITE capability"
-                        );
-                        return Ok((None::<String>,));
+                    let result = crate::host_functions::storage_api::write_start(
+                        &store.data().host_state,
+                        &path,
+                        Some(total_size),
+                    )
+                    .await;
+                    if let Err(error) = &result {
+                        tracing::warn!(%error, "[wasm write-file-start] failed");
                     }
-                    let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            tracing::warn!(
-                                "[wasm write-file-start] rejected: bad JSON {e}: {flow_path_json}"
-                            );
-                            return Ok((None,));
-                        }
-                    };
-                    let result = crate::host_functions::storage::start_write(
-                        &mut store.data_mut().host_state.pending_writes.write(),
-                        flow_path,
-                        total_size,
-                    );
-                    Ok((result,))
+                    Ok((result.ok(),))
                 })
             },
         )
@@ -794,22 +833,19 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
     storage
         .func_wrap_async(
             "write-file-chunk",
-            |mut store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
+            |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
              (write_id, data): (String, Vec<u8>)| {
                 Box::new(async move {
-                    if !store
-                        .data()
-                        .host_state
-                        .has_capability(WasmCapabilities::STORAGE_WRITE)
-                    {
-                        return Ok((false,));
-                    }
-                    let ok = crate::host_functions::storage::append_chunk(
-                        &mut store.data_mut().host_state.pending_writes.write(),
+                    let result = crate::host_functions::storage_api::write_chunk(
+                        &store.data().host_state,
                         &write_id,
-                        &data,
-                    );
-                    Ok((ok,))
+                        data,
+                    )
+                    .await;
+                    if let Err(error) = &result {
+                        tracing::warn!(%error, "[wasm write-file-chunk] failed");
+                    }
+                    Ok((result.is_ok(),))
                 })
             },
         )
@@ -820,39 +856,15 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
             "write-file-finish",
             |store: wasmtime::StoreContextMut<'_, ComponentStoreData>, (write_id,): (String,)| {
                 Box::new(async move {
-                    if !store
-                        .data()
-                        .host_state
-                        .has_capability(WasmCapabilities::STORAGE_WRITE)
-                    {
-                        return Ok((false,));
-                    }
-                    let pw = store
-                        .data()
-                        .host_state
-                        .pending_writes
-                        .write()
-                        .remove(&write_id);
-                    let Some(pw) = pw else {
-                        tracing::warn!(
-                            "[wasm write-file-finish] rejected: unknown write_id {write_id}"
-                        );
-                        return Ok((false,));
-                    };
-                    let ctx = match &store.data().host_state.storage_context {
-                        Some(c) => c,
-                        None => {
-                            tracing::warn!("[wasm write-file-finish] rejected: no storage context");
-                            return Ok((false,));
-                        }
-                    };
-                    Ok((crate::host_functions::storage::put_flow_path(
-                        ctx,
-                        &pw.flow_path,
-                        pw.buffer,
-                        "wasm write-file-finish",
+                    let result = crate::host_functions::storage_api::write_finish(
+                        &store.data().host_state,
+                        &write_id,
                     )
-                    .await,))
+                    .await;
+                    if let Err(error) = &result {
+                        tracing::warn!(%error, "[wasm write-file-finish] failed");
+                    }
+                    Ok((result.is_ok(),))
                 })
             },
         )
@@ -871,10 +883,12 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     {
                         return Ok((None::<String>,));
                     }
-                    let flow_path: StorageFlowPath = match serde_json::from_str(&flow_path_json) {
-                        Ok(p) => p,
-                        Err(_) => return Ok((None,)),
-                    };
+                    let request: crate::host_functions::storage::StorageListRequest =
+                        match serde_json::from_str(&flow_path_json) {
+                            Ok(request) => request,
+                            Err(_) => return Ok((None,)),
+                        };
+                    let flow_path = request.flow_path;
                     let ctx = match &store.data().host_state.storage_context {
                         Some(c) => c,
                         None => return Ok((None,)),
@@ -886,17 +900,38 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     };
                     use futures::StreamExt;
                     let prefix = path;
-                    let entries: Vec<_> = obj_store
-                        .as_generic()
-                        .list(Some(&prefix))
-                        .filter_map(|r| async { r.ok() })
-                        .map(|meta| StorageFlowPath {
-                            path: meta.location.as_ref().to_string(),
-                            store_ref: flow_path.store_ref.clone(),
-                            cache_store_ref: flow_path.cache_store_ref.clone(),
-                        })
-                        .collect()
-                        .await;
+                    let backend = obj_store.as_generic();
+                    let mut listing = crate::host_functions::storage::list_files_excluding(
+                        backend,
+                        prefix.clone(),
+                        request.exclude_directories.clone(),
+                    );
+                    let mut entries = Vec::new();
+                    while let Some(result) = listing.next().await {
+                        let meta = match result {
+                            Ok(meta) => meta,
+                            Err(error) => {
+                                tracing::warn!(%error, "[wasm list-files] failed");
+                                store.data().host_state.log(
+                                    crate::host_functions::logging::LogLevel::Error as u8,
+                                    format!("Unable to list '{}': {error}", flow_path.path),
+                                    None,
+                                );
+                                return Ok((None,));
+                            }
+                        };
+                        if crate::host_functions::storage::include_listed_file(
+                            &meta.location,
+                            &prefix,
+                            &request.exclude_directories,
+                        ) {
+                            entries.push(
+                                crate::host_functions::storage::StorageFileEntry::from_metadata(
+                                    &flow_path, meta,
+                                ),
+                            );
+                        }
+                    }
                     match serde_json::to_string(&entries) {
                         Ok(json) => Ok((Some(json),)),
                         Err(_) => Ok((None,)),

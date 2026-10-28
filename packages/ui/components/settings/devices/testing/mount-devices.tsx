@@ -255,6 +255,10 @@ export function fakeBackend(
 			// This computer runs only what the test gave it (`localTriggers`).
 			isEventSinkActive: async (eventId: string) =>
 				fake.sinks.state().isEventSinkActive(eventId),
+			getEventSinkStatus: async (eventId: string) => fake.sinks.status(eventId),
+			// "Add token" on the desktop: `fake.sinks.repaired` records it.
+			repairLocalTrigger: async (_appId: string, event: { id: string }) =>
+				fake.sinks.repair(event.id),
 		}),
 		sinkState:
 			fake.deps.platform === "desktop" ? fake.sinks.state() : undefined,

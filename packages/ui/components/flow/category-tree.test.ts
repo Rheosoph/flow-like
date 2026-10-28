@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	type ICategoryNode,
 	buildCategoryTree,
 	collectFolderPaths,
 	compareByNameThenId,
@@ -14,6 +15,8 @@ const item = (id: string, name: string, category?: string | null) => ({
 	category,
 });
 
+const folder = <T>(node: ICategoryNode<T>, name: string) => node.children[name];
+
 describe("buildCategoryTree", () => {
 	test("keeps prototype-named categories as ordinary folders", () => {
 		const tree = buildCategoryTree([
@@ -21,8 +24,10 @@ describe("buildCategoryTree", () => {
 			item("2", "b", "toString"),
 		]);
 
-		expect(tree.children.__proto__.children.constructor.items[0].id).toBe("1");
-		expect(tree.children.toString.items[0].id).toBe("2");
+		expect(folder(folder(tree, "__proto__"), "constructor").items[0].id).toBe(
+			"1",
+		);
+		expect(folder(tree, "toString").items[0].id).toBe("2");
 		expect(collectFolderPaths(tree)).toContain("__proto__/constructor");
 		expect(Object.getPrototypeOf(tree.children)).toBeNull();
 	});

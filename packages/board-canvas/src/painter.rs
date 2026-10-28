@@ -2,10 +2,11 @@ use crate::aura::{AURA_MARGIN, Aura, HeaderStatus, MAX_FLOWS};
 use crate::geometry::{Curve, CurveKey, Detail, dom_baseline, header_outline};
 use crate::model::{
     ConnectionKind, Direction, Edge, Endpoint, Header, Latch, Node, Overlay, PaintLayer, Palette,
-    Pin, PinEditor, PositionUpdate, Rgba, Scene, SceneIndex,
+    Pin, PinEditor, PositionUpdate, Rgba, Scene, SceneIndex, Trace,
 };
 use crate::status::{NodeStatus, RunState, StatusUpdate, Statuses};
 use crate::text_cache::{TextCache, ZoomQuality};
+use crate::trace_paint::{Tracing, paint_traced_wires};
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
 use serde::Serialize;
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
@@ -64,7 +65,7 @@ fn error(message: impl ToString) -> JsValue {
     JsValue::from_str(&message.to_string())
 }
 
-type NodeText = TextCache<Arc<egui::Galley>>;
+pub(crate) type NodeText = TextCache<Arc<egui::Galley>>;
 
 pub(crate) struct NodeIcon {
     texture: egui::TextureHandle,
@@ -99,6 +100,9 @@ struct Stats {
     comets_drawn: usize,
     flows_drawn: usize,
     status_animating: bool,
+    trace_wires_drawn: usize,
+    trace_previews_drawn: usize,
+    trace_focused: bool,
 }
 
 struct Board {
@@ -119,6 +123,7 @@ struct Board {
     destroyed: bool,
     pulse_started: Option<f64>,
     status: Statuses,
+    tracing: Tracing,
     ctx: Option<egui::Context>,
     stats: Stats,
 }
@@ -144,6 +149,7 @@ impl Board {
         self.text = (0..self.scene.nodes.len())
             .map(|_| NodeText::default())
             .collect();
+        self.tracing.clear_text();
     }
 
     fn replace_scene(&mut self, scene: Scene, index: SceneIndex) {
@@ -173,11 +179,12 @@ impl Board {
         self.stats.unresolved_edges = self.curves.iter().filter(|curve| curve.is_none()).count();
         self.scene = scene;
         self.index = index;
+        self.tracing.state.resolve(&self.scene, &self.index);
         self.clear_text();
         self.wake();
     }
 
-    /// Wires and their decorative activation sweep.
+    /// Wires and their decorative activation sweep. Traced wires are drawn later, on top.
     fn paint_edges(
         &self,
         painter: &egui::Painter,
@@ -194,11 +201,11 @@ impl Board {
         let pulse_stride = self.stats.rendered_edges.div_ceil(MAX_PULSE_EDGES).max(1);
         let mut rendered_edges = 0;
         let mut edge_segments_drawn = 0;
-        for (edge, curve) in self.scene.edges.iter().zip(&self.curves) {
-            let Some(curve) = curve
-                .as_ref()
-                .filter(|curve| !edge.dom && curve_rect(curve).intersects(view))
-            else {
+        let fade = self.tracing.state.unlit_opacity();
+        for (position, (edge, curve)) in self.scene.edges.iter().zip(&self.curves).enumerate() {
+            let Some(curve) = curve.as_ref().filter(|curve| {
+                !edge.dom && !self.tracing.state.lit(position) && curve_rect(curve).intersects(view)
+            }) else {
                 continue;
             };
             rendered_edges += 1;
@@ -208,10 +215,9 @@ impl Board {
                 .map(|point| transform(*point))
                 .collect();
             edge_segments_drawn += points.len().saturating_sub(1);
-            paint_wire(painter, points, edge, detail, zoom);
-            if let Some(progress) = pulse
-                && pulse_edges_drawn < MAX_PULSE_EDGES
-                && (rendered_edges + self.stats.pulse_count as usize).is_multiple_of(pulse_stride)
+            paint_wire(painter, points, edge, detail, zoom, fade);
+            if let Some(progress) =
+                pulse.filter(|_| self.sweeps(rendered_edges, pulse_edges_drawn, pulse_stride))
             {
                 let tint = mix(edge.color, self.palette.primary, 0.6);
                 pulse_edges_drawn += usize::from(paint_sweep(
@@ -224,6 +230,31 @@ impl Board {
             segments: edge_segments_drawn,
             sweeps: pulse_edges_drawn,
         }
+    }
+
+    /// Whether the activation sweep runs along the `rendered`th wire: every `stride`th, until
+    /// `drawn` reaches the budget.
+    fn sweeps(&self, rendered: usize, drawn: usize, stride: usize) -> bool {
+        drawn < MAX_PULSE_EDGES
+            && (rendered + self.stats.pulse_count as usize).is_multiple_of(stride)
+    }
+
+    /// The run's flows and the traced wires, over the other wires on the edge plane. Returns
+    /// how many of each were drawn and whether they animate.
+    fn paint_lit_wires(
+        &self,
+        aura: &Aura,
+        view: Rect,
+        transform: impl Fn([f32; 2]) -> Pos2 + Copy,
+    ) -> (usize, usize, bool) {
+        if self.layer == PaintLayer::Nodes {
+            return (0, 0, false);
+        }
+        let (scene, curves) = (&self.scene, &self.curves);
+        let (flows, flowing) = paint_flows(aura, scene, curves, &self.status, view, transform);
+        let (traced, tracing) =
+            paint_traced_wires(aura, scene, curves, &self.tracing.state, view, transform);
+        (flows, traced, flowing | tracing)
     }
 
     /// The box selection, the wire being dragged and the hovered pin's ring.
@@ -300,18 +331,7 @@ impl Board {
             medium: medium_family(self.medium_font),
         };
         // Over the wires on the edge plane, so comments and nodes stack above the run's path.
-        let (flows, flowing) = if self.layer == PaintLayer::Nodes {
-            (0, false)
-        } else {
-            paint_flows(
-                &aura,
-                &self.scene,
-                &self.curves,
-                &self.status,
-                view,
-                transform,
-            )
-        };
+        let (flows, traced, wiring) = self.paint_lit_wires(&aura, view, transform);
         let nodes = if self.layer == PaintLayer::Edges {
             NodeCounts::default()
         } else {
@@ -326,7 +346,16 @@ impl Board {
                 text_settle_delay.is_none(),
             )
         };
-        let animating = flowing || nodes.animating;
+        let marking = self.layer != PaintLayer::Edges
+            && self.tracing.paint_marks(
+                &aura,
+                &self.scene,
+                &self.index,
+                &self.curves,
+                area,
+                transform,
+            );
+        let animating = wiring | nodes.animating | marking;
         if animating {
             repaint_after(ui, STATUS_FRAME_INTERVAL);
         }
@@ -340,6 +369,9 @@ impl Board {
             self.paint_overlay(&painter, transform);
         }
         self.record(detail, &edges, flows, &nodes, animating);
+        self.stats.trace_wires_drawn = traced;
+        self.stats.trace_previews_drawn = self.tracing.previews_drawn();
+        self.stats.trace_focused = self.tracing.state.focused();
     }
 
     /// Each decorative sweep is finite and uses cached curves with a fixed edge budget.
@@ -410,8 +442,16 @@ fn pick(selected: bool, on: f32, off: f32) -> f32 {
     if selected { on } else { off }
 }
 
-/// One wire in its kind's stroke: execution solid, references glowing, data dashed.
-fn paint_wire(painter: &egui::Painter, points: Vec<Pos2>, edge: &Edge, detail: Detail, zoom: f32) {
+/// One wire in its kind's stroke: execution solid, references glowing, data dotted. `fade`
+/// scales its opacity.
+pub(crate) fn paint_wire(
+    painter: &egui::Painter,
+    points: Vec<Pos2>,
+    edge: &Edge,
+    detail: Detail,
+    zoom: f32,
+    fade: f32,
+) {
     match edge.kind {
         ConnectionKind::Execution => {
             let selected = edge.selected;
@@ -419,12 +459,14 @@ fn paint_wire(painter: &egui::Painter, points: Vec<Pos2>, edge: &Edge, detail: D
                 points,
                 Stroke::new(
                     pick(selected, 3.0, 2.0) * zoom,
-                    alpha(edge.color, pick(selected, 0.9, 0.7)),
+                    alpha(edge.color, pick(selected, 0.9, 0.7) * fade),
                 ),
             ));
         }
-        ConnectionKind::Reference => paint_reference_wire(painter, points, edge, detail, zoom),
-        ConnectionKind::Data => paint_data_wire(painter, points, edge, detail, zoom),
+        ConnectionKind::Reference => {
+            paint_reference_wire(painter, points, edge, detail, zoom, fade)
+        }
+        ConnectionKind::Data => paint_data_wire(painter, points, edge, detail, zoom, fade),
     }
 }
 
@@ -434,6 +476,7 @@ fn paint_reference_wire(
     edge: &Edge,
     detail: Detail,
     zoom: f32,
+    fade: f32,
 ) {
     let (selected, base) = (edge.selected, edge.color);
     if !detail.simplify_edges() {
@@ -441,7 +484,7 @@ fn paint_reference_wire(
             points.clone(),
             Stroke::new(
                 pick(selected, 8.0, 5.0) * zoom,
-                alpha(base, pick(selected, 0.08, 0.04)),
+                alpha(base, pick(selected, 0.08, 0.04) * fade),
             ),
         ));
     }
@@ -449,7 +492,7 @@ fn paint_reference_wire(
         points.clone(),
         Stroke::new(
             pick(selected, 2.5, 1.5) * zoom,
-            alpha(base, pick(selected, 0.5, 0.3)),
+            alpha(base, pick(selected, 0.5, 0.3) * fade),
         ),
     ));
     if !detail.simplify_edges() {
@@ -457,7 +500,7 @@ fn paint_reference_wire(
             points,
             Stroke::new(
                 pick(selected, 1.2, 0.8) * zoom,
-                alpha(mix(base, [255; 4], 0.2), pick(selected, 0.7, 0.4)),
+                alpha(mix(base, [255; 4], 0.2), pick(selected, 0.7, 0.4) * fade),
             ),
         ));
     }
@@ -469,34 +512,39 @@ fn paint_data_wire(
     edge: &Edge,
     detail: Detail,
     zoom: f32,
+    fade: f32,
 ) {
     let (selected, base) = (edge.selected, edge.color);
     if detail.simplify_edges() && !selected {
         painter.add(Shape::line(
             points,
-            Stroke::new(1.5 * zoom, alpha(base, 0.35)),
+            Stroke::new(1.5 * zoom, alpha(base, 0.35 * fade)),
         ));
         return;
     }
-    painter.extend(Shape::dashed_line(
+    // Dotted at rest; solid once selected, so it stands apart from the wires around it.
+    let stroke = |points: &[Pos2], stroke: Stroke| {
+        if selected {
+            painter.add(Shape::line(points.to_vec(), stroke));
+        } else {
+            painter.extend(Shape::dashed_line(points, stroke, 1.5 * zoom, 4.0 * zoom));
+        }
+    };
+    stroke(
         &points,
         Stroke::new(
             pick(selected, 2.5, 1.5) * zoom,
-            alpha(base, pick(selected, 0.5, 0.35)),
+            alpha(base, pick(selected, 0.5, 0.35) * fade),
         ),
-        1.5 * zoom,
-        4.0 * zoom,
-    ));
+    );
     if !edge.lite {
-        painter.extend(Shape::dashed_line(
+        stroke(
             &points,
             Stroke::new(
                 pick(selected, 1.5, 1.0) * zoom,
-                alpha(mix(base, [255; 4], 0.3), pick(selected, 0.8, 0.5)),
+                alpha(mix(base, [255; 4], 0.3), pick(selected, 0.8, 0.5) * fade),
             ),
-            1.5 * zoom,
-            4.0 * zoom,
-        ));
+        );
     }
 }
 
@@ -682,7 +730,7 @@ fn paint_flows(
     (lit, moving)
 }
 
-fn curve_rect(curve: &Curve) -> Rect {
+pub(crate) fn curve_rect(curve: &Curve) -> Rect {
     Rect::from_min_max(
         pos2(curve.bounds[0], curve.bounds[1]),
         pos2(curve.bounds[2], curve.bounds[3]),
@@ -733,7 +781,7 @@ struct TextScale {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_node(
+pub(crate) fn paint_node(
     aura: &Aura,
     node: &Node,
     rect: Rect,
@@ -1597,6 +1645,52 @@ impl Handle {
         Ok(())
     }
 
+    /// The wires traced from the hovered and the clicked pin, see `Trace`.
+    pub fn set_trace(&self, trace_json: &str) -> Result<(), JsValue> {
+        let trace: Trace = serde_json::from_str(trace_json).map_err(error)?;
+        trace.validate().map_err(error)?;
+        let mut board = self.board.borrow_mut();
+        board.ensure_alive()?;
+        let Board {
+            tracing,
+            scene,
+            index,
+            ..
+        } = &mut *board;
+        tracing.set(trace, scene, index, now());
+        board.wake();
+        Ok(())
+    }
+
+    /// The preview covering canvas point `[x, y]`, as `{"nodeId", "pinId", "rect"}` JSON with
+    /// the card's `[x, y, width, height]` in canvas points.
+    pub fn preview_at(&self, x: f32, y: f32) -> Option<String> {
+        let board = self.board.borrow();
+        let hit = board.tracing.preview_at(pos2(x, y))?;
+        let rect = hit.rect;
+        serde_json::to_string(&serde_json::json!({
+            "nodeId": hit.endpoint.node_id,
+            "pinId": hit.endpoint.pin_id,
+            "rect": [rect.min.x, rect.min.y, rect.width(), rect.height()],
+        }))
+        .ok()
+    }
+
+    /// The preview under the pointer, as `{"nodeId", "pinId"}` JSON; an empty string clears it.
+    pub fn set_preview_hover(&self, endpoint_json: &str) -> Result<(), JsValue> {
+        let endpoint = if endpoint_json.is_empty() {
+            None
+        } else {
+            Some(serde_json::from_str::<Endpoint>(endpoint_json).map_err(error)?)
+        };
+        let mut board = self.board.borrow_mut();
+        board.ensure_alive()?;
+        if board.tracing.hover(endpoint, now()) {
+            board.wake();
+        }
+        Ok(())
+    }
+
     /// The "last activity" text of each running run, keyed by run id.
     pub fn set_activity(&self, activity_json: &str) -> Result<(), JsValue> {
         let activity = serde_json::from_str(activity_json).map_err(error)?;
@@ -1749,6 +1843,7 @@ impl Handle {
             board.overlay = Overlay::default();
             board.overlay_curve = None;
             board.status = Statuses::default();
+            board.tracing = Tracing::default();
             board.scene = Scene::default();
             board.index.nodes = HashMap::new();
             board.index.pins = Vec::new();
@@ -1812,6 +1907,7 @@ pub async fn start(
         destroyed: false,
         pulse_started: None,
         status: Statuses::default(),
+        tracing: Tracing::default(),
         ctx: None,
         stats,
     }));

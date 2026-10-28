@@ -879,6 +879,7 @@ pub async fn apply_flow_ir_commit(
                 "Replayed a durable FlowScript apply receipt, but receipt pruning could not be persisted"
             );
         }
+        super::sink_rebind::rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
         return Ok(Json(receipt));
     }
     if requested_receipt_was_present {
@@ -1156,6 +1157,7 @@ pub async fn apply_flow_ir_commit(
     // therefore observe either neither or both, including after this process exits immediately
     // after persistence.
 
+    super::sink_rebind::rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
     mutation_guard.ensure_held()?;
     let saved = super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await;
     let put = match saved {
@@ -1179,6 +1181,7 @@ pub async fn apply_flow_ir_commit(
             )));
         }
     };
+    super::sink_rebind::rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
 
     audit_branch!(
         state,

@@ -2,18 +2,21 @@ use std::any::Any;
 
 use super::{
     ModelLogic, OPENROUTER_ONLY, ParamDialect, drop_body_param, drop_temperature,
-    merge_additional_params, unforce_tool_choice,
+    media::{self, MediaDialect},
+    merge_additional_params, unforce_tool_choice, user_media,
 };
 use crate::history::{History, HistoryThinking};
 use crate::provider::random_provider;
 use crate::{
+    authorization::AuthorizedHttpClient,
+    egress::ProviderEgress,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
-use rig::completion::CompletionRequest;
+use rig::completion::{CompletionError, CompletionRequest};
 use rig::message::ToolChoice;
 use serde_json::{Value, json};
 
@@ -47,7 +50,11 @@ fn reasoning(model: &str, thinking: HistoryThinking) -> Option<Value> {
         .then(|| json!({ "thinking": { "type": "disabled" } }))
 }
 
-fn moonshot_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
+fn moonshot_constraints(
+    model: &str,
+    request: CompletionRequest,
+) -> Result<CompletionRequest, CompletionError> {
+    let mut request = media::retain_supported(MediaDialect::Moonshot, model, request)?;
     if model.to_ascii_lowercase().contains("kimi-k2")
         && matches!(request.tool_choice, Some(ToolChoice::Required))
     {
@@ -59,11 +66,11 @@ fn moonshot_constraints(model: &str, mut request: CompletionRequest) -> Completi
             drop_body_param(&mut request, key, model, "fixed by this model");
         }
     }
-    request
+    Ok(request)
 }
 
 pub struct MoonshotModel {
-    client: rig::providers::moonshot::Client,
+    client: rig::providers::moonshot::Client<AuthorizedHttpClient>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -77,7 +84,9 @@ impl MoonshotModel {
         let api_key = moonshot_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
 
-        let mut builder = rig::providers::moonshot::Client::builder().api_key(&api_key);
+        let mut builder = rig::providers::moonshot::Client::builder()
+            .api_key(&api_key)
+            .http_client(AuthorizedHttpClient::default());
 
         if let Some(endpoint) = moonshot_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
@@ -92,7 +101,10 @@ impl MoonshotModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -101,7 +113,9 @@ impl MoonshotModel {
             .cloned()
             .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        let mut builder = rig::providers::moonshot::Client::builder().api_key(api_key);
+        let mut builder = rig::providers::moonshot::Client::builder()
+            .api_key(api_key)
+            .http_client(AuthorizedHttpClient::for_egress(egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -130,7 +144,7 @@ impl Cacheable for MoonshotModel {
 impl ModelLogic for MoonshotModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor::with_request_fixup(
+        Ok(user_media::constructor(
             self.client.clone(),
             moonshot_constraints,
         ))
@@ -185,7 +199,7 @@ mod tests {
             output_schema: None,
         };
 
-        let fixed = moonshot_constraints("kimi-k2.6", request);
+        let fixed = moonshot_constraints("kimi-k2.6", request).unwrap();
 
         assert_eq!(fixed.temperature, None);
         let params = fixed.additional_params.unwrap();
@@ -208,7 +222,7 @@ mod tests {
             output_schema: None,
         };
 
-        let fixed = moonshot_constraints("kimi-k2.6", request);
+        let fixed = moonshot_constraints("kimi-k2.6", request).unwrap();
 
         assert!(matches!(fixed.tool_choice, Some(ToolChoice::Auto)));
         assert_eq!(

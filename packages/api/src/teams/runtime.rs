@@ -10,11 +10,14 @@ use crate::{
     entity::{app, event_sink, sea_orm_active_enums::Status},
     error::ApiError,
     execution::{ExecutionClaims, state::ExecutionRunRecord},
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppUser, shadow_side_effect_refused},
     routes::{
         app::events::db::get_event_from_db,
         execution::progress::{ExecutionEventInput, get_state_store},
-        sink::trigger::{TriggerEventInput, trigger_event_with_run_id},
+        sink::trigger::{
+            TriggerEventInput, resolve_sink_run_as_for_run, sink_dispatch_error,
+            trigger_event_with_run_id,
+        },
     },
     state::AppState,
 };
@@ -64,6 +67,7 @@ const MAX_EARLIER_FILE_AGE: chrono::TimeDelta = chrono::TimeDelta::hours(47);
 /// are linked again.
 const ANSWERED: &str = "answered";
 const ANONYMOUS: &str = "anonymous:";
+const SEND_TEAMS_MESSAGES: &str = "send Teams messages";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Session {
@@ -320,10 +324,11 @@ fn string<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, ApiError> {
         (status = 200, description = "Activity accepted; card actions return an invoke response", body = Object),
         (status = 400, description = "The activity is malformed or too large"),
         (status = 401, description = "The request is not signed by Microsoft for this bot"),
-        (status = 403, description = "Teams is disabled, the bot, event or app is inactive, or the conversation belongs to another tenant"),
+        (status = 403, description = "Teams is disabled, the bot, event or app is inactive, the conversation belongs to another tenant, or SINK_RUN_AS_REFUSED: the user the event runs as may no longer run it, so the event is paused"),
         (status = 404, description = "Unknown bot"),
         (status = 409, description = "The same message is already being dispatched"),
-        (status = 500, description = "The workflow could not be dispatched; Microsoft may retry")
+        (status = 500, description = "The workflow could not be dispatched; Microsoft may retry"),
+        (status = 503, description = "SINK_RUN_AS_UNAVAILABLE: the user the event runs as cannot be checked right now; Microsoft may retry")
     )
 )]
 pub async fn incoming(
@@ -358,7 +363,7 @@ pub async fn incoming(
         };
     }
     match gate(&activity, reads_messages(&c))? {
-        Gate::Dispatch => record_activity(&state, &c).await,
+        Gate::Dispatch => {}
         Gate::Ignore => {
             if activity["type"] == "message" && !context::from_bot(&activity) {
                 log_attachment_shape(&c, &activity, "ignored");
@@ -386,7 +391,6 @@ pub async fn incoming(
     }
     let conversation = string(&activity, "/conversation/id")?;
     let activity_id = string(&activity, "/id")?;
-    let (user_id, _) = identity(&c.id, &activity)?;
     let run = hash(&[
         &c.id,
         &c.client_id,
@@ -394,6 +398,16 @@ pub async fn incoming(
         conversation,
         activity_id,
     ]);
+    // A Microsoft retry of a message whose run already went out has nothing left to check.
+    let claimed = store::get::<Dispatch>(&state, &format!("dispatch:{run}")).await?;
+    if claimed.is_some_and(|(claim, _)| dispatch_claim(&claim, now()) == Claim::Done) {
+        return Ok(Json(json!({})));
+    }
+    // Refused before any work for this message: no health write, claim, lookups, files or
+    // history. A refusal of a retried message finalizes its run while that never went out.
+    resolve_sink_run_as_for_run(&state, &sink, Some(&run)).await?;
+    record_activity(&state, &c).await;
+    let (user_id, _) = identity(&c.id, &activity)?;
     let scope = context::scope(&activity);
     let session = Session {
         connection_id: c.id.clone(),
@@ -512,6 +526,64 @@ async fn release_dispatch(state: &AppState, run: &str, revision: i32, dispatched
     }
 }
 
+/// The event a message was first accepted with, and who its sink ran as then.
+#[derive(Serialize, Deserialize)]
+struct AcceptedEvent {
+    run_as: String,
+    event: flow_like::flow::event::Event,
+}
+
+/// A saved `event:{run}` row. One saved before the identity was kept holds the bare event.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SavedEvent {
+    Accepted(AcceptedEvent),
+    Unbound(flow_like::flow::event::Event),
+}
+
+impl SavedEvent {
+    /// The saved event, unless the sink now runs as someone other than whoever accepted it.
+    fn reusable(self, run_as: &str) -> Option<flow_like::flow::event::Event> {
+        match self {
+            Self::Accepted(saved) => (saved.run_as == run_as).then_some(saved.event),
+            Self::Unbound(event) => Some(event),
+        }
+    }
+}
+
+/// A Microsoft retry keeps the deployment accepted with the first delivery while the sink
+/// still runs as whoever accepted it. After a rebind the current event runs and is kept for
+/// later retries.
+async fn accepted_event(
+    state: &AppState,
+    c: &Connection,
+    run: &str,
+    sink: &event_sink::Model,
+    event: flow_like::flow::event::Event,
+) -> Result<flow_like::flow::event::Event, ApiError> {
+    let key = format!("event:{run}");
+    let accepted = AcceptedEvent {
+        run_as: crate::mail_ingress::run_as_binding(sink),
+        event,
+    };
+    if store::insert(state, &key, &c.id, &accepted, now() + DAY_MS).await? {
+        return Ok(accepted.event);
+    }
+    let (saved, revision) = store::get::<SavedEvent>(state, &key)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    if let Some(event) = saved.reusable(&accepted.run_as) {
+        return Ok(event);
+    }
+    tracing::info!(
+        connection_id = %c.id,
+        run_id = %run,
+        "The event saved with this Teams message was accepted as another user; dispatching the current event"
+    );
+    store::update(state, &key, &accepted, revision).await?;
+    Ok(accepted.event)
+}
+
 async fn dispatch(
     state: &AppState,
     c: &Connection,
@@ -521,13 +593,7 @@ async fn dispatch(
     session: Session,
 ) -> Result<(), ApiError> {
     let run = session.run_id.clone();
-    // A Microsoft retry keeps the deployment accepted with the first delivery.
-    let event_key = format!("event:{run}");
-    store::insert(state, &event_key, &c.id, &event, now() + DAY_MS).await?;
-    let event = store::get::<flow_like::flow::event::Event>(state, &event_key)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?
-        .0;
+    let event = accepted_event(state, c, &run, &sink, event).await?;
     store::insert(
         state,
         &format!("run:{run}"),
@@ -560,11 +626,13 @@ async fn dispatch(
             event_id: c.event_id.clone(),
             payload: Some(payload),
             idempotency_key: Some(run.clone()),
+            actor: None,
+            oauth_tokens: None,
         },
         run,
     )
     .await
-    .map_err(ApiError::internal_error)?;
+    .map_err(sink_dispatch_error)?;
     if !result.triggered {
         return Err(ApiError::internal(
             "Teams workflow dispatch failed. Microsoft can retry this message.",
@@ -1679,16 +1747,7 @@ pub(super) async fn session_for_run(
     {
         return Err(ApiError::FORBIDDEN);
     }
-    if run.shadow_of_run_id.is_some()
-        || run.regression_run_id.is_some()
-        || matches!(
-            run.run_variant,
-            crate::execution::state::RunVariant::Shadow
-                | crate::execution::state::RunVariant::Regression
-        )
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+    refuse_replay(&run)?;
     let (c, _) = store::connection(state, &session.connection_id)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
@@ -1697,6 +1756,19 @@ pub(super) async fn session_for_run(
         return Err(ApiError::FORBIDDEN);
     }
     Ok(Some((session, c, run)))
+}
+
+/// Shadow and regression replays never reach a Teams conversation. The refusal carries the
+/// code that lets a suite grade such a replay as skipped.
+fn refuse_replay(run: &ExecutionRunRecord) -> Result<(), ApiError> {
+    use crate::execution::state::RunVariant;
+    if run.shadow_of_run_id.is_some()
+        || run.regression_run_id.is_some()
+        || matches!(run.run_variant, RunVariant::Shadow | RunVariant::Regression)
+    {
+        return Err(shadow_side_effect_refused(SEND_TEAMS_MESSAGES));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -1734,7 +1806,7 @@ pub struct TeamsSendResponse {
     responses(
         (status = 200, description = "Delivered. A repeated request ID returns the original message ID.", body = TeamsSendResponse),
         (status = 400, description = "Invalid request, text or card"),
-        (status = 403, description = "The caller is not this app's running Teams execution"),
+        (status = 403, description = "The caller is not this app's running Teams execution. SHADOW_SIDE_EFFECT_REFUSED: shadow and regression runs cannot send Teams messages"),
         (status = 409, description = "The same request is still being delivered"),
         (status = 413, description = "The message exceeds 24000 bytes"),
         (status = 422, description = "Teams rejected the message, or an earlier attempt may already have been delivered"),
@@ -1749,6 +1821,9 @@ pub async fn send(
     Path(app): Path<String>,
     Json(input): Json<TeamsSendRequest>,
 ) -> Result<Json<TeamsSendResponse>, ApiError> {
+    // A replay runs under a run id of its own with the recorded session, so it would fail the
+    // session checks below with a plain 403.
+    user.deny_shadow_execution(SEND_TEAMS_MESSAGES)?;
     let AppUser::Executor(claims) = user else {
         return Err(ApiError::FORBIDDEN);
     };
@@ -3501,5 +3576,183 @@ mod tests {
             earlier_files(&conversation.messages, &next, now),
             files::stored_refs(&[stored_png("run-1", "screenshot.png")])
         );
+    }
+
+    fn run_record(run_variant: crate::execution::state::RunVariant) -> ExecutionRunRecord {
+        ExecutionRunRecord {
+            id: "run".into(),
+            board_id: "board".into(),
+            version: None,
+            event_id: Some("event".into()),
+            status: crate::execution::state::RunStatus::Running,
+            mode: crate::execution::state::RunMode::Http,
+            run_variant,
+            variant_name: None,
+            shadow_of_run_id: None,
+            regression_run_id: None,
+            input_payload_len: 0,
+            output_payload_len: 0,
+            error_message: None,
+            progress: 0,
+            current_step: None,
+            started_at: None,
+            completed_at: None,
+            expires_at: None,
+            user_id: None,
+            technical_user_id: None,
+            app_id: "app".into(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// A suite grades a replay that was only refused its Teams messages as skipped when the
+    /// refusal carries the shadow code; a primary or canary run is not refused.
+    #[test]
+    fn a_replay_is_refused_with_the_shadow_code() {
+        use crate::execution::state::RunVariant;
+        for live in [RunVariant::Primary, RunVariant::Canary] {
+            assert!(refuse_replay(&run_record(live)).is_ok(), "{live:?}");
+        }
+        let replays = [
+            run_record(RunVariant::Shadow),
+            run_record(RunVariant::Regression),
+            ExecutionRunRecord {
+                shadow_of_run_id: Some("original-run".into()),
+                ..run_record(RunVariant::Primary)
+            },
+            ExecutionRunRecord {
+                regression_run_id: Some("suite-run".into()),
+                ..run_record(RunVariant::Primary)
+            },
+        ];
+        for replay in &replays {
+            let error = refuse_replay(replay).unwrap_err();
+            assert_eq!(
+                (error.status(), error.public_code(), error.public_message()),
+                (
+                    StatusCode::FORBIDDEN,
+                    crate::middleware::jwt::SHADOW_SIDE_EFFECT_REFUSED,
+                    Some("Shadow and regression runs cannot send Teams messages")
+                ),
+                "{replay:?}"
+            );
+        }
+    }
+
+    /// A replay's executor has a run id of its own and no session stored under it, so `send`
+    /// refuses it with the shadow code before any session check could answer a plain 403.
+    #[test]
+    fn a_replay_is_refused_before_the_session_checks() {
+        let source = include_str!("runtime.rs");
+        let send = body(source, "\npub async fn send(");
+        let refusal = send
+            .find("user.deny_shadow_execution(SEND_TEAMS_MESSAGES)?")
+            .expect("the replay refusal");
+        for later in ["claims.run_id != input.session_id", "session_for_run("] {
+            let position = send.find(later).expect(later);
+            assert!(refusal < position, "{later} must follow the replay refusal");
+        }
+        let session = body(source, "\npub(super) async fn session_for_run(");
+        let check = session.find("refuse_replay(&run)?").expect("the run check");
+        assert!(check < session.find("store::connection(").unwrap());
+    }
+
+    fn body<'a>(source: &'a str, signature: &'a str) -> &'a str {
+        let body = source
+            .split_once(signature)
+            .unwrap_or_else(|| panic!("{signature} exists"))
+            .1;
+        body.split_once("\n}\n").map_or(body, |(body, _)| body)
+    }
+
+    /// No Flow-Like person triggers a bot message, so its run fires without an actor and is
+    /// signed unattended: the apps it calls through connections act for nobody.
+    #[test]
+    fn a_message_fires_unattended() {
+        let dispatch = body(include_str!("runtime.rs"), "\nasync fn dispatch(");
+        let fire = &dispatch[dispatch
+            .find("trigger_event_with_run_id(")
+            .expect("the fire")..];
+        assert!(fire.contains("actor: None,"));
+    }
+
+    /// A message for an event whose run-as user may no longer run it is refused before
+    /// the bot records activity, claims the message or prepares its payload, and a run-as
+    /// answer from the dispatch keeps its status instead of turning into a 500.
+    #[test]
+    fn a_message_is_refused_before_any_work_for_it() {
+        let source = include_str!("runtime.rs");
+        let incoming = body(source, "\npub async fn incoming(");
+        let dispatching = &incoming[incoming
+            .find("Gate::Dispatch => {}")
+            .expect("a dispatched message falls through")..];
+        let check = dispatching
+            .find("resolve_sink_run_as_for_run(&state, &sink, Some(&run))")
+            .expect("the run-as check");
+        for later in [
+            "record_activity(",
+            "identity(",
+            "claim_dispatch(",
+            "dispatch(&state",
+        ] {
+            let position = dispatching.find(later).expect(later);
+            assert!(check < position, "{later} must follow the run-as check");
+        }
+        let dispatch = body(source, "\nasync fn dispatch(");
+        assert!(dispatch.contains(".map_err(sink_dispatch_error)?"));
+        assert!(!dispatch.contains("map_err(ApiError::internal_error)"));
+    }
+
+    /// A Microsoft retry of a message whose run already went out answers before the run-as
+    /// check, so a refusal can never land on that run.
+    #[test]
+    fn a_retry_of_a_dispatched_message_skips_the_run_as_check() {
+        let source = include_str!("runtime.rs");
+        let incoming = body(source, "\npub async fn incoming(");
+        let done = incoming
+            .find("dispatch_claim(&claim, now()) == Claim::Done")
+            .expect("the dispatched check");
+        let check = incoming
+            .find("resolve_sink_run_as_for_run(&state, &sink, Some(&run))")
+            .expect("the run-as check");
+        assert!(done < check);
+        assert!(incoming[done..check].contains("return Ok(Json(json!({})));"));
+    }
+
+    fn saved_event(json: String) -> SavedEvent {
+        serde_json::from_str(&json).expect("a saved Teams event")
+    }
+
+    /// A retry reuses the event saved with the message only while the sink runs as whoever
+    /// accepted it; a row saved before the identity was kept is reused as before.
+    #[test]
+    fn a_saved_event_is_reused_only_as_whoever_accepted_it() {
+        use flow_like_types::FromProto;
+        let event = || {
+            let mut event =
+                flow_like::flow::event::Event::from_proto(flow_like_types::proto::Event::default());
+            event.board_id = "board-accepted".into();
+            event
+        };
+        let board = |saved: SavedEvent, run_as: &str| saved.reusable(run_as).map(|e| e.board_id);
+        let accepted = serde_json::to_string(&AcceptedEvent {
+            run_as: "user-1".into(),
+            event: event(),
+        })
+        .unwrap();
+        assert_eq!(
+            board(saved_event(accepted.clone()), "user-1").as_deref(),
+            Some("board-accepted")
+        );
+        assert_eq!(board(saved_event(accepted.clone()), "admin-1"), None);
+        assert_eq!(board(saved_event(accepted), "sink:sink-1"), None);
+        let unbound = serde_json::to_string(&event()).unwrap();
+        for run_as in ["user-1", "admin-1"] {
+            assert_eq!(
+                board(saved_event(unbound.clone()), run_as).as_deref(),
+                Some("board-accepted")
+            );
+        }
     }
 }

@@ -34,7 +34,23 @@ pub struct SinkResponse {
     pub active: bool,
     pub path: Option<String>,
     pub has_auth_token: bool,
-    /// Webhook secret for Telegram verification (only returned for telegram sinks)
+    /// User whose identity remote runs of this sink use. `None` with `active == false`
+    /// usually means the sink was paused because the user it ran as can no longer run it
+    /// (they left, their role does not allow triggering events, their account is no longer
+    /// active, or its legacy token is invalid); `run_as_released` tells for sure. It waits
+    /// for someone to turn it back on. `None` with `active == true` is a legacy sink (see
+    /// `legacy_token`) or one that runs without a user.
+    pub run_as_user_id: Option<String>,
+    /// A release paused the sink because the user it ran as lost their standing in the app.
+    /// Only runs as that user stop: runs a Flow-Like person triggers (signed-in hosted
+    /// visitors, location crossings, calls with a Flow-Like login or through an app
+    /// connection that passes a person) continue. `false` for a sink that is on or that a
+    /// person switched off, which stops every run.
+    pub run_as_released: bool,
+    /// The sink still runs as the owner of a stored legacy access token, validated on
+    /// every trigger, until someone saves or turns it on.
+    pub legacy_token: bool,
+    /// Discord public key or Telegram secret token the bot door verifies
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook_secret: Option<String>,
     pub created_at: String,
@@ -57,6 +73,9 @@ impl From<event_sink::Model> for SinkResponse {
             active: model.active,
             path: model.path,
             has_auth_token: model.auth_token.is_some(),
+            legacy_token: model.pat_encrypted.is_some() && model.run_as_user_id.is_none(),
+            run_as_released: model.run_as_released_at.is_some(),
+            run_as_user_id: model.run_as_user_id,
             webhook_secret: model.webhook_secret,
             created_at: model.created_at.to_rfc3339(),
             updated_at: model.updated_at.to_rfc3339(),
@@ -84,6 +103,20 @@ fn normalize_http_auth_token(value: &str) -> &str {
         return token.trim();
     }
     trimmed
+}
+
+/// The editor becomes the run-as user and the legacy PAT goes. When that is someone new,
+/// the previous person's OAuth grants and profile go too.
+fn bound_to_editor(sink: event_sink::Model, editor: String) -> event_sink::ActiveModel {
+    let rebinds = sink.run_as_user_id.as_deref() != Some(editor.as_str());
+    let mut model: event_sink::ActiveModel = sink.into();
+    model.run_as_user_id = Set(Some(editor));
+    model.pat_encrypted = Set(None);
+    if rebinds {
+        model.oauth_tokens_encrypted = Set(None);
+        model.profile_json = Set(None);
+    }
+    model
 }
 
 /// Builds the responses for `sinks`, resolving their event info in one query.
@@ -279,11 +312,12 @@ pub async fn get_sink(
 }
 
 /// PATCH /sink/{event_id}
-/// Update sink-specific fields (path, auth_token)
+/// Update sink-specific fields (path, auth_token). The editor becomes the run-as user.
 #[utoipa::path(
     patch,
     path = "/sink/{event_id}",
     tag = "sink",
+    description = "Update the path or auth token of an event's hub trigger. The editor becomes the user the trigger runs as; when that is someone else, the stored OAuth grants and profile are dropped.",
     params(
         ("event_id" = String, Path, description = "Event ID")
     ),
@@ -292,8 +326,9 @@ pub async fn get_sink(
         (status = 200, description = "Updated sink", body = SinkResponse),
         (status = 400, description = "The event runs on its deployed devices only"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
-        (status = 404, description = "Sink not found")
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the trigger is on and the editor may not trigger events"),
+        (status = 404, description = "Sink not found"),
+        (status = 503, description = "The editor's permission to trigger events cannot be checked right now")
     ),
     security(
         ("bearer_auth" = [])
@@ -313,11 +348,15 @@ pub async fn update_sink(
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get sink: {}", e)))?
         .ok_or_else(|| ApiError::not_found("Sink not found for this event"))?;
 
-    let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
+    let permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
+    let sub = permission.sub()?;
     let sink_app_id = sink.app_id.clone();
     super::service::ensure_event_may_use_hub_trigger(&state.db, &sink).await?;
+    if sink.active {
+        super::service::ensure_actor_may_arm(&state, &sink.app_id, &sub).await?;
+    }
 
-    let mut active_model: event_sink::ActiveModel = sink.into();
+    let mut active_model = bound_to_editor(sink, sub);
 
     if let Some(path) = body.path {
         let normalized = if path.is_empty() {
@@ -356,6 +395,7 @@ pub async fn update_sink(
     post,
     path = "/sink/{event_id}/toggle",
     tag = "sink",
+    description = "Turn an event's hub trigger on or off. Turning it on makes the caller the user it runs as; turning it off keeps who it runs as.",
     params(
         ("event_id" = String, Path, description = "Event ID")
     ),
@@ -363,8 +403,9 @@ pub async fn update_sink(
         (status = 200, description = "Toggled sink", body = SinkResponse),
         (status = 400, description = "The event runs on its deployed devices only, so its hub trigger cannot be turned on"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
-        (status = 404, description = "Sink not found")
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the caller may not trigger events, so cannot turn the trigger on"),
+        (status = 404, description = "Sink not found"),
+        (status = 503, description = "The caller's permission to trigger events cannot be checked right now")
     ),
     security(
         ("bearer_auth" = [])
@@ -384,12 +425,13 @@ pub async fn toggle_sink(
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get sink: {}", e)))?
         .ok_or_else(|| ApiError::not_found("Sink not found for this event"))?;
 
-    let _permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
+    let permission = ensure_permission!(user, &sink.app_id, &state, RolePermissions::WriteEvents);
+    let sub = permission.sub()?;
     let sink_app_id = sink.app_id.clone();
 
     // Use service module to toggle (handles external scheduler sync and refuses to turn
     // the hub trigger of a device-only event on)
-    let updated = super::service::toggle_sink_active(&state.db, &state, &event_id).await?;
+    let updated = super::service::toggle_sink_active(&state.db, &state, &event_id, &sub).await?;
 
     audit_branch!(
         state,
@@ -401,4 +443,90 @@ pub async fn toggle_sink(
         serde_json::json!({ "active": updated.active })
     );
     Ok(Json(SinkResponse::from(updated)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sink(run_as: Option<&str>, pat: Option<&str>) -> event_sink::Model {
+        let now = chrono::Utc::now().fixed_offset();
+        event_sink::Model {
+            id: "sink".into(),
+            event_id: "event".into(),
+            app_id: "app".into(),
+            sink_type: "http".into(),
+            active: true,
+            path: None,
+            auth_token: None,
+            webhook_secret: None,
+            cron_expression: None,
+            cron_timezone: None,
+            pat_encrypted: pat.map(str::to_owned),
+            oauth_tokens_encrypted: Some("oauth".into()),
+            profile_json: Some(serde_json::json!({"id": "profile"})),
+            created_at: now,
+            updated_at: now,
+            method: None,
+            run_as_user_id: run_as.map(str::to_owned),
+            run_as_released_at: None,
+        }
+    }
+
+    #[test]
+    fn only_a_stored_token_without_a_run_as_user_is_legacy() {
+        for (run_as, pat, legacy) in [
+            (None, Some("pat"), true),
+            (Some("ada"), Some("pat"), false),
+            (None, None, false),
+            (Some("ada"), None, false),
+        ] {
+            assert_eq!(
+                SinkResponse::from(sink(run_as, pat)).legacy_token,
+                legacy,
+                "{run_as:?} {pat:?}"
+            );
+        }
+    }
+
+    /// A sink a release paused says so, so the app can tell it from one a person switched off.
+    #[test]
+    fn a_sink_says_whether_a_release_paused_it() {
+        let released = event_sink::Model {
+            active: false,
+            run_as_released_at: Some(chrono::Utc::now().fixed_offset()),
+            ..sink(None, None)
+        };
+        let switched_off = event_sink::Model {
+            active: false,
+            ..sink(Some("ada"), None)
+        };
+        for (case, model, expected) in [
+            ("released", released, true),
+            ("switched off", switched_off, false),
+            ("on", sink(Some("ada"), None), false),
+        ] {
+            let response = SinkResponse::from(model);
+            assert_eq!(response.run_as_released, expected, "{case}");
+            let json = serde_json::to_value(&response).unwrap();
+            assert_eq!(json["run_as_released"], expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn an_edit_keeps_the_credentials_only_of_the_same_person() {
+        let same = bound_to_editor(sink(Some("ada"), Some("pat")), "ada".into());
+        assert_eq!(same.run_as_user_id, Set(Some("ada".into())));
+        assert_eq!(same.pat_encrypted, Set(None));
+        assert!(!same.oauth_tokens_encrypted.is_set());
+        assert!(!same.profile_json.is_set());
+
+        for previous in [Some("ada"), None] {
+            let rebound = bound_to_editor(sink(previous, Some("pat")), "bob".into());
+            assert_eq!(rebound.run_as_user_id, Set(Some("bob".into())));
+            assert_eq!(rebound.pat_encrypted, Set(None));
+            assert_eq!(rebound.oauth_tokens_encrypted, Set(None));
+            assert_eq!(rebound.profile_json, Set(None));
+        }
+    }
 }

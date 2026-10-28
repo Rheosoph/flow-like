@@ -139,7 +139,6 @@ pub fn validate_payload(raw: &[u8], config: &CommonConfig) -> Result<Dispatch> {
         "credentials",
         "executor_jwt",
         "callback_url",
-        "token",
         "oauth_tokens",
         "stream_state",
         "execution_mode",
@@ -184,10 +183,6 @@ pub fn validate_payload(raw: &[u8], config: &CommonConfig) -> Result<Dispatch> {
         || payload.callback_url != config.callback_url
         || !payload.credentials.is_object()
         || payload.artifact.is_none()
-        || payload
-            .token
-            .as_ref()
-            .is_some_and(|token| !token.is_empty())
     {
         return Err(Error::invalid(
             "Dispatch does not match the approved execution capability",

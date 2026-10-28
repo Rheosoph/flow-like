@@ -16,4 +16,4 @@ mod unified;
 
 pub use governance::{BoardDepiction, GovernanceCopilot, GovernanceSuggestion, SuggestedAnswer};
 pub use types::*;
-pub use unified::UnifiedCopilot;
+pub use unified::{UnifiedCopilot, flowpilot_thinking};

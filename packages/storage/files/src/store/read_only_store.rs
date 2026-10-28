@@ -15,6 +15,11 @@ use object_store::{
 use std::ops::Range;
 use std::sync::Arc;
 
+/// Carries the code a regression suite reads to grade a replay that failed
+/// only on refused side effects as skipped instead of regressed.
+const WRITE_REFUSED: &str =
+    "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot write app storage";
+
 #[derive(Debug)]
 pub struct ReadOnlyStore {
     inner: Arc<dyn ObjectStore>,
@@ -28,7 +33,7 @@ impl ReadOnlyStore {
     fn write_denied(operation: &str, location: &str) -> object_store::Error {
         object_store::Error::NotSupported {
             source: format!(
-                "shadow runs cannot write app storage: {operation} on '{location}' was blocked by the read-only store"
+                "{WRITE_REFUSED}: {operation} on '{location}' was blocked by the read-only store"
             )
             .into(),
         }
@@ -130,38 +135,46 @@ mod tests {
             .await
             .expect("seed inner store");
 
-        let put = store.put(&path, PutPayload::from_static(b"x")).await;
-        assert!(
-            put.as_ref().is_err_and(|e| e
-                .to_string()
-                .contains("shadow runs cannot write app storage")),
-            "put must be denied with the shadow message, got {put:?}"
-        );
-        assert!(store.put_multipart(&path).await.is_err());
-        assert!(store.delete(&path).await.is_err());
-        assert!(store.copy(&path, &Path::from("copy.txt")).await.is_err());
-        assert!(store.rename(&path, &Path::from("moved.txt")).await.is_err());
-        assert!(
-            store
-                .copy_if_not_exists(&path, &Path::from("copy.txt"))
-                .await
-                .is_err()
-        );
-        assert!(
-            store
-                .rename_if_not_exists(&path, &Path::from("moved.txt"))
-                .await
-                .is_err()
-        );
-
-        let streamed: Vec<_> = store
+        let (copy, moved) = (Path::from("copy.txt"), Path::from("moved.txt"));
+        let streamed = store
             .delete_stream(Box::pin(futures::stream::iter([Ok(path.clone())])))
             .try_collect::<Vec<_>>()
             .await
-            .err()
-            .into_iter()
-            .collect();
-        assert!(!streamed.is_empty(), "delete_stream must error per path");
+            .map(drop);
+        let copied = "apps/app-1/file.txt -> copy.txt";
+        let renamed = "apps/app-1/file.txt -> moved.txt";
+        for (operation, location, result) in [
+            (
+                "put",
+                "apps/app-1/file.txt",
+                store
+                    .put(&path, PutPayload::from_static(b"x"))
+                    .await
+                    .map(drop),
+            ),
+            (
+                "multipart upload",
+                "apps/app-1/file.txt",
+                store.put_multipart(&path).await.map(drop),
+            ),
+            ("delete", "apps/app-1/file.txt", store.delete(&path).await),
+            ("delete", "apps/app-1/file.txt", streamed),
+            ("copy", copied, store.copy(&path, &copy).await),
+            ("copy", copied, store.copy_if_not_exists(&path, &copy).await),
+            ("rename", renamed, store.rename(&path, &moved).await),
+            (
+                "rename",
+                renamed,
+                store.rename_if_not_exists(&path, &moved).await,
+            ),
+        ] {
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!(
+                    "Operation not supported: {WRITE_REFUSED}: {operation} on '{location}' was blocked by the read-only store"
+                )
+            );
+        }
 
         // The inner object survived every attempt untouched.
         let bytes = inner.get(&path).await.unwrap().bytes().await.unwrap();

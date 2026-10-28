@@ -27,32 +27,41 @@ use utoipa::ToSchema;
 /// per-transaction row budget.
 const MEMBERSHIP_PURGE_CHUNK: usize = 500;
 
-/// One page of membership ids to detach and delete, smallest id first.
+/// One page of membership ids to detach and delete, smallest id first, each with
+/// its member.
 fn membership_page(condition: &Condition) -> Select<membership::Entity> {
     membership::Entity::find()
         .filter(condition.clone())
         .select_only()
         .column(membership::Column::Id)
+        .column(membership::Column::UserId)
         .order_by_asc(membership::Column::Id)
         .limit(MEMBERSHIP_PURGE_CHUNK as u64)
 }
 
-/// Delete every membership matching `condition`, page by page.
+/// Delete every membership of `app_id` matching `condition`, page by page, and
+/// release the event sinks of each page's members as removing them from the
+/// team does.
 ///
 /// A membership cascades into its invitations and the technical users it
 /// created, and deleting a technical user nulls its rows in four usage tables —
 /// tens of thousands of rows for a single API key. Detaching those children in
 /// their own bounded sweeps first leaves the membership rows as the only work
 /// the delete transaction has to do.
-async fn purge_memberships(state: &AppState, condition: &Condition) -> Result<(), ApiError> {
+async fn purge_memberships(
+    state: &AppState,
+    app_id: &str,
+    condition: &Condition,
+) -> Result<(), ApiError> {
     loop {
-        let ids: Vec<String> = membership_page(condition)
+        let page: Vec<(String, String)> = membership_page(condition)
             .into_tuple()
             .all(&state.db)
             .await?;
-        if ids.is_empty() {
+        if page.is_empty() {
             return Ok(());
         }
+        let (ids, members): (Vec<String>, Vec<String>) = page.into_iter().unzip();
         for membership_id in &ids {
             detach_membership_children(state, membership_id).await?;
         }
@@ -66,6 +75,11 @@ async fn purge_memberships(state: &AppState, condition: &Condition) -> Result<()
         .await?;
         if removed.rows == 0 {
             return Ok(());
+        }
+        if let Err(error) =
+            crate::routes::sink::service::release_departed_members(state, app_id, &members).await
+        {
+            tracing::error!(%app_id, members = members.len(), %error, "Failed to pause the removed members' event sinks");
         }
     }
 }
@@ -242,7 +256,7 @@ pub async fn change_visibility(
     // Purge only after quota admission commits. A rejected visibility change
     // must not remove members from the existing public project.
     if purge_members {
-        purge_memberships(&state, &other_members).await?;
+        purge_memberships(&state, &app_id, &other_members).await?;
         crate::package_license::refresh_app(&state, &app_id).await;
     }
 
@@ -280,5 +294,31 @@ mod tests {
         );
         assert!(sql.contains(r#"ORDER BY "Membership"."id" ASC"#), "{sql}");
         assert!(sql.contains(r#""Membership"."appId" = 'app_1'"#), "{sql}");
+        assert!(
+            sql.starts_with(r#"SELECT "Membership"."id", "Membership"."userId" FROM"#),
+            "each purged member's sinks are released: {sql}"
+        );
+    }
+
+    /// Members are released once their memberships are gone, and only for pages this
+    /// purge deleted: a page another removal emptied was released by that removal.
+    #[test]
+    fn a_purge_releases_each_page_after_deleting_it() {
+        let source = include_str!("change_visibility.rs");
+        let purge = source
+            .split_once("\nasync fn purge_memberships(")
+            .expect("the purge")
+            .1;
+        let purge = &purge[..purge.find("\n}\n").expect("the purge's end")];
+        let order = [
+            "delete_in_batches::<membership::Entity>(",
+            "if removed.rows == 0 {",
+            "release_departed_members(",
+        ];
+        let positions: Vec<usize> = order
+            .iter()
+            .map(|step| purge.find(step).unwrap_or_else(|| panic!("{step}")))
+            .collect();
+        assert!(positions.is_sorted(), "{order:?} at {positions:?}");
     }
 }

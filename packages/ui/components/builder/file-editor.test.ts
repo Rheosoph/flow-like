@@ -31,7 +31,7 @@ describe("File Editor builder setup", () => {
 	});
 
 	test("preserves bound source and save metadata when normalizing", () => {
-		const component: FileEditorComponent = {
+		const component: Omit<FileEditorComponent, "id"> = {
 			type: "fileEditor",
 			editor: { literalString: "solidcraft" },
 			src: { path: "$.file.url" },
@@ -40,7 +40,9 @@ describe("File Editor builder setup", () => {
 				save: [{ name: "workflow_event", context: { nodeId: "save" } }],
 			},
 		};
-		expect(normalizeComponent(component)).toMatchObject(component);
+		expect(
+			normalizeComponent({ id: "file-editor", ...component }),
+		).toMatchObject(component);
 	});
 
 	test("uses the optional URL before filling the source default", () => {
@@ -48,17 +50,23 @@ describe("File Editor builder setup", () => {
 			{ literalString: "/files/model.step" },
 			{ path: "$.file.url" },
 		]) {
-			const component: FileEditorComponent = {
+			const component: Omit<FileEditorComponent, "id"> = {
 				type: "fileEditor",
 				editor: { literalString: "solidcraft" },
 				url,
 			};
-			expect(normalizeComponent(component)).toMatchObject({
+			expect(
+				normalizeComponent({ id: "file-editor", ...component }),
+			).toMatchObject({
 				...component,
 				src: url,
 			});
 			expect(
-				normalizeComponent({ ...component, src: { literalString: "" } }),
+				normalizeComponent({
+					id: "file-editor",
+					...component,
+					src: { literalString: "" },
+				}),
 			).toMatchObject({ src: { literalString: "" }, url });
 		}
 	});

@@ -635,6 +635,9 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::teams::lookup::members,
         crate::routes::app::mail::executor_send_mail,
         crate::routes::app::mail::executor_reply_mail,
+        crate::routes::execution::models::chat_completions,
+        crate::routes::execution::models::systemone,
+        crate::routes::user::info::executor_user_info,
         crate::routes::execution::widgets::get_app_widgets,
         crate::routes::execution::widgets::get_app_package_widgets,
         crate::routes::execution::progress::poll_status,
@@ -670,6 +673,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::sink::trigger::trigger_http,
         crate::routes::sink::trigger::trigger_telegram,
         crate::routes::sink::trigger::trigger_discord,
+        crate::routes::sink::geofence::trigger_geofence,
         crate::teams::runtime::incoming,
         crate::teams::management::consent,
         crate::routes::sink::trigger::trigger_service,
@@ -1775,11 +1779,72 @@ mod tests {
     }
 
     #[test]
+    fn executor_model_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        for path in [
+            "/execution/apps/{app_id}/models/chat/completions",
+            "/execution/apps/{app_id}/models/systemone",
+            "/sink/trigger/geofence/{event_id}",
+        ] {
+            assert!(
+                spec.pointer(&format!("/paths/{}/post", path.replace('/', "~1")))
+                    .is_some(),
+                "missing OpenAPI operation post {path}"
+            );
+        }
+    }
+
+    /// Shadow and regression runs get 403 SHADOW_SIDE_EFFECT_REFUSED from these routes.
+    #[test]
+    fn shadow_refusing_routes_document_forbidden() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let locked = [
+            "upload",
+            "commit",
+            "abort",
+            "retention",
+            "legal-hold",
+            "auto-delete",
+            "purge",
+        ]
+        .map(|operation| {
+            (
+                format!("/execution/apps/{{app_id}}/locked/{operation}"),
+                "post",
+            )
+        });
+        for (path, method) in [
+            ("/apps/{app_id}/cache".to_string(), "put"),
+            ("/apps/{app_id}/cache".to_string(), "delete"),
+            ("/apps/{app_id}/cache/namespace".to_string(), "delete"),
+            ("/apps/{app_id}/notifications/create".to_string(), "post"),
+            (
+                "/apps/{app_id}/connections/{target_app_id}/token".to_string(),
+                "post",
+            ),
+            ("/oauth/refresh/{provider_id}".to_string(), "post"),
+        ]
+        .into_iter()
+        .chain(locked)
+        {
+            assert!(
+                spec.pointer(&format!(
+                    "/paths/{}/{method}/responses/403",
+                    path.replace('/', "~1")
+                ))
+                .is_some(),
+                "{method} {path} documents no 403"
+            );
+        }
+    }
+
+    #[test]
     fn executor_widget_paths_are_documented() {
         let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
         for path in [
             "/execution/apps/{app_id}/widgets",
             "/execution/apps/{app_id}/package-widgets",
+            "/execution/apps/{app_id}/user",
         ] {
             assert!(
                 spec.pointer(&format!("/paths/{}/get", path.replace('/', "~1")))

@@ -301,7 +301,6 @@ ndarray = "0.17"
 dirs-next = "2.0.0"
 regex = "1.11.3"
 rig = { package = "rig-core", version="0.38.2", default-features = false, features = ["rustls"]}
-rig-vertexai = { version = "=0.38.2" }
 google-cloud-auth = "1.0"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 rumqttc = "0.25.1"

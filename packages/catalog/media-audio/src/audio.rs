@@ -15,6 +15,7 @@ use flow_like::{
         pin::PinOptions,
         variable::VariableType,
     },
+    models::custom_bit_relay::refuse_relayed_media,
 };
 use flow_like_catalog_core::FlowPath;
 use flow_like_catalog_media_support::validate_vertex_endpoint;
@@ -2540,6 +2541,7 @@ impl NodeLogic for TextToSpeechNode {
 
         let bit: Bit = context.evaluate_pin("provider").await?;
         let provider = provider_from_bit(&bit)?;
+        refuse_relayed_media(&context.app_state, &bit)?;
 
         let text: String = context.evaluate_pin("text").await?;
         if text.trim().is_empty() {
@@ -2875,6 +2877,7 @@ impl NodeLogic for SpeechToTextNode {
 
         let bit: Bit = context.evaluate_pin("provider").await?;
         let provider = transcription_provider_from_bit(&bit)?;
+        refuse_relayed_media(&context.app_state, &bit)?;
 
         let audio_path: FlowPath = context.evaluate_pin("audio").await?;
         let audio_bytes = audio_path.get(context, false).await?;

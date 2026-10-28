@@ -50,6 +50,7 @@ import { useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
 import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
+import type { ChatThinkingLevel } from "../thinking/thinking-options";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -83,15 +84,15 @@ import {
 	putChatMessage,
 } from "./chat-default/chat-db";
 import {
-	ChatWidgetExecutionProvider,
-	type RunWidgetAction,
-} from "./chat-default/chat-widget-execution";
-import type { ISendMessageFunction } from "./chat-default/chatbox";
-import {
 	type IChatTurn,
 	type IStreamLiveState,
 	createChatTurn,
 } from "./chat-default/chat-turn";
+import {
+	ChatWidgetExecutionProvider,
+	type RunWidgetAction,
+} from "./chat-default/chat-widget-execution";
+import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
 import { ChatHistory } from "./chat-default/history";
 import { submitInteractionResponse } from "./chat-default/respond-interaction";
@@ -100,6 +101,7 @@ import {
 	updateSessionInteractions,
 	useSessionInteractions,
 } from "./chat-default/session-interactions";
+import { useChatThinking } from "./chat-default/use-chat-thinking";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
 
@@ -381,6 +383,7 @@ function createUserMessage(
 	otherAttachments: IAttachment[],
 	historyMessage: IHistoryMessage,
 	activeTools: string[],
+	thinking: ChatThinkingLevel | undefined,
 ): IMessage {
 	return {
 		id: createId(),
@@ -391,6 +394,7 @@ function createUserMessage(
 		timestamp: Date.now(),
 		tools: activeTools ?? [],
 		actions: [],
+		thinking,
 	};
 }
 
@@ -402,6 +406,7 @@ function createPayload(
 	globalState: any,
 	activeTools: string[],
 	otherAttachments: IAttachment[],
+	thinking: ChatThinkingLevel,
 ) {
 	return {
 		chat_id: userMessage.sessionId,
@@ -429,6 +434,7 @@ function createPayload(
 		actions: [],
 		tools: activeTools ?? [],
 		attachments: otherAttachments,
+		thinking,
 	};
 }
 
@@ -638,6 +644,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
 	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
+	const thinking = useChatThinking(appId, event.id, config);
+	const thinkingRef = useRef(thinking);
+	thinkingRef.current = thinking;
 	const activeInteractions = useSessionInteractions(sessionIdParameter);
 	const activeInteractionsRef =
 		useRef<IInteractionRequest[]>(activeInteractions);
@@ -1299,6 +1308,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					otherAttachments,
 					historyMessage,
 					activeTools ?? [],
+					thinkingRef.current.stamp,
 				);
 
 				await updateSession(sessionIdParameter, appId, content);
@@ -1352,6 +1362,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					globalState,
 					activeTools ?? [],
 					otherAttachments,
+					thinkingRef.current.level,
 				);
 
 				const responseMessage = createResponseMessage(
@@ -1819,6 +1830,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						config={config}
 						isSending={isSendingFromWelcome}
 						appId={appId}
+						thinking={thinking.picker}
 					/>
 				) : (
 					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
@@ -1836,6 +1848,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							boardId={event.board_id}
 							eventId={event.id}
 							showAiDisclosure
+							thinking={thinking.picker}
 						/>
 					</ChatWidgetExecutionProvider>
 				)}

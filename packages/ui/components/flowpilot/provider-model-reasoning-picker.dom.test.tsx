@@ -26,10 +26,8 @@ describe("provider, model and reasoning picker", () => {
 					{ id: "gpt", label: "GPT-5" },
 				]}
 				selectedModelId="gpt"
-				selectedEffort=""
 				onProviderChange={ignore}
 				onModelChange={ignore}
-				onEffortChange={ignore}
 			/>,
 		);
 		await click(byRole("button", /^Provider and model/, container));

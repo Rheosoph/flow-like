@@ -488,14 +488,10 @@ pub enum CachedAuth {
         app_id: String,
         creator_user_id: Option<String>,
     },
-    /// Executor JWT with sub, app_id, run_id, and optional originating technical user.
+    /// Executor JWT: the principal exactly as the fresh path verified it, with
+    /// every signed claim it carries, and the token's expiry.
     Executor {
-        sub: String,
-        app_id: String,
-        run_id: String,
-        technical_user_id: Option<String>,
-        app_chain: Option<Vec<String>>,
-        correlation: Option<crate::correlation::CorrelationContext>,
+        executor: crate::middleware::jwt::ExecutorUser,
         exp: i64,
     },
     /// App-connection JWT: one app calling another app it is connected to.

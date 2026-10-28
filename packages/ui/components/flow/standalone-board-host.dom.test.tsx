@@ -131,9 +131,25 @@ async function key(element: Element, key: string, modifiers = {}) {
 				bubbles: true,
 				cancelable: true,
 				...modifiers,
-			}),
+			}) as unknown as KeyboardEvent,
 		),
 	);
+}
+function richNode(
+	container: ReturnType<typeof window.document.createElement>,
+	id: string,
+) {
+	const node = container.querySelector(
+		`[data-board-rich-node][data-id="${id}"]`,
+	);
+	if (!(node instanceof window.HTMLElement))
+		throw new Error(`Missing rich node ${id}`);
+	return node;
+}
+function nodeInput(node: ReturnType<typeof window.document.createElement>) {
+	const input = node.querySelector("input");
+	if (!input) throw new Error("Missing rich node input");
+	return input;
 }
 
 test("generic edge labels retain SVG position, styling, and configurable background without RF context", async () => {
@@ -256,10 +272,8 @@ test("camera updates stable wrappers directly and preserves rich editor state", 
 			),
 		},
 	});
-	const wrapper = container.querySelector(
-		'[data-board-rich-node][data-id="0"]',
-	) as unknown as HTMLElement;
-	const editor = wrapper.querySelector("input") as HTMLInputElement;
+	const wrapper = richNode(container, "0");
+	const editor = nodeInput(wrapper);
 	editor.value = "Unsaved edit";
 	await act(async () => {
 		await runtime.setViewport({ x: -20, y: 30, zoom: 0.5 }, { notify: false });
@@ -349,13 +363,9 @@ test("selected workflow nodes keep stable parents, focus, and input selection", 
 			node: () => <input aria-label="Draft" defaultValue="Initial" />,
 		},
 	});
-	const first = container.querySelector(
-		'[data-board-rich-node][data-id="0"]',
-	) as unknown as HTMLElement;
-	const second = container.querySelector(
-		'[data-board-rich-node][data-id="1"]',
-	) as unknown as HTMLElement;
-	const editor = first.querySelector("input") as HTMLInputElement;
+	const first = richNode(container, "0");
+	const second = richNode(container, "1");
+	const editor = nodeInput(first);
 	const initialParent = first.parentElement;
 	expect(second.parentElement).toBe(initialParent);
 	expect(initialParent?.hasAttribute("data-board-editor-stratum")).toBe(true);

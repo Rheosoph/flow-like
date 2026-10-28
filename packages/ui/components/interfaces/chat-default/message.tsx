@@ -26,6 +26,7 @@ import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
 import { IRole } from "../../../lib/schema/llm/history";
 import { cn } from "../../../lib/utils";
+import { ThinkingStamp } from "../../thinking/thinking-stamp";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
@@ -62,6 +63,12 @@ import {
 	unanchoredWidgets,
 } from "./inline-segments";
 import { MessageWidgets } from "./message-widgets";
+import {
+	type PendingAsk,
+	askRuleColor,
+	isEmptyFallbackStep,
+} from "./pending-ask";
+import { PendingAskRule, PendingAskStatus } from "./pending-ask-status";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
 import { extractThinkBlocks } from "./reasoning-format";
 import { ReasoningViewer } from "./reasoning-viewer";
@@ -71,6 +78,7 @@ import { UsageStats } from "./usage-stats";
 const COLLAPSED_ASK_LINES = 6;
 
 function ThinkingIndicator() {
+	const { t } = useTranslation("chat");
 	return (
 		<div className="flex items-center gap-1.5 py-1">
 			<div className="flex gap-1">
@@ -78,7 +86,9 @@ function ThinkingIndicator() {
 				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
 				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
 			</div>
-			<span className="text-xs text-muted-foreground ml-1">Thinking...</span>
+			<span className="text-xs text-muted-foreground ml-1">
+				{t("thinking", "Thinking…")}
+			</span>
 		</div>
 	);
 }
@@ -100,6 +110,8 @@ interface MessageProps {
 	widgetSnapshots?: boolean;
 	/** Host nodes placed at offsets of this message's text. Compared by identity. */
 	anchoredContent?: readonly MessageInlineContent[];
+	/** A question whose answer has shown nothing yet carries the wait on its own card. */
+	pending?: PendingAsk;
 }
 
 /** A node the chat host renders inside one message, at `offset` into its joined text. */
@@ -483,6 +495,7 @@ export const MessageComponent = memo(
 		eventId,
 		widgetSnapshots = true,
 		anchoredContent,
+		pending,
 	}: Readonly<MessageProps>) {
 		const { t } = useTranslation("chat");
 		const feedbackEnabled = useContext(ChatFeedbackEnabledContext);
@@ -697,15 +710,7 @@ export const MessageComponent = memo(
 				return [];
 			}
 
-			return message.plan_steps.filter((step) => {
-				const isEmptyFallbackStep =
-					step.id === "step-0" &&
-					step.title === "Thinking" &&
-					!step.description?.trim() &&
-					!step.reasoning?.trim();
-
-				return !isEmptyFallbackStep;
-			});
+			return message.plan_steps.filter((step) => !isEmptyFallbackStep(step));
 		}, [isUser, message.plan_steps]);
 
 		const currentPlanStepId =
@@ -799,7 +804,7 @@ export const MessageComponent = memo(
 					<div
 						className={cn(
 							"whitespace-break-spaces transition-all duration-300 ease-in-out",
-							compactUserActions && "relative",
+							(compactUserActions || pending) && "relative",
 							isUser
 								? "w-full border-l-2 py-2 pr-4 pl-3.5"
 								: "w-full max-w-full p-4 pt-2 pb-0",
@@ -809,9 +814,7 @@ export const MessageComponent = memo(
 							backgroundColor: isUser
 								? "var(--fl-chat-ask-background, transparent)"
 								: "var(--fl-chat-ai-message-background, var(--background))",
-							borderLeftColor: isUser
-								? "var(--fl-chat-ask-rule, var(--primary))"
-								: undefined,
+							borderLeftColor: isUser ? askRuleColor(pending) : undefined,
 							borderRadius: isUser
 								? "0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0"
 								: "var(--fl-chat-message-radius, 0.75rem)",
@@ -821,9 +824,14 @@ export const MessageComponent = memo(
 							maxWidth: isUser ? "var(--fl-chat-measure, 38rem)" : undefined,
 						}}
 					>
+						{isUser && pending?.phase === "waiting" && <PendingAskRule />}
 						{isUser && (
-							<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-								{t("asked", "Asked")}
+							<span className="mb-1.5 flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+								<span className="flex min-w-0 items-baseline gap-2">
+									{t("asked", "Asked")}
+									{pending && <PendingAskStatus pending={pending} />}
+								</span>
+								{message.thinking && <ThinkingStamp value={message.thinking} />}
 							</span>
 						)}
 						{!isUser && !stepsInline && planSteps.length > 0 && (
@@ -1118,6 +1126,8 @@ export const MessageComponent = memo(
 			prev.loading === next.loading &&
 			prev.widgetSnapshots === next.widgetSnapshots &&
 			prev.anchoredContent === next.anchoredContent &&
+			prev.pending?.phase === next.pending?.phase &&
+			prev.pending?.since === next.pending?.since &&
 			prev.onMessageUpdate === next.onMessageUpdate
 		);
 	},

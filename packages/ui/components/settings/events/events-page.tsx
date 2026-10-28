@@ -37,7 +37,6 @@ import {
 	Input,
 	Label,
 	OAuthConsentDialog,
-	PatSelectorDialog,
 	PermissionNotice,
 	RolePermissions,
 	SectionLockedPanel,
@@ -101,6 +100,7 @@ import {
 import type { PageListItem } from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import { Trans, useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertTriangle,
 	Cloud,
@@ -140,13 +140,26 @@ import { EventEditorHeader } from "./event-editor-header";
 import { EventHistory } from "./event-history";
 import { EventHosting } from "./event-hosting";
 import { EventQuality } from "./event-quality";
+import {
+	EventRunAsNotice,
+	RunAsChip,
+	eventRunAs,
+	eventSinkStatusQuery,
+	servesHostedVisitors,
+	useTurnOnAsMe,
+} from "./event-run-as";
 import { EventSectionRail } from "./event-section-rail";
 import { EventWhereRuns } from "./event-where-runs";
 import { EventsOverview } from "./events-overview";
+import {
+	LocalTriggerTokenNotice,
+	useRepairLocalTrigger,
+} from "./local-trigger-token";
 import { NewEventDialog } from "./new-event-dialog";
 import { SectionGuidance } from "./section-guidance";
 import { SetupChecklist } from "./setup-checklist";
 import { isHeadlessEventType, useEventIssues } from "./use-event-issues";
+import { useSinkActivation } from "./use-sink-activation";
 
 function caseKeyRowsOf(
 	mappings: IEvent["correlation_mappings"],
@@ -295,13 +308,7 @@ export default function EventsPage({
 	useEffect(() => {
 		if (!isCreateDialogOpen) setDeviceEventId(createId());
 	}, [isCreateDialogOpen]);
-	const [pendingCreateOAuthTokens, setPendingCreateOAuthTokens] = useState<
-		Record<string, IOAuthToken> | undefined
-	>();
 	const [editingEvent, setEditingEvent] = useState<IEvent | null>(null);
-	const [showCreatePatDialog, setShowCreatePatDialog] = useState(false);
-	const [pendingEvent, setPendingEvent] = useState<IEvent | null>(null);
-	const [pendingRoutePath, setPendingRoutePath] = useState<string | null>(null);
 	const [isOffline, setIsOffline] = useState<boolean | null>(null);
 	const uiEventTypeSet = useMemo(
 		() => new Set(uiEventTypes ?? []),
@@ -363,7 +370,7 @@ export default function EventsPage({
 	const handleCreateEvent = useCallback(
 		async (
 			newEvent: Partial<IEvent>,
-			selectedPatOrOAuthTokens?: string | Record<string, IOAuthToken>,
+			oauthTokens?: Record<string, IOAuthToken>,
 		) => {
 			if (!id) {
 				console.error("App ID is required to create an event");
@@ -378,55 +385,15 @@ export default function EventsPage({
 			}
 			setIsCreating(true);
 
-			// Determine if we got a PAT string or OAuth tokens
-			const selectedPat =
-				typeof selectedPatOrOAuthTokens === "string"
-					? selectedPatOrOAuthTokens
-					: undefined;
-			const oauthTokens =
-				typeof selectedPatOrOAuthTokens === "object"
-					? selectedPatOrOAuthTokens
-					: undefined;
-
 			const event = newEventDefinition(newEvent, eventList.length);
 
 			let savedEvent: IEvent | null = null;
 			try {
-				// Check if the event requires a sink and PAT is needed
-				if (event.board_id && event.node_id) {
-					try {
-						const board = await backend.boardState.getBoard(
-							id,
-							event.board_id,
-							event.board_version as [number, number, number] | undefined,
-						);
-						const node = board?.nodes?.[event.node_id];
-						if (node?.name) {
-							const requiresSink = eventRequiresSink(
-								eventMapping,
-								event,
-								node.name,
-							);
-
-							if (requiresSink && !isOffline && !selectedPat) {
-								// Store the event and route path, then show PAT dialog
-								setPendingEvent(event);
-								setPendingCreateOAuthTokens(oauthTokens);
-								setPendingRoutePath(newEvent.path ?? null);
-								setShowCreatePatDialog(true);
-								return;
-							}
-						}
-					} catch (error) {
-						console.error("Failed to fetch board for sink check:", error);
-					}
-				}
-
 				savedEvent = await backend.eventState.upsertEvent(
 					id,
 					event,
 					undefined,
-					selectedPat,
+					undefined,
 					oauthTokens,
 				);
 
@@ -448,13 +415,7 @@ export default function EventsPage({
 				console.error("Failed to create event:", error);
 				toast.error(`Failed to create event: ${errorMessage(error)}`);
 			} finally {
-				if (savedEvent) {
-					setIsCreateDialogOpen(false);
-					setShowCreatePatDialog(false);
-					setPendingEvent(null);
-					setPendingRoutePath(null);
-					setPendingCreateOAuthTokens(undefined);
-				}
+				if (savedEvent) setIsCreateDialogOpen(false);
 				setIsCreating(false);
 			}
 		},
@@ -463,11 +424,8 @@ export default function EventsPage({
 			events,
 			eventList.length,
 			backend.eventState,
-			backend.boardState,
 			backend.routeState,
 			canWriteEvents,
-			eventMapping,
-			isOffline,
 			uiEventTypeSet,
 			invalidate,
 			isCreating,
@@ -599,71 +557,6 @@ export default function EventsPage({
 			);
 		},
 		[id, router, embedded, onNavigateToFlow],
-	);
-
-	const handleCreateWithPat = useCallback(
-		async (selectedPat: string) => {
-			if (pendingEvent && id) {
-				if (isCreating) {
-					return;
-				}
-				if (!canWriteEvents) {
-					toast.error(writeDeniedMessage);
-					return;
-				}
-				setIsCreating(true);
-				let savedEvent: IEvent | null = null;
-				try {
-					savedEvent = await backend.eventState.upsertEvent(
-						id,
-						pendingEvent,
-						undefined,
-						selectedPat,
-						pendingCreateOAuthTokens,
-					);
-
-					if (
-						await saveCreatedEventRoute(
-							backend.routeState,
-							id,
-							savedEvent,
-							pendingRoutePath,
-							uiEventTypeSet,
-						)
-					)
-						await invalidate(backend.routeState.getRoutes, [id]);
-
-					await invalidate(backend.eventState.getEvents, [id]);
-					await events.refetch();
-				} catch (error) {
-					console.error("Failed to create event with PAT:", error);
-					toast.error(`Failed to create event: ${errorMessage(error)}`);
-				} finally {
-					if (savedEvent) {
-						setIsCreateDialogOpen(false);
-						setShowCreatePatDialog(false);
-						setPendingEvent(null);
-						setPendingRoutePath(null);
-						setPendingCreateOAuthTokens(undefined);
-					}
-					setIsCreating(false);
-				}
-			}
-		},
-		[
-			pendingEvent,
-			pendingCreateOAuthTokens,
-			pendingRoutePath,
-			id,
-			backend.eventState,
-			backend.routeState,
-			canWriteEvents,
-			events,
-			uiEventTypeSet,
-			invalidate,
-			isCreating,
-			writeDeniedMessage,
-		],
 	);
 
 	if (id && editingEvent) {
@@ -803,18 +696,6 @@ export default function EventsPage({
 					)
 				}
 			</NewEventDialog>
-
-			{/* PAT Selector Dialog for Event Creation */}
-			<PatSelectorDialog
-				open={showCreatePatDialog}
-				onOpenChange={setShowCreatePatDialog}
-				onPatSelected={handleCreateWithPat}
-				title={t("createEventWithSink", "Create Event with Sink")}
-				description={t(
-					"thisEventRequiresASinkSelectOrCreateAPersonalAccessTokenToActivateTheEventSink",
-					"This event requires a sink. Select or create a Personal Access Token to activate the event sink.",
-				)}
-			/>
 		</div>
 	);
 }
@@ -866,6 +747,7 @@ function EventConfiguration({
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
+	const queryClient = useQueryClient();
 	const permissions = useAppPermissions(appId);
 	const canWriteEvents = permissions.can(RolePermissions.WriteEvents);
 	const canListEvents = permissions.can(RolePermissions.ListEvents);
@@ -886,7 +768,6 @@ function EventConfiguration({
 	}, []);
 	const deviceOnly = isDeviceEventSource(formData);
 	const [confirmLeave, setConfirmLeave] = useState(false);
-	const [showPatDialog, setShowPatDialog] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [isOffline, setIsOffline] = useState<boolean | null>(null);
 	const canExecuteLocally = backend.capabilities().canExecuteLocally;
@@ -1064,13 +945,6 @@ function EventConfiguration({
 		}));
 	};
 
-	const checkRequiresSink = (): boolean => {
-		const node = board.data?.nodes?.[formData.node_id];
-		if (!node) return false;
-		const eventTypeConfig = eventMapping[node?.name];
-		return eventTypeConfig?.withSink.includes(formData.event_type);
-	};
-
 	// Teams and inbound email setup is fetched per saved event; a save can change
 	// whether the server accepts that request at all.
 	const refreshServerEventSetup = async (eventId: string) => {
@@ -1082,10 +956,7 @@ function EventConfiguration({
 		]);
 	};
 
-	const runSave = async (
-		selectedPat?: string,
-		providedOAuthTokens?: Record<string, IOAuthToken>,
-	) => {
+	const runSave = async (providedOAuthTokens?: Record<string, IOAuthToken>) => {
 		let oauthTokens = providedOAuthTokens;
 		setRoutePathError(null);
 		const serverBlocker = isServerOnlyEventType(formData.event_type)
@@ -1111,9 +982,6 @@ function EventConfiguration({
 			toast.error("Route path is still loading, please retry");
 			return;
 		}
-
-		// A device-only event registers nothing here, so there is nothing to authorize.
-		const requiresSink = checkRequiresSink() && !deviceOnly;
 
 		// Check OAuth requirements first if we have the stores
 		if (
@@ -1187,12 +1055,6 @@ function EventConfiguration({
 			}
 		}
 
-		if (requiresSink && !isOffline && !selectedPat) {
-			// Show PAT selector dialog
-			setShowPatDialog(true);
-			return;
-		}
-
 		if (shouldHaveRoute) {
 			const existingRoutes =
 				routes.data ?? (await backend.routeState.getRoutes(appId));
@@ -1214,12 +1076,11 @@ function EventConfiguration({
 			}
 		}
 
-		// Save the event with the PAT and OAuth tokens if provided
 		const saved = await backend.eventState.upsertEvent(
 			appId,
 			formData,
 			undefined,
-			selectedPat,
+			undefined,
 			oauthTokens,
 		);
 
@@ -1230,6 +1091,9 @@ function EventConfiguration({
 		// "saving is broken" and invites repeated taps.
 		adoptSaved(saved);
 		await refreshServerEventSetup(saved.id);
+		await queryClient.invalidateQueries({
+			queryKey: ["eventSinkStatus", appId],
+		});
 
 		if (shouldHaveRoute && desiredRoutePath) {
 			try {
@@ -1254,7 +1118,6 @@ function EventConfiguration({
 			}
 		}
 		onReload?.();
-		setShowPatDialog(false);
 		toast.success(`"${saved.name}" saved`);
 		if (isDeviceEventSource(saved) && event.active && !saved.active)
 			toast.info(
@@ -1270,10 +1133,7 @@ function EventConfiguration({
 	// and the bar just stayed up. Every outcome is now visible, and the in-flight
 	// flag stops a double tap from firing two writes.
 	const savingRef = useRef(false);
-	const handleSave = async (
-		selectedPat?: string,
-		oauthTokens?: Record<string, IOAuthToken>,
-	) => {
+	const handleSave = async (oauthTokens?: Record<string, IOAuthToken>) => {
 		if (!canWriteEvents) {
 			toast.error(writeDeniedMessage);
 			return;
@@ -1282,7 +1142,7 @@ function EventConfiguration({
 		savingRef.current = true;
 		setIsSaving(true);
 		try {
-			await runSave(selectedPat, oauthTokens);
+			await runSave(oauthTokens);
 		} catch (error) {
 			console.error("Failed to save event:", error);
 			toast.error(`Failed to save event: ${errorMessage(error)}`);
@@ -1329,7 +1189,7 @@ function EventConfiguration({
 		}
 
 		// Continue with save, passing the OAuth tokens
-		await handleSave(undefined, allTokens);
+		await handleSave(allTokens);
 	};
 
 	const handleOAuthCancel = () => {
@@ -1662,6 +1522,40 @@ function EventConfiguration({
 		boardVariables: board.data?.variables,
 	});
 
+	const hostedVisitors = servesHostedVisitors(savedEvent);
+	const sinkStatus = useQuery({
+		...eventSinkStatusQuery(backend.eventState, appId, savedEvent),
+		enabled:
+			!!appId &&
+			savedEvent.active &&
+			(hostedVisitors ||
+				eventRequiresSink(
+					eventMapping,
+					savedEvent,
+					board.data?.nodes?.[savedEvent.node_id]?.name,
+				)),
+	});
+	const runAs = eventRunAs(savedEvent, sinkStatus.data);
+	const needsToken = sinkStatus.data?.needs_token === true;
+	const repairTrigger = useRepairLocalTrigger(appId);
+	const sinkActivation = useSinkActivation({
+		appId,
+		tokenStore,
+		consentStore,
+		hub,
+		onStartOAuth,
+		onRefreshToken,
+		onChanged: async (saved) => {
+			if (draftStateRef.current.isDirty) setSavedEvent(saved);
+			else adoptSaved(saved);
+			await queryClient.invalidateQueries({
+				queryKey: ["eventSinkStatus", appId],
+			});
+			onReload?.();
+		},
+	});
+	const turnOnAsMe = useTurnOnAsMe(sinkActivation.requestToggle);
+
 	const canSave = isDirty && canWriteEvents;
 	const saveRef = useRef(handleSave);
 	saveRef.current = handleSave;
@@ -1837,6 +1731,13 @@ function EventConfiguration({
 							</div>
 						);
 					})()}
+					{(runAs?.kind === "bound" || runAs?.kind === "unbound") && (
+						<RunAsChip
+							runAs={runAs}
+							hosted={hostedVisitors}
+							className="shrink-0 rounded-md px-2 py-0.5 text-xs font-medium"
+						/>
+					)}
 					{(formData.event_type === "rest" ||
 						formData.event_type === "mcp" ||
 						getHostedFrontendKind(formData)) &&
@@ -1940,6 +1841,22 @@ function EventConfiguration({
 									)}
 						</p>
 					)}
+					{runAs && (
+						<EventRunAsNotice
+							runAs={runAs}
+							busy={sinkActivation.pendingId === savedEvent.id}
+							canWrite={canWriteEvents}
+							writeDeniedMessage={writeDeniedMessage}
+							onTurnOn={() => void turnOnAsMe(savedEvent)}
+						/>
+					)}
+					{needsToken && repairTrigger.available && (
+						<LocalTriggerTokenNotice
+							busy={repairTrigger.pendingId === savedEvent.id}
+							onAddToken={() => void repairTrigger.repair(savedEvent)}
+						/>
+					)}
+					<OAuthConsentDialog {...sinkActivation.dialogProps.consent} />
 					{deviceOnly && (
 						<EventWhereRuns
 							appId={appId}
@@ -3019,14 +2936,6 @@ function EventConfiguration({
 				</AlertDialogContent>
 			</AlertDialog>
 
-			{/* PAT Selector Dialog */}
-			<PatSelectorDialog
-				open={showPatDialog}
-				onOpenChange={setShowPatDialog}
-				onPatSelected={(token) => {
-					handleSave(token);
-				}}
-			/>
 			{/* OAuth Consent Dialog */}
 			<OAuthConsentDialog
 				open={showOAuthConsent}

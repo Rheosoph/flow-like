@@ -14,6 +14,7 @@
 //! best-effort by construction: a failure to record a rejection must never
 //! change the response the caller already earned.
 
+use super::subject::account_user_id;
 use super::{format_run_version, normalize_run_version_label};
 use crate::credentials::CredentialsAccess;
 use crate::entity::execution_run;
@@ -392,9 +393,40 @@ async fn suppression(
     Ok(Suppression::Record)
 }
 
+/// The caller's run id while no run went out under it: its row is absent or still Pending. A
+/// durable transport passes its run id on every retry, and a refusal of a retry must not fail
+/// a run that already started or finished, so the rejection then gets a run of its own. A
+/// failed lookup leaves the run alone too.
+pub(crate) async fn undispatched_run(state: &AppState, run_id: Option<&str>) -> Option<String> {
+    let run_id = run_id?;
+    let status = execution_run::Entity::find_by_id(run_id)
+        .select_only()
+        .column(execution_run::Column::Status)
+        .into_tuple::<RunStatus>()
+        .one(&state.db)
+        .await;
+    match status {
+        Ok(status) if undispatched(status.as_ref()) => Some(run_id.to_owned()),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::warn!(
+                %run_id,
+                %error,
+                "Cannot read the status of a refused run; recording the refusal on a run of its own"
+            );
+            None
+        }
+    }
+}
+
+fn undispatched(status: Option<&RunStatus>) -> bool {
+    matches!(status, None | Some(RunStatus::Pending))
+}
+
 /// The list entry. A row may already exist when the trigger was refused *after*
 /// the run was created (a dispatch that never left the API); finalize it in
-/// place rather than losing the reason to a duplicate-key error.
+/// place rather than losing the reason to a duplicate-key error. Only a run that
+/// is still Pending is finalized: one an executor already started keeps its state.
 async fn record_run_row(
     state: &AppState,
     context: &RejectedRunContext,
@@ -429,15 +461,23 @@ async fn record_run_row(
             .set(update)
             .filter(execution_run::Column::Id.eq(&context.run_id))
             .filter(execution_run::Column::AppId.eq(&context.app_id))
-            .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
+            .filter(execution_run::Column::Status.eq(RunStatus::Pending))
             .exec_with_returning(&state.db)
             .await?;
         return Ok(finalized.into_iter().next());
     }
 
-    // `started_at` stays NULL: the run never started, and that is the
-    // difference between this and a run that failed while executing.
-    let run = execution_run::ActiveModel {
+    Ok(Some(rejected_run(context, now).insert(&state.db).await?))
+}
+
+/// The row of a rejected trigger. `started_at` stays NULL: the run never started, and
+/// that is the difference between this and a run that failed while executing. A
+/// placeholder or pseudonymous actor names no `User`.
+fn rejected_run(
+    context: &RejectedRunContext,
+    now: sea_orm::prelude::DateTimeWithTimeZone,
+) -> execution_run::ActiveModel {
+    execution_run::ActiveModel {
         id: Set(context.run_id.clone()),
         board_id: Set(context.board_id.clone().unwrap_or_default()),
         version: Set(context.version.clone()),
@@ -459,7 +499,11 @@ async fn record_run_row(
         started_at: Set(None),
         completed_at: Set(Some(now)),
         expires_at: Set(Some(now + chrono::Duration::hours(24))),
-        user_id: Set(context.user_id.clone()),
+        user_id: Set(context
+            .user_id
+            .as_deref()
+            .and_then(account_user_id)
+            .map(ToOwned::to_owned)),
         technical_user_id: Set(context.technical_user_id.clone()),
         caller_app_chain: Set(None),
         trace_id: Set(Some(context.run_id.clone())),
@@ -471,8 +515,7 @@ async fn record_run_row(
         event_version: Set(context.event_version.clone()),
         nodes: Set(Some(json!([]))),
         logs_count: Set(Some(1)),
-    };
-    Ok(Some(run.insert(&state.db).await?))
+    }
 }
 
 /// The detail view. Without a board there is no log database to write into —
@@ -597,4 +640,63 @@ pub async fn context_for_event(
             .with_event(event.id, event.node_id)
             .with_event_version(Some(event.event_version)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_runs_name_only_account_users() {
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 0)
+            .unwrap()
+            .fixed_offset();
+        let recorded_actor = |user_id: Option<&str>| {
+            let context = RejectedRunContext::new("app-1", RejectionStage::Payload, "refused")
+                .with_actor(user_id.map(str::to_owned), Some("key-1".into()));
+            let run = rejected_run(&context, now);
+            assert_eq!(run.technical_user_id.unwrap(), Some("key-1".to_owned()));
+            run.user_id.unwrap()
+        };
+        assert_eq!(recorded_actor(Some("user-1")), Some("user-1".to_owned()));
+        for pseudo in [
+            "frontend:event-1:anonymous-session-1",
+            "frontend:event-1:run-run-1",
+            "sink:sink-1",
+            "local",
+            "",
+        ] {
+            assert_eq!(recorded_actor(Some(pseudo)), None, "{pseudo}");
+        }
+        assert_eq!(recorded_actor(None), None);
+    }
+
+    /// A refused retry lands on the transport's run only while no run went out under it.
+    #[test]
+    fn only_a_run_that_never_went_out_takes_a_rejection() {
+        assert!(undispatched(None));
+        assert!(undispatched(Some(&RunStatus::Pending)));
+        for status in [
+            RunStatus::Running,
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+            RunStatus::Timeout,
+        ] {
+            assert!(!undispatched(Some(&status)), "{status:?}");
+        }
+    }
+
+    /// The in-place finalize matches a Pending row only, so a run an executor started
+    /// between the status read and the update keeps its state.
+    #[test]
+    fn a_rejection_never_finalizes_a_started_run() {
+        let source = include_str!("rejection.rs");
+        let finalize = &source[source
+            .find("\nasync fn record_run_row(")
+            .expect("record_run_row")..];
+        let finalize = &finalize[..finalize.find("\n}\n").expect("its end")];
+        assert!(finalize.contains(".filter(execution_run::Column::Status.eq(RunStatus::Pending))"));
+        assert!(!finalize.contains("RunStatus::Running"));
+    }
 }

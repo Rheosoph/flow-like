@@ -5,6 +5,7 @@ import {
 	type ProjectQuickLink,
 	type SpotlightItem,
 	SpotlightProvider,
+	clearStoredPat,
 	handleUpgradeRequiredError,
 	nowSystemTime,
 	useBackend,
@@ -147,7 +148,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			priority: 180,
 			action: () => router.push(`/flow?id=${boardId}&app=${appId}`),
 		}));
-	}, [openBoards.data, router]);
+	}, [openBoards.data, router, t]);
 
 	const handleNavigate = useCallback(
 		(path: string) => {
@@ -200,7 +201,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				{ message },
 			);
 		},
-		[],
+		[t],
 	);
 
 	const handleAddShortcut = useCallback(async () => {
@@ -264,7 +265,6 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		searchParams,
 		appMetadata.data,
 		syncProfileShortcuts,
-		backend.userState,
 	]);
 
 	const handleRemoveShortcut = useCallback(async () => {
@@ -305,8 +305,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			items.push({
 				id: "action-remove-shortcut",
 				type: "action",
-				label: `Remove from Shortcuts`,
-				description: `Remove this page from your quick access shortcuts`,
+				label: "Remove from Shortcuts",
+				description: "Remove this page from your quick access shortcuts",
 				icon: BookmarkMinus,
 				group: "shortcuts",
 				keywords: ["shortcut", "remove", "bookmark", "unpin"],
@@ -352,7 +352,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					keywords: ["shortcut", "bookmark", shortcut.label.toLowerCase()],
 					priority: 200,
 					action: () => {
-						if (!isScriptNavigationUrl(shortcut.path)) router.push(shortcut.path);
+						if (!isScriptNavigationUrl(shortcut.path))
+							router.push(shortcut.path);
 					},
 				});
 			}
@@ -376,7 +377,10 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				],
 				priority: 30,
 				action: () =>
-					clearPageSurfaceCache().then(() => auth.signoutRedirect()),
+					clearPageSurfaceCache().then(() => {
+						clearStoredPat();
+						return auth.signoutRedirect();
+					}),
 			});
 
 			items.push({

@@ -1,4 +1,4 @@
-import { validateSchema } from "@flow-like/widget-sdk";
+import { type JsonSchema, validateSchema } from "@flow-like/widget-sdk";
 import { type ComponentProps, act, useEffect, useState } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import { applyElementUpdate } from "../apply-a2ui-message";
 import { getFilePreviewEventContextSchema } from "../file-preview-events";
 import type {
 	BoundValue,
+	EventHandlers,
 	FileEditorComponent,
 	FilePreviewComponent,
 } from "../types";
@@ -311,7 +312,7 @@ describe("A2UI file creation", () => {
 		},
 	);
 
-	it.each([
+	it.each<EventHandlers | undefined>([
 		undefined,
 		{ "*": [saveAction] },
 		{ save: [] },
@@ -330,6 +331,7 @@ describe("A2UI file creation", () => {
 		"loads an optional initial model after normalization=%s",
 		async (normalized) => {
 			const component: FileEditorComponent = {
+				id: "preview",
 				type: "fileEditor",
 				editor: { literalString: "solidcraft" },
 				url: { literalString: "/files/part.step" },
@@ -591,7 +593,7 @@ describe("A2UI file preview routing", () => {
 		});
 	});
 
-	it.each([
+	it.each<Partial<FilePreviewComponent>>([
 		{},
 		{ actions: [saveAction] },
 		{ eventHandlers: { "*": [saveAction] } },
@@ -834,7 +836,7 @@ describe("A2UI document save actions", () => {
 			expect(context?.actionId).toBe(name);
 			// The widget validator handles direct fields; check the shared file definition too.
 			if (name === "save" || name === "saved") {
-				const definitions = schema?.$defs as Record<string, unknown>;
+				const definitions = schema?.$defs as Record<string, JsonSchema>;
 				for (const key of ["file", "value"]) {
 					expect(
 						validateSchema(definitions.FilePreviewFile, context?.[key]).valid,

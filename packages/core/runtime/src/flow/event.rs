@@ -391,6 +391,11 @@ pub struct ChatEventParameters {
     pub color_scheme: Option<String>,
     /// User-facing disclosure that the conversation is with an AI.
     pub ai_disclosure: Option<String>,
+    /// Show the thinking picker in the composer. Defaults to enabled.
+    pub allow_thinking_selection: Option<bool>,
+    /// Thinking level a new chat starts with: "off" | "low" | "mid" | "high".
+    /// Defaults to "low", the same level the Chat Event applies when none is sent.
+    pub default_thinking: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]

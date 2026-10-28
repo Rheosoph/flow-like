@@ -2,7 +2,9 @@
 //! runtime token for a short-lived app-to-app token and call the hub API on
 //! behalf of the current app.
 
-use flow_like::flow::execution::context::ExecutionContext;
+use flow_like::flow::execution::{
+    ExecutionEnvironment, ExecutionMode, LogLevel, context::ExecutionContext,
+};
 use flow_like_types::{PROXY_EVENT_AUTHORIZATION_HEADER, Value, async_trait, json::json, reqwest};
 use std::sync::{Arc, OnceLock};
 
@@ -17,6 +19,12 @@ const CONTROL_PLANE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 const MAX_SSE_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_SSE_DELIMITER_BYTES: usize = 4;
 const MAX_MCP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Code of the API's refusal of a side effect to a shadow or regression run. Suite grading
+/// reads it to tell a refused side effect from a failure.
+pub const SHADOW_SIDE_EFFECT_REFUSED: &str = "SHADOW_SIDE_EFFECT_REFUSED";
+const SHADOW_REFUSAL_LEAD: &str = "Shadow and regression runs cannot ";
+const CALL_CONNECTED_APPS: &str = "call connected apps";
 
 #[derive(Debug, flow_like_types::json::Deserialize)]
 struct AppConnectionTokenResponse {
@@ -221,12 +229,68 @@ pub async fn error_for_status(
     }
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
+    if let Some(refusal) = api_shadow_refusal(status, &body) {
+        return Err(refusal);
+    }
     let body: String = body.chars().take(500).collect();
     Err(flow_like_types::anyhow!(
         "{} failed with status {}: {}",
         operation,
         status,
         body
+    ))
+}
+
+/// The error a shadow or regression run gets for `effect`, such as "change the app cache".
+pub fn shadow_side_effect_refused(effect: &str) -> flow_like_types::Error {
+    flow_like_types::anyhow!("{SHADOW_SIDE_EFFECT_REFUSED}: {SHADOW_REFUSAL_LEAD}{effect}")
+}
+
+/// Refuses `effect` before any request is made when the run is a shadow or regression replay.
+pub fn refuse_in_shadow(context: &ExecutionContext, effect: &str) -> flow_like_types::Result<()> {
+    match &context.execution_cache {
+        Some(cache) if cache.shadow => Err(shadow_side_effect_refused(effect)),
+        _ => Ok(()),
+    }
+}
+
+/// Logs a refusal at Error, so a suite grades it whatever the node then does with its pins.
+pub fn log_shadow_refusal(
+    context: &mut ExecutionContext,
+    refusal: flow_like_types::Error,
+) -> flow_like_types::Error {
+    context.log_message(&refusal.to_string(), LogLevel::Error);
+    refusal
+}
+
+/// For nodes that route failures to an error pin: logs `error` at Error when it is a shadow
+/// refusal, so a suite grades the refusal; any other error is left to the node.
+pub fn log_if_shadow_refusal(context: &mut ExecutionContext, error: &str) {
+    if error.contains(SHADOW_SIDE_EFFECT_REFUSED) {
+        context.log_message(error, LogLevel::Error);
+    }
+}
+
+/// The API's 403 refusal of a shadow side effect as [`shadow_side_effect_refused`]; `None`
+/// for any other answer.
+pub fn api_shadow_refusal(
+    status: reqwest::StatusCode,
+    body: &str,
+) -> Option<flow_like_types::Error> {
+    if status != reqwest::StatusCode::FORBIDDEN {
+        return None;
+    }
+    let body: Value = flow_like_types::json::from_str(body).ok()?;
+    let error = body.get("error")?;
+    if error.get("code").and_then(Value::as_str) != Some(SHADOW_SIDE_EFFECT_REFUSED) {
+        return None;
+    }
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Some(shadow_side_effect_refused(
+        message.strip_prefix(SHADOW_REFUSAL_LEAD).unwrap_or(message),
     ))
 }
 
@@ -478,6 +542,27 @@ pub async fn ensure_remote_ontology_exposed(
     Ok(())
 }
 
+/// Whether a run on this device says nobody started it. Of the runs nobody starts, only a
+/// schedule's can tell, by its execution mode; a webhook or another device trigger looks like a
+/// person's run to the runtime. A run on the hub needs no say: its executor token tells the API.
+fn started_by_nobody(environment: ExecutionEnvironment, mode: ExecutionMode) -> bool {
+    environment.is_local() && mode == ExecutionMode::Scheduled
+}
+
+/// The body of a connection-token request for the run `run_id`. An `unattended` run asks for a
+/// token that names no person, so a device run minting with its user's own token never passes
+/// that user on as the person behind a schedule.
+fn connection_token_request(run_id: &str, ttl_seconds: Option<u64>, unattended: bool) -> Value {
+    let mut request = json!({ "run_id": run_id });
+    if let Some(ttl_seconds) = ttl_seconds {
+        request["ttl_seconds"] = json!(ttl_seconds);
+    }
+    if unattended {
+        request["unattended"] = json!(true);
+    }
+    request
+}
+
 impl RemoteAppSession {
     async fn open(
         context: &ExecutionContext,
@@ -487,6 +572,7 @@ impl RemoteAppSession {
         const DEFAULT_TTL_SECONDS: u64 = 10 * 60;
         const MAX_TTL_SECONDS: u64 = 15 * 60;
 
+        refuse_in_shadow(context, CALL_CONNECTED_APPS)?;
         let context_cache = context
             .execution_cache
             .clone()
@@ -517,13 +603,11 @@ impl RemoteAppSession {
             base_url, origin_app_id, target_app_id
         );
         let requested_at = std::time::Instant::now();
-        let request_body = match requested_ttl_seconds {
-            Some(ttl_seconds) => json!({
-                "run_id": context.run_id(),
-                "ttl_seconds": ttl_seconds.clamp(60, MAX_TTL_SECONDS),
-            }),
-            None => json!({ "run_id": context.run_id() }),
-        };
+        let request_body = connection_token_request(
+            context.run_id(),
+            requested_ttl_seconds.map(|ttl_seconds| ttl_seconds.clamp(60, MAX_TTL_SECONDS)),
+            started_by_nobody(context.execution_environment(), context.execution_mode()),
+        );
         let client = if context.request_authorizer().is_some() {
             live_control_plane_http_client()
         } else {
@@ -1312,19 +1396,50 @@ impl RemoteAppSession {
 mod tests {
     use super::{
         MAX_SSE_FRAME_BYTES, RemoteAppSession, RemoteSseEvent, RemoteSseEventHandler, SseOutcome,
-        apply_sse_eof_buffer, apply_sse_frame, collect_sse_outcome, ensure_remote_connection_fresh,
-        extend_bounded_body, find_sse_frame_boundary, finish_sse_outcome,
-        follow_get_redirect_without_credentials, http_client, http_client_no_redirect,
-        parse_mcp_response_body, remote_connection_refresh_at,
-        remote_ontology_authorization_cache_key, remote_session_deadlines,
-        with_event_registration_headers,
+        api_shadow_refusal, apply_sse_eof_buffer, apply_sse_frame, collect_sse_outcome,
+        connection_token_request, ensure_remote_connection_fresh, extend_bounded_body,
+        find_sse_frame_boundary, finish_sse_outcome, follow_get_redirect_without_credentials,
+        http_client, http_client_no_redirect, parse_mcp_response_body,
+        remote_connection_refresh_at, remote_ontology_authorization_cache_key,
+        remote_session_deadlines, started_by_nobody, with_event_registration_headers,
     };
+    use flow_like::flow::execution::{ExecutionEnvironment, ExecutionMode};
     use flow_like_types::tokio::io::{AsyncReadExt, AsyncWriteExt};
     use flow_like_types::tokio::net::TcpListener;
     use flow_like_types::{json::json, reqwest, tokio};
 
     fn empty_sse_outcome() -> SseOutcome {
         SseOutcome::default()
+    }
+
+    /// A schedule's run on a device asks for a connection token that names no person, so its
+    /// user's own token never passes them on as the person behind it. Any other device run is
+    /// taken for a person's, and a run on the hub leaves it to its executor token.
+    #[test]
+    fn only_a_device_schedule_asks_for_a_token_that_names_no_person() {
+        use ExecutionEnvironment::{BrowserSandbox, Desktop, Local, Mobile, Server};
+        use ExecutionMode::{Async, Event, Scheduled, Sync};
+        for environment in [Local, Desktop, Mobile, BrowserSandbox, Server] {
+            for mode in [Sync, Async, Event, Scheduled] {
+                assert_eq!(
+                    started_by_nobody(environment, mode),
+                    environment != Server && mode == Scheduled,
+                    "{environment:?} {mode:?}"
+                );
+            }
+        }
+        assert_eq!(
+            connection_token_request("run-1", None, false),
+            json!({"run_id": "run-1"})
+        );
+        assert_eq!(
+            connection_token_request("run-1", Some(900), true),
+            json!({"run_id": "run-1", "ttl_seconds": 900, "unattended": true})
+        );
+        assert_eq!(
+            connection_token_request("run-1", None, true),
+            json!({"run_id": "run-1", "unattended": true})
+        );
     }
 
     #[derive(Default)]
@@ -1822,6 +1937,155 @@ mod tests {
             );
         }
         assert!(listings >= 2);
+    }
+
+    #[test]
+    fn the_api_refusal_of_a_shadow_side_effect_keeps_its_code() {
+        let refused = r#"{"error":{"code":"SHADOW_SIDE_EFFECT_REFUSED","message":"Shadow and regression runs cannot call connected apps"}}"#;
+        assert_eq!(
+            api_shadow_refusal(reqwest::StatusCode::FORBIDDEN, refused)
+                .map(|error| error.to_string())
+                .as_deref(),
+            Some(
+                "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot call connected apps"
+            )
+        );
+        for (status, body) in [
+            (
+                reqwest::StatusCode::FORBIDDEN,
+                r#"{"error":{"code":"FORBIDDEN","message":"Forbidden"}}"#,
+            ),
+            (reqwest::StatusCode::CONFLICT, refused),
+            (reqwest::StatusCode::FORBIDDEN, "SHADOW_SIDE_EFFECT_REFUSED"),
+        ] {
+            assert!(
+                api_shadow_refusal(status, body).is_none(),
+                "{status} {body}"
+            );
+        }
+    }
+
+    #[cfg(feature = "execute")]
+    mod shadow {
+        use flow_like::{
+            flow::{
+                board::ExecutionStage,
+                execution::{
+                    LogLevel,
+                    context::{ExecutionContext, ExecutionContextCache},
+                    internal_node::InternalNode,
+                },
+                node::{Node, NodeLogic},
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use flow_like_types::{
+            sync::{Mutex, RwLock},
+            tokio::{self, net::TcpListener},
+        };
+        use std::sync::{Arc, Weak};
+
+        struct Noop;
+        #[flow_like_types::async_trait]
+        impl NodeLogic for Noop {
+            fn get_node(&self) -> Node {
+                Node::new("shadow_test", "Shadow test", "Shadow replay test", "Tests")
+            }
+            async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+                Ok(())
+            }
+        }
+
+        async fn shadow_context(hub: &str) -> ExecutionContext {
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            let node = Arc::new(InternalNode::new(
+                Noop.get_node(),
+                Default::default(),
+                Arc::new(Noop),
+                Default::default(),
+            ));
+            let profile = Profile {
+                hub: hub.into(),
+                secure: false,
+                ..Profile::default()
+            };
+            let mut context = ExecutionContext::new(
+                Arc::new(Default::default()),
+                &Weak::new(),
+                &state,
+                &node,
+                &Arc::new(Mutex::new(Default::default())),
+                &Arc::new(RwLock::new(Default::default())),
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(profile),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                Some("executor-jwt".into()),
+                Arc::new(Default::default()),
+                None,
+            )
+            .await;
+            context.execution_cache = Some(ExecutionContextCache {
+                stores: state.config.read().await.stores.clone(),
+                app_id: "origin".into(),
+                model_usage_app_id: Some("origin".into()),
+                board_dir: flow_like_storage::Path::from("apps/origin"),
+                board_id: "board".into(),
+                node_id: "node".into(),
+                sub: "alice".into(),
+                shadow: true,
+            });
+            context
+        }
+
+        #[tokio::test]
+        async fn shadow_runs_open_no_connected_app_session() {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let hub = format!("http://{}", listener.local_addr().unwrap());
+            let context = shadow_context(&hub).await;
+            let error = super::super::remote_app_session(&context, "target")
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.to_string(),
+                "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot call connected apps"
+            );
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_err(),
+                "a refused session must not reach the token mint"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_refusal_routed_to_an_error_pin_is_still_logged() {
+            let mut context = shadow_context("http://127.0.0.1:9").await;
+            let refusal = super::super::shadow_side_effect_refused("call connected apps");
+            super::super::log_if_shadow_refusal(&mut context, "Remote query timed out");
+            super::super::log_if_shadow_refusal(&mut context, &refusal.to_string());
+            let errors: Vec<&str> = context
+                .trace
+                .logs
+                .iter()
+                .filter(|log| log.log_level == LogLevel::Error)
+                .map(|log| log.message.as_str())
+                .collect();
+            assert_eq!(
+                errors,
+                [
+                    "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot call connected apps"
+                ]
+            );
+        }
     }
 
     #[test]

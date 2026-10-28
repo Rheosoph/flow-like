@@ -17,6 +17,7 @@ use crate::{
             PostgresStateStore, RunLeaseClaim, RunMode as StateRunMode,
             RunStatus as StateRunStatus, StateStoreError, UpdateRunInput,
         },
+        subject::account_user_id,
         verify_execution_jwt, verify_user_jwt,
     },
     routes::app::prerun_shared::load_exact_prerun_manifest,
@@ -311,7 +312,6 @@ pub async fn report_progress(
             StateRunStatus::Cancelled => ExecutionStatus::Warn,
             _ => ExecutionStatus::Info,
         };
-        let user_id = execution_claim_user_id(&claims.sub).map(ToOwned::to_owned);
         if let Err(e) = track_execution_usage(
             &state.db,
             &claims.board_id,
@@ -319,7 +319,7 @@ pub async fn report_progress(
             &claims.run_id,
             duration_us,
             exec_status,
-            user_id.as_deref(),
+            account_user_id(&claims.sub),
             claims.technical_user_id.as_deref(),
             &claims.app_id,
         )
@@ -788,15 +788,6 @@ async fn track_execution_usage(
     };
     record.insert(db).await?;
     Ok(())
-}
-
-fn execution_claim_user_id(subject: &str) -> Option<&str> {
-    let subject = subject.trim();
-    if subject.is_empty() || subject == "local" || subject.starts_with("sink:") {
-        None
-    } else {
-        Some(subject)
-    }
 }
 
 // ============================================================================
@@ -1376,5 +1367,20 @@ mod page_action_delivery_tests {
                 .get("pageAction")
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod usage_tracking_tests {
+    #[test]
+    fn execution_usage_names_only_account_users() {
+        let source = include_str!("progress.rs");
+        let tracked = source
+            .split_once("if let Err(e) = track_execution_usage(")
+            .expect("terminal runs track their usage")
+            .1;
+        let tracked = tracked.split_once(".await").expect("the call completes").0;
+        assert!(tracked.contains("account_user_id(&claims.sub),"));
+        assert!(!source.contains(concat!("execution_claim", "_user_id")));
     }
 }

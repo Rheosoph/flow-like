@@ -3032,6 +3032,8 @@ describe("mountDevices", () => {
 				config: { expression: "0 0 * * * *" },
 				offline: true,
 				app_id: SAMPLE_APPS.crmSync,
+				has_token: true,
+				state: "ready",
 			},
 		]);
 		await backend().sinkState?.removeEventSink(hourly);

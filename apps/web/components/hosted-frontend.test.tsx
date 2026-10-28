@@ -34,6 +34,11 @@ const harness = vi.hoisted(() => {
 			| ((suffix?: string, init?: RequestInit) => Promise<Response>),
 		accessToken: null as null | (() => string | undefined),
 		backendBuilds: 0,
+		authProxy: false,
+		oauthTokens: undefined as unknown,
+		oauthApps: [] as string[],
+		oauthOpened: 0,
+		promptMounts: 0,
 		auth: {
 			get: () => state,
 			set(next: Partial<AuthState>) {
@@ -88,7 +93,7 @@ vi.mock("../lib/hosted-backend", () => {
 					JSON.stringify({
 						app_id: "app-1",
 						kind: harness.kind,
-						auth_proxy: false,
+						auth_proxy: harness.authProxy,
 						bootstrap: {
 							event: { id: "event-1", name: "Home", config: [] },
 							page: { id: "page-1" },
@@ -101,14 +106,44 @@ vi.mock("../lib/hosted-backend", () => {
 			_data: unknown,
 			request: typeof harness.runtimeRequest,
 			accessToken: typeof harness.accessToken,
+			_auth: unknown,
+			oauthTokens: unknown,
 		) => {
 			harness.runtimeRequest = request;
 			harness.accessToken = accessToken;
+			harness.oauthTokens = oauthTokens;
 			harness.backendBuilds += 1;
 			return {};
 		},
 	};
 });
+
+vi.mock("../lib/hosted-oauth", () => ({
+	HostedOAuth: class {
+		readonly tokensFor = async () => undefined;
+		constructor(appId: string) {
+			harness.oauthApps.push(appId);
+		}
+		open() {
+			harness.oauthOpened += 1;
+			return () => {
+				harness.oauthOpened -= 1;
+			};
+		}
+	},
+}));
+
+vi.mock("./hosted-oauth-prompt", () => ({
+	HostedOAuthPrompt: () => {
+		useEffect(() => {
+			harness.promptMounts += 1;
+			return () => {
+				harness.promptMounts -= 1;
+			};
+		}, []);
+		return null;
+	},
+}));
 
 vi.mock("@flow-like/flow-like-ui/components/interfaces/page-interface", () => ({
 	PageInterface: () => {
@@ -187,7 +222,10 @@ vi.mock("@flow-like/flow-like-ui/state/backend-state", () => {
 vi.mock("@flow-like/flow-like-ui/state/execution-engine-context", () => ({
 	ExecutionEngineProviderComponent: passthrough,
 }));
-vi.mock("@flow-like/locales", () => ({ I18nProvider: passthrough }));
+vi.mock("@flow-like/locales", () => ({
+	I18nProvider: passthrough,
+	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
+}));
 vi.mock("../lib/return-url", () => ({ saveReturnUrl: () => undefined }));
 vi.mock("../lib/oidc-settings", () => ({
 	getWebOidcSettings: (s: unknown) => s,
@@ -227,6 +265,11 @@ beforeEach(() => {
 	harness.runtimeRequest = null;
 	harness.accessToken = null;
 	harness.backendBuilds = 0;
+	harness.authProxy = false;
+	harness.oauthTokens = undefined;
+	harness.oauthApps = [];
+	harness.oauthOpened = 0;
+	harness.promptMounts = 0;
 	harness.auth.reset({
 		isLoading: false,
 		isAuthenticated: true,
@@ -338,5 +381,37 @@ describe("HostedSession", () => {
 		expect(harness.pageMounts).toBe(1);
 
 		expect(harness.formProps).toEqual([]);
+	});
+
+	it("offers the visitor of a sign-in interface their own sign-ins, for every kind", async () => {
+		harness.authProxy = true;
+		for (const kind of ["c", "f", "u"] as const) {
+			harness.kind = kind;
+			await act(async () => root.render(<HostedSession />));
+			await flush();
+			expect(harness.oauthTokens).toEqual(expect.any(Function));
+			expect(harness.promptMounts).toBe(1);
+			expect(harness.oauthOpened).toBe(1);
+			await act(async () => root.unmount());
+			root = createRoot(container);
+		}
+		expect(harness.oauthApps).toEqual(["app-1", "app-1", "app-1"]);
+		expect(harness.promptMounts).toBe(0);
+		expect(harness.oauthOpened).toBe(0);
+	});
+
+	it("never offers an anonymous interface's visitor the prompt", async () => {
+		for (const kind of ["c", "f", "u"] as const) {
+			harness.kind = kind;
+			await act(async () => root.render(<HostedSession />));
+			await flush();
+			expect(harness.backendBuilds).toBeGreaterThan(0);
+			expect(harness.oauthTokens).toBeUndefined();
+			await act(async () => root.unmount());
+			root = createRoot(container);
+		}
+		expect(harness.oauthApps).toEqual([]);
+		expect(harness.promptMounts).toBe(0);
+		expect(harness.oauthOpened).toBe(0);
 	});
 });

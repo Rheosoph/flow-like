@@ -1,43 +1,29 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { parsePublicModelBenchmarks } from "./public-benchmarks";
 import type {
 	AAApiResponse,
 	AAEvaluations,
 	AAModel,
 	AAOpenSourceCategorization,
-	CreativityBenchmarkMatchType,
-	CreativitySimilarityTier,
 	GlobalMaxes,
 	ResultsFile,
-	WritingBenchmarkVersion,
 } from "./types";
+import { isCatalogEstimateSlug } from "./types";
+
+import {
+	type CreativityBenchmarkEntry,
+	type ResolvedCreativityBenchmark,
+	WRITING_BENCHMARK_READMES,
+	parseWritingBenchmarks,
+	resolveCreativityBenchmarks,
+	summarizeCreativityBenchmarks,
+} from "./writing";
 
 const API_URL = "https://artificialanalysis.ai/api/v2/data/llms/models";
 const MODELS_PAGE_URL = "https://artificialanalysis.ai/models";
 const MULTILINGUAL_URL = "https://artificialanalysis.ai/models/multilingual";
 const OMNISCIENCE_URL = "https://artificialanalysis.ai/evaluations/omniscience";
-const WRITING_BENCHMARK_READMES: Array<{
-	url: string;
-	version: WritingBenchmarkVersion;
-	heading: string;
-}> = [
-	{
-		url: "https://raw.githubusercontent.com/lechmazur/writing/main/README.md",
-		version: "v4",
-		heading: "#### Full overall leaderboard",
-	},
-	{
-		url: "https://raw.githubusercontent.com/lechmazur/writing/main/v3/README.md",
-		version: "v3",
-		heading: "#### Full overall leaderboard",
-	},
-	{
-		url: "https://raw.githubusercontent.com/lechmazur/writing/main/v2/README.md",
-		version: "v2",
-		heading: "### Overall LLM Means",
-	},
-];
-
 const MULTILINGUAL_DATASET = "Multilingual Index Across Languages (Normalized)";
 const OMNISCIENCE_INDEX_DATASET =
 	"AA-Omniscience Index Across Domains (Normalized)";
@@ -47,112 +33,17 @@ const OPENNESS_INDEX_DATASET = "Artificial Analysis Openness Index: Score";
 
 type JsonObject = Record<string, unknown>;
 
-interface CreativityBenchmarkEntry {
-	modelName: string;
-	score: number;
-	version: WritingBenchmarkVersion;
-}
-
-interface CreativityBenchmarkMatch {
-	entry: CreativityBenchmarkEntry;
-	matchType: Extract<CreativityBenchmarkMatchType, "direct" | "alias">;
-}
-
-interface ResolvedCreativityBenchmark {
-	score: number;
-	version: WritingBenchmarkVersion;
-	matchType: CreativityBenchmarkMatchType;
-	sourceModelName: string | null;
-	sourceModelSlug: string | null;
-	similarity: number | null;
-	similarityTier: CreativitySimilarityTier | null;
-}
-
-interface CreativitySimilarityFeature {
-	key: string;
-	weight: number;
-	getValue: (model: AAModel) => number | null;
-}
-
 interface PublicBenchmarkMaps {
 	creativity: Map<string, CreativityBenchmarkEntry>;
 	multilinguality: Map<string, number>;
+	multilingualIndex: Map<string, number>;
+	automationBench: Map<string, number>;
 	opennessIndex: Map<string, number>;
 	openSourceCategorization: Map<string, AAOpenSourceCategorization>;
 	omniscienceIndex: Map<string, number>;
 	omniscienceAccuracy: Map<string, number>;
 	omniscienceHallucinationRate: Map<string, number>;
 }
-
-const CREATIVITY_BENCHMARK_ALIASES: Record<string, string> = {
-	"claude-opus-4-6-adaptive": "claude-opus-4-6",
-	"claude-sonnet-4-6-adaptive": "claude-sonnet-4-5",
-	"gemini-3-1-flash-lite-preview": "gemini-2-5-flash",
-	"gemini-3-1-pro-preview": "gemini-3-pro",
-	"glm-5": "glm-4-6",
-	"gpt-5-4-pro": "gpt-5-pro",
-	"minimax-m2": "minimax-m2-1",
-	"minimax-m2-5": "minimax-m2-1",
-};
-
-const CREATIVITY_NEUTRAL_SCORE = 0.5;
-const CREATIVITY_SIMILARITY_MIN_FEATURES = 3;
-const CREATIVITY_SIMILARITY_TIER_DAMPING: Record<
-	CreativitySimilarityTier,
-	number
-> = {
-	same_creator_category: 1,
-	same_creator: 0.95,
-	same_category: 0.85,
-};
-const CREATIVITY_SIMILARITY_FEATURES: CreativitySimilarityFeature[] = [
-	{
-		key: "intelligence_index",
-		weight: 1.5,
-		getValue: (model) =>
-			model.evaluations.artificial_analysis_intelligence_index,
-	},
-	{
-		key: "coding_index",
-		weight: 1,
-		getValue: (model) => model.evaluations.artificial_analysis_coding_index,
-	},
-	{
-		key: "math_index",
-		weight: 1,
-		getValue: (model) => model.evaluations.artificial_analysis_math_index,
-	},
-	{
-		key: "gpqa",
-		weight: 1,
-		getValue: (model) => model.evaluations.gpqa,
-	},
-	{
-		key: "mmlu_pro",
-		weight: 0.8,
-		getValue: (model) => model.evaluations.mmlu_pro,
-	},
-	{
-		key: "livecodebench",
-		weight: 0.7,
-		getValue: (model) => model.evaluations.livecodebench,
-	},
-	{
-		key: "ifbench",
-		weight: 0.7,
-		getValue: (model) => model.evaluations.ifbench,
-	},
-	{
-		key: "tau2",
-		weight: 0.7,
-		getValue: (model) => model.evaluations.tau2,
-	},
-	{
-		key: "output_tokens_per_second",
-		weight: 0.4,
-		getValue: (model) => model.median_output_tokens_per_second,
-	},
-];
 
 function cachedResultsPath(rootDir: string): string {
 	return resolve(rootDir, "tmp", "results.json");
@@ -167,7 +58,11 @@ export async function loadCachedResults(
 		console.log(
 			`[fetch] Loaded ${results.modelCount} models from cache (fetched ${results.fetchedAt})`,
 		);
-		return { models: results.data, maxes: results.globalMaxes };
+		// Older caches predate some benchmark fields; rebuild their denominators.
+		const models = results.data.filter(
+			(model) => !isCatalogEstimateSlug(model.slug),
+		);
+		return { models, maxes: computeGlobalMaxes(models) };
 	} catch {
 		return null;
 	}
@@ -185,19 +80,22 @@ export async function fetchModels(apiKey: string): Promise<AAModel[]> {
 
 	const json = (await res.json()) as AAApiResponse;
 	console.log(`[fetch] Received ${json.data.length} models`);
-	return json.data;
+	return json.data.filter((model) => !isCatalogEstimateSlug(model.slug));
 }
 
 export async function fetchModelsWithCache(
 	apiKey: string,
 	rootDir: string,
+	modelSlugs: readonly string[] = [],
 ): Promise<{ models: AAModel[]; maxes: GlobalMaxes }> {
 	try {
 		const cached = await loadCachedResults(rootDir);
 		const models = await fetchModels(apiKey);
+		const availableSlugs = new Set(models.map((model) => model.slug));
 		const enrichedModels = await enrichModelsWithPublicBenchmarks(
 			models,
 			cached?.models,
+			modelSlugs.filter((slug) => availableSlugs.has(slug)),
 		);
 		const maxes = computeGlobalMaxes(enrichedModels);
 		await writeResults(rootDir, enrichedModels, maxes);
@@ -217,13 +115,16 @@ export async function fetchModelsWithCache(
 }
 
 function safeMax(values: (number | null | undefined)[]): number {
-	const valid = values.filter((v): v is number => v != null && v > 0);
+	const valid = values.filter(
+		(v): v is number => v != null && Number.isFinite(v) && v > 0,
+	);
 	return valid.length > 0 ? Math.max(...valid) : 1;
 }
 
 async function enrichModelsWithPublicBenchmarks(
 	models: AAModel[],
 	cachedModels?: AAModel[],
+	modelSlugs: readonly string[] = [],
 ): Promise<AAModel[]> {
 	const cachedBySlug = new Map(
 		(cachedModels ?? []).map((model) => [model.slug, model]),
@@ -233,9 +134,18 @@ async function enrichModelsWithPublicBenchmarks(
 		null;
 
 	try {
-		benchmarks = await fetchPublicBenchmarks();
+		benchmarks = await fetchPublicBenchmarks(modelSlugs);
+		const multilingualCount = new Set([
+			...benchmarks.multilinguality.keys(),
+			...benchmarks.multilingualIndex.keys(),
+		]).size;
+		const omniscienceCount = new Set([
+			...benchmarks.omniscienceIndex.keys(),
+			...benchmarks.omniscienceAccuracy.keys(),
+			...benchmarks.omniscienceHallucinationRate.keys(),
+		]).size;
 		console.log(
-			`[fetch] Loaded ${benchmarks.creativity.size} creativity, ${benchmarks.multilinguality.size} multilingual, ${benchmarks.opennessIndex.size} openness benchmark, and ${benchmarks.omniscienceIndex.size} omniscience benchmark entries from public pages`,
+			`[fetch] Loaded ${benchmarks.creativity.size} creativity, ${multilingualCount} multilingual, ${benchmarks.opennessIndex.size} openness, ${omniscienceCount} omniscience, and ${benchmarks.automationBench.size} automation benchmark entries from public pages`,
 		);
 	} catch (err) {
 		console.warn(
@@ -273,11 +183,32 @@ async function enrichModelsWithPublicBenchmarks(
 		const cachedModel = cachedBySlug.get(model.slug);
 		const cachedEvaluations = cachedModel?.evaluations;
 		const creativityBenchmark = creativityBenchmarks?.get(model.slug) ?? null;
+		const currentMultilingual =
+			benchmarks?.multilingualIndex.get(model.slug) ??
+			model.evaluations.artificial_analysis_multilingual_index;
+		const currentAccuracy =
+			benchmarks?.omniscienceAccuracy.get(model.slug) ??
+			model.evaluations.artificial_analysis_omniscience_accuracy;
+		const currentHallucination =
+			benchmarks?.omniscienceHallucinationRate.get(model.slug) ??
+			model.evaluations.artificial_analysis_omniscience_hallucination_rate;
 		const evaluations: AAEvaluations = {
 			...model.evaluations,
+			automationbench_aa:
+				benchmarks?.automationBench.get(model.slug) ??
+				model.evaluations.automationbench_aa ??
+				cachedEvaluations?.automationbench_aa ??
+				null,
+			artificial_analysis_multilingual_index:
+				currentMultilingual ??
+				cachedEvaluations?.artificial_analysis_multilingual_index ??
+				null,
 			artificial_analysis_multilingual_index_normalized:
 				benchmarks?.multilinguality.get(model.slug) ??
-				cachedEvaluations?.artificial_analysis_multilingual_index_normalized ??
+				model.evaluations.artificial_analysis_multilingual_index_normalized ??
+				(currentMultilingual == null
+					? cachedEvaluations?.artificial_analysis_multilingual_index_normalized
+					: null) ??
 				null,
 			artificial_analysis_openness_index:
 				benchmarks?.opennessIndex.get(model.slug) ??
@@ -285,19 +216,34 @@ async function enrichModelsWithPublicBenchmarks(
 				null,
 			artificial_analysis_omniscience_index_normalized:
 				benchmarks?.omniscienceIndex.get(model.slug) ??
-				cachedEvaluations?.artificial_analysis_omniscience_index_normalized ??
+				model.evaluations.artificial_analysis_omniscience_index_normalized ??
+				(currentAccuracy == null && currentHallucination == null
+					? cachedEvaluations?.artificial_analysis_omniscience_index_normalized
+					: null) ??
 				null,
 			artificial_analysis_omniscience_accuracy:
-				benchmarks?.omniscienceAccuracy.get(model.slug) ??
+				currentAccuracy ??
 				cachedEvaluations?.artificial_analysis_omniscience_accuracy ??
 				null,
 			artificial_analysis_omniscience_hallucination_rate:
-				benchmarks?.omniscienceHallucinationRate.get(model.slug) ??
+				currentHallucination ??
 				cachedEvaluations?.artificial_analysis_omniscience_hallucination_rate ??
 				null,
 			writing_benchmark_mean_score: creativityBenchmark
-				? creativityBenchmark.score
+				? creativityBenchmark.meanScore
 				: (cachedEvaluations?.writing_benchmark_mean_score ?? null),
+			writing_benchmark_comparison_score: creativityBenchmark
+				? creativityBenchmark.comparisonScore
+				: (cachedEvaluations?.writing_benchmark_comparison_score ?? null),
+			writing_benchmark_estimated_win_chance: creativityBenchmark
+				? creativityBenchmark.estimatedWinChance
+				: (cachedEvaluations?.writing_benchmark_estimated_win_chance ?? null),
+			writing_benchmark_creativity_estimate: creativityBenchmark
+				? creativityBenchmark.creativityEstimate
+				: (cachedEvaluations?.writing_benchmark_creativity_estimate ?? null),
+			writing_benchmark_source_url: creativityBenchmark
+				? creativityBenchmark.sourceUrl
+				: (cachedEvaluations?.writing_benchmark_source_url ?? null),
 			writing_benchmark_version: creativityBenchmark
 				? creativityBenchmark.version
 				: (cachedEvaluations?.writing_benchmark_version ?? null),
@@ -325,7 +271,9 @@ async function enrichModelsWithPublicBenchmarks(
 	});
 }
 
-async function fetchPublicBenchmarks(): Promise<PublicBenchmarkMaps> {
+async function fetchPublicBenchmarks(
+	modelSlugs: readonly string[] = [],
+): Promise<PublicBenchmarkMaps> {
 	const sources = [
 		MODELS_PAGE_URL,
 		MULTILINGUAL_URL,
@@ -333,19 +281,14 @@ async function fetchPublicBenchmarks(): Promise<PublicBenchmarkMaps> {
 		...WRITING_BENCHMARK_READMES.map((source) => source.url),
 	];
 
-	// The writing repository retires old leaderboard versions as new ones land,
-	// and one retired page must not cost every other benchmark its refresh: a
-	// page that fails is parsed as empty, so its models keep their cached score.
-	const settled = await Promise.allSettled(
-		sources.map((url) => fetchPageHtml(url)),
+	const pages = await fetchPages(sources);
+	// Leaderboards render only a subset of models. Fetch linked catalog models
+	// individually so an off-screen row can still receive current benchmarks.
+	const modelPages = await fetchPages(
+		[...new Set(modelSlugs)].map(
+			(slug) => `${MODELS_PAGE_URL}/${encodeURIComponent(slug)}`,
+		),
 	);
-	const pages = settled.map((result, index) => {
-		if (result.status === "fulfilled") return result.value;
-		console.warn(
-			`[fetch] Skipping ${sources[index]}: ${(result.reason as Error).message}`,
-		);
-		return "";
-	});
 
 	const [modelsHtml, multilingualHtml, omniscienceHtml, ...writingReadmes] =
 		pages;
@@ -355,14 +298,15 @@ async function fetchPublicBenchmarks(): Promise<PublicBenchmarkMaps> {
 	const multilingualDatasets = extractLdJsonDatasets(multilingualHtml);
 	const omniscienceDatasets = extractLdJsonDatasets(omniscienceHtml);
 
-	return {
+	const maps: PublicBenchmarkMaps = {
 		creativity: creativityBenchmarks,
+		multilingualIndex: new Map(),
+		automationBench: new Map(),
 		multilinguality: parseNormalizedPropertyDataset(
 			findDataset(multilingualDatasets, MULTILINGUAL_DATASET),
 			"multilingual",
 		),
-		// The score is published on a 0-100 scale, and the models page no longer
-		// carries the open-source categorization, which the API returns anyway.
+		// Openness is published on a 0-100 scale.
 		opennessIndex: parseNumericDataset(
 			findDataset(modelsDatasets, OPENNESS_INDEX_DATASET),
 			"opennessIndex",
@@ -382,306 +326,51 @@ async function fetchPublicBenchmarks(): Promise<PublicBenchmarkMaps> {
 			"omniscienceHallucinationRate",
 		),
 	};
-}
-
-function parseWritingBenchmarks(
-	readmes: string[],
-): Map<string, CreativityBenchmarkEntry> {
-	const benchmarks = new Map<string, CreativityBenchmarkEntry>();
-
-	for (const [index, source] of WRITING_BENCHMARK_READMES.entries()) {
-		const readme = readmes[index];
-		for (const entry of parseWritingBenchmarkTable(
-			readme,
-			source.heading,
-			source.version,
-		)) {
-			const key = normalizeCreativityKey(entry.modelName);
-			if (!key || benchmarks.has(key)) continue;
-			benchmarks.set(key, entry);
+	for (const html of [
+		modelsHtml,
+		multilingualHtml,
+		omniscienceHtml,
+		...modelPages,
+	]) {
+		for (const [slug, row] of parsePublicModelBenchmarks(html)) {
+			if (row.opennessIndex !== undefined)
+				maps.opennessIndex.set(slug, row.opennessIndex);
+			if (row.openSourceCategorization !== undefined)
+				maps.openSourceCategorization.set(slug, row.openSourceCategorization);
+			if (row.omniscienceAccuracy !== undefined)
+				maps.omniscienceAccuracy.set(slug, row.omniscienceAccuracy);
+			if (row.omniscienceHallucinationRate !== undefined)
+				maps.omniscienceHallucinationRate.set(
+					slug,
+					row.omniscienceHallucinationRate,
+				);
+			if (row.automationBench !== undefined)
+				maps.automationBench.set(slug, row.automationBench);
+			if (row.multilingualIndex !== undefined)
+				maps.multilingualIndex.set(slug, row.multilingualIndex);
 		}
 	}
-
-	return benchmarks;
+	return maps;
 }
 
-function parseWritingBenchmarkTable(
-	readme: string,
-	heading: string,
-	version: WritingBenchmarkVersion,
-): CreativityBenchmarkEntry[] {
-	const lines = readme.split(/\r?\n/);
-	const start = lines.findIndex(
-		(line) => line.trim().toLowerCase() === heading.toLowerCase(),
-	);
-	if (start === -1) return [];
-
-	const rows: string[] = [];
-	for (const line of lines.slice(start + 1)) {
-		if (
-			(line.startsWith("##") ||
-				line.startsWith("###") ||
-				line.startsWith("####")) &&
-			rows.length > 0
-		) {
-			break;
-		}
-
-		if (line.startsWith("|")) {
-			rows.push(line);
+async function fetchPages(urls: string[]): Promise<string[]> {
+	const pages: string[] = [];
+	for (let offset = 0; offset < urls.length; offset += 5) {
+		const batch = urls.slice(offset, offset + 5);
+		const settled = await Promise.allSettled(batch.map(fetchPageHtml));
+		for (const [index, result] of settled.entries()) {
+			if (result.status === "fulfilled") {
+				pages.push(result.value);
+			} else {
+				// A retired source must not block refreshes from the remaining pages.
+				console.warn(
+					`[fetch] Skipping ${batch[index]}: ${(result.reason as Error).message}`,
+				);
+				pages.push("");
+			}
 		}
 	}
-
-	return rows.slice(2).flatMap((line) => {
-		const columns = line
-			.trim()
-			.replace(/^\|/, "")
-			.replace(/\|$/, "")
-			.split("|")
-			.map((value) => value.trim());
-
-		if (columns.length < 3) return [];
-		const score = Number(columns[2]);
-		if (!Number.isFinite(score)) return [];
-
-		return [{ modelName: columns[1], score, version }];
-	});
-}
-
-function matchCreativityBenchmark(
-	model: AAModel,
-	benchmarks: Map<string, CreativityBenchmarkEntry>,
-): CreativityBenchmarkMatch | null {
-	const alias = CREATIVITY_BENCHMARK_ALIASES[model.slug];
-	if (alias) {
-		const entry = benchmarks.get(alias);
-		if (entry) {
-			return { entry, matchType: "alias" };
-		}
-	}
-
-	for (const candidate of [model.slug, model.name]) {
-		const key = normalizeCreativityKey(candidate);
-		if (!key) continue;
-
-		const entry = benchmarks.get(key);
-		if (entry) {
-			return { entry, matchType: "direct" };
-		}
-	}
-
-	return null;
-}
-
-function resolveCreativityBenchmarks(
-	models: AAModel[],
-	benchmarks: Map<string, CreativityBenchmarkEntry>,
-): Map<string, ResolvedCreativityBenchmark> {
-	const resolved = new Map<string, ResolvedCreativityBenchmark>();
-
-	for (const model of models) {
-		const match = matchCreativityBenchmark(model, benchmarks);
-		if (!match) continue;
-
-		resolved.set(model.slug, {
-			score: match.entry.score,
-			version: match.entry.version,
-			matchType: match.matchType,
-			sourceModelName: match.entry.modelName,
-			sourceModelSlug: match.matchType === "direct" ? model.slug : null,
-			similarity: null,
-			similarityTier: null,
-		});
-	}
-
-	if (resolved.size === 0) {
-		return resolved;
-	}
-
-	const donorModels = models.filter((model) => resolved.has(model.slug));
-	const featureMaxes = computeCreativitySimilarityFeatureMaxes(models);
-
-	for (const model of models) {
-		if (resolved.has(model.slug)) continue;
-
-		const similarityMatch = matchCreativityBySimilarity(
-			model,
-			donorModels,
-			resolved,
-			featureMaxes,
-		);
-		if (similarityMatch) {
-			resolved.set(model.slug, similarityMatch);
-		}
-	}
-
-	return resolved;
-}
-
-function summarizeCreativityBenchmarks(
-	benchmarks: Map<string, ResolvedCreativityBenchmark>,
-): { directOrAlias: number; similarity: number } {
-	let directOrAlias = 0;
-	let similarity = 0;
-
-	for (const benchmark of benchmarks.values()) {
-		if (benchmark.matchType === "similarity") {
-			similarity += 1;
-		} else {
-			directOrAlias += 1;
-		}
-	}
-
-	return { directOrAlias, similarity };
-}
-
-function computeCreativitySimilarityFeatureMaxes(
-	models: AAModel[],
-): Map<string, number> {
-	const featureMaxes = new Map<string, number>();
-
-	for (const feature of CREATIVITY_SIMILARITY_FEATURES) {
-		featureMaxes.set(
-			feature.key,
-			safeMax(models.map((model) => feature.getValue(model))),
-		);
-	}
-
-	return featureMaxes;
-}
-
-function matchCreativityBySimilarity(
-	model: AAModel,
-	donorModels: AAModel[],
-	resolvedBenchmarks: Map<string, ResolvedCreativityBenchmark>,
-	featureMaxes: Map<string, number>,
-): ResolvedCreativityBenchmark | null {
-	const creatorSlug = model.model_creator.slug;
-	const category = model.open_source_categorization ?? null;
-	const candidateGroups: Array<{
-		tier: CreativitySimilarityTier;
-		candidates: AAModel[];
-	}> = [];
-
-	if (category) {
-		candidateGroups.push({
-			tier: "same_creator_category",
-			candidates: donorModels.filter(
-				(candidate) =>
-					candidate.model_creator.slug === creatorSlug &&
-					candidate.open_source_categorization === category,
-			),
-		});
-	}
-
-	candidateGroups.push({
-		tier: "same_creator",
-		candidates: donorModels.filter(
-			(candidate) => candidate.model_creator.slug === creatorSlug,
-		),
-	});
-
-	if (category) {
-		candidateGroups.push({
-			tier: "same_category",
-			candidates: donorModels.filter(
-				(candidate) => candidate.open_source_categorization === category,
-			),
-		});
-	}
-
-	for (const group of candidateGroups) {
-		const bestMatch = selectBestCreativitySimilarityMatch(
-			model,
-			group.candidates,
-			featureMaxes,
-		);
-		if (!bestMatch) continue;
-
-		const sourceBenchmark = resolvedBenchmarks.get(bestMatch.candidate.slug);
-		if (!sourceBenchmark) continue;
-
-		const sourceScore = clampUnit(sourceBenchmark.score / 10);
-		const similarity = clampUnit(
-			(1 - bestMatch.distance) * CREATIVITY_SIMILARITY_TIER_DAMPING[group.tier],
-		);
-		const estimatedScore =
-			CREATIVITY_NEUTRAL_SCORE +
-			similarity * (sourceScore - CREATIVITY_NEUTRAL_SCORE);
-
-		return {
-			score: roundToPrecision(estimatedScore * 10, 3),
-			version: sourceBenchmark.version,
-			matchType: "similarity",
-			sourceModelName: bestMatch.candidate.name,
-			sourceModelSlug: bestMatch.candidate.slug,
-			similarity: roundToPrecision(similarity, 3),
-			similarityTier: group.tier,
-		};
-	}
-
-	return null;
-}
-
-function selectBestCreativitySimilarityMatch(
-	target: AAModel,
-	candidates: AAModel[],
-	featureMaxes: Map<string, number>,
-): { candidate: AAModel; distance: number } | null {
-	let bestMatch: { candidate: AAModel; distance: number } | null = null;
-
-	for (const candidate of candidates) {
-		const distance = computeCreativitySimilarityDistance(
-			target,
-			candidate,
-			featureMaxes,
-		);
-		if (distance == null) continue;
-
-		if (!bestMatch || distance < bestMatch.distance) {
-			bestMatch = { candidate, distance };
-		}
-	}
-
-	return bestMatch;
-}
-
-function computeCreativitySimilarityDistance(
-	target: AAModel,
-	candidate: AAModel,
-	featureMaxes: Map<string, number>,
-): number | null {
-	let weightedDistance = 0;
-	let totalWeight = 0;
-	let overlap = 0;
-
-	for (const feature of CREATIVITY_SIMILARITY_FEATURES) {
-		const targetValue = feature.getValue(target);
-		const candidateValue = feature.getValue(candidate);
-		const featureMax = featureMaxes.get(feature.key) ?? 1;
-
-		if (
-			targetValue == null ||
-			candidateValue == null ||
-			targetValue <= 0 ||
-			candidateValue <= 0 ||
-			featureMax <= 0
-		) {
-			continue;
-		}
-
-		weightedDistance +=
-			Math.min(1, Math.abs(targetValue - candidateValue) / featureMax) *
-			feature.weight;
-		totalWeight += feature.weight;
-		overlap += 1;
-	}
-
-	if (overlap < CREATIVITY_SIMILARITY_MIN_FEATURES || totalWeight === 0) {
-		return null;
-	}
-
-	return weightedDistance / totalWeight;
+	return pages;
 }
 
 async function fetchPageHtml(url: string): Promise<string> {
@@ -796,25 +485,6 @@ function extractSlugFromDetailsUrl(detailsUrl: string | null): string | null {
 	return match?.[1] ?? null;
 }
 
-function normalizeCreativityKey(value: string): string {
-	return value
-		.normalize("NFKD")
-		.replace(/[^\p{ASCII}]/gu, "")
-		.toLowerCase()
-		.replace(/&/g, " and ")
-		.replace(/\(no reasoning\)/g, "")
-		.replace(/\(high reasoning\)/g, " high ")
-		.replace(/\(medium reasoning\)/g, "")
-		.replace(/\(low reasoning\)/g, " low ")
-		.replace(/\(medium\)/g, "")
-		.replace(/thinking 16k/g, "")
-		.replace(/preview/g, "")
-		.replace(/\./g, "-")
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/-+/g, "-")
-		.replace(/^-|-$/g, "");
-}
-
 function clampUnit(value: number): number {
 	return Math.max(0, Math.min(1, value));
 }
@@ -834,6 +504,12 @@ export function computeGlobalMaxes(models: AAModel[]): GlobalMaxes {
 		terminalbench_hard: safeMax(
 			models.map((m) => m.evaluations.terminalbench_hard),
 		),
+		terminalbench_v2_1: safeMax(
+			models.map((m) => m.evaluations.terminalbench_v2_1),
+		),
+		terminalbench_v4_0: safeMax(
+			models.map((m) => m.evaluations.terminalbench_v4_0),
+		),
 		math_index: safeMax(
 			models.map((m) => m.evaluations.artificial_analysis_math_index),
 		),
@@ -848,6 +524,10 @@ export function computeGlobalMaxes(models: AAModel[]): GlobalMaxes {
 			models.map((m) => m.evaluations.artificial_analysis_intelligence_index),
 		),
 		tau2: safeMax(models.map((m) => m.evaluations.tau2)),
+		tau_banking: safeMax(models.map((m) => m.evaluations.tau_banking)),
+		automationbench_aa: safeMax(
+			models.map((m) => m.evaluations.automationbench_aa),
+		),
 		ifbench: safeMax(models.map((m) => m.evaluations.ifbench)),
 		price_1m_blended_3_to_1: safeMax(
 			models.map((m) => m.pricing.price_1m_blended_3_to_1),

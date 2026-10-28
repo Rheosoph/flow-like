@@ -6,9 +6,10 @@ export interface IProfile {
 	bits: string[];
 	created: string;
 	/**
-	 * User-owned private bits (custom providers / local HF models). Hydrated
-	 * with provider secrets only server-side and on the owner's desktop —
-	 * never in the browser client.
+	 * User-owned private bits (custom providers / local HF models). Only the
+	 * owner's desktop and the hub hold their provider secrets. Server runs carry
+	 * secret-free views and call them through the hub's model relay; the browser
+	 * client never sees a secret.
 	 */
 	custom_bits?: IBit[];
 	description?: null | string;

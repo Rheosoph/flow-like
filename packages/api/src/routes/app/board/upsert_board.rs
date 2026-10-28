@@ -6,7 +6,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::board::secrets::filter_board_secrets,
+    routes::app::board::{secrets::filter_board_secrets, sink_rebind::rebind_latest_sinks},
     state::{AppState, BoardMutationGuard},
 };
 use axum::{
@@ -221,6 +221,7 @@ pub async fn upsert_board(
 
     let mut app = state.master_app(&sub, &app_id, &state).await?;
     let template = params.template.take();
+    rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
     let instantiated = create_missing_board(
         &state,
         &mut app,
@@ -235,6 +236,7 @@ pub async fn upsert_board(
     let mut board = board.write().await;
     save_metadata(&mut board, params, &mutation_guard).await?;
     record_board_score(&state, &app_id, &board).await;
+    rebind_latest_sinks(&state, &app_id, &board.id, &user).await;
 
     audit_branch!(state, user, app_id, "board.update", "Board", board.id);
     let response_board = instantiated.then(|| {

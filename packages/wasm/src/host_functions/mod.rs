@@ -12,6 +12,8 @@ pub mod metadata;
 pub mod pins;
 pub mod schema;
 pub mod storage;
+pub(crate) mod storage_api;
+pub mod storage_ops;
 pub mod streaming;
 pub mod variables;
 pub mod websocket;
@@ -280,8 +282,12 @@ pub struct HostState {
     pub node_timeout: std::time::Duration,
     /// Run-owned execution cannot delegate its resources to an external process.
     pub run_scoped: bool,
-    /// In-flight chunked writes (write_id -> buffer)
+    /// Invocation-owned streaming uploads.
     pub pending_writes: RwLock<HashMap<String, storage::PendingWrite>>,
+    /// Invocation-owned listing cursors; entries are consumed a page at a time.
+    pub storage_listings: storage_ops::ListSessions,
+    /// Most recent core storage response, replaced on each request.
+    pub storage_response: RwLock<Vec<u8>>,
 }
 
 /// Log entry from WASM
@@ -352,6 +358,8 @@ impl HostState {
             node_timeout: crate::limits::DEFAULT_TIMEOUT,
             run_scoped: false,
             pending_writes: RwLock::new(HashMap::new()),
+            storage_listings: storage_ops::ListSessions::default(),
+            storage_response: RwLock::new(Vec::new()),
         }
     }
 
@@ -483,6 +491,7 @@ impl HostState {
         self.logs.write().clear();
         *self.error.write() = None;
         self.result_buffer.write().clear();
+        self.storage_response.write().clear();
         self.stream_events.write().clear();
     }
 }

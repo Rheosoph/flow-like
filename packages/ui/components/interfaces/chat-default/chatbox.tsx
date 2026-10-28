@@ -21,6 +21,8 @@ import {
 	useState,
 } from "react";
 import { cn, humanFileSize } from "../../../lib/utils";
+import type { ThinkingOption } from "../../thinking/thinking-options";
+import { ThinkingPicker } from "../../thinking/thinking-picker";
 import { Button } from "../../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Textarea } from "../../ui/textarea";
@@ -65,6 +67,14 @@ interface ChatBoxProps {
 	onVoiceModeToggle?: () => void;
 	/** Called when the user starts speaking/recording, to interrupt answer playback. */
 	onInterrupt?: () => void;
+	/** Thinking level picker; omitted when the chat does not offer one. */
+	thinking?: ChatBoxThinking;
+}
+
+export interface ChatBoxThinking {
+	readonly value: string;
+	readonly options: readonly ThinkingOption[];
+	readonly onChange: (id: string) => void;
 }
 
 export interface ChatBoxRef {
@@ -100,6 +110,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			onSteer,
 			onVoiceModeToggle,
 			onInterrupt,
+			thinking,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -657,6 +668,15 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											</div>
 										</PopoverContent>
 									</Popover>
+								)}
+
+								{thinking && thinking.options.length > 0 && (
+									<ThinkingPicker
+										value={thinking.value}
+										options={thinking.options}
+										onChange={thinking.onChange}
+										className="h-11 w-11 sm:h-8 sm:w-8"
+									/>
 								)}
 
 								{/* Tools Settings Button with Active Tools Badge */}

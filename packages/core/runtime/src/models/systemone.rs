@@ -1,6 +1,7 @@
 use std::{any::Any, sync::Arc};
 
 use flow_like_model_provider::{
+    llm::custom,
     provider::{is_hosted_provider_name, random_provider},
     systemone::{SystemOneClient, SystemOneModelLogic, SystemOneRequest, SystemOneResponse},
 };
@@ -88,6 +89,14 @@ impl ModelFactory {
             bail!("Provider {name} does not support native SystemOne inference");
         }
 
+        if let Some(relay) = app_state
+            .custom_bit_relay
+            .as_ref()
+            .filter(|relay| relay.serves(bit))
+        {
+            return Ok(Arc::new(relay.systemone_model(bit)?));
+        }
+
         if name == "local" {
             let capabilities = FlowLikeState::completion_model_capabilities(&app_state).await;
             if !capabilities.local_server {
@@ -155,33 +164,25 @@ impl ModelFactory {
             return Ok(Arc::new(client));
         }
 
-        let params = provider.params.as_ref();
-        let param = |key: &str| {
-            params
-                .and_then(|params| params.get(key))
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        };
-        let model = provider
-            .model_id
-            .as_deref()
-            .filter(|id| !id.trim().is_empty())
-            .or_else(|| param("model_id"))
-            .ok_or_else(|| anyhow!("SystemOne provider requires a model_id"))?;
         let client = match name.as_str() {
             "custom:systemone" | "custom:typesafe" | "custom:openrouter" => {
-                let default_endpoint = match name.as_str() {
-                    "custom:typesafe" => Some("https://api.typesafe.ai/v1"),
-                    "custom:openrouter" => Some("https://openrouter.ai/api/v1"),
-                    _ => None,
-                };
-                let endpoint = param("endpoint")
-                    .or(default_endpoint)
-                    .ok_or_else(|| anyhow!("Custom SystemOne providers require an endpoint"))?;
-                SystemOneClient::new(endpoint, model, param("api_key").unwrap_or_default())?
+                custom::systemone(&name, &provider, app_state.model_egress)?
             }
             "openrouter" => {
+                let model = provider
+                    .model_id
+                    .as_deref()
+                    .filter(|id| !id.trim().is_empty())
+                    .or_else(|| {
+                        provider
+                            .params
+                            .as_ref()
+                            .and_then(|params| params.get("model_id"))
+                            .and_then(|value| value.as_str())
+                            .map(str::trim)
+                            .filter(|id| !id.is_empty())
+                    })
+                    .ok_or_else(|| anyhow!("SystemOne provider requires a model_id"))?;
                 let config = random_provider(&app_state.model_provider_config.openrouter_config)?;
                 SystemOneClient::new(
                     config
@@ -191,13 +192,9 @@ impl ModelFactory {
                     model,
                     config.api_key.as_deref().unwrap_or_default(),
                 )?
+                .with_openrouter_state_images()
             }
             _ => bail!("Provider {name} does not support native SystemOne inference"),
-        };
-        let client = if matches!(name.as_str(), "custom:openrouter" | "openrouter") {
-            client.with_openrouter_state_images()
-        } else {
-            client
         };
         Ok(Arc::new(client))
     }
@@ -394,6 +391,47 @@ mod tests {
             assert_eq!(body["state"], "Refund please");
             assert_eq!(body["images"], json!([image]));
         }
+    }
+
+    #[tokio::test]
+    async fn relayed_decisions_go_to_the_run_relay_under_the_run_token() {
+        let (endpoint, captured) = capture_request().await;
+        let callback = endpoint.trim_end_matches("/api/v1");
+        let mut state = state();
+        state.custom_bit_relay = Some(Arc::new(
+            crate::models::custom_bit_relay::CustomBitRelay::new(
+                callback,
+                "app-1",
+                "exec-jwt",
+                ["opaque-decision-bit".to_string()],
+            ),
+        ));
+        let model = ModelFactory::new()
+            .build_systemone(&bit("custom:typesafe"), Arc::new(state), None, None)
+            .await
+            .unwrap();
+        let image = "data:image/png;base64,AQ==";
+        let request: SystemOneRequest = serde_json::from_value(json!({
+            "state":"Refund please", "images":[image],
+            "questions":{"refund":{"type":"noul","instructions":"Does the customer want a refund?"}}
+        }))
+        .unwrap();
+        timeout(Duration::from_secs(5), model.invoke(&request))
+            .await
+            .unwrap()
+            .unwrap();
+        let (headers, body) = captured.await.unwrap();
+        let headers = headers.to_ascii_lowercase();
+        assert!(
+            headers.starts_with("post /api/v1/execution/apps/app-1/models/systemone http/1.1"),
+            "{headers}"
+        );
+        assert!(headers.contains("authorization: bearer exec-jwt"));
+        let sent = format!("{headers}{body}");
+        assert!(!sent.contains("catalog-") && !sent.contains("untrusted.invalid"));
+        assert_eq!(body["model"], "opaque-decision-bit");
+        assert_eq!(body["state"], "Refund please");
+        assert_eq!(body["images"], json!([image]));
     }
 
     #[tokio::test]

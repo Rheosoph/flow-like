@@ -53,13 +53,14 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
-        TokenType, collect_generic_result_bytes, executor_response_bytes, is_jwt_configured,
-        rejection, resolve_wasm_packages, sign_execution_jwt, stream_http_response,
+        ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtError,
+        ExecutionJwtParams, TokenType, collect_generic_result_bytes, executor_response_bytes,
+        is_jwt_configured, rejection, resolve_wasm_packages, sign_execution_jwt,
+        sign_unattended_execution_jwt, stream_http_response,
         variant::{self, ResolvedTarget, STABLE_VARIANT, SplitKey, dispatch_event_json},
         wants_http_event_stream,
     },
-    middleware::jwt::{AppUser, OpenIDUser},
+    middleware::jwt::{AppUser, ConnectedAppUser, OpenIDUser},
     permission::role_permission::RolePermissions,
     routes::{
         app::events::{
@@ -67,31 +68,37 @@ use crate::{
             parse_version_tuple,
             setup_event::find_event_setup,
         },
-        sink::trigger::{maybe_refresh_oauth_tokens, resolve_sink_pat_user_id},
+        sink::trigger::{PinnedFire, SinkUse, pin_fire_for, resolve_sink_run_as, run_oauth_tokens},
     },
     state::AppState,
     utils::event_alias as alias_util,
 };
 
-/// Identity of the run that reached this event through the app-connection
-/// proxy. Threaded into the dispatched run so cross-app REST/MCP hops stay
-/// part of the caller's process case (chain, parent run, correlation).
-/// Public MCP can also carry a member identity after platform OAuth and app
-/// permission checks. Other public inbound traffic has no user context.
+/// Identity of the caller an inbound event run serves. Calls through the
+/// app-connection proxy are threaded into the dispatched run so cross-app
+/// REST/MCP hops stay part of the caller's process case (chain, parent run,
+/// correlation). A Flow-Like person who called runs the event as themselves;
+/// every other caller, public inbound traffic included, runs it as the event's
+/// run-as user.
 #[derive(Clone, Default)]
 pub(crate) struct ProxyCallerContext {
     pub app_chain: Option<Vec<String>>,
     pub parent_run_id: Option<String>,
     pub correlation: Option<CorrelationContext>,
-    /// The connected app's execution identity: the role the connection grants
-    /// and, as `on_behalf_of`, the subject it passed through. The proxy
-    /// resolves this to authorize the call, so handing it to the run costs
-    /// nothing and is the only way a flow can see who reached it.
+    /// The connected app's execution identity: the role the connection grants,
+    /// bounded by the person it passed through, and that subject as
+    /// `on_behalf_of`. The proxy resolves this to authorize the call, so
+    /// handing it to the run costs nothing and is the only way a flow can see
+    /// who reached it.
     ///
     /// Public OAuth only supplies this when Flow-Like authentication is enabled
     /// and the platform has verified the token and the user's app permissions.
     pub user_context: Option<UserExecutionContext>,
-    /// Set by member operations or public MCP platform OAuth after app checks.
+    /// The Flow-Like person the run acts as, with their own profile and private
+    /// Bits and never the sink's saved profile: a member operation's caller, a
+    /// verified Flow-Like login on public MCP, or the person an app connection
+    /// passed through, member or not. None of them sends OAuth sign-ins here, so
+    /// the run uses the sign-ins saved with the event.
     pub member: Option<MemberExecutionIdentity>,
 }
 
@@ -100,12 +107,59 @@ pub(crate) struct MemberExecutionIdentity {
     pub user_id: String,
     pub technical_user_id: Option<String>,
     pub profile_id: Option<String>,
-    pub token: Option<String>,
+}
+
+impl MemberExecutionIdentity {
+    /// A signed-in person with their default profile for the app.
+    fn person(user_id: &str) -> Self {
+        Self {
+            user_id: user_id.to_owned(),
+            technical_user_id: None,
+            profile_id: None,
+        }
+    }
 }
 
 impl ProxyCallerContext {
+    /// A call through the app-connection proxy with the connection's execution
+    /// identity. The person the connection passed through runs the event as
+    /// themselves; without one the run acts as the event's run-as user, like a
+    /// public call.
+    pub(crate) fn through_connection(
+        app: &ConnectedAppUser,
+        user_context: UserExecutionContext,
+    ) -> Self {
+        Self {
+            app_chain: Some(app.app_chain.clone()),
+            parent_run_id: app.run_id.clone(),
+            correlation: app.correlation.clone(),
+            user_context: Some(user_context),
+            member: app.person().map(MemberExecutionIdentity::person),
+        }
+    }
+
+    /// A verified Flow-Like login on a public surface: the run acts as that person.
+    fn signed_in(user_id: &str, user_context: UserExecutionContext) -> Self {
+        Self {
+            user_context: Some(user_context),
+            member: Some(MemberExecutionIdentity::person(user_id)),
+            ..Default::default()
+        }
+    }
+
     fn uses_sink_credentials(&self) -> bool {
         self.member.is_none()
+    }
+
+    /// A person's run is stopped only by a sink a person switched off, not by a release's
+    /// pause, and takes only the sign-ins saved with it; any other run uses the sink's run-as
+    /// user, and either stops it.
+    fn sink_use(&self) -> SinkUse {
+        if self.member.is_some() {
+            SinkUse::Person
+        } else {
+            SinkUse::RunAs
+        }
     }
 
     fn dispatch_trigger(&self) -> DispatchTrigger {
@@ -113,6 +167,16 @@ impl ProxyCallerContext {
             DispatchTrigger::User
         } else {
             DispatchTrigger::System
+        }
+    }
+
+    /// The run's executor token. A run no person called is marked unattended, so the apps it
+    /// calls through connections never take the event's run-as user for a person.
+    fn sign_executor_jwt(&self, params: ExecutionJwtParams) -> Result<String, ExecutionJwtError> {
+        if self.member.is_some() {
+            sign_execution_jwt(params)
+        } else {
+            sign_unattended_execution_jwt(params)
         }
     }
 
@@ -333,7 +397,7 @@ struct ServedVariant {
 /// only stamps `eventVersion`/`boardId` on success, while a re-setup flips
 /// `setup_status` on the same row to `running`/`error` — health metadata, not
 /// a serving signal.
-fn has_serving_pointer(row: &event_setup::Model) -> bool {
+pub(crate) fn has_serving_pointer(row: &event_setup::Model) -> bool {
     !row.event_version.is_empty() && !row.board_id.is_empty()
 }
 
@@ -1210,16 +1274,10 @@ async fn mcp_member_caller(
     if !permission.has_permission(RolePermissions::ExecuteEvents) {
         return Err(ApiError::FORBIDDEN);
     }
-    Ok(ProxyCallerContext {
-        user_context: Some(permission.to_user_context()),
-        member: Some(MemberExecutionIdentity {
-            user_id: sub.to_string(),
-            technical_user_id: None,
-            profile_id: None,
-            token: None,
-        }),
-        ..Default::default()
-    })
+    Ok(ProxyCallerContext::signed_in(
+        sub,
+        permission.to_user_context(),
+    ))
 }
 
 fn mcp_auth_error_response(
@@ -2782,24 +2840,14 @@ async fn dispatch_event_stream(
         .map_err(ApiError::from)?;
 
     if let Some(sink) = sink.as_ref()
-        && !sink.active
+        && !caller.sink_use().admits(sink)
     {
         return Err(ApiError::not_found("event sink is inactive"));
     }
 
-    let token = caller
-        .member
-        .as_ref()
-        .and_then(|member| member.token.clone())
-        .or_else(|| {
-            sink.as_ref()
-                .filter(|_| caller.uses_sink_credentials())
-                .and_then(|sink| sink.pat_encrypted.as_ref())
-                .and_then(|encrypted| decrypt_token(encrypted, &state.encryption_key))
-        });
     let sink_user_id = if let Some(sink) = sink.as_ref().filter(|_| caller.uses_sink_credentials())
     {
-        resolve_sink_pat_user_id(state, sink, token.as_deref()).await?
+        resolve_sink_run_as(state, sink).await?
     } else {
         None
     };
@@ -2809,6 +2857,16 @@ async fn dispatch_event_stream(
             .map(|sink| format!("sink:{}", sink.id))
             .unwrap_or_else(|| format!("inbound:{}", event_row.id)),
     );
+    // A run that borrows from the sink fixes what it runs first: a run as the sink's user takes
+    // its grants and profile, a person's run only the sign-ins saved with the event.
+    let (sink, board_etag) = match sink {
+        Some(sink) if caller.sink_use().borrows_from(&sink) => {
+            let PinnedFire { sink, board_etag } =
+                pin_fire_for(state, sink, target, caller.sink_use()).await?;
+            (Some(sink), board_etag)
+        }
+        sink => (sink, None),
+    };
 
     let credentials = state
         .scoped_credentials(
@@ -2820,16 +2878,9 @@ async fn dispatch_event_stream(
     let shared_credentials = credentials.into_shared_credentials();
     let credentials_json = serde_json::to_string(&shared_credentials).map_err(ApiError::from)?;
 
-    let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
-        .as_ref()
-        .filter(|_| caller.uses_sink_credentials())
-        .and_then(|sink| sink.oauth_tokens_encrypted.as_ref())
-        .and_then(|encrypted| decrypt_token(encrypted, &state.encryption_key))
-        .and_then(|json| serde_json::from_str(&json).ok());
-    let oauth_tokens = match (sink.as_ref(), oauth_tokens) {
-        (Some(sink), Some(tokens)) => Some(maybe_refresh_oauth_tokens(state, &sink, tokens).await?),
-        _ => None,
-    };
+    // No caller of this door supplies sign-ins of its own, so a person's run takes the
+    // event's saved sign-ins like any other run.
+    let oauth_tokens = run_oauth_tokens(state, sink.as_ref(), caller.sink_use(), None).await?;
 
     let run_id = flow_like_types::create_id();
     // Tie the run into the caller's process case: proxied calls inherit the
@@ -2854,21 +2905,22 @@ async fn dispatch_event_stream(
     }
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
-        user_id: executor_subject.clone(),
-        technical_user_id: technical_user_id.clone(),
-        run_id: run_id.clone(),
-        app_id: event_row.app_id.clone(),
-        board_id: board_id.clone(),
-        event_id: Some(event_row.id.clone()),
-        app_chain: caller.app_chain.clone(),
-        correlation: correlation.clone().into_option(),
-        callback_url: callback_url.clone(),
-        token_type: TokenType::Executor,
-        ttl_seconds: Some(24 * 60 * 60),
-        shadow: None,
-    })
-    .map_err(|error| ApiError::internal_error(flow_like_types::anyhow!(error)))?;
+    let executor_jwt = caller
+        .sign_executor_jwt(ExecutionJwtParams {
+            user_id: executor_subject.clone(),
+            technical_user_id: technical_user_id.clone(),
+            run_id: run_id.clone(),
+            app_id: event_row.app_id.clone(),
+            board_id: board_id.clone(),
+            event_id: Some(event_row.id.clone()),
+            app_chain: caller.app_chain.clone(),
+            correlation: correlation.clone().into_option(),
+            callback_url: callback_url.clone(),
+            token_type: TokenType::Executor,
+            ttl_seconds: Some(24 * 60 * 60),
+            shadow: None,
+        })
+        .map_err(|error| ApiError::internal_error(flow_like_types::anyhow!(error)))?;
 
     let input_payload_len = payload
         .as_ref()
@@ -2886,7 +2938,7 @@ async fn dispatch_event_stream(
         app_id: event_row.app_id.clone(),
         board_id: board_id.clone(),
         board_version: target.board_version,
-        board_etag: None,
+        board_etag,
         node_id: target_node_id,
         event_json: Some(event_json),
         payload,
@@ -2894,30 +2946,30 @@ async fn dispatch_event_stream(
         credentials_json,
         jwt: executor_jwt,
         callback_url,
-        token,
         oauth_tokens,
         stream_state: false,
         execution_mode: Some(flow_like::flow::execution::ExecutionMode::Event),
         runtime_variables: None,
-        // Proxy callers keep the connection's role; member operations carry
-        // the same identity and app role as direct event invocation.
+        // Proxy callers keep the connection's role, bounded by the person it
+        // passed through; member operations carry the same identity and app
+        // role as direct event invocation.
         user_context: caller.user_context.clone(),
-        profile: if let Some(member) = &caller.member {
-            crate::execution::fetch_profile_for_dispatch(
-                state,
-                &member.user_id,
-                member.profile_id.as_deref(),
-                &event_row.app_id,
-                true,
-            )
-            .await
-        } else {
-            let mut profile = sink.as_ref().and_then(|sink| sink.profile_json.clone());
-            if let Some(profile_json) = profile.as_mut() {
-                crate::execution::hydrate_profile_custom_bit_secrets(state, profile_json).await;
+        profile: match (&caller.member, sink.as_ref()) {
+            (Some(member), _) => {
+                crate::execution::fetch_profile_for_dispatch(
+                    state,
+                    &member.user_id,
+                    member.profile_id.as_deref(),
+                    &event_row.app_id,
+                )
+                .await
             }
-            profile
+            (None, Some(sink)) => {
+                crate::execution::sink_dispatch_profile(state, sink, actor_user_id.as_deref()).await
+            }
+            (None, None) => None,
         },
+        custom_bit_owner: actor_user_id.clone(),
         wasm_packages,
         channel: None,
         trigger: caller.dispatch_trigger(),
@@ -5141,49 +5193,229 @@ mod tests {
         assert!(super::member_mcp_result(None).is_err());
     }
 
+    /// A call from `app-a` through the connection proxy, as `remote_proxy` builds it.
+    fn connection(sub: Option<&str>, technical_user_id: Option<&str>) -> ProxyCallerContext {
+        let app = super::ConnectedAppUser {
+            sub: sub.map(str::to_owned),
+            origin_app_id: "app-a".to_string(),
+            target_app_id: "app-b".to_string(),
+            app_chain: vec!["app-a".to_string()],
+            technical_user_id: technical_user_id.map(str::to_owned),
+            run_id: Some("run-a".to_string()),
+            correlation: None,
+        };
+        let context = super::UserExecutionContext::connected_app("app-a", Default::default())
+            .with_on_behalf_of(app.sub.clone());
+        ProxyCallerContext::through_connection(&app, context)
+    }
+
+    fn executor_params(sub: &str) -> super::ExecutionJwtParams {
+        super::ExecutionJwtParams {
+            user_id: sub.to_string(),
+            technical_user_id: None,
+            run_id: "run-b".to_string(),
+            app_id: "app-b".to_string(),
+            board_id: "board-b".to_string(),
+            event_id: Some("event-b".to_string()),
+            app_chain: Some(vec!["app-a".to_string()]),
+            correlation: None,
+            callback_url: "http://localhost:8080".to_string(),
+            token_type: super::TokenType::Executor,
+            ttl_seconds: Some(60),
+            shadow: None,
+        }
+    }
+
+    /// Who an inbound run acts as. A Flow-Like person who called (a verified Flow-Like
+    /// login, the person an app connection passed through) runs as themselves and never
+    /// borrows the sink's run-as user, grants or profile. Every other caller runs as the
+    /// event's run-as user, or under a placeholder without one, and is signed unattended.
     #[test]
-    fn member_mcp_dispatch_uses_member_identity_and_never_sink_credentials() {
+    fn inbound_runs_act_as_the_person_who_called_else_as_the_event() {
+        use super::{DispatchTrigger, UserExecutionContext};
+        crate::backend_jwt::init_for_tests();
+        let person = Some("person");
+        let signed_in =
+            ProxyCallerContext::signed_in("person", UserExecutionContext::new("person"));
+        let (creator, key) = (Some("creator"), Some("key-a"));
+        let visitor = Some("frontend:event-a:run-run-a");
+        let unattended = Some("run:run-a");
+        let public = ProxyCallerContext::default();
+        for (case, caller, acts_for) in [
+            ("Flow-Like login", signed_in, person),
+            ("person via connection", connection(person, None), person),
+            ("key via connection", connection(creator, key), None),
+            ("visitor via connection", connection(visitor, None), None),
+            (
+                "unattended run via connection",
+                connection(unattended, None),
+                None,
+            ),
+            ("nobody via connection", connection(None, None), None),
+            ("anonymous public call", public, None),
+        ] {
+            let trigger = match acts_for {
+                Some(_) => DispatchTrigger::User,
+                None => DispatchTrigger::System,
+            };
+            let actor = acts_for.unwrap_or("run-as").to_string();
+            assert_eq!(caller.uses_sink_credentials(), acts_for.is_none(), "{case}");
+            let sink_use = match acts_for {
+                Some(_) => super::SinkUse::Person,
+                None => super::SinkUse::RunAs,
+            };
+            assert_eq!(caller.sink_use(), sink_use, "{case}");
+            assert_eq!(caller.dispatch_trigger(), trigger, "{case}");
+            assert_eq!(
+                caller.execution_identity(Some("run-as".to_string()), "sink:sink-1".to_string()),
+                (Some(actor.clone()), actor.clone(), None),
+                "{case}"
+            );
+            let token = caller.sign_executor_jwt(executor_params(&actor)).unwrap();
+            let claims = crate::execution::verify_execution_jwt(&token).unwrap();
+            assert_eq!(claims.unattended, acts_for.is_none(), "{case}");
+        }
+        assert_eq!(
+            ProxyCallerContext::default().execution_identity(None, "inbound:event".to_string()),
+            (None, "inbound:event".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn member_operations_run_as_the_member_with_their_key_and_profile() {
         let caller = ProxyCallerContext {
             member: Some(super::MemberExecutionIdentity {
                 user_id: "member".to_string(),
                 technical_user_id: Some("api-key".to_string()),
                 profile_id: Some("selected-profile".to_string()),
-                token: None,
             }),
             ..Default::default()
         };
         assert!(!caller.uses_sink_credentials());
-        assert!(matches!(
-            caller.dispatch_trigger(),
-            super::DispatchTrigger::User
-        ));
+        assert_eq!(caller.dispatch_trigger(), super::DispatchTrigger::User);
         assert_eq!(
-            caller.execution_identity(Some("sink-owner".to_string()), "sink:id".to_string()),
+            caller.execution_identity(Some("run-as".to_string()), "sink:sink-1".to_string()),
             (
                 Some("member".to_string()),
                 "member".to_string(),
                 Some("api-key".to_string())
             )
         );
+    }
 
-        let external = ProxyCallerContext::default();
-        assert!(external.uses_sink_credentials());
-        assert!(matches!(
-            external.dispatch_trigger(),
-            super::DispatchTrigger::System
-        ));
-        assert_eq!(
-            external.execution_identity(Some("sink-owner".to_string()), "sink:id".to_string()),
-            (
-                Some("sink-owner".to_string()),
-                "sink-owner".to_string(),
-                None
-            )
+    /// A call through a connection stays in the calling run's case and tells the run which
+    /// app called on whose behalf; the person it passed through runs with their default
+    /// profile and no API key.
+    #[test]
+    fn connection_calls_stay_in_the_callers_case() {
+        let caller = connection(Some("person"), None);
+        assert_eq!(caller.app_chain, Some(vec!["app-a".to_string()]));
+        assert_eq!(caller.parent_run_id.as_deref(), Some("run-a"));
+        let context = caller.user_context.as_ref().unwrap();
+        assert!(context.is_connected_app());
+        assert_eq!(context.origin_app_id(), Some("app-a"));
+        assert_eq!(context.on_behalf_of(), Some("person"));
+        let member = caller.member.as_ref().unwrap();
+        assert_eq!(member.user_id, "person");
+        assert_eq!(member.technical_user_id, None);
+        assert_eq!(member.profile_id, None);
+    }
+
+    fn sink(active: bool, released: bool, grants: bool) -> super::event_sink::Model {
+        let now = chrono::Utc::now().fixed_offset();
+        super::event_sink::Model {
+            id: "sink-b".into(),
+            event_id: "event-b".into(),
+            app_id: "app-b".into(),
+            sink_type: "rest".into(),
+            active,
+            path: None,
+            auth_token: None,
+            webhook_secret: None,
+            cron_expression: None,
+            cron_timezone: None,
+            pat_encrypted: None,
+            oauth_tokens_encrypted: grants.then(|| "saved-grants".into()),
+            profile_json: None,
+            created_at: now,
+            updated_at: now,
+            method: None,
+            run_as_user_id: (!released).then(|| "run-as".into()),
+            run_as_released_at: released.then_some(now),
+        }
+    }
+
+    /// A person's call borrows from the event's sink only the OAuth sign-ins saved with it,
+    /// and a release's pause does not stop it; a sink a person switched off does. Any other
+    /// call runs as the sink's user, borrows its grants and profile, and any pause stops it.
+    #[test]
+    fn a_persons_call_survives_a_release_and_borrows_only_saved_sign_ins() {
+        let person = connection(Some("person"), None);
+        let nobody = ProxyCallerContext::default();
+        for (case, sink, person_admitted, run_as_admitted) in [
+            ("on", sink(true, false, false), true, true),
+            ("paused by a release", sink(false, true, false), true, false),
+            ("switched off", sink(false, false, false), false, false),
+        ] {
+            assert_eq!(
+                person.sink_use().admits(&sink),
+                person_admitted,
+                "person: {case}"
+            );
+            assert_eq!(
+                nobody.sink_use().admits(&sink),
+                run_as_admitted,
+                "run as: {case}"
+            );
+        }
+        let person = person.sink_use();
+        let nobody = nobody.sink_use();
+        assert!(person.borrows_from(&sink(true, false, true)));
+        assert!(!person.borrows_from(&sink(true, false, false)));
+        assert!(nobody.borrows_from(&sink(true, false, false)));
+        let legacy = super::event_sink::Model {
+            run_as_user_id: None,
+            pat_encrypted: Some("legacy-pat".into()),
+            ..sink(true, false, true)
+        };
+        assert!(
+            !person.borrows_from(&legacy),
+            "a legacy sink's grants belong to nobody the hub resolves them for"
         );
-        assert_eq!(
-            external.execution_identity(None, "inbound:event".to_string()),
-            (None, "inbound:event".to_string(), None)
-        );
+        assert!(nobody.takes_saved_grants(&legacy));
+    }
+
+    /// A run that borrows from the sink fixes the draft it runs after the run-as check and
+    /// before it takes the sink's grants and profile, and dispatches exactly that draft: a run
+    /// as the sink's user always, a person's run when the event saved sign-ins. A person's run
+    /// never takes the sink's saved profile.
+    #[test]
+    fn a_run_as_the_sink_pins_its_draft_before_it_uses_the_sink() {
+        let source = include_str!("inbound.rs");
+        let body = source
+            .split_once("\nasync fn dispatch_event_stream(")
+            .expect("dispatch_event_stream exists")
+            .1;
+        let body = body.split_once("\n}\n").map_or(body, |(body, _)| body);
+        let mut from = 0;
+        for step in [
+            "!caller.sink_use().admits(sink)",
+            "resolve_sink_run_as(state, sink)",
+            "Some(sink) if caller.sink_use().borrows_from(&sink) => {",
+            "pin_fire_for(state, sink, target, caller.sink_use()).await?",
+            "run_oauth_tokens(state, sink.as_ref(), caller.sink_use(), None)",
+            "(Some(member), _) => {",
+            "(None, Some(sink)) => {",
+            "sink_dispatch_profile(",
+            "insert_run_with_caller_apps(",
+        ] {
+            let found = body[from..].find(step).unwrap_or_else(|| {
+                panic!("dispatch_event_stream calls {step} after the steps before it")
+            });
+            from += found + step.len();
+        }
+        assert!(body.contains("        board_etag,\n"));
+        assert!(!body.contains("board_etag: None"));
     }
 
     #[test]

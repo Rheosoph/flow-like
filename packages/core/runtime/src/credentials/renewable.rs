@@ -94,6 +94,7 @@ pub struct RenewableSharedCredentials {
     scope_id: String,
     this: Weak<Self>,
     content_decorator: std::sync::OnceLock<Arc<dyn ContentStoreDecorator>>,
+    #[cfg(feature = "flow-runtime")]
     lance_read_cache: std::sync::OnceLock<(
         Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,
         String,
@@ -302,6 +303,7 @@ impl RenewableSharedCredentials {
             scope_id: flow_like_types::create_id(),
             this: this.clone(),
             content_decorator: std::sync::OnceLock::new(),
+            #[cfg(feature = "flow-runtime")]
             lance_read_cache: std::sync::OnceLock::new(),
         });
         let weak = Arc::downgrade(&value);
@@ -593,6 +595,7 @@ impl RenewableSharedCredentials {
     }
 
     /// Hosts may persist immutable Lance ranges without enabling offline writes.
+    #[cfg(feature = "flow-runtime")]
     pub fn install_lance_read_cache(
         &self,
         cache: Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,

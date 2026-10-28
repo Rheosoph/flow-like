@@ -1,9 +1,10 @@
 use crate::{
+    event_sink::{EventRegistration, ensure_signed_in_owner, trigger_token::TriggerAccount},
     offline_writes::run_storage::{RunStorage, RunStorageRequest},
     state::TauriSettingsState,
     utils::{UiEmitTarget, local_execution_environment},
 };
-use flow_like::app::App;
+use flow_like::app::{App, AppVisibility};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{InternalRun, LogMeta, RunStatus, UserExecutionContext};
@@ -71,6 +72,9 @@ pub struct EventBusEvent {
 
     // Either Access Token or PAT
     pub token: Option<String>,
+    /// Whom the trigger's PAT was verified for. An online app's run starts
+    /// only while that account is signed in on the current profile's hub.
+    pub token_owner: Option<TriggerAccount>,
 
     pub callback: Option<Arc<BufferedInterComHandler>>,
     pub(crate) request_control: Option<Arc<EventRequestControl>>,
@@ -214,6 +218,17 @@ impl EventBusEvent {
         )
         .await?;
         let profile = TauriSettingsState::current_profile(app_handle).await?;
+        // A location trigger's dispatch already bound the run to the account
+        // its region is registered for.
+        if resolved_identity.is_none() && !matches!(app.visibility, AppVisibility::Offline) {
+            let account = TriggerAccount::signed_in_to(app_handle, &profile.hub_profile).await;
+            ensure_signed_in_owner(
+                &self.event_id,
+                self.token.as_deref(),
+                self.token_owner.as_ref(),
+                account.as_ref(),
+            )?;
+        }
 
         crate::functions::automation_approval::ensure_automation_approved(
             app_handle,
@@ -267,7 +282,7 @@ impl EventBusEvent {
             None,
             None,
         );
-        if !matches!(app.visibility, flow_like::app::AppVisibility::Offline) {
+        if !matches!(app.visibility, AppVisibility::Offline) {
             if self.token.is_none() {
                 return Err(flow_like_types::anyhow!(
                     "No token registered, cannot run online event"
@@ -497,54 +512,30 @@ impl EventBus {
         (Arc::new(new_self), receiver)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_event_with_token(
+    /// Queues a run of the event `registration` triggers, signing in with its
+    /// credentials and carrying whom its PAT was verified for.
+    pub(crate) fn push_registration(
         &self,
+        registration: EventRegistration,
         payload: Option<Value>,
-        app_id: String,
-        event_id: String,
-        offline: bool,
-        token: Option<String>,
         callback: Option<Arc<BufferedInterComHandler>>,
-        oauth_tokens: Option<std::collections::HashMap<String, OAuthToken>>,
-    ) -> Result<(), String> {
-        self.push_event_with_request(
-            payload,
-            app_id,
-            event_id,
-            offline,
-            token,
-            callback,
-            oauth_tokens,
-            None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn push_event_with_request(
-        &self,
-        payload: Option<Value>,
-        app_id: String,
-        event_id: String,
-        offline: bool,
-        token: Option<String>,
-        callback: Option<Arc<BufferedInterComHandler>>,
-        oauth_tokens: Option<std::collections::HashMap<String, OAuthToken>>,
         request_control: Option<Arc<EventRequestControl>>,
     ) -> Result<(), String> {
-        if !offline && token.is_none() {
+        if !registration.offline && registration.personal_access_token.is_none() {
             return Err("No token registered, cannot send online events".to_string());
         }
 
+        let token_owner = registration.token_owner();
         let event = EventBusEvent {
             payload,
-            app_id,
-            event_id,
-            token,
-            offline,
+            app_id: registration.app_id,
+            event_id: registration.event_id,
+            token: registration.personal_access_token,
+            token_owner,
+            offline: registration.offline,
             callback,
             request_control,
-            oauth_tokens: oauth_tokens.unwrap_or_default(),
+            oauth_tokens: registration.oauth_tokens,
         };
 
         self.sender

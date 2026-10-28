@@ -1,7 +1,12 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { type Prisma, PrismaClient } from "@prisma/client";
 import pg from "pg";
-import type { AAModel, ModelClassification } from "./types";
+import {
+	type AAModel,
+	type ModelClassification,
+	type ModelClassificationEstimates,
+	isCatalogEstimateSlug,
+} from "./types";
 
 let prisma: PrismaClient | null = null;
 
@@ -67,17 +72,18 @@ export function computeTier(
 	return { newTier, oldTier: currentTier };
 }
 
-export async function updateBitParameters(
-	bitId: string,
+export function mergeBitParameters(
 	classification: ModelClassification,
 	existingParams: Record<string, unknown> | null,
-	releaseDate?: string | null,
-): Promise<void> {
-	const db = getPrisma();
+	classificationEstimates?: ModelClassificationEstimates,
+): Record<string, unknown> {
 	const merged: Record<string, unknown> = {
 		...(existingParams ?? {}),
 		model_classification: classification,
 	};
+	if (classificationEstimates) {
+		merged.model_classification_estimates = classificationEstimates;
+	}
 
 	// Update tier if applicable
 	const tierResult = computeTier(existingParams, classification.cost);
@@ -88,11 +94,27 @@ export async function updateBitParameters(
 		provider.params = params;
 		merged.provider = provider;
 	}
+	return merged;
+}
+
+export async function updateBitParameters(
+	bitId: string,
+	classification: ModelClassification,
+	existingParams: Record<string, unknown> | null,
+	releaseDate?: string | null,
+	classificationEstimates?: ModelClassificationEstimates,
+): Promise<void> {
+	const db = getPrisma();
+	const merged = mergeBitParameters(
+		classification,
+		existingParams,
+		classificationEstimates,
+	);
 
 	const dateFields: Record<string, Date> = {};
 	if (releaseDate) {
 		const d = new Date(releaseDate);
-		if (!isNaN(d.getTime())) {
+		if (!Number.isNaN(d.getTime())) {
 			dateFields.createdAt = d;
 			dateFields.updatedAt = d;
 		}
@@ -112,6 +134,8 @@ export async function updateBitParameters(
 }
 
 export async function upsertLlmModel(aaModel: AAModel): Promise<void> {
+	// These catalog records are maintained from research, outside the AA feed.
+	if (isCatalogEstimateSlug(aaModel.slug)) return;
 	const db = getPrisma();
 	const data = {
 		name: aaModel.name,

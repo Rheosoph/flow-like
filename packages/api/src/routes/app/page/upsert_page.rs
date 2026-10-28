@@ -1,6 +1,7 @@
 use crate::{
     audit_branch, ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    permission::role_permission::RolePermissions,
+    routes::app::board::sink_rebind::rebind_latest_sinks, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -153,12 +154,15 @@ pub async fn upsert_page(
             }
         })?;
 
+    // A page is part of its board's draft, so its editor is a board editor.
+    rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
     {
         let mut board_guard = board.write().await;
         page_id_guard.ensure_held()?;
         board_guard.save_page(&page, None).await?;
         board_guard.save(None).await?;
     }
+    rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
 
     let is_new = existing.is_none();
     let mut row = page::ActiveModel {

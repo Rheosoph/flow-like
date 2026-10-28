@@ -135,6 +135,40 @@ The template's bridge also connects logging, streaming, variables, cache,
 storage, models, OAuth, and HTTP to Flow-Like host imports. Declare the matching
 permission before calling a gated host service.
 
+## Typed storage operations
+
+The checked-in SDK adds an optional `HostBridge.storageOps` extension. Existing
+bridges still compile without it. To use it in a component, select the WIT world
+`flow-like-node-storage-ops` and attach
+`createStorageOpsBridge(storageOpsImports)` to your bridge, where
+`storageOpsImports` is the generated binding for
+`flow-like:node/storage-ops@0.1.0`. That interface must also exist in the host.
+Access it through `ctx.storageOps`:
+
+```typescript
+const metadata = ctx.storageOps.stat(path);
+const bytes = ctx.storageOps.readRange(path, 0n, 65536n, metadata.e_tag ?? undefined);
+```
+
+Methods include `stat`, `readRange`, `listPage`, `write`, `writeStart`,
+`writeChunk`, `writeFinish`, `writeAbort`, `delete`, `copy`, `move`, and
+`fileUrl`. Failures throw `StorageError` with `code`, `message`, and `retryable`.
+Use `writeStorageChunks(ctx.storageOps, path, chunks, totalSize)` to consume an
+iterable of byte chunks and abort if it fails. The helper does not collect the
+iterable before writing. A declared total size must match exactly; omit it
+when unknown. Range reads, individual writes, and chunks are limited to 10 MiB.
+
+Pass `{ if_match: metadata.e_tag }` to `write` to detect concurrent changes,
+or `{ create_only: true }` to prevent replacement. A backend that cannot
+enforce the condition returns `unsupported`. Streaming writes are unconditional.
+List pages default to 100 entries, accept sizes from 1 to 1000, and support
+`exclude_directories` and `recursive`. Use the returned cursor for the next
+page; call `closeList` when abandoning it. Cursors and writers belong to one
+node invocation and are closed when it ends. See the
+[Rust storage reference](/dev/wasm-nodes/rust/#typed-storage-operations) for
+host limits and native mock behavior. TypeScript tests can use `MockStorageOps`
+or `MockHostBridge.storageOps`.
+
 ## Multi-node packages
 
 The checked-in TypeScript template exposes one `getDefinition`/`run` pair. To

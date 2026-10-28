@@ -291,14 +291,21 @@ impl NodeLogic for CachedSqlQueryNode {
                 // An oversized result fails loudly here (the cache caps value sizes)
                 // rather than silently running uncached every time — the fix is to
                 // shrink the result (LIMIT, projection) or persist it to app storage.
-                cache_set(
-                    context,
-                    &cache,
-                    &key,
-                    json!(table),
-                    Some(ttl_seconds as u64),
-                )
-                .await?;
+                // Replays never change the cache, so they grade on their own result.
+                let replay = context
+                    .execution_cache
+                    .as_ref()
+                    .is_some_and(|execution| execution.shadow);
+                if !replay {
+                    cache_set(
+                        context,
+                        &cache,
+                        &key,
+                        json!(table),
+                        Some(ttl_seconds as u64),
+                    )
+                    .await?;
+                }
 
                 (table, false)
             }

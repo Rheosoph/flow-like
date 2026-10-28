@@ -11,6 +11,7 @@ use flow_like::{
         pin::{PinOptions, ValueType},
         variable::VariableType,
     },
+    models::custom_bit_relay::refuse_relayed_media,
 };
 use flow_like_catalog_core::FlowPath;
 use flow_like_model_provider::{
@@ -2551,6 +2552,7 @@ impl NodeLogic for GenerateImageNode {
 
         let bit: Bit = context.evaluate_pin("provider").await?;
         let provider = provider_from_bit(&bit)?;
+        refuse_relayed_media(&context.app_state, &bit)?;
         let history: History = context.evaluate_pin("history").await?;
         let output_path: FlowPath = context.evaluate_pin("output_path").await?;
 

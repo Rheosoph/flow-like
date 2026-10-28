@@ -333,6 +333,26 @@ pub(crate) async fn notify_app_admins(
     title: String,
     description: String,
 ) {
+    notify_app_admins_at(
+        state,
+        app_id,
+        title,
+        description,
+        "blocks",
+        format!("/library/config/team?id={}", app_id),
+    )
+    .await;
+}
+
+/// [`notify_app_admins`] with the notification's icon and link chosen by the caller.
+pub(crate) async fn notify_app_admins_at(
+    state: &AppState,
+    app_id: &str,
+    title: String,
+    description: String,
+    icon: &str,
+    link: String,
+) {
     use crate::entity::sea_orm_active_enums::NotificationType;
     use crate::push_notifications::{DispatchNotificationInput, dispatch_notification};
 
@@ -352,8 +372,8 @@ pub(crate) async fn notify_app_admins(
                 app_id: Some(app_id.to_string()),
                 title: title.clone(),
                 description: Some(description.clone()),
-                icon: Some("blocks".to_string()),
-                link: Some(format!("/library/config/team?id={}", app_id)),
+                icon: Some(icon.to_string()),
+                link: Some(link.clone()),
                 image: None,
                 notification_type: NotificationType::System,
                 source_run_id: None,

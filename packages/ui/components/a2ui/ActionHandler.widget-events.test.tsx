@@ -215,6 +215,7 @@ describe("widget and workflow action timing", () => {
 					? { name, context: { actionId: "open" } }
 					: {
 							name,
+							context: {},
 							pageAction: {
 								actionId: "history",
 								manifestRevision: "revision-1",
@@ -443,6 +444,7 @@ describe("page widget event dispatch", () => {
 										open: [
 											{
 												name: "workflow_event",
+												context: {},
 												pageAction: {
 													actionId: `open-${instanceId}`,
 													manifestRevision: "revision-1",

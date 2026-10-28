@@ -20,7 +20,12 @@ use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 use tauri::AppHandle;
 
-type InspectionCacheEntry = (Option<SystemTime>, Option<SystemTime>, PackageInspection);
+type InspectionCacheEntry = (
+    Option<SystemTime>,
+    Option<SystemTime>,
+    Option<SystemTime>,
+    PackageInspection,
+);
 
 static INSPECTION_CACHE: LazyLock<DashMap<String, InspectionCacheEntry>> =
     LazyLock::new(DashMap::new);
@@ -956,7 +961,9 @@ pub async fn developer_inspect_node(
             .await
             .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
-        let security = WasmSecurityConfig::permissive().for_metadata();
+        let manifest = manifest_for_wasm_path(&path)?;
+        let security =
+            developer_node_security(&[], manifest.as_ref().map(|m| &m.permissions)).for_metadata();
         let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
             TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
         })?;
@@ -1071,22 +1078,27 @@ pub async fn developer_inspect_package(
 
         let wasm_mtime = wasm_path.as_deref().and_then(wasm_file_mtime);
         let bundle_mtime = bundle_path.as_deref().and_then(wasm_file_mtime);
+        let manifest_mtime = wasm_file_mtime(&project.join("flow-like.toml"));
         if let Some(entry) = INSPECTION_CACHE.get(&project_path) {
-            let (cached_wasm, cached_bundle, cached_result) = entry.value();
-            if wasm_mtime.is_some() && *cached_wasm == wasm_mtime && *cached_bundle == bundle_mtime
+            let (cached_wasm, cached_bundle, cached_manifest, cached_result) = entry.value();
+            if wasm_mtime.is_some()
+                && *cached_wasm == wasm_mtime
+                && *cached_bundle == bundle_mtime
+                && *cached_manifest == manifest_mtime
             {
                 return Ok(cached_result.clone());
             }
         }
 
-        let manifest = load_manifest_typed(&project).ok();
+        let manifest = load_optional_manifest(&project)?;
 
         let (nodes, is_package) = if let Some(wasm_path) = &wasm_path {
             let loaded = engine.load_auto_from_file(wasm_path).await.map_err(|e| {
                 TauriFunctionError::new(&format!("Failed to load WASM module: {}", e))
             })?;
 
-            let security = WasmSecurityConfig::permissive().for_metadata();
+            let security = developer_node_security(&[], manifest.as_ref().map(|m| &m.permissions))
+                .for_metadata();
             let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
                 TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
             })?;
@@ -1117,7 +1129,10 @@ pub async fn developer_inspect_package(
             widget_bundle_path: bundle_path.map(|p| p.to_string_lossy().to_string()),
         };
 
-        INSPECTION_CACHE.insert(project_path, (wasm_mtime, bundle_mtime, result.clone()));
+        INSPECTION_CACHE.insert(
+            project_path,
+            (wasm_mtime, bundle_mtime, manifest_mtime, result.clone()),
+        );
 
         Ok(result)
     })
@@ -1291,6 +1306,43 @@ fn load_manifest_typed(project_path: &Path) -> Result<PackageManifest, TauriFunc
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
     PackageManifest::from_toml(&content)
         .map_err(|e| TauriFunctionError::new(&format!("Invalid manifest: {}", e)))
+}
+
+fn load_optional_manifest(
+    project_path: &Path,
+) -> Result<Option<PackageManifest>, TauriFunctionError> {
+    let exists = project_path
+        .join("flow-like.toml")
+        .try_exists()
+        .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    if exists {
+        load_manifest_typed(project_path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn manifest_for_wasm_path(wasm_path: &Path) -> Result<Option<PackageManifest>, TauriFunctionError> {
+    let path = wasm_path
+        .canonicalize()
+        .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    for directory in path.parent().into_iter().flat_map(Path::ancestors) {
+        if let Some(manifest) = load_optional_manifest(directory)? {
+            return Ok(Some(manifest));
+        }
+    }
+    Ok(None)
+}
+
+fn developer_node_security(
+    node_permissions: &[NodePermission],
+    package_permissions: Option<&PackagePermissions>,
+) -> WasmSecurityConfig {
+    let security = WasmSecurityConfig::from_node_permissions(node_permissions);
+    match package_permissions {
+        Some(permissions) => security.with_package_settings(&permissions.to_security_config()),
+        None => security,
+    }
 }
 
 fn find_wasm_file(project_path: &Path) -> Result<PathBuf, TauriFunctionError> {
@@ -1657,8 +1709,13 @@ pub async fn developer_run_node(
             .await
             .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
+        let manifest = manifest_for_wasm_path(&path)?;
+        let package_permissions = manifest.as_ref().map(|m| &m.permissions);
         let mut inspect_instance = loaded
-            .instantiate(&engine, WasmSecurityConfig::permissive().for_metadata())
+            .instantiate(
+                &engine,
+                developer_node_security(&[], package_permissions).for_metadata(),
+            )
             .await
             .map_err(|e| {
                 TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
@@ -1674,7 +1731,7 @@ pub async fn developer_run_node(
         let mut instance = loaded
             .instantiate(
                 &engine,
-                WasmSecurityConfig::from_node_permissions(&definition.permissions),
+                developer_node_security(&definition.permissions, package_permissions),
             )
             .await
             .map_err(|e| {
@@ -1724,13 +1781,14 @@ async fn load_wasm_nodes_from_path(
     wasm_path: &Path,
     engine: Arc<WasmEngine>,
     manifest_package_id: Option<&str>,
+    package_permissions: Option<&PackagePermissions>,
 ) -> Result<Vec<(Node, Arc<dyn NodeLogic>)>, TauriFunctionError> {
     let loaded = engine
         .load_auto_from_file(wasm_path)
         .await
         .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
-    let security = WasmSecurityConfig::permissive();
+    let security = developer_node_security(&[], package_permissions);
     let mut instance = loaded
         .instantiate(&engine, security.for_metadata())
         .await
@@ -1744,6 +1802,7 @@ async fn load_wasm_nodes_from_path(
     Ok(definitions
         .into_iter()
         .map(|def| {
+            let security = developer_node_security(&def.permissions, package_permissions);
             let package_id = match manifest_package_id {
                 Some(id) => id.to_string(),
                 None => format!("local::{}", def.name),
@@ -1769,7 +1828,7 @@ async fn load_wasm_nodes_from_path(
                 WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
-                    security.clone(),
+                    security,
                     def,
                 )
                 .with_package_id(package_id),
@@ -1783,8 +1842,17 @@ fn load_manifest_for_registration(
     project_path: &Path,
     wasm_path: &Path,
 ) -> Option<PackageManifest> {
-    if let Ok(manifest) = load_manifest_typed(project_path) {
-        return Some(manifest);
+    match load_optional_manifest(project_path) {
+        Ok(Some(manifest)) => return Some(manifest),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                project_path = %project_path.display(),
+                ?error,
+                "Cannot register developer package with an invalid manifest"
+            );
+            return None;
+        }
     }
     let file_name = wasm_path
         .file_stem()
@@ -1900,10 +1968,22 @@ pub async fn developer_load_into_catalog(
         emit_package_status(&app_handle, &package_id, "error");
     })?;
 
-    let manifest = load_manifest_for_registration(&project, &wasm_path);
+    let authored_manifest = load_optional_manifest(&project).inspect_err(|_| {
+        emit_package_status(&app_handle, &package_id, "error");
+    })?;
+    let manifest = authored_manifest
+        .clone()
+        .or_else(|| load_manifest_for_registration(&project, &wasm_path));
     let manifest_id = manifest.as_ref().map(|m| m.id.as_str());
 
-    let node_pairs = match load_wasm_nodes_from_path(&wasm_path, engine, manifest_id).await {
+    let node_pairs = match load_wasm_nodes_from_path(
+        &wasm_path,
+        engine,
+        manifest_id,
+        authored_manifest.as_ref().map(|m| &m.permissions),
+    )
+    .await
+    {
         Ok(pairs) => pairs,
         Err(e) => {
             emit_package_status(&app_handle, &package_id, "error");
@@ -2038,10 +2118,30 @@ pub async fn collect_developer_node_pairs(
         let project_path = PathBuf::from(&project.path);
         match find_wasm_file(&project_path) {
             Ok(wasm_path) => {
-                let manifest = load_manifest_for_registration(&project_path, &wasm_path);
+                let authored_manifest = match load_optional_manifest(&project_path) {
+                    Ok(manifest) => manifest,
+                    Err(error) => {
+                        tracing::warn!(
+                            "Failed to load manifest for developer project '{}': {:?}",
+                            project.name,
+                            error
+                        );
+                        continue;
+                    }
+                };
+                let manifest = authored_manifest
+                    .clone()
+                    .or_else(|| load_manifest_for_registration(&project_path, &wasm_path));
                 let manifest_id = manifest.as_ref().map(|m| m.id.as_str());
 
-                match load_wasm_nodes_from_path(&wasm_path, engine.clone(), manifest_id).await {
+                match load_wasm_nodes_from_path(
+                    &wasm_path,
+                    engine.clone(),
+                    manifest_id,
+                    authored_manifest.as_ref().map(|m| &m.permissions),
+                )
+                .await
+                {
                     Ok(pairs) => {
                         tracing::info!(
                             "Loaded {} developer node(s) from '{}'",
@@ -2115,6 +2215,57 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
 mod publish_artifact_tests {
     use super::*;
 
+    #[test]
+    fn developer_nodes_use_package_limits_without_inheriting_package_capabilities() {
+        use flow_like_wasm::WasmCapabilities;
+
+        let manifest = PackageManifest::from_toml(
+            r#"manifest_version = 2
+id = "com.example.astro"
+name = "Astro"
+version = "0.1.0"
+description = "Developer fixture"
+[permissions]
+memory = "large"
+timeout = "long_running"
+[permissions.network]
+http_enabled = true
+allowed_hosts = ["registry.npmjs.org"]
+"#,
+        )
+        .unwrap();
+        let security =
+            developer_node_security(&[NodePermission::StorageRead], Some(&manifest.permissions));
+        assert_eq!(security.limits.memory_limit, 512 * 1024 * 1024);
+        assert_eq!(security.limits.timeout, std::time::Duration::from_secs(300));
+        assert_eq!(security.capabilities, WasmCapabilities::STORAGE_READ);
+        assert_eq!(
+            security.allowed_hosts.as_deref(),
+            Some(["registry.npmjs.org".to_owned()].as_slice())
+        );
+        assert!(!security.allow_wasi);
+        assert!(!security.allow_wasi_network);
+
+        let metadata = developer_node_security(&[], Some(&manifest.permissions)).for_metadata();
+        assert_eq!(metadata.limits.memory_limit, security.limits.memory_limit);
+        assert_eq!(metadata.limits.timeout, security.limits.timeout);
+        assert!(metadata.capabilities.is_empty());
+        assert!(metadata.deterministic);
+        assert_eq!(metadata.allowed_hosts.as_deref(), Some([].as_slice()));
+    }
+
+    #[test]
+    fn developer_nodes_without_a_manifest_keep_default_limits_and_declared_permissions() {
+        use flow_like_wasm::WasmCapabilities;
+
+        let security = developer_node_security(&[NodePermission::StorageRead], None);
+        assert_eq!(security.limits.memory_limit, 256 * 1024 * 1024);
+        assert_eq!(security.capabilities, WasmCapabilities::STORAGE_READ);
+        assert!(!security.allow_wasi);
+        assert!(!security.allow_wasi_network);
+        assert!(developer_node_security(&[], None).capabilities.is_empty());
+    }
+
     struct ProjectFixture(PathBuf);
 
     impl ProjectFixture {
@@ -2152,6 +2303,27 @@ widget_bundle_path = "widgets.flwb"
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn debug_artifacts_find_their_project_manifest_and_reject_invalid_permissions() {
+        let project = ProjectFixture::new();
+        let artifact = project.0.join("target/wasm32-wasip2/debug/node.wasm");
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(&artifact, b"artifact").unwrap();
+        assert_eq!(
+            manifest_for_wasm_path(&artifact).unwrap().unwrap().id,
+            "com.example.widgets"
+        );
+
+        std::fs::write(project.0.join("flow-like.toml"), "[broken").unwrap();
+        assert!(manifest_for_wasm_path(&artifact).is_err());
+        assert!(load_manifest_for_registration(&project.0, &artifact).is_none());
+        assert!(
+            load_optional_manifest(&project.0.join("node"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

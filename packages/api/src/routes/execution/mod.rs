@@ -13,6 +13,7 @@ use axum::{
 };
 
 pub mod cancel;
+pub mod models;
 pub mod progress;
 pub mod public_key;
 pub mod quota;
@@ -48,11 +49,23 @@ pub fn routes() -> Router<AppState> {
                 crate::routes::app::mail::MAX_REQUEST_BYTES,
             )),
         )
+        .route(
+            "/apps/{app_id}/models/chat/completions",
+            post(models::chat_completions).layer(DefaultBodyLimit::max(models::MAX_REQUEST_BYTES)),
+        )
+        .route(
+            "/apps/{app_id}/models/systemone",
+            post(models::systemone).layer(DefaultBodyLimit::max(models::MAX_REQUEST_BYTES)),
+        )
         .nest(
             "/apps/{app_id}/locked",
             crate::routes::app::locked::executor_routes(),
         )
         .route("/result", get(progress::executor_result))
+        .route(
+            "/apps/{app_id}/user",
+            get(crate::routes::user::info::executor_user_info),
+        )
         .route("/apps/{app_id}/widgets", get(widgets::get_app_widgets))
         .route(
             "/apps/{app_id}/package-widgets",

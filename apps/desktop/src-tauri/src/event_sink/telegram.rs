@@ -1114,6 +1114,9 @@ impl TelegramSink {
             app_id: "unknown".to_string(),
             default_payload: None,
             personal_access_token: None,
+            pat_owner_sub: None,
+            hub_origin: None,
+            remote: false,
             oauth_tokens: std::collections::HashMap::new(),
         }
     }

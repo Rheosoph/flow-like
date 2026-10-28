@@ -170,6 +170,7 @@ mod tests {
     };
 
     #[tokio::test]
+    #[ignore = "calls the live OpenAI embeddings API with OPENAI_API_EMBEDDING_KEY"]
     async fn test_openai_embedding() {
         dotenv().ok();
 
@@ -192,7 +193,10 @@ mod tests {
             vector_length: 3048,
             remote: None,
         };
-        let api_key = std::env::var("OPENAI_API_EMBEDDING_KEY").unwrap();
+        let Ok(api_key) = std::env::var("OPENAI_API_EMBEDDING_KEY") else {
+            eprintln!("Skipping OpenAI embedding test: OPENAI_API_EMBEDDING_KEY not set");
+            return;
+        };
         let config = ModelProviderConfiguration {
             openai_config: vec![OpenAIConfig {
                 api_key: Some(api_key),
@@ -249,10 +253,9 @@ mod tests {
             vector_length: 3048,
             remote: None,
         };
-        let api_key = std::env::var("OPENAI_API_EMBEDDING_KEY").unwrap();
         let config = ModelProviderConfiguration {
             openai_config: vec![OpenAIConfig {
-                api_key: Some(api_key),
+                api_key: Some("splitting-makes-no-request".to_string()),
                 organization: None,
                 endpoint: None,
                 proxy: None,
@@ -268,6 +271,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "calls the live Azure OpenAI embedding deployment set by AZURE_OPENAI_*"]
     async fn test_azure_embedding() {
         dotenv().ok();
 
@@ -278,8 +282,15 @@ mod tests {
             provider_name: "azure".to_string(),
             params: None,
         };
-        let api_key = std::env::var("AZURE_OPENAI_API_KEY").unwrap();
-        let endpoint = std::env::var("AZURE_OPENAI_ENDPOINT").unwrap();
+        let (Ok(api_key), Ok(endpoint)) = (
+            std::env::var("AZURE_OPENAI_API_KEY"),
+            std::env::var("AZURE_OPENAI_ENDPOINT"),
+        ) else {
+            eprintln!(
+                "Skipping Azure embedding test: AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT not set"
+            );
+            return;
+        };
         let config = ModelProviderConfiguration {
             openai_config: vec![OpenAIConfig {
                 api_key: Some(api_key),

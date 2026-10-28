@@ -281,6 +281,88 @@ pub async fn storage_user_list(
 }
 
 #[tauri::command(async)]
+pub async fn storage_resource_read(
+    app_handle: AppHandle,
+    app_id: String,
+    prefix: String,
+    user_scoped: bool,
+) -> Result<tauri::ipc::Response, TauriFunctionError> {
+    let sub = if user_scoped {
+        Some(current_user_sub(&app_handle).await?)
+    } else {
+        None
+    };
+    let path = resource_path(&app_id, &prefix, sub.as_deref())?;
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    ensure_device_files(&state, &app_id).await?;
+    let store = {
+        let config = state.config.read().await;
+        if user_scoped {
+            config.stores.user_store.clone()
+        } else {
+            config.stores.app_storage_store.clone()
+        }
+    }
+    .ok_or_else(|| anyhow!("Resource storage is unavailable"))?;
+    // Read through the protected backend. Returning a local asset URL would
+    // reopen a filesystem path after the permission check.
+    let object = store
+        .as_generic()
+        .get(&path)
+        .await
+        .map_err(anyhow::Error::from)?;
+    let bytes =
+        flow_like::flow_like_storage::files::bounded::read_object(object, 256 * 1024 * 1024)
+            .await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+fn resource_path(app_id: &str, prefix: &str, user_sub: Option<&str>) -> anyhow::Result<Path> {
+    if app_id.is_empty()
+        || !app_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(anyhow!("Invalid resource app ID"));
+    }
+    let base = match user_sub {
+        Some(sub) => Path::from("users").join(sub).join("apps").join(app_id),
+        None => Path::from("apps").join(app_id).join("upload"),
+    };
+    let path = flow_like::flow_like_storage::normalize_object_path(prefix);
+    if !path.prefix_matches(&base) || path == base {
+        return Err(anyhow!(
+            "Resource is outside the current app or user storage"
+        ));
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod resource_permission_tests {
+    use super::resource_path;
+
+    #[test]
+    fn resource_reads_require_current_app_and_user_scope() {
+        assert!(resource_path("a", "apps/a/upload/site/index.html", None).is_ok());
+        assert!(
+            resource_path("a", "users/current/apps/a/site/index.html", Some("current")).is_ok()
+        );
+        for prefix in [
+            "apps/b/upload/secret",
+            "apps/a/storage/secret",
+            "apps/a/upload",
+            "/etc/passwd",
+        ] {
+            assert!(resource_path("a", prefix, None).is_err(), "{prefix}");
+        }
+        assert!(resource_path("a", "users/other/apps/a/secret", Some("current")).is_err());
+        assert!(resource_path("a", "users/current/apps/b/secret", Some("current")).is_err());
+        assert!(resource_path("../a", "apps/a/upload/file", None).is_err());
+    }
+}
+
+#[tauri::command(async)]
 pub async fn storage_get(
     app_handle: AppHandle,
     app_id: String,

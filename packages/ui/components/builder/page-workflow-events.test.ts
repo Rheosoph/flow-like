@@ -181,7 +181,10 @@ describe("page board resolution", () => {
 
 describe("page widget event rows", () => {
 	test("exposes Excalidraw's typed events before any handler is bound", () => {
-		const events = getPageComponentEvents({ type: "excalidraw" });
+		const events = getPageComponentEvents({
+			id: "drawing",
+			type: "excalidraw",
+		});
 		expect(events.map((event) => event.id)).toEqual([
 			"load",
 			"save",

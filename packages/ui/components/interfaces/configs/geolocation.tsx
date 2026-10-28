@@ -1,7 +1,8 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { getApiOrigin } from "../../../lib/api-url";
 import { executeDeviceCommand } from "../../../lib/device-bridge";
@@ -27,11 +28,13 @@ export function GeolocationConfig({
 	eventId,
 	eventExecutionMode,
 }: IConfigInterfaceProps) {
+	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const auth = useAuth();
 	const [requesting, setRequesting] = useState(false);
 	const [error, setError] = useState<string>();
 	const [pollUntil, setPollUntil] = useState(0);
+	const radiusId = useId();
 	const scope = JSON.stringify([
 		getApiOrigin(backend.profile),
 		backend.profile?.id,
@@ -60,6 +63,7 @@ export function GeolocationConfig({
 		staleTime: 0,
 		refetchInterval: () => (pollUntil > Date.now() ? 1000 : false),
 	});
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `scope` is the trigger; a new hub, account, app or Event drops the previous request state.
 	useEffect(() => {
 		setError(undefined);
 		setRequesting(false);
@@ -131,9 +135,10 @@ export function GeolocationConfig({
 				/>
 			</div>
 			<div className="grid gap-4 sm:grid-cols-2">
-				<label className="space-y-2 text-sm">
+				<label htmlFor={radiusId} className="space-y-2 text-sm">
 					Radius (meters)
 					<Input
+						id={radiusId}
 						type="number"
 						min={100}
 						max={100000}
@@ -183,8 +188,10 @@ export function GeolocationConfig({
 			</p>
 			{eventExecutionMode === "Remote" && (
 				<p className="text-sm text-muted-foreground">
-					This device monitors the region. A crossing sends the region center,
-					radius and transition to this Event's server workflow.
+					{t(
+						"geofenceForwardsToHub",
+						"This device monitors the region and reports each crossing; the Event runs on the hub as the account signed in on this device.",
+					)}
 				</p>
 			)}
 			{invalid && (

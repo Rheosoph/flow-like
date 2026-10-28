@@ -51,6 +51,8 @@ model User {
   wasmPackageJoinQueue        WasmPackageJoinQueue[]
   wasmPackagesAuthored        WasmPackageAuthor[]
   technicalUsersCreated       TechnicalUser[]          @relation("TechnicalUserCreator")
+  eventSinksRunAs             EventSink[]              @relation("EventSinkRunAs")
+  regressionSuiteRunsStarted  RegressionSuiteRun[]     @relation("RegressionSuiteRunActor")
 
   status String @default("ACTIVE")
   tier   String @default("FREE")

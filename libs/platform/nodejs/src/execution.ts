@@ -2,12 +2,12 @@ import type { HttpClient } from "./client.js";
 import { boardPath, segment } from "./paths.js";
 import type {
 	JsonObject,
+	LogQuery,
 	PollOptions,
 	PollResult,
-	RunStatus,
 	RunListOptions,
 	RunLogOptions,
-	LogQuery,
+	RunStatus,
 } from "./types.js";
 
 export function createExecutionMethods(http: HttpClient) {

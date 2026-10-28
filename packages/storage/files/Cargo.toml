@@ -9,6 +9,8 @@ flow-like-types-data-url.workspace = true
 anyhow = "1.0.97"
 async-trait.workspace = true
 bytes = "1.10.1"
+cap-std = "4.0.3"
+cap-fs-ext = "4.0.3"
 mime_guess = "2.0.5"
 reqwest = { workspace = true, features = ["gzip", "brotli", "socks", "http2"] }
 tokio = { workspace = true, features = ["sync", "fs", "io-util"] }
@@ -27,6 +29,9 @@ base64.workspace = true
 percent-encoding.workspace = true
 tracing.workspace = true
 infer = "0.19.0"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["fs"] }
 
 [features]
 default = ["smb"]

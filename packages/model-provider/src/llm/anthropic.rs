@@ -4,23 +4,25 @@ use super::{
     ModelLogic, OPENROUTER_ONLY, ParamDialect, body_params, drop_body_param, drop_temperature,
     extract_headers,
     media::{self, MediaDialect},
-    unforce_tool_choice,
+    unforce_tool_choice, user_media,
 };
 use crate::history::{History, HistoryThinking};
 use crate::provider::random_provider;
 use crate::{
+    authorization::AuthorizedHttpClient,
+    egress::ProviderEgress,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
-use rig::completion::CompletionRequest;
+use rig::completion::{CompletionError, CompletionRequest};
 use rig::message::ToolChoice;
 use serde_json::{Value, json};
 
 pub struct AnthropicModel {
-    client: rig::providers::anthropic::Client,
+    client: rig::providers::anthropic::Client<AuthorizedHttpClient>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -34,7 +36,9 @@ impl AnthropicModel {
         let api_key = anthropic_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
 
-        let mut builder = rig::providers::anthropic::Client::builder().api_key(&api_key);
+        let mut builder = rig::providers::anthropic::Client::builder()
+            .api_key(&api_key)
+            .http_client(AuthorizedHttpClient::default());
         if let Some(endpoint) = anthropic_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
         }
@@ -56,7 +60,10 @@ impl AnthropicModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -66,7 +73,9 @@ impl AnthropicModel {
             .and_then(|v| v.as_str().map(|s| s.to_string()));
         let custom_headers = extract_headers(&params);
 
-        let mut builder = rig::providers::anthropic::Client::builder().api_key(api_key);
+        let mut builder = rig::providers::anthropic::Client::builder()
+            .api_key(api_key)
+            .http_client(AuthorizedHttpClient::for_egress(egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -106,9 +115,9 @@ impl Cacheable for AnthropicModel {
 impl ModelLogic for AnthropicModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor::with_request_fixup(
+        Ok(user_media::constructor(
             self.client.clone(),
-            enforce_model_constraints,
+            anthropic_request,
         ))
     }
 
@@ -345,10 +354,17 @@ fn thinking_type(request: &CompletionRequest) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+fn anthropic_request(
+    model: &str,
+    request: CompletionRequest,
+) -> Result<CompletionRequest, CompletionError> {
+    let request = media::retain_supported(MediaDialect::Anthropic, model, request)?;
+    Ok(enforce_model_constraints(model, request))
+}
+
 /// Applies Anthropic's per-model limits to the final request, including the fields agents set
 /// on the builder (`tool_choice`, `temperature`) that the History mapping cannot see.
-fn enforce_model_constraints(model: &str, request: CompletionRequest) -> CompletionRequest {
-    let mut request = media::retain_supported(MediaDialect::Anthropic, model, request);
+fn enforce_model_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
     let Some(claude) = Claude::parse(model) else {
         return request;
     };
@@ -648,7 +664,7 @@ mod tests {
         });
 
         for model in ["claude-sonnet-4-6", "hosted-assistant-bit"] {
-            let fixed = enforce_model_constraints(model, attached.clone());
+            let fixed = anthropic_request(model, attached.clone()).unwrap();
             let rig::completion::Message::User { content } = fixed.chat_history.first() else {
                 panic!("{model}: the user message changed role");
             };
@@ -656,11 +672,38 @@ mod tests {
                 matches!(
                     content.first(),
                     rig::message::UserContent::Text(text)
-                        if text.text.starts_with("[attachment omitted: ")
+                        if text.text == "[attachment omitted: unsupported file type document]"
                 ),
                 "{model}"
             );
         }
+    }
+
+    #[test]
+    fn a_pdf_link_the_run_did_not_inline_fails_naming_its_host() {
+        let mut attached = request(json!({}));
+        attached.chat_history = rig::OneOrMany::one(rig::completion::Message::User {
+            content: rig::OneOrMany::one(rig::message::UserContent::document_url(
+                "https://bucket.s3.amazonaws.com/report.pdf?X-Amz-Signature=secret",
+                Some(rig::message::DocumentMediaType::PDF),
+            )),
+        });
+
+        let error = anthropic_request("claude-sonnet-4-6", attached)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains(
+                "The document (application/pdf) from host 'bucket.s3.amazonaws.com' cannot be \
+                 sent to Anthropic as a link"
+            ),
+            "{error}"
+        );
+        assert!(
+            !error.contains("X-Amz") && !error.contains("report.pdf"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
@@ -675,17 +718,20 @@ mod tests {
             "usage": {"input_tokens": 12, "output_tokens": 4096},
         })))
         .await;
-        let model = AnthropicModel::from_provider(&ModelProvider {
-            provider_name: "anthropic".to_string(),
-            model_id: None,
-            version: None,
-            api_surface: None,
-            params: Some(HashMap::from([
-                ("api_key".to_string(), json!("test-key")),
-                ("model_id".to_string(), json!("claude-opus-4-7")),
-                ("endpoint".to_string(), json!(endpoint)),
-            ])),
-        })
+        let model = AnthropicModel::from_provider(
+            &ModelProvider {
+                provider_name: "anthropic".to_string(),
+                model_id: None,
+                version: None,
+                api_surface: None,
+                params: Some(HashMap::from([
+                    ("api_key".to_string(), json!("test-key")),
+                    ("model_id".to_string(), json!("claude-opus-4-7")),
+                    ("endpoint".to_string(), json!(endpoint)),
+                ])),
+            },
+            ProviderEgress::Open,
+        )
         .await
         .unwrap();
         let mut history = history("claude-opus-4-7");

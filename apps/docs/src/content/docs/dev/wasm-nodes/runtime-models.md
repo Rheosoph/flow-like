@@ -70,6 +70,38 @@ At least one of `get_node` or `get_nodes` is required. When `alloc` is absent, t
 
 Core modules call flat Flow-Like host functions. They do not receive direct WASI socket access; network-capable core templates use the Flow-Like HTTP host bridge when their SDK supports it.
 
+### Typed storage transport
+
+Core modules can opt into `flowlike_storage_ops.request(ptr: u32, len: u32) -> u64`.
+The input is UTF-8 JSON in guest memory. For example, a metadata request is
+`{"op":"stat_file","path":<FlowPath>}`. Operation names use snake case:
+`read_file_range`, `list_files_page`, `close_list`, `write_file`,
+`write_file_start`, `write_file_chunk`, `write_file_finish`, `write_file_abort`,
+`delete_file`, `copy_file`, `move_file`, and `file_url`.
+
+The result packs a host response-buffer offset in the upper 32 bits and its
+byte length in the lower 32 bits. It is not a pointer into guest memory.
+Allocate a guest destination, then call
+`flowlike_storage_ops.read_response(offset: u32, destination: u32, length: u32) -> i32`
+to copy the bytes. It returns the copied byte count or `-1` for invalid bounds.
+The next storage-ops request replaces this buffer, so consume the response
+before making another request. A response can be copied in several pieces.
+
+Decode the copied JSON as either `{"ok":true,"value":...}` or
+`{"ok":false,"error":{"code":"...","message":"...","retryable":false}}`.
+Unit results use `null`. A binary range read returns
+`{"data_base64":"..."}` in `value`; writes and write chunks take `data_base64`
+in the request. Paths are JSON `FlowPath` objects. Write sessions use
+`write_id`, listing continuation uses `cursor`, and copy/move requests use
+`source`, `destination`, and `overwrite`. Put listing fields directly beside
+`op`: `path`, `limit`, `cursor`, `exclude_directories`, and `recursive`.
+
+The component interface exposes the same operations through WIT records and
+byte lists. See the [typed storage reference](/dev/wasm-nodes/rust/#typed-storage-operations)
+for size limits, conditions, and invocation-scoped handles. Older core SDK
+helpers continue to use their existing imports; they do not call this
+transport automatically.
+
 ## Language templates
 
 The maintained formats are:

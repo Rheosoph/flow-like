@@ -24,16 +24,15 @@ const serviceScopes = [
 	"youtube.readonly",
 ].map((scope) => `https://www.googleapis.com/auth/${scope}`);
 
-const hub = {
-	oauth_providers: {
-		google: {
-			name: "Google",
-			auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-			token_url: "https://oauth2.googleapis.com/token",
-			scopes: ["openid", "email", "profile"],
-		},
+const oauthProviders: IHub["oauth_providers"] = {
+	google: {
+		name: "Google",
+		auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
+		token_url: "https://oauth2.googleapis.com/token",
+		scopes: ["openid", "email", "profile"],
 	},
-} as IHub;
+};
+const hub = { oauth_providers: oauthProviders } as IHub;
 
 function node(id: string, fields: Partial<INode> = {}): INode {
 	return { id, ...fields } as INode;

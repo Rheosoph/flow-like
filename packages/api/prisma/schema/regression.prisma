@@ -68,6 +68,10 @@ model RegressionSuiteRun {
   /// are flipped to errored by it.
   status  String
 
+  /// Who started a manual or publish run; queued pickups dispatch as this user.
+  actorUser   User?   @relation("RegressionSuiteRunActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorUserId String?
+
   regressed    Int @default(0)
   fixed        Int @default(0)
   stillFailing Int @default(0)
@@ -86,6 +90,7 @@ model RegressionSuiteRun {
   @@index([appId, boardId, boardVersion, createdAt])
   @@index([suiteId, createdAt])
   @@index([status, createdAt])
+  @@index([actorUserId])
 }
 
 /// Per-case verdict of a suite run: recorded-fixture replay or authored

@@ -69,13 +69,18 @@ fn sanitize_text(mut input: String) -> String {
         "apikey",
         "access_token",
         "refresh_token",
+        "key",
     ] {
         input = redact_kv(&input, key);
     }
 
     const MAX_LEN: usize = 32 * 1024;
     if input.len() > MAX_LEN {
-        input.truncate(MAX_LEN);
+        let mut end = MAX_LEN;
+        while !input.is_char_boundary(end) {
+            end -= 1;
+        }
+        input.truncate(end);
     }
     input
 }
@@ -167,4 +172,34 @@ pub async fn error_reporting_middleware(
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gemini sends its key as `?key=`, and reqwest errors quote the whole request URL.
+    #[test]
+    fn credentials_in_a_report_are_redacted() {
+        let summary = "Governance agent failed: error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent?alt=sse&key=AIzaSyD-report-key) | api_key=sk-report token=tk-report Authorization: Bearer br-report";
+        let sanitized = sanitize_text(summary.to_owned());
+        for leaked in ["AIzaSyD-report-key", "sk-report", "tk-report", "br-report"] {
+            assert!(
+                !sanitized.contains(leaked),
+                "{leaked} survived: {sanitized}"
+            );
+        }
+        assert!(
+            sanitized.contains("streamGenerateContent?alt=sse&key=[REDACTED] |"),
+            "{sanitized}"
+        );
+    }
+
+    #[test]
+    fn a_long_report_is_cut_on_a_character_boundary() {
+        let summary = format!("a{}", "ü".repeat(20_000));
+        let sanitized = sanitize_text(summary);
+        assert_eq!(sanitized.len(), 32 * 1024 - 1);
+        assert!(sanitized.ends_with('ü'));
+    }
 }

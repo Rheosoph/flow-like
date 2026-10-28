@@ -60,6 +60,9 @@ pub struct ExecutorClaims {
     pub payer_sub: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hosted_frontend: bool,
+    /// User whose private custom Bits this run may call through the API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_bits_owner: Option<String>,
     /// Run ID for this execution
     pub run_id: String,
     /// Application ID
@@ -298,4 +301,43 @@ pub fn decode_claims_unverified(token: &str) -> Result<ExecutorClaims, ExecutorE
 
     serde_json::from_slice(&payload)
         .map_err(|e| ExecutorError::Jwt(format!("Failed to parse claims: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claims(custom_bits_owner: Option<&str>) -> serde_json::Value {
+        let mut claims = serde_json::json!({
+            "sub": "user-1",
+            "run_id": "run-1",
+            "app_id": "app-1",
+            "board_id": "board-1",
+            "callback_url": "https://api.example",
+            "typ": "executor",
+            "iss": "flow-like",
+            "aud": "flow-like-executor",
+            "iat": 0,
+            "nbf": 0,
+            "exp": 0,
+            "jti": "jti-1"
+        });
+        if let Some(owner) = custom_bits_owner {
+            claims["custom_bits_owner"] = owner.into();
+        }
+        claims
+    }
+
+    #[test]
+    fn claims_parse_with_and_without_the_custom_bits_owner() {
+        let legacy: ExecutorClaims = serde_json::from_value(claims(None)).unwrap();
+        assert!(legacy.custom_bits_owner.is_none());
+        assert!(serde_json::to_value(&legacy)
+            .unwrap()
+            .get("custom_bits_owner")
+            .is_none());
+
+        let bound: ExecutorClaims = serde_json::from_value(claims(Some("owner-1"))).unwrap();
+        assert_eq!(bound.custom_bits_owner.as_deref(), Some("owner-1"));
+    }
 }

@@ -47,6 +47,7 @@ import {
 	createHostedBackend,
 	createHostedRequest,
 } from "../lib/hosted-backend";
+import { HostedOAuth } from "../lib/hosted-oauth";
 import {
 	type HostedTarget,
 	hostedNavigationPath,
@@ -57,6 +58,7 @@ import {
 import { getWebOidcSettings } from "../lib/oidc-settings";
 import { saveReturnUrl } from "../lib/return-url";
 import { HostedLegalMenu } from "./hosted-legal-menu";
+import { HostedOAuthPrompt } from "./hosted-oauth-prompt";
 import { useSessionRecovery } from "./use-session-recovery";
 
 function Status({
@@ -323,10 +325,24 @@ function HostedRuntime({
 	authContext: () => AuthContextProps;
 	queryParams: Record<string, string>;
 }) {
-	const backend = useMemo(
-		() => createHostedBackend(data, request, accessToken, authContext),
-		[data, request, accessToken, authContext],
+	// Only a sign-in interface knows its visitor, so only it offers their own sign-ins.
+	const oauth = useMemo(
+		() =>
+			data.auth_proxy ? new HostedOAuth(data.app_id, authContext) : undefined,
+		[data.auth_proxy, data.app_id, authContext],
 	);
+	const backend = useMemo(
+		() =>
+			createHostedBackend(
+				data,
+				request,
+				accessToken,
+				authContext,
+				oauth?.tokensFor,
+			),
+		[data, request, accessToken, authContext, oauth],
+	);
+	useEffect(() => oauth?.open(), [oauth]);
 	const config = useMemo(
 		() => parseUint8ArrayToJson(data.bootstrap.event.config) ?? {},
 		[data.bootstrap.event.config],
@@ -479,6 +495,7 @@ function HostedRuntime({
 									</Container>
 								</main>
 								<Toaster />
+								{oauth && <HostedOAuthPrompt oauth={oauth} />}
 							</ExecutionEngineProviderComponent>
 						</QueryParamNavigationContext.Provider>
 					</TooltipProvider>

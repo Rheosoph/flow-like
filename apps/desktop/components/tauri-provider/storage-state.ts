@@ -131,6 +131,19 @@ async function writeLocalFile(
 
 export class StorageState implements IStorageState {
 	constructor(private readonly backend: TauriBackend) {}
+	async readStorageItem(
+		appId: string,
+		prefix: string,
+		userScoped: boolean,
+	): Promise<ArrayBuffer | null> {
+		if (!(await this.backend.isOffline(appId))) return null;
+		return invoke<ArrayBuffer>("storage_resource_read", {
+			appId,
+			prefix,
+			userScoped,
+		});
+	}
+
 	async listStorageItems(
 		appId: string,
 		prefix: string,

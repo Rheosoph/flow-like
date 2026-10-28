@@ -140,6 +140,67 @@ ctx.stream_text("Partial result");
 ctx.stream_progress(0.5, "Halfway");
 ```
 
+## Typed storage operations
+
+The checked-in SDK's optional `storage-ops` Cargo feature exposes
+`ctx.storage_ops()`. It imports `flow-like:node/storage-ops@0.1.0`, so the host
+must include that interface. The default SDK world keeps its existing imports.
+Use a local SDK dependency until a release containing the feature is published.
+
+Reads require `STORAGE_READ`, writes require `STORAGE_WRITE`, and deletion
+requires `STORAGE_DELETE` inside the host. Copy requires read and write;
+move requires all three. The node permission `storage:write` currently grants
+both write and delete capabilities; it is not a write-only permission.
+
+Local paths containing symlinks are denied, and listings omit those links.
+`file_url` returns `None` for local files, including desktop runs. Use storage
+reads or the widget resource bridge instead of an ambient local asset URL.
+
+With storage permissions and a `FlowPath` supplied by an input or directory
+helper, read metadata and a bounded range:
+
+```rust
+let storage = ctx.storage_ops();
+let metadata = storage.stat(&path)?;
+let bytes = storage.read_range(&path, 0, 64 * 1024, metadata.e_tag.as_deref())?;
+```
+
+`stat`, `read_range`, `list_page`, `write`, `writer`, `delete`, `copy`,
+`move_file`, and `file_url` return `StorageResult`. Its error has `code`,
+`message`, and `retryable` fields. `WriteOptions::if_match` checks an ETag;
+`create_only` prevents overwriting an existing destination. The backend must
+support the requested condition or the operation returns `unsupported`.
+
+Cross-store copies and moves with `overwrite = false` are limited to 10 MiB
+because multipart uploads cannot enforce an atomic create-only condition.
+With `overwrite = true`, the host streams larger transfers. A cross-store move
+copies the destination before deleting the source. If deletion fails, its
+error reports that the destination has already been committed.
+An error with code `committed` means a mutation succeeded but a later step,
+such as reading metadata or deleting the move's source, failed. It is marked
+`retryable = false`; inspect the affected paths before repeating the operation.
+
+Range reads and individual writes or chunks are limited to 10 MiB. For a
+larger output, feed chunks to `storage.writer(&path, Some(total_size))` and
+call `finish()`. Omit the size when it is unknown. A declared size must match
+exactly. Dropping an unfinished Rust writer aborts it. Streaming writes are
+unconditional; conditional writes use `write`.
+
+`ListRequest` defaults to recursive traversal with 100 entries per page.
+Set `exclude_directories` to skip names such as `node_modules`; valid page
+sizes are 1 through 1000. Continue with the returned cursor or call
+`close_list` when stopping early. Ordering follows the storage backend.
+Writers and cursors expire when the node invocation ends, including after a
+guest failure. The host retains at most eight writers and 32 listings per
+invocation.
+
+Native tests can run storage code inside
+`storage_ops::mock::with_mock(MockStorage::default(), || { ... })`. The mock
+checks sizes, preconditions, and cursor scope; it does not exercise a remote
+storage provider. The runtime checks component imports and signatures before
+guest execution. An incompatible package reports the missing interface or
+function and asks the operator to update or rebuild the host.
+
 ## Typed struct pins
 
 Derive `JsonSchema` for a serializable Rust type, then attach the schema to a

@@ -24,8 +24,8 @@ import {
 import type { IHub } from "../../../lib/schema/hub/hub";
 import { useBackend } from "../../../state/backend-state";
 import { OAuthConsentDialog } from "../../oauth/oauth-consent-dialog";
-import { PatSelectorDialog } from "../../pat-selector-dialog";
 import { Button } from "../../ui/button";
+import { isLocalTriggerDismissal } from "./local-trigger-token";
 import { useSinkActivation } from "./use-sink-activation";
 
 type Target = "hub" | "computer";
@@ -58,7 +58,8 @@ export interface EventWhereRunsProps {
 
 /**
  * Where a device-only event runs, and the way back: the hub or this computer
- * can take it over, through the same PAT and OAuth consent as Activate.
+ * can take it over, through the same OAuth consent as Activate. For this
+ * computer, the desktop asks for any token the trigger needs.
  */
 export function EventWhereRuns({
 	appId,
@@ -133,6 +134,7 @@ export function EventWhereRuns({
 					requiresSink,
 					upsertOptions: { source: "default" },
 					onSettled: (error) => {
+						if (isLocalTriggerDismissal(error)) return;
 						if (error) {
 							toast.error(
 								t(
@@ -219,14 +221,6 @@ export function EventWhereRuns({
 					</p>
 				) : null,
 			)}
-			<PatSelectorDialog
-				{...dialogProps.pat}
-				title={t("authorizeThisChange", "Authorize this change")}
-				description={t(
-					"registeringOrRemovingAnEventSinkNeedsAPersonalAccessToken",
-					"Registering or removing an event sink needs a Personal Access Token.",
-				)}
-			/>
 			<OAuthConsentDialog {...dialogProps.consent} />
 		</div>
 	);

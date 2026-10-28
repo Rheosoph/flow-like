@@ -4871,6 +4871,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-fs-ext"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56ff379b70af8e08307a8f65e7040c7301cb4a572538ade16b4984f0da77847f"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "io-lifetimes 3.0.1",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "cap-primitives"
 version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4886,6 +4898,18 @@ dependencies = [
  "rustix-linux-procfs",
  "windows-sys 0.61.2",
  "winx",
+]
+
+[[package]]
+name = "cap-std"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ec78e242cfa2cfe276807ac2ecc00315a6c97786977414bcd1c3963b6c91b8"
+dependencies = [
+ "cap-primitives",
+ "io-extras",
+ "io-lifetimes 3.0.1",
+ "rustix 1.1.5",
 ]
 
 [[package]]
@@ -10786,7 +10810,7 @@ dependencies = [
  "async-trait",
  "axum 0.8.8",
  "base64 0.22.1",
- "pulldown-cmark 0.13.3",
+ "pulldown-cmark 0.13.5",
  "serde",
  "serde_json",
  "serenity",
@@ -11303,7 +11327,7 @@ dependencies = [
  "flow-like-types",
  "http 1.5.0",
  "lopdf",
- "pulldown-cmark 0.13.3",
+ "pulldown-cmark 0.13.5",
  "quick-xml 0.41.0",
  "schemars 1.2.1",
  "serde",
@@ -11564,7 +11588,7 @@ dependencies = [
  "htmd",
  "math-core",
  "md-5 0.11.0",
- "pulldown-cmark 0.13.3",
+ "pulldown-cmark 0.13.5",
  "regex",
  "schemars 1.2.1",
  "serde",
@@ -12300,7 +12324,6 @@ dependencies = [
  "reqwest 0.13.4",
  "reqwest-eventsource",
  "rig-core",
- "rig-vertexai",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -12615,6 +12638,8 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
+ "cap-fs-ext",
+ "cap-std",
  "chrono",
  "flow-like-types-contracts",
  "flow-like-types-data-url",
@@ -12625,6 +12650,7 @@ dependencies = [
  "object_store 0.14.1",
  "percent-encoding",
  "reqwest 0.12.28",
+ "rustix 1.1.5",
  "schemars 1.2.1",
  "serde",
  "smb2",
@@ -14416,43 +14442,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "google-cloud-aiplatform-v1"
-version = "1.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e015c2beb8fd644775b49c288130c0590563dd17af92ee3dd0e2f51b233f0cf3"
-dependencies = [
- "async-trait",
- "bytes",
- "google-cloud-api",
- "google-cloud-gax",
- "google-cloud-gax-internal",
- "google-cloud-iam-v1",
- "google-cloud-location",
- "google-cloud-longrunning",
- "google-cloud-lro",
- "google-cloud-rpc",
- "google-cloud-type",
- "google-cloud-wkt",
- "serde",
- "serde_json",
- "serde_with",
- "tracing",
-]
-
-[[package]]
-name = "google-cloud-api"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c61af87418a72938df35c626f9de0c47942c279d41f10c5485315ddbaef4f95"
-dependencies = [
- "bytes",
- "google-cloud-wkt",
- "serde",
- "serde_json",
- "serde_with",
-]
-
-[[package]]
 name = "google-cloud-auth"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14563,39 +14552,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "tracing",
-]
-
-[[package]]
-name = "google-cloud-longrunning"
-version = "1.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6de120149ea50fd0cccc2d3dfb863bc23e398ead386fa59c5d8f8f6004ced01c"
-dependencies = [
- "async-trait",
- "bytes",
- "google-cloud-gax",
- "google-cloud-gax-internal",
- "google-cloud-rpc",
- "google-cloud-wkt",
- "serde",
- "serde_json",
- "serde_with",
- "tracing",
-]
-
-[[package]]
-name = "google-cloud-lro"
-version = "1.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40d4311479512e408b67777cf497dac6e41fbe8c96730416ed9d47855584b29"
-dependencies = [
- "google-cloud-gax",
- "google-cloud-longrunning",
- "google-cloud-rpc",
- "google-cloud-wkt",
- "serde",
- "tokio",
  "tracing",
 ]
 
@@ -25178,7 +25134,7 @@ dependencies = [
  "prettyplease 0.2.37",
  "prost",
  "prost-types",
- "pulldown-cmark 0.13.3",
+ "pulldown-cmark 0.13.5",
  "pulldown-cmark-to-cmark",
  "regex",
  "syn 2.0.117",
@@ -25192,7 +25148,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -25331,9 +25287,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.3"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c3a14896dfa883796f1cb410461aef38810ea05f2b2c33c5aded3649095fdad"
+checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
 dependencies = [
  "bitflags 2.13.2",
  "getopts",
@@ -25354,7 +25310,7 @@ version = "22.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50793def1b900256624a709439404384204a5dc3a6ec580281bfaac35e882e90"
 dependencies = [
- "pulldown-cmark 0.13.3",
+ "pulldown-cmark 0.13.5",
 ]
 
 [[package]]
@@ -26841,22 +26797,6 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "url",
-]
-
-[[package]]
-name = "rig-vertexai"
-version = "0.38.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09dbde7524060746a16ceffa67dac40acf983a2d62be09349f06444df8da698e"
-dependencies = [
- "google-cloud-aiplatform-v1",
- "google-cloud-auth",
- "rig-core",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -31619,7 +31559,7 @@ dependencies = [
  "icu_segmenter",
  "itertools 0.14.0",
  "memchr",
- "pulldown-cmark 0.13.3",
+ "pulldown-cmark 0.13.5",
  "strum 0.27.2",
  "thiserror 2.0.18",
  "tiktoken-rs 0.7.0",

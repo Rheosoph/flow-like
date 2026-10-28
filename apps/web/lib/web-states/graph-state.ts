@@ -118,7 +118,6 @@ export class WebGraphState implements IGraphState {
 		try {
 			const requestPayload = {
 				...payload,
-				token: this.backend.auth?.user?.access_token,
 				profile_id: this.backend.profile.id,
 			};
 			await new WebApiState(this.backend).stream<OntologyActionStreamEvent>(

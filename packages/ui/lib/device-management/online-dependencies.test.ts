@@ -14,6 +14,11 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
+function stubFetch(respond: () => Promise<Response>) {
+	globalThis.fetch = Object.assign(respond, {
+		preconnect: originalFetch.preconnect,
+	});
+}
 function fixture(wrapDependencies = false) {
 	const app = {
 		id: "project",
@@ -302,13 +307,13 @@ test("browser exports packages above 64 MiB and dependency totals above 256 MiB"
 		manifest: { id: "nodes", version: "1.0.0" },
 		download_url: "https://registry.test/nodes.wasm",
 	})) as IBackendState["apiState"]["post"];
-	globalThis.fetch = (async () => {
+	stubFetch(async () => {
 		const response = new Response(new Uint8Array(), {
 			headers: { "content-length": String(size) },
 		});
 		response.blob = async () => wasm;
 		return response;
-	}) as typeof fetch;
+	});
 	const exported = await prepareOnlineDependencies(f.app, f.backend, profile);
 	expect(exported.artifact.descriptor.total_bytes).toBeGreaterThan(size);
 	expect(exported.assets.package_pins).toHaveLength(1);
@@ -331,7 +336,7 @@ test("package manifest digests remain verified across Blob chunks", async () => 
 		manifest: { id: "nodes", version: "1.0.0", wasm_hash: digest },
 		download_url: "https://registry.test/nodes.wasm",
 	})) as IBackendState["apiState"]["post"];
-	globalThis.fetch = (async () => new Response(bytes)) as typeof fetch;
+	stubFetch(async () => new Response(bytes));
 	await prepareOnlineDependencies(f.app, f.backend, profile);
 	digest = "0".repeat(64);
 	await expect(
