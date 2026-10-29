@@ -4,7 +4,8 @@
 
 use crate::{
     ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    permission::role_permission::RolePermissions,
+    routes::app::board::sink_rebind::rebind_published_sinks, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -109,6 +110,7 @@ async fn publish_under_lease(
     let (version, created) = board.publish_if_changed(None).await?;
     if created {
         super::version_board::after_publication(state, user, sub, app_id, &board, version).await;
+        rebind_published_sinks(state, app_id, board_id, version, user).await;
         ensure_comparable(&board, version).await?;
     }
     Ok(BoardVersionPublished { version, created })

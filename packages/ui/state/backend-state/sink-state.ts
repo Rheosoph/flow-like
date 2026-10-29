@@ -23,6 +23,19 @@ export type SinkType =
 	| "cron"
 	| "daemon";
 
+/**
+ * Whether a trigger runs on this computer: `none` when it runs elsewhere, `unregistered` when it
+ * should run here but has no registration, `needs_token` when it has no personal access token of
+ * this account to sign in to the hub with, `failed` when it last failed to start or refresh.
+ */
+export type LocalTriggerState =
+	| "none"
+	| "unregistered"
+	| "ready"
+	| "needs_token"
+	| { failed: { reason: string } };
+
+/** A trigger this computer registered. Its personal access token and OAuth grants never leave the desktop. */
 export interface IEventRegistration {
 	event_id: string;
 	name: string;
@@ -33,8 +46,12 @@ export interface IEventRegistration {
 	offline: boolean;
 	app_id: string;
 	default_payload?: unknown;
-	personal_access_token?: string;
-	oauth_tokens?: Record<string, unknown>;
+	has_token?: boolean;
+	/** The account the stored token belongs to; `null` on a registration from before it was recorded. */
+	pat_owner_sub?: string | null;
+	state?: LocalTriggerState;
+	/** Providers the registration holds OAuth grants for. */
+	oauth_providers?: string[];
 }
 
 export interface ISinkState {

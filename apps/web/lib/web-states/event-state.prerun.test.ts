@@ -231,11 +231,11 @@ describe("web Page prerun handoff", () => {
 		);
 		expect(invocationBody()).toMatchObject({
 			profile_id: "profile-1",
-			token: "token-1",
 			oauth_tokens: tokens,
 			runtime_variables: { value: runtimeVariable },
 			page_trigger: { manifest_revision: "current-revision" },
 		});
+		expect(invocationBody()).not.toHaveProperty("token");
 		expect(
 			new Headers(vi.mocked(fetch).mock.calls[0]?.[1]?.headers).get(
 				"Authorization",

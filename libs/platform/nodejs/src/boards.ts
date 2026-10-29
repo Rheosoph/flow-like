@@ -1,6 +1,6 @@
+import type { HttpClient, QueryParams } from "./client.js";
 import { appPath, boardPath } from "./paths.js";
 import type { JsonObject, Version, VersionType } from "./types.js";
-import type { HttpClient, QueryParams } from "./client.js";
 import type {
 	Board,
 	PrerunBoardResponse,

@@ -19,22 +19,18 @@ use flow_like_storage::{
     files::{
         credentials::{
             RenewableCredentials, StorageCredential, StorageCredentialLease,
-            StorageCredentialProvider, StorageCredentialScope,
+            StorageCredentialProvider, StorageCredentialScope, files as file_credentials,
         },
         store::{FlowLikeStore, local_store::LocalObjectStore},
     },
-    object_store::{
-        self, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
-        path::Path as ObjectPath,
-    },
+    lance_object_store,
+    object_store::{self, ObjectStore, path::Path as ObjectPath},
     renewable_lance::{LanceStorageBinding, scoped_registry},
 };
 use flow_like_types::ToProto;
 use flow_like_types_contracts::authorization::{
     AuthorizationError, AuthorizationRequest, RequestAuthorizer, ResourceAudience,
 };
-use futures_util::{StreamExt, stream::BoxStream};
 use serde::de::DeserializeOwned;
 use std::{
     collections::BTreeMap,
@@ -899,230 +895,255 @@ impl StorageCredentialProvider for DirectoryCredentials {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ProjectStore {
-    routes: Vec<(String, Arc<dyn ObjectStore>)>,
-}
-impl std::fmt::Display for ProjectStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("StandaloneProjectStore")
-    }
-}
-impl ProjectStore {
-    fn route(&self, path: &ObjectPath) -> object_store::Result<Arc<dyn ObjectStore>> {
-        self.routes
-            .iter()
-            .find(|(prefix, _)| path.as_ref().starts_with(prefix))
-            .map(|(_, store)| store.clone())
-            .ok_or_else(|| object_store::Error::PermissionDenied {
-                path: path.to_string(),
-                source: "Object is outside this project's authorized directories".into(),
-            })
-    }
-    fn same_route(
-        &self,
-        from: &ObjectPath,
-        to: &ObjectPath,
-    ) -> object_store::Result<Arc<dyn ObjectStore>> {
-        let source = self.route(from)?;
-        let target = self.route(to)?;
-        if !Arc::ptr_eq(&source, &target) {
-            return Err(object_store::Error::NotSupported {
-                source: "Copy across different cloud buckets or credentials is unsupported".into(),
-            });
-        }
-        Ok(source)
-    }
-    fn list_path(
-        &self,
-        prefix: Option<&ObjectPath>,
-    ) -> object_store::Result<(Arc<dyn ObjectStore>, ObjectPath)> {
-        let prefix = prefix.ok_or_else(|| object_store::Error::NotSupported {
-            source: "Project listing requires an authorized directory prefix".into(),
-        })?;
-        // ObjectStore adds the directory delimiter to cloud list requests.
-        // Path itself strips trailing delimiters, so the directory root is
-        // accepted here without widening ordinary object reads or writes.
-        if let Some((_, store)) = self
-            .routes
-            .iter()
-            .find(|(base, _)| base.trim_end_matches('/') == prefix.as_ref())
-        {
-            return Ok((store.clone(), prefix.clone()));
-        }
-        Ok((self.route(prefix)?, prefix.clone()))
-    }
-}
-#[async_trait]
-impl ObjectStore for ProjectStore {
-    async fn put_opts(
-        &self,
-        path: &ObjectPath,
-        payload: PutPayload,
-        opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        self.route(path)?.put_opts(path, payload, opts).await
-    }
-    async fn put_multipart_opts(
-        &self,
-        path: &ObjectPath,
-        opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.route(path)?.put_multipart_opts(path, opts).await
-    }
-    async fn get_opts(
-        &self,
-        path: &ObjectPath,
-        opts: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        self.route(path)?.get_opts(path, opts).await
-    }
-    fn delete_stream(
-        &self,
-        locations: BoxStream<'static, object_store::Result<ObjectPath>>,
-    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
-        let store = self.clone();
-        Box::pin(locations.then(move |path| {
-            let store = store.clone();
-            async move {
-                let path = path?;
-                use object_store::ObjectStoreExt;
-                store.route(&path)?.delete(&path).await?;
-                Ok(path)
-            }
-        }))
-    }
-    fn list(
-        &self,
-        prefix: Option<&ObjectPath>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        match self.list_path(prefix) {
-            Ok((store, path)) => store.list(Some(&path)),
-            Err(error) => Box::pin(futures_util::stream::once(async { Err(error) })),
-        }
-    }
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&ObjectPath>,
-    ) -> object_store::Result<ListResult> {
-        let (store, path) = self.list_path(prefix)?;
-        store.list_with_delimiter(Some(&path)).await
-    }
-    async fn copy_opts(
-        &self,
-        from: &ObjectPath,
-        to: &ObjectPath,
-        options: CopyOptions,
-    ) -> object_store::Result<()> {
-        self.same_route(from, to)?
-            .copy_opts(from, to, options)
-            .await
-    }
-    async fn rename_opts(
-        &self,
-        from: &ObjectPath,
-        to: &ObjectPath,
-        options: RenameOptions,
-    ) -> object_store::Result<()> {
-        self.same_route(from, to)?
-            .rename_opts(from, to, options)
-            .await
-    }
-}
+/// Directory-scoped routing and the read-only lease gate. File stores implement
+/// object_store 0.13 and Lance stores 0.14.
+macro_rules! scoped_stores {
+    ($module:ident, $($object_store:ident)::+) => {
+        mod $module {
+            use super::{ProjectCredentials, READ_ONLY_STORAGE};
+            use $($object_store)::+::{
+                self as object_store, CopyOptions, GetOptions, GetResult, ListResult,
+                MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions,
+                PutOptions, PutPayload, PutResult, RenameOptions, path::Path as ObjectPath,
+            };
+            use async_trait::async_trait;
+            use futures_util::{StreamExt, stream::BoxStream};
+            use std::sync::Arc;
 
-/// Refuses writes locally while the current lease is read-only, so they fail
-/// with a clear reason and leave no unresolved cache write behind.
-struct WriteGate {
-    inner: Arc<dyn ObjectStore>,
-    credentials: Arc<ProjectCredentials>,
-}
-impl std::fmt::Debug for WriteGate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("StandaloneWriteGate")
-    }
-}
-impl std::fmt::Display for WriteGate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("StandaloneWriteGate")
-    }
-}
-impl WriteGate {
-    fn check(&self, path: &ObjectPath) -> object_store::Result<()> {
-        if self.credentials.writes_allowed() {
-            return Ok(());
+            #[derive(Debug, Clone)]
+            pub(super) struct ProjectStore {
+                pub(super) routes: Vec<(String, Arc<dyn ObjectStore>)>,
+            }
+            impl std::fmt::Display for ProjectStore {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("StandaloneProjectStore")
+                }
+            }
+            impl ProjectStore {
+                pub(super) fn route(
+                    &self,
+                    path: &ObjectPath,
+                ) -> object_store::Result<Arc<dyn ObjectStore>> {
+                    self.routes
+                        .iter()
+                        .find(|(prefix, _)| path.as_ref().starts_with(prefix))
+                        .map(|(_, store)| store.clone())
+                        .ok_or_else(|| object_store::Error::PermissionDenied {
+                            path: path.to_string(),
+                            source: "Object is outside this project's authorized directories"
+                                .into(),
+                        })
+                }
+                fn same_route(
+                    &self,
+                    from: &ObjectPath,
+                    to: &ObjectPath,
+                ) -> object_store::Result<Arc<dyn ObjectStore>> {
+                    let source = self.route(from)?;
+                    let target = self.route(to)?;
+                    if !Arc::ptr_eq(&source, &target) {
+                        return Err(object_store::Error::NotSupported {
+                            source:
+                                "Copy across different cloud buckets or credentials is unsupported"
+                                    .into(),
+                        });
+                    }
+                    Ok(source)
+                }
+                pub(super) fn list_path(
+                    &self,
+                    prefix: Option<&ObjectPath>,
+                ) -> object_store::Result<(Arc<dyn ObjectStore>, ObjectPath)> {
+                    let prefix = prefix.ok_or_else(|| object_store::Error::NotSupported {
+                        source: "Project listing requires an authorized directory prefix".into(),
+                    })?;
+                    // ObjectStore adds the directory delimiter to cloud list requests.
+                    // Path itself strips trailing delimiters, so the directory root is
+                    // accepted here without widening ordinary object reads or writes.
+                    if let Some((_, store)) = self
+                        .routes
+                        .iter()
+                        .find(|(base, _)| base.trim_end_matches('/') == prefix.as_ref())
+                    {
+                        return Ok((store.clone(), prefix.clone()));
+                    }
+                    Ok((self.route(prefix)?, prefix.clone()))
+                }
+            }
+            #[async_trait]
+            impl ObjectStore for ProjectStore {
+                async fn put_opts(
+                    &self,
+                    path: &ObjectPath,
+                    payload: PutPayload,
+                    opts: PutOptions,
+                ) -> object_store::Result<PutResult> {
+                    self.route(path)?.put_opts(path, payload, opts).await
+                }
+                async fn put_multipart_opts(
+                    &self,
+                    path: &ObjectPath,
+                    opts: PutMultipartOptions,
+                ) -> object_store::Result<Box<dyn MultipartUpload>> {
+                    self.route(path)?.put_multipart_opts(path, opts).await
+                }
+                async fn get_opts(
+                    &self,
+                    path: &ObjectPath,
+                    opts: GetOptions,
+                ) -> object_store::Result<GetResult> {
+                    self.route(path)?.get_opts(path, opts).await
+                }
+                fn delete_stream(
+                    &self,
+                    locations: BoxStream<'static, object_store::Result<ObjectPath>>,
+                ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+                    let store = self.clone();
+                    Box::pin(locations.then(move |path| {
+                        let store = store.clone();
+                        async move {
+                            let path = path?;
+                            store.route(&path)?.delete(&path).await?;
+                            Ok(path)
+                        }
+                    }))
+                }
+                fn list(
+                    &self,
+                    prefix: Option<&ObjectPath>,
+                ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+                    match self.list_path(prefix) {
+                        Ok((store, path)) => store.list(Some(&path)),
+                        Err(error) => Box::pin(futures_util::stream::once(async { Err(error) })),
+                    }
+                }
+                async fn list_with_delimiter(
+                    &self,
+                    prefix: Option<&ObjectPath>,
+                ) -> object_store::Result<ListResult> {
+                    let (store, path) = self.list_path(prefix)?;
+                    store.list_with_delimiter(Some(&path)).await
+                }
+                async fn copy_opts(
+                    &self,
+                    from: &ObjectPath,
+                    to: &ObjectPath,
+                    options: CopyOptions,
+                ) -> object_store::Result<()> {
+                    self.same_route(from, to)?
+                        .copy_opts(from, to, options)
+                        .await
+                }
+                async fn rename_opts(
+                    &self,
+                    from: &ObjectPath,
+                    to: &ObjectPath,
+                    options: RenameOptions,
+                ) -> object_store::Result<()> {
+                    self.same_route(from, to)?
+                        .rename_opts(from, to, options)
+                        .await
+                }
+            }
+
+            /// Refuses writes locally while the current lease is read-only, so they fail
+            /// with a clear reason and leave no unresolved cache write behind.
+            pub(super) struct WriteGate {
+                pub(super) inner: Arc<dyn ObjectStore>,
+                pub(super) credentials: Arc<ProjectCredentials>,
+            }
+            impl std::fmt::Debug for WriteGate {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("StandaloneWriteGate")
+                }
+            }
+            impl std::fmt::Display for WriteGate {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("StandaloneWriteGate")
+                }
+            }
+            impl WriteGate {
+                fn check(&self, path: &ObjectPath) -> object_store::Result<()> {
+                    if self.credentials.writes_allowed() {
+                        return Ok(());
+                    }
+                    Err(object_store::Error::PermissionDenied {
+                        path: path.to_string(),
+                        source: READ_ONLY_STORAGE.into(),
+                    })
+                }
+            }
+            #[async_trait]
+            impl ObjectStore for WriteGate {
+                async fn put_opts(
+                    &self,
+                    path: &ObjectPath,
+                    payload: PutPayload,
+                    opts: PutOptions,
+                ) -> object_store::Result<PutResult> {
+                    self.check(path)?;
+                    self.inner.put_opts(path, payload, opts).await
+                }
+                async fn put_multipart_opts(
+                    &self,
+                    path: &ObjectPath,
+                    opts: PutMultipartOptions,
+                ) -> object_store::Result<Box<dyn MultipartUpload>> {
+                    self.check(path)?;
+                    self.inner.put_multipart_opts(path, opts).await
+                }
+                async fn get_opts(
+                    &self,
+                    path: &ObjectPath,
+                    opts: GetOptions,
+                ) -> object_store::Result<GetResult> {
+                    self.inner.get_opts(path, opts).await
+                }
+                fn delete_stream(
+                    &self,
+                    locations: BoxStream<'static, object_store::Result<ObjectPath>>,
+                ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+                    if let Err(error) = self.check(&ObjectPath::default()) {
+                        return Box::pin(futures_util::stream::once(async move { Err(error) }));
+                    }
+                    self.inner.delete_stream(locations)
+                }
+                fn list(
+                    &self,
+                    prefix: Option<&ObjectPath>,
+                ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+                    self.inner.list(prefix)
+                }
+                async fn list_with_delimiter(
+                    &self,
+                    prefix: Option<&ObjectPath>,
+                ) -> object_store::Result<ListResult> {
+                    self.inner.list_with_delimiter(prefix).await
+                }
+                async fn copy_opts(
+                    &self,
+                    from: &ObjectPath,
+                    to: &ObjectPath,
+                    options: CopyOptions,
+                ) -> object_store::Result<()> {
+                    self.check(to)?;
+                    self.inner.copy_opts(from, to, options).await
+                }
+                async fn rename_opts(
+                    &self,
+                    from: &ObjectPath,
+                    to: &ObjectPath,
+                    options: RenameOptions,
+                ) -> object_store::Result<()> {
+                    self.check(to)?;
+                    self.inner.rename_opts(from, to, options).await
+                }
+            }
         }
-        Err(object_store::Error::PermissionDenied {
-            path: path.to_string(),
-            source: READ_ONLY_STORAGE.into(),
-        })
-    }
+    };
 }
-#[async_trait]
-impl ObjectStore for WriteGate {
-    async fn put_opts(
-        &self,
-        path: &ObjectPath,
-        payload: PutPayload,
-        opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        self.check(path)?;
-        self.inner.put_opts(path, payload, opts).await
-    }
-    async fn put_multipart_opts(
-        &self,
-        path: &ObjectPath,
-        opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.check(path)?;
-        self.inner.put_multipart_opts(path, opts).await
-    }
-    async fn get_opts(
-        &self,
-        path: &ObjectPath,
-        opts: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        self.inner.get_opts(path, opts).await
-    }
-    fn delete_stream(
-        &self,
-        locations: BoxStream<'static, object_store::Result<ObjectPath>>,
-    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
-        if let Err(error) = self.check(&ObjectPath::default()) {
-            return Box::pin(futures_util::stream::once(async move { Err(error) }));
-        }
-        self.inner.delete_stream(locations)
-    }
-    fn list(
-        &self,
-        prefix: Option<&ObjectPath>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.inner.list(prefix)
-    }
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&ObjectPath>,
-    ) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
-    async fn copy_opts(
-        &self,
-        from: &ObjectPath,
-        to: &ObjectPath,
-        options: CopyOptions,
-    ) -> object_store::Result<()> {
-        self.check(to)?;
-        self.inner.copy_opts(from, to, options).await
-    }
-    async fn rename_opts(
-        &self,
-        from: &ObjectPath,
-        to: &ObjectPath,
-        options: RenameOptions,
-    ) -> object_store::Result<()> {
-        self.check(to)?;
-        self.inner.rename_opts(from, to, options).await
-    }
-}
+scoped_stores!(file_stores, flow_like_storage::object_store);
+scoped_stores!(lance_stores, flow_like_storage::lance_object_store);
 
 fn private_cache(root: &Path, placement: &str, instance: &str) -> Result<PathBuf> {
     let mut path = root.to_owned();
@@ -1320,11 +1341,11 @@ pub(crate) struct OnlineRuntime {
     pub(crate) schedules: Arc<dyn crate::schedule::ScheduleClaims>,
 }
 
-fn shared_cloud_store(
+fn shared_cloud_store<T: Clone>(
     location: &flow_like_device_protocol::InstanceStorageLocation,
-    stores: &mut BTreeMap<String, Arc<dyn ObjectStore>>,
-    create: impl FnOnce() -> Result<Arc<dyn ObjectStore>>,
-) -> Result<Arc<dyn ObjectStore>> {
+    stores: &mut BTreeMap<String, T>,
+    create: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     let uri = url::Url::parse(&location.uri)?;
     let domain = serde_json::to_string(&(
         uri.scheme(),
@@ -1360,23 +1381,42 @@ pub(crate) async fn configure_with_local_data(
     let mut bindings = Vec::new();
     let mut cloud_stores = BTreeMap::new();
     for (purpose, location) in &credentials.locations {
+        let renewable = RenewableCredentials::new(credentials.provider(*purpose)?)?;
         let binding = LanceStorageBinding::new(
             &location.uri,
             location.options.clone().into_iter().collect(),
-            RenewableCredentials::new(credentials.provider(*purpose)?)?,
+            renewable.clone(),
         )?
         .with_object_prefix(&location.prefix)?
         .with_http_connector(cache::OfflineConnector);
-        let store = shared_cloud_store(location, &mut cloud_stores, || {
-            Ok(Arc::new(WriteGate {
-                inner: cache::ReadCache::new(binding.build_store()?, credentials.cache.clone()),
+        // One shared device cache serves both object_store releases.
+        let (files, tables) = shared_cloud_store(location, &mut cloud_stores, || {
+            let files = file_credentials::scoped_store(
+                &renewable,
+                &location.uri,
+                &location.options.clone().into_iter().collect(),
+                Some(&file_credentials::SharedConnector(Arc::new(
+                    cache::OfflineConnector,
+                ))),
+            )?;
+            let files: Arc<dyn ObjectStore> = Arc::new(file_stores::WriteGate {
+                inner: cache::file_cache::ReadCache::new(files, credentials.cache.clone()),
                 credentials: credentials.clone(),
-            }))
+            });
+            let tables: Arc<dyn lance_object_store::ObjectStore> =
+                Arc::new(lance_stores::WriteGate {
+                    inner: cache::lance_cache::ReadCache::new(
+                        binding.build_store()?,
+                        credentials.cache.clone(),
+                    ),
+                    credentials: credentials.clone(),
+                });
+            Ok((files, tables))
         })?;
-        routes.push((location.prefix.clone(), store.clone()));
-        bindings.push(binding.with_store(store));
+        routes.push((location.prefix.clone(), files));
+        bindings.push(binding.with_store(tables));
     }
-    let project = Arc::new(ProjectStore { routes });
+    let project = Arc::new(file_stores::ProjectStore { routes });
     runtime.register_app_storage_store(FlowLikeStore::Other(project.clone()));
     runtime.register_user_store(FlowLikeStore::Other(project.clone()));
     runtime.register_temporary_store(FlowLikeStore::Other(project.clone()));
@@ -1486,6 +1526,7 @@ mod tests {
     use super::*;
     use crate::config::{EventBinding, ProjectSource, ResourceGrantRef};
     use flow_like_types_contracts::authorization::{AuthorizationFuture, RequestAuthorization};
+    use futures_util::StreamExt;
     use object_store::ObjectStoreExt;
     use std::{
         collections::BTreeMap,
@@ -1835,7 +1876,7 @@ mod tests {
     async fn routed_store_denies_other_projects_and_cross_purpose_mutations() {
         let storage: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
         let files: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
-        let router = ProjectStore {
+        let router = file_stores::ProjectStore {
             routes: vec![
                 ("apps/project/storage/".into(), storage.clone()),
                 ("apps/project/upload/".into(), files),
@@ -1889,7 +1930,7 @@ mod tests {
     async fn one_cloud_client_allows_copy_between_its_authorized_directories() {
         let lease = lease();
         let calls = AtomicUsize::new(0);
-        let mut cloud_stores = BTreeMap::new();
+        let mut cloud_stores = BTreeMap::<String, Arc<dyn ObjectStore>>::new();
         let mut routes = Vec::new();
         for location in lease.locations.values() {
             let store = shared_cloud_store(location, &mut cloud_stores, || {
@@ -1901,7 +1942,7 @@ mod tests {
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(cloud_stores.len(), 1);
-        let router = ProjectStore { routes };
+        let router = file_stores::ProjectStore { routes };
         let source = ObjectPath::from("apps/project/upload/source");
         router.put(&source, "shared payload".into()).await.unwrap();
         for location in lease.locations.values() {
@@ -2098,7 +2139,7 @@ mod tests {
         let cloud: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
         let path = ObjectPath::from("apps/project/upload/asset");
         cloud.put(&path, "cached bytes".into()).await?;
-        let cache = cache::ReadCache::new(cloud, first.cache.clone());
+        let cache = cache::file_cache::ReadCache::new(cloud, first.cache.clone());
         assert_eq!(
             cache.get(&path).await?.bytes().await?.as_ref(),
             b"cached bytes"
@@ -2137,13 +2178,17 @@ mod tests {
             location.options.clone().into_iter().collect(),
             RenewableCredentials::new(second.provider(StoragePurpose::Files)?)?,
         )?;
-        let cached = cache::ReadCache::new(binding.build_store()?, second.cache.clone());
+        // The Lance store's object_store release reads what the file store cached.
+        use lance_object_store::{ObjectStoreExt as _, path::Path as LancePath};
+        let cached =
+            cache::lance_cache::ReadCache::new(binding.build_store()?, second.cache.clone());
+        let path = LancePath::from(path.as_ref());
         assert_eq!(
             cached.get(&path).await?.bytes().await?.as_ref(),
             b"cached bytes"
         );
         let error = cached
-            .get(&ObjectPath::from("apps/project/upload/never-downloaded"))
+            .get(&LancePath::from("apps/project/upload/never-downloaded"))
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("offline"));
@@ -2543,7 +2588,7 @@ mod tests {
         let project =
             ProjectCredentials::new(client.clone(), &config, &identity(), root.path()).await?;
         let cloud: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
-        let gate = WriteGate {
+        let gate = file_stores::WriteGate {
             inner: cloud.clone(),
             credentials: project.clone(),
         };
@@ -3046,13 +3091,13 @@ mod tests {
             )
             .await
             .unwrap();
-        logs.inner
-            .put(
-                &ObjectPath::from("logs/history/example"),
-                bytes::Bytes::from_static(b"local log").into(),
-            )
-            .await
-            .unwrap();
+        lance_object_store::ObjectStoreExt::put(
+            logs.inner.as_ref(),
+            &lance_object_store::path::Path::from("logs/history/example"),
+            bytes::Bytes::from_static(b"local log").into(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             std::fs::read(persistent.path().join("logs/history/example")).unwrap(),
             b"local log"

@@ -3,8 +3,7 @@ use flow_like_device_protocol::{
     OfflineExpected, OfflineReplayRequest, OfflineReplayResponse, StoragePurpose, format_limit,
 };
 use flow_like_storage::{
-    lancedb::Table,
-    object_store::{ObjectStore, path::Path as ObjectPath},
+    lance_object_store::ObjectStore, lancedb::Table, object_store::path::Path as ObjectPath,
 };
 use flow_like_types::authorization::AuthorizationError;
 use std::sync::Arc;

@@ -22,7 +22,7 @@ use flow_like::flow::event::{EventVariant, EventVariantMode};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::db::get_event_from_db;
+use super::db::{ensure_saver_may_arm, get_event_from_db};
 
 fn variant_mode_label(mode: &EventVariantMode) -> &'static str {
     match mode {
@@ -458,8 +458,9 @@ fn validated_share(value: Option<f32>, field: &str) -> Result<f32, ApiError> {
         (status = 200, description = "The updated event", body = String, content_type = "application/json"),
         (status = 400, description = "Bad request"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
-        (status = 404, description = "Unknown variant")
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the event is on and the caller may not trigger events"),
+        (status = 404, description = "Unknown variant"),
+        (status = 503, description = "The caller's permission to trigger events cannot be checked right now")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
@@ -487,6 +488,7 @@ pub async fn patch_canary(
 
     let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     let mut event = freshest_event(&app, db_event).await;
+    ensure_saver_may_arm(&state, &app_id, &sub, &event).await?;
 
     let share_change = if let Some(variant) = event
         .variants
@@ -530,8 +532,16 @@ pub async fn patch_canary(
     app.save()
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-    super::db::sync_event_with_sink_tokens(&state.db, &state, &app_id, &event, None, None, None)
-        .await?;
+    super::db::sync_event_with_sink_tokens(
+        &state.db,
+        &state,
+        &app_id,
+        &event,
+        Some(&sub),
+        None,
+        None,
+    )
+    .await?;
 
     audit_branch!(
         state,
@@ -575,7 +585,8 @@ pub struct PutVariantsBody {
         (status = 200, description = "The updated event", body = String, content_type = "application/json"),
         (status = 400, description = "Validation failed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the event is on and the caller may not trigger events"),
+        (status = 503, description = "The caller's permission to trigger events cannot be checked right now")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
@@ -603,6 +614,7 @@ pub async fn put_event_variants(
 
     let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     let stored = freshest_event(&app, db_event).await;
+    ensure_saver_may_arm(&state, &app_id, &sub, &stored).await?;
 
     let mut updated = stored.clone();
     updated.variants = body.variants;
@@ -616,8 +628,16 @@ pub async fn put_event_variants(
     app.save()
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-    super::db::sync_event_with_sink_tokens(&state.db, &state, &app_id, &event, None, None, None)
-        .await?;
+    super::db::sync_event_with_sink_tokens(
+        &state.db,
+        &state,
+        &app_id,
+        &event,
+        Some(&sub),
+        None,
+        None,
+    )
+    .await?;
 
     // A removed or renamed variant's bucket would otherwise keep serving its
     // routes from the orphaned `EventSetup`/registration/auth rows, and a
@@ -782,11 +802,13 @@ async fn delete_variant_setup_rows(
         .await
 }
 
-/// Non-fatal stable setup re-run after a promote of a rest/mcp event. It
-/// re-reads the synced row, so it computes the bumped event version and
-/// writes a fresh registration bucket; inbound keeps serving the old stable
-/// bucket until the in-transaction pointer advances. A failure lands in the
-/// response as `setup_status` — the promote is never rolled back.
+/// Non-fatal stable setup re-run after a promote that left a rest/mcp event
+/// armed. It re-reads the synced row, so it computes the bumped event version
+/// and writes a fresh registration bucket; inbound keeps serving the old
+/// stable bucket until the in-transaction pointer advances. A failure lands
+/// in the response as `setup_status` — the promote is never rolled back, but
+/// an old bucket built against another board than the promoted one stops
+/// serving.
 async fn rerun_stable_setup(
     state: &AppState,
     sub: &str,
@@ -794,18 +816,12 @@ async fn rerun_stable_setup(
     event_id: &str,
     user_context: flow_like::flow::execution::UserExecutionContext,
 ) -> String {
-    match super::setup_event::run_event_setup(
-        state.clone(),
-        sub.to_string(),
-        app_id.to_string(),
-        event_id.to_string(),
-        super::setup_event::SetupEventRequest {
-            payload: None,
-            profile_id: None,
-            timeout_seconds: None,
-            force: false,
-            variant: None,
-        },
+    match super::setup_event::run_armed_stable_setup(
+        state,
+        sub,
+        app_id,
+        event_id,
+        None,
         user_context,
     )
     .await
@@ -844,10 +860,11 @@ pub struct CanaryPromoteResponse {
     /// The event after the promote, secrets blanked
     #[schema(value_type = Object)]
     pub event: flow_like::flow::event::Event,
-    /// rest/mcp only: outcome of the non-fatal stable setup re-run — `ok`,
-    /// or `{status}: {detail}` when the re-setup failed (the promote holds
-    /// either way; inbound serves the previous registration set until a
-    /// setup succeeds)
+    /// rest/mcp events the promote left on only: outcome of the non-fatal
+    /// stable setup re-run — `ok`, or `{status}: {detail}` when the re-setup
+    /// failed (the promote holds either way; inbound keeps serving the
+    /// previous registration set only when it was built against the promoted
+    /// board, and otherwise answers 404 until a setup succeeds)
     pub setup_status: Option<String>,
     /// Regression-gate outcome for the promoted target, present when the
     /// event's suite gate is `Warn` or `Block`. A `Block` gate with a `fail`
@@ -908,9 +925,10 @@ fn promotion_gate_summary(
         (status = 200, description = "The promoted event and, for REST/MCP events, the setup outcome", body = CanaryPromoteResponse),
         (status = 400, description = "Validation failed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the event is on and the caller may not trigger events"),
         (status = 404, description = "Unknown event or variant"),
-        (status = 409, description = "Promotion blocked by the regression gate")
+        (status = 409, description = "Promotion blocked by the regression gate"),
+        (status = 503, description = "The caller's permission to trigger events cannot be checked right now")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
@@ -978,6 +996,7 @@ pub async fn promote_canary(
     }
     updated.variables.extend(promoted.variables);
     preserve_event_secrets(&mut updated, &stored);
+    ensure_saver_may_arm(&state, &app_id, &sub, &updated).await?;
 
     let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     // An explicit version type forces the cut even when the promoted content
@@ -996,12 +1015,21 @@ pub async fn promote_canary(
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
-    // The row every dispatch path reads moves here; the Nones preserve the
-    // sink's stored PAT/OAuth/profile.
-    super::db::sync_event_with_sink_tokens(&state.db, &state, &app_id, &event, None, None, None)
-        .await?;
+    // The row every dispatch path reads moves here and now runs as the promoting
+    // user. The Nones keep the sink's OAuth grants and profile only when that user
+    // already ran it; otherwise the previous person's are dropped.
+    super::db::sync_event_with_sink_tokens(
+        &state.db,
+        &state,
+        &app_id,
+        &event,
+        Some(&sub),
+        None,
+        None,
+    )
+    .await?;
 
-    let setup_status = if matches!(event.event_type.as_str(), "rest" | "mcp") {
+    let setup_status = if super::setup_event::save_runs_stable_setup(&event) {
         Some(rerun_stable_setup(&state, &sub, &app_id, &event.id, user_context).await)
     } else {
         None
@@ -1084,8 +1112,9 @@ pub struct CanaryAbortResponse {
         (status = 200, description = "The event without the aborted variant", body = CanaryAbortResponse),
         (status = 400, description = "Validation failed"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
-        (status = 404, description = "Unknown event or variant")
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the event is on and the caller may not trigger events"),
+        (status = 404, description = "Unknown event or variant"),
+        (status = 503, description = "The caller's permission to trigger events cannot be checked right now")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
@@ -1121,6 +1150,7 @@ pub async fn abort_canary(
     let mut updated = stored.clone();
     take_variant(&mut updated, &body.variant)?;
     preserve_event_secrets(&mut updated, &stored);
+    ensure_saver_may_arm(&state, &app_id, &sub, &updated).await?;
 
     let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     // Removing a variant is a content change, so a patch cut happens on its
@@ -1134,8 +1164,16 @@ pub async fn abort_canary(
     app.save()
         .await
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-    super::db::sync_event_with_sink_tokens(&state.db, &state, &app_id, &event, None, None, None)
-        .await?;
+    super::db::sync_event_with_sink_tokens(
+        &state.db,
+        &state,
+        &app_id,
+        &event,
+        Some(&sub),
+        None,
+        None,
+    )
+    .await?;
 
     if let Err(error) = delete_variant_setup_rows(&state, &app_id, &event.id, &body.variant).await {
         tracing::warn!(

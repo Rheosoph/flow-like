@@ -308,15 +308,14 @@ async fn execute_inner(
     ),
     StreamFailure,
 > {
+    let claims = verify_jwt_async(&request.executor_jwt).await?;
     let state = crate::execute::build_flow_state(
         &request.credentials,
-        Some(crate::widgets::HubAccess {
-            callback_url: callback_url.to_string(),
-            jwt: request.executor_jwt.clone(),
-            hosted_frontend: verify_jwt_async(&request.executor_jwt)
-                .await?
-                .hosted_frontend,
-        }),
+        Some(crate::widgets::HubAccess::for_run(
+            &claims,
+            &request.executor_jwt,
+            request.profile.as_ref(),
+        )),
     )
     .await?;
     let execution_environment = state.execution_environment;
@@ -495,10 +494,7 @@ async fn execute_inner(
         "Creating InternalRun with predetermined run_id"
     );
 
-    let context_token = request
-        .token
-        .clone()
-        .or_else(|| Some(request.executor_jwt.clone()));
+    let context_token = Some(request.executor_jwt.clone());
 
     let channel = crate::channel::build_run_channel(
         request.channel.as_ref(),

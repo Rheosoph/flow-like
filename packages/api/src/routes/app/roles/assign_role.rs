@@ -4,6 +4,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::sink::service::{loses_execute_events, release_demoted_members},
     state::AppState,
 };
 use axum::{
@@ -64,7 +65,7 @@ pub async fn assign_role(
     crate::capacity::prepare_account(&state, &caller_sub).await?;
     crate::capacity::prepare_account(&state, &sub).await?;
     let (target_plan, target_tier) = crate::quota::payer_plan(&state, &sub).await?;
-    let assignment = state
+    let (assignment, demoted) = state
         .transaction(|txn| {
             let app_id = app_id.clone();
             let role_id = role_id.clone();
@@ -192,7 +193,13 @@ pub async fn assign_role(
                     }
 
                     crate::payments::accounts::owner_transferred(txn, &app_id, &sub, &caller_sub).await?;
-                    return Ok(Assignment::OwnerTransferred);
+                    let previous_owner_demoted =
+                        RolePermissions::from_bits(new_role_for_owner.permissions)
+                            .is_some_and(|after| loses_execute_events(caller_permissions, after));
+                    return Ok((
+                        Assignment::OwnerTransferred,
+                        previous_owner_demoted.then_some(caller_sub),
+                    ));
                 }
 
                 tracing::info!(
@@ -213,12 +220,16 @@ pub async fn assign_role(
                     .exec(txn)
                     .await?;
 
-                Ok::<_, ApiError>(Assignment::Assigned)
+                let demoted = loses_execute_events(target_current_permission, target_permission);
+                Ok::<_, ApiError>((Assignment::Assigned, demoted.then_some(sub)))
             })
         })
         .await?;
 
     crate::package_license::refresh_app(&state, &app_id).await;
+    if let Some(member) = demoted {
+        release_demoted_members(&state, &app_id, &[member]).await;
+    }
 
     audit_branch!(
         state,

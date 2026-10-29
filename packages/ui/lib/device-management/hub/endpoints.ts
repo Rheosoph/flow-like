@@ -197,7 +197,7 @@ const count = z.number().int().nonnegative().safe();
 const id = z.string().min(1).max(256);
 const micros = count;
 /** The hub may send `null` or leave an empty optional out; both read as `null`. */
-const nullable = <T extends z.ZodTypeAny>(schema: T) =>
+const nullable = <T extends z.ZodType>(schema: T) =>
 	schema.nullish().transform((value): z.output<T> | null => value ?? null);
 
 const CAPABILITIES: Record<Capability, true> = {
@@ -235,7 +235,7 @@ const inventoryScope = z.discriminatedUnion("kind", [
 	}),
 ]);
 
-const enrollmentSchema: z.ZodType<HubEnrollment, z.ZodTypeDef, unknown> =
+const enrollmentSchema: z.ZodType<HubEnrollment, unknown> =
 	z.object({
 		enrollment_id: id,
 		device_id: id,
@@ -246,7 +246,7 @@ const enrollmentSchema: z.ZodType<HubEnrollment, z.ZodTypeDef, unknown> =
 		controller_key_thumbprint: z.string(),
 	});
 
-const usageSchema: z.ZodType<DeviceUsageResponse, z.ZodTypeDef, unknown> =
+const usageSchema: z.ZodType<DeviceUsageResponse, unknown> =
 	z.object({
 		server_time: time,
 		limits: z.object({
@@ -267,7 +267,6 @@ const usageSchema: z.ZodType<DeviceUsageResponse, z.ZodTypeDef, unknown> =
 
 const accountBackupsSchema: z.ZodType<
 	AccountBackupList,
-	z.ZodTypeDef,
 	unknown
 > = z.object({
 	vaults: z
@@ -284,7 +283,7 @@ const accountBackupsSchema: z.ZodType<
 	max: count,
 });
 
-const myAccessSchema: z.ZodType<MyAccess, z.ZodTypeDef, unknown> = z.object({
+const myAccessSchema: z.ZodType<MyAccess, unknown> = z.object({
 	device_id: id,
 	role: z.enum(["owner", "grantee"]),
 	owner_id: z.string(),
@@ -322,11 +321,10 @@ const publicCertificatesSchema = z.object({
 });
 const fleetCertificateSchema: z.ZodType<
 	FleetCertificateInventoryRow,
-	z.ZodTypeDef,
 	unknown
 > = publicCertificatesSchema.extend({ device_id: id });
 
-const policyViewSchema: z.ZodType<PolicyView, z.ZodTypeDef, unknown> = z.object(
+const policyViewSchema: z.ZodType<PolicyView, unknown> = z.object(
 	{
 		policy_jws: z.string().nullable(),
 		supported_capabilities: z
@@ -353,7 +351,7 @@ export interface CertificateNotice {
 	completed_at: number | null;
 	next_attempt_at: number | null;
 }
-const noticeSchema: z.ZodType<CertificateNotice, z.ZodTypeDef, unknown> =
+const noticeSchema: z.ZodType<CertificateNotice, unknown> =
 	z.object({
 		certificate_id: z.string().uuid(),
 		certificate_revision: count,
@@ -372,7 +370,7 @@ export interface CertificateNoticeMute {
 	/** `null` mutes until unmuted. */
 	until: number | null;
 }
-const muteSchema: z.ZodType<CertificateNoticeMute, z.ZodTypeDef, unknown> =
+const muteSchema: z.ZodType<CertificateNoticeMute, unknown> =
 	z.object({ certificate_id: nullable(z.string()), until: nullable(time) });
 
 export type NoticeChannel = "push" | "email" | "both";
@@ -380,7 +378,7 @@ export interface TestNoticeResult {
 	sent: string[];
 	skipped: { channel: string; reason: string }[];
 }
-const testNoticeSchema: z.ZodType<TestNoticeResult, z.ZodTypeDef, unknown> =
+const testNoticeSchema: z.ZodType<TestNoticeResult, unknown> =
 	z.object({
 		sent: z.array(z.string()).max(8),
 		skipped: z
@@ -388,7 +386,7 @@ const testNoticeSchema: z.ZodType<TestNoticeResult, z.ZodTypeDef, unknown> =
 			.max(8),
 	});
 
-const archiveUsageSchema: z.ZodType<ArchiveUsage, z.ZodTypeDef, unknown> =
+const archiveUsageSchema: z.ZodType<ArchiveUsage, unknown> =
 	z.object({
 		tier: z.string(),
 		max_bytes: count,
@@ -430,7 +428,7 @@ const withEffective = <
 	effective_limit: row.effective_limit ?? ("approval" as const),
 });
 
-const resourceSummarySchema: z.ZodType<ResourceSummary, z.ZodTypeDef, unknown> =
+const resourceSummarySchema: z.ZodType<ResourceSummary, unknown> =
 	z.object({
 		server_time: time,
 		devices: z
@@ -473,7 +471,7 @@ const scheduleService = {
 	device_id: id.optional(),
 	placement_id: id.optional(),
 };
-const scheduleRow: z.ZodType<AppScheduleRow, z.ZodTypeDef, unknown> =
+const scheduleRow: z.ZodType<AppScheduleRow, unknown> =
 	z.discriminatedUnion("state", [
 		z.object({
 			event_id: id,
@@ -522,7 +520,6 @@ const eventTypes = z
 
 const appPlacementsSchema: z.ZodType<
 	AppDevicePlacements,
-	z.ZodTypeDef,
 	unknown
 > = z.object({
 	// Absent on a hub that can't hand schedules to devices: its presence is that capability.
@@ -577,7 +574,7 @@ export interface BillingEligibility {
 	eligible: boolean;
 	models: { model_id: string; tier: string | null; allowed: boolean }[];
 }
-const eligibilitySchema: z.ZodType<BillingEligibility, z.ZodTypeDef, unknown> =
+const eligibilitySchema: z.ZodType<BillingEligibility, unknown> =
 	z.object({
 		payer_id: z.string(),
 		plan: nullable(z.string()),
@@ -606,7 +603,7 @@ export interface BillingUsage {
 		last_at: number;
 	}[];
 }
-const billingUsageSchema: z.ZodType<BillingUsage, z.ZodTypeDef, unknown> =
+const billingUsageSchema: z.ZodType<BillingUsage, unknown> =
 	z.object({
 		billing_grant_id: id,
 		totals: z.object({
@@ -1135,7 +1132,7 @@ export function hubReadWith<T>(
 
 export type HubStandalone = NonNullable<IHub["standalone"]>;
 
-const lenient = <T extends z.ZodTypeAny>(schema: T) =>
+const lenient = <T extends z.ZodType>(schema: T) =>
 	schema.optional().catch(undefined);
 const standaloneSchema = z.object({
 	enabled: z.boolean().catch(false),
@@ -1144,7 +1141,7 @@ const standaloneSchema = z.object({
 	enrollment_ttl_seconds: lenient(count),
 	api_base_url: lenient(z.string().nullable()),
 	telemetry_tiers: lenient(
-		z.record(z.object({ max_bytes: count, retention_seconds: count })),
+		z.record(z.string(), z.object({ max_bytes: count, retention_seconds: count })),
 	),
 	release_trust: lenient(
 		z

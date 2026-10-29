@@ -12,6 +12,12 @@ export interface IStorageListOptions {
 }
 
 export interface IStorageState {
+	/** Returns protected local bytes, or null when this backend uses remote URLs. */
+	readStorageItem?(
+		appId: string,
+		prefix: string,
+		userScoped: boolean,
+	): Promise<ArrayBuffer | null>;
 	listStorageItems(
 		appId: string,
 		prefix: string,

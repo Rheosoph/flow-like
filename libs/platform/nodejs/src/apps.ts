@@ -2,8 +2,8 @@ import type { HttpClient, QueryParams } from "./client.js";
 import { appPath } from "./paths.js";
 import type {
 	App,
-	HealthResult,
 	CreateAppOptions,
+	HealthResult,
 	JsonObject,
 } from "./types.js";
 function parseAppItem(item: unknown): App {

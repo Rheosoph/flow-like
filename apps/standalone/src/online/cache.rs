@@ -1,14 +1,7 @@
 use anyhow::{Result, ensure};
-use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
-use flow_like_storage::object_store::{
-    self, Attribute, Attributes, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions,
-    PutPayload, PutResult, RenameOptions, UploadPart, path::Path as ObjectPath,
-};
-use flow_like_types::async_stream::try_stream;
+use bytes::Bytes;
+use flow_like_offline_writes::fs::{StoreError, is_offline_error};
 use flow_like_types_contracts::authorization::AuthorizationError;
-use futures_util::{StreamExt, stream::BoxStream};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -32,7 +25,10 @@ const MAX_WRITE_MARKERS: u64 = 64;
 const WRITE_SETTLE_SECONDS: i64 = 3600;
 const CLOUD_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn wall_clock() -> object_store::Result<i64> {
+mod stores;
+pub(super) use stores::{file_cache, lance_cache};
+
+fn wall_clock() -> CacheResult<i64> {
     crate::enrollment::unix_time().map_err(|error| cache_error(error.to_string()))
 }
 
@@ -77,49 +73,25 @@ struct GrantDeadlineElapsed;
 /// HTTP status in its private retry error. Writes retain normal provider behavior.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OfflineConnector;
-impl object_store::client::HttpConnector for OfflineConnector {
-    fn connect(
-        &self,
-        options: &object_store::ClientOptions,
-    ) -> object_store::Result<object_store::client::HttpClient> {
-        use object_store::client::{HttpClient, ReqwestConnector};
-        Ok(HttpClient::new(OfflineHttpService(
-            ReqwestConnector::default().connect(options)?,
-        )))
-    }
-}
-#[derive(Debug)]
-struct OfflineHttpService(object_store::client::HttpClient);
-#[async_trait]
-impl object_store::client::HttpService for OfflineHttpService {
-    async fn call(
-        &self,
-        request: object_store::client::HttpRequest,
-    ) -> std::result::Result<object_store::client::HttpResponse, object_store::client::HttpError>
-    {
-        let read = matches!(request.method().as_str(), "GET" | "HEAD");
-        let response = self.0.execute(request).await?;
-        if read && response.status().is_server_error() {
-            return Err(object_store::client::HttpError::new(
-                object_store::client::HttpErrorKind::Request,
-                CloudUnavailable,
-            ));
-        }
-        Ok(response)
-    }
-}
 
-fn cache_error(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> object_store::Error {
-    object_store::Error::Generic {
-        store: "StandaloneReadCache",
-        source: error.into(),
-    }
+const OUTSIDE_SCOPE: &str = "Object is outside this device cache's project and user scope";
+
+/// Failures of the shared cache, independent of the object_store release a
+/// store implements. Each release converts them into its own error variants.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum CacheFailure {
+    #[error(transparent)]
+    Generic(Box<dyn std::error::Error + Send + Sync>),
+    #[error("{scope}: {0}", scope = OUTSIDE_SCOPE)]
+    OutsideScope(String),
 }
-fn denied() -> object_store::Error {
+type CacheResult<T> = std::result::Result<T, CacheFailure>;
+
+fn cache_error(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> CacheFailure {
+    CacheFailure::Generic(error.into())
+}
+fn denied() -> CacheFailure {
     cache_error(AuthorizationError::Denied)
-}
-fn offline() -> object_store::Error {
-    cache_error(OfflineCacheMiss)
 }
 
 struct ListingJson(Vec<u8>);
@@ -137,41 +109,8 @@ impl std::io::Write for ListingJson {
         Ok(())
     }
 }
-fn delimiter_snapshot(result: &ListResult) -> Option<Vec<u8>> {
-    use std::io::Write;
-    let mut json = ListingJson(Vec::new());
-    json.write_all(b"[[").ok()?;
-    for (index, prefix) in result.common_prefixes.iter().enumerate() {
-        if index != 0 {
-            json.write_all(b",").ok()?;
-        }
-        serde_json::to_writer(&mut json, prefix.as_ref()).ok()?;
-    }
-    json.write_all(b"],[").ok()?;
-    for (index, meta) in result.objects.iter().enumerate() {
-        if index != 0 {
-            json.write_all(b",").ok()?;
-        }
-        // Bound each clone before constructing its cache representation.
-        if meta.location.as_ref().len() > LIST_BYTES
-            || meta
-                .e_tag
-                .as_ref()
-                .is_some_and(|value| value.len() > LIST_BYTES)
-            || meta
-                .version
-                .as_ref()
-                .is_some_and(|value| value.len() > LIST_BYTES)
-        {
-            return None;
-        }
-        serde_json::to_writer(&mut json, &CachedMeta::new(meta, &Attributes::default())).ok()?;
-    }
-    json.write_all(b"]]").ok()?;
-    Some(json.0)
-}
-fn is_denied(error: &object_store::Error) -> bool {
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+fn is_denied(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut source = Some(error);
     while let Some(error) = source {
         if error.downcast_ref::<AuthorizationError>() == Some(&AuthorizationError::Denied) {
             return true;
@@ -180,60 +119,15 @@ fn is_denied(error: &object_store::Error) -> bool {
     }
     false
 }
-pub(super) fn is_offline(error: &object_store::Error) -> bool {
-    // A 404, failed condition, invalid credential, or access denial must never
-    // turn into a successful stale read.
-    if !matches!(error, object_store::Error::Generic { .. }) {
-        return false;
-    }
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(error) = source {
-        if error.is::<CloudUnavailable>() || error.is::<OfflineCacheMiss>() {
-            return true;
-        }
-        if let Some(error) = error.downcast_ref::<AuthorizationError>() {
-            return matches!(
-                error,
-                AuthorizationError::Unavailable | AuthorizationError::Expired
-            );
-        }
-        if let Some(error) = error.downcast_ref::<object_store::client::HttpError>() {
-            use object_store::client::HttpErrorKind;
-            if matches!(
-                error.kind(),
-                HttpErrorKind::Connect | HttpErrorKind::Timeout | HttpErrorKind::Interrupted
-            ) {
-                return true;
-            }
-        }
-        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
-            return (error.status().is_none()
-                && (error.is_connect()
-                    || error.is_timeout()
-                    || error.is_body()
-                    || error.is_request()))
-                || error
-                    .status()
-                    .is_some_and(|status| status.is_server_error());
-        }
-        if let Some(error) = error.downcast_ref::<std::io::Error>() {
-            return matches!(
-                error.kind(),
-                std::io::ErrorKind::NotConnected
-                    | std::io::ErrorKind::ConnectionRefused
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::TimedOut
-                    | std::io::ErrorKind::NetworkUnreachable
-                    | std::io::ErrorKind::HostUnreachable
-            );
-        }
-        source = error.source();
-    }
-    false
+/// A 404, failed condition, invalid credential, or access denial must never
+/// turn into a successful stale read.
+pub(super) fn is_offline(error: &impl StoreError) -> bool {
+    is_offline_error(error, &|error| {
+        error.is::<CloudUnavailable>() || error.is::<OfflineCacheMiss>()
+    })
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedMeta {
     path: String,
     modified: String,
@@ -243,58 +137,7 @@ struct CachedMeta {
     attributes: Vec<(String, String)>,
 }
 impl CachedMeta {
-    fn new(meta: &ObjectMeta, attributes: &Attributes) -> Self {
-        Self {
-            path: meta.location.to_string(),
-            modified: meta.last_modified.to_rfc3339(),
-            size: meta.size,
-            etag: meta.e_tag.clone(),
-            version: meta.version.clone(),
-            attributes: attributes
-                .iter()
-                .filter_map(|(key, value)| {
-                    let key = match key {
-                        Attribute::ContentDisposition => "disposition".into(),
-                        Attribute::ContentEncoding => "encoding".into(),
-                        Attribute::ContentLanguage => "language".into(),
-                        Attribute::ContentType => "type".into(),
-                        Attribute::CacheControl => "control".into(),
-                        Attribute::StorageClass => "class".into(),
-                        Attribute::Metadata(name) => format!("metadata:{name}"),
-                        _ => return None,
-                    };
-                    Some((key, value.as_ref().to_owned()))
-                })
-                .collect(),
-        }
-    }
-    fn meta(&self) -> object_store::Result<ObjectMeta> {
-        Ok(ObjectMeta {
-            location: ObjectPath::parse(&self.path)?,
-            last_modified: self.modified.parse().map_err(cache_error)?,
-            size: self.size,
-            e_tag: self.etag.clone(),
-            version: self.version.clone(),
-        })
-    }
-    fn attributes(&self) -> Attributes {
-        self.attributes
-            .iter()
-            .filter_map(|(key, value)| {
-                let key = match key.as_str() {
-                    "disposition" => Attribute::ContentDisposition,
-                    "encoding" => Attribute::ContentEncoding,
-                    "language" => Attribute::ContentLanguage,
-                    "type" => Attribute::ContentType,
-                    "control" => Attribute::CacheControl,
-                    "class" => Attribute::StorageClass,
-                    key => Attribute::Metadata(key.strip_prefix("metadata:")?.to_owned().into()),
-                };
-                Some((key, object_store::AttributeValue::from(value.clone())))
-            })
-            .collect()
-    }
-    fn generation(&self) -> object_store::Result<String> {
+    fn generation(&self) -> CacheResult<String> {
         let value = (&self.modified, self.size, &self.etag, &self.version);
         Ok(
             blake3::hash(&serde_json::to_vec(&value).map_err(cache_error)?)
@@ -462,7 +305,8 @@ impl CacheControl {
         ensure!(
             !prefixes.is_empty()
                 && prefixes.iter().all(|prefix| prefix.ends_with('/')
-                    && ObjectPath::parse(prefix).is_ok_and(|path| format!("{path}/") == *prefix)),
+                    && flow_like_storage::object_store::path::Path::parse(prefix)
+                        .is_ok_and(|path| format!("{path}/") == *prefix)),
             "Invalid read cache prefixes"
         );
         // Only a digest enters the filesystem. Callers bind scope to the cloud
@@ -578,7 +422,7 @@ impl CacheControl {
     pub(super) fn suspend(&self) {
         self.suspended.store(true, Ordering::Release);
     }
-    fn authorized(&self) -> object_store::Result<()> {
+    fn authorized(&self) -> CacheResult<()> {
         if self.suspended.load(Ordering::Acquire) {
             return Err(cache_error(GrantDeadlineElapsed));
         }
@@ -590,7 +434,7 @@ impl CacheControl {
         }
         Ok(())
     }
-    fn try_cloud_read(&self) -> object_store::Result<bool> {
+    fn try_cloud_read(&self) -> CacheResult<bool> {
         self.authorized()?;
         let mut availability = self
             .availability
@@ -612,7 +456,7 @@ impl CacheControl {
             *availability = ReadAvailability::default();
         }
     }
-    fn cloud_failed(&self, error: &object_store::Error) {
+    fn cloud_failed(&self, error: &impl StoreError) {
         if !is_offline(error) {
             return;
         }
@@ -637,23 +481,20 @@ impl CacheControl {
         tx.commit()?;
         Ok(())
     }
-    fn scope(&self, path: &ObjectPath, directory: bool) -> object_store::Result<()> {
+    fn scope(&self, path: &(impl AsRef<str> + ?Sized), directory: bool) -> CacheResult<()> {
         self.authorized()?;
+        let path = path.as_ref();
         if !self.prefixes.iter().any(|prefix| {
-            path.as_ref().starts_with(prefix)
-                || (directory && path.as_ref() == prefix.trim_end_matches('/'))
+            path.starts_with(prefix) || (directory && path == prefix.trim_end_matches('/'))
         }) {
-            return Err(object_store::Error::PermissionDenied {
-                path: path.to_string(),
-                source: "Object is outside this device cache's project and user scope".into(),
-            });
+            return Err(CacheFailure::OutsideScope(path.to_owned()));
         }
         Ok(())
     }
     fn transaction<T>(
         &self,
-        operation: impl FnOnce(&Transaction<'_>) -> object_store::Result<T>,
-    ) -> object_store::Result<T> {
+        operation: impl FnOnce(&Transaction<'_>) -> CacheResult<T>,
+    ) -> CacheResult<T> {
         if self.suspended.load(Ordering::Acquire) {
             return Err(cache_error(GrantDeadlineElapsed));
         }
@@ -682,7 +523,7 @@ impl CacheControl {
         tx.commit().map_err(cache_error)?;
         Ok(value)
     }
-    fn epoch(&self) -> object_store::Result<i64> {
+    fn epoch(&self) -> CacheResult<i64> {
         self.transaction(|tx| {
             tx.query_row(
                 "SELECT epoch FROM cache_state WHERE singleton=1",
@@ -692,7 +533,7 @@ impl CacheControl {
             .map_err(cache_error)
         })
     }
-    fn tick(tx: &Transaction<'_>) -> object_store::Result<i64> {
+    fn tick(tx: &Transaction<'_>) -> CacheResult<i64> {
         tx.execute("UPDATE cache_state SET clock=clock+1 WHERE singleton=1", [])
             .map_err(cache_error)?;
         tx.query_row(
@@ -702,7 +543,7 @@ impl CacheControl {
         )
         .map_err(cache_error)
     }
-    fn read(&self, id: &str) -> object_store::Result<Option<Vec<u8>>> {
+    fn read(&self, id: &str) -> CacheResult<Option<Vec<u8>>> {
         self.transaction(|tx| {
             let data = tx
                 .query_row("SELECT data FROM cache_entries WHERE id=?1", [id], |row| {
@@ -732,7 +573,7 @@ impl CacheControl {
         start: u64,
         finish: u64,
         data: &[u8],
-    ) -> object_store::Result<()> {
+    ) -> CacheResult<()> {
         let cost =
             data.len() as u64 + (id.len() + path.len() + generation.len()) as u64 + ROW_OVERHEAD;
         if kind == 3 {
@@ -761,7 +602,7 @@ impl CacheControl {
     fn data_budget(&self) -> u64 {
         self.max_bytes - self.marker_budget()
     }
-    fn marker_usage(tx: &Transaction<'_>) -> object_store::Result<(u64, u64)> {
+    fn marker_usage(tx: &Transaction<'_>) -> CacheResult<(u64, u64)> {
         tx.query_row(
             "SELECT COUNT(*),COALESCE(SUM(cost),0) FROM cache_entries WHERE kind=3",
             [],
@@ -769,7 +610,7 @@ impl CacheControl {
         )
         .map_err(cache_error)
     }
-    fn uncertain_since(tx: &Transaction<'_>) -> object_store::Result<i64> {
+    fn uncertain_since(tx: &Transaction<'_>) -> CacheResult<i64> {
         tx.query_row(
             "SELECT immutable_uncertain FROM cache_write_state WHERE singleton=1",
             [],
@@ -777,7 +618,7 @@ impl CacheControl {
         )
         .map_err(cache_error)
     }
-    fn reserve_marker(&self, tx: &Transaction<'_>, cost: u64) -> object_store::Result<bool> {
+    fn reserve_marker(&self, tx: &Transaction<'_>, cost: u64) -> CacheResult<bool> {
         let now = wall_clock()?;
         Self::settle_writes(tx, now)?;
         let (count, bytes) = Self::marker_usage(tx)?;
@@ -803,7 +644,7 @@ impl CacheControl {
     /// A write unresolved for the settle window has committed or never will.
     /// Its path's cached data may predate a late commit, so it is dropped with
     /// the marker and revalidated on the next read.
-    fn settle_writes(tx: &Transaction<'_>, now: i64) -> object_store::Result<()> {
+    fn settle_writes(tx: &Transaction<'_>, now: i64) -> CacheResult<()> {
         let cutoff = now - WRITE_SETTLE_SECONDS;
         let settled: bool = tx
             .query_row(
@@ -849,7 +690,7 @@ impl CacheControl {
         }
         Ok(())
     }
-    fn evict(&self, tx: &Transaction<'_>, cost: u64) -> object_store::Result<()> {
+    fn evict(&self, tx: &Transaction<'_>, cost: u64) -> CacheResult<()> {
         let mut total: u64 = tx
             .query_row(
                 "SELECT bytes FROM cache_state WHERE singleton=1",
@@ -872,7 +713,7 @@ impl CacheControl {
         }
         Ok(())
     }
-    fn observe(&self, meta: &CachedMeta, epoch: i64) -> object_store::Result<Option<String>> {
+    fn observe(&self, meta: &CachedMeta, epoch: i64) -> CacheResult<Option<String>> {
         let generation = meta.generation()?;
         let data = serde_json::to_vec(meta).map_err(cache_error)?;
         self.transaction(|tx| {
@@ -911,7 +752,7 @@ impl CacheControl {
         start: u64,
         data: &[u8],
         epoch: i64,
-    ) -> object_store::Result<()> {
+    ) -> CacheResult<()> {
         self.transaction(|tx| {
             let current: i64 = tx
                 .query_row(
@@ -958,7 +799,7 @@ impl CacheControl {
         generation: &str,
         start: u64,
         end: u64,
-    ) -> object_store::Result<Option<Bytes>> {
+    ) -> CacheResult<Option<Bytes>> {
         self.transaction(|tx| {
             let block: Option<(String,u64,Vec<u8>)> = tx.query_row("SELECT id,start,data FROM cache_entries WHERE path=?1 AND kind=1 AND generation=?2 AND start<=?3 AND finish>?3 ORDER BY finish DESC LIMIT 1", params![path,generation,start], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(cache_error)?;
             let Some((id,offset,data)) = block else { return Ok(None); };
@@ -969,12 +810,7 @@ impl CacheControl {
             Ok(Some(Bytes::from(data).slice(from..to)))
         })
     }
-    fn covers(
-        &self,
-        path: &str,
-        generation: &str,
-        range: &Range<u64>,
-    ) -> object_store::Result<bool> {
+    fn covers(&self, path: &str, generation: &str, range: &Range<u64>) -> CacheResult<bool> {
         self.transaction(|tx| {
             let mut start = range.start;
             while start < range.end {
@@ -985,27 +821,27 @@ impl CacheControl {
             Ok(true)
         })
     }
-    pub(super) fn invalidate(&self, paths: &[&ObjectPath]) -> object_store::Result<()> {
+    fn invalidate<P: AsRef<str> + ?Sized>(&self, paths: &[&P]) -> CacheResult<()> {
         self.transaction(|tx| Self::invalidate_data(tx, paths))
     }
     /// Retain an acknowledged logical file write before its outbox payload is
     /// released. The normal cache budget and authorization fence still apply.
     pub(super) fn remember_file(
         &self,
-        meta: &ObjectMeta,
+        meta: &flow_like_storage::object_store::ObjectMeta,
         bytes: &[u8],
-    ) -> object_store::Result<()> {
+    ) -> CacheResult<()> {
         self.scope(&meta.location, false)?;
         if bytes.len() as u64 != meta.size {
             return Err(cache_error(
                 "Acknowledged file size differs from its payload",
             ));
         }
-        let stored = CachedMeta::new(meta, &Attributes::default());
+        let stored = file_cache::cached_meta(meta, &Default::default());
         let generation = stored.generation()?;
         let metadata = serde_json::to_vec(&stored).map_err(cache_error)?;
         self.transaction(|tx| {
-            self.acknowledge_file(tx, &meta.location, Some(meta))?;
+            self.acknowledge_file(tx, meta.location.as_ref(), Some(&stored))?;
             self.insert(
                 tx,
                 &format!("meta:{}", meta.location),
@@ -1032,21 +868,24 @@ impl CacheControl {
             Ok(())
         })
     }
-    pub(super) fn remember_file_deleted(&self, path: &ObjectPath) -> object_store::Result<()> {
+    pub(super) fn remember_file_deleted(
+        &self,
+        path: &(impl AsRef<str> + ?Sized),
+    ) -> CacheResult<()> {
         self.scope(path, false)?;
-        self.transaction(|tx| self.acknowledge_file(tx, path, None))
+        self.transaction(|tx| self.acknowledge_file(tx, path.as_ref(), None))
     }
     fn acknowledge_file(
         &self,
         tx: &Transaction<'_>,
-        path: &ObjectPath,
-        meta: Option<&ObjectMeta>,
-    ) -> object_store::Result<()> {
+        path: &str,
+        meta: Option<&CachedMeta>,
+    ) -> CacheResult<()> {
         tx.execute("UPDATE cache_state SET epoch=epoch+1 WHERE singleton=1", [])
             .map_err(cache_error)?;
         tx.execute(
             "DELETE FROM cache_entries WHERE path=?1 AND kind IN (0,1)",
-            [path.as_ref()],
+            [path],
         )
         .map_err(cache_error)?;
         // Update complete snapshots that already exist. Bound work per replay
@@ -1074,8 +913,7 @@ impl CacheControl {
             else {
                 continue;
             };
-            let prefix = ObjectPath::parse(prefix)?;
-            if !path.prefix_matches(&prefix) {
+            if !prefix_matches(path, prefix) {
                 continue;
             }
             tx.execute("DELETE FROM cache_entries WHERE id=?1", [&id])
@@ -1087,10 +925,8 @@ impl CacheControl {
             }
             let mut entries: Vec<CachedMeta> =
                 serde_json::from_slice(&bytes).map_err(cache_error)?;
-            entries.retain(|entry| entry.path != path.as_ref());
-            if let Some(meta) = meta {
-                entries.push(CachedMeta::new(meta, &Attributes::default()));
-            }
+            entries.retain(|entry| entry.path != path);
+            entries.extend(meta.cloned());
             entries.sort_by(|left, right| left.path.cmp(&right.path));
             let mut encoded = ListingJson(Vec::new());
             if serde_json::to_writer(&mut encoded, &entries).is_ok() {
@@ -1099,7 +935,10 @@ impl CacheControl {
         }
         Ok(())
     }
-    fn invalidate_data(tx: &Transaction<'_>, paths: &[&ObjectPath]) -> object_store::Result<()> {
+    fn invalidate_data<P: AsRef<str> + ?Sized>(
+        tx: &Transaction<'_>,
+        paths: &[&P],
+    ) -> CacheResult<()> {
         tx.execute("UPDATE cache_state SET epoch=epoch+1 WHERE singleton=1", [])
             .map_err(cache_error)?;
         tx.execute("DELETE FROM cache_entries WHERE kind=2", [])
@@ -1113,17 +952,18 @@ impl CacheControl {
         }
         Ok(())
     }
-    fn begin_write(&self, paths: &[&ObjectPath]) -> object_store::Result<String> {
+    fn begin_write<P: AsRef<str> + ?Sized>(&self, paths: &[&P]) -> CacheResult<String> {
         let operation = uuid::Uuid::new_v4().to_string();
         let started = wall_clock()?.max(1) as u64;
         self.transaction(|tx| {
             tx.execute("UPDATE cache_state SET epoch=epoch+1 WHERE singleton=1", [])
                 .map_err(cache_error)?;
             for path in paths {
+                let path = path.as_ref();
                 self.insert(
                     tx,
                     &format!("write:{operation}:{path}"),
-                    path.as_ref(),
+                    path,
                     3,
                     &operation,
                     started,
@@ -1136,12 +976,12 @@ impl CacheControl {
     }
     /// A provider response settles a write whether or not it succeeded; only a
     /// transport failure or cancellation leaves it unresolved.
-    fn finish_write<T>(
+    fn finish_write<T, P: AsRef<str> + ?Sized, E: StoreError>(
         &self,
         operation: &str,
-        paths: &[&ObjectPath],
-        result: &object_store::Result<T>,
-    ) -> object_store::Result<()> {
+        paths: &[&P],
+        result: &std::result::Result<T, E>,
+    ) -> CacheResult<()> {
         match result {
             Ok(_) => {
                 self.cloud_succeeded();
@@ -1158,7 +998,11 @@ impl CacheControl {
             }
         }
     }
-    fn complete_write(&self, operation: &str, paths: &[&ObjectPath]) -> object_store::Result<()> {
+    fn complete_write<P: AsRef<str> + ?Sized>(
+        &self,
+        operation: &str,
+        paths: &[&P],
+    ) -> CacheResult<()> {
         self.transaction(|tx| {
             Self::invalidate_data(tx, paths)?;
             // A separate concurrent or cancelled write remains uncertain.
@@ -1170,7 +1014,7 @@ impl CacheControl {
             Ok(())
         })
     }
-    fn immutable_trusted(&self, path: &ObjectPath) -> object_store::Result<bool> {
+    fn immutable_trusted(&self, path: &(impl AsRef<str> + ?Sized)) -> CacheResult<bool> {
         let now = wall_clock()?;
         self.transaction(|tx| {
             Self::settle_writes(tx, now)?;
@@ -1187,7 +1031,7 @@ impl CacheControl {
             Ok(!pending)
         })
     }
-    fn listing(&self, key: &str, data: &[u8], epoch: i64) -> object_store::Result<()> {
+    fn listing(&self, key: &str, data: &[u8], epoch: i64) -> CacheResult<()> {
         if data.len() > LIST_BYTES {
             return Ok(());
         }
@@ -1205,7 +1049,7 @@ impl CacheControl {
             Ok(())
         })
     }
-    fn handle_error(&self, error: &object_store::Error) {
+    fn handle_error(&self, error: &impl StoreError) {
         if is_offline(error) {
             self.cloud_failed(error);
         } else {
@@ -1222,10 +1066,11 @@ impl CacheControl {
     }
 }
 
-// Lance 8.0.0 @ 82a122e: dataset/write.rs::open_writer_with_options
-// creates fresh data files using fragment/write.rs::generate_random_filename.
-// Manifests, indexes, blobs, and ordinary uploads remain revalidated.
-fn immutable_lance_data(path: &ObjectPath) -> bool {
+// Lance 13.0.0: dataset/write.rs::prepare_data_file_path names fresh data files
+// with fragment/write.rs::generate_random_filename, and staged writes promote
+// them with copy_if_not_exists. Manifests, indexes, blobs, and ordinary uploads
+// remain revalidated.
+fn immutable_lance_data(path: &(impl AsRef<str> + ?Sized)) -> bool {
     let parts: Vec<_> = path.as_ref().split('/').collect();
     let database = matches!(
         parts.as_slice(),
@@ -1254,7 +1099,7 @@ fn immutable_lance_data(path: &ObjectPath) -> bool {
 // Published model folders are write-once: weights.bin and preprocessing.json are written
 // before the manifest that records their sha256, and none of them is ever replaced.
 // Pointer files under models/{experiments,learning,deployments}/ remain revalidated.
-fn immutable_model_artifact(path: &ObjectPath) -> bool {
+fn immutable_model_artifact(path: &(impl AsRef<str> + ?Sized)) -> bool {
     let parts: Vec<_> = path.as_ref().split('/').collect();
     matches!(
         parts.as_slice(),
@@ -1264,434 +1109,27 @@ fn immutable_model_artifact(path: &ObjectPath) -> bool {
     )
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct ReadCache {
-    inner: Arc<dyn ObjectStore>,
-    control: Arc<CacheControl>,
-}
-impl fmt::Display for ReadCache {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("StandaloneCloudReadCache")
-    }
-}
-impl ReadCache {
-    pub(super) fn new(inner: Arc<dyn ObjectStore>, control: Arc<CacheControl>) -> Arc<Self> {
-        Arc::new(Self { inner, control })
-    }
-    fn cached(
-        &self,
-        path: &ObjectPath,
-        options: &GetOptions,
-    ) -> object_store::Result<Option<GetResult>> {
-        let Some(data) = self.control.read(&format!("meta:{path}"))? else {
-            return Ok(None);
-        };
-        let stored: CachedMeta = serde_json::from_slice(&data).map_err(cache_error)?;
-        let meta = stored.meta()?;
-        if options
-            .version
-            .as_ref()
-            .is_some_and(|version| meta.version.as_ref() != Some(version))
-        {
-            return Ok(None);
-        }
-        options.check_preconditions(&meta)?;
-        let range = if options.head {
-            0..0
-        } else {
-            options
-                .range
-                .as_ref()
-                .map(|range| range.as_range(meta.size))
-                .transpose()
-                .map_err(cache_error)?
-                .unwrap_or(0..meta.size)
-        };
-        let generation = stored.generation()?;
-        if !self.control.covers(path.as_ref(), &generation, &range)? {
-            return Ok(None);
-        }
-        let control = self.control.clone();
-        let path = path.to_string();
-        let mut position = range.start;
-        let end = range.end;
-        let stream = try_stream! {
-            while position < end {
-                let bytes = control.read_block(&path,&generation,position,end)?.ok_or_else(offline)?;
-                position += bytes.len() as u64;
-                yield bytes;
-            }
-        };
-        Ok(Some(GetResult {
-            payload: GetResultPayload::Stream(Box::pin(stream)),
-            meta,
-            range,
-            attributes: stored.attributes(),
-        }))
-    }
-    fn wrap_result(
-        &self,
-        result: GetResult,
-        epoch: i64,
-        head: bool,
-        cache_current: bool,
-    ) -> object_store::Result<GetResult> {
-        let meta = result.meta.clone();
-        self.control.scope(&meta.location, false)?;
-        let attributes = result.attributes.clone();
-        let range = result.range.clone();
-        // An explicit historical version must not replace the current object
-        // that an unversioned offline read will use.
-        let generation = if cache_current {
-            self.control
-                .observe(&CachedMeta::new(&meta, &attributes), epoch)?
-        } else {
-            None
-        };
-        let control = self.control.clone();
-        let path = meta.location.to_string();
-        let mut position = range.start;
-        let end = range.end;
-        let mut source = result.into_stream();
-        let stream = try_stream! {
-            let mut pending = BytesMut::new();
-            let mut block_start = position;
-            while let Some(result) = source.next().await {
-                let mut bytes = match result {
-                    Ok(bytes) => bytes,
-                    Err(error) => { control.handle_error(&error); Err(error)?; unreachable!() }
-                };
-                control.authorized()?;
-                if !head && bytes.len() as u64 > end.saturating_sub(position) { Err(cache_error("Cloud object returned an invalid byte range"))?; }
-                while !bytes.is_empty() {
-                    let chunk = bytes.split_to(bytes.len().min(BLOCK_BYTES-pending.len()));
-                    if !head && generation.is_some() {
-                        pending.extend_from_slice(&chunk);
-                        if pending.len() == BLOCK_BYTES {
-                            control.block(&path,generation.as_deref().unwrap(),block_start,&pending,epoch)?;
-                            pending.clear();
-                            block_start = position + chunk.len() as u64;
-                        }
-                    }
-                    position += chunk.len() as u64;
-                    yield chunk;
-                }
-            }
-            if !head && position != end { Err(cache_error("Cloud object ended before its declared range"))?; }
-            if !pending.is_empty() { control.block(&path,generation.as_deref().unwrap(),block_start,&pending,epoch)?; }
-            control.cloud_succeeded();
-        };
-        Ok(GetResult {
-            payload: GetResultPayload::Stream(Box::pin(stream)),
-            meta,
-            range,
-            attributes,
-        })
-    }
-    fn list_key(
-        &self,
-        prefix: Option<&ObjectPath>,
-        delimiter: bool,
-    ) -> object_store::Result<String> {
-        let prefix = prefix.ok_or_else(|| {
-            cache_error("Device listing requires an authorized project or user directory")
-        })?;
-        self.control.scope(prefix, true)?;
-        Ok(format!("list:{}:{prefix}", u8::from(delimiter)))
-    }
-    fn cached_delimiter(&self, key: &str) -> object_store::Result<ListResult> {
-        let bytes = self.control.read(key)?.ok_or_else(offline)?;
-        let (prefixes, objects): (Vec<String>, Vec<CachedMeta>) =
-            serde_json::from_slice(&bytes).map_err(cache_error)?;
-        let result = ListResult {
-            common_prefixes: prefixes
-                .iter()
-                .map(ObjectPath::parse)
-                .collect::<std::result::Result<_, _>>()?,
-            objects: objects
-                .iter()
-                .map(CachedMeta::meta)
-                .collect::<object_store::Result<_>>()?,
-        };
-        for prefix in &result.common_prefixes {
-            self.control.scope(prefix, true)?;
-        }
-        for meta in &result.objects {
-            self.control.scope(&meta.location, false)?;
-        }
-        Ok(result)
-    }
-}
-
-#[async_trait]
-impl ObjectStore for ReadCache {
-    async fn get_opts(
-        &self,
-        path: &ObjectPath,
-        options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        self.control.scope(path, false)?;
-        if (immutable_lance_data(path) || immutable_model_artifact(path))
-            && self.control.immutable_trusted(path)?
-        {
-            if let Some(result) = self.cached(path, &options)? {
-                return Ok(result);
-            }
-        }
-        if !self.control.try_cloud_read()? {
-            return self.cached(path, &options)?.ok_or_else(offline);
-        }
-        let epoch = self.control.epoch()?;
-        let result = tokio::time::timeout(
-            CLOUD_PROBE_TIMEOUT,
-            self.inner.get_opts(path, options.clone()),
-        )
-        .await
-        .unwrap_or_else(|_| Err(cache_error(CloudUnavailable)));
-        match result {
-            Ok(result) => {
-                if result.meta.location != *path {
-                    return Err(cache_error(
-                        "Cloud object response changed its requested path",
-                    ));
-                }
-                if options
-                    .version
-                    .as_ref()
-                    .is_some_and(|version| result.meta.version.as_ref() != Some(version))
-                {
-                    return Err(cache_error(
-                        "Cloud object response changed its requested version",
-                    ));
-                }
-                self.control.cloud_succeeded();
-                self.wrap_result(result, epoch, options.head, options.version.is_none())
-            }
-            Err(error) => {
-                self.control.handle_error(&error);
-                if is_offline(&error) {
-                    return self.cached(path, &options)?.ok_or_else(offline);
-                }
-                if options.version.is_none()
-                    && matches!(
-                        error,
-                        object_store::Error::NotFound { .. }
-                            | object_store::Error::PermissionDenied { .. }
-                            | object_store::Error::Unauthenticated { .. }
-                    )
-                {
-                    self.control.invalidate(&[path])?;
-                }
-                Err(error)
-            }
-        }
-    }
-    async fn put_opts(
-        &self,
-        path: &ObjectPath,
-        payload: PutPayload,
-        options: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        self.control.scope(path, false)?;
-        let operation = self.control.begin_write(&[path])?;
-        let result = self.inner.put_opts(path, payload, options).await;
-        self.control.finish_write(&operation, &[path], &result)?;
-        result
-    }
-    async fn put_multipart_opts(
-        &self,
-        path: &ObjectPath,
-        options: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.control.scope(path, false)?;
-        let upload = self
-            .inner
-            .put_multipart_opts(path, options)
-            .await
-            .map_err(|error| {
-                self.control.handle_error(&error);
-                error
-            })?;
-        self.control.cloud_succeeded();
-        Ok(Box::new(CachedUpload {
-            inner: upload,
-            control: self.control.clone(),
-            path: path.clone(),
-        }))
-    }
-    fn delete_stream(
-        &self,
-        locations: BoxStream<'static, object_store::Result<ObjectPath>>,
-    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
-        let store = self.clone();
-        Box::pin(locations.then(move |path| {
-            let store = store.clone();
-            async move {
-                let path = path?;
-                store.control.scope(&path, false)?;
-                let operation = store.control.begin_write(&[&path])?;
-                let result = store.inner.delete(&path).await;
-                store.control.finish_write(&operation, &[&path], &result)?;
-                result?;
-                Ok(path)
-            }
-        }))
-    }
-    fn list(
-        &self,
-        prefix: Option<&ObjectPath>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        let store = self.clone();
-        let prefix = prefix.cloned();
-        Box::pin(try_stream! {
-            let key=store.list_key(prefix.as_ref(),false)?;
-            if !store.control.try_cloud_read()? {
-                let bytes=store.control.read(&key)?.ok_or_else(offline)?;
-                let stored: Vec<CachedMeta>=serde_json::from_slice(&bytes).map_err(cache_error)?;
-                for meta in stored { store.control.scope(&ObjectPath::parse(&meta.path)?,false)?; yield meta.meta()?; }
-                return;
-            }
-            let epoch=store.control.epoch()?;
-            let mut source=store.inner.list(prefix.as_ref());
-            let mut complete=true;
-            let mut seen=false;
-            let mut data=Vec::<CachedMeta>::new();
-            let mut size=0;
-            while let Some(result)=tokio::time::timeout(CLOUD_PROBE_TIMEOUT,source.next()).await.unwrap_or_else(|_|Some(Err(cache_error(CloudUnavailable)))) {
-                let meta=match result {
-                    Ok(meta)=>meta,
-                    Err(error)=>{
-                        store.control.handle_error(&error);
-                        if is_offline(&error) && !seen {
-                            let bytes=store.control.read(&key)?.ok_or_else(offline)?;
-                            let stored: Vec<CachedMeta>=serde_json::from_slice(&bytes).map_err(cache_error)?;
-                            for meta in stored { store.control.scope(&ObjectPath::parse(&meta.path)?,false)?; yield meta.meta()?; }
-                            return;
-                        }
-                        if !is_offline(&error) { store.control.invalidate(&[])?; }
-                        Err(error)?;
-                        unreachable!()
-                    }
-                };
-                store.control.scope(&meta.location,false)?;
-                seen=true;
-                if complete {
-                    let stored=CachedMeta::new(&meta,&Attributes::default());
-                    size+=serde_json::to_vec(&stored).map_err(cache_error)?.len()+1;
-                    if size <= LIST_BYTES { data.push(stored); } else { complete=false; data.clear(); }
-                }
-                yield meta;
-            }
-            if complete { store.control.listing(&key,&serde_json::to_vec(&data).map_err(cache_error)?,epoch)?; }
-            store.control.cloud_succeeded();
-        })
-    }
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&ObjectPath>,
-    ) -> object_store::Result<ListResult> {
-        let key = self.list_key(prefix, true)?;
-        if !self.control.try_cloud_read()? {
-            return self.cached_delimiter(&key);
-        }
-        let epoch = self.control.epoch()?;
-        let result =
-            tokio::time::timeout(CLOUD_PROBE_TIMEOUT, self.inner.list_with_delimiter(prefix))
-                .await
-                .unwrap_or_else(|_| Err(cache_error(CloudUnavailable)));
-        match result {
-            Ok(result) => {
-                for meta in &result.objects {
-                    self.control.scope(&meta.location, false)?;
-                }
-                for prefix in &result.common_prefixes {
-                    self.control.scope(prefix, true)?;
-                }
-                if let Some(snapshot) = delimiter_snapshot(&result) {
-                    self.control.listing(&key, &snapshot, epoch)?;
-                }
-                self.control.cloud_succeeded();
-                Ok(result)
-            }
-            Err(error) => {
-                self.control.handle_error(&error);
-                if !is_offline(&error) {
-                    self.control.invalidate(&[])?;
-                    return Err(error);
-                }
-                self.cached_delimiter(&key)
-            }
-        }
-    }
-    async fn copy_opts(
-        &self,
-        from: &ObjectPath,
-        to: &ObjectPath,
-        options: CopyOptions,
-    ) -> object_store::Result<()> {
-        self.control.scope(from, false)?;
-        self.control.scope(to, false)?;
-        let operation = self.control.begin_write(&[to])?;
-        let result = self.inner.copy_opts(from, to, options).await;
-        self.control.finish_write(&operation, &[to], &result)?;
-        result
-    }
-    async fn rename_opts(
-        &self,
-        from: &ObjectPath,
-        to: &ObjectPath,
-        options: RenameOptions,
-    ) -> object_store::Result<()> {
-        self.control.scope(from, false)?;
-        self.control.scope(to, false)?;
-        let operation = self.control.begin_write(&[from, to])?;
-        let result = self.inner.rename_opts(from, to, options).await;
-        self.control
-            .finish_write(&operation, &[from, to], &result)?;
-        result
-    }
-}
-#[derive(Debug)]
-struct CachedUpload {
-    inner: Box<dyn MultipartUpload>,
-    control: Arc<CacheControl>,
-    path: ObjectPath,
-}
-#[async_trait]
-impl MultipartUpload for CachedUpload {
-    fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        if let Err(error) = self.control.authorized() {
-            return Box::pin(async move { Err(error) });
-        }
-        let result = self.inner.put_part(data);
-        let control = self.control.clone();
-        Box::pin(async move {
-            let result = result.await;
-            if let Err(error) = &result {
-                control.handle_error(error);
-            } else {
-                control.cloud_succeeded();
-            }
-            result
-        })
-    }
-    async fn complete(&mut self) -> object_store::Result<PutResult> {
-        self.control.scope(&self.path, false)?;
-        let operation = self.control.begin_write(&[&self.path])?;
-        let result = self.inner.complete().await;
-        self.control
-            .finish_write(&operation, &[&self.path], &result)?;
-        result
-    }
-    async fn abort(&mut self) -> object_store::Result<()> {
-        self.inner.abort().await
-    }
+/// `Path::prefix_matches` on the normalized keys both object_store releases share.
+fn prefix_matches(path: &str, prefix: &str) -> bool {
+    prefix.is_empty()
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures_util::TryStreamExt;
+    use super::{
+        file_cache::{OfflineHttpService, ReadCache, cache_error, delimiter_snapshot},
+        *,
+    };
+    use async_trait::async_trait;
+    use flow_like_storage::object_store::{
+        self, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        RenameOptions, path::Path as ObjectPath,
+    };
+    use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
     use std::sync::atomic::{AtomicU8, AtomicUsize};
 
     #[tokio::test]
@@ -3058,6 +2496,49 @@ mod tests {
         assert!(
             !control.is_revoked().unwrap(),
             "Suspension is never durable"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_and_lance_stores_share_one_device_cache() {
+        use flow_like_storage::lance_object_store::{self as lance, ObjectStoreExt as _};
+        let root = tempfile::tempdir().unwrap();
+        let control = control(root.path(), "shared", 4 * 1024 * 1024);
+        let files = ReadCache::new(Arc::new(Cloud::default()), control.clone());
+        let tables = super::lance_cache::ReadCache::new(
+            Arc::new(lance::memory::InMemory::new()),
+            control.clone(),
+        );
+        let path = ObjectPath::from("apps/project/storage/db/shared.lance/_versions/1.manifest");
+        let lance_path = lance::path::Path::from(path.as_ref());
+        let offline = || {
+            control.availability.lock().unwrap().retry_at =
+                Some(Instant::now() + Duration::from_secs(60));
+        };
+        files.put(&path, "from files".into()).await.unwrap();
+        assert_eq!(body(files.as_ref(), &path).await, "from files");
+        offline();
+        assert_eq!(
+            tables
+                .get(&lance_path)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            "from files"
+        );
+        control.cloud_succeeded();
+        tables.put(&lance_path, "from tables".into()).await.unwrap();
+        offline();
+        assert!(
+            files
+                .get(&path)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("offline"),
+            "A Lance write invalidates what the file store cached"
         );
     }
 }

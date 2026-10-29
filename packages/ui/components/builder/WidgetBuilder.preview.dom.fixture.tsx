@@ -116,12 +116,16 @@ afterEach(async () => {
 
 const title = (text: string): SurfaceComponent => ({
 	id: "title",
-	component: { type: "text", content: { literalString: text } },
+	component: { id: "title", type: "text", content: { literalString: text } },
 });
 const initialComponents: SurfaceComponent[] = [
 	{
 		id: "root",
-		component: { type: "column", children: { explicitList: ["title"] } },
+		component: {
+			id: "root",
+			type: "column",
+			children: { explicitList: ["title"] },
+		},
 	},
 	title("Original title"),
 ];

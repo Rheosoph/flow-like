@@ -8,8 +8,8 @@ import type { IEventUpsertOptions } from "../../../state/backend-state/event-sta
 import {
 	byRole,
 	click,
-	inPortal,
 	installDom,
+	queryByRole,
 } from "../devices/testing/dom-harness";
 
 const dom = installDom();
@@ -50,6 +50,8 @@ interface Options {
 	boardExecutionMode?: string;
 	mapping?: { withSink: string[]; sinkAvailability?: never };
 	hub?: never;
+	/** What the host's save throws. */
+	failure?: Error;
 }
 
 async function mount(options: Options = {}) {
@@ -98,6 +100,7 @@ async function mount(options: Options = {}) {
 						upsertOptions?: IEventUpsertOptions,
 					) => {
 						upserts.push({ event: saved, pat, options: upsertOptions });
+						if (options.failure) throw options.failure;
 						return saved;
 					},
 				},
@@ -151,14 +154,45 @@ describe("a device-only event's way back", () => {
 		expect(view.upserts[0].options).toEqual({ source: "default" });
 	});
 
-	test("a trigger that registers a sink asks for the same Personal Access Token as Activate", async () => {
+	test("a trigger moving to this computer saves through the host, which asks for any token", async () => {
+		const view = await mount({
+			event: { ...deviceEvent, execution_mode: "Remote" } as IEvent,
+			mapping: { withSink: ["quick_action"] },
+		});
+		await click(button("Run on this computer"));
+		await view.settle();
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].event.execution_mode).toBe(
+			IEventExecutionMode.Local,
+		);
+		expect(view.upserts[0].pat).toBeUndefined();
+	});
+
+	test("a dismissed prompt on this computer stays silent", async () => {
+		const before = toasts().length;
+		const view = await mount({
+			event: { ...deviceEvent, execution_mode: "Remote" } as IEvent,
+			mapping: { withSink: ["quick_action"] },
+			failure: Object.assign(new Error("cancelled"), {
+				isLocalSinkConsentDismissed: true,
+			}),
+		});
+		await click(button("Run on this computer"));
+		await view.settle();
+		expect(view.taken).toEqual([]);
+		expect(toasts().slice(before)).toEqual([]);
+	});
+
+	test("a trigger moving to the hub saves without a token, as the hub runs it as the user who saved it", async () => {
 		const view = await mount({
 			mapping: { withSink: ["quick_action"] },
 		});
 		await click(button("Run on the hub"));
 		await view.settle();
-		expect(inPortal("dialog").textContent).toContain("Authorize this change");
-		expect(view.upserts).toEqual([]);
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].pat).toBeUndefined();
 	});
 
 	test("an option that is not available is disabled and says why", async () => {

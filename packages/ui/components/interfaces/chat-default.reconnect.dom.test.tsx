@@ -6,7 +6,7 @@ import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ExecutionEngineProvider } from "../../lib/execution-engine";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
-import type { IBackendState } from "../../state/backend-state";
+import type { IBackendState, IEventState } from "../../state/backend-state";
 import { ChatInterface } from "./chat-default";
 import {
 	type IMessage,
@@ -157,21 +157,13 @@ async function failDetachedRun(
 	failure: unknown,
 	events: IIntercomEvent[] = [],
 ) {
-	state.engine.setBackend({
-		eventState: {
-			executeEvent: async (
-				_app,
-				_event,
-				_payload,
-				_stream,
-				_start,
-				onEvents,
-			) => {
-				onEvents?.(events);
-				throw failure;
-			},
+	const eventState: Pick<IEventState, "executeEvent"> = {
+		executeEvent: async (_app, _event, _payload, _stream, _start, onEvents) => {
+			onEvents?.(events);
+			throw failure;
 		},
-	} as IBackendState);
+	};
+	state.engine.setBackend({ eventState } as IBackendState);
 	await expect(
 		state.engine.executeEvent("session", {
 			appId: "app",
@@ -258,14 +250,13 @@ describe("chat reconnect after a failed run", () => {
 	test("saves one error reply when an active run fails after reconnecting", async () => {
 		await putUserMessage();
 		let fail!: (failure: unknown) => void;
-		state.engine.setBackend({
-			eventState: {
-				executeEvent: () =>
-					new Promise((_resolve, reject) => {
-						fail = reject;
-					}),
-			},
-		} as IBackendState);
+		const eventState: Pick<IEventState, "executeEvent"> = {
+			executeEvent: () =>
+				new Promise((_resolve, reject) => {
+					fail = reject;
+				}),
+		};
+		state.engine.setBackend({ eventState } as IBackendState);
 		const subscribe = vi.spyOn(state.engine, "subscribeToEventStream");
 		const running = state.engine.executeEvent("session", {
 			appId: "app",

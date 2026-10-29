@@ -114,8 +114,7 @@ impl NodeLogic for SplitDatasetNode {
         let test = test.load(context).await?;
         let train = train.load(context).await?;
 
-        source.ensure_flushed().await?;
-        let source_guard = source.db.read().await;
+        let source_guard = source.flushed_read().await?;
         let source_table = source_guard.inner().raw().await?;
         let query = source_table.query();
         let mut item_stream = query.execute().await?;

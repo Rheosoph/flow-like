@@ -4,7 +4,7 @@
 
 use crate::abi::{exports, WasmAbi, WasmExecutionInput, WasmExecutionResult, WasmNodeDefinition};
 use crate::engine::WasmEngine;
-use crate::error::{WasmError, WasmResult};
+use crate::error::{host_compatibility_error, WasmError, WasmResult};
 use crate::host_functions::linker::{register_host_functions, StoreData};
 use crate::host_functions::HostState;
 use crate::limits::WasmSecurityConfig;
@@ -66,6 +66,9 @@ impl WasmInstance {
 
         let mut linker = Linker::new(module_engine);
         register_host_functions(&mut linker)?;
+        let prepared = linker
+            .instantiate_pre(module.module())
+            .map_err(host_compatibility_error)?;
 
         let mut data = StoreData::new(security.capabilities);
         data.host_state = host_state;
@@ -102,12 +105,9 @@ impl WasmInstance {
         }
 
         // Instantiate module
-        let instance = linker
-            .instantiate_async(&mut store, module.module())
-            .await
-            .map_err(|e| {
-                WasmError::instantiation(format!("Failed to instantiate module: {}", e))
-            })?;
+        let instance = prepared.instantiate_async(&mut store).await.map_err(|e| {
+            WasmError::instantiation(format!("Failed to instantiate module: {}", e))
+        })?;
 
         // Call _initialize if exported (needed for WASI reactor modules like Kotlin/Wasm)
         if let Ok(init) = instance.get_typed_func::<(), ()>(&mut store, "_initialize") {
@@ -356,22 +356,27 @@ impl WasmInstance {
         let result = self
             .run_func
             .call_async(&mut self.store, (input_ptr as i32, input_len as i32))
-            .await
-            .map_err(|e| {
-                // Check for specific error types
-                let msg = e.to_string();
-                if msg.contains("all fuel consumed") {
-                    return WasmError::OutOfFuel {
-                        limit: self.fuel_limit,
-                    };
-                }
-                if msg.contains("epoch deadline") || msg.contains("interrupt") {
-                    return WasmError::Timeout {
-                        duration_ms: 0, // Could track this better
-                    };
-                }
-                WasmError::execution(exports::RUN, format!("Call failed: {}", e))
-            })?;
+            .await;
+        crate::host_functions::storage::cleanup_pending_writes(
+            &self.store.data().host_state.pending_writes,
+        )
+        .await;
+        self.store.data().host_state.storage_listings.clear();
+        let result = result.map_err(|e| {
+            // Check for specific error types
+            let msg = e.to_string();
+            if msg.contains("all fuel consumed") {
+                return WasmError::OutOfFuel {
+                    limit: self.fuel_limit,
+                };
+            }
+            if msg.contains("epoch deadline") || msg.contains("interrupt") {
+                return WasmError::Timeout {
+                    duration_ms: 0, // Could track this better
+                };
+            }
+            WasmError::execution(exports::RUN, format!("Call failed: {}", e))
+        })?;
 
         // Deallocate input
         self.deallocate(input_ptr, input_len).await?;

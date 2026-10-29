@@ -49,6 +49,7 @@ afterEach(async () => {
 
 function button(person: string): ButtonComponent {
 	return {
+		id: "card-action",
 		type: "button",
 		label: { literalString: person },
 		actions: [{ name: "workflow_event", context: { person } }],
@@ -62,6 +63,7 @@ async function renderButton(component: ButtonComponent) {
 				component={component}
 				componentId="card-action"
 				surfaceId="people"
+				renderChild={() => null}
 			/>,
 		),
 	);
@@ -140,6 +142,7 @@ describe("A2UI activation identity", () => {
 					component={button("Bob")}
 					componentId="other-action"
 					surfaceId="people"
+					renderChild={() => null}
 				/>,
 			),
 		);
@@ -193,6 +196,7 @@ describe("A2UI activation identity", () => {
 
 	it("navigates to the app that was pressed before the card changed", async () => {
 		const appLink = (appId: string): AppLinkComponent => ({
+			id: "app-card",
 			type: "appLink",
 			appId: { literalString: appId },
 			target: { literalString: "overview" },
@@ -204,6 +208,7 @@ describe("A2UI activation identity", () => {
 						component={appLink(appId)}
 						componentId="app-card"
 						surfaceId="apps"
+						renderChild={() => null}
 					/>,
 				),
 			);

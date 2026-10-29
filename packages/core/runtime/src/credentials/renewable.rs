@@ -1,10 +1,12 @@
 use super::{
     SharedCredentials, StoreType,
-    aws_credentials::{s3_copy_if_not_exists, s3_storage_options},
+    aws_credentials::{BucketConfig, s3_copy_if_not_exists, s3_storage_options},
 };
 use async_trait::async_trait;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::databases::vector::lancedb::connect_lance;
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::lance_object_store;
 use flow_like_storage::{
     files::{
         credentials::{
@@ -13,7 +15,7 @@ use flow_like_storage::{
         },
         store::FlowLikeStore,
     },
-    object_store::{self, ObjectStore, ObjectStoreExt, path::Path},
+    object_store::{self, path::Path},
 };
 use flow_like_types::{Result, authorization::AuthorizationError, tokio};
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
@@ -56,6 +58,22 @@ impl Purpose {
     }
 }
 
+/// Where a purpose's objects live, independent of the object_store release that reaches them.
+enum NativeTarget<'a> {
+    Aws {
+        bucket: &'a str,
+        region: &'a str,
+        config: Option<&'a BucketConfig>,
+    },
+    Azure {
+        account: &'a str,
+        container: &'a str,
+    },
+    Gcp {
+        bucket: &'a str,
+    },
+}
+
 struct LeaseState {
     credentials: SharedCredentials,
     expires: SystemTime,
@@ -76,6 +94,7 @@ pub struct RenewableSharedCredentials {
     scope_id: String,
     this: Weak<Self>,
     content_decorator: std::sync::OnceLock<Arc<dyn ContentStoreDecorator>>,
+    #[cfg(feature = "flow-runtime")]
     lance_read_cache: std::sync::OnceLock<(
         Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,
         String,
@@ -284,6 +303,7 @@ impl RenewableSharedCredentials {
             scope_id: flow_like_types::create_id(),
             this: this.clone(),
             content_decorator: std::sync::OnceLock::new(),
+            #[cfg(feature = "flow-runtime")]
             lance_read_cache: std::sync::OnceLock::new(),
         });
         let weak = Arc::downgrade(&value);
@@ -355,18 +375,20 @@ impl RenewableSharedCredentials {
         self.check_lease()
     }
 
-    async fn while_lease_valid<T>(
+    /// Fails `future` as soon as the lease lapses, with the store error of its release.
+    async fn while_lease_valid<T, E>(
         &self,
-        future: impl std::future::Future<Output = object_store::Result<T>>,
-    ) -> object_store::Result<T> {
+        future: impl std::future::Future<Output = std::result::Result<T, E>>,
+        lapsed: fn(AuthorizationError) -> E,
+    ) -> std::result::Result<T, E> {
         let mut future = std::pin::pin!(future);
         futures::future::poll_fn(|cx| {
             if let Err(error) = self.check_lease() {
-                return std::task::Poll::Ready(Err(store_error(error)));
+                return std::task::Poll::Ready(Err(lapsed(error)));
             }
             let result = future.as_mut().poll(cx);
             if let Err(error) = self.check_lease() {
-                return std::task::Poll::Ready(Err(store_error(error)));
+                return std::task::Poll::Ready(Err(lapsed(error)));
             }
             result
         })
@@ -430,66 +452,132 @@ impl RenewableSharedCredentials {
         }))
     }
 
-    fn native_store(&self, purpose: Purpose) -> Result<FlowLikeStore> {
+    fn native_target(&self, purpose: Purpose) -> Result<NativeTarget<'_>> {
         self.check()?;
-        let credentials = self.provider(purpose)?;
-        match leaf(&self.initial, purpose)? {
+        Ok(match leaf(&self.initial, purpose)? {
             SharedCredentials::Aws(value) => {
                 let (bucket, config) = match purpose.store_type() {
                     StoreType::Meta => (&value.meta_bucket, value.meta_config.as_ref()),
                     StoreType::Logs => (&value.logs_bucket, value.logs_config.as_ref()),
                     _ => (&value.content_bucket, value.content_config.as_ref()),
                 };
+                NativeTarget::Aws {
+                    bucket,
+                    region: &value.region,
+                    config,
+                }
+            }
+            SharedCredentials::Azure(value) => NativeTarget::Azure {
+                account: &value.account_name,
+                container: match purpose.store_type() {
+                    StoreType::Meta => &value.meta_container,
+                    StoreType::Logs => &value.logs_container,
+                    _ => &value.content_container,
+                },
+            },
+            SharedCredentials::Gcp(value) => NativeTarget::Gcp {
+                bucket: match purpose.store_type() {
+                    StoreType::Meta => &value.meta_bucket,
+                    StoreType::Logs => &value.logs_bucket,
+                    _ => &value.content_bucket,
+                },
+            },
+            _ => return Err(AuthorizationError::InvalidResponse.into()),
+        })
+    }
+
+    fn native_store(&self, purpose: Purpose) -> Result<FlowLikeStore> {
+        let credentials = self.provider(purpose)?;
+        match self.native_target(purpose)? {
+            NativeTarget::Aws {
+                bucket,
+                region,
+                config,
+            } => {
                 let mut builder = object_store::aws::AmazonS3Builder::new()
                     .with_bucket_name(bucket)
-                    .with_region(&value.region)
+                    .with_region(region)
                     .with_copy_if_not_exists(s3_copy_if_not_exists(config));
                 for (key, value) in s3_storage_options(config) {
                     builder = builder.with_config(key.parse()?, value);
                 }
-                if config.is_some_and(|config| config.express) {
+                let express = config.is_some_and(|config| config.express);
+                if express {
                     builder = builder.with_s3_express(true);
                 }
                 let store = credentials.aws_store(builder)?;
                 // Express caches a derived five-minute session above the provider.
                 // Fence every operation even while that derived session is valid.
-                if config.is_some_and(|config| config.express) {
+                if express {
                     Ok(self.router(vec![(Path::from(""), store)]))
                 } else {
                     Ok(store)
                 }
             }
-            SharedCredentials::Azure(value) => {
-                let container = match purpose.store_type() {
-                    StoreType::Meta => &value.meta_container,
-                    StoreType::Logs => &value.logs_container,
-                    _ => &value.content_container,
-                };
-                Ok(credentials.azure_store(
-                    object_store::azure::MicrosoftAzureBuilder::new()
-                        .with_account(&value.account_name)
-                        .with_container_name(container),
-                )?)
-            }
-            SharedCredentials::Gcp(value) => {
-                let bucket = match purpose.store_type() {
-                    StoreType::Meta => &value.meta_bucket,
-                    StoreType::Logs => &value.logs_bucket,
-                    _ => &value.content_bucket,
-                };
-                Ok(credentials.gcp_store(
-                    object_store::gcp::GoogleCloudStorageBuilder::new().with_bucket_name(bucket),
-                )?)
-            }
-            _ => Err(AuthorizationError::InvalidResponse.into()),
+            NativeTarget::Azure { account, container } => Ok(credentials.azure_store(
+                object_store::azure::MicrosoftAzureBuilder::new()
+                    .with_account(account)
+                    .with_container_name(container),
+            )?),
+            NativeTarget::Gcp { bucket } => Ok(credentials.gcp_store(
+                object_store::gcp::GoogleCloudStorageBuilder::new().with_bucket_name(bucket),
+            )?),
         }
     }
 
     fn router(&self, routes: Vec<(Path, FlowLikeStore)>) -> FlowLikeStore {
-        FlowLikeStore::Signed(Arc::new(RoutedStore {
+        FlowLikeStore::Signed(Arc::new(file_router::RoutedStore {
             owner: self.this.upgrade().expect("live adapter"),
             routes,
         }))
+    }
+
+    /// The Azure content store spans one SAS per prefix; other providers use one store.
+    fn content_routes(&self) -> Result<Option<Vec<(Path, Purpose)>>> {
+        let SharedCredentials::Azure(value) = leaf(&self.initial, Purpose::Content)? else {
+            return Ok(None);
+        };
+        let mut routes = Vec::new();
+        if value.content_sas_token.is_some() {
+            routes.push((
+                prefix_path(
+                    &value
+                        .content_path_prefix
+                        .clone()
+                        .unwrap_or_else(|| format!("apps/{}", self.project)),
+                )?,
+                Purpose::Content,
+            ));
+        }
+        if let Some(prefix) = value.user_content_path_prefix.as_deref() {
+            if value.user_content_sas_token.is_some() || value.content_sas_token.is_some() {
+                routes.push((prefix_path(prefix)?, Purpose::User));
+            }
+            if value.tmp_sas_token.is_some() {
+                let decoded =
+                    Path::from_url_path(prefix).map_err(|_| AuthorizationError::InvalidResponse)?;
+                if let Some(subject) = decoded
+                    .as_ref()
+                    .strip_prefix("users/")
+                    .and_then(|prefix| prefix.strip_suffix(&format!("/apps/{}", self.project)))
+                {
+                    routes.push((
+                        Path::from(
+                            flow_like_types::storage_paths::temporary_prefixes(
+                                subject,
+                                &self.project,
+                            )
+                            .0,
+                        ),
+                        Purpose::Tmp,
+                    ));
+                }
+            }
+        }
+        if routes.is_empty() {
+            return Err(AuthorizationError::Denied.into());
+        }
+        Ok(Some(routes))
     }
 
     pub async fn to_store(&self, meta: bool) -> Result<FlowLikeStore> {
@@ -507,6 +595,7 @@ impl RenewableSharedCredentials {
     }
 
     /// Hosts may persist immutable Lance ranges without enabling offline writes.
+    #[cfg(feature = "flow-runtime")]
     pub fn install_lance_read_cache(
         &self,
         cache: Arc<flow_like_storage::files::immutable_lance_cache::LanceRangeCache>,
@@ -535,47 +624,13 @@ impl RenewableSharedCredentials {
         let SharedCredentials::Azure(value) = initial else {
             return self.native_store(purpose);
         };
-        if kind == StoreType::Content {
-            let mut routes = Vec::new();
-            if value.content_sas_token.is_some() {
-                routes.push((
-                    prefix_path(
-                        &value
-                            .content_path_prefix
-                            .clone()
-                            .unwrap_or_else(|| format!("apps/{}", self.project)),
-                    )?,
-                    self.native_store(Purpose::Content)?,
-                ));
-            }
-            if let Some(prefix) = value.user_content_path_prefix.as_deref() {
-                if value.user_content_sas_token.is_some() || value.content_sas_token.is_some() {
-                    routes.push((prefix_path(prefix)?, self.native_store(Purpose::User)?));
-                }
-                if value.tmp_sas_token.is_some() {
-                    let decoded = Path::from_url_path(prefix)
-                        .map_err(|_| AuthorizationError::InvalidResponse)?;
-                    if let Some(subject) = decoded
-                        .as_ref()
-                        .strip_prefix("users/")
-                        .and_then(|prefix| prefix.strip_suffix(&format!("/apps/{}", self.project)))
-                    {
-                        routes.push((
-                            Path::from(
-                                flow_like_types::storage_paths::temporary_prefixes(
-                                    subject,
-                                    &self.project,
-                                )
-                                .0,
-                            ),
-                            self.native_store(Purpose::Tmp)?,
-                        ));
-                    }
-                }
-            }
-            if routes.is_empty() {
-                return Err(AuthorizationError::Denied.into());
-            }
+        if kind == StoreType::Content
+            && let Some(routes) = self.content_routes()?
+        {
+            let routes = routes
+                .into_iter()
+                .map(|(prefix, purpose)| Ok((prefix, self.native_store(purpose)?)))
+                .collect::<Result<Vec<_>>>()?;
             return Ok(self.router(routes));
         }
         if kind == StoreType::Meta && value.draft_meta_sas_token.is_some() {
@@ -675,7 +730,7 @@ impl RenewableSharedCredentials {
             _ => return Err(AuthorizationError::InvalidResponse.into()),
         };
         let uri = format!("{scheme}://{bucket}/{prefix}");
-        let mut store = self.native_store(purpose)?.as_generic();
+        let mut store = self.lance_native_store(purpose)?;
         if purpose != Purpose::Logs
             && let Some((cache, namespace)) = self.lance_read_cache.get()
         {
@@ -701,6 +756,89 @@ impl RenewableSharedCredentials {
             .with_object_prefix(prefix.as_ref())?
             .with_store(store),
         )
+    }
+
+    /// The same bucket and guards as `native_store`, on Lance's object_store release.
+    fn lance_native_store(
+        &self,
+        purpose: Purpose,
+    ) -> Result<Arc<dyn lance_object_store::ObjectStore>> {
+        use flow_like_storage::files::credentials::lance as stores;
+        use lance_object_store::{aws, azure, gcp};
+
+        let credentials = self.provider(purpose)?;
+        Ok(match self.native_target(purpose)? {
+            NativeTarget::Aws {
+                bucket,
+                region,
+                config,
+            } => {
+                let copy_guard = if super::aws_credentials::is_r2(config) {
+                    let (header, value) = super::aws_credentials::R2_COPY_IF_NOT_EXISTS;
+                    aws::S3CopyIfNotExists::Header(header.into(), value.into())
+                } else {
+                    aws::S3CopyIfNotExists::Multipart
+                };
+                let mut builder = aws::AmazonS3Builder::new()
+                    .with_bucket_name(bucket)
+                    .with_region(region)
+                    .with_copy_if_not_exists(copy_guard);
+                for (key, value) in s3_storage_options(config) {
+                    builder = builder.with_config(key.parse()?, value);
+                }
+                let express = config.is_some_and(|config| config.express);
+                if express {
+                    builder = builder.with_s3_express(true);
+                }
+                let store: Arc<dyn lance_object_store::ObjectStore> =
+                    Arc::new(stores::aws_store(&credentials, builder)?);
+                // Express sessions outlive revocation; fence every operation (see `native_store`).
+                if express {
+                    self.lance_router(vec![(lance_object_store::path::Path::from(""), store)])
+                } else {
+                    store
+                }
+            }
+            NativeTarget::Azure { account, container } => Arc::new(stores::azure_store(
+                &credentials,
+                azure::MicrosoftAzureBuilder::new()
+                    .with_account(account)
+                    .with_container_name(container),
+            )?),
+            NativeTarget::Gcp { bucket } => Arc::new(stores::gcp_store(
+                &credentials,
+                gcp::GoogleCloudStorageBuilder::new().with_bucket_name(bucket),
+            )?),
+        })
+    }
+
+    fn lance_router(
+        &self,
+        routes: Vec<(
+            lance_object_store::path::Path,
+            Arc<dyn lance_object_store::ObjectStore>,
+        )>,
+    ) -> Arc<dyn lance_object_store::ObjectStore> {
+        Arc::new(lance_router::RoutedStore {
+            owner: self.this.upgrade().expect("live adapter"),
+            routes,
+        })
+    }
+
+    /// The undecorated content store on Lance's object_store release, for the lazy mirror.
+    pub fn lance_content_store(&self) -> Result<Arc<dyn lance_object_store::ObjectStore>> {
+        let Some(routes) = self.content_routes()? else {
+            return self.lance_native_store(Purpose::Content);
+        };
+        let routes = routes
+            .into_iter()
+            .map(|(prefix, purpose)| {
+                let prefix = lance_object_store::path::Path::parse(prefix.as_ref())
+                    .map_err(|_| AuthorizationError::InvalidResponse)?;
+                Ok((prefix, self.lance_native_store(purpose)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self.lance_router(routes))
     }
 
     pub fn lance_registry(
@@ -955,58 +1093,259 @@ impl StorageCredentialProvider for Provider {
     }
 }
 
-#[derive(Clone)]
-struct RoutedStore {
-    owner: Arc<RenewableSharedCredentials>,
-    routes: Vec<(Path, FlowLikeStore)>,
-}
-impl fmt::Debug for RoutedStore {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("RenewableRoutedStore")
-    }
-}
-impl fmt::Display for RoutedStore {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("RenewableRoutedStore")
-    }
-}
-fn store_error(error: AuthorizationError) -> object_store::Error {
-    object_store::Error::Generic {
-        store: "RenewableSharedCredentials",
-        source: Box::new(error),
-    }
-}
-impl RoutedStore {
-    fn selected(&self, path: &Path) -> object_store::Result<&FlowLikeStore> {
-        self.owner.check_lease().map_err(store_error)?;
-        self.routes
-            .iter()
-            .find(|(prefix, _)| path.prefix_match(prefix).is_some())
-            .map(|(_, store)| store)
-            .ok_or_else(|| store_error(AuthorizationError::Denied))
-    }
-    fn route(&self, path: &Path) -> object_store::Result<Arc<dyn ObjectStore>> {
-        Ok(self.selected(path)?.as_generic())
-    }
-    fn pair(&self, from: &Path, to: &Path) -> object_store::Result<Arc<dyn ObjectStore>> {
-        let source = self.route(from)?;
-        if !Arc::ptr_eq(&source, &self.route(to)?) {
-            return Err(object_store::Error::NotSupported {
-                source: "Cross-credential copies are not supported".into(),
-            });
+/// A store that fences every operation on the live lease and sends each key to the store
+/// of its prefix. The file layer and Lance each get one for their object_store release.
+macro_rules! fenced_router {
+    ($module:ident, $object_store:ident, $route:ty, |$selected:ident| $generic:expr) => {
+        mod $module {
+            use super::*;
+            use $object_store::{ObjectStore, ObjectStoreExt, path::Path};
+
+            pub(super) fn store_error(error: AuthorizationError) -> $object_store::Error {
+                $object_store::Error::Generic {
+                    store: "RenewableSharedCredentials",
+                    source: Box::new(error),
+                }
+            }
+
+            #[derive(Clone)]
+            pub(super) struct RoutedStore {
+                pub(super) owner: Arc<RenewableSharedCredentials>,
+                pub(super) routes: Vec<(Path, $route)>,
+            }
+            impl fmt::Debug for RoutedStore {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("RenewableRoutedStore")
+                }
+            }
+            impl fmt::Display for RoutedStore {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("RenewableRoutedStore")
+                }
+            }
+            impl RoutedStore {
+                pub(super) fn selected(&self, path: &Path) -> $object_store::Result<&$route> {
+                    self.owner.check_lease().map_err(store_error)?;
+                    self.routes
+                        .iter()
+                        .find(|(prefix, _)| path.prefix_match(prefix).is_some())
+                        .map(|(_, store)| store)
+                        .ok_or_else(|| store_error(AuthorizationError::Denied))
+                }
+                fn route(&self, path: &Path) -> $object_store::Result<Arc<dyn ObjectStore>> {
+                    let $selected = self.selected(path)?;
+                    Ok($generic)
+                }
+                fn pair(
+                    &self,
+                    from: &Path,
+                    to: &Path,
+                ) -> $object_store::Result<Arc<dyn ObjectStore>> {
+                    let source = self.route(from)?;
+                    if !Arc::ptr_eq(&source, &self.route(to)?) {
+                        return Err($object_store::Error::NotSupported {
+                            source: "Cross-credential copies are not supported".into(),
+                        });
+                    }
+                    Ok(source)
+                }
+            }
+
+            #[async_trait]
+            impl ObjectStore for RoutedStore {
+                async fn put_opts(
+                    &self,
+                    path: &Path,
+                    value: $object_store::PutPayload,
+                    options: $object_store::PutOptions,
+                ) -> $object_store::Result<$object_store::PutResult> {
+                    self.owner.ensure_lease().await.map_err(store_error)?;
+                    self.owner
+                        .while_lease_valid(
+                            self.route(path)?.put_opts(path, value, options),
+                            store_error,
+                        )
+                        .await
+                }
+                async fn put_multipart_opts(
+                    &self,
+                    path: &Path,
+                    options: $object_store::PutMultipartOptions,
+                ) -> $object_store::Result<Box<dyn $object_store::MultipartUpload>> {
+                    self.owner.ensure_lease().await.map_err(store_error)?;
+                    let inner = self
+                        .owner
+                        .while_lease_valid(
+                            self.route(path)?.put_multipart_opts(path, options),
+                            store_error,
+                        )
+                        .await?;
+                    Ok(Box::new(FencedUpload {
+                        inner,
+                        owner: self.owner.clone(),
+                    }))
+                }
+                async fn get_opts(
+                    &self,
+                    path: &Path,
+                    options: $object_store::GetOptions,
+                ) -> $object_store::Result<$object_store::GetResult> {
+                    self.owner.ensure_lease().await.map_err(store_error)?;
+                    self.owner
+                        .while_lease_valid(self.route(path)?.get_opts(path, options), store_error)
+                        .await
+                }
+                fn delete_stream(
+                    &self,
+                    paths: BoxStream<'static, $object_store::Result<Path>>,
+                ) -> BoxStream<'static, $object_store::Result<Path>> {
+                    let owner = self.clone();
+                    paths
+                        .then(move |path| {
+                            let owner = owner.clone();
+                            async move {
+                                let path = path?;
+                                owner.owner.ensure_lease().await.map_err(store_error)?;
+                                owner
+                                    .owner
+                                    .while_lease_valid(
+                                        owner.route(&path)?.delete(&path),
+                                        store_error,
+                                    )
+                                    .await?;
+                                Ok(path)
+                            }
+                        })
+                        .boxed()
+                }
+                fn list(
+                    &self,
+                    prefix: Option<&Path>,
+                ) -> BoxStream<'static, $object_store::Result<$object_store::ObjectMeta>> {
+                    let prefix = prefix.cloned();
+                    let router = self.clone();
+                    futures::stream::once(async move {
+                        router.owner.ensure_lease().await.map_err(store_error)?;
+                        let prefix =
+                            prefix.ok_or_else(|| store_error(AuthorizationError::Denied))?;
+                        let mut stream = router.route(&prefix)?.list(Some(&prefix));
+                        let mut denied = false;
+                        Ok::<_, $object_store::Error>(futures::stream::poll_fn(move |cx| {
+                            if denied {
+                                return std::task::Poll::Ready(None);
+                            }
+                            if let Err(error) = router.owner.check_lease() {
+                                denied = true;
+                                return std::task::Poll::Ready(Some(Err(store_error(error))));
+                            }
+                            let result = stream.as_mut().poll_next(cx);
+                            if let Err(error) = router.owner.check_lease() {
+                                denied = true;
+                                return std::task::Poll::Ready(Some(Err(store_error(error))));
+                            }
+                            result
+                        }))
+                    })
+                    .try_flatten()
+                    .boxed()
+                }
+                async fn list_with_delimiter(
+                    &self,
+                    prefix: Option<&Path>,
+                ) -> $object_store::Result<$object_store::ListResult> {
+                    self.owner.ensure_lease().await.map_err(store_error)?;
+                    self.owner
+                        .while_lease_valid(
+                            self.route(
+                                prefix.ok_or_else(|| store_error(AuthorizationError::Denied))?,
+                            )?
+                            .list_with_delimiter(prefix),
+                            store_error,
+                        )
+                        .await
+                }
+                async fn copy_opts(
+                    &self,
+                    from: &Path,
+                    to: &Path,
+                    options: $object_store::CopyOptions,
+                ) -> $object_store::Result<()> {
+                    self.owner.ensure_lease().await.map_err(store_error)?;
+                    self.owner
+                        .while_lease_valid(
+                            self.pair(from, to)?.copy_opts(from, to, options),
+                            store_error,
+                        )
+                        .await
+                }
+                async fn rename_opts(
+                    &self,
+                    from: &Path,
+                    to: &Path,
+                    options: $object_store::RenameOptions,
+                ) -> $object_store::Result<()> {
+                    self.owner.ensure_lease().await.map_err(store_error)?;
+                    self.owner
+                        .while_lease_valid(
+                            self.pair(from, to)?.rename_opts(from, to, options),
+                            store_error,
+                        )
+                        .await
+                }
+            }
+
+            #[derive(Debug)]
+            struct FencedUpload {
+                inner: Box<dyn $object_store::MultipartUpload>,
+                owner: Arc<RenewableSharedCredentials>,
+            }
+            #[async_trait]
+            impl $object_store::MultipartUpload for FencedUpload {
+                fn put_part(
+                    &mut self,
+                    payload: $object_store::PutPayload,
+                ) -> $object_store::UploadPart {
+                    if let Err(error) = self.owner.check_lease() {
+                        return Box::pin(async move { Err(store_error(error)) });
+                    }
+                    let upload = self.inner.put_part(payload);
+                    let owner = self.owner.clone();
+                    Box::pin(async move { owner.while_lease_valid(upload, store_error).await })
+                }
+                async fn complete(&mut self) -> $object_store::Result<$object_store::PutResult> {
+                    self.owner.ensure_lease().await.map_err(store_error)?;
+                    let owner = self.owner.clone();
+                    owner
+                        .while_lease_valid(self.inner.complete(), store_error)
+                        .await
+                }
+                async fn abort(&mut self) -> $object_store::Result<()> {
+                    self.inner.abort().await
+                }
+            }
         }
-        Ok(source)
-    }
+    };
 }
 
+fenced_router!(file_router, object_store, FlowLikeStore, |store| store
+    .as_generic());
+#[cfg(feature = "flow-runtime")]
+fenced_router!(
+    lance_router,
+    lance_object_store,
+    Arc<dyn lance_object_store::ObjectStore>,
+    |store| store.clone()
+);
+
 #[async_trait]
-impl object_store::signer::Signer for RoutedStore {
+impl object_store::signer::Signer for file_router::RoutedStore {
     async fn signed_url(
         &self,
         method: flow_like_types::reqwest::Method,
         path: &Path,
         expires_in: Duration,
     ) -> object_store::Result<url::Url> {
+        use file_router::store_error;
         self.owner.ensure_lease().await.map_err(store_error)?;
         let store = self.selected(path)?;
         let remaining = self
@@ -1019,164 +1358,19 @@ impl object_store::signer::Signer for RoutedStore {
             .map_err(|_| store_error(AuthorizationError::Expired))?;
         let expires_in = expires_in.min(remaining);
         self.owner
-            .while_lease_valid(async {
-                store
-                    .sign(method.as_str(), path, expires_in)
-                    .await
-                    .map_err(|error| object_store::Error::Generic {
-                        store: "RenewableSharedCredentials",
-                        source: error.into(),
-                    })
-            })
-            .await
-    }
-}
-#[async_trait]
-impl ObjectStore for RoutedStore {
-    async fn put_opts(
-        &self,
-        path: &Path,
-        value: object_store::PutPayload,
-        options: object_store::PutOptions,
-    ) -> object_store::Result<object_store::PutResult> {
-        self.owner.ensure_lease().await.map_err(store_error)?;
-        self.owner
-            .while_lease_valid(self.route(path)?.put_opts(path, value, options))
-            .await
-    }
-    async fn put_multipart_opts(
-        &self,
-        path: &Path,
-        options: object_store::PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
-        self.owner.ensure_lease().await.map_err(store_error)?;
-        let inner = self
-            .owner
-            .while_lease_valid(self.route(path)?.put_multipart_opts(path, options))
-            .await?;
-        Ok(Box::new(FencedUpload {
-            inner,
-            owner: self.owner.clone(),
-        }))
-    }
-    async fn get_opts(
-        &self,
-        path: &Path,
-        options: object_store::GetOptions,
-    ) -> object_store::Result<object_store::GetResult> {
-        self.owner.ensure_lease().await.map_err(store_error)?;
-        self.owner
-            .while_lease_valid(self.route(path)?.get_opts(path, options))
-            .await
-    }
-    fn delete_stream(
-        &self,
-        paths: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
-        let owner = self.clone();
-        paths
-            .then(move |path| {
-                let owner = owner.clone();
-                async move {
-                    let path = path?;
-                    owner.owner.ensure_lease().await.map_err(store_error)?;
-                    owner
-                        .owner
-                        .while_lease_valid(owner.route(&path)?.delete(&path))
-                        .await?;
-                    Ok(path)
-                }
-            })
-            .boxed()
-    }
-    fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
-        let prefix = prefix.cloned();
-        let router = self.clone();
-        futures::stream::once(async move {
-            router.owner.ensure_lease().await.map_err(store_error)?;
-            let prefix = prefix.ok_or_else(|| store_error(AuthorizationError::Denied))?;
-            let mut stream = router.route(&prefix)?.list(Some(&prefix));
-            let mut denied = false;
-            Ok::<_, object_store::Error>(futures::stream::poll_fn(move |cx| {
-                if denied {
-                    return std::task::Poll::Ready(None);
-                }
-                if let Err(error) = router.owner.check_lease() {
-                    denied = true;
-                    return std::task::Poll::Ready(Some(Err(store_error(error))));
-                }
-                let result = stream.as_mut().poll_next(cx);
-                if let Err(error) = router.owner.check_lease() {
-                    denied = true;
-                    return std::task::Poll::Ready(Some(Err(store_error(error))));
-                }
-                result
-            }))
-        })
-        .try_flatten()
-        .boxed()
-    }
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&Path>,
-    ) -> object_store::Result<object_store::ListResult> {
-        self.owner.ensure_lease().await.map_err(store_error)?;
-        self.owner
             .while_lease_valid(
-                self.route(prefix.ok_or_else(|| store_error(AuthorizationError::Denied))?)?
-                    .list_with_delimiter(prefix),
+                async {
+                    store
+                        .sign(method.as_str(), path, expires_in)
+                        .await
+                        .map_err(|error| object_store::Error::Generic {
+                            store: "RenewableSharedCredentials",
+                            source: error.into(),
+                        })
+                },
+                store_error,
             )
             .await
-    }
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
-        options: object_store::CopyOptions,
-    ) -> object_store::Result<()> {
-        self.owner.ensure_lease().await.map_err(store_error)?;
-        self.owner
-            .while_lease_valid(self.pair(from, to)?.copy_opts(from, to, options))
-            .await
-    }
-    async fn rename_opts(
-        &self,
-        from: &Path,
-        to: &Path,
-        options: object_store::RenameOptions,
-    ) -> object_store::Result<()> {
-        self.owner.ensure_lease().await.map_err(store_error)?;
-        self.owner
-            .while_lease_valid(self.pair(from, to)?.rename_opts(from, to, options))
-            .await
-    }
-}
-
-#[derive(Debug)]
-struct FencedUpload {
-    inner: Box<dyn object_store::MultipartUpload>,
-    owner: Arc<RenewableSharedCredentials>,
-}
-#[async_trait]
-impl object_store::MultipartUpload for FencedUpload {
-    fn put_part(&mut self, payload: object_store::PutPayload) -> object_store::UploadPart {
-        if let Err(error) = self.owner.check_lease() {
-            return Box::pin(async move { Err(store_error(error)) });
-        }
-        let upload = self.inner.put_part(payload);
-        let owner = self.owner.clone();
-        Box::pin(async move { owner.while_lease_valid(upload).await })
-    }
-    async fn complete(&mut self) -> object_store::Result<object_store::PutResult> {
-        self.owner.ensure_lease().await.map_err(store_error)?;
-        let owner = self.owner.clone();
-        owner.while_lease_valid(self.inner.complete()).await
-    }
-    async fn abort(&mut self) -> object_store::Result<()> {
-        self.inner.abort().await
     }
 }
 
@@ -1189,6 +1383,7 @@ mod tests {
         mixed_credentials::MixedSharedCredentials,
     };
     use super::*;
+    use object_store::ObjectStoreExt;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct Source {
@@ -1669,7 +1864,10 @@ mod tests {
                 let registry = owner.lance_registry()?;
                 let provider = registry.get_provider("s3").unwrap();
                 let uri = owner.database_uri(Purpose::User, &expected)?;
-                assert_eq!(provider.extract_path(&uri.parse()?)?, expected);
+                assert_eq!(
+                    provider.extract_path(&uri.parse()?)?.as_ref(),
+                    expected.as_ref()
+                );
                 assert!(owner.to_db_scoped("different", "project").await.is_err());
             }
         }
@@ -1691,7 +1889,7 @@ mod tests {
         let source = source_fixture(aws(1));
         let owner =
             RenewableSharedCredentials::new(aws(0), "project".into(), source.clone()).await?;
-        let memory = Arc::new(object_store::memory::InMemory::new());
+        let memory = Arc::new(lance_object_store::memory::InMemory::new());
         let registry = flow_like_storage::renewable_lance::scoped_registry(vec![
             owner
                 .binding(Purpose::Content, &Path::from("apps/project"))?
@@ -1791,13 +1989,14 @@ mod tests {
         assert!(owner.to_db_scoped("user", "project").await.is_ok());
         assert!(owner.to_db("other").await.is_err());
         source.revoked.store(true, Ordering::SeqCst);
-        let error = store
-            .inner
-            .head(&Path::from(
+        let error = lance_object_store::ObjectStoreExt::head(
+            store.inner.as_ref(),
+            &lance_object_store::path::Path::from(
                 "apps/project/storage/db/table.lance/_latest.manifest",
-            ))
-            .await
-            .unwrap_err();
+            ),
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("denied"));
         Ok(())
     }

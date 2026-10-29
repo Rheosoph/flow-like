@@ -41,6 +41,8 @@ pub use lance_file;
 #[cfg(feature = "database-runtime")]
 pub use lance_io;
 #[cfg(feature = "database-runtime")]
+pub use lance_object_store;
+#[cfg(feature = "database-runtime")]
 pub use lancedb;
 #[cfg(feature = "database-runtime")]
 pub use num_cpus;

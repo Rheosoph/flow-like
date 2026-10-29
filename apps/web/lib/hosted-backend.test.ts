@@ -5,6 +5,7 @@ import {
 	RequestTimeoutError,
 	WRITE_REQUEST_TIMEOUT_MS,
 } from "@flow-like/flow-like-ui/lib/request-deadline";
+import type { PageTrigger } from "@flow-like/flow-like-ui/lib/schema/flow/page-trigger";
 import type { AuthContextProps } from "react-oidc-context";
 import {
 	type HostedBootstrap,
@@ -34,9 +35,9 @@ describe("hosted API contract", () => {
 				profile: { sub: "viewer" },
 			}),
 		} as unknown as AuthContextProps;
-			const bearers: (string | null)[] = [];
+		const bearers: (string | null)[] = [];
 		globalThis.fetch = (async (_input, init) => {
-				bearers.push(new Headers(init?.headers).get("Authorization"));
+			bearers.push(new Headers(init?.headers).get("Authorization"));
 			return new Response("{}");
 		}) as typeof fetch;
 		await createHostedRequest(
@@ -44,7 +45,7 @@ describe("hosted API contract", () => {
 			"expired",
 			auth,
 		)();
-			expect(bearers).toEqual(["Bearer fresh"]);
+		expect(bearers).toEqual(["Bearer fresh"]);
 	});
 	it("uses the web container's public runtime configuration", async () => {
 		const previousFlag = process.env.NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG;
@@ -246,6 +247,186 @@ describe("hosted API contract", () => {
 		await expect(
 			backend.eventState.cancelExecution("run-1"),
 		).resolves.toBeUndefined();
+	});
+	describe("a visitor's own OAuth sign-ins", () => {
+		const requirements = [{ provider_id: "google", scopes: ["drive"] }];
+		const visitorTokens = {
+			google: {
+				hub_origin: "https://api.flow-like.com",
+				hub_subject: "visitor",
+				access_token: "visitor-google",
+				refresh_token: "fl_oauth_visitor",
+				token_type: "Bearer",
+			},
+		};
+		const completedRun = () =>
+			new Response(
+				[
+					'data: {"event_type":"run_initiated","payload":{"run_id":"run-1"}}',
+					'data: {"event_type":"completed","payload":{"status":"completed"}}',
+					"",
+				].join("\n\n"),
+			);
+
+		function visit({
+			auth_proxy,
+			token,
+			answer,
+			prerun = () =>
+				Response.json({
+					oauth_requirements: requirements,
+					manifest_revision: "rev-2",
+				}),
+		}: {
+			auth_proxy: boolean;
+			token?: string;
+			answer?: typeof visitorTokens;
+			prerun?: () => Response;
+		}) {
+			const calls: { suffix: string; body?: Record<string, unknown> }[] = [];
+			const asked: unknown[] = [];
+			const backend = createHostedBackend(
+				{
+					app_id: "published-app",
+					auth_proxy,
+					bootstrap: { event: { id: "published-event" } },
+				} as HostedBootstrap,
+				async (suffix, init) => {
+					calls.push({
+						suffix: suffix ?? "",
+						body: init?.body ? JSON.parse(String(init.body)) : undefined,
+					});
+					if (suffix !== "/prerun") return completedRun();
+					const response = prerun();
+					if (!response.ok)
+						throw new HostedHttpError(response.status, "Prerun refused");
+					return response;
+				},
+				() => token,
+				undefined,
+				async (needed) => {
+					asked.push(needed);
+					return answer;
+				},
+			);
+			const run = (trigger?: PageTrigger) =>
+				backend.eventState.executeEvent(
+					"published-app",
+					"published-event",
+					{ id: "node", payload: { question: "status" } },
+					false,
+					undefined,
+					undefined,
+					undefined,
+					trigger,
+				);
+			const invoked = () =>
+				calls.find(({ suffix }) => suffix === "/invoke")?.body;
+			return { calls, asked, run, invoked };
+		}
+
+		it("asks with the flow's requirements and sends the connected tokens with the invoke", async () => {
+			const signedIn = visit({
+				auth_proxy: true,
+				token: "visitor-token",
+				answer: visitorTokens,
+			});
+			await signedIn.run();
+			expect(signedIn.calls.map(({ suffix }) => suffix)).toEqual([
+				"/prerun",
+				"/invoke",
+			]);
+			expect(signedIn.asked).toEqual([requirements]);
+			expect(signedIn.invoked()).toEqual({
+				payload: { question: "status" },
+				oauth_tokens: visitorTokens,
+			});
+		});
+
+		it("sends no tokens when the visitor skips, so the Event's saved sign-ins serve", async () => {
+			const skipped = visit({ auth_proxy: true, token: "visitor-token" });
+			await skipped.run();
+			expect(skipped.asked).toEqual([requirements]);
+			expect(skipped.invoked()).toEqual({ payload: { question: "status" } });
+		});
+
+		it("never asks an anonymous visitor, nor preruns a chat or form for one", async () => {
+			for (const anonymous of [
+				visit({
+					auth_proxy: false,
+					token: "ambient-token",
+					answer: visitorTokens,
+				}),
+				visit({ auth_proxy: true, answer: visitorTokens }),
+			]) {
+				await anonymous.run();
+				expect(anonymous.asked).toEqual([]);
+				expect(anonymous.calls.map(({ suffix }) => suffix)).toEqual([
+					"/invoke",
+				]);
+				expect(anonymous.invoked()).toEqual({
+					payload: { question: "status" },
+				});
+			}
+		});
+
+		it("reads a Page action's requirements from the prerun that refreshes its revision", async () => {
+			const trigger: PageTrigger = {
+				kind: "special",
+				specialEvent: "load",
+				manifestRevision: "rev-1",
+			};
+			const signedIn = visit({
+				auth_proxy: true,
+				token: "visitor-token",
+				answer: visitorTokens,
+			});
+			await signedIn.run(trigger);
+			expect(signedIn.calls.map(({ suffix }) => suffix)).toEqual([
+				"/prerun",
+				"/invoke",
+			]);
+			expect(signedIn.asked).toEqual([requirements]);
+			expect(signedIn.invoked()).toEqual({
+				payload: { question: "status" },
+				page_trigger: {
+					kind: "special",
+					special_event: "load",
+					manifest_revision: "rev-2",
+				},
+				oauth_tokens: visitorTokens,
+			});
+
+			const anonymous = visit({ auth_proxy: false, answer: visitorTokens });
+			await anonymous.run(trigger);
+			expect(anonymous.asked).toEqual([]);
+			expect(anonymous.invoked()?.oauth_tokens).toBeUndefined();
+		});
+
+		it("runs on the saved sign-ins when a chat's prerun fails or needs no sign-in", async () => {
+			const warn = spyOn(console, "warn").mockImplementation(() => {});
+			try {
+				for (const prerun of [
+					() => new Response("unavailable", { status: 503 }),
+					() => Response.json({ oauth_requirements: [] }),
+				]) {
+					const signedIn = visit({
+						auth_proxy: true,
+						token: "visitor-token",
+						answer: visitorTokens,
+						prerun,
+					});
+					await signedIn.run();
+					expect(signedIn.asked).toEqual([]);
+					expect(signedIn.invoked()).toEqual({
+						payload: { question: "status" },
+					});
+				}
+				expect(warn).toHaveBeenCalledTimes(1);
+			} finally {
+				warn.mockRestore();
+			}
+		});
 	});
 	describe("package widgets", () => {
 		const ACCESS = "eyJhbGciOiJFUzI1NiJ9.eyJwa2ciOiJ4In0.YWNjZXNz";

@@ -20,7 +20,7 @@ use crate::{
         require_cache_store,
     },
     error::ApiError,
-    middleware::jwt::{AppPermissionResponse, AppUser},
+    middleware::jwt::{AppPermissionResponse, AppUser, ExecutorUse, shadow_side_effect_refused},
     permission::role_permission::RolePermissions,
     state::AppState,
 };
@@ -28,6 +28,35 @@ use crate::{
 /// Synthetic sub used when a run has no resolvable human initiator. Partitioning a
 /// user-scoped cache by it would silently merge unrelated callers into one bucket.
 const ANONYMOUS_SUB: &str = "local";
+
+const CHANGE_THE_APP_CACHE: &str = "change the app cache";
+const CACHE_WRITE: ExecutorUse = ExecutorUse::Write(CHANGE_THE_APP_CACHE);
+
+/// What a replay's PUT may do: an `ifAbsent` PUT that finds a live value only
+/// reads it; every other PUT would write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShadowPut {
+    ReadThrough,
+    Refuse,
+}
+
+fn shadow_put(if_absent: bool) -> ShadowPut {
+    if if_absent {
+        ShadowPut::ReadThrough
+    } else {
+        ShadowPut::Refuse
+    }
+}
+
+/// The authority a PUT asks for. A PUT granted `Read` only reads through and
+/// never stores a value.
+fn put_access(shadow: bool, if_absent: bool) -> ExecutorUse {
+    if shadow && shadow_put(if_absent) == ShadowPut::ReadThrough {
+        ExecutorUse::Read
+    } else {
+        CACHE_WRITE
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CacheEntryQuery {
@@ -134,7 +163,7 @@ pub struct DeleteCacheResponse {
         (status = 200, description = "Cache lookup result", body = ReadCacheResponse),
         (status = 400, description = "Invalid key or scope"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden — execution permission required"),
+        (status = 403, description = "Forbidden: execution permission required, or user scope without an identifiable user"),
         (status = 503, description = "Cache backend is not configured")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("executor_jwt" = []))
@@ -146,14 +175,14 @@ pub async fn read_cache_entry(
     Path(app_id): Path<String>,
     Query(query): Query<CacheEntryQuery>,
 ) -> Result<Json<ReadCacheResponse>, ApiError> {
-    let permission = authorize(&user, &app_id, &state).await?;
+    let permission = authorize(&user, &app_id, &state, ExecutorUse::Read).await?;
     let limits = CacheLimits::from_env();
     let store = cache_store(&state).await?;
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
     let namespace = validate_namespace(&limits, query.namespace.as_deref())?;
-    let cache_key = build_key(&app_id, scope, &namespace, &key, &permission)?;
+    let cache_key = build_key(&app_id, scope, &namespace, &key, permission.sub.as_deref())?;
 
     let entry = store.get(&cache_key).await.map_err(to_api_error)?;
 
@@ -191,7 +220,7 @@ pub async fn read_cache_entry(
         (status = 200, description = "Existence check result", body = ExistsCacheResponse),
         (status = 400, description = "Invalid key or scope"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden — execution permission required"),
+        (status = 403, description = "Forbidden: execution permission required, or user scope without an identifiable user"),
         (status = 503, description = "Cache backend is not configured")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("executor_jwt" = []))
@@ -203,14 +232,14 @@ pub async fn cache_entry_exists(
     Path(app_id): Path<String>,
     Query(query): Query<CacheEntryQuery>,
 ) -> Result<Json<ExistsCacheResponse>, ApiError> {
-    let permission = authorize(&user, &app_id, &state).await?;
+    let permission = authorize(&user, &app_id, &state, ExecutorUse::Read).await?;
     let limits = CacheLimits::from_env();
     let store = cache_store(&state).await?;
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
     let namespace = validate_namespace(&limits, query.namespace.as_deref())?;
-    let cache_key = build_key(&app_id, scope, &namespace, &key, &permission)?;
+    let cache_key = build_key(&app_id, scope, &namespace, &key, permission.sub.as_deref())?;
 
     let found = store.exists(&cache_key).await.map_err(to_api_error)?;
 
@@ -229,7 +258,7 @@ pub async fn cache_entry_exists(
         (status = 200, description = "Value stored, or the existing value when ifAbsent prevented the write", body = WriteCacheResponse),
         (status = 400, description = "Key, value or lifetime exceeds the configured limits"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden — execution permission required"),
+        (status = 403, description = "Forbidden: execution permission required, user scope without an identifiable user, or the run is a regression replay"),
         (status = 409, description = "The key was written and removed repeatedly during the operation"),
         (status = 503, description = "Cache backend is not configured")
     ),
@@ -242,7 +271,8 @@ pub async fn write_cache_entry(
     Path(app_id): Path<String>,
     Json(body): Json<WriteCacheRequest>,
 ) -> Result<Json<WriteCacheResponse>, ApiError> {
-    let permission = authorize(&user, &app_id, &state).await?;
+    let access = put_access(user.is_shadow_execution(), body.if_absent);
+    let permission = authorize(&user, &app_id, &state, access).await?;
     let limits = CacheLimits::from_env();
     let store = cache_store(&state).await?;
 
@@ -254,12 +284,24 @@ pub async fn write_cache_entry(
         .map_err(to_api_error)?;
 
     let entry = SetCacheEntry {
-        key: build_key(&app_id, body.scope, &namespace, &key, &permission)?,
+        key: build_key(
+            &app_id,
+            body.scope,
+            &namespace,
+            &key,
+            permission.sub.as_deref(),
+        )?,
         value: body.value,
         expires_at,
     };
 
-    let (winner, stored) = if body.if_absent {
+    let (winner, stored) = if access == ExecutorUse::Read {
+        let existing = store.get(&entry.key).await.map_err(to_api_error)?;
+        (
+            existing.ok_or_else(|| shadow_side_effect_refused(CHANGE_THE_APP_CACHE))?,
+            false,
+        )
+    } else if body.if_absent {
         store.get_or_set(entry).await.map_err(to_api_error)?
     } else {
         (store.set(entry).await.map_err(to_api_error)?, true)
@@ -290,7 +332,7 @@ pub async fn write_cache_entry(
         (status = 200, description = "Deletion result", body = DeleteCacheResponse),
         (status = 400, description = "Invalid key or scope"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden — execution permission required"),
+        (status = 403, description = "Forbidden: execution permission required, user scope without an identifiable user, or the run is a regression replay"),
         (status = 503, description = "Cache backend is not configured")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("executor_jwt" = []))
@@ -302,14 +344,14 @@ pub async fn delete_cache_entry(
     Path(app_id): Path<String>,
     Query(query): Query<CacheEntryQuery>,
 ) -> Result<Json<DeleteCacheResponse>, ApiError> {
-    let permission = authorize(&user, &app_id, &state).await?;
+    let permission = authorize(&user, &app_id, &state, CACHE_WRITE).await?;
     let limits = CacheLimits::from_env();
     let store = cache_store(&state).await?;
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
     let namespace = validate_namespace(&limits, query.namespace.as_deref())?;
-    let cache_key = build_key(&app_id, scope, &namespace, &key, &permission)?;
+    let cache_key = build_key(&app_id, scope, &namespace, &key, permission.sub.as_deref())?;
 
     let deleted = store.delete(&cache_key).await.map_err(to_api_error)?;
 
@@ -353,7 +395,7 @@ pub struct DeleteNamespaceResponse {
         (status = 200, description = "Invalidation result", body = DeleteNamespaceResponse),
         (status = 400, description = "Invalid or empty namespace"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden — execution permission required"),
+        (status = 403, description = "Forbidden: execution permission required, user scope without an identifiable user, or the run is a regression replay"),
         (status = 503, description = "Cache backend is not configured")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("executor_jwt" = []))
@@ -365,7 +407,7 @@ pub async fn delete_cache_namespace(
     Path(app_id): Path<String>,
     Query(query): Query<CacheNamespaceQuery>,
 ) -> Result<Json<DeleteNamespaceResponse>, ApiError> {
-    let permission = authorize(&user, &app_id, &state).await?;
+    let permission = authorize(&user, &app_id, &state, CACHE_WRITE).await?;
     let limits = CacheLimits::from_env();
     let store = cache_store(&state).await?;
 
@@ -379,7 +421,7 @@ pub async fn delete_cache_namespace(
 
     // The key itself is irrelevant here; build_key is reused only for its scope and
     // user-identity resolution (and its refusal to serve an anonymous user scope).
-    let identity = build_key(&app_id, scope, &namespace, "-", &permission)?;
+    let identity = build_key(&app_id, scope, &namespace, "-", permission.sub.as_deref())?;
 
     let deleted = store
         .delete_namespace(
@@ -404,6 +446,7 @@ async fn authorize(
     user: &AppUser,
     app_id: &str,
     state: &AppState,
+    access: ExecutorUse,
 ) -> Result<AppPermissionResponse, ApiError> {
     // The platform partition has no App row, so no permission could ever be granted on
     // it; refusing the id outright keeps that true even if permission lookups change.
@@ -411,7 +454,7 @@ async fn authorize(
         return Err(ApiError::FORBIDDEN);
     }
 
-    let permission = user.execution_app_permission(app_id, state).await?;
+    let permission = user.execution_app_permission(app_id, state, access).await?;
 
     if !permission.has_permission(RolePermissions::ExecuteBoards)
         && !permission.has_permission(RolePermissions::ExecuteEvents)
@@ -455,17 +498,17 @@ fn build_key(
     scope: CacheScope,
     namespace: &str,
     key: &str,
-    permission: &AppPermissionResponse,
+    sub: Option<&str>,
 ) -> Result<CacheKey, ApiError> {
     if !scope.is_user() {
         return Ok(CacheKey::app(app_id, namespace, key));
     }
 
-    // App-connection principals carry no user identity of their own, and a run started
-    // without a resolvable initiator would otherwise share one bucket with every other
-    // such run. Both must fail loudly rather than read someone else's data.
-    let user_id = permission.effective_user_id.as_deref().unwrap_or_default();
-    let user_id = user_id.trim();
+    // API keys and app connections have no user of their own; the user they pass
+    // through is attribution only. A run without a resolvable initiator would share
+    // one bucket with every other such run. All of them must fail loudly rather than
+    // read someone else's data.
+    let user_id = sub.unwrap_or_default().trim();
 
     if user_id.is_empty() || user_id == ANONYMOUS_SUB {
         return Err(ApiError::forbidden(
@@ -488,5 +531,113 @@ fn to_api_error(error: CacheStoreError) -> ApiError {
                 other
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_replay_put_only_reads_through_when_it_keeps_an_existing_value() {
+        for (if_absent, expected) in [(true, ShadowPut::ReadThrough), (false, ShadowPut::Refuse)] {
+            assert_eq!(shadow_put(if_absent), expected, "if_absent = {if_absent}");
+        }
+        for (shadow, if_absent, expected) in [
+            (false, false, CACHE_WRITE),
+            (false, true, CACHE_WRITE),
+            (true, false, CACHE_WRITE),
+            (true, true, ExecutorUse::Read),
+        ] {
+            assert_eq!(
+                put_access(shadow, if_absent),
+                expected,
+                "shadow = {shadow}, if_absent = {if_absent}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_handler_declares_whether_it_changes_the_cache() {
+        let source = include_str!("cache.rs");
+        let fn_body = |signature: &str| {
+            let body = source
+                .split_once(signature)
+                .unwrap_or_else(|| panic!("{signature} exists"))
+                .1;
+            body.split_once("\n}\n").map_or(body, |(body, _)| body)
+        };
+        for (handler, access) in [
+            ("read_cache_entry", "ExecutorUse::Read"),
+            ("cache_entry_exists", "ExecutorUse::Read"),
+            ("write_cache_entry", "access"),
+            ("delete_cache_entry", "CACHE_WRITE"),
+            ("delete_cache_namespace", "CACHE_WRITE"),
+        ] {
+            let call = format!("authorize(&user, &app_id, &state, {access})");
+            assert!(
+                fn_body(&format!("\npub async fn {handler}(")).contains(&call),
+                "{handler} authorizes with {access}"
+            );
+        }
+        let write = fn_body("\npub async fn write_cache_entry(");
+        assert!(
+            write.contains("let access = put_access(user.is_shadow_execution(), body.if_absent);")
+        );
+        assert!(write.contains("if access == ExecutorUse::Read {"));
+        assert!(
+            fn_body("\nasync fn authorize(")
+                .contains(".execution_app_permission(app_id, state, access)")
+        );
+    }
+
+    #[test]
+    fn a_refused_cache_write_carries_the_replay_marker() {
+        let refusal = shadow_side_effect_refused(CHANGE_THE_APP_CACHE);
+        assert_eq!(refusal.status(), axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(
+            refusal.public_code(),
+            crate::middleware::jwt::SHADOW_SIDE_EFFECT_REFUSED
+        );
+        assert_eq!(
+            refusal.public_message(),
+            Some("Shadow and regression runs cannot change the app cache")
+        );
+        assert_eq!(CACHE_WRITE, ExecutorUse::Write(CHANGE_THE_APP_CACHE));
+    }
+
+    #[test]
+    fn user_scope_needs_a_signed_in_subject() {
+        for sub in [None, Some(""), Some("  "), Some(ANONYMOUS_SUB)] {
+            let refusal = build_key("app-1", CacheScope::User, "ns", "key", sub).unwrap_err();
+            assert_eq!(
+                refusal.status(),
+                axum::http::StatusCode::FORBIDDEN,
+                "{sub:?}"
+            );
+        }
+        for sub in [Some("user-1"), Some(" user-1 ")] {
+            assert_eq!(
+                build_key("app-1", CacheScope::User, "ns", "key", sub).unwrap(),
+                CacheKey::user("app-1", "user-1", "ns", "key")
+            );
+        }
+        for sub in [None, Some("user-1")] {
+            assert_eq!(
+                build_key("app-1", CacheScope::App, "ns", "key", sub).unwrap(),
+                CacheKey::app("app-1", "ns", "key")
+            );
+        }
+    }
+
+    #[test]
+    fn every_handler_keys_the_user_scope_on_the_callers_own_subject() {
+        let source = include_str!("cache.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        assert_eq!(production.matches("permission.sub.as_deref()").count(), 5);
+        assert_eq!(production.matches("build_key(").count(), 6);
+        assert!(!production.contains("effective_user_id"));
     }
 }

@@ -23,6 +23,29 @@ fn split() -> SplitPolicy {
         seed: 73,
     }
 }
+// ResNet18 shrinks 8x8 inputs to 1x1 after its first stage, and near-identical samples
+// leave batch-norm running statistics behind the batch statistics, so evaluation
+// collapsed to one class whenever float rounding differed. Keep spatial detail and
+// vary every sample, as in the Burn ResNet18 unit test.
+fn image_input(i: usize, class: usize) -> TensorData {
+    const SIZE: usize = 32;
+    let brightness = (i / 2 % 4) as f32 * 0.04;
+    TensorData {
+        shape: vec![1, SIZE, SIZE],
+        values: (0..SIZE * SIZE)
+            .map(|pixel| {
+                let (x, y) = (pixel % SIZE, pixel / SIZE);
+                let foreground = if class == 0 {
+                    x >= SIZE / 2
+                } else {
+                    y >= SIZE / 2
+                };
+                let texture = ((i * 13 + x * 7 + y * 11) % 17) as f32 / 16. - 0.5;
+                (if foreground { 1. } else { -1. }) + texture * 0.2 + brightness
+            })
+            .collect(),
+    }
+}
 fn record_teachers(
     repo: &TrainingRepository,
     stream: &StreamKey,
@@ -33,19 +56,7 @@ fn record_teachers(
         let class = i % 2;
         let offset = i as f32 * 0.0001;
         let input = if image {
-            TensorData {
-                shape: vec![1, 8, 8],
-                values: (0..64)
-                    .map(|pixel| {
-                        let foreground = if class == 0 {
-                            pixel % 8 >= 4
-                        } else {
-                            pixel / 8 >= 4
-                        };
-                        (if foreground { 1. } else { -1. }) + offset
-                    })
-                    .collect(),
-            }
+            image_input(i, class)
         } else {
             TensorData {
                 shape: vec![4, 1],

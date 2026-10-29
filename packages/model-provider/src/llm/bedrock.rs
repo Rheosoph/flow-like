@@ -1,7 +1,8 @@
 use serde_json::Value;
 
 use super::openai::OpenAIModel;
-use crate::provider::ModelProvider;
+use crate::egress::ProviderEgress;
+use crate::provider::{ModelApiSurface, ModelProvider};
 
 /// AWS Bedrock via its OpenAI-compatible chat completions endpoint
 /// (`https://bedrock-runtime.{region}.amazonaws.com/openai/v1`) authenticated
@@ -12,7 +13,10 @@ pub struct BedrockModel;
 impl BedrockModel {
     /// Expected params: `api_key` (required), `region` (defaults to
     /// `us-east-1`), optional `endpoint` override, `model_id`.
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<OpenAIModel> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<OpenAIModel> {
         let mut params = provider.params.clone().unwrap_or_default();
 
         let endpoint = params
@@ -42,7 +46,9 @@ impl BedrockModel {
 
         let mut provider = provider.clone();
         provider.params = Some(params);
-        OpenAIModel::from_provider_chat_completions(&provider).await
+        Ok(OpenAIModel::from_provider(&provider, egress)
+            .await?
+            .with_api_surface(ModelApiSurface::ChatCompletions))
     }
 
     /// Build the Bedrock client for Flow-Like's authenticated hosted proxy.

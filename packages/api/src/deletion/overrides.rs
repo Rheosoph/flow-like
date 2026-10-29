@@ -163,7 +163,7 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
             restrict_as_cascade: vec![],
         },
         DeletionRoot::User => RootOverrides {
-            before_drain: vec![ExternalStep::UserQuotaPayloads],
+            before_drain: vec![ExternalStep::UserQuotaPayloads, ExternalStep::UserSinkRunAs],
             soft_sweeps: vec![sweep("QuotaWarningState", "payerId")],
             restrict_as_cascade: vec![
                 ("WasmPackageInvitation", "invitedById"),

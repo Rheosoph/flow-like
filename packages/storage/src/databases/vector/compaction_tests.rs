@@ -10,7 +10,7 @@ use lance::session::Session;
 use lance_io::object_store::{
     ObjectStore as LanceStore, ObjectStoreParams, ObjectStoreProvider, ObjectStoreRegistry,
 };
-use object_store::{
+use lance_object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, local::LocalFileSystem,
     path::Path,
@@ -42,7 +42,7 @@ impl ObjectStore for CountingStore {
         location: &Path,
         payload: PutPayload,
         options: PutOptions,
-    ) -> object_store::Result<PutResult> {
+    ) -> lance_object_store::Result<PutResult> {
         self.inner.put_opts(location, payload, options).await
     }
 
@@ -50,7 +50,7 @@ impl ObjectStore for CountingStore {
         &self,
         location: &Path,
         options: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+    ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
     }
 
@@ -58,23 +58,29 @@ impl ObjectStore for CountingStore {
         &self,
         location: &Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         self.gets.fetch_add(1, Ordering::Relaxed);
         self.inner.get_opts(location, options).await
     }
 
     fn delete_stream(
         &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
+        locations: BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<Path>> {
         self.inner.delete_stream(locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> lance_object_store::Result<ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
 
@@ -83,7 +89,7 @@ impl ObjectStore for CountingStore {
         from: &Path,
         to: &Path,
         options: CopyOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         self.inner.copy_opts(from, to, options).await
     }
 
@@ -92,7 +98,7 @@ impl ObjectStore for CountingStore {
         from: &Path,
         to: &Path,
         options: RenameOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         self.inner.rename_opts(from, to, options).await
     }
 }

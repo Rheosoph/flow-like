@@ -28,7 +28,7 @@ declare namespace control {
     function delay({ time?: float }): void;
 
     /**
-     * Loops over an Array
+     * Loops over an array and stops on the first unhandled iteration error.
      * @node control_for_each @alias controlForEach
      * @param array — Array to Loop
      * @returns value — The current item Value

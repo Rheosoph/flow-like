@@ -4,13 +4,14 @@
 //! same way: epoch signatures, seal inclusion proofs, record hashes.
 
 use std::collections::{BTreeSet, HashMap};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, SubsecRound, Utc};
 use flow_like::flow::execution::{ExecutionEnvironment, egress};
 use flow_like_types::anyhow;
+use flow_like_types::egress::is_public_ip;
 use flow_like_types::reqwest::{self, Url};
 use hmac::{Hmac, Mac};
 use sea_orm::sea_query::{Expr, SimpleExpr};
@@ -286,7 +287,7 @@ pub async fn check_url(raw: &str) -> flow_like_types::Result<WebhookTarget> {
                 anyhow!("audit webhook host '{host}' does not resolve to a public address")
             })?,
     };
-    if guarded && addrs.iter().any(|addr| !is_public(addr.ip())) {
+    if guarded && addrs.iter().any(|addr| !is_public_ip(addr.ip())) {
         return Err(anyhow!(
             "audit webhook host '{host}' does not resolve to a public address"
         ));
@@ -296,39 +297,6 @@ pub async fn check_url(raw: &str) -> flow_like_types::Result<WebhookTarget> {
         _ => None,
     };
     Ok(WebhookTarget { url, pinned })
-}
-
-/// Globally routable unicast. The egress guard blocks the host plane (loopback,
-/// link-local, metadata endpoints); a webhook additionally may not reach private,
-/// shared, documentation or reserved space.
-fn is_public(ip: IpAddr) -> bool {
-    if egress::is_blocked_ip(ip) || ip.is_unspecified() {
-        return false;
-    }
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, c, _] = v4.octets();
-            !(v4.is_private()
-                || v4.is_documentation()
-                || (a == 100 && (64..128).contains(&b))
-                || (a == 192 && b == 0 && c == 0)
-                || (a == 198 && (b == 18 || b == 19))
-                || a >= 240)
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4() {
-                return is_public(IpAddr::V4(v4));
-            }
-            let segments = v6.segments();
-            if segments[0] == 0x0064 && segments[1] == 0xff9b {
-                let embedded = (u32::from(segments[6]) << 16) | u32::from(segments[7]);
-                return is_public(IpAddr::V4(Ipv4Addr::from(embedded)));
-            }
-            !((segments[0] & 0xfe00) == 0xfc00
-                || (segments[0] & 0xffc0) == 0xfec0
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8))
-        }
-    }
 }
 
 struct Delivery {
@@ -800,37 +768,5 @@ mod tests {
         assert!(first.starts_with(SECRET_PREFIX));
         assert_eq!(first.len(), SECRET_PREFIX.len() + 64);
         assert_ne!(first, second);
-    }
-
-    #[test]
-    fn only_public_addresses_are_reachable() {
-        for private in [
-            "10.0.0.1",
-            "172.16.4.2",
-            "192.168.1.1",
-            "100.64.0.1",
-            "127.0.0.1",
-            "169.254.169.254",
-            "0.0.0.0",
-            "192.0.2.10",
-            "198.18.0.1",
-            "240.0.0.1",
-            "::1",
-            "fd00::1",
-            "fe80::1",
-            "::ffff:10.0.0.1",
-            "64:ff9b::a00:1",
-            "2001:db8::1",
-        ] {
-            assert!(!is_public(private.parse().unwrap()), "{private}");
-        }
-        for public in [
-            "93.184.216.34",
-            "1.1.1.1",
-            "2606:4700:4700::1111",
-            "::ffff:1.1.1.1",
-        ] {
-            assert!(is_public(public.parse().unwrap()), "{public}");
-        }
     }
 }

@@ -1166,7 +1166,19 @@ pub(super) async fn revoke_grant<C: ConnectionTrait>(
     let offer: Offer = serde_json::from_value(order.snapshot.clone())?;
     match ItemKind::of(order) {
         ItemKind::App => {
-            db.execute_raw(sql(r#"DELETE FROM "Membership" WHERE "userId"=$1 AND "appId"=$2 AND "roleId"=$3 AND "joinedVia"=$4 AND NOT EXISTS (SELECT 1 FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND status='ACTIVE')"#,vec![order.user_id.clone().into(),order.item_id.clone().into(),offer.role_id.into(),format!("payment:{}",order.id).into()])).await?;
+            let removed = db.execute_raw(sql(r#"DELETE FROM "Membership" WHERE "userId"=$1 AND "appId"=$2 AND "roleId"=$3 AND "joinedVia"=$4 AND NOT EXISTS (SELECT 1 FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND status='ACTIVE')"#,vec![order.user_id.clone().into(),order.item_id.clone().into(),offer.role_id.into(),format!("payment:{}",order.id).into()])).await?;
+            // The buyer's sinks pause once the revocation commits, as on a removal from the team.
+            if removed.rows_affected() > 0 {
+                outbox::enqueue(
+                    db,
+                    &format!("mkt:{}:membership-revoked:{reason}", order.id),
+                    MEMBERSHIP_REVOKED,
+                    SOURCE,
+                    &order.id,
+                    json!({"appId": order.item_id, "userId": order.user_id}),
+                )
+                .await?;
+            }
         }
         ItemKind::Package => {
             db.execute_raw(sql(r#"DELETE FROM "WasmPackageUser" WHERE "userId"=$1 AND "packageId"=$2 AND "grantedBy"=$3 AND NOT EXISTS (SELECT 1 FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='PACKAGE' AND "itemId"=$2 AND status='ACTIVE')"#,vec![order.user_id.clone().into(),order.item_id.clone().into(),format!("payment:{}",order.id).into()])).await?;
@@ -1305,9 +1317,45 @@ pub async fn handle_effect(
             }
         }
         "marketplace_paid" | "marketplace_comp" => deliver_notice(state, effect, source_id).await?,
+        MEMBERSHIP_REVOKED => release_revoked_member(state, payload).await?,
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// Outbox effect of a refund or lost dispute that removed the buyer's app membership.
+const MEMBERSHIP_REVOKED: &str = "marketplace_membership_revoked";
+
+/// Pauses the event sinks of a buyer whose membership a refund or lost dispute removed,
+/// as removing them from the team does. A buyer who is a member again by the time the
+/// effect runs keeps them, as every fire would. A failure is logged: every fire refuses
+/// the sinks of a non-member anyway.
+async fn release_revoked_member(state: &AppState, payload: &Value) -> Result<(), ApiError> {
+    let (Some(app_id), Some(user_id)) = (
+        payload.get("appId").and_then(Value::as_str),
+        payload.get("userId").and_then(Value::as_str),
+    ) else {
+        return Err(ApiError::internal(
+            "Membership revocation effect is missing appId or userId",
+        ));
+    };
+    let member_again = state
+        .db
+        .query_one_raw(sql(
+            r#"SELECT id FROM "Membership" WHERE "userId"=$1 AND "appId"=$2"#,
+            vec![user_id.into(), app_id.into()],
+        ))
+        .await?
+        .is_some();
+    if member_again {
+        return Ok(());
+    }
+    if let Err(error) =
+        crate::routes::sink::service::release_departed_member(state, app_id, user_id).await
+    {
+        tracing::error!(%app_id, %user_id, %error, "Failed to pause the event sinks of a member whose purchase was revoked");
+    }
+    Ok(())
 }
 
 async fn cancel_scope(

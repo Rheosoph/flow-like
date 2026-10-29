@@ -6,6 +6,7 @@ use crate::entity::user;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
+use crate::routes::sink::authority::RunAsDenial;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -79,7 +80,7 @@ pub async fn update_user(
     let permission = request.permission;
     let payer_id = user_id.clone();
     let payment_change_id = flow_like_types::create_id();
-    let updated = crate::db::retry_transaction(
+    let (updated, previous_status) = crate::db::retry_transaction(
         &state.db,
         state.db_dialect,
         None,
@@ -100,6 +101,7 @@ pub async fn update_user(
                     (existing.permission & GlobalPermission::Admin.bits())
                         != (next & GlobalPermission::Admin.bits())
                 });
+                let previous_status = existing.status.clone();
                 let mut active: user::ActiveModel = existing.into();
                 if let Some(status) = status {
                     active.status = Set(status);
@@ -122,11 +124,13 @@ pub async fn update_user(
                     )
                     .await?;
                 }
-                Ok::<_, ApiError>(updated)
+                Ok::<_, ApiError>((updated, previous_status))
             })
         },
     )
     .await?;
+
+    release_if_deactivated(&state, &user_id, &previous_status, &updated.status).await;
 
     audit!(
         state,
@@ -157,4 +161,90 @@ pub async fn update_user(
         },
         permission: updated.permission,
     }))
+}
+
+/// A ban or deactivation pauses the account's event sinks at once. Activating an account
+/// again resumes nothing: whoever turns an event back on runs it.
+async fn release_if_deactivated(
+    state: &AppState,
+    user_id: &str,
+    previous: &UserStatus,
+    next: &UserStatus,
+) {
+    if !left_active(previous, next) {
+        return;
+    }
+    let released = crate::routes::sink::service::release_member_sinks(
+        state,
+        None,
+        user_id,
+        RunAsDenial::AccountInactive,
+    )
+    .await;
+    if let Err(error) = released {
+        tracing::error!(user_id = %user_id, %error, "Failed to pause the event sinks of a deactivated account");
+    }
+}
+
+fn left_active(previous: &UserStatus, next: &UserStatus) -> bool {
+    *previous == UserStatus::Active && *next != UserStatus::Active
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_leaving_active_releases_the_account_sinks() {
+        use UserStatus::{Active, Banned, Inactive};
+        for (previous, next, releases) in [
+            (Active, Banned, true),
+            (Active, Inactive, true),
+            (Active, Active, false),
+            (Banned, Active, false),
+            (Inactive, Banned, false),
+            (Banned, Banned, false),
+        ] {
+            assert_eq!(
+                left_active(&previous, &next),
+                releases,
+                "{previous:?} -> {next:?}"
+            );
+        }
+    }
+
+    /// The release runs after the transaction committed, so a rolled-back update pauses
+    /// nothing and a retried transaction releases once.
+    #[test]
+    fn sinks_are_released_after_the_update_commits() {
+        let source = include_str!("update_user.rs");
+        let handler = source
+            .split_once("\npub async fn update_user(")
+            .expect("the handler")
+            .1;
+        let handler = handler
+            .split_once("\n}\n")
+            .map_or(handler, |(body, _)| body);
+        let committed = handler
+            .find("crate::db::retry_transaction(")
+            .expect("the transaction");
+        let transaction_end = committed
+            + handler[committed..]
+                .find("\n    .await?;")
+                .expect("the commit");
+        let release = handler
+            .find("release_if_deactivated(")
+            .expect("the release");
+        assert!(transaction_end < release);
+        assert_eq!(handler.matches("release_if_deactivated(").count(), 1);
+        let helper = source
+            .split_once("\nasync fn release_if_deactivated(")
+            .expect("the helper")
+            .1;
+        let helper = &helper[..helper.find("\n}\n").unwrap()];
+        assert!(
+            helper.find("left_active(").unwrap() < helper.find("release_member_sinks(").unwrap()
+        );
+        assert!(helper.contains("RunAsDenial::AccountInactive"));
+    }
 }

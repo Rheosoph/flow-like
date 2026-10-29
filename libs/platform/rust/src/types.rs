@@ -39,7 +39,8 @@ pub struct InvokeBoardRequest {
     pub version: Option<Version>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deprecated(note = "ignored: server runs authenticate with their own execution token")]
+    #[serde(default, skip_serializing)]
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth_tokens: Option<BTreeMap<String, Value>>,
@@ -57,7 +58,8 @@ pub struct InvokeEventRequest {
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[deprecated(note = "ignored: server runs authenticate with their own execution token")]
+    #[serde(default, skip_serializing)]
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth_tokens: Option<BTreeMap<String, Value>>,

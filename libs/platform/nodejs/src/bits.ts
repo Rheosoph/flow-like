@@ -1,5 +1,5 @@
-import { segment } from "./paths.js";
 import type { HttpClient } from "./client.js";
+import { segment } from "./paths.js";
 import type {
 	Bit,
 	BitSearchQuery,
@@ -79,7 +79,7 @@ function hasRemoteProvider(bit: Bit): boolean {
 	const provider =
 		(params.provider as Record<string, unknown> | undefined) ?? params;
 	const name = provider?.provider_name as string | undefined;
-	if (name && name.toLowerCase().startsWith("hosted")) return true;
+	if (name?.toLowerCase().startsWith("hosted")) return true;
 	if (
 		name &&
 		["premium", "internal"].includes(name.toLowerCase()) &&

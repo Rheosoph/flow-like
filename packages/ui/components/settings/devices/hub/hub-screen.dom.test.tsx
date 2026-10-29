@@ -363,11 +363,12 @@ describe("Hub status: a ready hub", () => {
 	test.each([false, true])(
 		"counts complete releases, including optional historical Intel Mac artifacts: %s",
 		async (includeIntelMac) => {
-			const artifacts: NonNullable<TestReleaseOptions["artifacts"]> = [
-				{ target: "x86_64-unknown-linux-gnu", size: 1_024 },
-				{ target: "aarch64-unknown-linux-gnu", size: 1_024 },
-				{ target: "aarch64-apple-darwin", size: 1_024 },
-			];
+			const artifacts: NonNullable<TestReleaseOptions["artifacts"]>[number][] =
+				[
+					{ target: "x86_64-unknown-linux-gnu", size: 1_024 },
+					{ target: "aarch64-unknown-linux-gnu", size: 1_024 },
+					{ target: "aarch64-apple-darwin", size: 1_024 },
+				];
 			if (includeIntelMac)
 				artifacts.push({ target: "x86_64-apple-darwin", size: 1_024 });
 			const { view } = await mountWith({ artifacts });

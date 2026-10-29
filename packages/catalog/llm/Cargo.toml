@@ -15,6 +15,7 @@ execute = [
     "flow-like-catalog-data-support/execute",
     "dep:rig",
     "dep:rmcp",
+    "dep:reqwest-mcp",
     "dep:jsonschema",
     "dep:copilot-sdk",
 ]
@@ -42,6 +43,7 @@ uuid.workspace = true
 async-trait.workspace = true
 rig = { workspace = true, optional = true, features = ["rmcp"] }
 rmcp = { workspace = true, optional = true }
+reqwest-mcp = { package = "reqwest", version = "0.13.4", default-features = false, features = ["rustls"], optional = true }
 jsonschema = { workspace = true, optional = true }
 copilot-sdk = { workspace = true, optional = true }
 regex.workspace = true

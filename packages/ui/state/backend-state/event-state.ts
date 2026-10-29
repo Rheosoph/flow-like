@@ -40,9 +40,35 @@ export interface IOAuthCheckResult {
 	missingProviders: IOAuthProvider[];
 }
 
+/** What a run rejects with when `missingProviders` still need an OAuth grant or this app's consent. */
+export interface IOAuthRequiredError extends Error {
+	isOAuthError: true;
+	missingProviders: IOAuthProvider[];
+}
+
 export interface IEventSinkStatusContext {
 	appId: string;
 	event: IEvent;
+}
+
+export interface IEventSinkStatus {
+	active: boolean;
+	/**
+	 * Present only when the hub's sink answered: the user its runs act as, `null` when nobody
+	 * is bound (the hub paused it because that user can no longer run it, or a legacy sink).
+	 */
+	run_as_user_id?: string | null;
+	/** The hub's sink runs with a token saved before run-as users existed. */
+	legacy_token?: boolean;
+	/** This computer's trigger has no personal access token to sign in to the hub with, so it never fires. */
+	needs_token?: boolean;
+	/** Why this computer's trigger last failed to start or refresh. */
+	failed_reason?: string;
+}
+
+/** The stored event, with `trigger_error` when it was saved but this computer could not register its trigger. */
+export interface IEventUpsertResult extends IEvent {
+	trigger_error?: string;
 }
 
 export interface IEventUpsertOptions {
@@ -54,6 +80,13 @@ export interface IEventUpsertOptions {
 	source?: "device" | "default";
 }
 
+/** Settings the hub stored with a registration; which keys are present depends on `kind`. */
+export interface IEventRegistrationExtras {
+	/** The event config's route entry a `rest_fn`, `rest_openapi` or `rest_openapi_ui` registration was built from. */
+	route?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
 export interface IEventRegistration {
 	id: string;
 	event_id: string;
@@ -62,8 +95,8 @@ export interface IEventRegistration {
 	method?: string | null;
 	path: string;
 	node_id?: string | null;
-	schema?: Record<string, any> | null;
-	extras?: Record<string, any> | null;
+	schema?: Record<string, unknown> | null;
+	extras?: IEventRegistrationExtras | null;
 	auth_id?: string | null;
 }
 
@@ -73,7 +106,7 @@ export interface IEventRemoteAuth {
 	event_version: string;
 	kind: string;
 	node_id: string;
-	config: Record<string, any>;
+	config: Record<string, unknown>;
 }
 
 export interface IListRegistrationsResponse {
@@ -504,6 +537,11 @@ export interface IEventState {
 		appId: string,
 		eventId: string,
 	): Promise<[number, number, number][]>;
+	/**
+	 * `personalAccessToken` is kept only by a trigger this computer registers; when that trigger
+	 * needs one and none is passed, the desktop asks for it itself. The hub runs an event as
+	 * whoever last saved it and never receives it.
+	 */
 	upsertEvent(
 		appId: string,
 		event: IEvent,
@@ -511,7 +549,7 @@ export interface IEventState {
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
 		options?: IEventUpsertOptions,
-	): Promise<IEvent>;
+	): Promise<IEventUpsertResult>;
 	/** Check OAuth requirements for an event's board. Returns missing providers. */
 	checkEventOAuth?(appId: string, event: IEvent): Promise<IOAuthCheckResult>;
 	/** Check OAuth requirements resolved by a governed pre-run endpoint. */
@@ -531,9 +569,9 @@ export interface IEventState {
 		feedbackId: string,
 		feedback: {
 			rating: number;
-			history?: any[];
-			globalState?: Record<string, any>;
-			localState?: Record<string, any>;
+			history?: unknown[];
+			globalState?: Record<string, unknown>;
+			localState?: Record<string, unknown>;
 			comment?: string;
 		},
 	): Promise<string>;
@@ -579,6 +617,18 @@ export interface IEventState {
 		eventId: string,
 		context?: IEventSinkStatusContext,
 	): Promise<boolean>;
+
+	/** `isEventSinkActive`, plus whom the hub's sink runs as when it was the one asked. */
+	getEventSinkStatus(
+		eventId: string,
+		context?: IEventSinkStatusContext,
+	): Promise<IEventSinkStatus>;
+
+	/**
+	 * Desktop: gives this computer's trigger for the stored `event` a personal access token,
+	 * asking for one first. It changes nothing on the hub and saves no new event version.
+	 */
+	repairLocalTrigger?(appId: string, event: IEvent): Promise<IEventSinkStatus>;
 
 	/**
 	 * List persisted REST/MCP registrations for an event (populated by remote

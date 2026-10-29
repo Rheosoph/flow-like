@@ -24,7 +24,11 @@ use super::{
         reserve_assistant_usage_with_max_runtime, settle_assistant_usage,
     },
 };
-use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::{
+    error::ApiError,
+    middleware::jwt::{AppUser, ExecutorUse},
+    state::AppState,
+};
 
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const MAX_MESSAGES: usize = 16;
@@ -126,7 +130,8 @@ async fn complete(
     let sub = user.sub()?;
     let token = user_access_token(&user).ok_or(ApiError::UNAUTHORIZED)?;
     if let Some(app_id) = payload.app_id.as_deref() {
-        user.execution_app_permission(app_id, &state).await?;
+        user.execution_app_permission(app_id, &state, ExecutorUse::Read)
+            .await?;
     }
     let (profile, access) = load_user_profile_access(&state, &sub, Some(&payload.profile_id))
         .await?

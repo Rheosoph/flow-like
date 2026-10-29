@@ -22,6 +22,8 @@ use wasmtime_wasi::p2::{OutputStream, Pollable, StreamResult};
 const MAX_CALL_OUTPUT: usize = 1 << 20;
 /// Unterminated output is split at this length to keep entries readable.
 const MAX_LINE: usize = 8 << 10;
+/// A trap can discard the normal run log, so keep its final output in the error.
+const MAX_ERROR_OUTPUT: usize = 8 << 10;
 
 #[derive(Clone, Copy)]
 enum Channel {
@@ -107,11 +109,28 @@ impl GuestOutput {
 
     /// Move everything written since the last drain, including an unterminated
     /// final line, into the invocation's log and reset the per-call budget.
-    pub(crate) fn drain_into(&self, host: &HostState) {
+    pub(crate) fn drain_into(&self, host: &HostState) -> String {
         let mut captured = std::mem::take(&mut *self.0.lock());
         captured.end_line(Channel::Stdout);
         captured.end_line(Channel::Stderr);
+        let mut error_output = String::new();
         for (level, line) in captured.lines {
+            let channel = if matches!(level, LogLevel::Warn) {
+                "stderr"
+            } else {
+                "stdout"
+            };
+            error_output.push_str(channel);
+            error_output.push_str(": ");
+            error_output.push_str(&line);
+            error_output.push('\n');
+            if error_output.len() > MAX_ERROR_OUTPUT {
+                let mut start = error_output.len() - MAX_ERROR_OUTPUT;
+                while !error_output.is_char_boundary(start) {
+                    start += 1;
+                }
+                error_output.drain(..start);
+            }
             host.log(level as u8, line, None);
         }
         if captured.dropped {
@@ -124,6 +143,7 @@ impl GuestOutput {
                 None,
             );
         }
+        error_output
     }
 }
 
@@ -245,5 +265,56 @@ mod tests {
             drained(&output),
             vec![(LogLevel::Info as u8, "next call".to_owned())]
         );
+    }
+
+    #[test]
+    fn failure_output_keeps_the_final_diagnostic_with_a_bounded_utf8_tail() {
+        let output = GuestOutput::default();
+        output
+            .stdout()
+            .append("é".repeat(MAX_ERROR_OUTPUT).as_bytes());
+        output.stderr().append(b"unhandlable out of memory");
+        let host = HostState::new(WasmCapabilities::empty());
+
+        let diagnostic = output.drain_into(&host);
+        assert!(diagnostic.len() <= MAX_ERROR_OUTPUT);
+        assert!(diagnostic.ends_with("stderr: unhandlable out of memory\n"));
+        assert!(!host.get_logs().is_empty());
+        assert!(output.drain_into(&host).is_empty());
+    }
+
+    #[test]
+    fn output_written_before_unreachable_survives_in_the_execution_error() {
+        let engine = wasmtime::Engine::default();
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "test" "stderr" (func $stderr))
+                (func (export "run") call $stderr unreachable))"#,
+        )
+        .unwrap();
+        let module = wasmtime::Module::new(&engine, wasm).unwrap();
+        let output = GuestOutput::default();
+        let stderr = output.stderr();
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker
+            .func_wrap("test", "stderr", move || {
+                stderr.append(b"unhandlable out of memory\n");
+            })
+            .unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let instance = linker.instantiate(&mut store, &module).unwrap();
+        let trap = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .unwrap()
+            .call(&mut store, ())
+            .unwrap_err();
+        let host = HostState::new(WasmCapabilities::empty());
+        let error =
+            crate::error::component_run_error(trap, 123, std::time::Duration::from_secs(12))
+                .with_guest_output(&output.drain_into(&host));
+
+        let message = error.to_string();
+        assert!(message.contains("wasm `unreachable` instruction executed"));
+        assert!(message.contains("stderr: unhandlable out of memory"));
     }
 }

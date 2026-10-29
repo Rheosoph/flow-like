@@ -735,7 +735,7 @@ declare namespace control {
     function delay({ time?: float }): void;
 
     /**
-     * Loops over an Array
+     * Loops over an array and stops on the first unhandled iteration error.
      * @node control_for_each @alias controlForEach
      * @param array — Array to Loop
      * @returns value — The current item Value
@@ -5644,9 +5644,9 @@ declare namespace user {
     function getCurrent({ appId?: string }): { currentUser: Struct, success: bool, statusCode: int, error: string };
 
     /**
-     * Fetches the current user's persisted user information from the configured FlowLike hub's /api/v1/user/info endpoint when an execution token is available.
+     * Gets the profile of the user this run acts as. Server runs see only the fields the hub shares in user lookups.
      * @node utils_user_get_current_user_info @alias utilsUserGetCurrentUserInfo
-     * @returns userInfo — The user record returned by /api/v1/user/info
+     * @returns userInfo — Profile of the user this run acts as
      * @returns success — True when user info was fetched successfully
      * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made
      * @returns error — Error message when user info could not be fetched

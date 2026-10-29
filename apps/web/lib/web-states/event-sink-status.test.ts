@@ -95,4 +95,39 @@ describe("web event trigger status", () => {
 			expect(mocks.apiGet).not.toHaveBeenCalled();
 		},
 	);
+
+	test("reports whom the hub's sink runs as, and nobody once the hub paused it", async () => {
+		const state = new WebEventState(backend);
+		const context = { appId: "app-1", event: eventFixture("cron") };
+		mocks.apiGet
+			.mockResolvedValueOnce({ active: true, run_as_user_id: "user-1" })
+			.mockResolvedValueOnce({ active: false, run_as_user_id: null })
+			.mockRejectedValueOnce({ status: 404, code: "NOT_FOUND" });
+		await expect(state.getEventSinkStatus("event-1", context)).resolves.toEqual(
+			{ active: true, run_as_user_id: "user-1" },
+		);
+		await expect(state.getEventSinkStatus("event-1", context)).resolves.toEqual(
+			{ active: false, run_as_user_id: null },
+		);
+		await expect(state.getEventSinkStatus("event-1", context)).resolves.toEqual(
+			{ active: false },
+		);
+	});
+
+	test("passes on that a legacy sink still runs with its saved token", async () => {
+		const state = new WebEventState(backend);
+		const context = { appId: "app-1", event: eventFixture("cron") };
+		mocks.apiGet.mockResolvedValueOnce({
+			active: true,
+			run_as_user_id: null,
+			legacy_token: true,
+		});
+		await expect(
+			state.getEventSinkStatus("event-1", context),
+		).resolves.toStrictEqual({
+			active: true,
+			run_as_user_id: null,
+			legacy_token: true,
+		});
+	});
 });

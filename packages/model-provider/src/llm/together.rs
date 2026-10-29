@@ -1,9 +1,15 @@
 use std::any::Any;
 
-use super::{ModelLogic, OPENROUTER_ONLY, ParamDialect, merge_additional_params};
+use super::{
+    ModelLogic, OPENROUTER_ONLY, ParamDialect,
+    media::{self, MediaDialect},
+    merge_additional_params, output_budget_as_body_param, user_media,
+};
 use crate::history::{History, HistoryThinking};
 use crate::provider::random_provider;
 use crate::{
+    authorization::AuthorizedHttpClient,
+    egress::ProviderEgress,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
@@ -33,7 +39,7 @@ fn reasoning(model: &str, thinking: HistoryThinking) -> Option<Value> {
 }
 
 pub struct TogetherModel {
-    client: rig::providers::together::Client,
+    client: rig::providers::together::Client<AuthorizedHttpClient>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -47,7 +53,9 @@ impl TogetherModel {
         let api_key = together_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
 
-        let mut builder = rig::providers::together::Client::builder().api_key(&api_key);
+        let mut builder = rig::providers::together::Client::builder()
+            .api_key(&api_key)
+            .http_client(AuthorizedHttpClient::default());
 
         if let Some(endpoint) = together_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
@@ -62,7 +70,10 @@ impl TogetherModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -71,7 +82,9 @@ impl TogetherModel {
             .cloned()
             .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        let mut builder = rig::providers::together::Client::builder().api_key(api_key);
+        let mut builder = rig::providers::together::Client::builder()
+            .api_key(api_key)
+            .http_client(AuthorizedHttpClient::for_egress(egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -100,8 +113,15 @@ impl Cacheable for TogetherModel {
 impl ModelLogic for TogetherModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor::with_max_tokens_body_param(
+        Ok(user_media::constructor(
             self.client.clone(),
+            |model, request| {
+                media::retain_supported(
+                    MediaDialect::Together,
+                    model,
+                    output_budget_as_body_param(request, "max_tokens"),
+                )
+            },
         ))
     }
 

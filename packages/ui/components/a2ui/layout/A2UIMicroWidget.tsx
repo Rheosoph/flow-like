@@ -67,6 +67,10 @@ import {
 } from "../micro-widget-host";
 import { createMicroWidgetMicrophone } from "../micro-widget-microphone";
 import { useMicroWidgetReloader } from "../micro-widget-reload";
+import {
+	createMicroWidgetResources,
+	resolveAppResource,
+} from "../micro-widget-resource";
 import { MicroWidgetNoticeSlot } from "../micro-widget-runtime-banner";
 import {
 	type MicroWidgetUpload,
@@ -390,6 +394,8 @@ function MicroWidgetFrame({
 	const setElementValue = useSetElementValue();
 	const { executeAction } = useExecuteAction();
 	const { appId } = useActionContext();
+	const resourceStorageRef = useRef({ appId, storage: backend.storageState });
+	resourceStorageRef.current = { appId, storage: backend.storageState };
 	const uploadTargetRef = useMicroWidgetUploadTarget();
 
 	const desktop = isTauri();
@@ -469,8 +475,12 @@ function MicroWidgetFrame({
 		typeof createMicroWidgetMicrophone
 	> | null>(null);
 	const uploadRef = useRef<MicroWidgetUpload | null>(null);
+	const resourcesRef = useRef<ReturnType<
+		typeof createMicroWidgetResources
+	> | null>(null);
 	const hostCapabilities: InitCapabilities = {
 		preview: preview === true,
+		resources: preview !== true,
 		media: mediaGranted,
 		mediaIds: mediaGrants.map((mediaGrant) => mediaGrant.id),
 		microphone: framePolicy?.microphone === true,
@@ -555,6 +565,7 @@ function MicroWidgetFrame({
 	}, [resolvedTheme]);
 
 	const sendInit = useCallback(() => {
+		resourcesRef.current?.setProps(publicWidgetProps(propsRef.current));
 		lastSentPropsRef.current = propsRef.current;
 		initSentRef.current = true;
 		post(
@@ -594,6 +605,7 @@ function MicroWidgetFrame({
 			microphoneRef.current?.revoke();
 			uploadRef.current?.revoke("failed");
 			mediaRef.current?.stop();
+			resourcesRef.current?.reset();
 		}
 		sendInit();
 	}, [sendInit, onGrantFrameLoad, onAccessFrameLoad]);
@@ -628,6 +640,7 @@ function MicroWidgetFrame({
 
 	const handleEnvelope = useCallback(
 		(envelope: FlwEnvelope) => {
+			resourcesRef.current?.handle(envelope);
 			microphoneRef.current?.handle(envelope);
 			uploadRef.current?.handle(envelope);
 			mediaRef.current?.handle(envelope);
@@ -725,12 +738,36 @@ function MicroWidgetFrame({
 
 	// Query bridge registration (imperative host access via microWidgetQuery).
 	useEffect(() => {
+		let latestQueryId: string | undefined;
 		const correlator = createQueryCorrelator((payload) => {
+			latestQueryId = payload.queryId;
+			resourcesRef.current?.beginQuery(
+				payload.queryId,
+				payload.name,
+				payload.args,
+			);
 			post(createEnvelope("query", payload, nonce, instanceId));
 		});
 		correlatorRef.current = correlator;
 		const unregister = registerMicroWidgetBridge(instanceId, {
-			query: correlator.request,
+			query: (name, args, timeout) => {
+				const result = correlator.request(name, args, timeout);
+				const queryId = latestQueryId;
+				return result.then(
+					(value) => {
+						if (queryId)
+							resourcesRef.current?.completeQuery(
+								queryId,
+								!(isRecord(value) && value.applied === false),
+							);
+						return value;
+					},
+					(error) => {
+						if (queryId) resourcesRef.current?.completeQuery(queryId, false);
+						throw error;
+					},
+				);
+			},
 		});
 		return () => {
 			unregister();
@@ -767,6 +804,23 @@ function MicroWidgetFrame({
 			result: (payload) =>
 				post(createEnvelope("file:result", payload, nonce, instanceId)),
 		});
+		const resources = createMicroWidgetResources({
+			enabled: () => capabilitiesRef.current.resources === true,
+			desktop,
+			resolve: (reference) =>
+				resolveAppResource(
+					reference,
+					resourceStorageRef.current.appId,
+					resourceStorageRef.current.storage,
+				),
+			result: (payload, transfer) =>
+				post(
+					createEnvelope("resource:result", payload, nonce, instanceId),
+					transfer,
+				),
+		});
+		resources.setProps(publicWidgetProps(propsRef.current));
+		resourcesRef.current = resources;
 		mediaRef.current = media;
 		microphoneRef.current = microphone;
 		uploadRef.current = upload;
@@ -774,9 +828,11 @@ function MicroWidgetFrame({
 			microphone.dispose();
 			media.dispose();
 			upload.dispose();
+			resources.dispose();
 			mediaRef.current = null;
 			microphoneRef.current = null;
 			uploadRef.current = null;
+			resourcesRef.current = null;
 		};
 	}, [instanceId, nonce, post, src]);
 
@@ -786,6 +842,7 @@ function MicroWidgetFrame({
 	useEffect(() => {
 		if (!capabilitiesRef.current.microphone) microphoneRef.current?.revoke();
 		if (!capabilitiesRef.current.uploads) uploadRef.current?.revoke();
+		if (!capabilitiesRef.current.resources) resourcesRef.current?.reset();
 		mediaRef.current?.revoke();
 		if (initSentRef.current)
 			post(
@@ -810,6 +867,7 @@ function MicroWidgetFrame({
 	useEffect(() => {
 		const nextProps = component.props ?? {};
 		propsRef.current = nextProps;
+		resourcesRef.current?.setProps(publicWidgetProps(nextProps));
 		if (!initSentRef.current) return;
 		const patch = diffMicroWidgetProps(
 			publicWidgetProps(lastSentPropsRef.current),

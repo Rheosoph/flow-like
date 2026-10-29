@@ -1,7 +1,15 @@
 // @vitest-environment happy-dom
 import { act, useState } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	type Mock,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import type { INode } from "../../../lib/schema/flow/node";
 import { FlowNodeCommentMenu } from "./flow-node-comment-menu";
 
@@ -40,7 +48,7 @@ const node: INode = {
 
 let root: Root;
 let container: HTMLDivElement;
-let onOpenChange: ReturnType<typeof vi.fn>;
+let onOpenChange: Mock<(open: boolean) => void>;
 
 function Harness() {
 	const [open, setOpen] = useState(true);
@@ -109,7 +117,7 @@ beforeEach(async () => {
 	backend.executeCommand.mockResolvedValue({ id: "saved" });
 	backend.pushCommand.mockResolvedValue(undefined);
 	backend.invalidate.mockResolvedValue(undefined);
-	onOpenChange = vi.fn();
+	onOpenChange = vi.fn<(open: boolean) => void>();
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);

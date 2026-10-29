@@ -202,6 +202,29 @@ describe("persistence", () => {
 		).toThrow("kind");
 	});
 
+	test("activity copy parameters retain bounded text and numbers across reloads", () => {
+		const h = harness();
+		const tray = h.create();
+		const label: ActivityStart["label"] = {
+			code: "command",
+			params: { service: "invoice", count: 2 },
+		};
+		const id = tray.start(item({ label }));
+		expect(
+			h.create().list().find((entry) => entry.id === id)?.label,
+		).toEqual(label);
+		for (const value of [{ secret: "private" }, "x".repeat(513), Infinity]) {
+			expect(() =>
+				tray.start(
+					item({
+						label: { code: "command", params: { value } },
+					} as unknown as ActivityStart),
+				),
+			).toThrow("label.params");
+		}
+		expect(h.create().list()).toHaveLength(1);
+	});
+
 	test("unreadable storage keeps the tray for this page", () => {
 		Object.defineProperty(globalThis, "localStorage", {
 			configurable: true,

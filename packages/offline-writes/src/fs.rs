@@ -115,18 +115,53 @@ pub fn clean_orphaned_tables(root: &Path, retained: &HashSet<String>) -> Result<
     Ok(())
 }
 
+/// An object-store error of the file layer (object_store 0.13) or of Lance (0.14).
+#[cfg(feature = "runtime")]
+pub trait StoreError: std::error::Error + 'static {
+    /// Transport and credential failures arrive as `Generic`.
+    fn is_generic(&self) -> bool;
+}
+
+#[cfg(feature = "runtime")]
+impl StoreError for flow_like_storage::object_store::Error {
+    fn is_generic(&self) -> bool {
+        matches!(self, Self::Generic { .. })
+    }
+}
+
+#[cfg(feature = "runtime")]
+impl StoreError for flow_like_storage::lance_object_store::Error {
+    fn is_generic(&self) -> bool {
+        matches!(self, Self::Generic { .. })
+    }
+}
+
 /// Offline-class object-store errors: connect, DNS and timeout failures, lease refresh
 /// failures (`AuthorizationError::Unavailable`/`Expired`) and final 5xx answers. `extra`
 /// recognizes host-specific error types in the source chain. A 404, failed condition,
 /// invalid credential or access denial is never offline-class.
 #[cfg(feature = "runtime")]
 pub fn is_offline_error(
-    error: &flow_like_storage::object_store::Error,
+    error: &impl StoreError,
     extra: &dyn Fn(&(dyn std::error::Error + 'static)) -> bool,
 ) -> bool {
-    use flow_like_storage::object_store;
+    use flow_like_storage::{lance_object_store, object_store};
     use flow_like_types::authorization::AuthorizationError;
-    if !matches!(error, object_store::Error::Generic { .. }) {
+
+    macro_rules! reqwest_offline {
+        ($error:expr) => {
+            ($error.status().is_none()
+                && ($error.is_connect()
+                    || $error.is_timeout()
+                    || $error.is_body()
+                    || $error.is_request()))
+                || $error
+                    .status()
+                    .is_some_and(|status| status.is_server_error())
+        };
+    }
+
+    if !error.is_generic() {
         return false;
     }
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
@@ -149,15 +184,20 @@ pub fn is_offline_error(
                 return true;
             }
         }
+        if let Some(error) = error.downcast_ref::<lance_object_store::client::HttpError>() {
+            use lance_object_store::client::HttpErrorKind;
+            if matches!(
+                error.kind(),
+                HttpErrorKind::Connect | HttpErrorKind::Timeout | HttpErrorKind::Interrupted
+            ) {
+                return true;
+            }
+        }
         if let Some(error) = error.downcast_ref::<reqwest::Error>() {
-            return (error.status().is_none()
-                && (error.is_connect()
-                    || error.is_timeout()
-                    || error.is_body()
-                    || error.is_request()))
-                || error
-                    .status()
-                    .is_some_and(|status| status.is_server_error());
+            return reqwest_offline!(error);
+        }
+        if let Some(error) = error.downcast_ref::<lance_reqwest::Error>() {
+            return reqwest_offline!(error);
         }
         if let Some(error) = error.downcast_ref::<std::io::Error>() {
             return matches!(

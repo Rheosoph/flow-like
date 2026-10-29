@@ -34,7 +34,9 @@ import {
 } from "../../lib/board-canvas/scene";
 import { collectNodeStatus } from "../../lib/board-canvas/status";
 import { readCanvasTheme } from "../../lib/board-canvas/theme";
+import { type BoardTrace, NO_TRACE } from "../../lib/board-canvas/trace";
 import { isWebkitLite } from "../../lib/platform";
+import { createSignalStore } from "../../lib/realtime/presence-signals-store";
 import { useBoardQualityStore } from "../../state/board-quality-state";
 import { useLogAggregation } from "../../state/log-aggregation-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
@@ -63,6 +65,7 @@ import {
 	NATIVE_NODE_PLANE_Z,
 	StandaloneBoardHost,
 } from "./standalone-board-host";
+import { WireTraceContext } from "./wire-trace";
 
 import type { FlowCanvasProps } from "./flow-board";
 
@@ -195,6 +198,7 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 	const viewportMoving = useRef(false);
 	const [projection] = useState(createNativeFlowProjectionCache);
 	const [domGeometry] = useState(createDomFlowGeometryCache);
+	const [wireTrace] = useState(() => createSignalStore<BoardTrace>(NO_TRACE));
 	const [retainedDomIds, setRetainedDomIds] = useState<Set<string>>(
 		() => new Set(),
 	);
@@ -670,152 +674,161 @@ export function EguiFlowCanvas(props: FlowCanvasProps) {
 			}
 		>
 			{flowMounted && (
-				<CanvasHost
-					exporting={exporting}
-					defaultViewport={handoverViewport()}
-					suppressHydrationWarning
-					deleteKeyCode={null}
-					onContextMenu={props.onContextMenu}
-					nodesDraggable={props.nodesInteractive && !nativePending}
-					nodesConnectable={props.nodesInteractive && !nativePending}
-					onlyRenderVisibleElements={
-						exporting ? false : props.onlyRenderVisible
-					}
-					onInit={props.onInit}
-					onNodeMouseEnter={onNodeMouseEnter}
-					onNodeMouseLeave={onNodeMouseLeave}
-					snapToGrid={false}
-					ref={props.flowRef}
-					colorMode={props.colorMode}
-					nodes={nodes}
-					nodeTypes={props.nodeTypes}
-					edges={edges}
-					edgeTypes={props.edgeTypes}
-					maxZoom={MAX_ZOOM}
-					minZoom={minZoom}
-					onNodeDoubleClick={props.onNodeDoubleClick}
-					onEdgeDoubleClick={props.onEdgeDoubleClick}
-					onNodesChange={props.onNodesChange}
-					onEdgesChange={props.onEdgesChange}
-					onNodeDragStop={props.onNodeDragStop}
-					onNodeDrag={props.onNodeDrag}
-					onNodeDragStart={props.onNodeDragStart}
-					onSelectionDragStart={(event, nodes) => {
-						if (nodes[0]) props.onNodeDragStart?.(event, nodes[0], nodes);
-					}}
-					onSelectionDrag={(event, nodes) => {
-						if (nodes[0]) props.onNodeDrag?.(event, nodes[0], nodes);
-					}}
-					onSelectionDragStop={(event, nodes) => {
-						if (nodes[0]) props.onNodeDragStop?.(event, nodes[0], nodes);
-					}}
-					onPaneClick={props.onPaneClick}
-					isValidConnection={props.isValidConnection}
-					onConnect={props.onConnect}
-					onSelectionChange={props.onSelectionChange}
-					onReconnect={props.onReconnect}
-					onReconnectStart={props.onReconnectStart}
-					onMoveStart={renderer === "egui" ? onViewportMoveStart : undefined}
-					onMoveEnd={renderer === "egui" ? onViewportMoveEnd : props.onMoveEnd}
-					onReconnectEnd={props.onReconnectEnd}
-					onConnectEnd={props.onConnectEnd}
-					fitView={renderer === "egui" || !flow.viewportInitialized}
-					proOptions={{ hideAttribution: true }}
+				<WireTraceContext.Provider
+					value={renderer === "egui" ? wireTrace : undefined}
 				>
-					{renderer === "egui" && scene && nativePalette && !exporting && (
-						<CanvasBoundary key={props.scopeKey} onError={fail}>
-							<NativeViewportPlane zIndex={NATIVE_EDGE_PLANE_Z}>
-								<EguiCanvasLayer
-									scene={scene}
-									palette={nativePalette}
-									boardProps={nativeBoardProps}
-									onError={fail}
-									onReady={onEdgesReady}
-									lod
-									paintLayer="edges"
-									status={nodeStatus}
-									active={active}
-									interactive={false}
+					<CanvasHost
+						exporting={exporting}
+						defaultViewport={handoverViewport()}
+						suppressHydrationWarning
+						deleteKeyCode={null}
+						onContextMenu={props.onContextMenu}
+						nodesDraggable={props.nodesInteractive && !nativePending}
+						nodesConnectable={props.nodesInteractive && !nativePending}
+						onlyRenderVisibleElements={
+							exporting ? false : props.onlyRenderVisible
+						}
+						onInit={props.onInit}
+						onNodeMouseEnter={onNodeMouseEnter}
+						onNodeMouseLeave={onNodeMouseLeave}
+						snapToGrid={false}
+						ref={props.flowRef}
+						colorMode={props.colorMode}
+						nodes={nodes}
+						nodeTypes={props.nodeTypes}
+						edges={edges}
+						edgeTypes={props.edgeTypes}
+						maxZoom={MAX_ZOOM}
+						minZoom={minZoom}
+						onNodeDoubleClick={props.onNodeDoubleClick}
+						onEdgeDoubleClick={props.onEdgeDoubleClick}
+						onNodesChange={props.onNodesChange}
+						onEdgesChange={props.onEdgesChange}
+						onNodeDragStop={props.onNodeDragStop}
+						onNodeDrag={props.onNodeDrag}
+						onNodeDragStart={props.onNodeDragStart}
+						onSelectionDragStart={(event, nodes) => {
+							if (nodes[0]) props.onNodeDragStart?.(event, nodes[0], nodes);
+						}}
+						onSelectionDrag={(event, nodes) => {
+							if (nodes[0]) props.onNodeDrag?.(event, nodes[0], nodes);
+						}}
+						onSelectionDragStop={(event, nodes) => {
+							if (nodes[0]) props.onNodeDragStop?.(event, nodes[0], nodes);
+						}}
+						onPaneClick={props.onPaneClick}
+						isValidConnection={props.isValidConnection}
+						onConnect={props.onConnect}
+						onSelectionChange={props.onSelectionChange}
+						onReconnect={props.onReconnect}
+						onReconnectStart={props.onReconnectStart}
+						onMoveStart={renderer === "egui" ? onViewportMoveStart : undefined}
+						onMoveEnd={
+							renderer === "egui" ? onViewportMoveEnd : props.onMoveEnd
+						}
+						onReconnectEnd={props.onReconnectEnd}
+						onConnectEnd={props.onConnectEnd}
+						fitView={renderer === "egui" || !flow.viewportInitialized}
+						proOptions={{ hideAttribution: true }}
+					>
+						{renderer === "egui" && scene && nativePalette && !exporting && (
+							<CanvasBoundary key={props.scopeKey} onError={fail}>
+								<NativeViewportPlane zIndex={NATIVE_EDGE_PLANE_Z}>
+									<EguiCanvasLayer
+										scene={scene}
+										palette={nativePalette}
+										boardProps={nativeBoardProps}
+										onError={fail}
+										onReady={onEdgesReady}
+										lod
+										paintLayer="edges"
+										status={nodeStatus}
+										trace={wireTrace}
+										active={active}
+										interactive={false}
+									/>
+								</NativeViewportPlane>
+								<NativeViewportPlane zIndex={NATIVE_NODE_PLANE_Z}>
+									<EguiCanvasLayer
+										scene={scene}
+										palette={nativePalette}
+										boardProps={nativeBoardProps}
+										onError={fail}
+										onReady={onNodesReady}
+										lod
+										paintLayer="nodes"
+										status={nodeStatus}
+										trace={wireTrace}
+										runs={runs}
+										onHoverNode={onHoverNode}
+									/>
+								</NativeViewportPlane>
+							</CanvasBoundary>
+						)}
+						{props.overlay}
+						{!exporting && !nativePending && !props.loadingStatus && (
+							<LargeGraphNavigation
+								// Sibling keys must differ from the canvas boundary's, or React drops one on export.
+								key={`navigation:${props.scopeKey}`}
+								nodes={props.nodes ?? []}
+								native={renderer === "egui"}
+							/>
+						)}
+						{renderer === "egui" ? (
+							<>
+								<StandaloneBoardControls
+									onScreenshot={onScreenshot}
+									exporting={exporting}
 								/>
-							</NativeViewportPlane>
-							<NativeViewportPlane zIndex={NATIVE_NODE_PLANE_Z}>
-								<EguiCanvasLayer
-									scene={scene}
-									palette={nativePalette}
-									boardProps={nativeBoardProps}
-									onError={fail}
-									onReady={onNodesReady}
-									lod
-									paintLayer="nodes"
-									status={nodeStatus}
-									runs={runs}
-									onHoverNode={onHoverNode}
+								<StandaloneBoardMiniMap
+									nodes={nodes ?? []}
+									nodeColor={props.miniMapNodeColor}
+									themeKey={theme}
 								/>
-							</NativeViewportPlane>
-						</CanvasBoundary>
-					)}
-					{props.overlay}
-					{!exporting && !nativePending && !props.loadingStatus && (
-						<LargeGraphNavigation
-							key={props.scopeKey}
-							nodes={props.nodes ?? []}
-							native={renderer === "egui"}
-						/>
-					)}
-					{renderer === "egui" ? (
-						<>
-							<StandaloneBoardControls
-								onScreenshot={onScreenshot}
-								exporting={exporting}
-							/>
-							<StandaloneBoardMiniMap
-								nodes={nodes ?? []}
-								nodeColor={props.miniMapNodeColor}
-								themeKey={theme}
-							/>
-							<StandaloneBoardBackground insideLayer={props.insideLayer} />
-						</>
-					) : (
-						<>
-							<Controls>
-								<ControlButton
-									onClick={onScreenshot}
-									disabled={exporting}
-									aria-busy={exporting}
-									aria-label={t("captureScreenshot", "Capture screenshot")}
-								>
-									<ShareIcon className="size-4" />
-								</ControlButton>
-							</Controls>
-							<MiniMap
-								pannable
-								zoomable
-								bgColor={
-									isWebkitLite()
-										? "var(--background)"
-										: "color-mix(in oklch, var(--background) 80%, transparent)"
-								}
-								maskColor="rgb(127 127 127 / 0.15)"
-								nodeColor={props.miniMapNodeColor}
-							/>
-							<Background
-								variant={
-									props.insideLayer
-										? BackgroundVariant.Lines
-										: BackgroundVariant.Dots
-								}
-								color={
-									props.insideLayer
-										? "color-mix(in oklch, var(--foreground) 5%, transparent)"
-										: "color-mix(in oklch, var(--foreground) 20%, transparent)"
-								}
-								bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
-								gap={12}
-								size={1}
-							/>
-						</>
-					)}
-				</CanvasHost>
+								<StandaloneBoardBackground insideLayer={props.insideLayer} />
+							</>
+						) : (
+							<>
+								<Controls>
+									<ControlButton
+										onClick={onScreenshot}
+										disabled={exporting}
+										aria-busy={exporting}
+										aria-label={t("captureScreenshot", "Capture screenshot")}
+									>
+										<ShareIcon className="size-4" />
+									</ControlButton>
+								</Controls>
+								<MiniMap
+									pannable
+									zoomable
+									bgColor={
+										isWebkitLite()
+											? "var(--background)"
+											: "color-mix(in oklch, var(--background) 80%, transparent)"
+									}
+									maskColor="rgb(127 127 127 / 0.15)"
+									nodeColor={props.miniMapNodeColor}
+								/>
+								<Background
+									variant={
+										props.insideLayer
+											? BackgroundVariant.Lines
+											: BackgroundVariant.Dots
+									}
+									color={
+										props.insideLayer
+											? "color-mix(in oklch, var(--foreground) 5%, transparent)"
+											: "color-mix(in oklch, var(--foreground) 20%, transparent)"
+									}
+									bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
+									gap={12}
+									size={1}
+								/>
+							</>
+						)}
+					</CanvasHost>
+				</WireTraceContext.Provider>
 			)}
 			{(props.loadingStatus || !preferenceReady || nativePending) && (
 				<output

@@ -26,4 +26,5 @@ futures = { version = "0.3", optional = true }
 
 [features]
 default = []
+storage-ops = []
 rig = ["dep:rig", "dep:futures"]

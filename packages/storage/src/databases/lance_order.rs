@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::DataType;
@@ -58,7 +58,7 @@ impl PhysicalOptimizerRule for LanceOrderLimitPushdown {
         }
         Ok(plan
             .transform_down(|plan| {
-                let Some(sort) = plan.as_any().downcast_ref::<SortExec>() else {
+                let Some(sort) = plan.downcast_ref::<SortExec>() else {
                     return Ok(Transformed::no(plan));
                 };
                 let Some(fetch) = sort
@@ -97,14 +97,14 @@ fn ordered_input(
     ordering: &[PhysicalSortExpr],
     fetch: usize,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    if let Some(scan) = input.as_any().downcast_ref::<LanceScanSourceExec>() {
+    if let Some(scan) = input.downcast_ref::<LanceScanSourceExec>() {
         if scan.source_limit.is_some() || ordering.is_empty() {
             return Ok(None);
         }
         let mut columns = Vec::with_capacity(ordering.len());
         let schema = input.schema();
         for order in ordering {
-            let Some(column) = order.expr.as_any().downcast_ref::<Column>() else {
+            let Some(column) = order.expr.downcast_ref::<Column>() else {
                 return Ok(None);
             };
             let Some(field) = schema.fields().get(column.index()) else {
@@ -145,7 +145,7 @@ fn ordered_input(
             properties,
         })));
     }
-    if let Some(projection) = input.as_any().downcast_ref::<ProjectionExec>() {
+    if let Some(projection) = input.downcast_ref::<ProjectionExec>() {
         // Payload expressions stay above the limited native scan. A computed
         // sort key or a volatile payload keeps the ordinary DataFusion plan.
         if projection.expr().iter().any(|expr| volatile(&expr.expr)) {
@@ -153,13 +153,13 @@ fn ordered_input(
         }
         let mut child_order = Vec::with_capacity(ordering.len());
         for order in ordering {
-            let Some(column) = order.expr.as_any().downcast_ref::<Column>() else {
+            let Some(column) = order.expr.downcast_ref::<Column>() else {
                 return Ok(None);
             };
             let Some(projected) = projection.expr().get(column.index()) else {
                 return Ok(None);
             };
-            let Some(child_column) = projected.expr.as_any().downcast_ref::<Column>() else {
+            let Some(child_column) = projected.expr.downcast_ref::<Column>() else {
                 return Ok(None);
             };
             child_order.push(PhysicalSortExpr {
@@ -180,15 +180,14 @@ fn ordered_input(
 /// original meaning. Unknown source shapes use the original plan.
 fn snapshot(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<Dataset>> {
     fn visit(plan: &Arc<dyn ExecutionPlan>, found: &mut Option<Arc<Dataset>>) -> bool {
-        let dataset = if let Some(scan) = plan.as_any().downcast_ref::<LanceScanExec>() {
+        let dataset = if let Some(scan) = plan.downcast_ref::<LanceScanExec>() {
             Some(scan.dataset())
-        } else if let Some(scan) = plan.as_any().downcast_ref::<FilteredReadExec>() {
+        } else if let Some(scan) = plan.downcast_ref::<FilteredReadExec>() {
             Some(scan.dataset())
-        } else if let Some(take) = plan.as_any().downcast_ref::<TakeExec>() {
+        } else if let Some(take) = plan.downcast_ref::<TakeExec>() {
             Some(take.dataset())
         } else {
-            plan.as_any()
-                .downcast_ref::<ScalarIndexExec>()
+            plan.downcast_ref::<ScalarIndexExec>()
                 .map(|scan| scan.dataset())
         };
         if let Some(dataset) = dataset {
@@ -266,9 +265,6 @@ impl ExecutionPlan for LanceScanSourceExec {
     fn name(&self) -> &str {
         "LanceScanSourceExec"
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn properties(&self) -> &Arc<PlanProperties> {
         self.input.properties()
     }
@@ -303,7 +299,7 @@ impl ExecutionPlan for LanceScanSourceExec {
     ) -> Result<SendableRecordBatchStream> {
         self.input.execute(partition, context)
     }
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 }
@@ -371,9 +367,6 @@ impl DisplayAs for NativeLanceTopKExec {
 impl ExecutionPlan for NativeLanceTopKExec {
     fn name(&self) -> &str {
         "NativeLanceTopKExec"
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
@@ -513,7 +506,7 @@ mod tests {
     }
 
     fn find_native(plan: &Arc<dyn ExecutionPlan>) -> Option<&NativeLanceTopKExec> {
-        if let Some(native) = plan.as_any().downcast_ref::<NativeLanceTopKExec>() {
+        if let Some(native) = plan.downcast_ref::<NativeLanceTopKExec>() {
             return Some(native);
         }
         plan.children().into_iter().find_map(find_native)
@@ -560,7 +553,8 @@ mod tests {
         let mut deferred_content = false;
         let mut top_k = false;
         native_plan.apply(|node| {
-            if node.as_any().is::<TakeExec>()
+            // Lance 13 takes deferred columns with a row-id-fed FilteredReadExec.
+            if (node.is::<TakeExec>() || node.is::<FilteredReadExec>())
                 && node.schema().field_with_name("content").is_ok()
                 && node
                     .children()
@@ -568,7 +562,7 @@ mod tests {
                     .all(|child| child.schema().field_with_name("content").is_err())
             {
                 node.apply(|child| {
-                    if let Some(sort) = child.as_any().downcast_ref::<SortExec>() {
+                    if let Some(sort) = child.downcast_ref::<SortExec>() {
                         top_k |= sort.fetch() == Some(10);
                     }
                     Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
@@ -646,10 +640,8 @@ mod tests {
         let native = find_native(&plan).expect("indexed native top-K");
         let mut indexed = false;
         native.source.input.apply(|node| {
-            indexed |= node.as_any().is::<ScalarIndexExec>()
-                || node
-                    .as_any()
-                    .is::<lance::io::exec::scalar_index::MaterializeIndexExec>();
+            indexed |= node.is::<ScalarIndexExec>()
+                || node.is::<lance::io::exec::scalar_index::MaterializeIndexExec>();
             Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
         })?;
         assert!(

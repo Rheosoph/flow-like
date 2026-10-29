@@ -253,8 +253,7 @@ impl NodeLogic for FitLogisticRegressionNode {
 
                 let records = {
                     let cached_db = database.load(context).await?;
-                    cached_db.ensure_flushed().await?;
-                    let database = cached_db.db.read().await;
+                    let database = cached_db.flushed_read().await?;
                     let schema = database.schema().await?;
                     let existing_cols: HashSet<String> =
                         schema.fields.iter().map(|f| f.name().clone()).collect();

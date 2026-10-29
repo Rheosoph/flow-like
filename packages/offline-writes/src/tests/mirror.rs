@@ -34,6 +34,11 @@ use flow_like_storage::{
     lance_io::object_store::{
         ObjectStore as LanceStore, ObjectStoreParams, ObjectStoreProvider, ObjectStoreRegistry,
     },
+    lance_object_store::{
+        self, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+        local::LocalFileSystem, path::Path as ObjectPath,
+    },
     lancedb::{
         self, Connection, Table,
         index::{
@@ -42,11 +47,6 @@ use flow_like_storage::{
             vector::{IvfFlatIndexBuilder, IvfPqIndexBuilder},
         },
         table::{CompactionOptions, Duration as LanceDuration, OptimizeAction},
-    },
-    object_store::{
-        self, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
-        local::LocalFileSystem, path::Path as ObjectPath,
     },
 };
 use flow_like_types::reqwest::Url;
@@ -101,9 +101,9 @@ impl CloudStore {
         self.faults.lock().unwrap()
     }
 
-    fn reachable(&self) -> object_store::Result<()> {
+    fn reachable(&self) -> lance_object_store::Result<()> {
         if self.faults().offline {
-            return Err(object_store::Error::Generic {
+            return Err(lance_object_store::Error::Generic {
                 store: "cloudsim",
                 source: Box::new(std::io::Error::new(
                     std::io::ErrorKind::ConnectionRefused,
@@ -156,7 +156,7 @@ impl ObjectStore for CloudStore {
         location: &ObjectPath,
         payload: PutPayload,
         options: PutOptions,
-    ) -> object_store::Result<PutResult> {
+    ) -> lance_object_store::Result<PutResult> {
         self.reachable()?;
         self.inner.put_opts(location, payload, options).await
     }
@@ -165,7 +165,7 @@ impl ObjectStore for CloudStore {
         &self,
         location: &ObjectPath,
         options: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+    ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
         self.reachable()?;
         self.inner.put_multipart_opts(location, options).await
     }
@@ -174,7 +174,7 @@ impl ObjectStore for CloudStore {
         &self,
         location: &ObjectPath,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         self.reachable()?;
         let kind = match (options.head, &options.range) {
             (true, _) => Get::Head,
@@ -191,15 +191,15 @@ impl ObjectStore for CloudStore {
 
     fn delete_stream(
         &self,
-        locations: BoxStream<'static, object_store::Result<ObjectPath>>,
-    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+        locations: BoxStream<'static, lance_object_store::Result<ObjectPath>>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectPath>> {
         self.inner.delete_stream(locations)
     }
 
     fn list(
         &self,
         prefix: Option<&ObjectPath>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         if let Err(error) = self.reachable() {
             return futures_util::stream::once(async move { Err(error) }).boxed();
         }
@@ -209,7 +209,7 @@ impl ObjectStore for CloudStore {
     async fn list_with_delimiter(
         &self,
         prefix: Option<&ObjectPath>,
-    ) -> object_store::Result<ListResult> {
+    ) -> lance_object_store::Result<ListResult> {
         self.reachable()?;
         self.inner.list_with_delimiter(prefix).await
     }
@@ -219,7 +219,7 @@ impl ObjectStore for CloudStore {
         from: &ObjectPath,
         to: &ObjectPath,
         options: CopyOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         self.reachable()?;
         self.inner.copy_opts(from, to, options).await
     }
@@ -229,7 +229,7 @@ impl ObjectStore for CloudStore {
         from: &ObjectPath,
         to: &ObjectPath,
         options: RenameOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         self.reachable()?;
         self.inner.rename_opts(from, to, options).await
     }
@@ -671,7 +671,7 @@ impl Device {
         };
         self.writer
             .managed_store(
-                &ObjectPath::parse(prefix)?,
+                &flow_like_storage::Path::parse(prefix)?,
                 &table.table,
                 DatabaseSelector::default(),
             )
@@ -1908,11 +1908,10 @@ async fn key_validation_scans_the_cloud_version_without_caching() -> Result<()> 
         error,
         "Column 'id' is not a unique, non-empty key in 'dupes': 4 rows are empty or duplicated."
     );
-    assert!(
-        !device
-            .writer
-            .table_is_managed(&ObjectPath::from("apps/project/storage/db"), "dupes")
-    );
+    assert!(!device.writer.table_is_managed(
+        &flow_like_storage::Path::from("apps/project/storage/db"),
+        "dupes"
+    ));
     assert_eq!(device.writer.table_states().await?.len(), 1);
     assert_eq!(device.mirror().cache_bytes(), 0);
     Ok(())

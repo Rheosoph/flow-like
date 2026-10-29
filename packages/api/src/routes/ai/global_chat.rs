@@ -45,9 +45,8 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like::bit::BitTypes;
-use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse};
+use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse, flowpilot_thinking};
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
 use flow_like::flow::copilot::tool_spec::{
@@ -76,6 +75,7 @@ use crate::{
     state::AppState,
 };
 
+mod attachments;
 pub mod feedback;
 
 pub fn routes() -> Router<AppState> {
@@ -100,70 +100,6 @@ pub fn routes() -> Router<AppState> {
 const MAX_PROMPT_CHARS: usize = 20_000;
 const MAX_HISTORY_MESSAGES: usize = 32;
 const MAX_HISTORY_MESSAGE_CHARS: usize = 8_000;
-const MAX_ATTACHMENT_URLS: usize = 8;
-const MAX_ATTACHMENT_BYTES: usize = 512 * 1024 * 1024;
-
-/// Infer an image media type from a (signed) attachment URL's extension, defaulting to PNG.
-fn attachment_media_type(url: &str) -> String {
-    let name = url.split('?').next().unwrap_or(url);
-    match name
-        .rsplit('.')
-        .next()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg".to_string(),
-        Some("gif") => "image/gif".to_string(),
-        Some("webp") => "image/webp".to_string(),
-        _ => "image/png".to_string(),
-    }
-}
-
-/// Fetch signed attachment URLs and base64-encode them into `ChatImage`s for the model. Only http(s)
-/// URLs (the browser's tmp-upload download links) are supported; oversized or failed fetches are
-/// skipped. Mirrors the desktop `resolve_attachment_images` http branch.
-async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
-    let mut images = Vec::new();
-    for url in urls.iter().take(MAX_ATTACHMENT_URLS) {
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            continue;
-        }
-        match flow_like_types::reqwest::get(url).await {
-            Ok(response) => {
-                // Reject oversized attachments by Content-Length before buffering the body into
-                // memory (a malicious URL could otherwise OOM the process). The post-read length
-                // check below stays as a backstop for a missing or dishonest Content-Length.
-                if response
-                    .content_length()
-                    .is_some_and(|len| len > MAX_ATTACHMENT_BYTES as u64)
-                {
-                    tracing::warn!("[global_chat] attachment exceeds size limit, skipped");
-                    continue;
-                }
-                match response.bytes().await {
-                    Ok(bytes) if bytes.len() <= MAX_ATTACHMENT_BYTES => {
-                        images.push(ChatImage {
-                            data: STANDARD.encode(&bytes),
-                            media_type: attachment_media_type(url),
-                        });
-                    }
-                    Ok(_) => {
-                        tracing::warn!("[global_chat] attachment exceeds size limit, skipped")
-                    }
-                    Err(error) => {
-                        let error = error.without_url();
-                        tracing::warn!(%error, "[global_chat] attachment read failed")
-                    }
-                }
-            }
-            Err(error) => {
-                let error = error.without_url();
-                tracing::warn!(%error, "[global_chat] attachment fetch failed");
-            }
-        }
-    }
-    images
-}
 
 // ---------------------------------------------------------------------------------------------
 // Run ids and channels
@@ -233,8 +169,10 @@ pub struct GlobalChatRequest {
     /// Images attached to the current prompt (base64).
     #[serde(default)]
     pub current_images: Option<Vec<ChatImage>>,
-    /// Signed (tmp-upload) image URLs to fetch server-side and attach — the browser uploads files to
-    /// `/tmp` first and sends the download URLs here instead of inlining base64.
+    /// Image URLs to fetch server-side and attach — the browser uploads files to `/tmp` first and
+    /// sends the signed download URLs here instead of inlining base64. Only the caller's own
+    /// uploads and public HTTPS URLs are fetched, each bounded in size and time; anything else, or
+    /// a fetch that fails, is skipped.
     #[serde(default)]
     pub attachment_urls: Option<Vec<String>>,
     /// Every attachment on the current message (name/type/size), including non-image files the model
@@ -244,6 +182,10 @@ pub struct GlobalChatRequest {
     /// The Bits model id to use. Omit to let the profile pick its best model.
     #[serde(default)]
     pub model_id: Option<String>,
+    /// Thinking level for the model: `off`, `low`, `mid` or `high`. Omit for `low`. A level the
+    /// model rejects is left out of the run.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     /// The embedding Bits model id enabling profile-scoped semantic memory. Omit to disable memory.
     #[serde(default)]
     pub embedding_model_id: Option<String>,
@@ -1403,7 +1345,7 @@ pub(crate) async fn run_global_chat(
     let current_images = {
         let mut images = payload.current_images.take().unwrap_or_default();
         if let Some(urls) = payload.attachment_urls.as_deref() {
-            images.extend(resolve_attachment_images(urls).await);
+            images.extend(attachments::resolve_attachment_images(&state, &sub, urls).await);
         }
         (!images.is_empty()).then_some(images)
     };
@@ -1438,6 +1380,7 @@ pub(crate) async fn run_global_chat(
             current_images,
             payload.history,
             payload.model_id,
+            Some(flowpilot_thinking(payload.reasoning_effort.as_deref())),
             token,
             bridge,
             memory,

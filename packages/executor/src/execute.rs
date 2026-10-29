@@ -325,8 +325,9 @@ pub(crate) fn validate_executor_request_claims(
 /// request credentials, the logs database builder, the server execution
 /// environment and — when the run has a hub — the hub as the source of the
 /// app's own widgets and of its pinned packages' widgets, which keeps
-/// `Instantiate Widget` off the meta store. WASM registry overlays are applied
-/// by the caller.
+/// `Instantiate Widget` off the meta store, and as the model relay for the
+/// private Bits of the run's profile. WASM registry overlays are applied by the
+/// caller.
 ///
 /// There is deliberately no meta store. Boards arrive as presigned compiled
 /// artifacts and widgets come from the hub, so the run credential carries no
@@ -765,11 +766,11 @@ async fn execute_inner(
     // Build FlowLike state from the request credentials
     let state = build_flow_state(
         &request.credentials,
-        Some(HubAccess {
-            callback_url: claims.callback_url.clone(),
-            jwt: request.executor_jwt.clone(),
-            hosted_frontend: claims.hosted_frontend,
-        }),
+        Some(HubAccess::for_run(
+            &claims,
+            &request.executor_jwt,
+            request.profile.as_ref(),
+        )),
     )
     .await?;
     let execution_environment = state.execution_environment;
@@ -985,10 +986,7 @@ async fn execute_inner(
         "Creating InternalRun with predetermined run_id"
     );
 
-    let context_token = request
-        .token
-        .clone()
-        .or_else(|| Some(request.executor_jwt.clone()));
+    let context_token = Some(request.executor_jwt.clone());
 
     let channel = match crate::channel::build_run_channel(
         request.channel.as_ref(),
@@ -2704,6 +2702,8 @@ mod hub_widget_source_tests {
             callback_url: "http://127.0.0.1:9".into(),
             jwt: "jwt".into(),
             hosted_frontend: false,
+            app_id: "app-1".into(),
+            relay_ids: Vec::new(),
         };
 
         let with_hub = build_flow_state(&credentials, Some(hub))

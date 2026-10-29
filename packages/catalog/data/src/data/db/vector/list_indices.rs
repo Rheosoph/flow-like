@@ -81,8 +81,7 @@ impl NodeLogic for ListIndicesNode {
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
 
         let indices = database.inner().list_indices().await?;
 

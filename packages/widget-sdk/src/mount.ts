@@ -45,6 +45,11 @@ import {
 	createWidgetMicrophoneClient,
 } from "./microphone";
 import { dispatchWidgetQuery } from "./query";
+import {
+	type ResourceReference,
+	type WidgetResourceOptions,
+	createWidgetResourceClient,
+} from "./resource";
 
 export const INIT_TIMEOUT_MS = 300;
 
@@ -76,6 +81,11 @@ export interface WidgetBridge<
 	stopMedia(): void;
 	/** Hands a file to the host for upload; needs the `uploads` capability. */
 	uploadFile(file: Blob, options?: WidgetUploadOptions): Promise<WidgetFile>;
+	/** Loads a resource granted by the host; needs the `resources` capability. */
+	resolveResource(
+		reference: ResourceReference,
+		options?: WidgetResourceOptions,
+	): Promise<Blob>;
 	emit<Name extends keyof E & string>(
 		name: Name,
 		...args: EmitPayloadArgs<E, Name>
@@ -198,6 +208,7 @@ export function mountFlowWidget<
 	const microphone = createWidgetMicrophoneClient(post, $capabilities.get);
 	const media = createWidgetMediaClient(post, $capabilities.get);
 	const uploads = createWidgetUploadClient(post, $capabilities.get);
+	const resources = createWidgetResourceClient(post, $capabilities.get);
 
 	const setAndApplyTheme = (theme: ThemeState) => {
 		$theme.set(theme);
@@ -234,6 +245,7 @@ export function mountFlowWidget<
 		microphone.reset();
 		media.reset();
 		uploads.reset();
+		resources.reset();
 		$capabilities.set(payload.capabilities ?? {});
 		nonce = envelope.nonce;
 		instanceId = payload.instanceId || envelope.instanceId;
@@ -282,6 +294,7 @@ export function mountFlowWidget<
 		microphone.handle(envelope);
 		media.handle(envelope);
 		uploads.handle(envelope);
+		resources.handle(envelope);
 		switch (envelope.type) {
 			case "capabilities:update":
 				$capabilities.set(envelope.payload as InitCapabilities);
@@ -362,6 +375,7 @@ export function mountFlowWidget<
 		microphone.dispose();
 		media.dispose();
 		uploads.dispose();
+		resources.dispose();
 		window.removeEventListener("message", onMessage);
 		if (standaloneTimer !== null) {
 			clearTimeout(standaloneTimer);
@@ -389,6 +403,7 @@ export function mountFlowWidget<
 		pauseMedia: media.pauseMedia,
 		stopMedia: media.stopMedia,
 		uploadFile: uploads.uploadFile,
+		resolveResource: resources.resolveResource,
 		emit,
 		onQuery,
 		setValues,

@@ -260,6 +260,8 @@ export interface CopilotMessage {
 	planSteps?: UnifiedPlanStep[];
 	/** Context node IDs (board mode) */
 	contextNodeIds?: string[];
+	/** Thinking level a user turn was sent with: a Bits level or the agent backend's own effort id. */
+	thinking?: string;
 	/** Applied components (UI mode) */
 	appliedComponents?: SurfaceComponent[];
 	/** Executed board commands (board mode) */

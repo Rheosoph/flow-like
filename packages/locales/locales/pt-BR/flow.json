@@ -2086,5 +2086,8 @@
 	"eguiPinProtectedExplanation": "",
 	"dynamicPinGroupChanged": "",
 	"dynamicPinBoardUnavailable": "",
-	"dynamicPinCannotRemove": ""
+	"dynamicPinCannotRemove": "",
+	"wireTraceFocused": "",
+	"wireTraceMoved": "",
+	"wireTracePreviewHint": ""
 }

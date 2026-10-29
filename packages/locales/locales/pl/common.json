@@ -120,6 +120,10 @@
 		"title": ""
 	},
 	"loadingDevices": "",
+	"localTriggerChoosesTokenNext": "",
+	"localTriggerMovesFromApp": "",
+	"localTriggerTokenDescription": "",
+	"localTriggerTokenTitle": "",
 	"lockedStorage": {
 		"actionsFor": "",
 		"allVersionDetails": "",
@@ -230,6 +234,7 @@
 	"routeCheckUnavailable": "",
 	"runsInDesktopApp": "",
 	"runsOnServer": "",
+	"saveWithoutTrigger": "",
 	"schemaAllowedToRead": "",
 	"schemaAllowedToReadAdminOnly": "",
 	"schemaAllowedToReadEveryone": "",
@@ -263,6 +268,7 @@
 	"triggeredBy": "",
 	"triggerNothingToSet": "",
 	"triggerSettings": "",
+	"triggerTokenWrongAccount": "",
 	"unableToSignIn": "",
 	"undeclaredEvents": "",
 	"updateAllWidgets": "",

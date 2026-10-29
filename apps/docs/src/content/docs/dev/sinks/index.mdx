@@ -42,6 +42,8 @@ The exact payload is sink-specific. Do not assume that local polling, a hosted b
 
 The event editor only offers targets that are available in the current environment.
 
+A remote sink runs its event as the user who last saved, restored, edited or toggled it, with that user's role in the app, so it needs no personal access token. A local sink of an online app signs in to the hub with a personal access token of the account signed in to the desktop app; the desktop asks for it the first time a computer runs the event, and a sink without one does not fire.
+
 ## Hub capabilities
 
 `supported_sinks` tells clients which sink types the hub can execute remotely. It does not start the required worker or configure a third-party webhook by itself.

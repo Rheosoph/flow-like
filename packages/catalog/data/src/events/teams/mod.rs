@@ -10,6 +10,8 @@ use flow_like_types::{Value, anyhow, async_trait, json::json, reqwest};
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
+use crate::remote_util::{log_shadow_refusal, refuse_in_shadow};
+
 pub mod context;
 pub mod lookup;
 
@@ -147,13 +149,13 @@ struct TeamsCall {
 impl TeamsCall {
     async fn bind(context: &mut ExecutionContext, action: &str) -> flow_like_types::Result<Self> {
         context.deactivate_exec_pin("exec_out").await?;
+        if let Err(refusal) = refuse_in_shadow(context, action) {
+            return Err(log_shadow_refusal(context, refusal));
+        }
         let app = context
             .execution_cache
             .as_ref()
             .ok_or_else(|| anyhow!("Teams nodes require a server event execution"))?;
-        if app.shadow {
-            return Err(anyhow!("Shadow runs cannot {action}"));
-        }
         let app_id = app.app_id.clone();
         let auth = context
             .executor_api_auth
@@ -294,7 +296,21 @@ impl NodeLogic for TeamsUpdateMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow::pin::PinType;
+    use flow_like::{
+        flow::{
+            board::ExecutionStage,
+            execution::{
+                LogLevel, context::ExecutionContextCache, internal_node::InternalNode,
+                internal_pin::InternalPin,
+            },
+            pin::PinType,
+        },
+        profile::Profile,
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_types::sync::{Mutex, RwLock};
+    use std::sync::{Arc, Weak};
 
     #[test]
     fn requires_a_server_session_reference() {
@@ -370,6 +386,73 @@ mod tests {
         }
         for status in [400, 401, 403, 404, 413, 422] {
             assert!(!transient(reqwest::StatusCode::from_u16(status).unwrap()));
+        }
+    }
+
+    async fn replay_context() -> ExecutionContext {
+        let logic: Arc<dyn NodeLogic> = Arc::new(TeamsSendMessage);
+        let node = logic.get_node();
+        let pins = node
+            .pins
+            .values()
+            .map(|pin| (pin.id.clone(), Arc::new(InternalPin::new(pin, false))))
+            .collect();
+        let node = Arc::new(InternalNode::new(node, pins, logic, Default::default()));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut context = ExecutionContext::new(
+            Arc::new(Default::default()),
+            &Weak::new(),
+            &state,
+            &node,
+            &Arc::new(Mutex::new(Default::default())),
+            &Arc::new(RwLock::new(Default::default())),
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            Some("executor-jwt".into()),
+            Arc::new(Default::default()),
+            None,
+        )
+        .await;
+        context.execution_cache = Some(ExecutionContextCache {
+            stores: state.config.read().await.stores.clone(),
+            app_id: "app-1".into(),
+            model_usage_app_id: Some("app-1".into()),
+            board_dir: flow_like_storage::Path::from("apps/app-1"),
+            board_id: "board".into(),
+            node_id: "node".into(),
+            sub: "alice".into(),
+            shadow: true,
+        });
+        context
+    }
+
+    #[tokio::test]
+    async fn replays_refuse_every_teams_call_with_the_graded_refusal_and_log_it() {
+        for action in [
+            "send Teams messages",
+            "read Teams messages",
+            "read Teams members",
+        ] {
+            let mut context = replay_context().await;
+            let refusal =
+                format!("SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot {action}");
+            let error = TeamsCall::bind(&mut context, action).await.err().unwrap();
+            assert_eq!(error.to_string(), refusal);
+            let errors: Vec<_> = context
+                .trace
+                .logs
+                .iter()
+                .filter(|log| log.log_level == LogLevel::Error)
+                .map(|log| log.message.as_str())
+                .collect();
+            assert_eq!(errors, [refusal.as_str()]);
         }
     }
 }

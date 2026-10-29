@@ -4,18 +4,23 @@ use super::{
     ModelLogic, UsageReportingMode, extract_headers,
     media::{self, MediaDialect},
     merge_additional_params, output_budget_as_body_param,
+    user_media::{self, leading_bytes},
 };
 use crate::authorization::AuthorizedHttpClient;
 use crate::provider::random_provider;
 use crate::{
+    egress::ProviderEgress,
     history::History,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_types_contracts::Cacheable;
 use flow_like_types_contracts::authorization::{RequestAuthorizer, ResourceAudience};
+use rig::completion::{CompletionRequest, Message as RigMessage};
+use rig::message::{DocumentSourceKind, UserContent, VideoMediaType};
 use serde_json::json;
 
 pub struct OpenRouterModel {
@@ -50,13 +55,38 @@ impl OpenRouterModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
-        Self::from_provider_with_authorizer(provider, None).await
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
+        Self::with_http_client(provider, AuthorizedHttpClient::for_egress(egress)?)
     }
 
     pub async fn from_provider_with_authorizer(
         provider: &ModelProvider,
         authorizer: Option<Arc<dyn RequestAuthorizer>>,
+    ) -> anyhow::Result<Self> {
+        let http_client = match authorizer {
+            Some(authorizer) => AuthorizedHttpClient::new(
+                authorizer,
+                ResourceAudience::HostedModels,
+                provider
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("endpoint"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Hosted authorization requires an explicit endpoint")
+                    })?,
+            )?,
+            None => AuthorizedHttpClient::default(),
+        };
+        Self::with_http_client(provider, http_client)
+    }
+
+    fn with_http_client(
+        provider: &ModelProvider,
+        http_client: AuthorizedHttpClient,
     ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
@@ -69,16 +99,6 @@ impl OpenRouterModel {
         let endpoint = params.get("endpoint").and_then(|v| v.as_str());
         let custom_headers = extract_headers(&params);
 
-        let http_client = match authorizer {
-            Some(authorizer) => AuthorizedHttpClient::new(
-                authorizer,
-                ResourceAudience::HostedModels,
-                endpoint.ok_or_else(|| {
-                    anyhow::anyhow!("Hosted authorization requires an explicit endpoint")
-                })?,
-            )?,
-            None => AuthorizedHttpClient::default(),
-        };
         let mut builder = rig::providers::openrouter::Client::builder()
             .api_key(api_key)
             .http_client(http_client);
@@ -113,13 +133,13 @@ impl Cacheable for OpenRouterModel {
 impl ModelLogic for OpenRouterModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor::with_request_fixup(
+        Ok(user_media::constructor(
             self.client.clone(),
             |model, request| {
                 media::retain_supported(
                     MediaDialect::OpenRouter,
                     model,
-                    output_budget_as_body_param(request, "max_tokens"),
+                    video_bytes_as_data_urls(output_budget_as_body_param(request, "max_tokens")),
                 )
             },
         ))
@@ -145,6 +165,45 @@ impl ModelLogic for OpenRouterModel {
         });
 
         merge_additional_params(base, reasoning)
+    }
+}
+
+/// OpenRouter forwards a video link only to upstreams that fetch it (Google AI Studio fetches
+/// YouTube links only), so links stay as they are. Video held as bytes travels as a typed base64
+/// `data:` URL, which every video upstream reads; Rig refuses raw bytes and untyped base64.
+fn video_bytes_as_data_urls(mut request: CompletionRequest) -> CompletionRequest {
+    for message in request.chat_history.iter_mut() {
+        let RigMessage::User { content } = message else {
+            continue;
+        };
+        for part in content.iter_mut() {
+            let UserContent::Video(video) = part else {
+                continue;
+            };
+            if let DocumentSourceKind::Raw(bytes) = &video.data {
+                video.data = DocumentSourceKind::Base64(STANDARD.encode(bytes));
+            }
+            if video.media_type.is_none()
+                && let DocumentSourceKind::Base64(data) = &video.data
+            {
+                video.media_type = sniffed_video(&leading_bytes(data, 64));
+            }
+        }
+    }
+    request
+}
+
+/// The container of a video, from its first bytes: the formats OpenRouter lists.
+fn sniffed_video(bytes: &[u8]) -> Option<VideoMediaType> {
+    let at = |range: std::ops::Range<usize>| bytes.get(range).unwrap_or_default();
+    match bytes {
+        _ if at(4..8) == b"ftyp" && at(8..12) == b"qt  " => Some(VideoMediaType::MOV),
+        _ if at(4..8) == b"ftyp" => Some(VideoMediaType::MP4),
+        [0x1A, 0x45, 0xDF, 0xA3, ..] if bytes.windows(4).any(|window| window == b"webm") => {
+            Some(VideoMediaType::WEBM)
+        }
+        [0x00, 0x00, 0x01, 0xB3 | 0xBA, ..] => Some(VideoMediaType::MPEG),
+        _ => None,
     }
 }
 
@@ -185,17 +244,20 @@ mod tests {
     }
 
     async fn model(endpoint: &str) -> OpenRouterModel {
-        OpenRouterModel::from_provider(&ModelProvider {
-            provider_name: "openrouter".to_string(),
-            model_id: None,
-            version: None,
-            api_surface: None,
-            params: Some(HashMap::from([
-                ("api_key".to_string(), json!("test-key")),
-                ("model_id".to_string(), json!(MODEL)),
-                ("endpoint".to_string(), json!(endpoint)),
-            ])),
-        })
+        OpenRouterModel::from_provider(
+            &ModelProvider {
+                provider_name: "openrouter".to_string(),
+                model_id: None,
+                version: None,
+                api_surface: None,
+                params: Some(HashMap::from([
+                    ("api_key".to_string(), json!("test-key")),
+                    ("model_id".to_string(), json!(MODEL)),
+                    ("endpoint".to_string(), json!(endpoint)),
+                ])),
+            },
+            ProviderEgress::Open,
+        )
         .await
         .unwrap()
     }
@@ -403,7 +465,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn linked_audio_becomes_a_note_and_keeps_the_budget() {
+    async fn linked_audio_the_run_did_not_inline_fails_naming_its_host() {
         let (endpoint, server) = serve_once(json_response(chat_completion(MODEL, "stop", 1))).await;
         let mut history = budgeted_history();
         history.stream = Some(false);
@@ -422,15 +484,101 @@ mod tests {
             annotations: None,
         });
 
-        model(&endpoint).await.invoke(&history, None).await.unwrap();
+        let error = model(&endpoint)
+            .await
+            .invoke(&history, None)
+            .await
+            .unwrap_err()
+            .to_string();
 
-        let body = wire_body(&server.await.unwrap());
-        let body = body.to_string();
-        assert!(!body.contains("X-Amz-Signature"), "{body}");
         assert!(
-            body.contains(
-                "[attachment omitted: this model cannot read audio (audio/mp3) sent as a link]"
+            error.contains(
+                "The audio (audio/mp3) from host 'bucket.s3.amazonaws.com' cannot be sent to \
+                 OpenRouter as a link"
             ),
+            "{error}"
+        );
+        assert!(
+            !error.contains("X-Amz") && !error.contains("voice.mp3"),
+            "{error}"
+        );
+        assert!(!server.is_finished(), "nothing reached OpenRouter");
+        server.abort();
+    }
+
+    fn video(url: &str, media_type: Option<&str>) -> Content {
+        Content::Video {
+            content_type: ContentType::VideoUrl,
+            video_url: url.to_string(),
+            media_type: media_type.map(str::to_string),
+            additional_params: None,
+        }
+    }
+
+    /// Sends `videos` in a user message and returns the request body.
+    async fn sending_videos(videos: Vec<Content>) -> Value {
+        let (endpoint, server) = serve_once(json_response(chat_completion(MODEL, "stop", 1))).await;
+        let mut history = budgeted_history();
+        history.stream = Some(false);
+        history.messages.push(HistoryMessage {
+            role: Role::User,
+            content: MessageContent::Contents(videos),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            annotations: None,
+        });
+        model(&endpoint).await.invoke(&history, None).await.unwrap();
+        wire_body(&server.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn video_links_stay_links_and_video_bytes_travel_as_typed_data_urls() {
+        const YOUTUBE: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        const CLIP: &str = "https://cdn.example.com/clips/launch.mp4";
+        const RAW: &str = "flow-like-source=raw;base64";
+        let mp4 = STANDARD.encode(b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2");
+        let mov = STANDARD.encode(b"\0\0\0\x14ftypqt  \0\0\x02\0qt  ");
+        let webm = STANDARD.encode(b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\x82\x84webm");
+        let mpeg = STANDARD.encode(b"\0\0\x01\xba\x44\0\x04\0\x04\x01");
+        let unknown = STANDARD.encode(b"not a video at all");
+
+        let body = sending_videos(vec![
+            video(YOUTUBE, None),
+            video(CLIP, Some("video/mp4")),
+            video(&format!("data:application/octet-stream;base64,{mp4}"), None),
+            video(&format!("data:application/octet-stream;{RAW},{mov}"), None),
+            video(&format!("data:;base64,{webm}"), None),
+            video(&format!("data:video/mpeg;{RAW},{mpeg}"), None),
+            video(
+                &format!("data:application/octet-stream;base64,{unknown}"),
+                None,
+            ),
+        ])
+        .await;
+
+        let videos: Vec<&str> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|message| message["content"].as_array().into_iter().flatten())
+            .filter(|part| part["type"] == "video_url")
+            .map(|part| part["video_url"]["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            videos,
+            [
+                YOUTUBE.to_string(),
+                CLIP.to_string(),
+                format!("data:video/mp4;base64,{mp4}"),
+                format!("data:video/mov;base64,{mov}"),
+                format!("data:video/webm;base64,{webm}"),
+                format!("data:video/mpeg;base64,{mpeg}"),
+            ]
+        );
+        assert!(
+            body.to_string()
+                .contains("[attachment omitted: unsupported file type video]"),
             "{body}"
         );
     }

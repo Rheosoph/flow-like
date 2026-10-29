@@ -21,9 +21,10 @@ use crate::{
     error::ApiError,
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionJwtParams, PageExecutionJwtContext, TokenType,
-        fetch_profile_for_dispatch, format_run_version, is_jwt_configured, rejection,
+        caller_dispatch_profile, format_run_version, is_jwt_configured, rejection,
         resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
+        subject::account_user_id,
         variant,
     },
     middleware::jwt::AppUser,
@@ -177,8 +178,6 @@ pub struct InvokeEventAsyncRequest {
     pub version: Option<String>,
     /// Input payload for the execution
     pub payload: Option<serde_json::Value>,
-    /// User's auth token to pass to the flow
-    pub token: Option<String>,
     /// OAuth tokens keyed by provider name
     pub oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// Runtime-configured variables to override board variables
@@ -268,6 +267,7 @@ pub async fn invoke_event_async(
         )
     })?;
     let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
+    let actor_user_id = account_user_id(&sub).map(ToOwned::to_owned);
     crate::routes::oauth::authorize_incoming_oauth_tokens(&state, &user, &mut params.oauth_tokens)
         .await?;
     let caller_app_chain = match &user {
@@ -396,7 +396,7 @@ pub async fn invoke_event_async(
             )
             .with_event_definition(&event)
             .with_mode(RunMode::Queue)
-            .with_actor(Some(sub.clone()), technical_user_id.clone())
+            .with_actor(actor_user_id, technical_user_id.clone())
             .with_credential_subject(sub.clone())
             .with_payload(params.payload.clone());
             rejection::record(&state, context).await;
@@ -419,11 +419,11 @@ pub async fn invoke_event_async(
     // The dispatch inputs do not depend on each other, so they resolve
     // together. Each result is consumed where it was awaited before, which
     // keeps the order in which failures surface.
-    let (wasm_packages, input_payload_key, credentials, profile) = flow_like_types::tokio::join!(
+    let (wasm_packages, input_payload_key, credentials, (profile, custom_bit_owner)) = flow_like_types::tokio::join!(
         resolve_wasm_packages(&state, &app_id),
         store_input_payload(&state, &app_id, &run_id, params.payload.as_ref()),
         state.scoped_credentials(&sub, &app_id, get_credentials_access()),
-        fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true),
+        caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id),
     );
     let wasm_authority_revision =
         flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
@@ -502,7 +502,7 @@ pub async fn invoke_event_async(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(Some(sub.clone())),
+        user_id: Set(actor_user_id),
         technical_user_id: Set(technical_user_id.clone()),
         caller_app_chain: Set(caller_app_chain.clone().map(Into::into)),
         trace_id: Set(correlation.trace_id.clone()),
@@ -614,7 +614,6 @@ pub async fn invoke_event_async(
         credentials_json,
         jwt: executor_jwt,
         callback_url,
-        token: params.token,
         oauth_tokens: params.oauth_tokens,
         stream_state: false,
         execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
@@ -623,6 +622,7 @@ pub async fn invoke_event_async(
         runtime_variables: params.runtime_variables,
         user_context: Some(permission.to_user_context()),
         profile,
+        custom_bit_owner,
         wasm_packages,
         channel: None,
         trigger: DispatchTrigger::User,
@@ -688,5 +688,22 @@ mod tests {
     fn stateless_lambda_governed_page_poll_token_lives_as_long_as_its_async_run() {
         assert_eq!(poll_token_ttl_seconds(true), 24 * 60 * 60);
         assert_eq!(poll_token_ttl_seconds(false), 60 * 60);
+    }
+
+    #[test]
+    fn pseudo_subjects_never_reach_user_foreign_keys() {
+        let invoke = include_str!("invoke_event_async.rs")
+            .split_once("\npub async fn invoke_event_async(")
+            .expect("the handler exists")
+            .1;
+        let invoke = invoke.split_once("\n}\n").map_or(invoke, |(body, _)| body);
+        for unchecked in ["Set(Some(sub", ".with_actor(Some("] {
+            assert!(!invoke.contains(unchecked), "{unchecked}");
+        }
+        assert!(
+            invoke.contains("let actor_user_id = account_user_id(&sub).map(ToOwned::to_owned);")
+        );
+        assert!(invoke.contains("user_id: Set(actor_user_id),"));
+        assert!(invoke.contains(".with_actor(actor_user_id, technical_user_id.clone())"));
     }
 }

@@ -64,6 +64,7 @@ vi.mock("../lib/web-states", async () => {
 				"WebEventState",
 				"WebGraphState",
 				"WebHelperState",
+				"WebLockedStorageState",
 				"WebPageState",
 				"WebQueryState",
 				"WebRegistryState",

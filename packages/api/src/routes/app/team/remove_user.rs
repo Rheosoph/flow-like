@@ -99,6 +99,12 @@ pub async fn remove_user(
     // the package, or lapse and notify.
     crate::package_license::refresh_app(&state, &app_id).await;
 
+    if let Err(error) =
+        crate::routes::sink::service::release_departed_member(&state, &app_id, &sub).await
+    {
+        tracing::error!(%app_id, user_id = %sub, %error, "Failed to pause the removed member's event sinks");
+    }
+
     audit_branch!(state, user, app_id, "membership.remove", "Membership", sub);
     Ok(Json(()))
 }

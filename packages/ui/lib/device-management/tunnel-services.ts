@@ -46,7 +46,7 @@ export async function readServiceListeners(
 					z
 						.object({
 							id: identifier,
-							host: z.string().ip(),
+							host: z.union([z.ipv4(), z.ipv6()]),
 							port: z.number().int().min(1).max(65535),
 							protocol: z.enum(["tcp", "http", "https"]),
 							tls_server_name: z
@@ -74,7 +74,7 @@ export async function readServiceListeners(
 }
 
 function loopback(host: string): boolean {
-	if (z.string().ip({ version: "v6" }).safeParse(host).success)
+	if (z.ipv6().safeParse(host).success)
 		return new URL(`http://[${host}]/`).hostname === "[::1]";
 	const parts = host.split(".");
 	return (
@@ -87,7 +87,7 @@ function loopback(host: string): boolean {
 }
 
 function serverName(name: string): boolean {
-	if (z.string().ip().safeParse(name).success) return true;
+	if (z.union([z.ipv4(), z.ipv6()]).safeParse(name).success) return true;
 	const labels = (name.endsWith(".") ? name.slice(0, -1) : name).split(".");
 	return (
 		labels.every(

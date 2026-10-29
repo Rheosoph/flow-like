@@ -871,6 +871,7 @@
 		rgba(0, 0, 0, 0.1) 0px 2px 6px 0px, rgba(0, 0, 0, 0.1) 0px 0px 1px 0px;
 
 	--animate-ai-bounce: ai-bounce 0.4s infinite;
+	--animate-ask-scan: ask-scan 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 	--animate-popover: popover 100ms ease-in;
 	--animate-pulse: pulse var(--duration) ease-out infinite;
 	--animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
@@ -887,6 +888,16 @@
 		50% {
 			animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
 			transform: translateY(-20%);
+		}
+	}
+
+	@keyframes ask-scan {
+		from {
+			background-position: 0 -2.5rem;
+		}
+
+		to {
+			background-position: 0 calc(100% + 2.5rem);
 		}
 	}
 
@@ -2244,6 +2255,32 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 	}
 }
 
+/* ── Board pin trace ───────────────────────────────────────────────────── */
+
+/* Lights running along the wires of a clicked pin, on edges drawn in SVG. */
+.wire-trace-flow {
+	animation: wire-trace-flow 0.7s linear infinite;
+}
+
+@keyframes wire-trace-flow {
+	to {
+		stroke-dashoffset: -31.1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.wire-trace-flow {
+		animation: none;
+	}
+}
+
+/* A preview card flies the camera to its pin; the whole card is one link, even where it
+   covers a node's DOM wrapper. */
+.react-flow[data-board-preview-hover],
+.react-flow[data-board-preview-hover] * {
+	cursor: pointer !important;
+}
+
 /* ── FlowScript realtime presence ──────────────────────────────────────── */
 
 /* One static class per palette slot (CSP-safe, no inline styles). MUST stay in
@@ -2571,4 +2608,291 @@ html[data-engine="webkit"] [class*="backdrop-blur"] {
 	font-weight: 700;
 	line-height: 10px;
 	color: var(--muted-foreground);
+}
+
+/* ── Thinking level glyph ──────────────────────────────────────────────── */
+
+/* An atom whose orbits, speed and colour grow with the thinking level: off is a
+   grey dot, low one slow orbit, high three fast ones inside a halo. Shared by
+   the app chat and FlowPilot (components/thinking). Static classes only. */
+@property --fl-think-c1 {
+	syntax: "<color>";
+	inherits: true;
+	initial-value: #8a8f99;
+}
+
+@property --fl-think-c2 {
+	syntax: "<color>";
+	inherits: true;
+	initial-value: #8a8f99;
+}
+
+.fl-think {
+	--fl-think-s: 18px;
+	--fl-think-t: 8s;
+	--fl-think-violet: oklch(0.62 0.22 300);
+	position: relative;
+	display: inline-block;
+	flex: none;
+	width: var(--fl-think-s);
+	height: var(--fl-think-s);
+	pointer-events: none;
+	transition:
+		--fl-think-c1 0.5s ease,
+		--fl-think-c2 0.5s ease;
+}
+
+.fl-think-md {
+	--fl-think-s: 24px;
+}
+
+.fl-think-xs {
+	--fl-think-s: 13px;
+}
+
+.fl-think-l0 {
+	--fl-think-c1: var(--muted-foreground);
+	--fl-think-c2: var(--muted-foreground);
+}
+
+.fl-think-l1 {
+	--fl-think-c1: var(--chart-4);
+	--fl-think-c2: var(--chart-2);
+	--fl-think-t: 6.4s;
+}
+
+.fl-think-l2 {
+	--fl-think-c1: var(--chart-2);
+	--fl-think-c2: var(--primary);
+	--fl-think-t: 3.6s;
+}
+
+.fl-think-l3 {
+	--fl-think-c1: var(--primary);
+	--fl-think-c2: var(--fl-think-violet);
+	--fl-think-t: 2s;
+}
+
+.fl-think-l4 {
+	--fl-think-c1: var(--chart-3);
+	--fl-think-c2: var(--fl-think-violet);
+	--fl-think-t: 1.3s;
+}
+
+.fl-think > span {
+	position: absolute;
+}
+
+.fl-think-halo {
+	inset: -35%;
+	border-radius: 50%;
+	background: conic-gradient(
+		from 0deg,
+		transparent 0deg,
+		var(--fl-think-c1) 70deg,
+		transparent 150deg,
+		var(--fl-think-c2) 230deg,
+		transparent 320deg
+	);
+	filter: blur(calc(var(--fl-think-s) * 0.14));
+	opacity: 0;
+	transition: opacity 0.5s ease;
+	animation: fl-think-spin calc(var(--fl-think-t) * 2) linear infinite;
+}
+
+.fl-think-l3 > .fl-think-halo {
+	opacity: 0.35;
+}
+
+.fl-think-l4 > .fl-think-halo {
+	opacity: 0.55;
+}
+
+.fl-think-ring {
+	inset: 0;
+	opacity: 0;
+	transform: rotate(var(--fl-think-tilt)) scale(0.4);
+	transition:
+		opacity 0.4s ease,
+		transform 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.fl-think-r1 {
+	--fl-think-tilt: -20deg;
+	--fl-think-k: 1;
+}
+
+.fl-think-r2 {
+	--fl-think-tilt: 40deg;
+	--fl-think-k: 1.45;
+}
+
+.fl-think-r3 {
+	--fl-think-tilt: -80deg;
+	--fl-think-k: 0.8;
+}
+
+.fl-think-r4 {
+	--fl-think-tilt: 85deg;
+	--fl-think-k: 0.62;
+}
+
+.fl-think-l1 > .fl-think-r1,
+.fl-think-l2 > .fl-think-r1,
+.fl-think-l2 > .fl-think-r2,
+.fl-think-l3 > .fl-think-r1,
+.fl-think-l3 > .fl-think-r2,
+.fl-think-l3 > .fl-think-r3,
+.fl-think-l4 > .fl-think-ring {
+	opacity: 1;
+	transform: rotate(var(--fl-think-tilt)) scale(1);
+}
+
+.fl-think-ellipse {
+	position: absolute;
+	inset: 33% 2%;
+	border-radius: 50%;
+	border: 1px solid var(--fl-think-c1);
+	opacity: 0.7;
+}
+
+.fl-think-auto .fl-think-ellipse {
+	border-style: dashed;
+}
+
+.fl-think-ox,
+.fl-think-oy {
+	position: absolute;
+	width: 0;
+	height: 0;
+}
+
+.fl-think-ox {
+	left: 50%;
+	top: 50%;
+	animation: fl-think-ox calc(var(--fl-think-t) * var(--fl-think-k) * 0.5)
+		cubic-bezier(0.37, 0, 0.63, 1) infinite alternate;
+}
+
+.fl-think-oy,
+.fl-think-dot {
+	animation-duration: calc(var(--fl-think-t) * var(--fl-think-k) * 0.5);
+	animation-timing-function: cubic-bezier(0.37, 0, 0.63, 1);
+	animation-iteration-count: infinite;
+	animation-direction: alternate;
+	animation-delay: calc(var(--fl-think-t) * var(--fl-think-k) * -0.25);
+}
+
+.fl-think-oy {
+	animation-name: fl-think-oy;
+}
+
+.fl-think-dot {
+	position: absolute;
+	width: 3px;
+	height: 3px;
+	left: -1.5px;
+	top: -1.5px;
+	border-radius: 50%;
+	background: var(--fl-think-c1);
+	box-shadow: 0 0 3px var(--fl-think-c1);
+	animation-name: fl-think-oz;
+}
+
+.fl-think-md .fl-think-dot {
+	width: 3.5px;
+	height: 3.5px;
+	left: -1.75px;
+	top: -1.75px;
+}
+
+.fl-think-xs .fl-think-dot {
+	width: 2px;
+	height: 2px;
+	left: -1px;
+	top: -1px;
+	box-shadow: none;
+}
+
+.fl-think-core {
+	inset: 31%;
+	border-radius: 50%;
+	background: radial-gradient(
+		circle at 34% 30%,
+		color-mix(in oklch, white 85%, var(--fl-think-c1)) 0,
+		var(--fl-think-c1) 38%,
+		var(--fl-think-c2) 100%
+	);
+	animation: fl-think-breathe var(--fl-think-t) ease-in-out infinite;
+}
+
+.fl-think-l0 > .fl-think-core {
+	inset: 30%;
+	background: var(--muted-foreground);
+	opacity: 0.75;
+	animation: none;
+}
+
+.fl-think-idle span {
+	animation-play-state: paused;
+}
+
+.fl-think-row:hover .fl-think-idle span,
+.fl-think-row:focus-visible .fl-think-idle span {
+	animation-play-state: running;
+}
+
+@keyframes fl-think-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@keyframes fl-think-ox {
+	from {
+		transform: translateX(calc(var(--fl-think-s) * -0.48));
+	}
+	to {
+		transform: translateX(calc(var(--fl-think-s) * 0.48));
+	}
+}
+
+@keyframes fl-think-oy {
+	from {
+		transform: translateY(calc(var(--fl-think-s) * -0.17));
+	}
+	to {
+		transform: translateY(calc(var(--fl-think-s) * 0.17));
+	}
+}
+
+@keyframes fl-think-oz {
+	from {
+		transform: scale(0.6);
+		opacity: 0.45;
+	}
+	to {
+		transform: scale(1.15);
+		opacity: 1;
+	}
+}
+
+@keyframes fl-think-breathe {
+	0%,
+	100% {
+		transform: scale(1);
+	}
+	50% {
+		transform: scale(1.1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.fl-think span {
+		animation: none;
+	}
+
+	.fl-think-dot {
+		display: none;
+	}
 }

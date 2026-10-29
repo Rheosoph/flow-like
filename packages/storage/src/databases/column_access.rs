@@ -2,7 +2,7 @@
 //! keep hidden columns out of projections, filters, searches and SQL. A hidden column reads
 //! as missing, so its name never shows up in a schema, a row or an error.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
@@ -136,6 +136,14 @@ pub fn full_text_query_columns(query: &FtsQuery) -> Option<Vec<String>> {
                 .chain(&query.must)
                 .chain(&query.must_not)
                 .all(|query| collect(query, columns)),
+            FtsQuery::CombinedFields(query) => {
+                columns.extend(
+                    query
+                        .weighted_columns()
+                        .map(|(column, _)| column.to_string()),
+                );
+                true
+            }
         }
     }
     let mut columns = Vec::new();
@@ -176,7 +184,6 @@ pub(crate) fn restricted_parts(
     provider: &Arc<dyn TableProvider>,
 ) -> Option<(&Arc<dyn TableProvider>, &[String])> {
     provider
-        .as_any()
         .downcast_ref::<ColumnRestrictedProvider>()
         .map(|restricted| (&restricted.inner, restricted.hidden.as_slice()))
 }
@@ -213,10 +220,6 @@ struct ColumnRestrictedProvider {
 
 #[async_trait]
 impl TableProvider for ColumnRestrictedProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

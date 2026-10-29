@@ -262,8 +262,6 @@ pub struct DispatchPayload {
     pub executor_jwt: String,
     pub callback_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_tokens: Option<HashMap<String, OAuthTokenInput>>,
     #[serde(default)]
     pub stream_state: bool,
@@ -365,7 +363,10 @@ mod execution_binding_tests {
             ("credentials", json!({"secret": "substituted"})),
             ("callback_url", json!("https://attacker.example")),
             ("shadow", json!(true)),
-            ("token", json!("new-authority")),
+            (
+                "oauth_tokens",
+                json!({"provider": {"access_token": "new-authority"}}),
+            ),
             ("runtime_variables", json!({"input": "changed"})),
             ("payload", json!({"a": 3})),
             ("profile", json!({"hubs": ["new-hub"]})),

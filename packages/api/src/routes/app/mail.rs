@@ -3,16 +3,18 @@ use std::{collections::HashSet, time::Duration};
 use crate::{
     cache::Reservation,
     error::ApiError,
-    execution::state::{ExecutionRunRecord, RunVariant},
+    execution::{
+        live_run::{has_ended, live_run},
+        state::{ExecutionRunRecord, RunVariant},
+    },
     mail::{AutoSubmitted, AutomationEmailMessage, DynMailClient, EmailAttachment},
     mail_ingress::{
         ReplySource, digest, failed_verdict, is_automated,
         limits::{self, Counter, Window},
         now, statement,
     },
-    middleware::jwt::{AppUser, ExecutorUser},
+    middleware::jwt::{AppUser, ExecutorUser, shadow_side_effect_refused},
     permission::role_permission::RolePermissions,
-    routes::execution::progress::get_state_store,
     state::AppState,
 };
 use axum::{
@@ -52,6 +54,7 @@ const BLOCKED_EXTENSIONS: &[&str] = &[
 /// Longer than any send route deadline, so a live claim is never taken over.
 const SEND_LEASE_MS: i64 = 600_000;
 const IDEMPOTENCY_WINDOW_MS: i64 = 86_400_000;
+const SEND_PLATFORM_MAIL: &str = "send platform mail";
 
 // OpenAPI mirrors the shared catalog locator types without adding an HTTP dependency to them.
 #[derive(ToSchema)]
@@ -392,13 +395,6 @@ fn clean_display_name(raw: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-fn has_ended(run: &ExecutionRunRecord) -> bool {
-    run.status.is_terminal()
-        || run
-            .expires_at
-            .is_some_and(|expiry| expiry <= chrono::Utc::now().timestamp_millis())
-}
-
 fn is_replay(run: &ExecutionRunRecord) -> bool {
     matches!(run.run_variant, RunVariant::Shadow | RunVariant::Regression)
         || run.shadow_of_run_id.is_some()
@@ -406,18 +402,21 @@ fn is_replay(run: &ExecutionRunRecord) -> bool {
 }
 
 /// Any live primary run of the session's app may send, whichever event started it; shadow
-/// and regression replays never send.
+/// and regression replays never send, and their refusal carries the code that lets a suite
+/// grade the replay as skipped.
 fn ensure_run_can_send(run: &ExecutionRunRecord, session: &MailSession) -> Result<(), ApiError> {
-    let refusal = if run.app_id != session.app_id {
-        "The run belongs to a different app than the mail session"
-    } else if has_ended(run) {
-        "The run has already ended"
-    } else if is_replay(run) {
-        "Shadow and regression runs cannot send mail"
-    } else {
-        return Ok(());
-    };
-    Err(ApiError::forbidden(refusal))
+    if run.app_id != session.app_id {
+        return Err(ApiError::forbidden(
+            "The run belongs to a different app than the mail session",
+        ));
+    }
+    if has_ended(run) {
+        return Err(ApiError::forbidden("The run has already ended"));
+    }
+    if is_replay(run) {
+        return Err(shadow_side_effect_refused(SEND_PLATFORM_MAIL));
+    }
+    Ok(())
 }
 
 /// Anonymous sink runs carry `sink:<id>` and no user. User, API-key and connected-app
@@ -485,12 +484,7 @@ async fn authorize_executor(
             "The executor token belongs to a different app",
         ));
     }
-    let run = get_state_store(state)
-        .await?
-        .get_run(&executor.run_id)
-        .await
-        .map_err(|error| ApiError::internal(error.to_string()))?
-        .ok_or_else(|| ApiError::forbidden("The executor's run no longer exists"))?;
+    let run = live_run(state, &executor.run_id).await?;
     ensure_executor_can_send(executor, &run, session)?;
     Ok(Sender {
         event_name: live_event_name(state, app_id, session).await?,
@@ -821,7 +815,7 @@ async fn send(
     description = "Send from an active inbound email event. The session identifies the event; the server resolves its From address and shows the event name as sender. Recipients are deduplicated and count against the app's and the sender's daily recipient limits. Direct callers need current ExecuteEvents and WriteEvents permissions; executor callers need a live run of the same app, started by any event.",
     params(("app_id" = String, Path)), request_body = SendMailRequest,
     responses((status=200,description="Mail provider accepted the message, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid message or attachments"),(status=403,description="Session not authorized"),
+        (status=400,description="Invalid message or attachments"),(status=403,description="Session not authorized. SHADOW_SIDE_EFFECT_REFUSED: shadow and regression runs cannot send platform mail"),
         (status=409,description="A message with this request_id is still being sent"),
         (status=422,description="A recipient is an event address on this server"),
         (status=429,description="App send interval or daily recipient limit reached",headers(("Retry-After" = u64, description = "Seconds until a retry can succeed"))),
@@ -842,7 +836,7 @@ pub async fn send_mail(
     description = "Send from an inbound email event of this run's app; any event's run may send. Executor only; same contract as the app route. Retry only 429 responses, after Retry-After.",
     params(("app_id" = String, Path, description = "Application ID")), request_body = SendMailRequest,
     responses((status=200,description="Mail provider accepted the message, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid message or attachments"),(status=403,description="The caller is not a live run of this app, or the session's email event is not active"),
+        (status=400,description="Invalid message or attachments"),(status=403,description="The caller is not a live run of this app, or the session's email event is not active. SHADOW_SIDE_EFFECT_REFUSED: shadow and regression runs cannot send platform mail"),
         (status=409,description="A message with this request_id is still being sent"),
         (status=422,description="A recipient is an event address on this server"),
         (status=429,description="App send interval or daily recipient limit reached",headers(("Retry-After" = u64, description = "Seconds until a retry can succeed"))),
@@ -1036,7 +1030,7 @@ async fn reply(
     description = "Reply to a retained message belonging to the authorized email event. The server loads the original recipient, subject and threading headers and answers exactly one address: the first Reply-To, else From. Replies to automated mail (bounces, auto-replies, mailing lists) or to mail that failed its DMARC, spam or virus check are refused. Callers supply only locator references and the reply body.",
     params(("app_id"=String,Path)), request_body=ReplyMailRequest,
     responses((status=200,description="Mail provider accepted the reply, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid reply or attachments"),(status=403,description="Session or message not authorized"),
+        (status=400,description="Invalid reply or attachments"),(status=403,description="Session or message not authorized. SHADOW_SIDE_EFFECT_REFUSED: shadow and regression runs cannot send platform mail"),
         (status=404,description="Original message not found for this event"),
         (status=409,description="The original is not available for replies, or a reply with this request_id is still being sent"),
         (status=410,description="Original message expired"),
@@ -1059,7 +1053,7 @@ pub async fn reply_mail(
     description = "Reply to a retained message of an inbound email event in this run's app; any event's run may reply. Executor only; same contract as the app route. Retry only 429 responses, after Retry-After.",
     params(("app_id" = String, Path, description = "Application ID")), request_body = ReplyMailRequest,
     responses((status=200,description="Mail provider accepted the reply, or the request_id was already sent",body=SendMailResponse),
-        (status=400,description="Invalid reply or attachments"),(status=403,description="The caller is not a live run of this app, or the session's email event is not active"),
+        (status=400,description="Invalid reply or attachments"),(status=403,description="The caller is not a live run of this app, or the session's email event is not active. SHADOW_SIDE_EFFECT_REFUSED: shadow and regression runs cannot send platform mail"),
         (status=404,description="Original message not found for this event"),
         (status=409,description="The original is not available for replies, or a reply with this request_id is still being sent"),
         (status=410,description="Original message expired"),
@@ -1082,6 +1076,7 @@ pub async fn executor_reply_mail(
 mod tests {
     use super::*;
     use crate::execution::state::{RunMode, RunStatus};
+    use crate::middleware::jwt::SHADOW_SIDE_EFFECT_REFUSED;
 
     fn session() -> MailSession {
         MailSession {
@@ -1148,6 +1143,11 @@ mod tests {
             technical_user_id: None,
             app_chain: None,
             correlation: None,
+            shadow: false,
+            hosted_frontend: false,
+            event_id: Some("event".into()),
+            custom_bits_owner: None,
+            unattended: false,
         }
     }
 
@@ -1636,7 +1636,7 @@ mod tests {
         run.status = RunStatus::Completed;
         assert_eq!(check(&run, &session()).as_deref(), ended);
         run.status = RunStatus::Running;
-        let replay = Some("Shadow and regression runs cannot send mail");
+        let replay = Some("Shadow and regression runs cannot send platform mail");
         run.run_variant = RunVariant::Shadow;
         assert_eq!(check(&run, &session()).as_deref(), replay);
         run.run_variant = RunVariant::Regression;
@@ -1650,5 +1650,58 @@ mod tests {
         run.regression_run_id = None;
         run.expires_at = Some(0);
         assert_eq!(check(&run, &session()).as_deref(), ended);
+    }
+
+    /// A suite grades a replay that only failed to send as skipped when the refusal carries the
+    /// shadow code, so the executor's call is refused with it, not with a plain 403.
+    #[test]
+    fn a_replay_is_refused_with_the_shadow_code() {
+        let replays = [
+            ExecutionRunRecord {
+                run_variant: RunVariant::Shadow,
+                ..run()
+            },
+            ExecutionRunRecord {
+                run_variant: RunVariant::Regression,
+                ..run()
+            },
+            ExecutionRunRecord {
+                shadow_of_run_id: Some("original-run".into()),
+                ..run()
+            },
+            ExecutionRunRecord {
+                regression_run_id: Some("suite-run".into()),
+                ..run()
+            },
+        ];
+        for replay in &replays {
+            let error =
+                ensure_executor_can_send(&executor("user"), replay, &session()).unwrap_err();
+            assert_eq!(
+                (error.status(), error.public_code(), error.public_message()),
+                (
+                    axum::http::StatusCode::FORBIDDEN,
+                    SHADOW_SIDE_EFFECT_REFUSED,
+                    Some("Shadow and regression runs cannot send platform mail")
+                ),
+                "{replay:?}"
+            );
+        }
+        let ended = ExecutionRunRecord {
+            status: RunStatus::Completed,
+            run_variant: RunVariant::Regression,
+            ..run()
+        };
+        let mut elsewhere = session();
+        elsewhere.app_id = "another-app".into();
+        for (record, mail_session) in [(&ended, session()), (&replays[1], elsewhere)] {
+            assert_eq!(
+                ensure_run_can_send(record, &mail_session)
+                    .unwrap_err()
+                    .public_code(),
+                "FORBIDDEN",
+                "{record:?}"
+            );
+        }
     }
 }

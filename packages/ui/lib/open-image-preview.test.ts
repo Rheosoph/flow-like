@@ -21,7 +21,8 @@ test("image popouts preserve the image URL as data and remove their opener", () 
 		expect(popup.opener).toBeNull();
 		expect(popup.document.body.children.length).toBe(1);
 		const image = popup.document.body.firstElementChild;
-		if (!image) throw new Error("Expected an image in the popup");
+		if (!(image instanceof popup.HTMLElement))
+			throw new Error("Expected an image in the popup");
 		expect(image.tagName).toBe("IMG");
 		expect(image.getAttribute("src")).toBe(url);
 		expect(image.getAttribute("onerror")).toBeNull();

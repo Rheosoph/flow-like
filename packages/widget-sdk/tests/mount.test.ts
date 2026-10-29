@@ -81,6 +81,23 @@ describe("acceptEnvelope", () => {
 		const forged = { ...init, protocol: "flw/2" };
 		expect(acceptEnvelope(forged, null, true)).toBeNull();
 	});
+
+	test("resource replies retain the parent and nonce checks", () => {
+		const result = createEnvelope(
+			"resource:result",
+			{
+				requestId: "resource-1",
+				ok: true,
+				data: new ArrayBuffer(0),
+			},
+			"nonce-1",
+			"i-1",
+		);
+		expect(acceptEnvelope(result, null, true)).toBeNull();
+		expect(acceptEnvelope(result, "nonce-1", false)).toBeNull();
+		expect(acceptEnvelope(result, "other", true)).toBeNull();
+		expect(acceptEnvelope(result, "nonce-1", true)).toBe(result);
+	});
 });
 
 describe("mergeInitProps", () => {

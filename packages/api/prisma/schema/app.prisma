@@ -690,13 +690,29 @@ model EventSink {
   /// For cron sinks: timezone (default UTC)
   cronTimezone String?
 
-  /// Encrypted Personal Access Token for execution (optional - allows model/file access)
+  /// Legacy encrypted Personal Access Token that named the run identity before
+  /// runAsUserId. Never forwarded to runs; validated on every trigger; cleared when
+  /// the sink is saved, turned on or paused, or when the board it runs at its latest
+  /// version is edited while the sink is on.
   patEncrypted String?
+
+  /// User whose identity and app role remote runs of this sink use: whoever last
+  /// saved, restored, edited or turned on the event or its sink, or edited the board
+  /// it runs at its latest version. Cleared, and the sink paused, when that user
+  /// leaves, loses permission to trigger events, or their account stops being active.
+  runAsUser   User?   @relation("EventSinkRunAs", fields: [runAsUserId], references: [id], onDelete: SetNull)
+  runAsUserId String?
+
+  /// When a release paused the sink because the user it ran as lost their standing in the
+  /// app. Such a pause stops only the runs that use that user; runs a Flow-Like person
+  /// triggers continue. Turning the sink on or off clears it, so a person's switch-off
+  /// stops every run.
+  runAsReleasedAt DateTime? @db.Timestamptz(3)
 
   /// Encrypted OAuth tokens JSON (optional - for provider-specific access like Google, GitHub, etc.)
   oauthTokensEncrypted String?
 
-  /// Snapshot of the last updater's profile JSON (bits, hubs) for trigger execution
+  /// Holds the run-as user's profile id; runs use that user's current profile.
   profileJson Json?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -707,6 +723,7 @@ model EventSink {
   @@index([active])
   @@index([sinkType])
   @@index([sinkType, active])
+  @@index([runAsUserId])
 }
 
 /// Service Sink Token - JWT tokens issued to internal services for triggering sinks

@@ -11,6 +11,7 @@ RUN rustup toolchain install
 # `opencl`, and cl-sys emits an unconditional -lOpenCL on Linux.
 RUN apt-get update && apt-get install -y \
     pkg-config \
+    cmake \
     libssl-dev \
     unixodbc-dev \
     protobuf-compiler \

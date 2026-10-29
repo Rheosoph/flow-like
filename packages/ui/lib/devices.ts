@@ -31,7 +31,7 @@ const identitySchema = z.object({
 });
 
 /** Fields older hubs do not send; a malformed value reads as absent instead of failing the row. */
-const lenient = <T extends z.ZodTypeAny>(schema: T) =>
+const lenient = <T extends z.ZodType>(schema: T) =>
 	schema.optional().catch(undefined);
 
 const rowSchema = z.object({

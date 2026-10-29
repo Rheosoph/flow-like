@@ -18,6 +18,12 @@ export interface BoardCanvasHandle {
 	set_status?(status: string): void;
 	/** Each run's last activity text and tone, keyed by run id. */
 	set_activity?(activity: string): void;
+	/** A `BoardTrace`: wires lit from the hovered and the clicked pin. */
+	set_trace?(trace: string): void;
+	/** `{ nodeId, pinId, rect }` JSON of the preview at a canvas point, if one is there. */
+	preview_at?(x: number, y: number): string | undefined;
+	/** `{ nodeId, pinId }` JSON of the preview under the pointer; empty clears it. */
+	set_preview_hover?(endpoint: string): void;
 	pulse?(): void;
 	stop_pulse?(): void;
 	stats(): unknown;

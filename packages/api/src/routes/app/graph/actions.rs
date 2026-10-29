@@ -23,6 +23,7 @@ use crate::{
     execution::rejection,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::app::board::sink_rebind::rebind_published_sinks,
     routes::app::events::{
         db::{get_event_from_db, sync_event_to_db},
         invoke_event::{InvokeEventQuery, InvokeEventRequest, invoke_resolved_event},
@@ -52,9 +53,6 @@ pub struct InvokeOntologyActionRequest {
     /// action workflow until run-level idempotency is persisted by the API.
     #[serde(default)]
     pub idempotency_key: Option<String>,
-    /// User token forwarded to nodes in the action workflow.
-    #[serde(default)]
-    pub token: Option<String>,
     #[serde(default)]
     #[schema(value_type = Option<Object>)]
     pub oauth_tokens: Option<HashMap<String, Value>>,
@@ -177,15 +175,23 @@ fn validated_action_parameter_schema(
 /// client-supplied `parameter_schema` is ignored for materialized actions and
 /// overwritten with the board-derived value (or `None` when the start node has
 /// no typed `parameters` pin — invoke then accepts any object payload).
+///
+/// Only a `publisher` publishes a draft. A version it publishes, whether into the
+/// slot the action pins or as a prepared snapshot, makes it the user the sinks
+/// pinned to exactly that version run as, before the schema derivation that may
+/// still fail.
 async fn ensure_action_board_published(
+    state: &AppState,
+    app_id: &str,
     app: &App,
     action: &mut OntologyActionDef,
-    publish_draft: bool,
+    publisher: Option<&AppUser>,
 ) -> Result<Option<PreparedBoardSnapshot>, ApiError> {
     if action.board_id.trim().is_empty() {
         // action_event surfaces the missing-implementation error with context.
         return Ok(None);
     }
+    let publish_draft = publisher.is_some();
     let board = app
         .open_board_authoritative(action.board_id.clone(), None)
         .await
@@ -234,19 +240,19 @@ async fn ensure_action_board_published(
         validated_action_parameter_schema(&guard, start_node_id)?;
     }
     let mut prepared = None;
+    let mut published_in_place = false;
     if pinned == current {
         let guard = board.snapshot();
         if existing.contains(&pinned) {
             if publish_draft {
-                let unchanged =
-                    guard
-                        .snapshot_matches_persisted_draft(pinned, None)
-                        .await
-                        .map_err(|error| {
-                            ApiError::internal(format!(
-                                "Could not compare the action's board snapshot: {error}"
-                            ))
-                        })?;
+                let unchanged = guard
+                    .snapshot_matches_persisted_draft(pinned, None)
+                    .await
+                    .map_err(|error| {
+                        ApiError::internal(format!(
+                            "Could not compare the action's board snapshot: {error}"
+                        ))
+                    })?;
                 if !unchanged {
                     let snapshot = guard
                         .prepare_snapshot_recovering_from_races(None)
@@ -304,6 +310,8 @@ async fn ensure_action_board_published(
                 pinned = snapshot.version();
                 action.board_version = Some([pinned.0, pinned.1, pinned.2]);
                 prepared = Some(snapshot);
+            } else {
+                published_in_place = true;
             }
         }
     } else if !existing.contains(&pinned) {
@@ -353,6 +361,11 @@ async fn ensure_action_board_published(
             action.board_version = Some([pinned.0, pinned.1, pinned.2]);
             prepared = Some(snapshot);
         }
+    }
+    if let Some(publisher) = publisher
+        && (published_in_place || prepared.is_some())
+    {
+        rebind_published_sinks(state, app_id, &action.board_id, pinned, publisher).await;
     }
     action.parameter_schema = derive_action_parameter_schema(app, action, pinned).await?;
     Ok(prepared)
@@ -504,10 +517,12 @@ where
 
 /// Creates or updates the internal, version-pinned events that make ontology
 /// actions executable through the existing event runtime. Callers must already
-/// have checked graph-write and event-write permissions.
+/// have checked graph-write and event-write permissions. `user` publishes the
+/// drafts the actions pin.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn materialize_action_events(
     state: &AppState,
+    user: &AppUser,
     sub: &str,
     app_id: &str,
     ontology_id: &str,
@@ -527,11 +542,13 @@ pub(crate) async fn materialize_action_events(
         edges,
         projection_mode,
         actions,
-        true,
+        Some(user),
     )
     .await
 }
 
+/// `publisher` publishes the drafts the actions pin; `None` restores the
+/// persisted pins without publishing anything.
 #[allow(clippy::too_many_arguments)]
 async fn materialize_action_events_with_mode(
     state: &AppState,
@@ -543,7 +560,7 @@ async fn materialize_action_events_with_mode(
     edges: &[lancegraph::EdgeMappingDef],
     projection_mode: lancegraph::PropertyProjectionMode,
     actions: &mut [OntologyActionDef],
-    publish_drafts: bool,
+    publisher: Option<&AppUser>,
 ) -> Result<Vec<PreparedBoardSnapshot>, ApiError> {
     if actions.is_empty() {
         return Ok(Vec::new());
@@ -619,7 +636,8 @@ async fn materialize_action_events_with_mode(
         // Reconcile the implementation snapshot before taking the contract
         // fast path. A board edit can change executable behavior without
         // changing any ontology action metadata.
-        if let Some(prepared) = ensure_action_board_published(&app, action, publish_drafts).await?
+        if let Some(prepared) =
+            ensure_action_board_published(state, app_id, &app, action, publisher).await?
             && !prepared_snapshots.contains(&prepared)
         {
             prepared_snapshots.push(prepared);
@@ -834,7 +852,7 @@ pub(crate) async fn rollback_action_event_changes(
         edges,
         projection_mode,
         &mut overwritten,
-        false,
+        None,
     )
     .await
     .map(|_| ());
@@ -1184,7 +1202,6 @@ pub async fn invoke_ontology_action(
                 .board_version
                 .map(|version| format!("{}_{}_{}", version[0], version[1], version[2])),
             payload: Some(payload),
-            token: request.token,
             oauth_tokens: request.oauth_tokens,
             // Ontology actions accept only their declared parameter schema.
             // Raw board-variable overrides would bypass that governed contract.

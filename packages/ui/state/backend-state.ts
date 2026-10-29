@@ -70,6 +70,7 @@ import type { ISalesState } from "./backend-state/sales-state";
 import type {
 	IEventRegistration,
 	ISinkState,
+	LocalTriggerState,
 } from "./backend-state/sink-state";
 import type { IStorageState } from "./backend-state/storage-state";
 
@@ -124,6 +125,7 @@ export type {
 	IRoleState,
 	ISinkState,
 	IEventRegistration,
+	LocalTriggerState,
 	IStorageState,
 	ITeamState,
 	ITemplateState,

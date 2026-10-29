@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { IApplyFlowScriptResponse } from "../../state/backend-state/board-state";
 import { applyFlowScriptFromResponse } from "./response";
 
 describe("FlowScript apply responses", () => {
@@ -16,9 +17,9 @@ describe("FlowScript apply responses", () => {
 	});
 
 	test("keeps a blocked deletion plan and defaults missing board commands", () => {
-		const blocked = {
+		const blocked: IApplyFlowScriptResponse = {
 			commands: [],
-			board_commands: [{ RemoveNode: { node_id: "n1" } }],
+			board_commands: [{ command_type: "RemoveNode", node_id: "n1" }],
 			diagnostics: ["Apply blocked: deletes 1 node"],
 		};
 		expect(applyFlowScriptFromResponse(blocked, "board-1")).toEqual(blocked);

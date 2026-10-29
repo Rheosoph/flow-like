@@ -2,7 +2,6 @@
 
 import {
 	BotIcon,
-	BrainCircuitIcon,
 	CheckIcon,
 	ChevronDownIcon,
 	Code2Icon,
@@ -19,11 +18,7 @@ import type { AgentBackendDiagnostic } from "../../lib/flowpilot/agent-backend-d
 import { cn } from "../../lib/utils";
 import { DeviceModelBadge } from "../settings/devices/models/use/device-model-badge";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import type {
-	AIProvider,
-	CopilotReasoningEffort,
-	NormalizedAIProvider,
-} from "./types";
+import type { AIProvider, NormalizedAIProvider } from "./types";
 import { normalizeAIProvider } from "./types";
 
 export interface ProviderModelPickerProvider {
@@ -37,8 +32,6 @@ export interface ProviderModelPickerModel {
 	id: string;
 	label: string;
 	isFree?: boolean;
-	supportedReasoningEfforts?: CopilotReasoningEffort[];
-	defaultReasoningEffort?: string;
 	/** The device a device Bit's model runs on: the list marks it with the device's state. */
 	deviceId?: string;
 }
@@ -48,10 +41,8 @@ export interface ProviderModelReasoningPickerProps {
 	providers: ProviderModelPickerProvider[];
 	models: ProviderModelPickerModel[];
 	selectedModelId: string;
-	selectedEffort: string;
 	onProviderChange: (provider: AIProvider) => void | Promise<void>;
 	onModelChange: (modelId: string) => void;
-	onEffortChange: (effort: string) => void;
 	disabled?: boolean;
 	connecting?: boolean;
 	connected?: boolean;
@@ -99,40 +90,19 @@ export function FreeModelCapabilityNotice({
 	);
 }
 
-export function reasoningEffortLabels(
-	model: ProviderModelPickerModel | undefined,
-	selectedEffort: string,
-) {
-	const efforts = model?.supportedReasoningEfforts ?? [];
-	const defaultName = model?.defaultReasoningEffort
-		? (efforts.find((effort) => effort.id === model.defaultReasoningEffort)
-				?.name ?? model.defaultReasoningEffort)
-		: undefined;
-	const automatic = defaultName
-		? `Auto (${defaultName} default)`
-		: "Auto (provider default)";
-	const selected = selectedEffort
-		? (efforts.find((effort) => effort.id === selectedEffort)?.name ??
-			selectedEffort)
-		: automatic;
-
-	return { automatic, selected, efforts };
-}
-
 /**
  * One model-aware picker shared by FlowPilot surfaces. It deliberately owns no
  * backend lifecycle: callers keep their existing start/stop and persistence
- * behavior in `onProviderChange`/`onDisconnect`.
+ * behavior in `onProviderChange`/`onDisconnect`. The thinking level has its own
+ * control, `ThinkingPicker`, next to it.
  */
 export function ProviderModelReasoningPicker({
 	provider,
 	providers,
 	models,
 	selectedModelId,
-	selectedEffort,
 	onProviderChange,
 	onModelChange,
-	onEffortChange,
 	disabled = false,
 	connecting = false,
 	connected = false,
@@ -162,14 +132,12 @@ export function ProviderModelReasoningPicker({
 		(option) =>
 			normalizeAIProvider(option.id) !== "bits" && option.disabled !== true,
 	);
-	const reasoning = reasoningEffortLabels(selectedModel, selectedEffort);
 	const modelLabel =
 		selectedModel?.label ??
 		(connecting ? "Connecting…" : emptyModelLabel || "Select model");
 	const title = [
 		currentProvider?.label,
 		modelLabel,
-		reasoning.efforts.length > 0 ? reasoning.selected : undefined,
 		showFreeModelNotice
 			? "Free model may be too limited for complete app creation"
 			: undefined,
@@ -214,17 +182,6 @@ export function ProviderModelReasoningPicker({
 					<span className="min-w-0 max-w-40 truncate font-medium">
 						{modelLabel}
 					</span>
-					{reasoning.efforts.length > 0 && (
-						<span data-slot="picker-reasoning" className="contents">
-							<span className="text-border" aria-hidden="true">
-								·
-							</span>
-							<BrainCircuitIcon className="size-3.5 shrink-0 text-muted-foreground" />
-							<span className="min-w-0 max-w-36 truncate text-muted-foreground">
-								{reasoning.selected}
-							</span>
-						</span>
-					)}
 					{showFreeModelNotice && (
 						<TriangleAlertIcon
 							aria-hidden="true"
@@ -332,9 +289,7 @@ export function ProviderModelReasoningPicker({
 									type="button"
 									onClick={() => {
 										onModelChange(model.id);
-										if ((model.supportedReasoningEfforts?.length ?? 0) === 0) {
-											setOpen(false);
-										}
+										setOpen(false);
 									}}
 									className={cn(
 										"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40",
@@ -355,56 +310,6 @@ export function ProviderModelReasoningPicker({
 					<FreeModelCapabilityNotice
 						agentBackendsAvailable={agentBackendsAvailable}
 					/>
-				)}
-
-				{reasoning.efforts.length > 0 && (
-					<>
-						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-							Reasoning
-						</p>
-						<div className="grid grid-cols-2 gap-1">
-							<button
-								type="button"
-								onClick={() => {
-									onEffortChange("");
-									setOpen(false);
-								}}
-								className={cn(
-									"col-span-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40",
-									!selectedEffort
-										? "bg-primary/10 text-primary"
-										: "hover:bg-muted",
-								)}
-							>
-								<BrainCircuitIcon className="size-3.5 shrink-0" />
-								<span className="flex-1 truncate">{reasoning.automatic}</span>
-								{!selectedEffort && <CheckIcon className="size-3.5 shrink-0" />}
-							</button>
-							{reasoning.efforts.map((effort) => {
-								const active = effort.id === selectedEffort;
-								return (
-									<button
-										key={effort.id}
-										type="button"
-										title={effort.description}
-										onClick={() => {
-											onEffortChange(effort.id);
-											setOpen(false);
-										}}
-										className={cn(
-											"flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40",
-											active ? "bg-primary/10 text-primary" : "hover:bg-muted",
-										)}
-									>
-										<span className="flex-1 truncate">
-											{effort.name || effort.id}
-										</span>
-										{active && <CheckIcon className="size-3.5 shrink-0" />}
-									</button>
-								);
-							})}
-						</div>
-					</>
 				)}
 
 				{statusText && !diagnostic && (

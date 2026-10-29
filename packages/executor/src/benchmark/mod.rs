@@ -508,7 +508,7 @@ async fn run_scoped(
         trial.delay("setup_delay", bench.options.setup_ms).await;
         let mut state = FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
         state.node_registry.write().await.node_registry = bench.workload.registry.clone();
-        HubAccess { callback_url: claims.callback_url.clone(), jwt: "local-benchmark".into(), hosted_frontend: false }.register_on(&mut state).await;
+        HubAccess { callback_url: claims.callback_url.clone(), jwt: "local-benchmark".into(), hosted_frontend: false, app_id: claims.app_id.clone(), relay_ids: Vec::new() }.register_on(&mut state).await;
         let state = Arc::new(state);
         let revision = match trial.action.cache { Cache::Warm => bench.session.as_str(), Cache::Cold => id };
         let request: ExecutionRequest = serde_json::from_value(json!({

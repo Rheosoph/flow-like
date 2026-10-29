@@ -15,7 +15,9 @@ use std::{
 };
 
 use async_trait::async_trait;
+use flow_like_model_provider::history::HistoryThinking;
 use flow_like_model_provider::llm::CompletionClientDyn;
+use flow_like_model_provider::llm::lenient_settings::{lenient_agent, thinking_params};
 use flow_like_model_provider::provider::ModelProvider;
 use flow_like_model_provider::response::{LLMUsageStats, Usage};
 use flow_like_types::{
@@ -620,18 +622,33 @@ fn same_round_page_dependency_guard_result(
 pub struct PlatformCopilot {
     state: Arc<FlowLikeState>,
     profile: Option<Arc<Profile>>,
+    thinking: Option<HistoryThinking>,
 }
 
 impl PlatformCopilot {
     pub fn new(state: Arc<FlowLikeState>, profile: Option<Arc<Profile>>) -> Self {
-        Self { state, profile }
+        Self {
+            state,
+            profile,
+            thinking: None,
+        }
+    }
+
+    /// User-chosen thinking level, dropped for the rest of the run if the model rejects it.
+    pub fn with_thinking(mut self, thinking: Option<HistoryThinking>) -> Self {
+        self.thinking = thinking;
+        self
     }
 
     async fn resolve_model<'a>(
         &self,
         model_id: Option<String>,
         token: Option<String>,
-    ) -> Result<(String, Box<dyn CompletionClientDyn + Send + Sync + 'a>)> {
+    ) -> Result<(
+        String,
+        Box<dyn CompletionClientDyn + Send + Sync + 'a>,
+        Option<Value>,
+    )> {
         let bit = if let Some(profile) = &self.profile {
             let preference = BitModelPreference {
                 reasoning_weight: Some(1.0),
@@ -676,8 +693,11 @@ impl PlatformCopilot {
             .build(&bit, self.state.clone(), token, None)
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());
+        let thinking = self
+            .thinking
+            .and_then(|thinking| thinking_params(model.as_ref(), &default_model, thinking));
         let provider = model.provider().await?;
-        Ok((default_model, provider.into_client()))
+        Ok((default_model, provider.into_client(), thinking))
     }
 
     /// Run the platform assistant loop for a profile model, dispatching platform tools through the
@@ -702,7 +722,7 @@ impl PlatformCopilot {
     where
         F: Fn(String) + Send + Sync + 'static,
     {
-        let (model_name, completion_client) = self.resolve_model(model_id, token).await?;
+        let (model_name, completion_client, thinking) = self.resolve_model(model_id, token).await?;
 
         // Memory: recall relevant context into the prompt + advertise the memory tools.
         if let Some(memory) = &memory {
@@ -720,8 +740,7 @@ impl PlatformCopilot {
             .map(|spec| spec.to_tool_definition())
             .collect();
 
-        let agent = completion_client
-            .agent(&model_name)
+        let agent = lenient_agent(completion_client.as_ref(), &model_name, thinking.clone())
             .preamble(&system_prompt)
             .build();
 
@@ -1070,6 +1089,7 @@ impl PlatformCopilot {
                                 run_sealed_research_agent(
                                     completion_client.as_ref(),
                                     &model_name,
+                                    thinking.clone(),
                                     &user_prompt,
                                 ),
                             )
@@ -1479,6 +1499,7 @@ struct SealedResearchOutcome {
 async fn run_sealed_research_agent(
     completion_client: &(dyn CompletionClientDyn + Send + Sync),
     model_name: &str,
+    thinking: Option<Value>,
     source_user_prompt: &str,
 ) -> Result<SealedResearchOutcome> {
     let research_date = format!(
@@ -1486,8 +1507,7 @@ async fn run_sealed_research_agent(
         chrono::Utc::now().format("%Y-%m-%d")
     );
     let research_prompt = crate::copilot::prompts::research_system_prompt(&research_date);
-    let agent = completion_client
-        .agent(model_name)
+    let agent = lenient_agent(completion_client, model_name, thinking)
         .preamble(&research_prompt)
         .build();
     let tools: Vec<_> = public_web_tool_specs()

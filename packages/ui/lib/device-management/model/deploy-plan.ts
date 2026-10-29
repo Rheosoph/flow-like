@@ -1619,7 +1619,7 @@ function checkToken(draft: DeployDraft, target: PlanTarget, issues: Issues) {
 }
 
 function validHost(host: string) {
-	return z.string().ip().safeParse(host).success;
+	return z.union([z.ipv4(), z.ipv6()]).safeParse(host).success;
 }
 
 function validPort(port: number) {

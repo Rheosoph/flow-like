@@ -1,9 +1,12 @@
 use super::VectorStore;
-use super::lancedb::is_write_contention;
+use super::lancedb::is_batch_wide_failure;
+use arrow_schema::Schema;
 use flow_like_types::{Cacheable, Result, Value, anyhow, async_trait};
 use std::any::Any;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 const DEFAULT_BATCH_SIZE: usize = 1000;
@@ -171,42 +174,29 @@ impl<T: VectorStore> BufferedVectorStore<T> {
             return Ok(());
         }
 
-        let ops = std::mem::take(&mut self.buffer);
+        let mut ops = std::mem::take(&mut self.buffer).into_iter().peekable();
         self.buffered_count = 0;
 
         // Coalesce consecutive ops of the same kind
-        let mut i = 0;
         let mut failures = Vec::new();
-        while i < ops.len() {
-            match &ops[i] {
-                BufferedOp::Insert(_) => {
-                    let mut merged = Vec::new();
-                    while i < ops.len() {
-                        if let BufferedOp::Insert(items) = &ops[i] {
-                            merged.extend(items.iter().cloned());
-                            i += 1;
-                        } else {
-                            break;
-                        }
+        while let Some(op) = ops.next() {
+            match op {
+                BufferedOp::Insert(mut merged) => {
+                    while let Some(BufferedOp::Insert(items)) =
+                        ops.next_if(|next| matches!(next, BufferedOp::Insert(_)))
+                    {
+                        merged.extend(items);
                     }
-                    failures.extend(Self::insert_smart(&mut self.inner, merged).await);
+                    failures.extend(Self::write_smart(&mut self.inner, merged, None).await);
                 }
-                BufferedOp::Upsert(_, id_field) => {
-                    let current_id = id_field.clone();
-                    let mut merged = Vec::new();
-                    while i < ops.len() {
-                        if let BufferedOp::Upsert(items, id) = &ops[i] {
-                            if *id == current_id {
-                                merged.extend(items.iter().cloned());
-                                i += 1;
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
+                BufferedOp::Upsert(mut merged, id_field) => {
+                    while let Some(BufferedOp::Upsert(items, _)) = ops.next_if(
+                        |next| matches!(next, BufferedOp::Upsert(_, next_id) if *next_id == id_field),
+                    ) {
+                        merged.extend(items);
                     }
-                    failures.extend(Self::upsert_smart(&mut self.inner, merged, current_id).await);
+                    failures
+                        .extend(Self::write_smart(&mut self.inner, merged, Some(&id_field)).await);
                 }
             }
         }
@@ -219,15 +209,29 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         Ok(())
     }
 
-    /// Collect the set of JSON keys from a Value (empty set if not an object).
-    fn value_keys(item: &BufferedItem) -> BTreeSet<String> {
-        match item.value.as_object() {
-            Some(map) => map.keys().cloned().collect(),
-            None => BTreeSet::new(),
+    /// Rows without a key never match an existing row, so each one is kept.
+    /// Numbers compare by value, except for integer key columns: those reject
+    /// `1.0`, and folding it into `1` would discard the row that can be written.
+    fn upsert_key(value: &Value, numeric: bool) -> Option<String> {
+        match value {
+            Value::Null => None,
+            Value::Number(number) if numeric => Some(match number.as_f64() {
+                Some(float)
+                    if number.is_f64() && float.fract() == 0.0 && float.abs() < i64::MAX as f64 =>
+                {
+                    (float as i64).to_string()
+                }
+                _ => number.to_string(),
+            }),
+            value => flow_like_types::json::to_string(value).ok(),
         }
     }
 
-    fn dedupe_upsert_items(items: Vec<BufferedItem>, id_field: &str) -> Vec<BufferedItem> {
+    fn dedupe_upsert_items(
+        items: Vec<BufferedItem>,
+        id_field: &str,
+        numeric: bool,
+    ) -> Vec<BufferedItem> {
         if items.len() <= 1 {
             return items;
         }
@@ -236,17 +240,11 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         let mut deduped = Vec::with_capacity(items.len());
 
         for item in items.into_iter().rev() {
-            let Some(id_value) = item.value.get(id_field) else {
-                deduped.push(item);
-                continue;
-            };
-
-            let Ok(id_key) = flow_like_types::json::to_string(id_value) else {
-                deduped.push(item);
-                continue;
-            };
-
-            if seen_ids.insert(id_key) {
+            let key = item
+                .value
+                .get(id_field)
+                .and_then(|id| Self::upsert_key(id, numeric));
+            if key.is_none_or(|key| seen_ids.insert(key)) {
                 deduped.push(item);
             }
         }
@@ -255,260 +253,145 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         deduped
     }
 
-    /// Partition items by schema compatibility.
-    /// Uses the existing table schema (if any) to separate records whose
-    /// key set matches the schema from those that don't.
-    async fn partition_by_schema(
-        inner: &T,
+    /// Separates rows whose keys match the table's columns exactly from the rest.
+    fn partition_by_schema(
+        schema: &Schema,
         items: Vec<BufferedItem>,
     ) -> (Vec<BufferedItem>, Vec<BufferedItem>) {
-        if items.is_empty() {
-            return (items, Vec::new());
-        }
-
-        let Ok(schema) = inner.schema().await else {
-            return (items, Vec::new());
-        };
-
-        let reference_keys: BTreeSet<String> = schema
+        let columns: BTreeSet<&str> = schema
             .fields()
             .iter()
-            .map(|field| field.name().clone())
+            .map(|field| field.name().as_str())
             .collect();
-
-        let mut compatible = Vec::new();
-        let mut outliers = Vec::new();
-        for item in items {
-            if Self::value_keys(&item) == reference_keys {
-                compatible.push(item);
-            } else {
-                outliers.push(item);
-            }
-        }
-        (compatible, outliers)
+        items.into_iter().partition(|item| {
+            item.value.as_object().is_some_and(|row| {
+                row.len() == columns.len() && row.keys().all(|key| columns.contains(key.as_str()))
+            })
+        })
     }
 
     fn values(items: &[BufferedItem]) -> Vec<Value> {
         items.iter().map(|item| item.value.clone()).collect()
     }
 
-    /// 3-tier insert: schema filter → divide & conquer → single record.
+    /// Writes schema-compatible rows as one batch and the rest separately.
     /// Returns every terminal record failure with its originating write.
-    async fn insert_smart(inner: &mut T, items: Vec<BufferedItem>) -> Vec<BufferedWriteFailure> {
-        if items.is_empty() {
-            return Vec::new();
-        }
-
-        // If the table doesn't exist yet, try inserting everything directly
-        // to bootstrap the table — schema partitioning is meaningless without a table.
-        let has_table = inner.schema().await.is_ok();
-
-        if !has_table {
-            match inner.insert(Self::values(&items)).await {
-                Ok(()) => return Vec::new(),
-                Err(err) => {
-                    eprintln!(
-                        "[BufferedVectorStore] Batch insert failed (no existing table, {} records): {err:#}",
-                        items.len()
-                    );
-                    return Self::insert_divide_and_conquer(inner, items).await;
-                }
-            }
-        }
-
-        let (compatible, outliers) = Self::partition_by_schema(inner, items).await;
-        let mut failures = Vec::new();
-
-        // Tier 1: batch-insert schema-compatible records
-        if !compatible.is_empty()
-            && let Err(err) = inner.insert(Self::values(&compatible)).await
-        {
-            eprintln!(
-                "[BufferedVectorStore] Batch insert of {} compatible records failed: {err:#}",
-                compatible.len()
-            );
-            failures.extend(Self::insert_divide_and_conquer(inner, compatible).await);
-        }
-
-        // Outliers go straight to divide & conquer (may form sub-groups)
-        if !outliers.is_empty() {
-            eprintln!(
-                "[BufferedVectorStore] Schema mismatch: {} outlier records, using divide & conquer",
-                outliers.len()
-            );
-            failures.extend(Self::insert_divide_and_conquer(inner, outliers).await);
-        }
-
-        failures
-    }
-
-    /// 3-tier upsert: schema filter → divide & conquer → single record.
-    /// Returns every terminal record failure with its originating write.
-    async fn upsert_smart(
+    async fn write_smart(
         inner: &mut T,
         items: Vec<BufferedItem>,
-        id_field: String,
+        id_field: Option<&str>,
     ) -> Vec<BufferedWriteFailure> {
-        let items = Self::dedupe_upsert_items(items, &id_field);
-
         if items.is_empty() {
             return Vec::new();
         }
 
-        // If the table doesn't exist yet, try upserting everything directly
-        // to bootstrap the table — schema partitioning is meaningless without a table.
-        let has_table = inner.schema().await.is_ok();
-
-        if !has_table {
-            match inner.upsert(Self::values(&items), id_field.clone()).await {
-                Ok(()) => return Vec::new(),
-                Err(err) => {
-                    eprintln!(
-                        "[BufferedVectorStore] Batch upsert failed (no existing table, {} records): {err:#}",
-                        items.len()
-                    );
-                    return Self::upsert_after_failure(inner, items, id_field, &err).await;
-                }
+        let schema = inner.schema().await.ok();
+        let items = match id_field {
+            Some(id_field) => {
+                let integer_key = schema
+                    .as_ref()
+                    .and_then(|schema| schema.field_with_name(id_field).ok())
+                    .is_some_and(|field| field.data_type().is_integer());
+                Self::dedupe_upsert_items(items, id_field, !integer_key)
             }
-        }
+            None => items,
+        };
 
-        let (compatible, outliers) = Self::partition_by_schema(inner, items).await;
-        let mut failures = Vec::new();
+        // Without a table the first write creates it, so there is no schema to partition by.
+        let Some(schema) = schema else {
+            return Self::divide_and_conquer(inner, items, id_field).await;
+        };
 
-        if !compatible.is_empty()
-            && let Err(err) = inner
-                .upsert(Self::values(&compatible), id_field.clone())
-                .await
-        {
-            eprintln!(
-                "[BufferedVectorStore] Batch upsert of {} compatible records failed: {err:#}",
-                compatible.len()
-            );
-            failures.extend(
-                Self::upsert_after_failure(inner, compatible, id_field.clone(), &err).await,
-            );
-        }
-
+        let (compatible, outliers) = Self::partition_by_schema(&schema, items);
+        let mut failures = Self::divide_and_conquer(inner, compatible, id_field).await;
         if !outliers.is_empty() {
             eprintln!(
-                "[BufferedVectorStore] Schema mismatch: {} outlier records, using divide & conquer",
+                "[BufferedVectorStore] Schema mismatch: {} outlier records, writing them separately",
                 outliers.len()
             );
-            failures.extend(Self::upsert_divide_and_conquer(inner, outliers, id_field).await);
+            failures.extend(Self::divide_and_conquer(inner, outliers, id_field).await);
         }
-
         failures
     }
 
-    /// Tier 2: binary-split recursive fallback.
-    /// Returns every terminal record failure with its originating write.
-    fn insert_divide_and_conquer<'a>(
+    /// Splits a rejected batch until the rejected rows are isolated. A failure
+    /// no subset can avoid (storage, credentials, a missing table, losing every
+    /// commit race) fails the batch once instead: each split would repeat it,
+    /// and for a keyed upsert each attempt is a full-table merge.
+    fn divide_and_conquer<'a>(
         inner: &'a mut T,
-        items: Vec<BufferedItem>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<BufferedWriteFailure>> + Send + 'a>>
-    {
+        mut items: Vec<BufferedItem>,
+        id_field: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = Vec<BufferedWriteFailure>> + Send + 'a>> {
         Box::pin(async move {
             if items.is_empty() {
                 return Vec::new();
             }
-            match inner.insert(Self::values(&items)).await {
-                Ok(()) => return Vec::new(),
-                Err(err) if items.len() == 1 => {
-                    eprintln!("[BufferedVectorStore] Skipping insert for record: {err:#}");
-                    return vec![BufferedWriteFailure {
-                        origin: items[0].origin.clone(),
-                        operation: BufferedWriteKind::Insert,
-                        error: format!("{err:#}"),
-                    }];
-                }
-                Err(_) => {}
+            let (operation, result) = match id_field {
+                Some(id_field) => (
+                    BufferedWriteKind::Upsert,
+                    inner
+                        .upsert(Self::values(&items), id_field.to_string())
+                        .await,
+                ),
+                None => (
+                    BufferedWriteKind::Insert,
+                    inner.insert(Self::values(&items)).await,
+                ),
+            };
+            let Err(error) = result else {
+                return Vec::new();
+            };
+            if items.len() == 1 || is_batch_wide_failure(&error) {
+                eprintln!(
+                    "[BufferedVectorStore] Skipping {operation} of {} record(s): {error:#}",
+                    items.len()
+                );
+                return Self::failures(&items, operation, &error);
             }
-            let mid = items.len() / 2;
-            let (left, right) = items.split_at(mid);
-            let mut failures = Self::insert_divide_and_conquer(inner, left.to_vec()).await;
-            failures.extend(Self::insert_divide_and_conquer(inner, right.to_vec()).await);
+            eprintln!(
+                "[BufferedVectorStore] {operation} of {} records failed, isolating the rejected rows: {error:#}",
+                items.len()
+            );
+            let right = items.split_off(items.len() / 2);
+            let mut failures = Self::divide_and_conquer(inner, items, id_field).await;
+            failures.extend(Self::divide_and_conquer(inner, right, id_field).await);
             failures
         })
     }
 
-    /// Splitting isolates rejected records. When concurrent commits kept winning,
-    /// every half would repeat the same full-table merge, so the batch fails once.
-    async fn upsert_after_failure(
-        inner: &mut T,
-        items: Vec<BufferedItem>,
-        id_field: String,
-        error: &flow_like_types::Error,
-    ) -> Vec<BufferedWriteFailure> {
-        if is_write_contention(error) {
-            return Self::failed_upserts(&items, error);
-        }
-        Self::upsert_divide_and_conquer(inner, items, id_field).await
-    }
-
-    fn failed_upserts(
+    fn failures(
         items: &[BufferedItem],
+        operation: BufferedWriteKind,
         error: &flow_like_types::Error,
     ) -> Vec<BufferedWriteFailure> {
         items
             .iter()
             .map(|item| BufferedWriteFailure {
                 origin: item.origin.clone(),
-                operation: BufferedWriteKind::Upsert,
+                operation,
                 error: format!("{error:#}"),
             })
             .collect()
     }
 
-    /// Tier 2: binary-split recursive fallback.
-    /// Returns every terminal record failure with its originating write.
-    fn upsert_divide_and_conquer<'a>(
-        inner: &'a mut T,
-        items: Vec<BufferedItem>,
-        id_field: String,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<BufferedWriteFailure>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            if items.is_empty() {
-                return Vec::new();
-            }
-            match inner.upsert(Self::values(&items), id_field.clone()).await {
-                Ok(()) => return Vec::new(),
-                Err(err) if items.len() == 1 => {
-                    eprintln!("[BufferedVectorStore] Skipping upsert for record: {err:#}");
-                    return Self::failed_upserts(&items, &err);
-                }
-                Err(err) if is_write_contention(&err) => {
-                    return Self::failed_upserts(&items, &err);
-                }
-                Err(_) => {}
-            }
-            let mid = items.len() / 2;
-            let (left, right) = items.split_at(mid);
-            let mut failures =
-                Self::upsert_divide_and_conquer(inner, left.to_vec(), id_field.clone()).await;
-            failures.extend(Self::upsert_divide_and_conquer(inner, right.to_vec(), id_field).await);
-            failures
-        })
-    }
-
-    async fn maybe_flush(&mut self) -> Result<()> {
-        if self.buffered_count >= self.batch_size {
-            self.flush_buffer().await?;
-        }
-        Ok(())
-    }
-
-    async fn enqueue_upsert(
+    /// A threshold flush also writes rows other nodes queued. Their failures stay
+    /// recorded for completion and later reads; the enqueuing node only fails
+    /// for its own rows.
+    async fn enqueue(
         &mut self,
         items: Vec<Value>,
-        id_field: String,
+        id_field: Option<String>,
         origin: Option<BufferedWriteOrigin>,
     ) -> Result<()> {
         self.inner.ensure_writable()?;
         if self.inner.is_durably_managed() {
-            return self.inner.upsert(items, id_field).await;
+            return match id_field {
+                Some(id_field) => self.inner.upsert(items, id_field).await,
+                None => self.inner.insert(items).await,
+            };
         }
-        let count = items.len();
+        self.buffered_count += items.len();
         let items = items
             .into_iter()
             .map(|value| BufferedItem {
@@ -516,31 +399,30 @@ impl<T: VectorStore> BufferedVectorStore<T> {
                 origin: origin.clone(),
             })
             .collect();
-        self.buffer.push(BufferedOp::Upsert(items, id_field));
-        self.buffered_count += count;
-        self.maybe_flush().await
-    }
-
-    async fn enqueue_insert(
-        &mut self,
-        items: Vec<Value>,
-        origin: Option<BufferedWriteOrigin>,
-    ) -> Result<()> {
-        self.inner.ensure_writable()?;
-        if self.inner.is_durably_managed() {
-            return self.inner.insert(items).await;
+        self.buffer.push(match id_field {
+            Some(id_field) => BufferedOp::Upsert(items, id_field),
+            None => BufferedOp::Insert(items),
+        });
+        if self.buffered_count < self.batch_size {
+            return Ok(());
         }
-        let count = items.len();
-        let items = items
-            .into_iter()
-            .map(|value| BufferedItem {
-                value,
-                origin: origin.clone(),
-            })
-            .collect();
-        self.buffer.push(BufferedOp::Insert(items));
-        self.buffered_count += count;
-        self.maybe_flush().await
+
+        let Err(error) = self.flush_buffer().await else {
+            return Ok(());
+        };
+        let own: Vec<_> = match (origin.as_ref(), error.downcast_ref::<BufferedWriteError>()) {
+            (Some(origin), Some(report)) => report
+                .failures
+                .iter()
+                .filter(|failure| failure.origin.as_ref() == Some(origin))
+                .cloned()
+                .collect(),
+            _ => return Err(error),
+        };
+        if own.is_empty() {
+            return Ok(());
+        }
+        Err(anyhow!(BufferedWriteError::new(own)))
     }
 
     pub async fn upsert_with_origin(
@@ -549,7 +431,7 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         id_field: String,
         origin: BufferedWriteOrigin,
     ) -> Result<()> {
-        self.enqueue_upsert(items, id_field, Some(origin)).await
+        self.enqueue(items, Some(id_field), Some(origin)).await
     }
 
     pub async fn insert_with_origin(
@@ -557,7 +439,7 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         items: Vec<Value>,
         origin: BufferedWriteOrigin,
     ) -> Result<()> {
-        self.enqueue_insert(items, Some(origin)).await
+        self.enqueue(items, None, Some(origin)).await
     }
 }
 
@@ -645,11 +527,11 @@ impl<T: VectorStore + 'static> VectorStore for BufferedVectorStore<T> {
     }
 
     async fn upsert(&mut self, items: Vec<Value>, id_field: String) -> Result<()> {
-        self.enqueue_upsert(items, id_field, None).await
+        self.enqueue(items, Some(id_field), None).await
     }
 
     async fn insert(&mut self, items: Vec<Value>) -> Result<()> {
-        self.enqueue_insert(items, None).await
+        self.enqueue(items, None, None).await
     }
 
     async fn delete(&self, filter: &str) -> Result<()> {
@@ -721,5 +603,241 @@ impl<T: VectorStore + 'static> VectorStore for BufferedVectorStore<T> {
 
     fn is_dirty(&self) -> bool {
         !self.buffer.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::databases::vector::schema::TableInputRejected;
+    use arrow_schema::{DataType, Field};
+    use flow_like_types::json::json;
+
+    /// Rejects every batch holding a row flagged `bad`, or every write during an outage.
+    #[derive(Default)]
+    struct ScriptedStore {
+        attempts: usize,
+        outage: bool,
+        written: Vec<Value>,
+    }
+
+    impl ScriptedStore {
+        fn write(&mut self, items: Vec<Value>) -> Result<()> {
+            self.attempts += 1;
+            if self.outage {
+                return Err(object_store::Error::Generic {
+                    store: "test",
+                    source: "credentials expired".into(),
+                }
+                .into());
+            }
+            if items.iter().any(|item| item["bad"] == json!(true)) {
+                return Err(TableInputRejected("row rejected".to_string()).into());
+            }
+            self.written.extend(items);
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl VectorStore for ScriptedStore {
+        async fn vector_search(
+            &self,
+            _: Vec<f64>,
+            _: Option<&str>,
+            _: Option<Vec<String>>,
+            _: usize,
+            _: usize,
+        ) -> Result<Vec<Value>> {
+            unimplemented!()
+        }
+
+        async fn fts_search(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<Vec<String>>,
+            _: Option<Vec<String>>,
+            _: usize,
+            _: usize,
+        ) -> Result<Vec<Value>> {
+            unimplemented!()
+        }
+
+        async fn hybrid_search(
+            &self,
+            _: Vec<f64>,
+            _: &str,
+            _: Option<&str>,
+            _: Option<Vec<String>>,
+            _: Option<Vec<String>>,
+            _: usize,
+            _: usize,
+            _: bool,
+        ) -> Result<Vec<Value>> {
+            unimplemented!()
+        }
+
+        async fn filter(
+            &self,
+            _: &str,
+            _: Option<Vec<String>>,
+            _: usize,
+            _: usize,
+        ) -> Result<Vec<Value>> {
+            unimplemented!()
+        }
+
+        async fn upsert(&mut self, items: Vec<Value>, _: String) -> Result<()> {
+            self.write(items)
+        }
+
+        async fn insert(&mut self, items: Vec<Value>) -> Result<()> {
+            self.write(items)
+        }
+
+        async fn delete(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn index(&self, _: &str, _: Option<&str>) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn optimize(&self, _: bool) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn list(&self, _: Option<Vec<String>>, _: usize, _: usize) -> Result<Vec<Value>> {
+            unimplemented!()
+        }
+
+        async fn purge(&self) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn count(&self, _: Option<String>) -> Result<usize> {
+            unimplemented!()
+        }
+
+        async fn schema(&self) -> Result<Schema> {
+            Ok(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("bad", DataType::Boolean, false),
+            ]))
+        }
+    }
+
+    fn rows(count: i64, bad: impl Fn(i64) -> bool) -> Vec<Value> {
+        (0..count)
+            .map(|id| json!({"id": id, "bad": bad(id)}))
+            .collect()
+    }
+
+    fn origin(node: &str) -> BufferedWriteOrigin {
+        BufferedWriteOrigin::new(Arc::from(node), None)
+    }
+
+    #[tokio::test]
+    async fn rejected_rows_are_isolated_and_the_rest_written() -> Result<()> {
+        let mut db = BufferedVectorStore::new(ScriptedStore::default(), 1000);
+        db.upsert(rows(64, |id| id == 7 || id == 40), "id".into())
+            .await?;
+
+        let error = db.flush().await.expect_err("two rows are rejected");
+        let report = error.downcast_ref::<BufferedWriteError>().unwrap();
+        assert_eq!(report.failures.len(), 2);
+        assert_eq!(db.inner().written.len(), 62);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_batch_wide_failure_is_attempted_once() -> Result<()> {
+        let store = ScriptedStore {
+            outage: true,
+            ..ScriptedStore::default()
+        };
+        let mut db = BufferedVectorStore::new(store, 1000);
+        db.upsert(rows(64, |_| false), "id".into()).await?;
+        db.insert(rows(64, |_| false)).await?;
+
+        let error = db.flush().await.expect_err("storage is down");
+        let report = error.downcast_ref::<BufferedWriteError>().unwrap();
+        assert_eq!(report.failures.len(), 128);
+        assert_eq!(db.inner().attempts, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_threshold_flush_fails_only_the_node_whose_rows_were_rejected() -> Result<()> {
+        let mut db = BufferedVectorStore::new(ScriptedStore::default(), 2);
+        db.upsert_with_origin(rows(1, |_| true), "id".into(), origin("rejected"))
+            .await?;
+
+        db.insert_with_origin(vec![json!({"id": 5, "bad": false})], origin("trigger"))
+            .await
+            .expect("the triggering node's own row was written");
+
+        let report = db
+            .write_failure_report()
+            .expect("the rejection stays recorded");
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].origin, Some(origin("rejected")));
+
+        db.take_write_failures();
+        let error = db
+            .insert_with_origin(
+                vec![json!({"id": 6, "bad": true}), json!({"id": 7, "bad": true})],
+                origin("trigger"),
+            )
+            .await
+            .expect_err("the triggering node's own rows were rejected");
+        let report = error.downcast_ref::<BufferedWriteError>().unwrap();
+        assert_eq!(report.failures.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn upserts_without_a_key_are_never_merged() {
+        let items = [
+            json!({"id": null}),
+            json!({"id": null}),
+            json!({"name": "x"}),
+        ]
+        .into_iter()
+        .map(|value| BufferedItem {
+            value,
+            origin: None,
+        })
+        .collect();
+
+        let kept = BufferedVectorStore::<ScriptedStore>::dedupe_upsert_items(items, "id", true);
+
+        assert_eq!(kept.len(), 3);
+    }
+
+    #[test]
+    fn numeric_keys_merge_by_value_unless_the_key_column_is_an_integer() {
+        let items = || {
+            [
+                json!({"id": 1, "v": "first"}),
+                json!({"id": 1.0, "v": "last"}),
+            ]
+            .into_iter()
+            .map(|value| BufferedItem {
+                value,
+                origin: None,
+            })
+            .collect::<Vec<_>>()
+        };
+
+        let by_value =
+            BufferedVectorStore::<ScriptedStore>::dedupe_upsert_items(items(), "id", true);
+        assert_eq!(by_value.len(), 1);
+        assert_eq!(by_value[0].value["v"], json!("last"));
+
+        let integer_column =
+            BufferedVectorStore::<ScriptedStore>::dedupe_upsert_items(items(), "id", false);
+        assert_eq!(integer_column.len(), 2);
     }
 }

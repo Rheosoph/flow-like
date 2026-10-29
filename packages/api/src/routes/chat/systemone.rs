@@ -6,7 +6,7 @@ use axum::{Extension, Json, extract::State, http::HeaderMap, response::Response}
 use flow_like::flow_like_model_provider::{provider::ModelApiSurface, systemone::SystemOneRequest};
 use serde_json::Value;
 
-pub(super) fn validate_payload(payload: &Value) -> Result<SystemOneRequest, ApiError> {
+pub(crate) fn validate_payload(payload: &Value) -> Result<SystemOneRequest, ApiError> {
     let mut request = payload.clone();
     let object = request
         .as_object_mut()

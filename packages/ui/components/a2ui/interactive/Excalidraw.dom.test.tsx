@@ -77,6 +77,7 @@ const route = { name: "workflow_event", context: { nodeId: "save-drawing" } };
 const component = (
 	props: Partial<ExcalidrawComponent> = {},
 ): ExcalidrawComponent => ({
+	id: "drawing",
 	type: "excalidraw",
 	value: { literalJson: JSON.stringify(scene()) },
 	eventHandlers: { save: [route], autoSave: [route] },

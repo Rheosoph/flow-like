@@ -143,7 +143,9 @@ impl LockedApi {
             .as_ref()
             .ok_or_else(|| anyhow!("Locked storage nodes require an app execution"))?;
         if access == LockedAccess::Write && cache.shadow {
-            return Err(anyhow!("Shadow runs cannot change locked storage"));
+            return Err(crate::remote_util::shadow_side_effect_refused(
+                "change locked files",
+            ));
         }
         let route = match context.executor_api_auth.clone() {
             Some(auth) => LockedRoute::Execution(auth),

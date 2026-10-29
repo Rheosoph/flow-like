@@ -214,3 +214,42 @@ describe("assistant streaming with inline step anchors", () => {
 		expect(order).toEqual(["Hello", "steps", "world"]);
 	});
 });
+
+describe("thinking stamp", () => {
+	test("a user turn shows the level it was sent with next to its label", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const message = {
+			id: "u1",
+			timestamp: 0,
+			files: [],
+			inner: { role: IRole.User, content: "Why does the export time out?" },
+			thinking: "high",
+		} as unknown as IMessage;
+
+		await act(async () => {
+			root.render(<MessageComponent message={message} />);
+		});
+
+		const stamp = container.querySelector(".fl-think-l3");
+		expect(stamp).not.toBeNull();
+		expect(stamp?.parentElement?.textContent).toContain("High");
+	});
+
+	test("older messages without a level show no stamp", async () => {
+		const { MessageComponent } = await import("./message");
+		const { container, root } = await setup();
+		const message = {
+			id: "u2",
+			timestamp: 0,
+			files: [],
+			inner: { role: IRole.User, content: "Hi" },
+		} as unknown as IMessage;
+
+		await act(async () => {
+			root.render(<MessageComponent message={message} />);
+		});
+
+		expect(container.querySelector(".fl-think")).toBeNull();
+	});
+});

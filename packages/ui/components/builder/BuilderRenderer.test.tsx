@@ -408,4 +408,47 @@ describe("BuilderRenderer element roots", () => {
 		expect(selected.mock.calls).toEqual([["box", true]]);
 		expect(empty?.children.length).toBe(0);
 	});
+
+	test("hides runtime-hidden elements unless they or their contents are selected", async () => {
+		const surface = createSurface();
+		surface.components.group = {
+			...surface.components.group,
+			component: {
+				...surface.components.group.component,
+				hidden: { literalBool: true },
+			},
+		};
+		surface.components.title = {
+			...surface.components.title,
+			component: {
+				...surface.components.title.component,
+				hidden: { path: "/hideTitle" },
+			},
+		};
+		surface.dataModel = [{ path: "/hideTitle", value: "true" }];
+		const { host, rerender } = await renderBuilder(surface);
+		expect(host.querySelector('[data-builder-component="group"]')).toBeNull();
+		expect(host.querySelector('[data-builder-component="nested"]')).toBeNull();
+		expect(host.querySelector('[data-builder-component="title"]')).toBeNull();
+		expect(
+			host.querySelector('[data-builder-component="space"]'),
+		).not.toBeNull();
+
+		builder.selection = { componentIds: ["nested"] };
+		await rerender();
+		const group = host.querySelector('[data-builder-component="group"]');
+		const nested = host.querySelector('[data-builder-component="nested"]');
+		expect(group?.hasAttribute("data-builder-runtime-hidden")).toBe(true);
+		expect(nested?.hasAttribute("data-builder-runtime-hidden")).toBe(false);
+		expect(host.querySelector('[data-builder-component="title"]')).toBeNull();
+
+		builder.selection = { componentIds: ["title"] };
+		await rerender();
+		expect(host.querySelector('[data-builder-component="group"]')).toBeNull();
+		expect(
+			host
+				.querySelector('[data-builder-component="title"]')
+				?.hasAttribute("data-builder-runtime-hidden"),
+		).toBe(true);
+	});
 });

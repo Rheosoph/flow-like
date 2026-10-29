@@ -24,7 +24,9 @@ export function validateBuild(input: unknown): BuildValidation {
 			ok: false,
 			issues: parsed.error.issues.map((entry) => ({
 				code: "invalid_state_schema",
-				path: entry.path,
+				path: entry.path.map((key) =>
+					typeof key === "symbol" ? String(key) : key,
+				),
 				message: entry.message,
 			})),
 		};

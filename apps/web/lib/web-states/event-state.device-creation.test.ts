@@ -170,3 +170,20 @@ describe("device event creation", () => {
 		expect(mocks.apiPut).not.toHaveBeenCalled();
 	});
 });
+
+describe("event upsert credentials", () => {
+	beforeEach(() => {
+		vi.resetAllMocks();
+		mocks.apiPut.mockResolvedValue(event);
+	});
+
+	test("never sends a personal access token, because the hub runs the event as the user who saved it", async () => {
+		await new WebEventState(backend).upsertEvent(
+			"app-1",
+			event,
+			undefined,
+			"pat_id.secret",
+		);
+		expect(mocks.apiPut.mock.calls[0]?.[1]).not.toHaveProperty("pat");
+	});
+});

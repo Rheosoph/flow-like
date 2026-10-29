@@ -75,6 +75,8 @@ pub(crate) enum HostedWork {
         usage: crate::routes::ai::global_chat::AssistantUsage,
         board_format: u32,
     },
+    /// A run's call to its owner's private model. The worker decrypts the key when it runs.
+    CustomBit(crate::routes::execution::models::RelayCall),
 }
 
 pub(crate) fn apply_worker_tariff(rate: &mut crate::usage_accounting::HostedRateSnapshot) {
@@ -537,6 +539,7 @@ pub(crate) async fn work(
             {
                 ("assistant", "cloud_orchestration")
             }
+            HostedWork::CustomBit(_) => ("assistant", "cloud_orchestration"),
             _ => ("ai_relay", "ai_serving"),
         };
         crate::compute_attempts::associate_current(&state.db, &id, &payer, role, cost_class)
@@ -557,6 +560,14 @@ pub(crate) async fn work(
                 usage,
                 started.elapsed().as_millis().min(i64::MAX as u128) as i64,
                 false,
+            )
+            .await;
+        } else if let HostedWork::CustomBit(_) = &job.request {
+            crate::routes::execution::models::settle_operation(
+                &state,
+                &id,
+                false,
+                started.elapsed(),
             )
             .await;
         } else {
@@ -725,6 +736,15 @@ async fn execute(
                 ),
             )
             .await?
+        }
+        HostedWork::CustomBit(call) => {
+            crate::routes::execution::models::run_queued(
+                state,
+                call.clone(),
+                job.deadline,
+                &job.operation_id,
+            )
+            .await
         }
     };
     let mut head = StreamHead {
@@ -951,5 +971,52 @@ mod tests {
             Some("provider-request")
         );
         assert!(decode_usage_receipt(serde_json::json!({"status":"fake"})).is_err());
+    }
+
+    #[test]
+    fn queued_private_model_calls_hold_ids_and_the_hop_only() {
+        let call = crate::routes::execution::models::RelayCall {
+            owner: "owner-1".into(),
+            run_id: "run-1".into(),
+            bit_id: "owner-gpt".into(),
+            systemone: false,
+            body: serde_json::json!({
+                "model": "owner-gpt",
+                "stream": true,
+                "messages": [{"role": "user", "content": "Summarize the ticket"}],
+            }),
+            stream: true,
+            context: UsageRequestContext {
+                app_id: Some("app-1".into()),
+                user_id: "frontend:event-1:run-run-1".into(),
+                technical_user_id: None,
+            },
+            person: None,
+        };
+        let job = serde_json::to_value(HostedWork::CustomBit(call)).unwrap();
+        let mut fields: Vec<&str> = job["CustomBit"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields.join(" "),
+            "bit_id body context owner run_id stream systemone"
+        );
+        let serialized = job.to_string();
+        for secret in [
+            "api_key",
+            "access_token",
+            "service_account",
+            "headers",
+            "endpoint",
+            "secrets",
+        ] {
+            assert!(!serialized.contains(secret), "the job carries {secret}");
+        }
+        let restored: HostedWork = serde_json::from_value(job.clone()).unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap(), job);
     }
 }

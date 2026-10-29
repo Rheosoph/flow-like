@@ -24,12 +24,19 @@ fn is_missing(error: &object_store::Error) -> bool {
 }
 
 async fn local_metadata(store: &LocalObjectStore, path: &Path) -> Result<Option<Metadata>> {
-    let local_path = store.directory_to_filesystem(path)?;
-    match tokio::fs::metadata(&local_path).await {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
-            Ok(None)
-        }
+    match store.metadata(path) {
+        Ok(metadata) => Ok(metadata),
+        Err(error) if is_missing(&error) => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("Failed to inspect {path} in {store}")),
+    }
+}
+
+async fn absent_after_listing(store: &dyn object_store::ObjectStore, path: &Path) -> Result<bool> {
+    // Protected local listings omit links. A direct check must still report a
+    // denied link or provider failure instead of presenting it as a missing file.
+    match store.head(path).await {
+        Ok(_) => Ok(false),
+        Err(error) if is_missing(&error) => Ok(false),
         Err(error) => Err(error).with_context(|| format!("Failed to inspect {path} in {store}")),
     }
 }
@@ -50,10 +57,12 @@ impl FlowLikeStore {
 
         let store = self.as_generic();
         if matches!(self, Self::Other(_)) {
-            // Wrapped local stores can create missing parents during head requests.
-            // Listing also works for stores that expose native directories, such as SMB.
+            // Listing distinguishes files from native directories on wrapped
+            // local stores and providers such as SMB.
             return match store.list_with_delimiter(Some(&parent)).await {
-                Ok(list) => Ok(list.objects.iter().any(|object| object.location == *path)),
+                Ok(list) if list.objects.iter().any(|object| object.location == *path) => Ok(true),
+                Ok(list) if list.common_prefixes.contains(path) => Ok(false),
+                Ok(_) => absent_after_listing(store.as_ref(), path).await,
                 Err(error) if is_missing(&error) => Ok(false),
                 Err(error) => {
                     Err(error).with_context(|| format!("Failed to inspect {path} in {store}"))
@@ -106,7 +115,8 @@ impl FlowLikeStore {
 
         // Parent listings retain empty native directories behind generic store wrappers.
         match store.list_with_delimiter(Some(&parent)).await {
-            Ok(list) => Ok(list.common_prefixes.contains(path)),
+            Ok(list) if list.common_prefixes.contains(path) => Ok(true),
+            Ok(_) => absent_after_listing(store.as_ref(), path).await,
             Err(error) if is_missing(&error) => Ok(false),
             Err(error) => {
                 Err(error).with_context(|| format!("Failed to inspect {path} in {store}"))

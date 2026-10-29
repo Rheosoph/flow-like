@@ -28,8 +28,7 @@ use std::collections::BTreeMap;
 /// no table yet, and `delete` would fail on the missing table.
 #[cfg(feature = "execute")]
 async fn clear_destination(db: &CachedDB) -> Result<()> {
-    db.ensure_flushed().await?;
-    let guard = db.db.read().await;
+    let guard = db.flushed_read().await?;
     if guard.inner().raw().await.is_err() {
         return Ok(());
     }
@@ -191,8 +190,7 @@ impl NodeLogic for StratifiedSplitNode {
         let mut null_labels = 0usize;
 
         {
-            source_db.ensure_flushed().await?;
-            let source_guard = source_db.db.read().await;
+            let source_guard = source_db.flushed_read().await?;
             let source_table = source_guard.inner().raw().await?;
             let query = source_table.query();
             let mut item_stream = query.execute().await?;

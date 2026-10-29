@@ -149,6 +149,8 @@ mod tests {
             sub: "user-1".into(),
             payer_sub: None,
             hosted_frontend: false,
+            custom_bits_owner: None,
+            unattended: false,
             technical_user_id: None,
             run_id: "run-1".into(),
             app_id: app_id.into(),

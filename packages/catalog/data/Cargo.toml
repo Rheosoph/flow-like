@@ -45,7 +45,7 @@ iceberg = ["flow-like-storage/iceberg"]
 # Use rustls variants for postgres/mysql to avoid native-tls/openssl dependency
 postgres = ["datafusion-table-providers/postgres-rustls", "dep:rustls"]
 mysql = ["datafusion-table-providers/mysql-rustls", "dep:rustls"]
-sqlite = ["datafusion-table-providers/sqlite-bundled"]
+sqlite = ["datafusion-table-providers/sqlite"]
 duckdb = ["datafusion-table-providers/duckdb"]
 clickhouse = ["datafusion-table-providers/clickhouse"]
 flight = ["datafusion-table-providers/flight"]
@@ -53,14 +53,15 @@ odbc = ["datafusion-table-providers/odbc"]
 # BigQuery provider uses gcp-bigquery-client directly (datafusion-table-providers has no BigQuery backend yet).
 # Results are fetched via the REST query API and registered as an in-memory table in the DataFusion session.
 bigquery = ["dep:gcp-bigquery-client"]
-# Federation support - enables query push-down to remote databases
-federation = ["datafusion-table-providers/federation", "flow-like-storage/federation", "flow-like-catalog-data-support/federation"]
-postgres-federation = ["postgres", "datafusion-table-providers/postgres-rustls-federation", "federation"]
-mysql-federation = ["mysql", "datafusion-table-providers/mysql-rustls-federation", "federation"]
-sqlite-federation = ["sqlite", "datafusion-table-providers/sqlite-federation", "federation"]
-duckdb-federation = ["duckdb", "datafusion-table-providers/duckdb-federation", "federation"]
-clickhouse-federation = ["clickhouse", "datafusion-table-providers/clickhouse-federation", "federation"]
-odbc-federation = ["odbc", "datafusion-table-providers/odbc-federation", "federation"]
+# Federation support - enables query push-down to remote databases.
+# The provider crates always build their federation support.
+federation = ["flow-like-storage/federation", "flow-like-catalog-data-support/federation"]
+postgres-federation = ["postgres", "federation"]
+mysql-federation = ["mysql", "federation"]
+sqlite-federation = ["sqlite", "federation"]
+duckdb-federation = ["duckdb", "federation"]
+clickhouse-federation = ["clickhouse", "federation"]
+odbc-federation = ["odbc", "federation"]
 # Feature bundles
 all-lakes = ["delta", "iceberg"]
 all-databases = ["postgres", "mysql", "sqlite", "duckdb", "clickhouse", "flight", "odbc", "bigquery"]
@@ -119,8 +120,8 @@ tdms-rs = { git = "https://github.com/Rheosoph/tdms-rs", rev = "620318f", option
 tempfile = { version = "3", optional = true }
 
 # Database providers retain our rustls and SQLite compatibility patches.
-# Arrow 58 and DataFusion 53 are shared by every provider.
-datafusion-table-providers = { git = "https://github.com/Rheosoph/datafusion-table-providers.git", rev = "2a4428f404f9542184943ccc799a964effd941f3", default-features = false, optional = true }
+# Arrow 58 and DataFusion 54 are shared by every provider.
+datafusion-table-providers = { git = "https://github.com/Rheosoph/datafusion-table-providers.git", rev = "05025aa10c8e5ff83f01adb0a0d0218d9e5f2e67", default-features = false, optional = true }
 
 # Only to install a process-wide crypto provider before the PostgreSQL/MySQL drivers build TLS configs.
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"], optional = true }

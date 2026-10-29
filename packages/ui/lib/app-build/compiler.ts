@@ -557,7 +557,11 @@ export function validateAppSpec(input: unknown): AppSpecValidation {
 		return {
 			ok: false,
 			issues: parsed.error.issues.map((entry: z.ZodIssue) =>
-				issue("invalid_schema", entry.path, entry.message),
+				issue(
+					"invalid_schema",
+					entry.path.map((key) => (typeof key === "symbol" ? String(key) : key)),
+					entry.message,
+				),
 			),
 		};
 	}

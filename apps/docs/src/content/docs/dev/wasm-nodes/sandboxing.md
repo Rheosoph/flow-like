@@ -71,6 +71,18 @@ the credentials behind the host service. The sandbox gates the node, user,
 upload, and cache directories on one storage capability, so the store lists all
 four for a package whose nodes declare `storage:read` or `storage:write`.
 
+Storage host functions check object-key prefixes against the current app, user,
+or supplied `FlowPath` grant. Local storage operations open each directory and
+file without following symlinks, and retain directory handles while reading,
+writing, listing, publishing, or aborting uploads. Listings omit symlinks;
+explicit access through one fails, including links to another folder within
+the same store. Projects must provide ordinary files and directories for these
+operations.
+
+WASM storage does not return local asset URLs, which would reopen filesystem
+paths later. Desktop widget resources receive bytes through the protected
+storage backend; remote resources continue to use authorized HTTPS URLs.
+
 A node with no declared permissions receives none of the protected Flow-Like
 capabilities in this table. It can still read its input pins, write outputs,
 log, access runtime metadata, and use baseline facilities supplied by its ABI.

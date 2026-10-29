@@ -1,10 +1,15 @@
 use flow_like_runtime::state::FlowLikeStores;
 use flow_like_storage::files::store::FlowLikeStore;
-use flow_like_storage::object_store::{memory::InMemory, path::Path, ObjectStoreExt};
+use flow_like_storage::object_store::{
+    self, memory::InMemory, path::Path, CopyOptions, GetOptions, GetResult, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult,
+};
 use flow_like_wasm::host_functions::linker::{register_host_functions, StoreData};
 use flow_like_wasm::host_functions::storage::{StorageFlowPath, StorageStore};
 use flow_like_wasm::host_functions::StorageContext;
 use flow_like_wasm::{WasmAbi, WasmCapabilities};
+use futures::{stream::BoxStream, StreamExt};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -166,7 +171,11 @@ impl Guest {
     }
 
     async fn read_or_list(&mut self, operation: &str, path: &StorageFlowPath) -> Option<Vec<u8>> {
-        let json = serde_json::to_string(path).unwrap();
+        self.read_or_list_json(operation, serde_json::to_string(path).unwrap())
+            .await
+    }
+
+    async fn read_or_list_json(&mut self, operation: &str, json: String) -> Option<Vec<u8>> {
         match self {
             Self::Core { store, instance } => {
                 store
@@ -455,6 +464,226 @@ async fn valid_storage_paths_still_require_capabilities() {
             .is_none());
         assert!(!guest.write(&path, b"denied").await);
     }
+}
+
+#[derive(Debug)]
+struct PrunedListingStore {
+    inner: InMemory,
+    visited: Arc<RwLock<Vec<String>>>,
+}
+
+impl std::fmt::Display for PrunedListingStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PrunedListingStore")
+    }
+}
+
+fn unexpected_listing(message: &str) -> object_store::Error {
+    object_store::Error::Generic {
+        store: "PrunedListingStore",
+        source: message.to_owned().into(),
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for PrunedListingStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        options: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, options).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        options: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, _: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        futures::stream::once(async {
+            Err(unexpected_listing(
+                "Recursive listing opens excluded directories",
+            ))
+        })
+        .boxed()
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        let prefix = prefix.cloned().unwrap_or_default();
+        self.visited.write().push(prefix.to_string());
+        if prefix
+            .parts()
+            .any(|part| matches!(part.as_ref(), "node_modules" | ".git"))
+        {
+            return Err(unexpected_listing("An excluded directory was opened"));
+        }
+        self.inner.list_with_delimiter(Some(&prefix)).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+async fn pruned_listing_fixture() -> (StorageContext, Arc<RwLock<Vec<String>>>) {
+    let visited = Arc::new(RwLock::new(Vec::new()));
+    let backend = Arc::new(PrunedListingStore {
+        inner: InMemory::new(),
+        visited: visited.clone(),
+    });
+    for path in [
+        "project/package.json",
+        "project/src/pages/index.astro",
+        "project/src/node_modules",
+        "project/node_modules/package/index.js",
+        "project/src/pages/node_modules/package/index.js",
+        "project/.git/objects/pack/data",
+        "project-sibling/private.txt",
+    ] {
+        backend
+            .put(
+                &Path::from(path),
+                bytes::Bytes::from_static(b"contents").into(),
+            )
+            .await
+            .unwrap();
+    }
+    let (context, _) = fixture().await;
+    context.store_cache.write().insert(
+        "project-store".into(),
+        StorageStore {
+            store: FlowLikeStore::Other(backend),
+            roots: vec![Path::from("project")],
+        },
+    );
+    (context, visited)
+}
+
+fn assert_pruned_listing(visited: &RwLock<Vec<String>>, mut paths: Vec<String>) {
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            "project/package.json",
+            "project/src/node_modules",
+            "project/src/pages/index.astro",
+        ]
+    );
+    let mut directories = visited.read().clone();
+    directories.sort();
+    assert_eq!(directories, ["project", "project/src", "project/src/pages"]);
+}
+
+#[tokio::test]
+async fn legacy_listing_prunes_excluded_subtrees_before_opening_them() {
+    for &runtime in RUNTIMES {
+        let (context, visited) = pruned_listing_fixture().await;
+        let mut guest = Guest::new(runtime, context, WasmCapabilities::STORAGE_READ).await;
+        let request = |path: &str| {
+            serde_json::json!({
+                "path": path,
+                "store_ref": "project-store",
+                "exclude_directories": ["node_modules", ".git"],
+            })
+            .to_string()
+        };
+        let bytes = guest
+            .read_or_list_json("list", request("project"))
+            .await
+            .expect("Excluded directories must not be opened by either WASM ABI");
+        let entries: Vec<StorageFlowPath> = serde_json::from_slice(&bytes).unwrap();
+        assert_pruned_listing(
+            &visited,
+            entries.into_iter().map(|entry| entry.path).collect(),
+        );
+        visited.write().clear();
+        assert!(guest
+            .read_or_list_json("list", request("project-sibling"))
+            .await
+            .is_none());
+        assert!(
+            visited.read().is_empty(),
+            "A denied prefix reached the backend"
+        );
+
+        let (context, visited) = pruned_listing_fixture().await;
+        let mut denied = Guest::new(runtime, context, WasmCapabilities::NONE).await;
+        assert!(denied
+            .read_or_list_json("list", request("project"))
+            .await
+            .is_none());
+        assert!(
+            visited.read().is_empty(),
+            "An unpermitted request reached the backend"
+        );
+    }
+}
+
+#[tokio::test]
+async fn paginated_listing_prunes_excluded_subtrees_across_cursors() {
+    use flow_like_wasm::host_functions::storage_ops::{
+        list_files_page, ListPageRequest, ListSessions,
+    };
+
+    let (context, visited) = pruned_listing_fixture().await;
+    let sessions = ListSessions::default();
+    let mut request = ListPageRequest {
+        path: flow_path("project-store", "project"),
+        limit: 1,
+        cursor: None,
+        exclude_directories: vec!["node_modules".into(), ".git".into()],
+        recursive: true,
+    };
+    let mut paths = Vec::new();
+    loop {
+        let page = list_files_page(&context, &sessions, &request)
+            .await
+            .unwrap();
+        paths.extend(page.entries.into_iter().map(|entry| entry.flow_path.path));
+        request.cursor = page.cursor;
+        if request.cursor.is_none() {
+            break;
+        }
+    }
+    assert_pruned_listing(&visited, paths);
+    visited.write().clear();
+    request.path.path = "project-sibling".into();
+    assert_eq!(
+        list_files_page(&context, &sessions, &request)
+            .await
+            .unwrap_err()
+            .code,
+        "permission_denied"
+    );
+    assert!(
+        visited.read().is_empty(),
+        "A denied prefix reached the backend"
+    );
 }
 
 // Adapt the component imports through linear memory so the test crosses the

@@ -17,7 +17,10 @@ spec:
     - toCIDR:
         - 169.254.0.0/16
         - 100.100.100.200/32
+        - 168.63.129.16/32
         - fd00:ec2::254/128
+        - fd00:ec2::23/128
+        - fd20:ce::254/128
 ---
 # Cilium allow-localhost=policy requires explicit kubelet health-probe access.
 apiVersion: cilium.io/v2

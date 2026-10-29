@@ -243,6 +243,7 @@ pub async fn update_overlay(
         let mut reconciled_actions = def.actions.clone();
         let prepared = match super::actions::materialize_action_events(
             &state,
+            &user,
             &sub,
             &app_id,
             &overlay_id,

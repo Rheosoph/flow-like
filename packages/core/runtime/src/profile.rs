@@ -188,9 +188,10 @@ pub struct Profile {
     #[serde(default)]
     pub theme: Option<Value>,
     pub bits: Vec<String>, // hub:id
-    /// User-owned private bits, hydrated per trust boundary: with decrypted
-    /// provider secrets only server-side per request/run and on the owner's
-    /// desktop; never in the browser client or the server profile row.
+    /// User-owned private bits. Only the owner's desktop and the hub hold their
+    /// provider secrets. Server runs carry secret-free views (provider and
+    /// model, no key or endpoint) and call them through the hub's model relay;
+    /// the browser client and the server profile row never see a secret.
     /// Schema-wise these are plain `Bit`s (the wrapper is serde-transparent);
     /// `schemars(with)` keeps the generated schema referencing `Bit` instead
     /// of minting a duplicate inline type, which would cascade renames through

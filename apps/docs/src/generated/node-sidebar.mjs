@@ -35,6 +35,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/agents/builder/agent-from-model"
               },
               {
+                "label": "Enable Interactive UI",
+                "slug": "nodes/ai/agents/builder/agent-enable-interactive-ui"
+              },
+              {
                 "label": "Lazy Register Function Tools",
                 "slug": "nodes/ai/agents/builder/agent-lazy-register-function-tools"
               },
@@ -721,6 +725,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Find Model",
             "slug": "nodes/ai/generative/ai-generative-find-model"
+          },
+          {
+            "label": "Interactive UI Instructions",
+            "slug": "nodes/ai/generative/ai-generative-interactive-ui-instructions"
           },
           {
             "label": "Invoke Model",
@@ -4057,6 +4065,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Register MySQL",
                 "slug": "nodes/data/datafusion/databases/df-register-mysql"
+              },
+              {
+                "label": "Register ODBC Table",
+                "slug": "nodes/data/datafusion/databases/df-register-odbc"
               },
               {
                 "label": "Register Oracle",

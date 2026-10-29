@@ -1,11 +1,8 @@
-import {
-	type OAuthPlatform,
-	type OAuthService,
-	createOAuthService,
-} from "@flow-like/flow-like-ui";
+import { type OAuthService, createOAuthService } from "@flow-like/flow-like-ui";
 import { oauthTokenStore } from "./oauth-db";
 import { getPublicApiUrl } from "./public-config";
 import { tauriOAuthRuntime } from "./tauri-oauth-runtime";
+import { webOAuthPlatform } from "./web-oauth-runtime";
 
 export type { IOAuthProvider } from "@flow-like/flow-like-ui";
 
@@ -37,23 +34,9 @@ export function getOAuthApiBaseUrl(hub?: string | null): string {
 	return normalizeApiBaseUrl(hub) ?? getDefaultOAuthApiBaseUrl();
 }
 
-function getWebPlatform(): OAuthPlatform {
-	if (typeof window === "undefined") {
-		return "web-prod";
-	}
-	// Check if running on localhost for dev environment
-	if (
-		window.location.hostname === "localhost" ||
-		window.location.hostname === "127.0.0.1"
-	) {
-		return "web-dev";
-	}
-	return "web-prod";
-}
-
 export function getOAuthService(apiBaseUrl?: string): OAuthService {
 	// Always recalculate platform at runtime to ensure correct value
-	const platform = getWebPlatform();
+	const platform = webOAuthPlatform();
 	const normalizedApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
 
 	if (cachedService && cachedApiBaseUrl === normalizedApiBaseUrl) {
@@ -81,9 +64,9 @@ export const oauthService: OAuthService = new Proxy({} as OAuthService, {
 				runtime: tauriOAuthRuntime,
 				tokenStore: oauthTokenStore,
 				getApiBaseUrl: async () => getDefaultOAuthApiBaseUrl(),
-				platform: getWebPlatform(),
+				platform: webOAuthPlatform(),
 			});
 		}
-		return (_oauthService as any)[prop];
+		return Reflect.get(_oauthService, prop);
 	},
 });

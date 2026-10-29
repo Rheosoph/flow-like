@@ -3,19 +3,23 @@ use std::any::Any;
 use super::{
     ModelLogic, OPENROUTER_ONLY, ParamDialect, UsageReportingMode, body_params, extract_headers,
     merge_additional_params, output_budget_as_body_param,
+    user_media::{self, MediaSplice, Part},
 };
 use crate::history::{History, HistoryThinking};
 use crate::provider::random_provider;
 use crate::{
+    egress::ProviderEgress,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
-use rig::completion::CompletionRequest;
-use rig::message::ToolChoice;
+use rig::completion::{CompletionError, CompletionRequest};
+use rig::message::{ToolChoice, UserContent};
 use serde_json::{Value, json};
+
+const NAME: &str = "DeepSeek";
 
 const DEEPSEEK: ParamDialect = ParamDialect {
     provider: "deepseek",
@@ -71,8 +75,29 @@ fn deepseek_constraints(model: &str, request: CompletionRequest) -> CompletionRe
     request
 }
 
+/// Rig's converter sends only the text of user messages; images travel past it as `image_url`
+/// parts, which DeepSeek's vision models read from public links and `data:` URLs.
+fn deepseek_request(
+    model: &str,
+    request: CompletionRequest,
+) -> Result<CompletionRequest, CompletionError> {
+    user_media::deliver(
+        NAME,
+        model,
+        deepseek_constraints(model, request),
+        media_part,
+    )
+}
+
+fn media_part(part: &UserContent) -> Result<Part, CompletionError> {
+    match part {
+        UserContent::Image(image) => user_media::web_image(NAME, image, true),
+        part => user_media::text_only(NAME, part),
+    }
+}
+
 pub struct DeepseekModel {
-    client: rig::providers::deepseek::Client,
+    client: rig::providers::deepseek::Client<MediaSplice>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -86,7 +111,9 @@ impl DeepseekModel {
         let api_key = deepseek_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
 
-        let mut builder = rig::providers::deepseek::Client::builder().api_key(&api_key);
+        let mut builder = rig::providers::deepseek::Client::builder()
+            .api_key(&api_key)
+            .http_client(MediaSplice::default());
 
         if let Some(endpoint) = deepseek_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
@@ -101,7 +128,10 @@ impl DeepseekModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -111,7 +141,9 @@ impl DeepseekModel {
             .and_then(|v| v.as_str().map(|s| s.to_string()));
         let custom_headers = extract_headers(&params);
 
-        let mut builder = rig::providers::deepseek::Client::builder().api_key(api_key);
+        let mut builder = rig::providers::deepseek::Client::builder()
+            .api_key(api_key)
+            .http_client(MediaSplice::for_egress(egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -143,9 +175,9 @@ impl Cacheable for DeepseekModel {
 impl ModelLogic for DeepseekModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor::with_request_fixup(
+        Ok(user_media::constructor(
             self.client.clone(),
-            deepseek_constraints,
+            deepseek_request,
         ))
     }
 
@@ -222,5 +254,154 @@ mod tests {
 
         assert_eq!(params["user_id"], "user-1");
         assert!(params.get("user").is_none());
+    }
+
+    fn usage() -> Value {
+        json!({
+            "completion_tokens": 1,
+            "prompt_tokens": 12,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 12,
+            "total_tokens": 13,
+        })
+    }
+
+    async fn deepseek_at(endpoint: &str) -> DeepseekModel {
+        DeepseekModel::from_provider(
+            &ModelProvider {
+                provider_name: "deepseek".to_string(),
+                model_id: None,
+                version: None,
+                api_surface: None,
+                params: Some(std::collections::HashMap::from([
+                    ("api_key".to_string(), json!("key")),
+                    ("endpoint".to_string(), json!(endpoint)),
+                ])),
+            },
+            ProviderEgress::Open,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_streamed_history_image_reaches_deepseek() {
+        use crate::history::{
+            Content, ContentType, HistoryMessage, ImageUrl, MessageContent, Role,
+        };
+        use crate::llm::{
+            LLMCallback,
+            test_support::{serve_once, sse_response},
+        };
+        use user_media::tests::PNG_BASE64;
+
+        let (endpoint, server) = serve_once(sse_response(&[
+            json!({"id": "c", "model": "deepseek-flash", "choices": [{"delta": {"content": "ok"}}]}),
+            json!({"id": "c", "model": "deepseek-flash", "choices": [], "usage": usage()}),
+        ]))
+        .await;
+        let model = deepseek_at(&endpoint).await;
+        let data_url = format!("data:image/png;base64,{PNG_BASE64}");
+        let history = History::new(
+            "deepseek-flash".to_string(),
+            vec![HistoryMessage {
+                role: Role::User,
+                content: MessageContent::Contents(vec![
+                    Content::Text {
+                        content_type: ContentType::Text,
+                        text: "What is it?".to_string(),
+                    },
+                    Content::Image {
+                        content_type: ContentType::ImageUrl,
+                        image_url: ImageUrl {
+                            url: data_url.clone(),
+                            detail: None,
+                            media_type: None,
+                            additional_params: None,
+                        },
+                    },
+                ]),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                annotations: None,
+            }],
+        );
+        let callback: LLMCallback = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
+
+        model.invoke(&history, Some(callback)).await.unwrap();
+
+        let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_eq!(body["stream"], true);
+        assert_eq!(
+            body["messages"][0],
+            json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is it?"},
+                    {"type": "image_url", "image_url": {"url": data_url, "detail": "auto"}},
+                ],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn images_reach_deepseek_as_image_url_parts_and_pdfs_as_notes() {
+        use crate::llm::test_support::{json_response, serve_once};
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use rig::message::{DocumentMediaType, DocumentSourceKind, ImageMediaType};
+        use user_media::tests::{PDF_BASE64, PNG_BASE64, PRESIGNED_PNG, document, image, request};
+
+        let (endpoint, server) = serve_once(json_response(json!({
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "logprobs": null,
+                "finish_reason": "stop",
+            }],
+            "usage": usage(),
+        })))
+        .await;
+        let model = deepseek_at(&endpoint).await;
+
+        model
+            .provider()
+            .await
+            .unwrap()
+            .client()
+            .completion_model("deepseek-flash")
+            .completion(request(vec![
+                UserContent::text("What do they show?"),
+                image(
+                    DocumentSourceKind::Raw(STANDARD.decode(PNG_BASE64).unwrap()),
+                    None,
+                ),
+                image(
+                    DocumentSourceKind::Url(PRESIGNED_PNG.to_string()),
+                    Some(ImageMediaType::PNG),
+                ),
+                document(
+                    DocumentSourceKind::Base64(PDF_BASE64.to_string()),
+                    Some(DocumentMediaType::PDF),
+                ),
+                document(
+                    DocumentSourceKind::String("Quarterly notes".to_string()),
+                    Some(DocumentMediaType::TXT),
+                ),
+            ]))
+            .await
+            .unwrap();
+
+        let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_eq!(
+            body["messages"][1]["content"],
+            json!([
+                {"type": "text", "text": "What do they show?"},
+                {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{PNG_BASE64}")}},
+                {"type": "image_url", "image_url": {"url": PRESIGNED_PNG}},
+                {"type": "text", "text": "[attachment omitted: unsupported file type application/pdf]"},
+                {"type": "text", "text": "Quarterly notes"},
+            ])
+        );
     }
 }

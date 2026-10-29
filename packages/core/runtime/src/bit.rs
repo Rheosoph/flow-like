@@ -3,7 +3,10 @@ use crate::state::FlowLikeState;
 use crate::utils::compression::{compress_to_file_json, from_compressed_json};
 use crate::utils::download::download_bit;
 use flow_like_model_provider::history::History;
-use flow_like_model_provider::llm::{AgentSettings, CompletionClientDyn, CompletionModelHandle};
+use flow_like_model_provider::llm::lenient_settings::{lenient_agent, split_thinking_params};
+use flow_like_model_provider::llm::{
+    AgentSettings, CompletionClientDyn, CompletionModelHandle, ModelLogic,
+};
 use flow_like_model_provider::provider::{
     EmbeddingModelProvider, ImageEmbeddingModelProvider, ModelProvider,
 };
@@ -2274,11 +2277,22 @@ impl Bit {
         context: &mut ExecutionContext,
         history: &Option<History>,
     ) -> flow_like_types::Result<AgentBuilder<CompletionModelHandle<'a>>> {
-        let (model_name, settings, completion_client) =
-            self.completion_model(context, history).await?;
-        let mut agent_builder = completion_client.agent(&model_name);
+        let model = self.model_logic(context).await?;
+        let settings = model.agent_settings(history)?;
+        // The thinking body is sent until the model rejects it; the rest of the body always is.
+        let (params, thinking) = match history {
+            Some(history) if history.thinking.is_some() => {
+                split_thinking_params(&mut history.clone(), |history| {
+                    Ok(model.agent_settings(&Some(history.clone()))?.params)
+                })?
+            }
+            _ => (settings.params, None),
+        };
+        let model_name = model.default_model().await.unwrap_or_default();
+        let completion_client = model.provider().await?.into_client();
+        let mut agent_builder = lenient_agent(completion_client.as_ref(), &model_name, thinking);
 
-        if let Some(params) = settings.params {
+        if let Some(params) = params {
             agent_builder = agent_builder.additional_params(params);
         }
         if let Some(temperature) = settings.temperature {
@@ -2300,20 +2314,29 @@ impl Bit {
         AgentSettings,
         Box<dyn CompletionClientDyn + Send + Sync + 'a>,
     )> {
-        let model_factory = context.app_state.model_factory.clone();
-        let model = model_factory
+        let model = self.model_logic(context).await?;
+        let settings = model.agent_settings(history)?;
+        let model_name = model.default_model().await.unwrap_or_default();
+        let completion_client = model.provider().await?.into_client();
+
+        Ok((model_name, settings, completion_client))
+    }
+
+    async fn model_logic(
+        &self,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<Arc<dyn ModelLogic>> {
+        context
+            .app_state
+            .model_factory
+            .clone()
             .build(
                 self,
                 context.app_state.clone(),
                 context.token.clone(),
                 context.model_usage_context(),
             )
-            .await?;
-        let settings = model.agent_settings(history)?;
-        let model_name = model.default_model().await.unwrap_or_default();
-        let completion_client = model.provider().await?.into_client();
-
-        Ok((model_name, settings, completion_client))
+            .await
     }
 }
 

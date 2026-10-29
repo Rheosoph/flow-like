@@ -58,12 +58,12 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 		z.boolean(),
 		z.null(),
 		z.array(jsonValueSchema),
-		z.record(jsonValueSchema),
+		z.record(z.string(), jsonValueSchema),
 	]),
 );
 
 export const jsonObjectSchema: z.ZodType<JsonObject> =
-	z.record(jsonValueSchema);
+	z.record(z.string(), jsonValueSchema);
 
 const shortText = z.string().trim().min(1).max(512);
 const instruction = z.string().trim().min(1).max(40_000);

@@ -46,7 +46,7 @@ function buildHeaders(token: string): Record<string, string> {
 		"Content-Type": "application/json",
 	};
 	if (token.startsWith("pat_")) {
-		headers["Authorization"] = token;
+		headers.Authorization = token;
 	} else {
 		headers["X-API-Key"] = token;
 	}
@@ -115,7 +115,9 @@ export class FlowLikeChatModel extends BaseChatModel {
 			throw new Error(`Flow-Like API error ${res.status}: ${text}`);
 		}
 
-		const data = (await res.json()) as Record<string, any>;
+		const data = (await res.json()) as {
+			choices?: { message?: { content?: string } }[];
+		};
 		const content = data.choices?.[0]?.message?.content ?? "";
 
 		return {
@@ -155,7 +157,7 @@ export class FlowLikeEmbeddings extends Embeddings {
 			throw new Error(`Flow-Like API error ${res.status}: ${text}`);
 		}
 
-		const data = (await res.json()) as Record<string, any>;
+		const data = (await res.json()) as { embeddings: number[][] };
 		return data.embeddings;
 	}
 

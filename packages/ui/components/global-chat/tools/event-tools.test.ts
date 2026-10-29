@@ -6,6 +6,9 @@ function fixture(
 		routeFails?: boolean;
 		cancelled?: boolean;
 		responseLost?: boolean;
+		triggerError?: string;
+		/** The flag the desktop rejects a save with when a prompt before the write is refused. */
+		promptRefusal?: Record<string, boolean>;
 	} = {},
 ) {
 	const saved: Record<string, unknown>[] = [];
@@ -18,9 +21,16 @@ function fixture(
 				throw new Error("not found");
 			},
 			upsertEvent: async (_app: string, event: Record<string, unknown>) => {
+				if (options.promptRefusal)
+					throw Object.assign(
+						new Error("prompt refused before the write"),
+						options.promptRefusal,
+					);
 				saved.push(event);
 				if (options.responseLost) throw new Error("response lost after write");
-				return event;
+				return options.triggerError
+					? { ...event, trigger_error: options.triggerError }
+					: event;
 			},
 		},
 		boardState: {},
@@ -60,6 +70,45 @@ describe("Event provisioning receipts", () => {
 		});
 		expect(f.routes).toHaveLength(0);
 	});
+	test.each([
+		[
+			"dismissed trigger consent or token prompt",
+			"isLocalSinkConsentDismissed",
+		],
+		["refused computer automation approval", "isRpaConsentError"],
+	])(
+		"a %s reports a cancelled write, not an unknown outcome",
+		async (_, flag) => {
+			const f = fixture({ promptRefusal: { [flag]: true } });
+			const result = await upsertAppEvent(
+				f.backend,
+				{ app_id: "app", name: "Home", page_id: "page", route: "home" },
+				f.context,
+			);
+			expect(result).toMatchObject({
+				status: "error",
+				code: "event_write_cancelled",
+				provisioning: { event_saved: false, route_applied: false },
+			});
+			expect(result.recovery).toBeUndefined();
+			expect(f.routes).toHaveLength(0);
+		},
+	);
+	test("a refusal flag that is not true leaves the outcome unknown", async () => {
+		const f = fixture({
+			promptRefusal: { isLocalSinkConsentDismissed: false },
+		});
+		const result = await upsertAppEvent(
+			f.backend,
+			{ app_id: "app", name: "Home", page_id: "page" },
+			f.context,
+		);
+		expect(result).toMatchObject({
+			status: "unknown",
+			code: "event_write_outcome_unknown",
+			provisioning: { event_saved: "unknown" },
+		});
+	});
 	test("route failure is partial and keeps the persisted Event identity", async () => {
 		const f = fixture({ routeFails: true });
 		const result = await upsertAppEvent(
@@ -74,6 +123,26 @@ describe("Event provisioning receipts", () => {
 			event_saved: true,
 			route_applied: false,
 		});
+	});
+	test("a saved Event whose trigger on this computer failed reports saved, not an unknown outcome", async () => {
+		const f = fixture({
+			triggerError:
+				"Event was saved, but its trigger on this computer was not registered: no token",
+		});
+		const result = await upsertAppEvent(
+			f.backend,
+			{ app_id: "app", name: "Home", page_id: "page", route: "home" },
+			f.context,
+		);
+		expect(result).toMatchObject({
+			status: "saved",
+			trigger_error:
+				"Event was saved, but its trigger on this computer was not registered: no token",
+			event_id: f.saved[0].id,
+			provisioning: { event_saved: true, route_applied: true },
+		});
+		expect(result.code).toBeUndefined();
+		expect(f.routes).toEqual(["/home"]);
 	});
 	test("build host reserves an inactive Event before its first write", async () => {
 		const f = fixture();

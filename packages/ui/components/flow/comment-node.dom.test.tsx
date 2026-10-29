@@ -69,12 +69,13 @@ beforeEach(async () => {
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
+	const onUpsert: CommentNode["data"]["onUpsert"] = upsert;
 	const props = {
 		id: current.id,
 		selected: true,
 		data: {
 			comment: current,
-			onUpsert: upsert,
+			onUpsert,
 			appId: "app",
 			boardId: "board",
 			hash: "hash",

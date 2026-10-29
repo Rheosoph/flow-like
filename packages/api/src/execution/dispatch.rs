@@ -368,8 +368,6 @@ pub struct DispatchRequest {
     pub credentials_json: String,
     pub jwt: String,
     pub callback_url: String,
-    /// User's auth token for the flow to use
-    pub token: Option<String>,
     /// OAuth tokens keyed by provider name
     pub oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// Whether to stream node state updates
@@ -388,6 +386,11 @@ pub struct DispatchRequest {
     /// User profile data for execution context (bits, settings, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<serde_json::Value>,
+    /// User whose private Bits in `profile` the run may call through the API:
+    /// the person the run acts as. A subject an app connection passed through
+    /// owns them only when it names the person who started the chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_bit_owner: Option<String>,
     /// Pre-resolved WASM packages with presigned download URLs for executor
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_packages:
@@ -544,6 +547,34 @@ async fn bind_runtime_allowance(
     request.jwt = super::jwt::bind_runtime_limit(&request.jwt, admission.runtime_ms, receipt_url)
         .map_err(|error| DispatchError::Configuration(error.to_string()))?;
     Ok(())
+}
+
+/// Signs the owner of the run's private Bits into the executor token, only
+/// when the dispatched profile carries a Bit the API relays for that owner.
+fn bind_relayed_bits_owner(request: &mut DispatchRequest) -> Result<(), DispatchError> {
+    let Some(owner) = request.custom_bit_owner.as_deref() else {
+        return Ok(());
+    };
+    if !request.profile.as_ref().is_some_and(carries_relayable_bit) {
+        return Ok(());
+    }
+    request.jwt = super::jwt::bind_custom_bits_owner(&request.jwt, owner).map_err(|error| {
+        DispatchError::Configuration(format!("cannot bind the private model owner: {error}"))
+    })?;
+    Ok(())
+}
+
+fn carries_relayable_bit(profile: &serde_json::Value) -> bool {
+    profile
+        .get("custom_bits")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|bits| {
+            bits.iter().any(|bit| {
+                bit.pointer("/parameters/provider/provider_name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(crate::routes::user::bits::relayable_provider)
+            })
+        })
 }
 
 fn validate_runtime_variable_transport(
@@ -913,6 +944,7 @@ impl Dispatcher {
         mode: &str,
         run: Option<RunRecord>,
     ) -> Result<(), RunDispatchError> {
+        bind_relayed_bits_owner(request).map_err(RunDispatchError::before_admission)?;
         let pending = ChannelRequest::pending(request);
         let (channel, admitted) = futures::join!(
             self.mint_channel(pending),
@@ -2186,11 +2218,6 @@ fn executor_payload(
         credentials,
         executor_jwt: request.jwt.clone(),
         callback_url: request.callback_url.clone(),
-        token: if std::env::var("EXECUTION_ISOLATION_MODE").as_deref() == Ok("per_run") {
-            None
-        } else {
-            request.token.clone()
-        },
         oauth_tokens,
         stream_state: request.stream_state,
         execution_mode: request.execution_mode.map(|mode| mode.as_str().to_string()),
@@ -3633,19 +3660,6 @@ pub(crate) mod gcp_id_token {
     }
 }
 
-/// Fetch a profile for a user from the database and convert it
-/// to a JSON value matching the core `Profile` struct format for the executor.
-///
-/// Resolution order:
-/// 1. If `profile_id` is provided, fetch that specific profile (must belong to user)
-/// 2. Otherwise find the first profile whose `apps` list contains the given `app_id`
-/// 3. Fallback to the first profile for the user
-///
-/// The user's private custom bits are inlined as `custom_bits`. Pass
-/// `include_secrets = true` only when the resulting JSON stays inside an
-/// ephemeral dispatch (encrypted payload storage / in-memory); persisted
-/// copies (event rows) must use `false` and re-hydrate at trigger time via
-/// [`hydrate_profile_custom_bit_secrets`].
 /// The requested profile, else the first one linked to the app, else the first.
 fn dispatch_profile<'a>(
     profiles: &'a [crate::entity::profile::Model],
@@ -3668,12 +3682,115 @@ fn dispatch_profile<'a>(
         .or_else(|| profiles.first())
 }
 
+/// Fetch a profile for a user from the database and convert it
+/// to a JSON value matching the core `Profile` struct format for the executor.
+///
+/// Resolution order:
+/// 1. If `profile_id` is provided, fetch that specific profile (must belong to user)
+/// 2. Otherwise find the first profile whose `apps` list contains the given `app_id`
+/// 3. Fallback to the first profile for the user
+///
+/// `custom_bits` holds only the user's own private Bits, as dispatch views
+/// that never carry a credential or an endpoint.
 pub async fn fetch_profile_for_dispatch(
     state: &crate::state::AppState,
     user_id: &str,
     profile_id: Option<&str>,
     app_id: &str,
-    include_secrets: bool,
+) -> Option<serde_json::Value> {
+    profile_for_dispatch(
+        &state.db,
+        &state.platform_config.domain,
+        user_id,
+        profile_id,
+        app_id,
+    )
+    .await
+}
+
+/// The profile a sink's run carries. With a run-as user it is that user's
+/// current profile, picked by the id the sink stored, so the profile and its
+/// private Bits belong to the person the run acts as. Without one, the stored
+/// snapshot runs without private Bits.
+pub async fn sink_dispatch_profile(
+    state: &crate::state::AppState,
+    sink: &crate::entity::event_sink::Model,
+    run_as: Option<&str>,
+) -> Option<serde_json::Value> {
+    stored_profile_for_dispatch(
+        &state.db,
+        &state.platform_config.domain,
+        sink.profile_json.as_ref(),
+        &sink.app_id,
+        run_as,
+    )
+    .await
+}
+
+/// The profile a run started by `caller` as `sub` carries, and the owner of
+/// its private Bits. A person an app connection passed through lends theirs, as
+/// when invoking directly. Any other passed-through subject is attribution only:
+/// its private Bits stay behind and no owner is bound.
+pub async fn caller_dispatch_profile(
+    state: &crate::state::AppState,
+    caller: &crate::middleware::jwt::AppUser,
+    sub: &str,
+    profile_id: Option<&str>,
+    app_id: &str,
+) -> (Option<serde_json::Value>, Option<String>) {
+    let mut profile = fetch_profile_for_dispatch(state, sub, profile_id, app_id).await;
+    let owner = lends_private_bits(caller).then(|| sub.to_owned());
+    if owner.is_none()
+        && let Some(profile) = profile.as_mut()
+    {
+        strip_custom_bits(profile);
+    }
+    (profile, owner)
+}
+
+/// Whether the subject a caller runs as is a person's own account (an API key's
+/// creator for a key, the person who started the chain for an app connection),
+/// and so may lend the run its private Bits.
+fn lends_private_bits(caller: &crate::middleware::jwt::AppUser) -> bool {
+    use crate::middleware::jwt::AppUser;
+    match caller {
+        AppUser::OpenID(_) | AppUser::PAT(_) | AppUser::APIKey(_) => true,
+        AppUser::ConnectedApp(app) => app.person().is_some(),
+        AppUser::Executor(_) | AppUser::Unauthorized => false,
+    }
+}
+
+/// Drops every private Bit from a profile JSON.
+pub fn strip_custom_bits(profile: &mut serde_json::Value) {
+    if let Some(profile) = profile.as_object_mut() {
+        profile.insert("custom_bits".to_owned(), serde_json::json!([]));
+    }
+}
+
+async fn stored_profile_for_dispatch(
+    db: &sea_orm::DatabaseConnection,
+    hub: &str,
+    stored: Option<&serde_json::Value>,
+    app_id: &str,
+    run_as: Option<&str>,
+) -> Option<serde_json::Value> {
+    let Some(run_as) = run_as else {
+        let mut snapshot = stored?.clone();
+        strip_custom_bits(&mut snapshot);
+        return Some(snapshot);
+    };
+    let stored_id = stored
+        .and_then(|profile| profile.get("id"))
+        .and_then(serde_json::Value::as_str);
+    profile_for_dispatch(db, hub, run_as, stored_id, app_id).await
+}
+
+async fn profile_for_dispatch(
+    db: &sea_orm::DatabaseConnection,
+    hub: &str,
+    user_id: &str,
+    profile_id: Option<&str>,
+    app_id: &str,
 ) -> Option<serde_json::Value> {
     use crate::entity::profile;
     use sea_orm::sea_query::ExprTrait;
@@ -3686,7 +3803,7 @@ pub async fn fetch_profile_for_dispatch(
                 .eq(user_id)
                 .and(profile::Column::DeletedAt.is_null()),
         )
-        .all(&state.db)
+        .all(db)
         .instrument(tracing::info_span!(
             target: "flow_like::observability",
             "db.query",
@@ -3699,17 +3816,20 @@ pub async fn fetch_profile_for_dispatch(
     let model = dispatch_profile(&profiles, profile_id, app_id)?.clone();
 
     let profile_bit_ids = model.bit_ids.clone().unwrap_or_default();
-    let custom_bits = crate::routes::user::bits::load_custom_bits_for_profile(
-        state,
+    let custom_bits: Vec<_> = crate::routes::user::bits::profile_custom_bits(
+        db,
+        hub,
         user_id,
         &profile_bit_ids,
-        include_secrets,
     )
     .await
     .unwrap_or_else(|err| {
         tracing::warn!(user_id = %user_id, "Failed to load custom bits for dispatch: {err:?}");
         vec![]
-    });
+    })
+    .into_iter()
+    .map(crate::routes::user::bits::dispatch_view)
+    .collect();
     let custom_bits = serde_json::to_value(custom_bits).unwrap_or_else(|_| serde_json::json!([]));
 
     Some(serde_json::json!({
@@ -3732,66 +3852,6 @@ pub async fn fetch_profile_for_dispatch(
         "updated": model.updated_at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         "created": model.created_at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
     }))
-}
-
-/// Re-hydrates decrypted provider secrets into the `custom_bits` of a
-/// persisted profile JSON (event/sink rows store profiles WITHOUT secrets).
-/// Bits are looked up by id — the ids were placed server-side from the owner's
-/// profile at setup time, so they act as unforgeable references.
-pub async fn hydrate_profile_custom_bit_secrets(
-    state: &crate::state::AppState,
-    profile_json: &mut serde_json::Value,
-) {
-    use crate::entity::user_bit;
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-
-    let Some(custom_bits) = profile_json
-        .get_mut("custom_bits")
-        .and_then(|bits| bits.as_array_mut())
-    else {
-        return;
-    };
-
-    let bit_ids: Vec<String> = custom_bits
-        .iter()
-        .filter_map(|bit| bit.get("id").and_then(|id| id.as_str()))
-        .map(str::to_owned)
-        .collect();
-    if bit_ids.is_empty() {
-        return;
-    }
-
-    let rows = match user_bit::Entity::find()
-        .filter(user_bit::Column::Id.is_in(bit_ids))
-        .all(&state.db)
-        .await
-    {
-        Ok(rows) => rows,
-        Err(err) => {
-            tracing::warn!("Failed to load custom bits for hydration: {err:?}");
-            return;
-        }
-    };
-
-    let hydrated: std::collections::HashMap<String, serde_json::Value> = rows
-        .into_iter()
-        .filter_map(|row| {
-            let bit_id = row.id.clone();
-            let bit = crate::routes::user::bits::user_bit_to_core(row, state, true);
-            serde_json::to_value(&bit).ok().map(|value| (bit_id, value))
-        })
-        .collect();
-
-    for bit in custom_bits {
-        let Some(value) = bit
-            .get("id")
-            .and_then(|id| id.as_str())
-            .and_then(|bit_id| hydrated.get(bit_id))
-        else {
-            continue;
-        };
-        *bit = value.clone();
-    }
 }
 
 #[cfg(test)]
@@ -4065,18 +4125,200 @@ mod tests {
             credentials_json: "{}".into(),
             jwt: String::new(),
             callback_url: "https://api.test".into(),
-            token: None,
             oauth_tokens: None,
             stream_state: false,
             execution_mode: None,
             runtime_variables: None,
             user_context: None,
             profile: None,
+            custom_bit_owner: None,
             wasm_packages: None,
             channel: None,
             trigger,
             shadow: false,
             artifact: None,
+        }
+    }
+
+    fn executor_jwt(request: &DispatchRequest) -> String {
+        crate::backend_jwt::init_for_tests();
+        super::super::jwt::sign(super::super::jwt::ExecutionJwtParams {
+            user_id: request.user_id.clone(),
+            technical_user_id: None,
+            run_id: request.run_id.clone(),
+            app_id: request.app_id.clone(),
+            board_id: request.board_id.clone(),
+            event_id: None,
+            app_chain: None,
+            correlation: None,
+            callback_url: request.callback_url.clone(),
+            token_type: crate::backend_jwt::TokenType::Executor,
+            ttl_seconds: Some(3600),
+            shadow: None,
+        })
+        .unwrap()
+    }
+
+    fn private_bit(id: &str, provider_name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "type": "Llm",
+            "parameters": {
+                "context_length": 8192,
+                "provider": {
+                    "provider_name": provider_name,
+                    "model_id": "owner/model",
+                    "params": {"model_id": "owner/model"},
+                },
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn prepare_binds_the_owner_only_for_relayable_bits() {
+        let dispatcher = Dispatcher::from_config(DispatchConfig::default());
+        let relayable = private_bit("my-gpt", "custom:openai");
+        for (owner, custom_bits, bound) in [
+            (
+                Some("owner-1"),
+                Some(vec![relayable.clone()]),
+                Some("owner-1"),
+            ),
+            (
+                Some("owner-1"),
+                Some(vec![
+                    private_bit("my-codex", "custom:codex"),
+                    private_bit("my-gguf", "Local"),
+                    relayable.clone(),
+                ]),
+                Some("owner-1"),
+            ),
+            (
+                Some("owner-1"),
+                Some(vec![
+                    private_bit("my-codex", "custom:codex"),
+                    private_bit("my-claude-code", "custom:claude-code"),
+                    private_bit("my-gguf", "Local"),
+                    private_bit("my-device", "device"),
+                ]),
+                None,
+            ),
+            (Some("owner-1"), Some(vec![]), None),
+            (Some("owner-1"), None, None),
+            (None, Some(vec![relayable.clone()]), None),
+        ] {
+            let mut request = dispatch_request(DispatchTrigger::User);
+            request.jwt = executor_jwt(&request);
+            request.custom_bit_owner = owner.map(str::to_owned);
+            request.profile =
+                custom_bits.map(|bits| serde_json::json!({"id": "profile-1", "custom_bits": bits}));
+
+            let failure = dispatcher
+                .prepare(&mut request, &ExecutionBackend::Http, "realtime", None)
+                .await
+                .expect_err("no compiled-artifact assurer is installed");
+            assert!(
+                matches!(failure.error, DispatchError::Artifact(_)),
+                "{:?}",
+                failure.error
+            );
+            let claims = super::super::jwt::verify(&request.jwt).unwrap();
+            assert_eq!(claims.custom_bits_owner.as_deref(), bound, "{owner:?}");
+        }
+
+        let mut unsigned = dispatch_request(DispatchTrigger::User);
+        unsigned.custom_bit_owner = Some("owner-1".into());
+        unsigned.profile = Some(serde_json::json!({"custom_bits": [relayable]}));
+        let failure = dispatcher
+            .prepare(&mut unsigned, &ExecutionBackend::Http, "realtime", None)
+            .await
+            .expect_err("an unverifiable token cannot carry an owner");
+        assert!(!failure.admitted);
+        assert!(
+            matches!(failure.error, DispatchError::Configuration(_)),
+            "{:?}",
+            failure.error
+        );
+    }
+
+    #[test]
+    fn strip_custom_bits_keeps_the_rest_of_the_profile() {
+        let mut profile = serde_json::json!({
+            "id": "profile-1",
+            "bits": ["hub.example:model", "my-gpt"],
+            "custom_bits": [private_bit("my-gpt", "custom:openai")],
+        });
+        strip_custom_bits(&mut profile);
+        assert_eq!(
+            profile,
+            serde_json::json!({
+                "id": "profile-1",
+                "bits": ["hub.example:model", "my-gpt"],
+                "custom_bits": [],
+            })
+        );
+
+        let mut without_list = serde_json::json!({"id": "profile-1"});
+        strip_custom_bits(&mut without_list);
+        assert_eq!(without_list["custom_bits"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn only_the_account_of_a_person_lends_private_bits() {
+        use crate::middleware::jwt::{ApiKey, AppUser, ConnectedAppUser, OpenIDUser, PATUser};
+        let through_connection = |sub: Option<&str>, technical_user_id: Option<&str>| {
+            AppUser::ConnectedApp(ConnectedAppUser {
+                sub: sub.map(str::to_owned),
+                origin_app_id: "app-0".into(),
+                target_app_id: "app-1".into(),
+                app_chain: vec!["app-0".into()],
+                technical_user_id: technical_user_id.map(str::to_owned),
+                run_id: Some("run-0".into()),
+                correlation: None,
+            })
+        };
+        let executor = AppUser::Executor(
+            super::super::jwt::verify(&executor_jwt(&dispatch_request(DispatchTrigger::User)))
+                .unwrap()
+                .into(),
+        );
+        for (caller, lends) in [
+            (
+                AppUser::OpenID(OpenIDUser {
+                    sub: "user-1".into(),
+                    access_token: "token".into(),
+                }),
+                true,
+            ),
+            (
+                AppUser::PAT(PATUser {
+                    pat: "pat".into(),
+                    sub: "user-1".into(),
+                }),
+                true,
+            ),
+            (
+                AppUser::APIKey(ApiKey {
+                    key_id: "key-1".into(),
+                    api_key: "secret".into(),
+                    app_id: "app-1".into(),
+                    creator_user_id: Some("user-1".into()),
+                }),
+                true,
+            ),
+            (through_connection(Some("user-1"), None), true),
+            (through_connection(Some("user-1"), Some("key-0")), false),
+            (
+                through_connection(Some("frontend:event-0:run-run-0"), None),
+                false,
+            ),
+            (through_connection(Some("sink:sink-0"), None), false),
+            (through_connection(Some("run:run-0"), None), false),
+            (through_connection(None, None), false),
+            (executor, false),
+            (AppUser::Unauthorized, false),
+        ] {
+            assert_eq!(lends_private_bits(&caller), lends, "{caller:?}");
         }
     }
 
@@ -4118,23 +4360,8 @@ mod tests {
             ..DispatchConfig::default()
         });
         let cloned = dispatcher.clone();
-        crate::backend_jwt::init_for_tests();
         let mut request = dispatch_request(DispatchTrigger::User);
-        request.jwt = super::super::jwt::sign(super::super::jwt::ExecutionJwtParams {
-            user_id: request.user_id.clone(),
-            technical_user_id: None,
-            run_id: request.run_id.clone(),
-            app_id: request.app_id.clone(),
-            board_id: request.board_id.clone(),
-            event_id: None,
-            app_chain: None,
-            correlation: None,
-            callback_url: request.callback_url.clone(),
-            token_type: crate::backend_jwt::TokenType::Executor,
-            ttl_seconds: Some(3600),
-            shadow: None,
-        })
-        .unwrap();
+        request.jwt = executor_jwt(&request);
 
         for sender in [&dispatcher, &cloned] {
             sender
@@ -4634,5 +4861,241 @@ mod tests {
             !tenant[1..].starts_with(&bare[..12]),
             "tenant id must not reuse the storage-path digest"
         );
+    }
+
+    mod private_bits {
+        use super::super::{profile_for_dispatch, stored_profile_for_dispatch};
+        use crate::entity::{profile, sea_orm_active_enums::BitType, user_bit};
+        use sea_orm::{
+            ActiveValue::Set, ConnectOptions, ConnectionTrait, Database, DatabaseConnection,
+            EntityTrait, Schema, sea_query::Table,
+        };
+        use serde_json::{Value, json};
+
+        const HUB: &str = "hub.example";
+        const KEY: [u8; 32] = [7; 32];
+        const ENDPOINT: &str = "https://models.internal.example/v1";
+        const CREDENTIAL_KEYS: [&str; 5] = [
+            "api_key",
+            "service_account_json",
+            "access_token",
+            "headers",
+            "endpoint",
+        ];
+
+        async fn database() -> DatabaseConnection {
+            let mut options = ConnectOptions::new("sqlite::memory:");
+            options.max_connections(1);
+            let db = Database::connect(options).await.unwrap();
+            db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+                .await
+                .unwrap();
+            let schema = Schema::new(db.get_database_backend());
+            for source in [
+                schema.create_table_from_entity(profile::Entity),
+                schema.create_table_from_entity(user_bit::Entity),
+            ] {
+                let mut table = Table::create();
+                table.table(source.get_table_name().unwrap().clone());
+                for column in source.get_columns() {
+                    table.col(column.clone());
+                }
+                db.execute(&table).await.unwrap();
+            }
+            db
+        }
+
+        async fn add_profile(db: &DatabaseConnection, id: &str, owner: &str, linked: bool) {
+            let now = chrono::Utc::now().fixed_offset();
+            profile::Entity::insert(profile::ActiveModel {
+                id: Set(id.into()),
+                user_id: Set(owner.into()),
+                name: Set(id.into()),
+                hub: Set(HUB.into()),
+                apps: Set(linked.then(|| json!([{"app_id": "app-1"}]))),
+                bit_ids: Set(Some(
+                    vec![
+                        format!("{HUB}:catalog-model"),
+                        "alice-gpt".to_owned(),
+                        "alice-codex".to_owned(),
+                        "bob-claude".to_owned(),
+                    ]
+                    .into(),
+                )),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            })
+            .exec(db)
+            .await
+            .unwrap();
+        }
+
+        async fn add_private_bit(db: &DatabaseConnection, id: &str, owner: &str, provider: &str) {
+            let now = chrono::Utc::now().fixed_offset();
+            let secrets = json!({
+                "api_key": format!("sk-{id}"),
+                "service_account_json": format!("{{\"private_key\":\"pk-{id}\"}}"),
+                "access_token": format!("at-{id}"),
+                "headers": {"x-api-key": format!("hk-{id}")},
+            });
+            user_bit::Entity::insert(user_bit::ActiveModel {
+                id: Set(id.into()),
+                user_id: Set(owner.into()),
+                r#type: Set(BitType::Llm),
+                parameters: Set(Some(json!({
+                    "context_length": 8192,
+                    "provider": {
+                        "provider_name": provider,
+                        "model_id": "owner/model",
+                        "params": {
+                            "model_id": "owner/model",
+                            "endpoint": ENDPOINT,
+                            "api_key": format!("sk-legacy-{id}"),
+                        },
+                    },
+                }))),
+                secrets_encrypted: Set(Some(crate::utils::crypto::encrypt_secret(
+                    &secrets.to_string(),
+                    &KEY,
+                ))),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            })
+            .exec(db)
+            .await
+            .unwrap();
+        }
+
+        async fn library() -> DatabaseConnection {
+            let db = database().await;
+            add_profile(&db, "alice-first", "alice", false).await;
+            add_profile(&db, "alice-linked", "alice", true).await;
+            add_profile(&db, "bob-profile", "bob", true).await;
+            add_private_bit(&db, "alice-gpt", "alice", "custom:openai").await;
+            add_private_bit(&db, "alice-codex", "alice", "custom:codex").await;
+            add_private_bit(&db, "bob-claude", "bob", "custom:anthropic").await;
+            db
+        }
+
+        async fn ciphertexts(db: &DatabaseConnection) -> Vec<String> {
+            user_bit::Entity::find()
+                .all(db)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter_map(|row| row.secrets_encrypted)
+                .collect()
+        }
+
+        fn custom_bit_ids(profile: &Value) -> Vec<&str> {
+            let mut ids: Vec<&str> = profile["custom_bits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|bit| bit["id"].as_str().unwrap())
+                .collect();
+            ids.sort_unstable();
+            ids
+        }
+
+        fn assert_secret_free(profile: &Value, ciphertexts: &[String]) {
+            for bit in profile["custom_bits"].as_array().unwrap() {
+                let params = bit["parameters"]["provider"]["params"].as_object().unwrap();
+                for key in CREDENTIAL_KEYS {
+                    assert!(!params.contains_key(key), "{} kept {key}", bit["id"]);
+                }
+            }
+            let serialized = profile.to_string();
+            for leaked in ["sk-", "pk-", "at-", "hk-", "models.internal.example"] {
+                assert!(!serialized.contains(leaked), "dispatch carried {leaked}");
+            }
+            for ciphertext in ciphertexts {
+                assert!(!serialized.contains(ciphertext.as_str()));
+            }
+        }
+
+        #[tokio::test]
+        async fn dispatched_profiles_carry_only_the_users_own_bits_without_credentials() {
+            let db = library().await;
+            let ciphertexts = ciphertexts(&db).await;
+
+            let profile = profile_for_dispatch(&db, HUB, "alice", Some("alice-first"), "app-1")
+                .await
+                .unwrap();
+            assert_eq!(profile["id"], "alice-first");
+            assert_eq!(custom_bit_ids(&profile), ["alice-codex", "alice-gpt"]);
+            assert_eq!(
+                profile["custom_bits"][0]["parameters"]["provider"]["params"],
+                json!({"model_id": "owner/model"})
+            );
+            assert_secret_free(&profile, &ciphertexts);
+
+            let linked = profile_for_dispatch(&db, HUB, "alice", None, "app-1")
+                .await
+                .unwrap();
+            assert_eq!(linked["id"], "alice-linked");
+            assert_secret_free(&linked, &ciphertexts);
+        }
+
+        #[tokio::test]
+        async fn sink_profiles_follow_the_run_as_user() {
+            let db = library().await;
+            let ciphertexts = ciphertexts(&db).await;
+            let mut stored = profile_for_dispatch(&db, HUB, "bob", None, "app-1")
+                .await
+                .unwrap();
+            stored["custom_bits"][0]["parameters"]["provider"]["params"]["api_key"] =
+                json!("sk-stored");
+
+            let as_alice =
+                stored_profile_for_dispatch(&db, HUB, Some(&stored), "app-1", Some("alice"))
+                    .await
+                    .unwrap();
+            assert_eq!(as_alice["id"], "alice-linked");
+            assert_eq!(custom_bit_ids(&as_alice), ["alice-codex", "alice-gpt"]);
+            assert_secret_free(&as_alice, &ciphertexts);
+
+            let picked = json!({"id": "alice-first", "custom_bits": stored["custom_bits"]});
+            let as_alice =
+                stored_profile_for_dispatch(&db, HUB, Some(&picked), "app-1", Some("alice"))
+                    .await
+                    .unwrap();
+            assert_eq!(as_alice["id"], "alice-first");
+            assert_eq!(custom_bit_ids(&as_alice), ["alice-codex", "alice-gpt"]);
+            assert_secret_free(&as_alice, &ciphertexts);
+
+            let as_bob = stored_profile_for_dispatch(&db, HUB, None, "app-1", Some("bob"))
+                .await
+                .unwrap();
+            assert_eq!(as_bob["id"], "bob-profile");
+            assert_eq!(custom_bit_ids(&as_bob), ["bob-claude"]);
+            assert_secret_free(&as_bob, &ciphertexts);
+        }
+
+        #[tokio::test]
+        async fn sinks_without_run_as_dispatch_no_private_bits() {
+            let db = library().await;
+            let mut stored = profile_for_dispatch(&db, HUB, "bob", None, "app-1")
+                .await
+                .unwrap();
+            stored["custom_bits"][0]["parameters"]["provider"]["params"]["api_key"] =
+                json!("sk-stored");
+
+            let snapshot = stored_profile_for_dispatch(&db, HUB, Some(&stored), "app-1", None)
+                .await
+                .unwrap();
+            assert_eq!(snapshot["custom_bits"], json!([]));
+            assert_eq!(snapshot["id"], stored["id"]);
+            assert_eq!(snapshot["bits"], stored["bits"]);
+            assert!(!snapshot.to_string().contains("sk-stored"));
+
+            assert!(
+                stored_profile_for_dispatch(&db, HUB, None, "app-1", None)
+                    .await
+                    .is_none()
+            );
+        }
     }
 }

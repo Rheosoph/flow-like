@@ -24,6 +24,8 @@ export interface IFlowPilotMessage {
 	content: string;
 	images?: IFlowPilotImage[];
 	contextNodeIds?: string[];
+	/** Thinking level a user turn was sent with; see `CopilotMessage.thinking`. */
+	thinking?: string;
 	appliedComponents?: SurfaceComponent[];
 	executedCommands?: BoardCommand[];
 	flowscriptWorkspace?: string;

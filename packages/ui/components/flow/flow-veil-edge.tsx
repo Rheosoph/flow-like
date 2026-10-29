@@ -6,6 +6,12 @@ import {
 	getStraightPath,
 } from "@xyflow/react";
 import { memo, useMemo } from "react";
+import {
+	WireTraceFlow,
+	WireTraceGlow,
+	isLit,
+	useWireEmphasis,
+} from "./wire-trace";
 
 export const FlowVeilEdge = memo(function FlowVeilEdge(props: EdgeProps) {
 	const {
@@ -62,7 +68,8 @@ export const FlowVeilEdge = memo(function FlowVeilEdge(props: EdgeProps) {
 	]);
 
 	const baseColor = style.stroke || "var(--pin-fn-ref)";
-	const isSelected = selected ?? false;
+	const emphasis = useWireEmphasis(id);
+	const isSelected = (selected ?? false) || isLit(emphasis);
 
 	// Calculate unique animation delays for particle variety
 	const particleConfigs = useMemo(
@@ -75,7 +82,13 @@ export const FlowVeilEdge = memo(function FlowVeilEdge(props: EdgeProps) {
 	);
 
 	return (
-		<>
+		<g opacity={emphasis === "dim" ? 0.25 : undefined}>
+			<WireTraceGlow
+				id={id}
+				path={edgePath}
+				color={baseColor}
+				emphasis={emphasis}
+			/>
 			{/* Subtle outer glow layer - no animation */}
 			<BaseEdge
 				id={`${id}-glow`}
@@ -118,6 +131,12 @@ export const FlowVeilEdge = memo(function FlowVeilEdge(props: EdgeProps) {
 					transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
 				}}
 			/>
-		</>
+			<WireTraceFlow
+				id={id}
+				path={edgePath}
+				color={baseColor}
+				emphasis={emphasis}
+			/>
+		</g>
 	);
 });

@@ -22,20 +22,16 @@ pub enum RemoteTokenSite {
     /// HTTP/api/webhook event whose `event.config` JSON has an
     /// `auth_token` field set on the source.
     HttpAuthToken { event_id: String },
-    /// Sink with an encrypted Personal Access Token (cron, scheduled,
-    /// any sink that needs to authenticate to the host on the user's
-    /// behalf). Replaceable with a single PAT supplied at fork time.
-    Pat { event_id: String, sink_id: String },
-    /// Sink with OAuth tokens. Cannot be replaced with a PAT — the
+    /// Sink with OAuth tokens. Cannot be replaced with a token — the
     /// fork must re-authenticate the provider after creation.
     OAuth { event_id: String, sink_id: String },
 }
 
 impl RemoteTokenSite {
-    /// Whether a single user-supplied token can satisfy this site. PAT
-    /// + HTTP auth are token-replaceable; OAuth must re-auth.
+    /// Whether a single user-supplied token can satisfy this site. HTTP
+    /// auth is token-replaceable; OAuth must re-auth.
     pub fn is_token_replaceable(&self) -> bool {
-        matches!(self, Self::HttpAuthToken { .. } | Self::Pat { .. })
+        matches!(self, Self::HttpAuthToken { .. })
     }
 }
 
@@ -364,9 +360,9 @@ async fn sum_prefix(
 }
 
 /// Detects every remote-token site on the source app — events with a
-/// non-empty `auth_token` in their config, sinks with `pat_encrypted`
-/// or `oauth_tokens_encrypted` set. Used by the preview endpoint so the
-/// UI can decide whether to prompt the caller for a token.
+/// non-empty `auth_token` in their config and sinks with
+/// `oauth_tokens_encrypted` set. Used by the preview endpoint so the UI
+/// can decide whether to prompt the caller for a token.
 pub async fn detect_remote_token_sites(
     state: &AppState,
     app_id: &str,
@@ -394,12 +390,6 @@ pub async fn detect_remote_token_sites(
         .all(&state.db)
         .await?;
     for sink in sink_rows {
-        if sink.pat_encrypted.is_some() {
-            sites.push(RemoteTokenSite::Pat {
-                event_id: sink.event_id.clone(),
-                sink_id: sink.id.clone(),
-            });
-        }
         if sink.oauth_tokens_encrypted.is_some() {
             sites.push(RemoteTokenSite::OAuth {
                 event_id: sink.event_id.clone(),

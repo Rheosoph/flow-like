@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { type ReactNode, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { type Mock, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
 import type { OAuthService } from "../../lib/oauth/service";
 import type {
@@ -61,7 +61,7 @@ let root: Root;
 let container: HTMLDivElement;
 let context: OAuthExecutionContextValue;
 let startAuthorization: ReturnType<typeof vi.fn>;
-let retry: ReturnType<typeof vi.fn>;
+let retry: Mock<(event: Event) => void>;
 
 function CaptureContext() {
 	context = useOAuthExecutionContext();
@@ -91,7 +91,7 @@ beforeEach(async () => {
 		globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 	).IS_REACT_ACT_ENVIRONMENT = true;
 	startAuthorization = vi.fn().mockResolvedValue(undefined);
-	retry = vi.fn();
+	retry = vi.fn<(event: Event) => void>();
 	window.addEventListener("flow:oauth-retry", retry);
 	container = document.createElement("div");
 	document.body.appendChild(container);

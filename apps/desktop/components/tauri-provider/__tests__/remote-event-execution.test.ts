@@ -327,6 +327,9 @@ describe("an event pinned to Remote execution", () => {
 		expect(mocks.streamFetcher.mock.calls[0][1]).toBe(
 			`apps/${APP}/events/${EVENT}/invoke`,
 		);
+		expect(
+			JSON.parse(mocks.streamFetcher.mock.calls[0][2].body),
+		).not.toHaveProperty("token");
 		expect(backend.boardState.getBoardRunRequirements).not.toHaveBeenCalled();
 		expect(mocks.invoke).not.toHaveBeenCalledWith(
 			"execute_event",

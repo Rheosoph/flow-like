@@ -193,9 +193,8 @@ impl NodeLogic for TsneNode {
                 let database = cached_db.db.clone();
 
                 let t0 = std::time::Instant::now();
-                cached_db.ensure_flushed().await?;
                 let records = {
-                    let database = database.read().await;
+                    let database = cached_db.flushed_read().await?;
                     let schema = database.schema().await?;
                     let existing_cols: HashSet<String> =
                         schema.fields.iter().map(|f| f.name().clone()).collect();

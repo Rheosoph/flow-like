@@ -83,6 +83,15 @@ import {
 	ChatAiDisclosure,
 	FLOWPILOT_AI_DISCLOSURE,
 } from "../interfaces/chat-default/ai-disclosure";
+import {
+	agentThinkingOptions,
+	chatThinkingLevel,
+	chatThinkingOptions,
+	isValidReasoningEffort,
+	turnThinking,
+} from "../thinking/thinking-options";
+import { ThinkingPicker, useThinkingLabels } from "../thinking/thinking-picker";
+import { ThinkingStamp } from "../thinking/thinking-stamp";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -1679,17 +1688,29 @@ function FlowPilotImpl({
 	}, [currentModels, selectedModelId, normalizedProvider, bitsModels]);
 
 	// Effort capabilities belong to a specific provider/model pair. Keep an
-	// explicit choice only while the live catalog still advertises it; an empty
-	// value means the backend remains in control of its default.
+	// explicit choice only while it still fits; an empty value means the agent
+	// backend keeps its own default, or "low" for Bits models.
+	const isAgentProvider = isAgentBackendProvider(normalizedProvider);
 	useEffect(() => {
-		const efforts = selectedAgentModel?.supportedReasoningEfforts ?? [];
 		if (
-			selectedReasoningEffort &&
-			!efforts.some((effort) => effort.id === selectedReasoningEffort)
+			!isValidReasoningEffort(
+				isAgentProvider,
+				selectedReasoningEffort,
+				selectedAgentModel,
+			)
 		) {
 			setSelectedReasoningEffort("");
 		}
-	}, [selectedAgentModel, selectedReasoningEffort]);
+	}, [isAgentProvider, selectedAgentModel, selectedReasoningEffort]);
+
+	const thinkingLabels = useThinkingLabels();
+	const thinkingOptions = useMemo(
+		() =>
+			isAgentProvider
+				? agentThinkingOptions(selectedAgentModel, thinkingLabels)
+				: chatThinkingOptions(thinkingLabels),
+		[isAgentProvider, selectedAgentModel, thinkingLabels],
+	);
 
 	// Copilot connection handlers
 	const handleStartCopilot = useCallback(
@@ -1793,6 +1814,7 @@ function FlowPilotImpl({
 						preview: `data:${image.mediaType};base64,${image.data}`,
 					})),
 					contextNodeIds: m.contextNodeIds,
+					thinking: m.thinking,
 					appliedComponents: m.appliedComponents,
 					executedCommands: m.executedCommands,
 					flowscriptWorkspace: m.flowscriptWorkspace,
@@ -2570,6 +2592,11 @@ function FlowPilotImpl({
 				}
 			}
 
+			const sentThinking = turnThinking(
+				isAgentProvider,
+				selectedReasoningEffort,
+			);
+
 			// Save user message to DB
 			if (conversationId) {
 				try {
@@ -2579,6 +2606,7 @@ function FlowPilotImpl({
 						images: currentImages.length > 0 ? currentImages : undefined,
 						contextNodeIds:
 							currentContextNodes.length > 0 ? currentContextNodes : undefined,
+						thinking: sentThinking,
 					});
 					// Update conversation title if this is the first message
 					if (messages.length === 0) {
@@ -2600,6 +2628,7 @@ function FlowPilotImpl({
 					images: currentImages.length > 0 ? currentImages : undefined,
 					contextNodeIds:
 						currentContextNodes.length > 0 ? currentContextNodes : undefined,
+					thinking: sentThinking,
 				},
 				{ role: "assistant", content: "" },
 			]);
@@ -3715,6 +3744,7 @@ function FlowPilotImpl({
 			selectedNodeIds,
 			selectedModelId,
 			selectedReasoningEffort,
+			isAgentProvider,
 			runContext,
 			currentComponents,
 			currentCanvasSettings,
@@ -3991,8 +4021,6 @@ function FlowPilotImpl({
 				bitsModels={bitsModels}
 				selectedModelId={selectedModelId}
 				setSelectedModelId={setSelectedModelId}
-				selectedReasoningEffort={selectedReasoningEffort}
-				setSelectedReasoningEffort={setSelectedReasoningEffort}
 				hasWorkspace={hasFlowScriptWorkspace}
 				showWorkspace={showWorkspace}
 				onToggleWorkspace={() => setShowWorkspace((value) => !value)}
@@ -4200,6 +4228,20 @@ function FlowPilotImpl({
 									Attach image (paste supported)
 								</TooltipContent>
 							</Tooltip>
+							{thinkingOptions.length > 0 && (
+								<ThinkingPicker
+									value={
+										isAgentProvider
+											? selectedReasoningEffort
+											: chatThinkingLevel(selectedReasoningEffort)
+									}
+									options={thinkingOptions}
+									onChange={setSelectedReasoningEffort}
+									disabled={loading}
+									className="h-10 w-10"
+									contentClassName="z-150"
+								/>
+							)}
 							<textarea
 								value={input}
 								onChange={(e) => setInput(e.target.value)}
@@ -4561,8 +4603,6 @@ interface HeaderProps {
 	bitsModels: IBit[];
 	selectedModelId: string;
 	setSelectedModelId: (id: string) => void;
-	selectedReasoningEffort: string;
-	setSelectedReasoningEffort: (effort: string) => void;
 	hasWorkspace: boolean;
 	showWorkspace: boolean;
 	onToggleWorkspace: () => void;
@@ -4589,8 +4629,6 @@ const Header = memo(function Header({
 	bitsModels,
 	selectedModelId,
 	setSelectedModelId,
-	selectedReasoningEffort,
-	setSelectedReasoningEffort,
 	hasWorkspace,
 	showWorkspace,
 	onToggleWorkspace,
@@ -4631,8 +4669,6 @@ const Header = memo(function Header({
 			: copilotSDK.models.map((model) => ({
 					id: model.id,
 					label: model.name || model.id,
-					supportedReasoningEfforts: model.supportedReasoningEfforts,
-					defaultReasoningEffort: model.defaultReasoningEffort,
 				}));
 	const handlePickerProviderChange = useCallback(
 		async (nextProvider: AIProvider) => {
@@ -4803,17 +4839,15 @@ const Header = memo(function Header({
 				</div>
 			</div>
 
-			{/* Provider, model, and model-native effort are one selection surface. */}
+			{/* Provider and model share one selection surface; thinking sits in the composer. */}
 			<div className="relative px-3 pb-3">
 				<ProviderModelReasoningPicker
 					provider={provider}
 					providers={pickerProviders}
 					models={pickerModels}
 					selectedModelId={selectedModelId}
-					selectedEffort={selectedReasoningEffort}
 					onProviderChange={handlePickerProviderChange}
 					onModelChange={setSelectedModelId}
-					onEffortChange={setSelectedReasoningEffort}
 					disabled={loading}
 					connecting={copilotSDK.isConnecting}
 					connected={
@@ -5486,6 +5520,12 @@ const MessageBubble = memo(function MessageBubble({
 							compact
 						/>
 					)}
+
+				{isUser && message.thinking && (
+					<div className="mb-1 flex justify-end">
+						<ThinkingStamp value={message.thinking} />
+					</div>
+				)}
 
 				{/* Streaming Markdown retains completed blocks between token flushes. */}
 				{message.content ? (

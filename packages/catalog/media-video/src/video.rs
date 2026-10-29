@@ -16,6 +16,7 @@ use flow_like::{
         pin::{PinOptions, ValueType},
         variable::VariableType,
     },
+    models::custom_bit_relay::refuse_relayed_media,
 };
 use flow_like_catalog_core::FlowPath;
 use flow_like_catalog_media_support::validate_vertex_endpoint;
@@ -2370,6 +2371,7 @@ impl NodeLogic for GenerateVideoNode {
 
         let bit: Bit = context.evaluate_pin("provider").await?;
         let provider = provider_from_bit(&bit)?;
+        refuse_relayed_media(&context.app_state, &bit)?;
 
         let prompt: String = context.evaluate_pin("prompt").await?;
         if prompt.trim().is_empty() {

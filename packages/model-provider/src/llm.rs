@@ -18,6 +18,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::{future::Future, pin::Pin, sync::Arc};
 
+use lenient_settings::{lenient_thinking, split_thinking_params};
+
 use super::{
     history::History,
     response::{Response, Usage as ResponseUsage},
@@ -28,6 +30,7 @@ pub mod anthropic;
 pub mod bedrock;
 pub mod claude_code;
 pub mod cohere;
+pub mod custom;
 pub mod deepseek;
 pub mod external;
 pub mod galadriel;
@@ -48,11 +51,13 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod perplexity;
+pub mod relay;
 mod responses_tools;
 pub mod subscription;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod together;
+pub(crate) mod user_media;
 pub mod vertex;
 pub mod voyageai;
 pub mod xai;
@@ -278,7 +283,6 @@ pub trait ModelLogic: Send + Sync {
 
         let constructor = self.provider().await?;
         let completion_model = constructor.inner.completion_model(&model_name);
-        let completion_handle = CompletionModelHandle::new(Arc::from(completion_model));
 
         // Extract and remove system prompt so it becomes preamble instead of
         // being converted to a User message (which would break role alternation
@@ -288,6 +292,16 @@ pub trait ModelLogic: Send + Sync {
         let (prompt, chat_history) = history
             .extract_prompt_and_history()
             .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
+
+        // A thinking level the model rejects is dropped and the request sent again without it.
+        let (model_additional_params, thinking_params) =
+            split_thinking_params(&mut history, |history| {
+                self.request_params(history, should_stream)
+            })?;
+        let completion_handle = lenient_thinking(
+            CompletionModelHandle::new(Arc::from(completion_model)),
+            thinking_params,
+        );
 
         let mut builder =
             CompletionModel::completion_request(&completion_handle, prompt).messages(chat_history);
@@ -314,8 +328,6 @@ pub trait ModelLogic: Send + Sync {
         if let Some(choice) = history.tool_choice_to_rig() {
             builder = builder.tool_choice(choice);
         }
-
-        let model_additional_params = self.request_params(&history, should_stream)?;
 
         if should_stream {
             invoke_with_stream(
@@ -591,6 +603,29 @@ fn dynamic_raw_stream_items<R>(
 where
     R: Clone + Unpin + GetTokenUsage + Serialize,
 {
+    raw_stream_items(item, |response| {
+        let usage = response.token_usage();
+        let finish_reason = resolve_finish_reason(
+            reported_finish_reason(&response),
+            max_tokens,
+            usage.map_or(0, |usage| usage.output_tokens),
+            has_tool_call,
+        );
+        DynamicStreamingResponse {
+            usage,
+            finish_reason: Some(finish_reason),
+        }
+    })
+}
+
+/// Turns a consumed stream item back into the raw chunk a re-wrapping stream is built from.
+fn raw_stream_items<R, F>(
+    item: StreamedAssistantContent<R>,
+    final_response: impl FnOnce(R) -> F,
+) -> Vec<RawStreamingChoice<F>>
+where
+    F: Clone,
+{
     match item {
         StreamedAssistantContent::Text(text) => {
             let mut items = Vec::new();
@@ -635,19 +670,7 @@ where
             vec![RawStreamingChoice::ReasoningDelta { id, reasoning }]
         }
         StreamedAssistantContent::Final(response) => {
-            let usage = response.token_usage();
-            let finish_reason = resolve_finish_reason(
-                reported_finish_reason(&response),
-                max_tokens,
-                usage.map_or(0, |usage| usage.output_tokens),
-                has_tool_call,
-            );
-            vec![RawStreamingChoice::FinalResponse(
-                DynamicStreamingResponse {
-                    usage,
-                    finish_reason: Some(finish_reason),
-                },
-            )]
+            vec![RawStreamingChoice::FinalResponse(final_response(response))]
         }
     }
 }

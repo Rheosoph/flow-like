@@ -60,6 +60,7 @@ import type {
 	IEventCorpusResult,
 	IEventRunsResult,
 	IEventSetupInfo,
+	IEventSinkStatus,
 	IEventSinkStatusContext,
 	IEventTimeline,
 	IEventTimelineRun,
@@ -325,7 +326,7 @@ export class WebEventState implements IEventState {
 		appId: string,
 		inputEvent: IEvent,
 		versionType?: IVersionType,
-		personalAccessToken?: string,
+		_personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
 		options?: IEventUpsertOptions,
 	): Promise<IEvent> {
@@ -348,7 +349,6 @@ export class WebEventState implements IEventState {
 			{
 				event,
 				version_type: versionType,
-				pat: personalAccessToken,
 				oauth_tokens: oauthTokens,
 				profile_id: this.backend.profile?.id,
 				...(intent === "device" ? { register_source: false } : {}),
@@ -694,7 +694,6 @@ export class WebEventState implements IEventState {
 			dispatchStart = runTimingNow();
 			const body = JSON.stringify({
 				payload: payload.payload,
-				token: this.backend.auth?.user?.access_token,
 				oauth_tokens: oauthTokens,
 				runtime_variables: payload.runtime_variables,
 				profile_id: this.backend.profile?.id,
@@ -876,23 +875,35 @@ export class WebEventState implements IEventState {
 		eventId: string,
 		context?: IEventSinkStatusContext,
 	): Promise<boolean> {
+		return (await this.getEventSinkStatus(eventId, context)).active;
+	}
+
+	async getEventSinkStatus(
+		eventId: string,
+		context?: IEventSinkStatusContext,
+	): Promise<IEventSinkStatus> {
 		if (context) {
-			if (isDeviceEventSource(context.event)) return false;
-			if (!context.event.active) return false;
+			if (isDeviceEventSource(context.event)) return { active: false };
+			if (!context.event.active) return { active: false };
 			// Hosted endpoints use the event's enabled flag. Their setup
 			// registrations are separate from worker sink registrations.
 			if (["rest", "mcp"].includes(context.event.event_type)) {
-				return context.event.active;
+				return { active: context.event.active };
 			}
 		}
 		try {
-			const result = await apiGet<{ active: boolean }>(
-				`sink/${eventId}`,
-				this.backend.auth,
-			);
-			return result.active;
+			const result = await apiGet<{
+				active: boolean;
+				run_as_user_id?: string | null;
+				legacy_token?: boolean;
+			}>(`sink/${eventId}`, this.backend.auth);
+			return {
+				active: result.active,
+				run_as_user_id: result.run_as_user_id,
+				legacy_token: result.legacy_token,
+			};
 		} catch (error) {
-			if (isMissingResourceError(error)) return false;
+			if (isMissingResourceError(error)) return { active: false };
 			throw error;
 		}
 	}

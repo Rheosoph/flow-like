@@ -5,10 +5,12 @@
 //! `EventRemoteRegistration` rows so inbound REST/MCP traffic can be
 //! dispatched directly to the registered nodes.
 //!
-//! Invoked automatically from [`super::upsert_event`] for `rest` / `mcp`
-//! event types (always for the stable variant), and manually via
+//! Invoked for the stable variant whenever a save, restore or promote leaves a
+//! `rest` / `mcp` event armed (on, with a hub trigger), and manually via
 //! `POST /apps/{app_id}/events/{event_id}/setup` — which may name a Live
-//! variant to build that variant's own registration bucket.
+//! variant to build that variant's own registration bucket. Inbound runs the
+//! stable pointer's board as the sink's run-as user, so only an armed event,
+//! set up by someone allowed to arm it, may move that pointer.
 //!
 //! Persistence reconciles rows by route within `(app_id, event_id,
 //! event_version, variant)` and removes obsolete versions in bounded transactions.
@@ -31,7 +33,7 @@ use axum::{
 use eventsource_stream::Eventsource;
 use flow_like::flow::{
     board::Board,
-    event::{EventVariant, EventVariantMode},
+    event::{Event, EventVariant, EventVariantMode},
     node::Node,
     pin::{Pin, PinType, ValueType},
     variable::VariableType,
@@ -60,12 +62,12 @@ use crate::{
         resolve_wasm_packages, sign_execution_jwt,
         variant::{ResolvedTarget, STABLE_VARIANT, dispatch_event_json},
     },
-    middleware::jwt::AppUser,
+    middleware::{deadline::DeadlineClass, jwt::AppUser},
     permission::role_permission::RolePermissions,
     state::AppState,
 };
 
-use super::db::{encrypt_token, get_event_with_setup_status_from_db};
+use super::db::{arms_hub_trigger, encrypt_token, get_event_with_setup_status_from_db};
 
 #[path = "setup_persistence.rs"]
 mod persistence;
@@ -74,6 +76,11 @@ use persistence::{prune_registration_versions, replace_registration_rows};
 /// Default setup timeout — setup workflows are expected to finish in
 /// seconds (they're emitting config, not doing real work).
 const DEFAULT_SETUP_TIMEOUT_SECS: u64 = 90;
+
+/// What the Dispatch deadline of the routes that run a setup (save, setup,
+/// restore, promote) keeps beyond the setup's own timeout: the write before
+/// it and recording its outcome.
+const SETUP_DEADLINE_HEADROOM: Duration = Duration::from_secs(60);
 
 /// Intercom event type emitted by the REST/MCP server nodes during a
 /// remote setup run. Kept in sync with
@@ -84,6 +91,50 @@ fn is_completed_run_status(status: &str) -> bool {
     status.trim().eq_ignore_ascii_case("completed")
 }
 
+/// The longest a setup may run. It stays below the Dispatch deadline of its
+/// request, so a setup times out and records its outcome instead of being
+/// cut off while marked `running`.
+fn max_setup_timeout() -> Duration {
+    DeadlineClass::Dispatch
+        .budget()
+        .saturating_sub(SETUP_DEADLINE_HEADROOM)
+}
+
+fn bounded_setup_timeout(requested: Option<u64>, max: Duration) -> Duration {
+    Duration::from_secs(requested.unwrap_or(DEFAULT_SETUP_TIMEOUT_SECS)).min(max)
+}
+
+/// Whether a `running` mark still blocks another setup. A mark older than the
+/// longest setup outlived its request, which ended without recording an
+/// outcome, so it blocks nothing.
+fn setup_in_progress(
+    status: Option<&str>,
+    marked_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    now: chrono::DateTime<chrono::FixedOffset>,
+    max_setup: Duration,
+) -> bool {
+    status == Some("running")
+        && marked_at.is_some_and(|at| match now.signed_duration_since(at).to_std() {
+            Ok(age) => age < max_setup,
+            Err(_) => true,
+        })
+}
+
+/// Only an armed event — on, with a hub trigger — may move the stable serving
+/// pointer: inbound runs that pointer's board as the sink's run-as user, who
+/// armed the saved primary target. A variant setup fills only its own bucket,
+/// and inbound dispatches a variant to the board the event row names.
+fn may_move_serving_pointer(event: &Event, variant: &str) -> bool {
+    variant != STABLE_VARIANT || arms_hub_trigger(event)
+}
+
+/// Whether a save, restore or promote that leaves `event` like this re-runs
+/// its stable setup.
+pub(crate) fn save_runs_stable_setup(event: &Event) -> bool {
+    matches!(event.event_type.as_str(), "rest" | "mcp")
+        && may_move_serving_pointer(event, STABLE_VARIANT)
+}
+
 #[derive(Clone, Debug, Default, Deserialize, ToSchema)]
 pub struct SetupEventRequest {
     /// Optional override for the setup payload sent to the workflow.
@@ -92,10 +143,12 @@ pub struct SetupEventRequest {
     pub payload: Option<serde_json::Value>,
     /// Optional profile ID for credential scoping.
     pub profile_id: Option<String>,
-    /// Setup timeout in seconds (default: 90).
+    /// Setup timeout in seconds (default: 90), capped a minute below the
+    /// request deadline of the setup routes.
     pub timeout_seconds: Option<u64>,
     /// Force a setup even if another setup run is already `running`.
-    /// Without this flag a parallel `POST /setup` returns `409 Conflict`.
+    /// Without this flag a parallel `POST /setup` returns `409 Conflict`,
+    /// unless that run is older than the longest setup and so abandoned.
     #[serde(default)]
     pub force: bool,
     /// Variant whose inbound surface to (re)build. Defaults to "stable"
@@ -104,6 +157,16 @@ pub struct SetupEventRequest {
     /// variants have no inbound surface and are refused.
     #[serde(default)]
     pub variant: Option<String>,
+}
+
+/// The variant a setup request names, the primary ("stable") when none.
+fn requested_variant(body: &SetupEventRequest) -> String {
+    body.variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(STABLE_VARIANT)
+        .to_string()
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -122,7 +185,7 @@ pub struct SetupEventResponse {
     post,
     path = "/apps/{app_id}/events/{event_id}/setup",
     tag = "events",
-    description = "Run REST/MCP remote setup and persist inbound registrations for an event.",
+    description = "Run REST/MCP remote setup and persist inbound registrations for an event. The primary (stable) setup needs an event that is on and the right to trigger events, because inbound traffic runs as the user the event's trigger runs as.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("event_id" = String, Path, description = "Event ID"),
@@ -130,11 +193,12 @@ pub struct SetupEventResponse {
     request_body = SetupEventRequest,
     responses(
         (status = 200, description = "Setup completed", body = SetupEventResponse),
-        (status = 400, description = "Setup failed"),
+        (status = 400, description = "Setup failed, or the primary setup was asked for an event that is off or runs on devices only"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
+        (status = 403, description = "Forbidden, or RUN_AS_NOT_ALLOWED: the caller may not trigger events, so cannot run the primary setup"),
         (status = 404, description = "Not found"),
         (status = 409, description = "Setup already running"),
+        (status = 503, description = "The caller's permission to trigger events cannot be checked right now"),
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
@@ -151,14 +215,13 @@ pub async fn setup_event(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
     let sub = permission.sub()?;
     let user_context = permission.to_user_context();
-    let variant = body
-        .variant
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .unwrap_or(STABLE_VARIANT)
-        .to_string();
+    let variant = requested_variant(&body);
     let force = body.force;
+    if variant == STABLE_VARIANT {
+        // Moving the stable pointer chooses what inbound runs as the sink's
+        // run-as user, so it takes the right to turn the event on.
+        crate::routes::sink::service::ensure_actor_may_arm(&state, &app_id, &sub).await?;
+    }
 
     let response = run_event_setup(
         state.clone(),
@@ -276,10 +339,11 @@ async fn collect_server_config_events(
     (events, error, terminal_status)
 }
 
-/// Core setup logic. Invoked from background tasks spawned by
-/// [`super::upsert_event`] for REST/MCP event types. The caller is
-/// responsible for permission enforcement; the helper does no
-/// authorization checks.
+/// Core setup logic, run by `POST /setup` and, through
+/// [`run_armed_stable_setup`], after a save, restore or promote that left a
+/// REST/MCP event armed. The caller enforces permissions, including the
+/// arming rule for a stable setup; the helper only refuses a stable setup of
+/// an event that is not armed.
 pub(crate) async fn run_event_setup(
     state: AppState,
     sub: String,
@@ -295,7 +359,7 @@ pub(crate) async fn run_event_setup(
     }
 
     // Load the event (validates ownership) and capture its current version.
-    let (core_event, stable_setup_status) =
+    let (core_event, stable_setup_status, stable_setup_at) =
         get_event_with_setup_status_from_db(&state.db, &event_id, &app_id)
             .await
             .map_err(|e| ApiError::not_found(e.to_string()))?;
@@ -309,13 +373,12 @@ pub(crate) async fn run_event_setup(
     // Resolve the target surface. A non-stable setup dispatches into the
     // variant's board/version/node and writes that variant's own
     // registration bucket; the primary ("stable") keeps today's path.
-    let variant_name = body
-        .variant
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .unwrap_or(STABLE_VARIANT)
-        .to_string();
+    let variant_name = requested_variant(&body);
+    if !may_move_serving_pointer(&core_event, &variant_name) {
+        return Err(ApiError::bad_request(format!(
+            "event {event_id} is off, so its setup cannot run: inbound REST/MCP traffic is served only while the event is on, and turning it on runs the setup"
+        )));
+    }
     let target = if variant_name == STABLE_VARIANT {
         ResolvedTarget::primary(&core_event)
     } else {
@@ -339,16 +402,19 @@ pub(crate) async fn run_event_setup(
     // Reject overlapping setup runs unless the caller explicitly forces one.
     // Persistence and each cleanup page lock the Event row before reading
     // registrations and serving pointers.
+    let max_setup = max_setup_timeout();
     if !body.force {
-        let running = if variant_name == STABLE_VARIANT {
-            stable_setup_status.as_deref() == Some("running")
+        let (status, marked_at) = if variant_name == STABLE_VARIANT {
+            (stable_setup_status, stable_setup_at)
         } else {
             find_event_setup(&state.db, &app_id, &core_event.id, &variant_name)
                 .await
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
-                .is_some_and(|row| row.setup_status.as_deref() == Some("running"))
+                .map(|row| (row.setup_status, row.last_setup_at))
+                .unwrap_or_default()
         };
-        if running {
+        let now = chrono::Utc::now().fixed_offset();
+        if setup_in_progress(status.as_deref(), marked_at, now, max_setup) {
             return Err(ApiError::conflict(
                 "setup already running for this event; pass `force: true` to override",
             ));
@@ -365,6 +431,11 @@ pub(crate) async fn run_event_setup(
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
     let board_id = target.board_id.clone();
     let board_version = target.board_version;
+
+    // The timeout runs from the `running` mark, so dispatch and collection
+    // together stay within it.
+    let timeout = bounded_setup_timeout(body.timeout_seconds, max_setup);
+    let setup_deadline = flow_like_types::tokio::time::Instant::now() + timeout;
 
     // Mark setup as running before dispatch so the UI can show progress.
     // Deliberately DO NOT touch the serving pointers here —
@@ -427,7 +498,7 @@ pub(crate) async fn run_event_setup(
             &app_id,
             crate::credentials::CredentialsAccess::ServerExecute,
         ),
-        fetch_profile_for_dispatch(&state, &sub, body.profile_id.as_deref(), &app_id, true),
+        fetch_profile_for_dispatch(&state, &sub, body.profile_id.as_deref(), &app_id),
         resolve_wasm_packages(&state, &app_id),
     );
     let credentials = credentials_result?;
@@ -487,17 +558,17 @@ pub(crate) async fn run_event_setup(
         node_id: target.node_id.clone(),
         event_json: Some(event_json),
         payload: body.payload.clone().or_else(|| Some(serde_json::json!({}))),
-        user_id: sub,
+        user_id: sub.clone(),
         credentials_json,
         jwt: executor_jwt,
         callback_url,
-        token: None,
         oauth_tokens: None,
         stream_state: false,
         execution_mode: Some(flow_like::flow::execution::ExecutionMode::Event),
         runtime_variables: None,
         user_context: Some(user_context),
         profile,
+        custom_bit_owner: Some(sub),
         wasm_packages,
         channel: None,
         // A background setup workflow emitting config.
@@ -559,9 +630,8 @@ pub(crate) async fn run_event_setup(
     // Drain the SSE stream and collect `server_config` events. Bail out as
     // soon as we see a `completed` event so we don't hold the connection
     // longer than necessary.
-    let timeout = Duration::from_secs(body.timeout_seconds.unwrap_or(DEFAULT_SETUP_TIMEOUT_SECS));
-    let (collected, error, terminal_status) = match flow_like_types::tokio::time::timeout(
-        timeout,
+    let (collected, error, terminal_status) = match flow_like_types::tokio::time::timeout_at(
+        setup_deadline,
         collect_server_config_events(setup_stream),
     )
     .await
@@ -725,7 +795,8 @@ pub(crate) async fn run_event_setup(
             let msg = match &e {
                 PersistError::Parity(reason)
                 | PersistError::Budget(reason)
-                | PersistError::VariantGone(reason) => reason.clone(),
+                | PersistError::VariantGone(reason)
+                | PersistError::Superseded(reason) => reason.clone(),
                 PersistError::Db(err) => format!("persisting registrations failed: {err}"),
                 PersistError::Other(err) => format!("persisting registrations failed: {err}"),
             };
@@ -747,7 +818,8 @@ pub(crate) async fn run_event_setup(
             return match e {
                 PersistError::Parity(_)
                 | PersistError::Budget(_)
-                | PersistError::VariantGone(_) => Ok(SetupEventResponse {
+                | PersistError::VariantGone(_)
+                | PersistError::Superseded(_) => Ok(SetupEventResponse {
                     run_id,
                     event_id: core_event.id,
                     event_version,
@@ -827,6 +899,26 @@ async fn record_setup_failure(
 
 fn format_board_version((major, minor, patch): (u32, u32, u32)) -> String {
     format!("{major}.{minor}.{patch}")
+}
+
+fn board_label(board_id: &str, board_version: Option<&str>) -> String {
+    match board_version {
+        Some(version) => format!("board {board_id} version {version}"),
+        None => format!("board {board_id} (latest version)"),
+    }
+}
+
+/// Whether a stored `(boardId, boardVersion)` pair names `board_id` at
+/// `board_version`, the stored version read as inbound dispatches it (`None`
+/// floats on latest).
+fn names_board(
+    stored_board_id: &str,
+    stored_board_version: Option<&str>,
+    board_id: &str,
+    board_version: Option<(u32, u32, u32)>,
+) -> bool {
+    stored_board_id == board_id
+        && stored_board_version.and_then(super::parse_version_tuple) == board_version
 }
 
 /// The `(event, variant)` `EventSetup` pointer row, if one exists. Shared by
@@ -935,6 +1027,157 @@ async fn touch_event_setup_status<C: ConnectionTrait>(
         .filter(event_setup::Column::AppId.eq(app_id))
         .filter(event_setup::Column::EventId.eq(event_id))
         .filter(event_setup::Column::Variant.eq(variant))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Whether the stable pointer serves a board other than the event's primary
+/// target. Without a populated pointer inbound serves nothing, or falls back
+/// to the legacy `last_setup_version` with the primary itself.
+fn must_withdraw_stable_pointer(
+    pointer: &event_setup::Model,
+    board_id: &str,
+    board_version: Option<(u32, u32, u32)>,
+) -> bool {
+    crate::routes::inbound::has_serving_pointer(pointer)
+        && !names_board(
+            &pointer.board_id,
+            pointer.board_version.as_deref(),
+            board_id,
+            board_version,
+        )
+}
+
+/// Runs the stable setup of an event that a save, restore or promote just
+/// left armed. The sink now runs as whoever armed the event's primary target,
+/// so when the setup does not succeed, a stable pointer that still names
+/// another board is withdrawn and inbound answers 404 until a setup of the
+/// armed target succeeds.
+pub(crate) async fn run_armed_stable_setup(
+    state: &AppState,
+    sub: &str,
+    app_id: &str,
+    event_id: &str,
+    profile_id: Option<String>,
+    user_context: flow_like::flow::execution::UserExecutionContext,
+) -> Result<SetupEventResponse, ApiError> {
+    let outcome = run_event_setup(
+        state.clone(),
+        sub.to_string(),
+        app_id.to_string(),
+        event_id.to_string(),
+        SetupEventRequest {
+            profile_id,
+            ..Default::default()
+        },
+        user_context,
+    )
+    .await;
+    if !matches!(&outcome, Ok(response) if response.status == "ok") {
+        withdraw_stale_stable_pointer(state, app_id, event_id).await;
+    }
+    outcome
+}
+
+/// [`withdraw_stale_stable_pointer_in`] in its own transaction. A failure is
+/// only logged: the write that armed the event has already committed.
+async fn withdraw_stale_stable_pointer(state: &AppState, app_id: &str, event_id: &str) {
+    let withdrawn = state
+        .transaction(|txn| {
+            let app_id = app_id.to_string();
+            let event_id = event_id.to_string();
+            Box::pin(async move { withdraw_stale_stable_pointer_in(txn, &app_id, &event_id).await })
+        })
+        .await;
+    match withdrawn {
+        Ok(true) => tracing::warn!(
+            %app_id,
+            %event_id,
+            "stable setup of the armed target did not succeed; withdrew the stable pointer that named another board"
+        ),
+        Ok(false) => {}
+        Err(error) => tracing::error!(
+            %app_id,
+            %event_id,
+            %error,
+            "failed to withdraw the stable pointer naming another board than the armed target; inbound keeps running that board until a setup succeeds"
+        ),
+    }
+}
+
+/// Clears the stable `EventSetup` pointer columns and the legacy
+/// `last_setup_version` in one step when the pointer names another board than
+/// the event's primary target, under the Event row lock that setup
+/// persistence takes. Returns whether it withdrew the pointer.
+async fn withdraw_stale_stable_pointer_in<C: ConnectionTrait>(
+    conn: &C,
+    app_id: &str,
+    event_id: &str,
+) -> Result<bool, sea_orm::DbErr> {
+    use sea_orm::QuerySelect;
+
+    let Some(row) = event::Entity::find_by_id(event_id)
+        .filter(event::Column::AppId.eq(app_id))
+        .lock_exclusive()
+        .one(conn)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let board_id = row.board_id.as_deref().unwrap_or_default();
+    let board_version = row.board_version.as_deref();
+    let Some(pointer) = find_event_setup(conn, app_id, event_id, STABLE_VARIANT)
+        .await?
+        .filter(|pointer| {
+            must_withdraw_stable_pointer(
+                pointer,
+                board_id,
+                board_version.and_then(super::parse_version_tuple),
+            )
+        })
+    else {
+        return Ok(false);
+    };
+    let reason = format!(
+        "the last successful setup built {}, but the event now targets {}; inbound REST/MCP traffic is refused until a setup of the current target succeeds",
+        board_label(&pointer.board_id, pointer.board_version.as_deref()),
+        board_label(board_id, board_version),
+    );
+    clear_stable_pointer(conn, &pointer.id, &row, &reason).await?;
+    Ok(true)
+}
+
+/// Empties the stable pointer row's serving columns, marking it failed with
+/// `reason`, and the event row's legacy `last_setup_version` fallback.
+async fn clear_stable_pointer<C: ConnectionTrait>(
+    conn: &C,
+    pointer_id: &str,
+    row: &event::Model,
+    reason: &str,
+) -> Result<(), sea_orm::DbErr> {
+    let now = chrono::Utc::now().fixed_offset();
+    event_setup::Entity::update_many()
+        .col_expr(event_setup::Column::EventVersion, Expr::value(""))
+        .col_expr(event_setup::Column::BoardId, Expr::value(""))
+        .col_expr(
+            event_setup::Column::BoardVersion,
+            Expr::value(Option::<String>::None),
+        )
+        .col_expr(event_setup::Column::SetupStatus, Expr::value("error"))
+        .col_expr(event_setup::Column::LastSetupAt, Expr::value(now))
+        .col_expr(event_setup::Column::LastSetupError, Expr::value(reason))
+        .col_expr(event_setup::Column::UpdatedAt, Expr::value(now))
+        .filter(event_setup::Column::Id.eq(pointer_id))
+        .exec(conn)
+        .await?;
+    event::Entity::update_many()
+        .col_expr(
+            event::Column::LastSetupVersion,
+            Expr::value(Option::<String>::None),
+        )
+        .filter(event::Column::Id.eq(&row.id))
+        .filter(event::Column::AppId.eq(&row.app_id))
         .exec(conn)
         .await?;
     Ok(())
@@ -1314,6 +1557,11 @@ async fn persist_registrations_in(
             )));
         }
     }
+    if variant == STABLE_VARIANT
+        && let Some(row) = locked_row.as_ref()
+    {
+        ensure_target_is_primary(row, target)?;
+    }
     let stable_setup_version = locked_row
         .as_ref()
         .and_then(|row| row.last_setup_version.clone());
@@ -1421,6 +1669,34 @@ async fn persist_registrations_in(
     Ok((reg_count, auth_count, live_setup_version))
 }
 
+/// A save, restore or promote may move the primary while a stable setup runs.
+/// The sink then runs as whoever armed the new primary, so a setup of the
+/// board it replaced may not move the stable pointer.
+fn ensure_target_is_primary(
+    row: &event::Model,
+    target: &ResolvedTarget,
+) -> Result<(), PersistError> {
+    let board_id = row.board_id.as_deref().unwrap_or_default();
+    let board_version = row.board_version.as_deref();
+    if names_board(
+        board_id,
+        board_version,
+        &target.board_id,
+        target.board_version,
+    ) {
+        return Ok(());
+    }
+    Err(PersistError::Superseded(format!(
+        "event {} now targets {}, not {} this setup ran against, so the setup was discarded; run setup again",
+        row.id,
+        board_label(board_id, board_version),
+        board_label(
+            &target.board_id,
+            target.board_version.map(format_board_version).as_deref()
+        ),
+    )))
+}
+
 fn validate_mcp_authentication_for_setup(config: &Value) -> flow_like_types::Result<()> {
     let flow_like_auth = match config.get("flow_like_auth") {
         None => false,
@@ -1484,16 +1760,17 @@ fn validate_mcp_authentication_for_setup(config: &Value) -> flow_like_types::Res
 }
 
 /// Persist-phase failure split: a stable-parity refusal is the caller's
-/// board to fix and a concurrently deleted variant is a lost race — both
-/// surface as a failed setup (400 at the route) — while everything else
-/// stays an internal error. `VariantGone` additionally skips the failure
-/// marking, which would otherwise re-insert an `EventSetup` row for the
-/// deleted variant.
+/// board to fix, while a concurrently deleted variant and a stable setup
+/// whose primary moved on are lost races — all surface as a failed setup
+/// (400 at the route) — and everything else stays an internal error.
+/// `VariantGone` additionally skips the failure marking, which would
+/// otherwise re-insert an `EventSetup` row for the deleted variant.
 #[derive(Debug)]
 enum PersistError {
     Parity(String),
     Budget(String),
     VariantGone(String),
+    Superseded(String),
     Db(sea_orm::DbErr),
     Other(flow_like_types::Error),
 }
@@ -1503,7 +1780,8 @@ impl std::fmt::Display for PersistError {
         match self {
             PersistError::Parity(reason)
             | PersistError::Budget(reason)
-            | PersistError::VariantGone(reason) => f.write_str(reason),
+            | PersistError::VariantGone(reason)
+            | PersistError::Superseded(reason) => f.write_str(reason),
             PersistError::Db(error) => write!(f, "{error}"),
             PersistError::Other(error) => write!(f, "{error}"),
         }
@@ -3137,5 +3415,355 @@ mod tests {
             json!({"type": "object", "additionalProperties": true})
         );
         assert!(spec["paths"]["/form"]["get"].get("requestBody").is_none());
+    }
+
+    const APP: &str = "app-1";
+    const EVENT: &str = "event-1";
+
+    fn rest_event(active: bool) -> super::Event {
+        use flow_like_types::FromProto;
+        let mut event = super::Event::from_proto(flow_like_types::proto::Event::default());
+        event.id = EVENT.to_string();
+        event.event_type = "rest".to_string();
+        event.active = active;
+        event
+    }
+
+    fn stable_pointer(
+        event_version: &str,
+        board_id: &str,
+        board_version: Option<&str>,
+    ) -> super::event_setup::Model {
+        let now = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+            .unwrap()
+            .fixed_offset();
+        super::event_setup::Model {
+            id: "setup-1".to_string(),
+            app_id: APP.to_string(),
+            event_id: EVENT.to_string(),
+            variant: super::STABLE_VARIANT.to_string(),
+            event_version: event_version.to_string(),
+            board_id: board_id.to_string(),
+            board_version: board_version.map(ToString::to_string),
+            setup_status: Some("ok".to_string()),
+            last_setup_at: Some(now),
+            last_setup_error: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn only_an_armed_event_may_move_the_stable_serving_pointer() {
+        let armed = rest_event(true);
+        assert!(super::may_move_serving_pointer(
+            &armed,
+            super::STABLE_VARIANT
+        ));
+        assert!(super::save_runs_stable_setup(&armed));
+
+        let off = rest_event(false);
+        assert!(!super::may_move_serving_pointer(
+            &off,
+            super::STABLE_VARIANT
+        ));
+        assert!(!super::save_runs_stable_setup(&off));
+        assert!(super::may_move_serving_pointer(&off, "canary"));
+
+        let mut device_only = rest_event(true);
+        device_only.set_device_source().unwrap();
+        assert!(!super::may_move_serving_pointer(
+            &device_only,
+            super::STABLE_VARIANT
+        ));
+        assert!(!super::save_runs_stable_setup(&device_only));
+
+        let mut mcp = rest_event(true);
+        mcp.event_type = "mcp".to_string();
+        assert!(super::save_runs_stable_setup(&mcp));
+        let mut webhook = rest_event(true);
+        webhook.event_type = "webhook".to_string();
+        assert!(!super::save_runs_stable_setup(&webhook));
+    }
+
+    #[test]
+    fn a_stable_pointer_naming_another_board_than_the_primary_is_withdrawn() {
+        let pinned = stable_pointer("1.0.0", "board-a", Some("1.2.3"));
+        assert!(!super::must_withdraw_stable_pointer(
+            &pinned,
+            "board-a",
+            Some((1, 2, 3))
+        ));
+        assert!(super::must_withdraw_stable_pointer(
+            &pinned,
+            "board-m",
+            Some((1, 2, 3))
+        ));
+        assert!(super::must_withdraw_stable_pointer(
+            &pinned,
+            "board-a",
+            Some((1, 2, 4))
+        ));
+        assert!(super::must_withdraw_stable_pointer(
+            &pinned, "board-a", None
+        ));
+
+        let latest = stable_pointer("1.0.0", "board-a", None);
+        assert!(!super::must_withdraw_stable_pointer(
+            &latest, "board-a", None
+        ));
+        assert!(super::must_withdraw_stable_pointer(
+            &latest,
+            "board-a",
+            Some((1, 2, 3))
+        ));
+
+        // An empty pointer serves nothing; inbound falls back to the primary.
+        for empty in [
+            stable_pointer("", "", None),
+            stable_pointer("", "board-m", None),
+            stable_pointer("1.0.0", "", None),
+        ] {
+            assert!(!super::must_withdraw_stable_pointer(
+                &empty, "board-a", None
+            ));
+        }
+    }
+
+    #[test]
+    fn a_setup_of_a_replaced_primary_may_not_move_the_stable_pointer() {
+        assert!(super::names_board(
+            "board-a",
+            Some("1.2.3"),
+            "board-a",
+            Some((1, 2, 3))
+        ));
+        assert!(super::names_board(
+            "board-a",
+            Some("1_2_3"),
+            "board-a",
+            Some((1, 2, 3))
+        ));
+        assert!(super::names_board("board-a", None, "board-a", None));
+        assert!(!super::names_board(
+            "board-a",
+            None,
+            "board-a",
+            Some((1, 2, 3))
+        ));
+        assert!(!super::names_board(
+            "board-a",
+            Some("1.2.3"),
+            "board-b",
+            Some((1, 2, 3))
+        ));
+    }
+
+    #[test]
+    fn a_running_mark_older_than_the_longest_setup_blocks_no_setup() {
+        let max = std::time::Duration::from_secs(810);
+        let now = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+            .unwrap()
+            .fixed_offset();
+        let ago = |secs: i64| Some(now - chrono::Duration::seconds(secs));
+
+        assert!(super::setup_in_progress(Some("running"), ago(5), now, max));
+        assert!(super::setup_in_progress(
+            Some("running"),
+            ago(809),
+            now,
+            max
+        ));
+        assert!(!super::setup_in_progress(
+            Some("running"),
+            ago(810),
+            now,
+            max
+        ));
+        assert!(!super::setup_in_progress(
+            Some("running"),
+            ago(86_400),
+            now,
+            max
+        ));
+        assert!(super::setup_in_progress(
+            Some("running"),
+            ago(-30),
+            now,
+            max
+        ));
+        assert!(!super::setup_in_progress(Some("running"), None, now, max));
+        for settled in [None, Some("ok"), Some("error")] {
+            assert!(!super::setup_in_progress(settled, ago(5), now, max));
+        }
+    }
+
+    #[test]
+    fn setup_timeouts_stay_below_the_dispatch_deadline() {
+        let deadline = super::DeadlineClass::Dispatch.budget();
+        let max = super::max_setup_timeout();
+        assert!(max < deadline);
+        assert_eq!(max + super::SETUP_DEADLINE_HEADROOM, deadline);
+
+        let cap = std::time::Duration::from_secs(810);
+        assert_eq!(
+            super::bounded_setup_timeout(None, cap),
+            std::time::Duration::from_secs(super::DEFAULT_SETUP_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            super::bounded_setup_timeout(Some(30), cap),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(super::bounded_setup_timeout(Some(u64::MAX), cap), cap);
+    }
+
+    fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+        let body = source
+            .split_once(signature)
+            .unwrap_or_else(|| panic!("{signature} exists"))
+            .1;
+        &body[..body.find("\n}\n").unwrap_or(body.len())]
+    }
+
+    #[test]
+    fn stable_setups_check_the_arming_rule_and_armed_writes_withdraw_on_failure() {
+        let source = include_str!("setup_event.rs");
+        let handler = function_body(source, "\npub async fn setup_event(");
+        let armed = handler
+            .find("ensure_actor_may_arm(")
+            .expect("POST /setup checks the arming rule");
+        assert!(armed < handler.find("run_event_setup(").unwrap());
+
+        let setup = function_body(source, "\npub(crate) async fn run_event_setup(");
+        let refused = setup
+            .find("may_move_serving_pointer(")
+            .expect("an unarmed stable setup is refused");
+        assert!(refused < setup.find("Some(\"running\"").unwrap());
+
+        for (name, caller) in [
+            ("upsert_event.rs", include_str!("upsert_event.rs")),
+            ("restore_event.rs", include_str!("restore_event.rs")),
+            ("canary.rs", include_str!("canary.rs")),
+        ] {
+            assert!(
+                caller.contains("save_runs_stable_setup("),
+                "{name} sets up only events it left armed"
+            );
+            assert!(
+                !caller.contains("run_event_setup("),
+                "{name} sets up through run_armed_stable_setup"
+            );
+        }
+    }
+
+    /// A SQLite stand-in for the Event and EventSetup tables.
+    async fn setup_tables() -> sea_orm::DatabaseConnection {
+        use sea_orm::{ConnectOptions, ConnectionTrait, Database, Schema, sea_query::Table};
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        let schema = Schema::new(db.get_database_backend());
+        for source in [
+            schema.create_table_from_entity(super::event::Entity),
+            schema.create_table_from_entity(super::event_setup::Entity),
+        ] {
+            let mut table = Table::create();
+            table.table(source.get_table_name().unwrap().clone());
+            for column in source.get_columns() {
+                table.col(column.clone());
+            }
+            db.execute(&table).await.unwrap();
+        }
+        db
+    }
+
+    async fn insert_event(db: &sea_orm::DatabaseConnection, last_setup_version: Option<&str>) {
+        use sea_orm::EntityTrait;
+        let mut event = rest_event(true);
+        event.board_id = "board-a".to_string();
+        event.board_version = Some((1, 0, 0));
+        let mut row = crate::routes::app::events::db::event_to_db_model(APP, &event);
+        row.last_setup_version = super::Set(last_setup_version.map(ToString::to_string));
+        super::event::Entity::insert(row).exec(db).await.unwrap();
+    }
+
+    async fn insert_pointer(db: &sea_orm::DatabaseConnection, pointer: super::event_setup::Model) {
+        use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel};
+        super::event_setup::Entity::insert(pointer.into_active_model().reset_all())
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    async fn stored(
+        db: &sea_orm::DatabaseConnection,
+    ) -> (Option<super::event_setup::Model>, Option<String>) {
+        use sea_orm::EntityTrait;
+        let pointer = super::find_event_setup(db, APP, EVENT, super::STABLE_VARIANT)
+            .await
+            .unwrap();
+        let row = super::event::Entity::find_by_id(EVENT)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap();
+        (pointer, row.last_setup_version)
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn withdrawing_clears_the_stable_pointer_and_the_legacy_scalar_together() {
+        let db = setup_tables().await;
+        insert_event(&db, Some("1.0.0")).await;
+        insert_pointer(&db, stable_pointer("1.0.0", "board-m", None)).await;
+
+        assert!(
+            super::withdraw_stale_stable_pointer_in(&db, APP, EVENT)
+                .await
+                .unwrap()
+        );
+        let (pointer, last_setup_version) = stored(&db).await;
+        let pointer = pointer.unwrap();
+        assert!(!crate::routes::inbound::has_serving_pointer(&pointer));
+        assert_eq!(pointer.board_version, None);
+        assert_eq!(pointer.setup_status.as_deref(), Some("error"));
+        assert!(
+            pointer
+                .last_setup_error
+                .is_some_and(|reason| reason.contains("board board-m"))
+        );
+        assert_eq!(last_setup_version, None);
+
+        assert!(
+            !super::withdraw_stale_stable_pointer_in(&db, APP, EVENT)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_pointer_on_the_primary_and_the_legacy_scalar_keep_serving() {
+        let db = setup_tables().await;
+        insert_event(&db, Some("1.0.0")).await;
+        assert!(
+            !super::withdraw_stale_stable_pointer_in(&db, APP, EVENT)
+                .await
+                .unwrap()
+        );
+        assert_eq!(stored(&db).await.1.as_deref(), Some("1.0.0"));
+
+        insert_pointer(&db, stable_pointer("1.0.0", "board-a", Some("1.0.0"))).await;
+        assert!(
+            !super::withdraw_stale_stable_pointer_in(&db, APP, EVENT)
+                .await
+                .unwrap()
+        );
+        let (pointer, last_setup_version) = stored(&db).await;
+        assert!(crate::routes::inbound::has_serving_pointer(
+            &pointer.unwrap()
+        ));
+        assert_eq!(last_setup_version.as_deref(), Some("1.0.0"));
     }
 }

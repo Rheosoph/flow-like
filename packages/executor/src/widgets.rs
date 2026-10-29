@@ -2,12 +2,15 @@
 //! lookups for other selectors and package widgets. Full inventories stay
 //! separate from the bundle and are cached for the life of the run.
 
+use crate::jwt::ExecutorClaims;
 use crate::resolve::{fetch_bounded_with, max_remote_payload_bytes};
 use flow_like::a2ui::micro_widget::{
     find_app_widget_by_selector, AppWidgetSource, PackageWidgetRef, PackageWidgetSource,
 };
 use flow_like::a2ui::widget::Widget;
+use flow_like::bit::Bit;
 use flow_like::flow::compiled::ArtifactWidgetSnapshot;
+use flow_like::models::custom_bit_relay::{relayable, CustomBitRelay};
 use flow_like::state::FlowLikeState;
 use flow_like_types::{anyhow, async_trait};
 use serde::de::DeserializeOwned;
@@ -21,21 +24,71 @@ pub(crate) struct HubAccess {
     pub callback_url: String,
     pub jwt: String,
     pub hosted_frontend: bool,
+    pub app_id: String,
+    /// Private Bits of the dispatched profile that the run calls through the
+    /// hub's model relay.
+    pub relay_ids: Vec<String>,
 }
 
 impl HubAccess {
+    /// The hub of a run whose `claims` the executor verified. The run relays
+    /// the private Bits of its dispatched `profile` only when the claims name
+    /// their owner; the profile itself is bound by the signed dispatch hash.
+    pub(crate) fn for_run(
+        claims: &ExecutorClaims,
+        jwt: &str,
+        profile: Option<&serde_json::Value>,
+    ) -> Self {
+        let names_owner = claims
+            .custom_bits_owner
+            .as_deref()
+            .is_some_and(|owner| !owner.trim().is_empty());
+        Self {
+            callback_url: claims.callback_url.clone(),
+            jwt: jwt.to_string(),
+            hosted_frontend: claims.hosted_frontend,
+            app_id: claims.app_id.clone(),
+            relay_ids: if names_owner {
+                relayable_bit_ids(profile)
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
     /// Point `state` at the hub for what the executor has no store or database
     /// for: one source answers for the app's own widgets and for the widgets of
-    /// the packages it pins. For a hosted frontend the JWT is also the run's
-    /// credential for hosted model calls.
+    /// the packages it pins, and the model relay answers for private Bits. For
+    /// a hosted frontend the JWT is also the run's credential for hosted model
+    /// calls.
     pub(crate) async fn register_on(self, state: &mut FlowLikeState) {
         if self.hosted_frontend {
             state.hosted_model_token = Some(self.jwt.clone());
+        }
+        if !self.relay_ids.is_empty() {
+            state.custom_bit_relay = Some(Arc::new(CustomBitRelay::new(
+                &self.callback_url,
+                &self.app_id,
+                &self.jwt,
+                self.relay_ids,
+            )));
         }
         let widgets = Arc::new(HubWidgetSource::new(&self.callback_url, self.jwt));
         state.register_app_widget_source(widgets.clone()).await;
         state.register_package_widget_source(widgets).await;
     }
+}
+
+fn relayable_bit_ids(profile: Option<&serde_json::Value>) -> Vec<String> {
+    profile
+        .and_then(|profile| profile.get("custom_bits"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bit| serde_json::from_value::<Bit>(bit.clone()).ok())
+        .filter(relayable)
+        .map(|bit| bit.id)
+        .collect()
 }
 
 /// Register only exact selectors that the API resolved for this board revision.
@@ -614,6 +667,91 @@ mod tests {
         assert_eq!(asked, 2, "a refusal is not cached");
     }
 
+    fn claims(custom_bits_owner: Option<&str>) -> ExecutorClaims {
+        let mut claims = serde_json::json!({
+            "sub": "user-1", "run_id": "run-1", "app_id": "app-1", "board_id": "board-1",
+            "callback_url": "http://127.0.0.1:9", "typ": "executor", "iss": "flow-like",
+            "aud": "flow-like-executor", "iat": 0, "nbf": 0, "exp": 0, "jti": "jti-1"
+        });
+        if let Some(owner) = custom_bits_owner {
+            claims["custom_bits_owner"] = owner.into();
+        }
+        serde_json::from_value(claims).expect("executor claims")
+    }
+
+    fn profile_bit(id: &str, provider_name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "type": "Llm",
+            "parameters": {
+                "context_length": 8192,
+                "provider": {"provider_name": provider_name, "model_id": "upstream", "params": {}}
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn a_run_relays_its_profiles_private_bits_only_when_its_claims_name_their_owner() {
+        let profile = serde_json::json!({"custom_bits": [
+            profile_bit("my-claude", "custom:anthropic"),
+            profile_bit("my-codex", "custom:codex"),
+            profile_bit("catalog", "hosted:openai"),
+        ]});
+        let desktop_only =
+            serde_json::json!({"custom_bits": [profile_bit("my-codex", "custom:codex")]});
+
+        for (owner, profile, relays) in [
+            (Some("owner-1"), Some(&profile), true),
+            (None, Some(&profile), false),
+            (Some(" "), Some(&profile), false),
+            (Some("owner-1"), Some(&desktop_only), false),
+            (Some("owner-1"), None, false),
+        ] {
+            let mut state = state();
+            HubAccess::for_run(&claims(owner), "exec-jwt", profile)
+                .register_on(&mut state)
+                .await;
+
+            assert_eq!(
+                state.custom_bit_relay.is_some(),
+                relays,
+                "owner {owner:?}, profile {profile:?}"
+            );
+        }
+
+        let mut state = state();
+        HubAccess::for_run(&claims(Some("owner-1")), "exec-jwt", Some(&profile))
+            .register_on(&mut state)
+            .await;
+        let relay = state.custom_bit_relay.expect("the relay is registered");
+        assert_eq!(
+            relay.base_url(),
+            "http://127.0.0.1:9/api/v1/execution/apps/app-1/models"
+        );
+        let bits: Vec<Bit> = serde_json::from_value(profile["custom_bits"].clone()).unwrap();
+        let served: Vec<bool> = bits.iter().map(|bit| relay.serves(bit)).collect();
+        assert_eq!(served, [true, false, false]);
+    }
+
+    #[test]
+    fn malformed_profile_bits_are_never_relayed() {
+        let unknown_type = serde_json::json!({"custom_bits": [{
+            "id": "odd", "type": "NoSuchType",
+            "parameters": {"provider": {"provider_name": "custom:openai"}}
+        }]});
+        let no_provider = serde_json::json!({"custom_bits": [
+            {"id": "bare", "type": "Llm", "parameters": {}}
+        ]});
+        for profile in [
+            serde_json::json!({}),
+            serde_json::json!({"custom_bits": "not-a-list"}),
+            unknown_type,
+            no_provider,
+        ] {
+            assert!(relayable_bit_ids(Some(&profile)).is_empty(), "{profile}");
+        }
+    }
+
     #[tokio::test]
     async fn a_hub_registers_the_app_and_the_package_widget_source() {
         let mut state = state();
@@ -621,6 +759,8 @@ mod tests {
             callback_url: "http://127.0.0.1:9".into(),
             jwt: "jwt".into(),
             hosted_frontend: false,
+            app_id: "app-1".into(),
+            relay_ids: Vec::new(),
         };
 
         access.register_on(&mut state).await;
@@ -641,6 +781,8 @@ mod tests {
             callback_url: base,
             jwt: "executor-jwt".into(),
             hosted_frontend: false,
+            app_id: "app-1".into(),
+            relay_ids: Vec::new(),
         };
         access.register_on(&mut state).await;
 
@@ -665,6 +807,8 @@ mod tests {
                 callback_url: "http://127.0.0.1:9".into(),
                 jwt: "jwt".into(),
                 hosted_frontend,
+                app_id: "app-1".into(),
+                relay_ids: Vec::new(),
             };
 
             access.register_on(&mut state).await;

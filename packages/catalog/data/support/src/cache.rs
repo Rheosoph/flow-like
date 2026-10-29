@@ -19,10 +19,14 @@ use flow_like_types::{
     reqwest,
 };
 
-use crate::remote_util::{api_base_url, control_plane_http_client, live_control_plane_http_client};
+use crate::remote_util::{
+    api_base_url, control_plane_http_client, error_for_status, live_control_plane_http_client,
+    refuse_in_shadow,
+};
 
 /// Entries live under this prefix inside the app's storage, alongside `storage/`.
 const LOCAL_CACHE_DIR: &str = "cache";
+const CHANGE_THE_APP_CACHE: &str = "change the app cache";
 const LOCAL_APP_SCOPE_DIR: &str = "global";
 const LOCAL_USER_SCOPE_DIR: &str = "user";
 
@@ -190,6 +194,13 @@ fn resolve_transport(context: &ExecutionContext) -> flow_like_types::Result<Cach
     })
 }
 
+/// The transport for a cache change; a shadow or regression run is refused before any
+/// request.
+fn resolve_change_transport(context: &ExecutionContext) -> flow_like_types::Result<CacheTransport> {
+    refuse_in_shadow(context, CHANGE_THE_APP_CACHE)?;
+    resolve_transport(context)
+}
+
 fn cache_http_client(context: &ExecutionContext) -> reqwest::Client {
     if context.request_authorizer().is_some() {
         live_control_plane_http_client()
@@ -271,14 +282,7 @@ pub async fn cache_get(
                     ("namespace", namespace),
                 ]);
             let response = send_cache_request(context, &client, request).await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Cache read failed with status {status}: {body}"
-                ));
-            }
+            let response = error_for_status(response, "Cache read").await?;
 
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -353,6 +357,7 @@ async fn read_local_record(
 
 /// Persist a local entry. Returns the resolved expiry, if any.
 async fn write_local_record(
+    context: &ExecutionContext,
     store: &FlowLikeStore,
     path: &Path,
     namespace: &str,
@@ -360,6 +365,7 @@ async fn write_local_record(
     value: Value,
     ttl_seconds: Option<u64>,
 ) -> flow_like_types::Result<Option<i64>> {
+    refuse_in_shadow(context, CHANGE_THE_APP_CACHE)?;
     let encoded_value = flow_like_types::json::to_vec(&value)?;
     if encoded_value.len() > LOCAL_MAX_VALUE_BYTES {
         return Err(flow_like_types::anyhow!(
@@ -410,14 +416,7 @@ pub async fn cache_has(
                     ("namespace", namespace),
                 ]);
             let response = send_cache_request(context, &client, request).await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Cache existence check failed with status {status}: {body}"
-                ));
-            }
+            let response = error_for_status(response, "Cache existence check").await?;
 
             #[derive(Deserialize)]
             struct ExistsResponse {
@@ -444,6 +443,9 @@ pub async fn cache_has(
 /// Returns the value now held under the key and whether this call is the one that wrote
 /// it. Use this instead of a Has followed by a Write when only one caller should do the
 /// expensive work — those two calls have a gap between them, this does not.
+///
+/// A shadow or regression run only reads through: a hit returns the stored value and a
+/// miss is refused, like every other cache change.
 pub async fn cache_get_or_set(
     context: &ExecutionContext,
     cache: &FlowCache,
@@ -468,14 +470,7 @@ pub async fn cache_get_or_set(
                 }),
             );
             let response = send_cache_request(context, &client, request).await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Cache get-or-write failed with status {status}: {body}"
-                ));
-            }
+            let response = error_for_status(response, "Cache get-or-write").await?;
 
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -500,7 +495,8 @@ pub async fn cache_get_or_set(
             // are two flows in the same process hitting the same key in the same
             // instant; the loser's value simply wins. Cloud runs go through the atomic
             // backend path above.
-            write_local_record(&store, &path, namespace, &key, value.clone(), ttl_seconds).await?;
+            let copy = value.clone();
+            write_local_record(context, &store, &path, namespace, &key, copy, ttl_seconds).await?;
             Ok((value, true))
         }
     }
@@ -517,7 +513,7 @@ pub async fn cache_set(
     let key = cache.validated_key(key)?;
     let namespace = cache.validated_namespace()?;
 
-    match resolve_transport(context)? {
+    match resolve_change_transport(context)? {
         CacheTransport::Remote { base_url, app_id } => {
             let client = cache_http_client(context);
             let request = client.put(format!("{base_url}/apps/{app_id}/cache")).json(
@@ -530,14 +526,7 @@ pub async fn cache_set(
                 }),
             );
             let response = send_cache_request(context, &client, request).await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Cache write failed with status {status}: {body}"
-                ));
-            }
+            let response = error_for_status(response, "Cache write").await?;
 
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -551,7 +540,7 @@ pub async fn cache_set(
 
         CacheTransport::Local { store, root } => {
             let path = local_entry_path(&root, cache.scope, local_sub(context), namespace, &key)?;
-            write_local_record(&store, &path, namespace, &key, value, ttl_seconds).await
+            write_local_record(context, &store, &path, namespace, &key, value, ttl_seconds).await
         }
     }
 }
@@ -565,7 +554,7 @@ pub async fn cache_delete(
     let key = cache.validated_key(key)?;
     let namespace = cache.validated_namespace()?;
 
-    match resolve_transport(context)? {
+    match resolve_change_transport(context)? {
         CacheTransport::Remote { base_url, app_id } => {
             let client = cache_http_client(context);
             let request = client
@@ -576,14 +565,7 @@ pub async fn cache_delete(
                     ("namespace", namespace),
                 ]);
             let response = send_cache_request(context, &client, request).await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Cache delete failed with status {status}: {body}"
-                ));
-            }
+            let response = error_for_status(response, "Cache delete").await?;
 
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -620,21 +602,14 @@ pub async fn cache_invalidate_namespace(
         ));
     }
 
-    match resolve_transport(context)? {
+    match resolve_change_transport(context)? {
         CacheTransport::Remote { base_url, app_id } => {
             let client = cache_http_client(context);
             let request = client
                 .delete(format!("{base_url}/apps/{app_id}/cache/namespace"))
                 .query(&[("namespace", namespace), ("scope", cache.scope.as_str())]);
             let response = send_cache_request(context, &client, request).await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "Cache namespace invalidation failed with status {status}: {body}"
-                ));
-            }
+            let response = error_for_status(response, "Cache namespace invalidation").await?;
 
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -726,7 +701,7 @@ mod tests {
             tokio::{
                 self,
                 io::{AsyncReadExt, AsyncWriteExt},
-                net::TcpListener,
+                net::{TcpListener, TcpStream},
             },
         };
         use std::{
@@ -833,56 +808,67 @@ mod tests {
             context
         }
 
-        #[tokio::test]
-        async fn retained_cache_context_rotates_all_remote_operations_and_rejects_expired_authority()
-         {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let hub = format!("http://{}", listener.local_addr().unwrap());
-            let server = tokio::spawn(async move {
+        async fn read_request(socket: &mut TcpStream) -> String {
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = tokio::time::timeout(Duration::from_secs(10), socket.read(&mut buffer))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&buffer[..count]);
+                assert!(bytes.len() < 64 * 1024);
+                if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .map_or(0, |length| length.trim().parse::<usize>().unwrap());
+                    if bytes.len() >= end + 4 + length {
+                        return String::from_utf8(bytes).unwrap();
+                    }
+                }
+            }
+        }
+
+        /// Answers `count` requests with `answer(request)` and returns them as received.
+        fn serve(
+            listener: TcpListener,
+            count: usize,
+            answer: fn(&str) -> (&'static str, &'static str),
+        ) -> tokio::task::JoinHandle<Vec<String>> {
+            tokio::spawn(async move {
                 let mut captured = Vec::new();
-                for _ in 0..6 {
+                for _ in 0..count {
                     let (mut socket, _) =
                         tokio::time::timeout(Duration::from_secs(10), listener.accept())
                             .await
                             .unwrap()
                             .unwrap();
-                    let mut bytes = Vec::new();
-                    let mut buffer = [0_u8; 4096];
-                    let headers = loop {
-                        let count =
-                            tokio::time::timeout(Duration::from_secs(10), socket.read(&mut buffer))
-                                .await
-                                .unwrap()
-                                .unwrap();
-                        assert!(count > 0);
-                        bytes.extend_from_slice(&buffer[..count]);
-                        assert!(bytes.len() < 64 * 1024);
-                        if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
-                            let headers = String::from_utf8(bytes[..end + 2].to_vec()).unwrap();
-                            let length = headers
-                                .lines()
-                                .find_map(|line| {
-                                    line.to_ascii_lowercase()
-                                        .strip_prefix("content-length:")
-                                        .map(|length| length.trim().parse::<usize>().unwrap())
-                                })
-                                .unwrap_or(0);
-                            if bytes.len() >= end + 4 + length {
-                                break headers;
-                            }
-                        }
-                    };
-                    let body = if headers
-                        .starts_with("DELETE /api/v1/apps/project/cache/namespace?")
-                    {
-                        r#"{"deleted":2}"#
-                    } else {
-                        r#"{"found":true,"value":{"hit":1},"expiresAt":null,"stored":true,"deleted":true}"#
-                    };
-                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-                    captured.push(headers);
+                    let request = read_request(&mut socket).await;
+                    let (status, body) = answer(&request);
+                    socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                    captured.push(request);
                 }
                 captured
+            })
+        }
+
+        #[tokio::test]
+        async fn retained_cache_context_rotates_all_remote_operations_and_rejects_expired_authority()
+         {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let hub = format!("http://{}", listener.local_addr().unwrap());
+            let server = serve(listener, 6, |request| {
+                if request.starts_with("DELETE /api/v1/apps/project/cache/namespace?") {
+                    ("200 OK", r#"{"deleted":2}"#)
+                } else {
+                    (
+                        "200 OK",
+                        r#"{"found":true,"value":{"hit":1},"expiresAt":null,"stored":true,"deleted":true}"#,
+                    )
+                }
             });
             let authority = Arc::new(RotatingAuthorization {
                 generation: AtomicUsize::new(0),
@@ -996,6 +982,95 @@ mod tests {
                 resolve_transport(&legacy).unwrap(),
                 CacheTransport::Remote { .. }
             ));
+        }
+
+        fn assert_refused(result: flow_like_types::Result<()>) {
+            let error = result.unwrap_err().to_string();
+            assert_eq!(
+                error,
+                "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot change the app cache"
+            );
+        }
+
+        #[tokio::test]
+        async fn shadow_runs_refuse_cache_changes_before_any_request() {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let hub = format!("http://{}", listener.local_addr().unwrap());
+            let mut context = context(&hub, None, false).await;
+            context.execution_cache.as_mut().unwrap().shadow = true;
+            let cache = FlowCache {
+                scope: CacheScope::App,
+                namespace: "orders".into(),
+            };
+            assert_refused(
+                cache_set(&context, &cache, "key", Value::Null, None)
+                    .await
+                    .map(drop),
+            );
+            assert_refused(cache_delete(&context, &cache, "key").await.map(drop));
+            assert_refused(cache_invalidate_namespace(&context, &cache).await.map(drop));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_err(),
+                "a refused change must not reach the API"
+            );
+        }
+
+        #[tokio::test]
+        async fn shadow_get_or_write_reads_through_the_api_and_names_a_refused_miss() {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let hub = format!("http://{}", listener.local_addr().unwrap());
+            let server = serve(listener, 2, |request| {
+                if request.contains(r#""key":"hit""#) {
+                    ("200 OK", r#"{"stored":false,"value":{"hit":1}}"#)
+                } else {
+                    (
+                        "403 Forbidden",
+                        r#"{"error":{"code":"SHADOW_SIDE_EFFECT_REFUSED","message":"Shadow and regression runs cannot change the app cache"}}"#,
+                    )
+                }
+            });
+            let mut context = context(&hub, None, false).await;
+            context.execution_cache.as_mut().unwrap().shadow = true;
+            let cache = FlowCache::default();
+            assert_eq!(
+                cache_get_or_set(&context, &cache, "hit", Value::Null, None)
+                    .await
+                    .unwrap(),
+                (flow_like_types::json::json!({"hit":1}), false)
+            );
+            assert_refused(
+                cache_get_or_set(&context, &cache, "miss", Value::Null, None)
+                    .await
+                    .map(drop),
+            );
+            for request in server.await.unwrap() {
+                assert!(request.starts_with("PUT /api/v1/apps/project/cache "));
+                assert!(request.contains(r#""ifAbsent":true"#));
+            }
+        }
+
+        #[tokio::test]
+        async fn shadow_offline_get_or_write_reads_a_hit_and_refuses_a_miss() {
+            let mut context = context("https://unreachable.test", None, true).await;
+            let cache = FlowCache::default();
+            cache_set(&context, &cache, "hit", Value::Bool(true), None)
+                .await
+                .unwrap();
+            context.execution_cache.as_mut().unwrap().shadow = true;
+            assert_eq!(
+                cache_get_or_set(&context, &cache, "hit", Value::Null, None)
+                    .await
+                    .unwrap(),
+                (Value::Bool(true), false)
+            );
+            assert_refused(
+                cache_get_or_set(&context, &cache, "miss", Value::Null, None)
+                    .await
+                    .map(drop),
+            );
+            assert!(cache_get(&context, &cache, "miss").await.unwrap().is_none());
         }
     }
 

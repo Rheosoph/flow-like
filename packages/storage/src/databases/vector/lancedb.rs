@@ -42,7 +42,7 @@ use std::{any::Any, collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
 use crate::arrow_utils::{
-    ValueBatchReader, value_to_batch_reader_with_fields,
+    ValueBatchReader, reject_unknown_columns, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
 use crate::databases::column_access::{is_hidden, restrict_provider, without_hidden_columns};
@@ -1058,8 +1058,11 @@ impl LanceDBVectorStore {
                 }
             }
         }
-        let result = table.add_columns(transform, read_columns).await?;
-        Ok(result)
+        let mut builder = table.add_columns().transform(transform);
+        if let Some(read_columns) = read_columns {
+            builder = builder.read_columns(read_columns);
+        }
+        Ok(builder.execute().await?)
     }
 
     pub async fn drop_columns(&self, column_names: &[&str]) -> Result<()> {
@@ -1546,15 +1549,14 @@ impl LanceDBVectorStore {
         if let Some(opts) = &self.write_options {
             add = add.write_options(opts.clone());
         }
-        add.execute()
-            .await
-            .map_err(|err| anyhow!(err.to_string()))?;
+        add.execute().await?;
         Ok(())
     }
 
-    async fn write_batch_reader(&self, items: Vec<Value>) -> Result<ValueBatchReader> {
+    async fn write_batch_reader(&self, mut items: Vec<Value>) -> Result<ValueBatchReader> {
         if let Some(table) = &self.table {
             let schema = table.schema().await?;
+            reject_unknown_columns(&mut items, &schema, &self.table_name)?;
             let fields = schema.fields().iter().cloned().collect();
             return value_to_batch_reader_with_fields(items, Some(fields));
         }
@@ -1577,7 +1579,7 @@ pub(crate) fn full_text_table_provider(
     query: FullTextSearchQuery,
 ) -> Option<Arc<dyn TableProvider>> {
     let (inner, mutation_adapter) =
-        if let Some(read_only) = provider.as_any().downcast_ref::<ReadOnlyDatabaseProvider>() {
+        if let Some(read_only) = provider.downcast_ref::<ReadOnlyDatabaseProvider>() {
             (
                 crate::databases::df_provider::with_full_text_query(&read_only.inner, query)?,
                 read_only.mutation_adapter.clone(),
@@ -1606,10 +1608,6 @@ impl std::fmt::Debug for ReadOnlyDatabaseProvider {
 
 #[async_trait]
 impl TableProvider for ReadOnlyDatabaseProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.inner.schema()
     }
@@ -1687,6 +1685,46 @@ pub fn is_write_contention(error: &flow_like_types::Error) -> bool {
                 | lance::Error::CommitConflict { .. }
         )
     })
+}
+
+/// Whether every subset of a write batch would fail the same way: storage I/O,
+/// a missing table, an HTTP or timeout failure, or lost commit races. Lance's
+/// generic `IO` variant is not enough on its own, because DataFusion failures
+/// caused by a row can be converted into it.
+pub fn is_batch_wide_failure(error: &flow_like_types::Error) -> bool {
+    is_write_contention(error)
+        || error.chain().any(|cause| {
+            if cause.is::<lance_object_store::Error>()
+                || cause.is::<object_store::Error>()
+                || cause.is::<std::io::Error>()
+            {
+                return true;
+            }
+            if let Some(error) = cause.downcast_ref::<lancedb::Error>() {
+                return matches!(
+                    error,
+                    lancedb::Error::TableNotFound { .. }
+                        | lancedb::Error::DatabaseNotFound { .. }
+                        | lancedb::Error::ObjectStore { .. }
+                        | lancedb::Error::Http { .. }
+                        | lancedb::Error::Retry { .. }
+                        | lancedb::Error::Timeout { .. }
+                        | lancedb::Error::Lance {
+                            source: lance::Error::DatasetNotFound { .. }
+                                | lance::Error::NotFound { .. }
+                                | lance::Error::Timeout { .. }
+                        }
+                );
+            }
+            matches!(
+                cause.downcast_ref::<lance::Error>(),
+                Some(
+                    lance::Error::DatasetNotFound { .. }
+                        | lance::Error::NotFound { .. }
+                        | lance::Error::Timeout { .. }
+                )
+            )
+        })
 }
 
 pub(crate) fn update_sql_literal(
@@ -2451,9 +2489,7 @@ impl VectorStore for LanceDBVectorStore {
         if let Some(opts) = &self.write_options {
             add = add.write_options(opts.clone());
         }
-        add.execute()
-            .await
-            .map_err(|err| anyhow!(err.to_string()))?;
+        add.execute().await?;
         Ok(())
     }
 
@@ -2512,6 +2548,14 @@ impl VectorStore for LanceDBVectorStore {
         self.ensure_unmanaged("index changes")?;
         self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        // Lance 13 adds an index of another kind next to the column's existing one.
+        // Reusing its name replaces it, so a column keeps one index.
+        let existing = table
+            .list_indices()
+            .await?
+            .into_iter()
+            .find(|index| index.columns == [column])
+            .map(|index| index.name);
         if let Some(kind) = native_scalar_index(index_type) {
             let wrapper = table.dataset().ok_or_else(|| {
                 anyhow!(
@@ -2531,10 +2575,14 @@ impl VectorStore for LanceDBVectorStore {
                 validate_rtree_column(&arrow_schema::Field::from(field))?;
             }
             let params = ScalarIndexParams::for_builtin(kind);
-            dataset
-                .create_index_builder(&[column], lance_index::IndexType::Scalar, &params)
-                .replace(true)
-                .await?;
+            let columns = [column];
+            let mut builder = dataset
+                .create_index_builder(&columns, lance_index::IndexType::Scalar, &params)
+                .replace(true);
+            if let Some(name) = existing {
+                builder = builder.name(name);
+            }
+            builder.await?;
             wrapper.update(dataset);
             return Ok(());
         }
@@ -2549,7 +2597,11 @@ impl VectorStore for LanceDBVectorStore {
         };
         let index = fit_pq_to_row_count(&table, column, index_type, index).await?;
 
-        table.create_index(&[column], index).execute().await?;
+        let mut builder = table.create_index(&[column], index).replace(true);
+        if let Some(name) = existing {
+            builder = builder.name(name);
+        }
+        builder.execute().await?;
         Ok(())
     }
 
@@ -3359,7 +3411,17 @@ mod tests {
             )?)
             .await?;
             db.index("event_date", Some("ZONEMAP")).await?;
-            db.optimize(true).await?;
+            // lancedb 0.27.2 persisted Lance's then-default cleanup policy on every new table.
+            let refused = db
+                .optimize(true)
+                .await
+                .expect_err("retaining optimization must refuse the persisted cleanup policy");
+            assert!(
+                refused
+                    .to_string()
+                    .contains("automatic cleanup is configured")
+            );
+            db.optimize(false).await?;
             let reopened = LanceDBVectorStore::new(path.clone(), "legacy".into()).await?;
             assert_eq!(reopened.schema().await?, *schema);
             assert_eq!(reopened.count(None).await?, 5);
@@ -3369,7 +3431,8 @@ mod tests {
                     .await?,
                 3
             );
-            assert_eq!(reopened.list_indices().await?.len(), 3);
+            let indices = reopened.list_indices().await?;
+            assert_eq!(indices.len(), 3, "{indices:?}");
             std::fs::remove_dir_all(path)?;
         }
         Ok(())
@@ -5011,6 +5074,65 @@ mod tests {
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn writes_reject_unknown_columns_but_drop_search_result_columns() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.insert(vec![json!({"id": 1, "name": "seed"})]).await?;
+
+        let error = db
+            .upsert(
+                vec![json!({"id": 2, "name": "typo", "nmae": "lost"})],
+                "id".to_string(),
+            )
+            .await
+            .expect_err("a key without a column must not be dropped silently");
+        assert!(error.downcast_ref::<TableInputRejected>().is_some());
+        assert!(error.to_string().contains("'nmae'"));
+
+        let mut found = db.list(None, 10, 0).await?;
+        found[0]["_distance"] = json!(0.25);
+        found[0]["_relevance_score"] = json!(0.5);
+        found[0]["name"] = json!("written back");
+        db.upsert(found, "id".to_string()).await?;
+
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], json!("written back"));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn only_failures_no_subset_can_avoid_are_batch_wide() {
+        let storage: flow_like_types::Error = object_store::Error::Generic {
+            store: "s3",
+            source: "ExpiredToken".into(),
+        }
+        .into();
+        assert!(is_batch_wide_failure(&storage));
+
+        let missing: flow_like_types::Error = lancedb::Error::TableNotFound {
+            name: "t".to_string(),
+            source: "dropped".into(),
+        }
+        .into();
+        assert!(is_batch_wide_failure(&missing));
+
+        let rejected: flow_like_types::Error =
+            TableInputRejected("Missing non-nullable field \"tag\"".to_string()).into();
+        assert!(!is_batch_wide_failure(&rejected));
+
+        let ambiguous: flow_like_types::Error = lancedb::Error::InvalidInput {
+            message: "Ambiguous merge inserts are prohibited".to_string(),
+        }
+        .into();
+        assert!(!is_batch_wide_failure(&ambiguous));
     }
 
     #[tokio::test]

@@ -35,6 +35,8 @@ pub struct Model {
     pub error: Option<String>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTimeWithTimeZone,
+    #[sea_orm(column_name = "actorUserId", column_type = "Text", nullable)]
+    pub actor_user_id: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "app_id",
@@ -45,6 +47,14 @@ pub struct Model {
     pub app: BelongsTo<super::app::Entity>,
     #[sea_orm(has_many)]
     pub regression_case_results: HasMany<super::regression_case_result::Entity>,
+    #[sea_orm(
+        belongs_to,
+        from = "actor_user_id",
+        to = "id",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    pub actor_user: BelongsTo<Option<super::user::Entity>>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

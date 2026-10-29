@@ -65,7 +65,6 @@ export interface IForkSettings {
 /** A single replaceable / re-auth-required token site on the source. */
 export type IRemoteTokenSite =
 	| { HttpAuthToken: { event_id: string } }
-	| { Pat: { event_id: string; sink_id: string } }
 	| { OAuth: { event_id: string; sink_id: string } };
 
 export interface IForkPreviewResponse {
@@ -256,17 +255,21 @@ export interface IBeginOfflineForkBody {
 	language?: string;
 }
 
-/** Helper — does this site need a fresh OAuth re-auth (true) or is a
- * single PAT-style token enough (false)? Mirrors
- * `RemoteTokenSite::is_token_replaceable()` on the server. */
+/** Whether a single token supplied at fork time replaces this site's
+ * credential (an HTTP auth token); an OAuth site needs a fresh re-auth.
+ * Mirrors `RemoteTokenSite::is_token_replaceable()` on the server. */
 export function isTokenReplaceable(site: IRemoteTokenSite): boolean {
-	return "HttpAuthToken" in site || "Pat" in site;
+	return "HttpAuthToken" in site;
 }
 
 /** Convenience extractor for the event id any RemoteTokenSite refers to,
- * regardless of which variant it is. */
+ * regardless of which variant it is. Older hubs also report variants this
+ * client no longer models, such as `Pat`. */
 export function siteEventId(site: IRemoteTokenSite): string {
 	if ("HttpAuthToken" in site) return site.HttpAuthToken.event_id;
-	if ("Pat" in site) return site.Pat.event_id;
-	return site.OAuth.event_id;
+	if ("OAuth" in site) return site.OAuth.event_id;
+	const [variant] = Object.values(
+		site as Record<string, { event_id?: string }>,
+	);
+	return variant?.event_id ?? "";
 }

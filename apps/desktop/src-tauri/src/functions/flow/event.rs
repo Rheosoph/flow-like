@@ -1,5 +1,5 @@
 use flow_like::{
-    app::App,
+    app::{App, AppVisibility},
     flow::{
         board::{Board, VersionType},
         event::{
@@ -17,7 +17,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
 use crate::{
-    event_sink::EventSinkManager, functions::TauriFunctionError, state::TauriFlowLikeState,
+    event_sink::{
+        EventSinkManager, has_token,
+        manager::{
+            LocalTriggerPlan, LocalTriggerState, MissingTriggerToken, TriggerSignIn, TriggerUpdate,
+            app_is_offline,
+        },
+        trigger_token::{TriggerAccount, verify_token_owner},
+    },
+    functions::TauriFunctionError,
+    state::{TauriEventSinkManagerState, TauriFlowLikeState},
 };
 
 /// Bound on how many archived versions one response projects, matching the
@@ -552,13 +561,12 @@ async fn sync_local_sink(
     handler: &AppHandle,
     app_id: &str,
     event: &Event,
-    offline: Option<bool>,
     pat: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     mode: SinkRegistration,
 ) -> anyhow::Result<()> {
     let mode = effective_sink_mode(event, mode);
-    let manager_state = match crate::state::TauriEventSinkManagerState::construct(handler).await {
+    let manager_state = match TauriEventSinkManagerState::construct(handler).await {
         Ok(manager_state) => manager_state,
         Err(err) if event.is_device_source() => {
             tracing::warn!(
@@ -570,23 +578,150 @@ async fn sync_local_sink(
         }
         Err(err) => return Err(err),
     };
-    let manager = manager_state.lock().await;
-    match mode {
-        SinkRegistration::Register => {
-            manager
-                .register_from_flow_event(handler, app_id, event, offline, pat, oauth_tokens)
+    let update = match mode {
+        SinkRegistration::Register => TriggerUpdate::Register,
+        SinkRegistration::Keep => TriggerUpdate::Keep,
+        SinkRegistration::Skip => {
+            return manager_state
+                .lock()
                 .await
+                .decline_local_registration(handler, app_id, &event.id)
+                .await;
+        }
+    };
+    update_local_trigger(
+        handler,
+        &manager_state,
+        app_id,
+        event,
+        pat,
+        oauth_tokens,
+        update,
+    )
+    .await
+}
+
+/// Resolves who the trigger signs in as before locking the sink manager, so
+/// checking a new PAT or clearing a location trigger with the hub never
+/// blocks the triggers that fire meanwhile, then updates the trigger under
+/// the lock.
+async fn update_local_trigger(
+    handler: &AppHandle,
+    manager_state: &flow_like_types::sync::Mutex<EventSinkManager>,
+    app_id: &str,
+    event: &Event,
+    pat: Option<String>,
+    oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    update: TriggerUpdate,
+) -> anyhow::Result<()> {
+    let sign_in = TriggerSignIn::resolve(
+        manager_state,
+        handler,
+        app_id,
+        event,
+        pat,
+        oauth_tokens.as_ref(),
+        update,
+    )
+    .await?;
+    manager_state
+        .lock()
+        .await
+        .register_from_flow_event(handler, app_id, event, sign_in, oauth_tokens, update)
+        .await
+}
+
+/// A saved event with what the save did to its trigger on this device. The
+/// event's fields stay at the top level, so callers that read the event
+/// keep working. A trigger that failed never fails the committed save; its
+/// error is reported here instead.
+#[derive(Serialize, Debug, Clone)]
+pub struct EventSaveOutcome {
+    #[serde(flatten)]
+    pub event: Event,
+    pub trigger_state: LocalTriggerState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_error: Option<String>,
+}
+
+/// The sentence a save reports when its trigger update failed. A refresh
+/// that only lacks a token reports nothing: the event's status says so.
+fn trigger_error(event: &Event, mode: SinkRegistration, error: &anyhow::Error) -> Option<String> {
+    if mode == SinkRegistration::Keep && error.is::<MissingTriggerToken>() {
+        tracing::debug!(event_id = %event.id, error = %error, "Trigger refresh skipped");
+        return None;
+    }
+    tracing::warn!(
+        event_id = %event.id,
+        error = %error,
+        "Failed to update the sink registration of a saved event"
+    );
+    Some(match mode {
+        SinkRegistration::Skip => {
+            format!(
+                "Event was saved, but its trigger on this computer could not be removed: {error}"
+            )
+        }
+        _ if event.event_type == "geolocation" => {
+            format!("Location Event was saved, but device monitoring could not be updated: {error}")
+        }
+        SinkRegistration::Register => {
+            format!("Event was saved, but its trigger on this computer was not registered: {error}")
         }
         SinkRegistration::Keep => {
-            if manager.get_registration(&event.id)?.is_none() {
-                return Ok(());
-            }
-            manager
-                .register_from_flow_event(handler, app_id, event, offline, pat, oauth_tokens)
-                .await
+            format!(
+                "Event was saved, but its trigger on this computer could not be updated: {error}"
+            )
         }
-        SinkRegistration::Skip => manager.decline_local_registration(handler, &event.id).await,
+    })
+}
+
+/// Syncs the trigger of the saved `event` and reports what that did. Never
+/// fails: the save is already committed.
+async fn sync_saved_event(
+    handler: &AppHandle,
+    app_id: &str,
+    event: Event,
+    offline: bool,
+    pat: Option<String>,
+    oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    mode: SinkRegistration,
+) -> EventSaveOutcome {
+    let mode = effective_sink_mode(&event, mode);
+    let trigger_error = sync_local_sink(handler, app_id, &event, pat, oauth_tokens, mode)
+        .await
+        .err()
+        .and_then(|error| trigger_error(&event, mode, &error));
+    let trigger_state = trigger_state(handler, app_id, &event, offline)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                event_id = %event.id,
+                error = %error,
+                "Could not read the trigger state of a saved event"
+            );
+            LocalTriggerState::None
+        });
+    EventSaveOutcome {
+        event,
+        trigger_state,
+        trigger_error,
     }
+}
+
+async fn trigger_state(
+    handler: &AppHandle,
+    app_id: &str,
+    event: &Event,
+    offline: bool,
+) -> anyhow::Result<LocalTriggerState> {
+    if EventSinkManager::local_registration_blocker(event).is_some() {
+        return Ok(LocalTriggerState::None);
+    }
+    let account = TriggerAccount::current(handler).await;
+    let manager_state = TauriEventSinkManagerState::construct(handler).await?;
+    let manager = manager_state.lock().await;
+    manager.trigger_state(event, app_id, offline, account.as_ref())
 }
 
 #[tauri::command(async)]
@@ -597,11 +732,10 @@ pub async fn upsert_event(
     event: Event,
     version_type: Option<VersionType>,
     enforce_id: Option<bool>,
-    offline: Option<bool>,
     pat: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     register_sink: Option<SinkRegistration>,
-) -> Result<Event, TauriFunctionError> {
+) -> Result<EventSaveOutcome, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
     if let Ok(mut app) = App::load(app_id.clone(), flow_like_state).await {
@@ -616,76 +750,128 @@ pub async fn upsert_event(
             ));
         }
         let event = app.upsert_event(event, version_type, enforce_id).await?;
-
-        let mode = effective_sink_mode(&event, register_sink.unwrap_or(SinkRegistration::Keep));
-        if let Err(e) =
-            sync_local_sink(&handler, &app_id, &event, offline, pat, oauth_tokens, mode).await
-        {
-            println!(
-                "Failed to update sink registration of event {}: {}",
-                event.id, e
-            );
-            tracing::warn!(
-                "Failed to update sink registration of event {}: {}",
-                event.id,
-                e
-            );
-            if mode == SinkRegistration::Skip {
-                return Err(TauriFunctionError::new(&format!(
-                    "Event was saved, but its trigger on this computer could not be removed: {e}"
-                )));
-            }
-            if event.event_type == "geolocation" {
-                return Err(TauriFunctionError::new(&format!(
-                    "Location Event was saved, but device monitoring could not be updated: {e}"
-                )));
-            }
-        }
-
-        return Ok(event);
+        let offline = matches!(app.visibility, AppVisibility::Offline);
+        let mode = register_sink.unwrap_or(SinkRegistration::Keep);
+        return Ok(
+            sync_saved_event(&handler, &app_id, event, offline, pat, oauth_tokens, mode).await,
+        );
     }
 
     Err(TauriFunctionError::new("Failed to upsert event"))
 }
 
-/// What saving `event` does to this device's triggers, so the UI can ask
-/// before a new one starts running here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LocalSinkPlan {
-    /// Nothing registers locally: unsupported type, inactive, Remote, or a
-    /// remote-only sink.
-    None,
-    /// A registration of the same trigger type exists; saving refreshes it.
-    Existing,
-    /// A trigger would start on this device, for the first time or with a
-    /// new type.
-    New,
-}
-
-#[tauri::command(async)]
-pub async fn local_sink_registration_plan(
-    handler: AppHandle,
-    app_id: String,
+/// What saving `event` would do to this device's trigger. Saving reconciles
+/// the execution mode with the board, so a stale client copy must not decide
+/// whether the user is asked.
+async fn trigger_plan(
+    handler: &AppHandle,
+    app_id: &str,
     mut event: Event,
-) -> Result<LocalSinkPlan, TauriFunctionError> {
-    // Saving reconciles the execution mode with the board, so a stale client
-    // copy must not decide whether the user is asked.
-    if let Ok(state) = TauriFlowLikeState::construct(&handler).await
-        && let Ok(app) = App::load(app_id, state).await
+) -> anyhow::Result<LocalTriggerPlan> {
+    let mut offline = false;
+    if let Ok(state) = TauriFlowLikeState::construct(handler).await
+        && let Ok(app) = App::load(app_id.to_string(), state).await
     {
         let _ = event.reconcile_execution_mode_with_board(&app).await;
+        offline = matches!(app.visibility, AppVisibility::Offline);
     }
     if EventSinkManager::local_registration_blocker(&event).is_some() {
-        return Ok(LocalSinkPlan::None);
+        return Ok(LocalTriggerPlan::NONE);
     }
+    let account = TriggerAccount::current(handler).await;
+    let manager_state = TauriEventSinkManagerState::construct(handler).await?;
+    let manager = manager_state.lock().await;
+    manager.registration_plan(&event, app_id, offline, account.as_ref())
+}
 
-    let manager_state = crate::state::TauriEventSinkManagerState::construct(&handler).await?;
-    let existing = manager_state.lock().await.get_registration(&event.id)?;
-    Ok(match existing {
-        Some(registration) if registration.r#type == event.event_type => LocalSinkPlan::Existing,
-        _ => LocalSinkPlan::New,
-    })
+/// Whether saving `event` registers a trigger on this device and whether the
+/// user has to choose a token for it first.
+#[tauri::command(async)]
+pub async fn local_trigger_plan(
+    handler: AppHandle,
+    app_id: String,
+    event: Event,
+) -> Result<LocalTriggerPlan, TauriFunctionError> {
+    Ok(trigger_plan(&handler, &app_id, event).await?)
+}
+
+/// This device's trigger for `event` of `app_id`.
+#[tauri::command(async)]
+pub async fn local_trigger_status(
+    handler: AppHandle,
+    app_id: String,
+    event: Event,
+) -> Result<LocalTriggerState, TauriFunctionError> {
+    let offline = app_is_offline(&handler, &app_id).await;
+    Ok(trigger_state(&handler, &app_id, &event, offline).await?)
+}
+
+/// Repairs this device's trigger of a stored event without saving the event:
+/// `register` signs the existing trigger in with `pat`, `skip` removes it.
+#[tauri::command(async)]
+pub async fn sync_local_trigger(
+    handler: AppHandle,
+    app_id: String,
+    event_id: String,
+    register_sink: SinkRegistration,
+    pat: Option<String>,
+) -> Result<LocalTriggerState, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let app = App::load(app_id.clone(), flow_like_state)
+        .await
+        .map_err(|_| TauriFunctionError::new("App not found"))?;
+    let event = app.get_event(&event_id, None).await?;
+    let update = repair_update(effective_sink_mode(&event, register_sink), pat.as_deref())?;
+    repair_local_trigger(&handler, &app_id, &event, update, pat).await?;
+    let offline = matches!(app.visibility, AppVisibility::Offline);
+    Ok(trigger_state(&handler, &app_id, &event, offline).await?)
+}
+
+/// Signs the trigger of `event` in again with `pat`, or removes it when
+/// `update` is `None`.
+async fn repair_local_trigger(
+    handler: &AppHandle,
+    app_id: &str,
+    event: &Event,
+    update: Option<TriggerUpdate>,
+    pat: Option<String>,
+) -> anyhow::Result<()> {
+    let Some(update) = update else {
+        return sync_local_sink(handler, app_id, event, None, None, SinkRegistration::Skip).await;
+    };
+    let manager_state = TauriEventSinkManagerState::construct(handler).await?;
+    update_local_trigger(handler, &manager_state, app_id, event, pat, None, update).await
+}
+
+/// A repair only signs this app's existing trigger of the same type and
+/// destination in with a new token, or removes it (`None`); creating or
+/// converting a trigger takes a save.
+fn repair_update(
+    mode: SinkRegistration,
+    pat: Option<&str>,
+) -> Result<Option<TriggerUpdate>, TauriFunctionError> {
+    match mode {
+        SinkRegistration::Skip => Ok(None),
+        SinkRegistration::Keep => Err(TauriFunctionError::new(
+            "A trigger repair either registers with a token or skips the trigger",
+        )),
+        SinkRegistration::Register if !has_token(pat) => Err(TauriFunctionError::new(
+            "Choose a personal access token to repair this trigger",
+        )),
+        SinkRegistration::Register => Ok(Some(TriggerUpdate::Repair)),
+    }
+}
+
+/// Checks that `pat` belongs to the signed-in account on the current hub and
+/// may run events in `app_id`, before anything is saved with it.
+#[tauri::command(async)]
+pub async fn verify_trigger_token(
+    handler: AppHandle,
+    app_id: String,
+    pat: String,
+) -> Result<(), TauriFunctionError> {
+    verify_token_owner(&handler, &app_id, &pat).await?;
+    Ok(())
 }
 
 /// Wire twin of the API's `POST /apps/{app_id}/events/{event_id}/restore`
@@ -694,13 +880,93 @@ pub async fn local_sink_registration_plan(
 #[derive(Serialize, Debug, Clone)]
 pub struct RestoreEventResponse {
     pub plan: RestorePlan,
-    /// The event as persisted — present only after a non-dry run.
+    /// The event as persisted, with what restoring did to its trigger on this
+    /// device — present only after a non-dry run.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub event: Option<Event>,
+    pub event: Option<EventSaveOutcome>,
     /// Outcome of the non-fatal sink re-registration after a non-dry run. A
     /// failure here does not roll the restore back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setup_status: Option<String>,
+}
+
+impl RestoreEventResponse {
+    /// The response for `plan` and, after a non-dry run, the `outcome` of
+    /// saving the restored event, with secret variable values blanked.
+    fn redacted(mut plan: RestorePlan, outcome: Option<EventSaveOutcome>) -> Self {
+        plan.restored = filter_event_secrets(plan.restored);
+        let setup_status = outcome
+            .as_ref()
+            .and_then(|outcome| outcome.trigger_error.as_ref())
+            .map(|error| format!("error: {error}"));
+        Self {
+            plan,
+            event: outcome.map(|outcome| EventSaveOutcome {
+                event: filter_event_secrets(outcome.event),
+                ..outcome
+            }),
+            setup_status,
+        }
+    }
+}
+
+fn refuse_ontology_action(event: &Event) -> Result<(), TauriFunctionError> {
+    if event.event_type == "ontology_action" {
+        return Err(TauriFunctionError::new(
+            "Ontology action events are managed through Data Studio actions",
+        ));
+    }
+    Ok(())
+}
+
+fn refuse_blocking_issues(plan: &RestorePlan) -> Result<(), TauriFunctionError> {
+    if !plan
+        .issues
+        .iter()
+        .any(|issue| issue.severity == RestoreIssueSeverity::Blocking)
+    {
+        return Ok(());
+    }
+    let issues = serde_json::to_string(&plan.issues).unwrap_or_else(|_| "[]".to_string());
+    Err(TauriFunctionError::new(&format!(
+        "restore blocked by plan issues: {issues}"
+    )))
+}
+
+/// The plan for restoring `version` over the live event `event_id`.
+async fn restore_plan(
+    app: &App,
+    event_id: &str,
+    version: (u32, u32, u32),
+    options: &RestoreOptions,
+) -> Result<RestorePlan, TauriFunctionError> {
+    let live = app.get_event(event_id, None).await?;
+    refuse_ontology_action(&live)?;
+    let plan = Event::plan_restore(app, event_id, version, &live, options).await?;
+    refuse_ontology_action(&plan.restored)?;
+    Ok(plan)
+}
+
+/// Saves the event `plan` restores and syncs its trigger like
+/// [`upsert_event`]. Without a new `pat` and with no OAuth tokens, the stored
+/// credentials survive the restore. Forward-only: a failed trigger update
+/// never rolls the restore back. No archive prune on desktop — history here
+/// is the user's disk.
+async fn apply_restore(
+    handler: &AppHandle,
+    app: &mut App,
+    app_id: &str,
+    plan: &RestorePlan,
+    version_type: VersionType,
+    pat: Option<String>,
+    mode: SinkRegistration,
+) -> Result<EventSaveOutcome, TauriFunctionError> {
+    refuse_blocking_issues(plan)?;
+    let event = app
+        .upsert_event(plan.restored.clone(), Some(version_type), Some(true))
+        .await?;
+    let offline = matches!(app.visibility, AppVisibility::Offline);
+    Ok(sync_saved_event(handler, app_id, event, offline, pat, None, mode).await)
 }
 
 /// Plan or apply a forward-only restore of an archived event version against
@@ -722,85 +988,33 @@ pub async fn restore_event(
     restore_route: Option<bool>,
     drop_canary: Option<bool>,
     accept_blank_secrets: Option<bool>,
-    offline: Option<bool>,
     register_sink: Option<SinkRegistration>,
+    pat: Option<String>,
 ) -> Result<RestoreEventResponse, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let mut app = App::load(app_id.clone(), flow_like_state)
         .await
         .map_err(|_| TauriFunctionError::new("App not found"))?;
-
-    let live = app.get_event(&event_id, None).await?;
-    if live.event_type == "ontology_action" {
-        return Err(TauriFunctionError::new(
-            "Ontology action events are managed through Data Studio actions",
-        ));
-    }
-
     let options = RestoreOptions {
         restore_route: restore_route.unwrap_or(false),
         drop_canary: drop_canary.unwrap_or(false),
         accept_blank_secrets: accept_blank_secrets.unwrap_or(false),
     };
-    let mut plan = Event::plan_restore(&app, &event_id, version, &live, &options).await?;
-    if plan.restored.event_type == "ontology_action" {
-        return Err(TauriFunctionError::new(
-            "Ontology action events are managed through Data Studio actions",
-        ));
-    }
-
+    let plan = restore_plan(&app, &event_id, version, &options).await?;
     if dry_run.unwrap_or(true) {
-        plan.restored = filter_event_secrets(plan.restored);
-        return Ok(RestoreEventResponse {
-            plan,
-            event: None,
-            setup_status: None,
-        });
+        return Ok(RestoreEventResponse::redacted(plan, None));
     }
-
-    if plan
-        .issues
-        .iter()
-        .any(|issue| issue.severity == RestoreIssueSeverity::Blocking)
-    {
-        let issues = serde_json::to_string(&plan.issues).unwrap_or_else(|_| "[]".to_string());
-        return Err(TauriFunctionError::new(&format!(
-            "restore blocked by plan issues: {issues}"
-        )));
-    }
-
-    let event = app
-        .upsert_event(
-            plan.restored.clone(),
-            Some(version_type.unwrap_or(VersionType::Patch)),
-            Some(true),
-        )
-        .await?;
-
-    // Mirror of the upsert command's sink sync, with pat/oauth None so the
-    // stored PAT and tokens survive the restore. Forward-only: a failed
-    // sink update never rolls the restore back. No archive prune on
-    // desktop — history here is the user's disk.
-    let mode = register_sink.unwrap_or(SinkRegistration::Keep);
-    let setup_status =
-        match sync_local_sink(&handler, &app_id, &event, offline, None, None, mode).await {
-            Ok(()) => None,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to update sink registration of event {} after restore: {}",
-                    event.id,
-                    e
-                );
-                Some(format!("error: {e}"))
-            }
-        };
-
-    plan.restored = filter_event_secrets(plan.restored);
-    Ok(RestoreEventResponse {
-        plan,
-        event: Some(filter_event_secrets(event)),
-        setup_status,
-    })
+    let outcome = apply_restore(
+        &handler,
+        &mut app,
+        &app_id,
+        &plan,
+        version_type.unwrap_or(VersionType::Patch),
+        pat,
+        register_sink.unwrap_or(SinkRegistration::Keep),
+    )
+    .await?;
+    Ok(RestoreEventResponse::redacted(plan, Some(outcome)))
 }
 
 #[tauri::command(async)]
@@ -821,18 +1035,14 @@ pub async fn delete_event(
                 "Ontology action events are removed through Data Studio actions",
             ));
         }
-        // Unregister from sink manager first if registered
-        if let Ok(event_sink_manager) =
-            crate::state::TauriEventSinkManagerState::construct(&handler).await
-        {
+        if let Ok(event_sink_manager) = TauriEventSinkManagerState::construct(&handler).await {
             let manager = event_sink_manager.lock().await;
-            if let Err(e) = manager.unregister_event(&handler, &event_id).await {
+            if let Err(e) = manager.remove_trigger(&handler, &app_id, &event_id).await {
                 tracing::warn!(
-                    "Failed to unregister event {} from sink manager: {}",
+                    "Failed to remove the trigger of event {} from this device: {}",
                     event_id,
                     e
                 );
-                // Continue with deletion even if unregistration fails
             }
         }
 
@@ -872,6 +1082,122 @@ mod tests {
     fn version_key_uses_the_dotted_event_format_not_the_board_format() {
         assert_eq!(dotted_version_key((1, 2, 3)), "1.2.3");
         assert_ne!(dotted_version_key((1, 2, 3)), "v1-2-3");
+    }
+
+    fn saved_event(event_type: &str) -> Event {
+        let now = SystemTime::now();
+        Event {
+            id: "event".to_string(),
+            name: "Event".to_string(),
+            description: String::new(),
+            board_id: "board".to_string(),
+            board_version: None,
+            node_id: "node".to_string(),
+            variables: HashMap::new(),
+            config: Vec::new(),
+            active: true,
+            canary: None,
+            variants: Vec::new(),
+            priority: 0,
+            event_type: event_type.to_string(),
+            notes: None,
+            event_version: (1, 0, 0),
+            created_at: now,
+            updated_at: now,
+            default_page_id: None,
+            inputs: Vec::new(),
+            route: None,
+            is_default: false,
+            execution_mode: Default::default(),
+            exposure: Default::default(),
+            correlation_mappings: None,
+        }
+    }
+
+    #[test]
+    fn upsert_outcome_flattens_the_event() {
+        let ready = serde_json::to_value(EventSaveOutcome {
+            event: saved_event("cron"),
+            trigger_state: LocalTriggerState::Ready,
+            trigger_error: None,
+        })
+        .unwrap();
+        assert_eq!(ready["id"], "event");
+        assert_eq!(ready["event_type"], "cron");
+        assert_eq!(ready["trigger_state"], "ready");
+        assert!(ready.get("trigger_error").is_none());
+        assert!(ready.get("event").is_none());
+
+        let failed = serde_json::to_value(EventSaveOutcome {
+            event: saved_event("cron"),
+            trigger_state: LocalTriggerState::Failed {
+                reason: "sink refused".to_string(),
+            },
+            trigger_error: Some("Event was saved, but …".to_string()),
+        })
+        .unwrap();
+        assert_eq!(
+            failed["trigger_state"],
+            serde_json::json!({ "failed": { "reason": "sink refused" } })
+        );
+        assert_eq!(failed["trigger_error"], "Event was saved, but …");
+
+        let event: Event = serde_json::from_value(failed).unwrap();
+        assert_eq!(event.id, "event");
+    }
+
+    #[test]
+    fn trigger_errors_name_what_the_save_could_not_do() {
+        let cron = saved_event("cron");
+        let missing: anyhow::Error = MissingTriggerToken("event".to_string()).into();
+        assert_eq!(trigger_error(&cron, SinkRegistration::Keep, &missing), None);
+        assert!(
+            trigger_error(&cron, SinkRegistration::Register, &missing)
+                .unwrap()
+                .starts_with(
+                    "Event was saved, but its trigger on this computer was not registered: "
+                )
+        );
+
+        let failure = anyhow::anyhow!("sink refused");
+        assert_eq!(
+            trigger_error(&cron, SinkRegistration::Skip, &failure).as_deref(),
+            Some(
+                "Event was saved, but its trigger on this computer could not be removed: sink refused"
+            )
+        );
+        assert_eq!(
+            trigger_error(&cron, SinkRegistration::Keep, &failure).as_deref(),
+            Some(
+                "Event was saved, but its trigger on this computer could not be updated: sink refused"
+            )
+        );
+        assert_eq!(
+            trigger_error(
+                &saved_event("geolocation"),
+                SinkRegistration::Register,
+                &failure
+            )
+            .as_deref(),
+            Some(
+                "Location Event was saved, but device monitoring could not be updated: sink refused"
+            )
+        );
+    }
+
+    #[test]
+    fn a_repair_signs_the_trigger_in_with_a_token_or_removes_it() {
+        assert!(matches!(
+            repair_update(SinkRegistration::Skip, None),
+            Ok(None)
+        ));
+        assert!(matches!(
+            repair_update(SinkRegistration::Register, Some("pat_1")),
+            Ok(Some(TriggerUpdate::Repair))
+        ));
+        assert!(repair_update(SinkRegistration::Register, Some("  ")).is_err());
+        assert!(repair_update(SinkRegistration::Register, None).is_err());
+        assert!(repair_update(SinkRegistration::Keep, Some("pat_1")).is_err());
     }
 
     #[test]

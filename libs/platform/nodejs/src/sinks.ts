@@ -1,5 +1,5 @@
-import { segment } from "./paths.js";
 import type { HttpClient } from "./client.js";
+import { segment } from "./paths.js";
 import type { HttpSinkOptions } from "./types.js";
 
 export function createSinkMethods(http: HttpClient) {

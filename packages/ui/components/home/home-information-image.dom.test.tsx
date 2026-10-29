@@ -1,6 +1,14 @@
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	type Mock,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import type { HomeImageReference } from "./home-image-config";
 import { HomeInformationImage } from "./home-information-image";
 import type { HomeStorageImageState } from "./use-home-storage-image";
@@ -13,12 +21,12 @@ vi.mock("./use-home-storage-image", () => ({
 
 let root: Root;
 let container: HTMLDivElement;
-let retry: ReturnType<typeof vi.fn>;
+let retry: Mock<() => void>;
 
 beforeEach(() => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	fixture.useStorageImage.mockReset();
-	retry = vi.fn();
+	retry = vi.fn<() => void>();
 	storageState();
 	container = document.createElement("div");
 	document.body.append(container);

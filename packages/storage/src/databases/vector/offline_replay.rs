@@ -20,6 +20,7 @@ use lance::{
 };
 use lance_index::{metrics::NoOpMetricsCollector, scalar::ScalarIndexParams};
 use lance_io::object_store::{ObjectStore, ObjectStoreParams, uri_to_url};
+use lance_object_store::{ObjectStoreExt, path::Path};
 use lance_table::{
     format::{IndexMetadata, Manifest, Transaction},
     io::commit::{
@@ -28,7 +29,6 @@ use lance_table::{
     },
 };
 use lancedb::{Connection, Table, table::WriteOptions};
-use object_store::{ObjectStoreExt, path::Path};
 use sqlparser::{
     ast::{BinaryOperator, Expr, Ident, UnaryOperator, Value as SqlValue},
     dialect::GenericDialect,
@@ -134,8 +134,9 @@ pub(super) async fn fingerprint(dataset: &Dataset) -> Result<String> {
     let object = store.inner.get(&dataset.manifest_location().path).await?;
     if let (Some(expected), Some(actual)) = (&dataset.manifest_location().e_tag, &object.meta.e_tag)
     {
+        // Lance's local writer reports bare ETags; object_store 0.14 quotes them.
         ensure!(
-            expected == actual,
+            expected.trim_matches('"') == actual.trim_matches('"'),
             "table manifest changed while reading its fingerprint"
         );
     }
@@ -777,11 +778,11 @@ impl WriteBudget {
             .fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
     }
 
-    fn charge(&self, bytes: u64) -> object_store::Result<()> {
+    fn charge(&self, bytes: u64) -> lance_object_store::Result<()> {
         if self.try_charge(bytes) {
             return Ok(());
         }
-        Err(object_store::Error::Generic {
+        Err(lance_object_store::Error::Generic {
             store: "offline-materialization",
             source: "offline snapshot exceeds its disk write budget".into(),
         })
@@ -833,18 +834,27 @@ impl lance_io::object_store::WrappingObjectStore for BudgetWrapper {
     fn wrap(
         &self,
         _: &str,
-        original: Arc<dyn object_store::ObjectStore>,
-    ) -> Arc<dyn object_store::ObjectStore> {
+        original: Arc<dyn lance_object_store::ObjectStore>,
+    ) -> Arc<dyn lance_object_store::ObjectStore> {
         Arc::new(BudgetedStore {
             inner: original,
             budget: self.0.clone(),
         })
     }
+
+    /// Listings write nothing, so the budget does not need to see them.
+    fn wrap_paginated(
+        &self,
+        _: &str,
+        original: Arc<dyn lance_object_store::list::PaginatedListStore>,
+    ) -> Option<Arc<dyn lance_object_store::list::PaginatedListStore>> {
+        Some(original)
+    }
 }
 
 #[derive(Debug)]
 struct BudgetedStore {
-    inner: Arc<dyn object_store::ObjectStore>,
+    inner: Arc<dyn lance_object_store::ObjectStore>,
     budget: Arc<WriteBudget>,
 }
 
@@ -855,13 +865,13 @@ impl std::fmt::Display for BudgetedStore {
 }
 
 #[async_trait::async_trait]
-impl object_store::ObjectStore for BudgetedStore {
+impl lance_object_store::ObjectStore for BudgetedStore {
     async fn put_opts(
         &self,
         location: &Path,
-        payload: object_store::PutPayload,
-        options: object_store::PutOptions,
-    ) -> object_store::Result<object_store::PutResult> {
+        payload: lance_object_store::PutPayload,
+        options: lance_object_store::PutOptions,
+    ) -> lance_object_store::Result<lance_object_store::PutResult> {
         self.budget.charge(payload.content_length() as u64 + 4096)?;
         self.inner.put_opts(location, payload, options).await
     }
@@ -869,8 +879,8 @@ impl object_store::ObjectStore for BudgetedStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        options: object_store::PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        options: lance_object_store::PutMultipartOptions,
+    ) -> lance_object_store::Result<Box<dyn lance_object_store::MultipartUpload>> {
         self.budget.charge(4096)?;
         Ok(Box::new(BudgetedUpload {
             inner: self.inner.put_multipart_opts(location, options).await?,
@@ -881,29 +891,32 @@ impl object_store::ObjectStore for BudgetedStore {
     async fn get_opts(
         &self,
         location: &Path,
-        options: object_store::GetOptions,
-    ) -> object_store::Result<object_store::GetResult> {
+        options: lance_object_store::GetOptions,
+    ) -> lance_object_store::Result<lance_object_store::GetResult> {
         self.inner.get_opts(location, options).await
     }
 
     fn delete_stream(
         &self,
-        locations: futures::stream::BoxStream<'static, object_store::Result<Path>>,
-    ) -> futures::stream::BoxStream<'static, object_store::Result<Path>> {
+        locations: futures::stream::BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> futures::stream::BoxStream<'static, lance_object_store::Result<Path>> {
         self.inner.delete_stream(locations)
     }
 
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+    ) -> futures::stream::BoxStream<
+        'static,
+        lance_object_store::Result<lance_object_store::ObjectMeta>,
+    > {
         self.inner.list(prefix)
     }
 
     async fn list_with_delimiter(
         &self,
         prefix: Option<&Path>,
-    ) -> object_store::Result<object_store::ListResult> {
+    ) -> lance_object_store::Result<lance_object_store::ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
 
@@ -911,13 +924,13 @@ impl object_store::ObjectStore for BudgetedStore {
         &self,
         from: &Path,
         to: &Path,
-        options: object_store::CopyOptions,
-    ) -> object_store::Result<()> {
+        options: lance_object_store::CopyOptions,
+    ) -> lance_object_store::Result<()> {
         let size = self
             .inner
             .get_opts(
                 from,
-                object_store::GetOptions {
+                lance_object_store::GetOptions {
                     head: true,
                     ..Default::default()
                 },
@@ -932,22 +945,25 @@ impl object_store::ObjectStore for BudgetedStore {
 
 #[derive(Debug)]
 struct BudgetedUpload {
-    inner: Box<dyn object_store::MultipartUpload>,
+    inner: Box<dyn lance_object_store::MultipartUpload>,
     budget: Arc<WriteBudget>,
 }
 
 #[async_trait::async_trait]
-impl object_store::MultipartUpload for BudgetedUpload {
-    fn put_part(&mut self, payload: object_store::PutPayload) -> object_store::UploadPart {
+impl lance_object_store::MultipartUpload for BudgetedUpload {
+    fn put_part(
+        &mut self,
+        payload: lance_object_store::PutPayload,
+    ) -> lance_object_store::UploadPart {
         if let Err(error) = self.budget.charge(payload.content_length() as u64) {
             return Box::pin(async move { Err(error) });
         }
         self.inner.put_part(payload)
     }
-    async fn complete(&mut self) -> object_store::Result<object_store::PutResult> {
+    async fn complete(&mut self) -> lance_object_store::Result<lance_object_store::PutResult> {
         self.inner.complete().await
     }
-    async fn abort(&mut self) -> object_store::Result<()> {
+    async fn abort(&mut self) -> lance_object_store::Result<()> {
         self.inner.abort().await
     }
 }
@@ -975,7 +991,7 @@ impl std::io::Write for ByteCounter {
 
 #[derive(Clone, Debug)]
 struct LocalBudgetStore {
-    inner: Arc<dyn object_store::ObjectStore>,
+    inner: Arc<dyn lance_object_store::ObjectStore>,
     root: std::path::PathBuf,
     prefix: Path,
     budget: Arc<WriteBudget>,
@@ -990,7 +1006,7 @@ fn charge_local(
     budget: &WriteBudget,
     mirror: Option<&Arc<super::offline_mirror::LazyMirror>>,
     bytes: u64,
-) -> object_store::Result<()> {
+) -> lance_object_store::Result<()> {
     if budget.try_charge(bytes) {
         return Ok(());
     }
@@ -1021,7 +1037,7 @@ async fn sync_local_object(
     root: std::path::PathBuf,
     file: std::path::PathBuf,
     exists: bool,
-) -> object_store::Result<()> {
+) -> lance_object_store::Result<()> {
     flow_like_types::tokio::task::spawn_blocking(move || -> std::io::Result<()> {
         if exists {
             let metadata = std::fs::symlink_metadata(&file)?;
@@ -1050,11 +1066,11 @@ async fn sync_local_object(
         Ok(())
     })
     .await
-    .map_err(|error| object_store::Error::Generic {
+    .map_err(|error| lance_object_store::Error::Generic {
         store: "offline-local-durability",
         source: Box::new(error),
     })?
-    .map_err(|error| object_store::Error::Generic {
+    .map_err(|error| lance_object_store::Error::Generic {
         store: "offline-local-durability",
         source: Box::new(error),
     })
@@ -1120,7 +1136,7 @@ impl std::fmt::Display for LocalBudgetStore {
 }
 
 impl LocalBudgetStore {
-    fn local_path(&self, path: &Path) -> object_store::Result<std::path::PathBuf> {
+    fn local_path(&self, path: &Path) -> lance_object_store::Result<std::path::PathBuf> {
         self.check(path)?;
         Ok(path
             .prefix_match(&self.prefix)
@@ -1130,10 +1146,10 @@ impl LocalBudgetStore {
                 file
             }))
     }
-    fn check(&self, path: &Path) -> object_store::Result<()> {
+    fn check(&self, path: &Path) -> lance_object_store::Result<()> {
         let suffix =
             path.prefix_match(&self.prefix)
-                .ok_or_else(|| object_store::Error::Generic {
+                .ok_or_else(|| lance_object_store::Error::Generic {
                     store: "offline-local-budget",
                     source: "object is outside the private offline database".into(),
                 })?;
@@ -1142,7 +1158,7 @@ impl LocalBudgetStore {
             file.push(component.as_ref());
             match std::fs::symlink_metadata(&file) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(object_store::Error::Generic {
+                    return Err(lance_object_store::Error::Generic {
                         store: "offline-local-budget",
                         source: "symlinks are forbidden in the offline database".into(),
                     });
@@ -1150,7 +1166,7 @@ impl LocalBudgetStore {
                 Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => {
-                    return Err(object_store::Error::Generic {
+                    return Err(lance_object_store::Error::Generic {
                         store: "offline-local-budget",
                         source: Box::new(error),
                     });
@@ -1165,10 +1181,10 @@ impl LocalBudgetStore {
         digest.as_bytes()[0] as usize % self.locks.len()
     }
 
-    async fn old_cost(&self, path: &Path) -> object_store::Result<u64> {
+    async fn old_cost(&self, path: &Path) -> lance_object_store::Result<u64> {
         match self.inner.head(path).await {
             Ok(meta) => Ok(meta.size.saturating_add(4096)),
-            Err(object_store::Error::NotFound { .. }) => Ok(0),
+            Err(lance_object_store::Error::NotFound { .. }) => Ok(0),
             Err(error) => Err(error),
         }
     }
@@ -1177,7 +1193,7 @@ impl LocalBudgetStore {
         self.budget.release(bytes);
     }
 
-    fn charge(&self, bytes: u64) -> object_store::Result<()> {
+    fn charge(&self, bytes: u64) -> lance_object_store::Result<()> {
         charge_local(&self.budget, self.mirror.as_ref(), bytes)
     }
 
@@ -1190,13 +1206,13 @@ impl LocalBudgetStore {
 }
 
 #[async_trait::async_trait]
-impl object_store::ObjectStore for LocalBudgetStore {
+impl lance_object_store::ObjectStore for LocalBudgetStore {
     async fn put_opts(
         &self,
         path: &Path,
-        payload: object_store::PutPayload,
-        options: object_store::PutOptions,
-    ) -> object_store::Result<object_store::PutResult> {
+        payload: lance_object_store::PutPayload,
+        options: lance_object_store::PutOptions,
+    ) -> lance_object_store::Result<lance_object_store::PutResult> {
         if let Some(mirror) = self.routed(path) {
             return Err(mirror.read_only(path));
         }
@@ -1215,8 +1231,8 @@ impl object_store::ObjectStore for LocalBudgetStore {
     async fn put_multipart_opts(
         &self,
         path: &Path,
-        options: object_store::PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        options: lance_object_store::PutMultipartOptions,
+    ) -> lance_object_store::Result<Box<dyn lance_object_store::MultipartUpload>> {
         if let Some(mirror) = self.routed(path) {
             return Err(mirror.read_only(path));
         }
@@ -1239,8 +1255,8 @@ impl object_store::ObjectStore for LocalBudgetStore {
     async fn get_opts(
         &self,
         path: &Path,
-        options: object_store::GetOptions,
-    ) -> object_store::Result<object_store::GetResult> {
+        options: lance_object_store::GetOptions,
+    ) -> lance_object_store::Result<lance_object_store::GetResult> {
         if let Some(mirror) = self.routed(path) {
             return mirror.get(path, options).await;
         }
@@ -1250,8 +1266,8 @@ impl object_store::ObjectStore for LocalBudgetStore {
 
     fn delete_stream(
         &self,
-        locations: futures::stream::BoxStream<'static, object_store::Result<Path>>,
-    ) -> futures::stream::BoxStream<'static, object_store::Result<Path>> {
+        locations: futures::stream::BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> futures::stream::BoxStream<'static, lance_object_store::Result<Path>> {
         // Store-owned state is cloned because ObjectStore's deletion stream is static.
         let store = self.clone();
         locations
@@ -1280,7 +1296,10 @@ impl object_store::ObjectStore for LocalBudgetStore {
     fn list(
         &self,
         prefix: Option<&Path>,
-    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+    ) -> futures::stream::BoxStream<
+        'static,
+        lance_object_store::Result<lance_object_store::ObjectMeta>,
+    > {
         let prefix = prefix.unwrap_or(&self.prefix);
         if let Some(mirror) = self.routed(prefix) {
             return mirror.list(prefix);
@@ -1294,7 +1313,7 @@ impl object_store::ObjectStore for LocalBudgetStore {
     async fn list_with_delimiter(
         &self,
         prefix: Option<&Path>,
-    ) -> object_store::Result<object_store::ListResult> {
+    ) -> lance_object_store::Result<lance_object_store::ListResult> {
         let prefix = prefix.unwrap_or(&self.prefix);
         if let Some(mirror) = self.routed(prefix) {
             return mirror.list_with_delimiter(prefix).await;
@@ -1307,8 +1326,8 @@ impl object_store::ObjectStore for LocalBudgetStore {
         &self,
         from: &Path,
         to: &Path,
-        options: object_store::CopyOptions,
-    ) -> object_store::Result<()> {
+        options: lance_object_store::CopyOptions,
+    ) -> lance_object_store::Result<()> {
         if let Some(mirror) = self.routed(from).or_else(|| self.routed(to)) {
             return Err(mirror.read_only(to));
         }
@@ -1344,7 +1363,7 @@ impl object_store::ObjectStore for LocalBudgetStore {
 
 #[derive(Debug)]
 struct LocalBudgetUpload {
-    inner: Box<dyn object_store::MultipartUpload>,
+    inner: Box<dyn lance_object_store::MultipartUpload>,
     budget: Arc<WriteBudget>,
     mirror: Option<Arc<super::offline_mirror::LazyMirror>>,
     old: u64,
@@ -1355,11 +1374,14 @@ struct LocalBudgetUpload {
 }
 
 #[async_trait::async_trait]
-impl object_store::MultipartUpload for LocalBudgetUpload {
-    fn put_part(&mut self, payload: object_store::PutPayload) -> object_store::UploadPart {
+impl lance_object_store::MultipartUpload for LocalBudgetUpload {
+    fn put_part(
+        &mut self,
+        payload: lance_object_store::PutPayload,
+    ) -> lance_object_store::UploadPart {
         if self.finished {
             return Box::pin(async {
-                Err(object_store::Error::Generic {
+                Err(lance_object_store::Error::Generic {
                     store: "offline-local-budget",
                     source: "multipart upload already finished".into(),
                 })
@@ -1371,7 +1393,7 @@ impl object_store::MultipartUpload for LocalBudgetUpload {
         }
         self.inner.put_part(payload)
     }
-    async fn complete(&mut self) -> object_store::Result<object_store::PutResult> {
+    async fn complete(&mut self) -> lance_object_store::Result<lance_object_store::PutResult> {
         let result = self.inner.complete().await;
         if result.is_ok() && !self.finished {
             sync_local_object(self.root.clone(), self.path.clone(), true).await?;
@@ -1381,7 +1403,7 @@ impl object_store::MultipartUpload for LocalBudgetUpload {
         }
         result
     }
-    async fn abort(&mut self) -> object_store::Result<()> {
+    async fn abort(&mut self) -> lance_object_store::Result<()> {
         let result = self.inner.abort().await;
         if result.is_ok() && !self.finished {
             self.finished = true;
@@ -1544,7 +1566,7 @@ pub async fn budgeted_local_connection_with_budget(
         .map(|setup| super::offline_mirror::LazyMirror::open(setup, budget.clone(), &registry))
         .transpose()?;
     let store = Arc::new(LocalBudgetStore {
-        inner: Arc::new(object_store::local::LocalFileSystem::new()),
+        inner: Arc::new(lance_object_store::local::LocalFileSystem::new()),
         prefix: Path::from_absolute_path(&root)?,
         root: root.clone(),
         budget: budget.clone(),
@@ -2462,12 +2484,12 @@ mod tests {
 
     #[tokio::test]
     async fn destination_write_budget_fences_multipart_and_ordinary_puts() -> Result<()> {
-        let memory = Arc::new(object_store::memory::InMemory::new());
+        let memory = Arc::new(lance_object_store::memory::InMemory::new());
         let store = BudgetedStore {
             inner: memory.clone(),
             budget: Arc::new(WriteBudget::new(4098, 0)),
         };
-        use object_store::ObjectStore;
+        use lance_object_store::ObjectStore;
         let mut upload = store
             .put_multipart_opts(&Path::from("part"), Default::default())
             .await?;
@@ -2481,12 +2503,12 @@ mod tests {
 
     #[tokio::test]
     async fn aborted_local_upload_keeps_its_reservation_until_restart() -> Result<()> {
-        use object_store::ObjectStore;
+        use lance_object_store::ObjectStore;
         let (directory, _) = connection().await?;
         let root = directory.0.canonicalize()?;
         let budget = Arc::new(WriteBudget::new(8192, 0));
         let store = LocalBudgetStore {
-            inner: Arc::new(object_store::local::LocalFileSystem::new()),
+            inner: Arc::new(lance_object_store::local::LocalFileSystem::new()),
             prefix: Path::from_absolute_path(&root)?,
             root: root.clone(),
             budget: budget.clone(),
@@ -2557,11 +2579,15 @@ mod tests {
 
         let main_stats = compact_idle_local(&main).await?;
         let branch_stats = compact_idle_local(&branch).await?;
-        // Lance bounds object listings by the earliest retained manifest's
-        // timestamp. Early tags can defer newer orphan data files even after
-        // their obsolete manifests have been removed.
-        assert!(main_stats.old_versions > 0 && main_stats.bytes_removed > 0);
-        assert!(branch_stats.old_versions > 0 && branch_stats.bytes_removed > 0);
+        // An older tag no longer defers newer orphan data files (lance#8708).
+        assert!(
+            main_stats.old_versions > 0 && main_stats.data_files_removed > 0,
+            "{main_stats:?}"
+        );
+        assert!(
+            branch_stats.old_versions > 0 && branch_stats.data_files_removed > 0,
+            "{branch_stats:?}"
+        );
         assert_eq!(revision(&main).await?, main_revision);
         assert_eq!(revision(&branch).await?, branch_revision);
         assert_eq!(revision(&descendant).await?, descendant_revision);
@@ -2594,8 +2620,15 @@ mod tests {
         branch.checkout_latest().await?;
         main.tags().await?.delete("main-history").await?;
         branch.tags().await?.delete("branch-history").await?;
-        assert!(compact_idle_local(&main).await?.data_files_removed > 0);
-        assert!(compact_idle_local(&branch).await?.data_files_removed > 0);
+        let main_cleanup = compact_idle_local(&main).await?;
+        assert!(
+            main_cleanup.old_versions > 0 && main_cleanup.data_files_removed > 0,
+            "{main_cleanup:?}"
+        );
+        // The branch's tagged version only shares main's base data, so just its
+        // manifest goes.
+        let branch_cleanup = compact_idle_local(&branch).await?;
+        assert!(branch_cleanup.old_versions > 0, "{branch_cleanup:?}");
         assert_eq!(revision(&main).await?, main_revision);
         assert_eq!(revision(&branch).await?, branch_revision);
         assert_eq!(

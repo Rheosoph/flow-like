@@ -506,10 +506,6 @@ mod tests {
 
     #[flow_like_types::async_trait]
     impl datafusion::catalog::SchemaProvider for DeferredSchema {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn table_names(&self) -> Vec<String> {
             vec!["documents".into()]
         }

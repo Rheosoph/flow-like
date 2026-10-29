@@ -143,8 +143,7 @@ impl NodeLogic for GetColumnMetadataLocalDatabaseNode {
         let column_name: String = context.evaluate_pin("column_name").await?;
 
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
 
         let metadata = database.inner().column_metadata(&column_name).await?;
 

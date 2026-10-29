@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use lance_io::object_store::WrappingObjectStore;
-use object_store::{
+use lance_object_store::{
     CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     RenameOptions, RenameTargetMode, path::Path,
@@ -38,7 +38,7 @@ impl ObjectStore for AndroidSafeObjectStore {
         location: &Path,
         payload: PutPayload,
         opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
+    ) -> lance_object_store::Result<PutResult> {
         eprintln!(
             "[AndroidSafe] put_opts called, mode={:?}, location={}",
             opts.mode, location
@@ -47,12 +47,12 @@ impl ObjectStore for AndroidSafeObjectStore {
             PutMode::Create => match self.inner.head(location).await {
                 Ok(_) => {
                     eprintln!("[AndroidSafe] file exists, returning AlreadyExists");
-                    Err(object_store::Error::AlreadyExists {
+                    Err(lance_object_store::Error::AlreadyExists {
                         path: location.to_string(),
                         source: "File already exists (AndroidSafe check)".into(),
                     })
                 }
-                Err(object_store::Error::NotFound { .. }) => {
+                Err(lance_object_store::Error::NotFound { .. }) => {
                     eprintln!("[AndroidSafe] file not found, using Overwrite mode");
                     self.inner
                         .put_opts(
@@ -78,7 +78,7 @@ impl ObjectStore for AndroidSafeObjectStore {
         &self,
         location: &Path,
         opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+    ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, opts).await
     }
 
@@ -86,22 +86,28 @@ impl ObjectStore for AndroidSafeObjectStore {
         &self,
         location: &Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         self.inner.get_opts(location, options).await
     }
 
     fn delete_stream(
         &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
+        locations: BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<Path>> {
         self.inner.delete_stream(locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> lance_object_store::Result<ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
 
@@ -110,16 +116,16 @@ impl ObjectStore for AndroidSafeObjectStore {
         from: &Path,
         to: &Path,
         mut options: CopyOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         if options.mode == CopyMode::Overwrite {
             return self.inner.copy_opts(from, to, options).await;
         }
         match self.inner.head(to).await {
-            Ok(_) => Err(object_store::Error::AlreadyExists {
+            Ok(_) => Err(lance_object_store::Error::AlreadyExists {
                 path: to.to_string(),
                 source: "File already exists (AndroidSafe check)".into(),
             }),
-            Err(object_store::Error::NotFound { .. }) => {
+            Err(lance_object_store::Error::NotFound { .. }) => {
                 options.mode = CopyMode::Overwrite;
                 self.inner.copy_opts(from, to, options).await
             }
@@ -132,16 +138,16 @@ impl ObjectStore for AndroidSafeObjectStore {
         from: &Path,
         to: &Path,
         mut options: RenameOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         if options.target_mode == RenameTargetMode::Overwrite {
             return self.inner.rename_opts(from, to, options).await;
         }
         match self.inner.head(to).await {
-            Ok(_) => Err(object_store::Error::AlreadyExists {
+            Ok(_) => Err(lance_object_store::Error::AlreadyExists {
                 path: to.to_string(),
                 source: "File already exists (AndroidSafe check)".into(),
             }),
-            Err(object_store::Error::NotFound { .. }) => {
+            Err(lance_object_store::Error::NotFound { .. }) => {
                 options.target_mode = RenameTargetMode::Overwrite;
                 self.inner.rename_opts(from, to, options).await
             }
@@ -157,6 +163,15 @@ pub struct AndroidSafeWrapper;
 impl WrappingObjectStore for AndroidSafeWrapper {
     fn wrap(&self, _store_prefix: &str, original: Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore> {
         Arc::new(AndroidSafeObjectStore::new(original))
+    }
+
+    /// Only conditional writes need the workaround; listings stay pushed down.
+    fn wrap_paginated(
+        &self,
+        _store_prefix: &str,
+        original: Arc<dyn lance_object_store::list::PaginatedListStore>,
+    ) -> Option<Arc<dyn lance_object_store::list::PaginatedListStore>> {
+        Some(original)
     }
 }
 

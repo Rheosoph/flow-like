@@ -23,6 +23,7 @@ import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../../flowpilot/types";
+import { isValidReasoningEffort } from "../../thinking/thinking-options";
 import { resolveModelSelection } from "../model-selection";
 import { useHydrateAgentSelection } from "../use-agent-persistence";
 
@@ -199,28 +200,16 @@ export function useAgentSelection() {
 	]);
 
 	const selectedModel = models.find((model) => model.id === selectedModelId);
-	const reasoningEffortOptions = selectedModel?.supportedReasoningEfforts ?? [];
 
 	// Model catalogs are loaded asynchronously. `undefined` means the temporary
 	// static fallback is still visible; an actual empty array means the backend
 	// advertised that this model has no configurable effort levels.
 	useEffect(() => {
 		if (!reasoningEffort) return;
-		if (!isAgent) {
-			setReasoningEffort("");
+		if (isAgent && selectedModel?.supportedReasoningEfforts === undefined) {
 			return;
 		}
-		if (
-			!selectedModel ||
-			selectedModel.supportedReasoningEfforts === undefined
-		) {
-			return;
-		}
-		if (
-			!selectedModel.supportedReasoningEfforts.some(
-				(option) => option.id === reasoningEffort,
-			)
-		) {
+		if (!isValidReasoningEffort(isAgent, reasoningEffort, selectedModel)) {
 			setReasoningEffort("");
 		}
 	}, [isAgent, reasoningEffort, selectedModel, setReasoningEffort]);
@@ -231,17 +220,6 @@ export function useAgentSelection() {
 	const selectedModelName =
 		selectedModel?.name ??
 		(isAgent && copilotSDK.isConnecting ? "Connecting…" : "Auto");
-	const defaultReasoningEffortName = reasoningEffortOptions.find(
-		(option) => option.id === selectedModel?.defaultReasoningEffort,
-	)?.name;
-	const autoReasoningEffortName = defaultReasoningEffortName
-		? `Auto (${defaultReasoningEffortName} default)`
-		: "Auto (provider default)";
-	const reasoningEffortName = reasoningEffort
-		? (reasoningEffortOptions.find((option) => option.id === reasoningEffort)
-				?.name ?? reasoningEffort)
-		: autoReasoningEffortName;
-
 	return {
 		provider: normalizedProvider,
 		setProvider: selectProvider,
@@ -253,9 +231,7 @@ export function useAgentSelection() {
 		selectedModelName,
 		reasoningEffort,
 		setReasoningEffort: selectReasoningEffort,
-		reasoningEffortOptions,
-		reasoningEffortName,
-		autoReasoningEffortName,
+		selectedModel,
 		isAgent,
 		connecting: copilotSDK.isConnecting,
 		connected:

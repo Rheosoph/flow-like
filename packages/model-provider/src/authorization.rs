@@ -12,6 +12,8 @@ use rig::{
     wasm_compat::WasmCompatSend,
 };
 
+use crate::egress::ProviderEgress;
+
 #[derive(Clone)]
 pub struct ScopedRequestAuthorizer {
     provider: Arc<dyn RequestAuthorizer>,
@@ -107,6 +109,7 @@ impl ScopedRequestAuthorizer {
 pub struct AuthorizedHttpClient<H = rig::http_client::ReqwestClient> {
     inner: H,
     authorizer: Option<ScopedRequestAuthorizer>,
+    egress: ProviderEgress,
 }
 
 impl<H> std::fmt::Debug for AuthorizedHttpClient<H> {
@@ -114,6 +117,7 @@ impl<H> std::fmt::Debug for AuthorizedHttpClient<H> {
         formatter
             .debug_struct("AuthorizedHttpClient")
             .field("has_authorizer", &self.authorizer.is_some())
+            .field("egress", &self.egress)
             .finish_non_exhaustive()
     }
 }
@@ -123,6 +127,7 @@ impl Default for AuthorizedHttpClient {
         Self {
             inner: rig::http_client::ReqwestClient::default(),
             authorizer: None,
+            egress: ProviderEgress::Open,
         }
     }
 }
@@ -139,11 +144,34 @@ impl AuthorizedHttpClient {
                 .retry(reqwest_rig::retry::never())
                 .build()?,
             authorizer: Some(ScopedRequestAuthorizer::new(provider, audience, base_url)?),
+            egress: ProviderEgress::Open,
+        })
+    }
+
+    /// A client for a Bit's own endpoint. `Open` is Rig's default client; the guarded modes
+    /// check the scheme and IP-literal host of every request and resolve names through the
+    /// policy.
+    pub fn for_egress(egress: ProviderEgress) -> anyhow::Result<Self> {
+        if egress == ProviderEgress::Open {
+            return Ok(Self::default());
+        }
+        Ok(Self {
+            inner: egress
+                .guard_rig(rig::http_client::ReqwestClient::builder())
+                .build()?,
+            authorizer: None,
+            egress,
         })
     }
 }
 
 impl<H> AuthorizedHttpClient<H> {
+    fn admit<T>(&self, request: &Request<T>) -> http_client::Result<()> {
+        self.egress
+            .check_uri(request.uri())
+            .map_err(|error| http_client::Error::Instance(Box::new(error)))
+    }
+
     async fn authorize<T>(&self, request: &mut Request<T>) -> http_client::Result<()> {
         if let Some(authorizer) = &self.authorizer {
             let method = request.method().as_str().to_owned();
@@ -169,6 +197,7 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for AuthorizedHttpClient<
         let client = self.clone();
         let mut request = request.map(|body| -> Bytes { body.into() });
         async move {
+            client.admit(&request)?;
             client.authorize(&mut request).await?;
             client.inner.send(request).await
         }
@@ -183,6 +212,7 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for AuthorizedHttpClient<
     {
         let client = self.clone();
         async move {
+            client.admit(&request)?;
             client.authorize(&mut request).await?;
             client.inner.send_multipart(request).await
         }
@@ -198,6 +228,7 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for AuthorizedHttpClient<
         let client = self.clone();
         let mut request = request.map(|body| -> Bytes { body.into() });
         async move {
+            client.admit(&request)?;
             client.authorize(&mut request).await?;
             client.inner.send_streaming(request).await
         }
@@ -309,6 +340,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
+            egress: ProviderEgress::Open,
         };
         let rig_client = rig::providers::openai::CompletionsClient::builder()
             .api_key("obsolete-startup-token")
@@ -471,6 +503,91 @@ mod tests {
         assert!(requests[0].contains("authorization: dpop token-0\r\n"));
         assert!(requests[1].contains("authorization: dpop token-1\r\n"));
         assert!(requests[1].contains("dpop: proof-1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn guarded_client_refuses_disallowed_hosts_before_sending() {
+        let backend = RecordingClient::default();
+        let client = AuthorizedHttpClient {
+            inner: backend.clone(),
+            authorizer: None,
+            egress: ProviderEgress::Public,
+        };
+        let request = |url: &str| Request::post(url).body(Bytes::new()).unwrap();
+        for url in [
+            "https://127.0.0.1/v1/chat/completions",
+            "https://[::1]/v1/chat/completions",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://10.0.0.1/v1/chat/completions",
+            "https://localhost/v1/chat/completions",
+            "http://api.example.test/v1/chat/completions",
+        ] {
+            assert!(
+                client.send::<_, Bytes>(request(url)).await.is_err(),
+                "{url}"
+            );
+            assert!(client.send_streaming(request(url)).await.is_err(), "{url}");
+            let multipart = Request::post(url).body(MultipartForm::new()).unwrap();
+            let error = client
+                .send_multipart::<Bytes>(multipart)
+                .await
+                .err()
+                .expect("a disallowed host is refused")
+                .to_string();
+            assert!(error.contains("Model endpoint"), "{url}: {error}");
+        }
+        assert!(backend.0.lock().unwrap().is_empty());
+
+        let _: Response<LazyBody<Bytes>> = client
+            .send(request("https://api.example.test/v1/chat/completions"))
+            .await
+            .unwrap();
+        assert_eq!(backend.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn guarded_rig_client_never_follows_redirects() {
+        let (addr, served) = crate::egress::tests::answer_every_connection(
+            "HTTP/1.1 307 Temporary Redirect\r\nlocation: http://models.test/next\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        )
+        .await;
+        let client = AuthorizedHttpClient {
+            inner: ProviderEgress::Private
+                .guard_rig(rig::http_client::ReqwestClient::builder().resolve("models.test", addr))
+                .build()
+                .unwrap(),
+            authorizer: None,
+            egress: ProviderEgress::Private,
+        };
+        let request = Request::post(format!(
+            "http://models.test:{}/v1/chat/completions",
+            addr.port()
+        ))
+        .body(Bytes::new())
+        .unwrap();
+        let error = client
+            .send::<_, Bytes>(request)
+            .await
+            .err()
+            .expect("a redirect is not followed");
+        assert!(error.to_string().contains("307"), "{error}");
+        assert_eq!(served.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn open_egress_is_the_default_client() {
+        assert_eq!(
+            AuthorizedHttpClient::for_egress(ProviderEgress::Open)
+                .unwrap()
+                .egress,
+            ProviderEgress::Open
+        );
+        assert_eq!(
+            AuthorizedHttpClient::for_egress(ProviderEgress::Public)
+                .unwrap()
+                .egress,
+            ProviderEgress::Public
+        );
     }
 
     #[test]

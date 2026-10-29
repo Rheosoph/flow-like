@@ -85,8 +85,7 @@ impl NodeLogic for MakeColumnOptionalLocalDatabaseNode {
         let optional: bool = context.evaluate_pin("optional").await.unwrap_or(true);
 
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
 
         database
             .inner()

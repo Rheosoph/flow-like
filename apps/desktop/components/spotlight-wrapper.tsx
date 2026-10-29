@@ -10,6 +10,7 @@ import {
 	type ProjectQuickLink,
 	type SpotlightItem,
 	SpotlightProvider,
+	clearStoredPat,
 	handleUpgradeRequiredError,
 	nowSystemTime,
 	useBackend,
@@ -187,7 +188,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			priority: 180,
 			action: () => router.push(`/flow?id=${boardId}&app=${appId}`),
 		}));
-	}, [openBoards.data, router, developerMode]);
+	}, [openBoards.data, router, developerMode, t]);
 
 	const handleNavigate = useCallback(
 		(path: string) => {
@@ -242,7 +243,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				{ message },
 			);
 		},
-		[],
+		[t],
 	);
 
 	const handleProfileChange = useCallback(
@@ -349,7 +350,6 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		searchParams,
 		appMetadata.data,
 		syncProfileShortcuts,
-		backend.userState,
 	]);
 
 	const handleRemoveShortcut = useCallback(async () => {
@@ -441,7 +441,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					keywords: ["shortcut", "bookmark", shortcut.label.toLowerCase()],
 					priority: 200,
 					action: () => {
-						if (!isScriptNavigationUrl(shortcut.path)) router.push(shortcut.path);
+						if (!isScriptNavigationUrl(shortcut.path))
+							router.push(shortcut.path);
 					},
 				});
 			}
@@ -465,7 +466,10 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				],
 				priority: 30,
 				action: () =>
-					clearPageSurfaceCache().then(() => auth.signoutRedirect()),
+					clearPageSurfaceCache().then(() => {
+						clearStoredPat();
+						return auth.signoutRedirect();
+					}),
 			});
 
 			items.push({
@@ -551,9 +555,9 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		const profileValues = profiles.data ? Object.values(profiles.data) : [];
 		if (profileValues.length > 1) {
 			for (const profile of profileValues) {
-				const isCurrentProfile =
-					profile.hub_profile.id === currentProfile.data?.hub_profile.id;
-				if (isCurrentProfile) continue;
+				const profileId = profile.hub_profile.id;
+				if (!profileId || profileId === currentProfile.data?.hub_profile.id)
+					continue;
 
 				items.push({
 					id: `switch-profile-${profile.hub_profile.id}`,
@@ -574,7 +578,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 						profile.hub_profile.name?.toLowerCase() || "",
 					],
 					priority: 120,
-					action: () => handleProfileChange(profile.hub_profile.id!),
+					action: () => handleProfileChange(profileId),
 				});
 			}
 		}
